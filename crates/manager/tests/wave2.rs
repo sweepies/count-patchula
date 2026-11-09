@@ -1,5 +1,5 @@
-use patchula_config::{DependencyKind, Manager, Source};
 use patchula_manager::{Files, Scanner};
+use patchula_words::{DependencyKind, Manager, Source};
 
 /// Files from paths and texts the Count read.
 #[allow(dead_code)]

@@ -1,7 +1,8 @@
 //! The dashboard built from the data of the Count's first live run on his own
 //! repository: grouped, readable, and never mentioning anyone.
 use patchula_report::{BranchAction, BranchStatus, Repository};
-use patchula_update::{Change, Plan, Recheck, dashboard};
+use patchula_update::{Change, Plan, dashboard};
+use patchula_words::Recheck;
 use serde_json::{Value, json};
 
 const ZSTD_SAFE: [(&str, &str); 12] = [
@@ -170,7 +171,7 @@ fn plan(
         fingerprint: String::new(),
         changes: vec![Change {
             registry: None,
-            source: "crates".into(),
+            source: patchula_words::Source::Crates,
             package: package.into(),
             file: file.into(),
             current: "1".into(),
@@ -178,7 +179,7 @@ fn plan(
             value: Some(version.into()),
             version: Some(version.into()),
             digest: None,
-            kind: "patch".into(),
+            kind: patchula_words::Update::Patch,
             merge: false,
             labels: Vec::new(),
             release_notes: true,

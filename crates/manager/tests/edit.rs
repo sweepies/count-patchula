@@ -1,5 +1,6 @@
-use patchula_config::{Config, Manager};
+use patchula_config::Config;
 use patchula_manager::{Edit, Scanner, apply, edits};
+use patchula_words::Manager;
 
 /// Files from paths and texts the Count read.
 #[allow(dead_code)]

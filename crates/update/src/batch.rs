@@ -213,7 +213,7 @@ mod tests {
     fn change(package: &str, value: &str) -> Change {
         Change {
             registry: None,
-            source: "npm".into(),
+            source: patchula_words::Source::Npm,
             package: package.into(),
             file: "package.json".into(),
             current: "1.0.0".into(),
@@ -221,7 +221,7 @@ mod tests {
             value: Some(value.into()),
             version: Some(value.into()),
             digest: None,
-            kind: "minor".into(),
+            kind: patchula_words::Update::Minor,
             merge: false,
             labels: Vec::new(),
             release_notes: true,

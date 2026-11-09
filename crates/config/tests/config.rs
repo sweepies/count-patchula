@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
-use patchula_config::{DependencyKind, Manager, SCHEMA, Update, VersionPolicy, discover, load};
+use patchula_config::{SCHEMA, discover, load};
+use patchula_words::{DependencyKind, Manager, Update, VersionPolicy};
 use std::path::Path;
 
 fn workspace() -> &'static Path {
@@ -70,7 +71,7 @@ fn defaults_are_explicit_and_safe() {
     assert_eq!(config.defaults.versions, VersionPolicy::Exact);
     assert_eq!(
         config.defaults.channel,
-        patchula_config::ReleaseChannel::Stable
+        patchula_words::ReleaseChannel::Stable
     );
     assert_eq!(config.defaults.wait_hours, 24);
     // Ten open PRs at once keeps a first run from opening everything; no hourly
@@ -119,7 +120,7 @@ fn node_lts_channel_is_typed_and_rule_selectable() {
     );
     assert_eq!(
         load(&path).unwrap().rules[0].apply.channel,
-        Some(patchula_config::ReleaseChannel::Lts)
+        Some(patchula_words::ReleaseChannel::Lts)
     );
     let (_dir, path) = fixture("defaults { channel = \"guess\" }");
     assert!(load(&path).is_err());

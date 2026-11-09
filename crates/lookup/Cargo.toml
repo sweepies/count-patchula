@@ -18,6 +18,7 @@ patchula-config = { path = "../config" }
 patchula-datasource = { path = "../datasource" }
 patchula-manager = { path = "../manager" }
 patchula-report = { path = "../report" }
+patchula-words = { path = "../words" }
 patchula-versioning = { path = "../versioning" }
 semver = "1.0.28"
 

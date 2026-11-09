@@ -4,6 +4,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_cache::Cache;
 use patchula_engine::{Engine, Options};
 use patchula_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
+use patchula_words::{DependencyKind, Update};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -317,12 +318,15 @@ async fn a_vulnerable_lockfile_only_crate_is_reported_with_its_fix() {
     assert_eq!(file.dependencies.len(), 1);
     let time = &file.dependencies[0];
     assert_eq!(time.name, "time");
-    assert_eq!(time.metadata.as_ref().unwrap().kinds, ["transitive"]);
+    assert_eq!(
+        time.metadata.as_ref().unwrap().kinds,
+        [DependencyKind::Transitive]
+    );
     assert_eq!(time.updates.len(), 1);
     let fix = &time.updates[0];
     assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
     assert_eq!(fix.new_value, None);
-    assert_eq!(fix.update_type, "patch");
+    assert_eq!(fix.update_type, Update::Patch);
     assert_eq!(fix.fixes, ["RUSTSEC-2020-0071"]);
     assert!(
         fix.policy

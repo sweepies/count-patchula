@@ -8,7 +8,7 @@ fn dependency(name: &str, current: &str, updates: Value, advisories: Value) -> V
         "manager": "npm", "name": name, "package": name,
         "current": {"value": current, "version": current, "digest": null},
         "updates": updates,
-        "metadata": {"source": "npm", "kinds": ["dependencies"], "locations": [], "advisories": advisories}
+        "metadata": {"source": "npm", "kinds": ["production"], "locations": [], "advisories": advisories}
     })
 }
 

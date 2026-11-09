@@ -32,6 +32,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "json"] }
 patchula-update = { path = "../update" }
 patchula-manager = { path = "../manager" }
+patchula-words = { path = "../words" }
 ratatui = "0.30.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clx = "3.0.5"

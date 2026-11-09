@@ -3,6 +3,7 @@
 use patchula_cache::Cache;
 use patchula_engine::{Engine, Options};
 use patchula_http::Network;
+use patchula_words::Update;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 const MANIFEST: &str = "name: demo\nversion: 1.0.0\ndependencies:\n  apm:\n    - gitlab.com/components/sast#3.0.0\n    - owner/branch#main\n";
@@ -59,14 +60,14 @@ async fn apm_tags_pin_to_commits_and_update_to_exact_tags() {
     let pin = sast
         .updates
         .iter()
-        .find(|u| u.update_type == "pin")
+        .find(|u| u.update_type == Update::Pin)
         .expect("the tag is pinned to its commit");
     assert_eq!(pin.new_value.as_deref(), Some("3.0.0"));
     assert!(commit(pin.new_digest.as_deref()), "{pin:?}");
     let minor = sast
         .updates
         .iter()
-        .find(|u| u.update_type == "minor")
+        .find(|u| u.update_type == Update::Minor)
         .expect("a newer tag");
     assert_eq!(minor.new_value, minor.new_version);
     assert!(commit(minor.new_digest.as_deref()), "{minor:?}");

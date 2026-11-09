@@ -6,6 +6,7 @@ use patchula_engine::{Engine, Options};
 use patchula_testkit::{
     Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Redactor, Replay,
 };
+use patchula_words::Manager;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -123,7 +124,7 @@ async fn copier_templates_become_notices_and_never_branches() {
     );
     for file in &repo.package_files {
         for dep in &file.dependencies {
-            assert_eq!(dep.manager, "copier");
+            assert_eq!(dep.manager, Manager::Copier);
             assert!(dep.updates.is_empty(), "{dep:?}");
             assert!(dep.metadata.as_ref().unwrap().held_back.is_empty());
         }

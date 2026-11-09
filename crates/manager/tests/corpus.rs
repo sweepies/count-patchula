@@ -60,7 +60,7 @@ fn corpus_extraction_matches_its_snapshot() {
     let private: Vec<_> = extraction
         .dependencies
         .iter()
-        .filter(|d| d.source == patchula_config::Source::Maven)
+        .filter(|d| d.source == patchula_words::Source::Maven)
         .filter_map(|d| d.registry.as_deref())
         .collect();
     assert!(private.is_empty(), "{private:?}");

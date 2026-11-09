@@ -1,5 +1,5 @@
-use patchula_config::{DependencyKind, Manager};
 use patchula_manager::{Files, Scanner};
+use patchula_words::{DependencyKind, Manager};
 
 /// Files from paths and texts the Count read.
 #[allow(dead_code)]
@@ -369,7 +369,7 @@ coverage = "7.6.0"
         }
     }
     let poetry = deps.iter().find(|d| d.name == "rich").unwrap();
-    assert_eq!(poetry.scheme, patchula_config::Scheme::Poetry);
+    assert_eq!(poetry.scheme, patchula_words::Scheme::Poetry);
     let groups = deps.iter().find(|d| d.name == "ruff").unwrap();
     assert_eq!(groups.kind, DependencyKind::Development);
 }
@@ -400,7 +400,7 @@ fn pre_commit_revs_use_github_or_forge_tags() {
         .iter()
         .map(|d| (d.source, d.package.as_str(), d.current.as_str()))
         .collect();
-    use patchula_config::Source;
+    use patchula_words::Source;
     assert_eq!(
         got,
         [
@@ -1131,7 +1131,7 @@ fn woodpecker_steps_services_clone_anchors_and_variables() {
 }
 #[test]
 fn forgejo_and_gitea_workflows_resolve_bare_refs_on_their_default_action_host() {
-    use patchula_config::Source;
+    use patchula_words::Source;
     let mut config = config();
     config.managers = vec![Manager::GithubActions];
     let scanner = Scanner::new(&config).unwrap();
@@ -1296,7 +1296,7 @@ fn forgejo_and_gitea_workflows_resolve_bare_refs_on_their_default_action_host() 
 }
 #[test]
 fn gitlab_ci_images_services_components_and_project_includes() {
-    use patchula_config::Source;
+    use patchula_words::Source;
     let mut config = config();
     config.managers = vec![Manager::Gitlabci, Manager::GitlabciInclude];
     let scanner = Scanner::new(&config).unwrap();
@@ -1606,12 +1606,12 @@ fn copier_answers_read_template_and_tag_and_skip_what_cannot_be_looked_up() {
         .iter()
         .map(|d| {
             assert_eq!(d.kind, DependencyKind::Template);
-            assert_eq!(d.scheme, patchula_config::Scheme::Pep440);
+            assert_eq!(d.scheme, patchula_words::Scheme::Pep440);
             (
                 d.file.as_str(),
                 d.name.as_str(),
                 d.package.as_str(),
-                patchula_manager::word(&d.source),
+                d.source.to_string(),
                 d.current.as_str(),
                 &read(&files, &d.file)[d.location.start..d.location.end],
             )
@@ -1852,7 +1852,7 @@ fn apm_git_tags_commit_pins_and_skipped_entries() {
             )
         })
         .collect();
-    use patchula_config::Source;
+    use patchula_words::Source;
     assert_eq!(
         got,
         [

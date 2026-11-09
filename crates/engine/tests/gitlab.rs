@@ -3,6 +3,7 @@
 use patchula_cache::Cache;
 use patchula_engine::{Engine, Options};
 use patchula_http::Network;
+use patchula_words::Update;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 const CI: &str = r#"include:
@@ -74,11 +75,16 @@ async fn gitlab_ci_images_pin_to_digests_and_refs_follow_gitlab_tags() {
     let pin = busybox
         .updates
         .iter()
-        .find(|u| u.update_type == "pin")
+        .find(|u| u.update_type == Update::Pin)
         .expect("busybox is pinned");
     assert_eq!(pin.new_value.as_deref(), Some("1.36.0"));
     assert!(pin.new_digest.as_deref().unwrap().starts_with("sha256:"));
-    assert!(busybox.updates.iter().any(|u| u.update_type == "minor"));
+    assert!(
+        busybox
+            .updates
+            .iter()
+            .any(|u| u.update_type == Update::Minor)
+    );
     // GitLab's registry issues its anonymous tokens from gitlab.com.
     let release = deps[&("gitlabci", "registry.gitlab.com/gitlab-org/release-cli")];
     assert!(release.updates.iter().all(|u| {
@@ -86,11 +92,11 @@ async fn gitlab_ci_images_pin_to_digests_and_refs_follow_gitlab_tags() {
             .as_deref()
             .is_some_and(|d| d.starts_with("sha256:"))
     }));
-    assert!(release.updates.iter().any(|u| u.update_type == "pin"));
+    assert!(release.updates.iter().any(|u| u.update_type == Update::Pin));
     for manager in ["gitlabci", "gitlabci-include"] {
         let sast = deps[&(manager, "gitlab.com/components/sast")];
         assert!(
-            sast.updates.iter().any(|u| u.update_type == "minor"
+            sast.updates.iter().any(|u| u.update_type == Update::Minor
                 && u.new_version.as_deref() == Some("3.5.0")
                 && u.new_digest.is_none()),
             "{manager}: {:?}",

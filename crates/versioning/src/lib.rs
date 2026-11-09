@@ -1,7 +1,7 @@
 //! Ecosystem version semantics. npm ranges are deliberately not Cargo requirements.
 #![forbid(unsafe_code)]
 
-use patchula_config::{Update, VersionPolicy};
+use patchula_words::{Update, VersionPolicy};
 use semver::{Version, VersionReq};
 use std::cmp::Ordering;
 mod composer;

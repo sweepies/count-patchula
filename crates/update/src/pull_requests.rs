@@ -3,6 +3,7 @@ use chrono::{DateTime, Duration, Utc};
 use patchula_config::{Config, PackageId};
 use patchula_github::Client;
 use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus};
+use patchula_words::{Recheck, ToolingDetail, ToolingRule, Update as UpdateKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,11 +15,20 @@ const OBSOLETE: &str = "<!-- patchula-closed:obsolete -->";
 pub const ENABLE_AUTO_MERGE: &str = "mutation($input:EnablePullRequestAutoMergeInput!){enablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
 const DISABLE_AUTO_MERGE: &str = "mutation($input:DisablePullRequestAutoMergeInput!){disablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
 
-#[derive(Clone, Copy, Debug, Default, Serialize)]
-pub enum Recheck {
-    Now,
-    #[default]
-    NextRun,
+/// How the re-check timing reads in PR bodies and the dashboard.
+pub(crate) fn recheck_timing(recheck: Recheck) -> &'static str {
+    match recheck {
+        Recheck::Now => "now",
+        Recheck::NextRun => "on the next run",
+    }
+}
+/// How `recheck` enters the body and receipt hashes. Open PR bodies carry
+/// hashes over these spellings, so changing them rewrites every open PR body.
+pub(crate) fn recheck_hashed(recheck: Recheck) -> &'static str {
+    match recheck {
+        Recheck::Now => "Now",
+        Recheck::NextRun => "NextRun",
+    }
 }
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -540,10 +550,11 @@ impl Lifecycle {
             for change in plan
                 .changes
                 .iter()
-                .filter(|c| c.kind != "pin" && c.release_notes)
+                .filter(|c| c.kind != UpdateKind::Pin && c.release_notes)
             {
-                if let Some(target) = change.version.as_ref().or(change.value.as_ref())
-                    && let Some(id) = change.id().filter(PackageId::is_public)
+                let id = change.id();
+                if id.is_public()
+                    && let Some(target) = change.version.as_ref().or(change.value.as_ref())
                 {
                     plan_ranges.insert((
                         id,
@@ -927,7 +938,7 @@ impl Lifecycle {
                 cell(&c.package),
                 cell(&c.current),
                 cell(&target),
-                cell(&c.kind),
+                cell(c.kind.as_str()),
                 cell(&c.file)
             );
             if text.len() + row.len() > 18_000 {
@@ -966,7 +977,7 @@ impl Lifecycle {
             "notes-render-v6",
             &text,
             ranges,
-            self.recheck,
+            recheck_hashed(self.recheck),
             self.branch_permits.get(&plan.action.branch),
         );
         // Only an advertised server joins the hash, so bodies written without
@@ -1021,7 +1032,7 @@ impl Lifecycle {
                 text.push_str("\nOut of room for more release notes. The source repositories have the rest.\n");
                 break;
             }
-            if change.kind == "pin" || !change.release_notes {
+            if change.kind == UpdateKind::Pin || !change.release_notes {
                 continue;
             }
             let Some(version) = change.version.as_ref().or(change.value.as_ref()) else {
@@ -1030,9 +1041,10 @@ impl Lifecycle {
             let current = change.current_version.as_ref().unwrap_or(&change.current);
             // A package from its own registry has no public release notes, and
             // no section saying so.
-            let Some(id) = change.id().filter(PackageId::is_public) else {
+            let id = change.id();
+            if !id.is_public() {
                 continue;
-            };
+            }
             let key = (id, current.clone(), version.clone());
             if !releases.insert(key.clone()) {
                 continue;
@@ -1068,10 +1080,7 @@ impl Lifecycle {
         }
         text.push('\n');
         text.push_str(&content_marker);
-        let timing = match self.recheck {
-            Recheck::Now => "now",
-            Recheck::NextRun => "on the next run",
-        };
+        let timing = recheck_timing(self.recheck);
         text.push_str(&format!(
             "\n- [ ] Tick to re-check this PR {timing}. {RECHECK}\n"
         ));
@@ -1091,17 +1100,25 @@ impl Lifecycle {
 }
 /// One caution per tooling warning on this PR, ahead of everything else.
 fn tooling_section(callouts: &[crate::tooling::Callout]) -> String {
-    use crate::tooling::*;
     let mut text = String::new();
     for callout in callouts {
         let branch = safe(&callout.branch);
         let body = match (callout.rule, callout.detail) {
-            (MERGE_WITHOUT_CI, Some(NATIVE)) => "**This PR is set to merge itself, and the Count can't find any CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so nothing will have tested it when GitHub merges it.".to_owned(),
-            (MERGE_WITHOUT_CI, _) => "**This PR is set to merge itself, and the Count can't find any CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits. He waits for at least one passing check before merging, so this PR will stay open.".to_owned(),
-            (MERGE_WITHOUT_REQUIRED_CHECKS, Some(REVIEWS_ONLY)) => format!("**Nothing makes this PR pass its checks before GitHub merges it.** The Count uses GitHub's auto-merge here, and `{branch}` requires a review but no status checks, so once approved a red PR merges as readily as a green one. Add a required check in a ruleset."),
-            (MERGE_WITHOUT_REQUIRED_CHECKS, _) => format!("**Nothing makes this PR pass its checks before GitHub merges it.** The Count uses GitHub's auto-merge here, and `{branch}` requires no status checks, so a red PR merges as readily as a green one. Add a required check in a ruleset."),
-            (SECURITY_MERGE_WITHOUT_DELIVERY, Some(TAGGED_RELEASE)) => format!("**Merging this fix doesn't ship it.** It will merge on its own, and nothing runs when `{branch}` changes. The only workflow here that could deliver it runs on tags or releases, so it ships only if you cut one."),
-            (_, _) => format!("**Merging this fix ships nothing.** This PR fixes a known vulnerability and will merge on its own, but nothing in this repository builds, releases or deploys when `{branch}` changes. Whatever runs the old code stays bitten. If something outside this repository delivers it, say so in `warnings.quiet`."),
+            (ToolingRule::MergeWithoutCi, Some(ToolingDetail::Native)) => "**This PR is set to merge itself, and the Count can't find any CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so nothing will have tested it when GitHub merges it.".to_owned(),
+            (
+                ToolingRule::MergeWithoutCi,
+                Some(ToolingDetail::ReviewsOnly | ToolingDetail::TaggedRelease) | None,
+            ) => "**This PR is set to merge itself, and the Count can't find any CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits. He waits for at least one passing check before merging, so this PR will stay open.".to_owned(),
+            (ToolingRule::MergeWithoutRequiredChecks, Some(ToolingDetail::ReviewsOnly)) => format!("**Nothing makes this PR pass its checks before GitHub merges it.** The Count uses GitHub's auto-merge here, and `{branch}` requires a review but no status checks, so once approved a red PR merges as readily as a green one. Add a required check in a ruleset."),
+            (
+                ToolingRule::MergeWithoutRequiredChecks,
+                Some(ToolingDetail::Native | ToolingDetail::TaggedRelease) | None,
+            ) => format!("**Nothing makes this PR pass its checks before GitHub merges it.** The Count uses GitHub's auto-merge here, and `{branch}` requires no status checks, so a red PR merges as readily as a green one. Add a required check in a ruleset."),
+            (ToolingRule::SecurityMergeWithoutDelivery, Some(ToolingDetail::TaggedRelease)) => format!("**Merging this fix doesn't ship it.** It will merge on its own, and nothing runs when `{branch}` changes. The only workflow here that could deliver it runs on tags or releases, so it ships only if you cut one."),
+            (
+                ToolingRule::SecurityMergeWithoutDelivery,
+                Some(ToolingDetail::Native | ToolingDetail::ReviewsOnly) | None,
+            ) => format!("**Merging this fix ships nothing.** This PR fixes a known vulnerability and will merge on its own, but nothing in this repository builds, releases or deploys when `{branch}` changes. Whatever runs the old code stays bitten. If something outside this repository delivers it, say so in `warnings.quiet`."),
         };
         text.push_str("> [!CAUTION]\n> ");
         text.push_str(&body);
@@ -1228,7 +1245,10 @@ fn image_section(changes: &[crate::Change]) -> String {
                 "{image} is built on {}, and OSV.dev has no advisories for it.",
                 cell(check.os.as_deref().unwrap_or("an OS"))
             ),
-            _ => String::new(),
+            ImageState::Unreadable
+            | ImageState::PartialSources
+            | ImageState::Checked
+            | ImageState::NoOsPackages => String::new(),
         };
         if !warning.is_empty() {
             if check.silenced.is_none() {
@@ -1244,8 +1264,20 @@ fn image_section(changes: &[crate::Change]) -> String {
                 "The Count couldn't read {image}'s SBOM on this run ({}). He'll try again on the next run.",
                 cell(check.detail.as_deref().unwrap_or("no answer"))
             ),
-            _ if !check.fixed.is_empty() => String::new(),
-            _ => format!(
+            ImageState::PartialSources
+            | ImageState::Checked
+            | ImageState::SbomWithoutOs
+            | ImageState::OsNotCovered
+                if !check.fixed.is_empty() =>
+            {
+                String::new()
+            }
+            ImageState::PartialSources
+            | ImageState::Checked
+            | ImageState::SbomWithoutOs
+            | ImageState::OsNotCovered
+            | ImageState::PreviousUnavailable
+            | ImageState::NoSbom => format!(
                 "The Count compared {image}'s old and new package lists. OSV.dev knows of no vulnerability that the new one fixes."
             ),
         };
@@ -1419,7 +1451,7 @@ mod security_tests {
         .unwrap();
         let change = crate::Change {
             registry: None,
-            source: "npm".into(),
+            source: patchula_words::Source::Npm,
             package: "lodash".into(),
             file: "package.json".into(),
             current: "4.17.11".into(),
@@ -1427,7 +1459,7 @@ mod security_tests {
             value: Some("4.17.21".into()),
             version: Some("4.17.21".into()),
             digest: None,
-            kind: "patch".into(),
+            kind: patchula_words::Update::Patch,
             merge: false,
             labels: Vec::new(),
             release_notes: true,
@@ -1455,7 +1487,7 @@ mod security_tests {
         .unwrap();
         let change = crate::Change {
             registry: None,
-            source: "npm".into(),
+            source: patchula_words::Source::Npm,
             package: "@scope/pkg".into(),
             file: "package.json".into(),
             current: "1.0.0".into(),
@@ -1463,7 +1495,7 @@ mod security_tests {
             value: Some("1.0.1".into()),
             version: Some("1.0.1".into()),
             digest: None,
-            kind: "patch".into(),
+            kind: patchula_words::Update::Patch,
             merge: false,
             labels: Vec::new(),
             release_notes: true,
@@ -1499,7 +1531,7 @@ mod image_tests {
     fn change(package: &str, check: ImageCheck) -> crate::Change {
         crate::Change {
             registry: None,
-            source: "docker".into(),
+            source: patchula_words::Source::Docker,
             package: package.into(),
             file: "Dockerfile".into(),
             current: format!("1.0@sha256:{}", "4c49fc0".repeat(9)),
@@ -1507,7 +1539,7 @@ mod image_tests {
             value: Some("1.0".into()),
             version: Some("1.0".into()),
             digest: Some(format!("sha256:{}", "b".repeat(64))),
-            kind: "digest".into(),
+            kind: patchula_words::Update::Digest,
             merge: false,
             labels: Vec::new(),
             release_notes: true,
@@ -1706,8 +1738,9 @@ mod image_tests {
 mod tooling_tests {
     use super::tooling_section;
     use crate::tooling::*;
+    use patchula_words::{ToolingDetail, ToolingRule};
 
-    fn callout(rule: &'static str, detail: Option<&'static str>) -> Callout {
+    fn callout(rule: ToolingRule, detail: Option<ToolingDetail>) -> Callout {
         Callout {
             rule,
             detail,
@@ -1718,10 +1751,10 @@ mod tooling_tests {
     #[test]
     fn each_tooling_warning_is_a_caution_in_the_design_wording() {
         let text = tooling_section(&[
-            callout(MERGE_WITHOUT_CI, None),
-            callout(MERGE_WITHOUT_CI, Some(NATIVE)),
-            callout(MERGE_WITHOUT_REQUIRED_CHECKS, None),
-            callout(SECURITY_MERGE_WITHOUT_DELIVERY, None),
+            callout(ToolingRule::MergeWithoutCi, None),
+            callout(ToolingRule::MergeWithoutCi, Some(ToolingDetail::Native)),
+            callout(ToolingRule::MergeWithoutRequiredChecks, None),
+            callout(ToolingRule::SecurityMergeWithoutDelivery, None),
         ]);
         assert_eq!(text.matches("> [!CAUTION]\n").count(), 4, "{text}");
         for line in [
@@ -1733,8 +1766,14 @@ mod tooling_tests {
             assert!(text.contains(line), "{line}\n{text}");
         }
         let narrower = tooling_section(&[
-            callout(MERGE_WITHOUT_REQUIRED_CHECKS, Some(REVIEWS_ONLY)),
-            callout(SECURITY_MERGE_WITHOUT_DELIVERY, Some(TAGGED_RELEASE)),
+            callout(
+                ToolingRule::MergeWithoutRequiredChecks,
+                Some(ToolingDetail::ReviewsOnly),
+            ),
+            callout(
+                ToolingRule::SecurityMergeWithoutDelivery,
+                Some(ToolingDetail::TaggedRelease),
+            ),
         ]);
         assert!(
             narrower.contains("`main` requires a review but no status checks"),

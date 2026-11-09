@@ -20,10 +20,11 @@ use crate::{
     plan::{hash, unified},
 };
 use futures_util::StreamExt;
-use patchula_config::{Config, Manager, NpmEngine, Source};
+use patchula_config::{Config, NpmEngine};
 use patchula_manager::Dependency;
 use patchula_process::{Executor, SystemExecutor};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
+use patchula_words::{Manager, Source};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -253,7 +254,7 @@ pub(crate) fn job(
             }
             (Ecosystem::Apm, root)
         }
-        Manager::Bundler if dep.kind == patchula_config::DependencyKind::Toolchain => {
+        Manager::Bundler if dep.kind == patchula_words::DependencyKind::Toolchain => {
             return Ok(None);
         }
         Manager::Bundler => {
@@ -283,7 +284,7 @@ pub(crate) fn job(
         // with locks restores that directory's solution or project.
         Manager::Nuget => {
             let dir = directory(&dep.file);
-            let locked = dep.kind != patchula_config::DependencyKind::Toolchain
+            let locked = dep.kind != patchula_words::DependencyKind::Toolchain
                 && !dep.file.ends_with("dotnet-tools.json")
                 && subtree(&snapshot.paths, dir)
                     .any(|p| p.rsplit('/').next() == Some("packages.lock.json"));
@@ -1490,7 +1491,7 @@ fn validate_targets(
                     | Manager::Bundler
                     | Manager::Composer
             ) || (dep.source == Source::Terraform
-                && dep.kind == patchula_config::DependencyKind::Provider))
+                && dep.kind == patchula_words::DependencyKind::Provider))
             && let Some(version) = &change.version
             && !dep
                 .resolved
@@ -1578,8 +1579,8 @@ pub(crate) fn same_release(locked: &str, requested: &str) -> bool {
 /// major version, or a different minor (or patch) one below 1.0. Cargo then
 /// keeps both in the lock.
 fn crosses_compatibility(current: &str, target: &str) -> bool {
-    use patchula_config::Update;
     use patchula_versioning::{Ecosystem as Scheme, Versioning};
+    use patchula_words::Update;
     match (Scheme::Cargo.parse(current), Scheme::Cargo.parse(target)) {
         (Ok(current), Ok(target)) => Scheme::Cargo.classify(&current, &target) == Update::Major,
         _ => false,

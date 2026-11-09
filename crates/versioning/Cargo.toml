@@ -11,8 +11,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+patchula-words = { path = "../words" }
 pep440_rs = "0.7.3"
 nodejs-semver = "7.0.0"
-patchula-config = { path = "../config" }
 semver = "1.0.28"
 thiserror.workspace = true

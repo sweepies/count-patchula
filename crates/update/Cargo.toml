@@ -39,6 +39,7 @@ tracing = "0.1"
 patchula-http = { path = "../http" }
 patchula-mise = { path = "../mise" }
 patchula-process = { path = "../process" }
+patchula-words = { path = "../words" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

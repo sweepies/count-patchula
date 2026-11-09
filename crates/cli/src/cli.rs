@@ -64,8 +64,8 @@ pub const PALETTE: Palette = Palette::DEFAULT
 )]
 pub struct App {
     /// When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: now in the server, next-run in the CLI.
-    #[usage(long, value_enum, value_name = "WHEN", global)]
-    pub recheck: Option<Recheck>,
+    #[usage(long, choices("now", "next-run"), value_name = "WHEN", global)]
+    pub recheck: Option<patchula_words::Recheck>,
     /// Show request counts and phase timings after a batch; repeat for debug logs.
     #[usage(short = 'v', long, count, global)]
     pub verbose: u8,
@@ -307,12 +307,6 @@ pub struct Run {
     pub allow_lockfile_pending: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum Recheck {
-    Now,
-    NextRun,
-}
-
 #[derive(Args)]
 pub struct Lookup {
     /// Repositories as owner/repo, read through the GitHub API; omit for the checkout here.
@@ -372,8 +366,12 @@ pub struct Apply {
     #[usage(long, value_name = "PATTERN")]
     pub dependency: Vec<String>,
     /// Only updates of this type; repeat for more.
-    #[usage(long = "type", value_enum, value_name = "TYPE")]
-    pub update_type: Vec<UpdateType>,
+    #[usage(
+        long = "type",
+        choices("major", "minor", "patch", "pin", "digest"),
+        value_name = "TYPE"
+    )]
+    pub update_type: Vec<patchula_words::Update>,
     /// Print the unified diff of what would be written, and write nothing.
     #[usage(long, conflicts = "--check")]
     pub dry_run: bool,
@@ -395,15 +393,6 @@ pub struct Apply {
     pub all_repos: bool,
     #[usage(long, hide)]
     pub remote: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum UpdateType {
-    Major,
-    Minor,
-    Patch,
-    Pin,
-    Digest,
 }
 
 #[derive(Args)]
@@ -488,11 +477,11 @@ mod tests {
             serve.settings.as_deref(),
             Some(std::path::Path::new("/operator/settings.pkl"))
         );
-        assert_eq!(app.recheck, Some(Recheck::NextRun));
+        assert_eq!(app.recheck, Some(patchula_words::Recheck::NextRun));
         let app =
             App::parse_from(&["run", "--recheck", "now", "owner/repo"].map(std::ffi::OsStr::new))
                 .unwrap();
-        assert_eq!(app.recheck, Some(Recheck::Now));
+        assert_eq!(app.recheck, Some(patchula_words::Recheck::Now));
         assert!(matches!(app.command, Some(Command::Run(_))));
     }
 
@@ -574,7 +563,10 @@ mod tests {
         let Some(Command::Apply(apply)) = app.command else {
             panic!("apply")
         };
-        assert_eq!(apply.update_type, [UpdateType::Pin, UpdateType::Digest]);
+        assert_eq!(
+            apply.update_type,
+            [patchula_words::Update::Pin, patchula_words::Update::Digest]
+        );
         assert_eq!(apply.manager, ["github-actions"]);
         assert_eq!(apply.dependency, ["glob:actions/*"]);
         assert!(apply.check && !apply.dry_run);

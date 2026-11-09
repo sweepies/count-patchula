@@ -236,7 +236,7 @@ impl Engine {
                                 .filter(move |dep| {
                                     dep.file == change.file
                                         && dep.package == change.package
-                                        && word(&dep.source) == change.source
+                                        && dep.source == change.source
                                 })
                                 .map(patchula_update::dashboard::extracted_key)
                         })
@@ -263,7 +263,7 @@ impl Engine {
                                 patchula_update::dashboard::held_target(
                                     &key,
                                     version,
-                                    &held.update_type,
+                                    held.update_type.as_str(),
                                 ),
                                 BTreeSet::from([key.clone()]),
                             );

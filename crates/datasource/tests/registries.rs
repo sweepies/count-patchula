@@ -1,8 +1,8 @@
 //! Public registry v2, Terraform, PyPI and Helm endpoints recorded by this implementation; replay is offline.
 use patchula_cache::Cache;
-use patchula_config::Source;
 use patchula_datasource::Client;
 use patchula_http::{Cached, Network};
+use patchula_words::Source;
 use std::{path::Path, sync::Arc};
 
 #[tokio::test]

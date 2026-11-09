@@ -1,9 +1,9 @@
 //! Flake inputs through a stand-in for `nix flake prefetch`: nothing here starts
 //! nix or reaches the network.
 use patchula_cache::Cache;
-use patchula_config::Source;
 use patchula_datasource::{Client, Error, Flakes};
 use patchula_http::{Cached, Exchange, Transport};
+use patchula_words::Source;
 use std::{
     future::Future,
     pin::Pin,

@@ -1,5 +1,7 @@
 use crate::*;
+use patchula_words::{Scheme, Source, ToolingRule};
 use regex::Regex;
+use std::str::FromStr;
 
 pub(crate) struct Issue {
     pub field: String,
@@ -198,10 +200,17 @@ impl Config {
         }
         for (rule, reason) in &self.warnings.quiet {
             let field = format!("warnings.quiet[{rule}]");
-            if !crate::TOOLING_WARNINGS.contains(&rule.as_str()) {
+            if ToolingRule::from_str(rule).is_err() {
                 return fail(
                     &field,
-                    format!("must be one of {}", crate::TOOLING_WARNINGS.join(", ")),
+                    format!(
+                        "must be one of {}",
+                        ToolingRule::ALL
+                            .iter()
+                            .map(|rule| rule.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                 );
             }
             if reason.trim().is_empty() {
@@ -245,20 +254,10 @@ impl Config {
                         return fail(&field, "only npm and pypi extractors take a registry");
                     }
                 }
-                if !extractor.source.contains('{')
-                    && serde_json::from_value::<Source>(serde_json::Value::String(
-                        extractor.source.clone(),
-                    ))
-                    .is_err()
-                {
+                if !extractor.source.contains('{') && extractor.source.parse::<Source>().is_err() {
                     return fail(&field, format!("unknown datasource {:?}", extractor.source));
                 }
-                if !extractor.scheme.contains('{')
-                    && serde_json::from_value::<Scheme>(serde_json::Value::String(
-                        extractor.scheme.clone(),
-                    ))
-                    .is_err()
-                {
+                if !extractor.scheme.contains('{') && extractor.scheme.parse::<Scheme>().is_err() {
                     return fail(
                         &field,
                         format!("unknown version scheme {:?}", extractor.scheme),

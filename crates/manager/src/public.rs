@@ -1083,7 +1083,7 @@ mod tests {
     #[test]
     fn fetch_urls_split_public_from_private() {
         let npm = crate::origins::Public {
-            source: patchula_config::Source::Npm,
+            source: patchula_words::Source::Npm,
             label: "npm",
             is_public: |url| {
                 crate::web_host(url).is_some_and(|host| {

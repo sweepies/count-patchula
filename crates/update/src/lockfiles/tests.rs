@@ -1550,7 +1550,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
         });
         p.changes.push(crate::Change {
             registry: None,
-            source: source.into(),
+            source: source.parse().unwrap(),
             package: package.into(),
             file: manifest.into(),
             current: current.into(),
@@ -1558,7 +1558,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
             value: Some(target.into()),
             version: Some(target.into()),
             digest: None,
-            kind: "major".into(),
+            kind: patchula_words::Update::Major,
             merge: false,
             labels: Vec::new(),
             release_notes: false,
@@ -1906,7 +1906,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
     });
     p.changes.push(crate::Change {
         registry: None,
-        source: "crates".into(),
+        source: patchula_words::Source::Crates,
         package: "base64".into(),
         file: "Cargo.toml".into(),
         current: "0.22".into(),
@@ -1914,7 +1914,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
         value: Some("0.23".into()),
         version: Some("0.23.0".into()),
         digest: None,
-        kind: "major".into(),
+        kind: patchula_words::Update::Major,
         merge: false,
         labels: Vec::new(),
         release_notes: false,
@@ -1951,7 +1951,7 @@ fn provider_lock_drift_is_rejected_before_publication() {
         .unwrap();
     p.changes.push(crate::Change {
         registry: None,
-        source: "terraform".into(),
+        source: patchula_words::Source::Terraform,
         package: "hashicorp/aws".into(),
         file: "providers.tf".into(),
         current: "0.9.0".into(),
@@ -1959,7 +1959,7 @@ fn provider_lock_drift_is_rejected_before_publication() {
         value: Some("1.0.0".into()),
         version: Some("1.0.0".into()),
         digest: None,
-        kind: "major".into(),
+        kind: patchula_words::Update::Major,
         merge: false,
         labels: Vec::new(),
         release_notes: false,
@@ -2496,7 +2496,7 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
 fn npm_change(value: &str) -> crate::plan::Change {
     crate::plan::Change {
         registry: None,
-        source: "npm".into(),
+        source: patchula_words::Source::Npm,
         package: "fixture".into(),
         file: "package.json".into(),
         current: "1.0.0".into(),
@@ -2504,7 +2504,7 @@ fn npm_change(value: &str) -> crate::plan::Change {
         value: Some(value.into()),
         version: Some(value.into()),
         digest: None,
-        kind: "major".into(),
+        kind: patchula_words::Update::Major,
         merge: false,
         labels: Vec::new(),
         release_notes: false,
@@ -2947,7 +2947,7 @@ fn chart_updates_with_a_committed_chart_lock_are_pending() {
         new_value: Some("2.0.0".into()),
         new_version: Some("2.0.0".into()),
         new_digest: None,
-        update_type: "major".into(),
+        update_type: patchula_words::Update::Major,
         group: None,
         policy: None,
         release_age: None,
@@ -3585,7 +3585,7 @@ fn a_lock_resolves_a_target_that_names_no_build_metadata() {
         .unwrap();
     plan.changes.push(crate::Change {
         registry: None,
-        source: "crates".into(),
+        source: patchula_words::Source::Crates,
         package: "zstd-sys".into(),
         file: "Cargo.lock".into(),
         current: "2.1.1+zstd.1.5.7".into(),
@@ -3593,7 +3593,7 @@ fn a_lock_resolves_a_target_that_names_no_build_metadata() {
         value: None,
         version: Some("2.1.2".into()),
         digest: None,
-        kind: "patch".into(),
+        kind: patchula_words::Update::Patch,
         merge: false,
         labels: Vec::new(),
         release_notes: false,
@@ -4829,7 +4829,7 @@ fn a_lock_only_update_without_a_committed_lockfile_plans_nothing_to_do() {
         new_value: None,
         new_version: Some("13.2.1".into()),
         new_digest: None,
-        update_type: "minor".into(),
+        update_type: patchula_words::Update::Minor,
         group: None,
         policy: None,
         release_age: None,
@@ -4914,7 +4914,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
             }];
             p.changes = vec![crate::plan::Change {
                 registry: None,
-                source: source.into(),
+                source: source.parse().unwrap(),
                 package: dep.package.clone(),
                 file: manifest.into(),
                 current: dep.current.clone(),
@@ -4922,7 +4922,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                 value: None,
                 version: Some(target.into()),
                 digest: None,
-                kind: "minor".into(),
+                kind: patchula_words::Update::Minor,
                 merge: false,
                 labels: Vec::new(),
                 release_notes: false,
@@ -5087,7 +5087,7 @@ fn a_branch_with_a_security_fix_takes_its_commit_prefix() {
 fn cargo_change(package: &str, current: &str, version: &str) -> crate::plan::Change {
     crate::plan::Change {
         registry: None,
-        source: "crates".into(),
+        source: patchula_words::Source::Crates,
         package: package.into(),
         file: "Cargo.toml".into(),
         current: current.into(),
@@ -5095,7 +5095,7 @@ fn cargo_change(package: &str, current: &str, version: &str) -> crate::plan::Cha
         value: None,
         version: Some(version.into()),
         digest: None,
-        kind: "patch".into(),
+        kind: patchula_words::Update::Patch,
         merge: false,
         labels: Vec::new(),
         release_notes: false,
@@ -5169,7 +5169,7 @@ fn a_lock_only_cargo_update_without_a_committed_lock_has_no_job() {
         new_value: value.map(Into::into),
         new_version: Some("1.40.0".into()),
         new_digest: None,
-        update_type: "minor".into(),
+        update_type: patchula_words::Update::Minor,
         group: None,
         policy: None,
         release_age: None,
@@ -5215,10 +5215,9 @@ fn a_batch_moves_every_declaration_of_a_dependency_in_a_file() {
         .filter(|d| d.package == "actions/checkout")
         .collect::<Vec<_>>();
     assert_eq!(dependencies.len(), 3, "{dependencies:?}");
-    let source = serde_json::to_value(dependencies[0].source).unwrap();
     let target = crate::plan::Change {
         registry: None,
-        source: source.as_str().unwrap().into(),
+        source: dependencies[0].source,
         package: dependencies[0].package.clone(),
         file: ".github/workflows/ci.yml".into(),
         current: dependencies[0].current.clone(),
@@ -5226,7 +5225,7 @@ fn a_batch_moves_every_declaration_of_a_dependency_in_a_file() {
         value: Some("v4.2.0".into()),
         version: Some("4.2.0".into()),
         digest: None,
-        kind: "minor".into(),
+        kind: patchula_words::Update::Minor,
         merge: false,
         labels: Vec::new(),
         release_notes: false,
@@ -5597,10 +5596,9 @@ fn a_batch_drops_a_target_older_than_the_current_version() {
         .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies;
-    let source = serde_json::to_value(dependencies[0].source).unwrap();
     let target = |version: &str| crate::plan::Change {
         registry: None,
-        source: source.as_str().unwrap().into(),
+        source: dependencies[0].source,
         package: dependencies[0].package.clone(),
         file: "mise.toml".into(),
         current: "24.21.0".into(),
@@ -5608,7 +5606,7 @@ fn a_batch_drops_a_target_older_than_the_current_version() {
         value: Some(version.into()),
         version: Some(version.into()),
         digest: None,
-        kind: "minor".into(),
+        kind: patchula_words::Update::Minor,
         merge: false,
         labels: Vec::new(),
         release_notes: false,

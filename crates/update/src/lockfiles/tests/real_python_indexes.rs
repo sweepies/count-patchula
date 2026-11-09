@@ -20,7 +20,7 @@
 //! where it names none the tool must not take the package from an index the
 //! project configures.
 use super::{config, default_spec};
-use patchula_config::Manager;
+use patchula_words::Manager;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};

@@ -1,8 +1,8 @@
 //! Independent Go proxy contract fixtures; no network client is constructed.
 use patchula_cache::Cache;
-use patchula_config::Source;
 use patchula_datasource::Client;
 use patchula_http::{Cached, Exchange, Response, Transport};
+use patchula_words::Source;
 use std::sync::{Arc, Mutex};
 
 /// A module listing thirty releases, one of which the proxy cannot describe.

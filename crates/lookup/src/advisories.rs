@@ -1,9 +1,9 @@
 //! Which advisories a version is affected by, from OSV's affected ranges.
 use crate::scheme;
-use patchula_config::{DependencyKind, Manager, Source};
 use patchula_datasource::{Advisory, AdvisoryQuery, Event};
 use patchula_manager::Dependency;
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
+use patchula_words::{DependencyKind, Manager, Source};
 use std::cmp::Ordering;
 
 /// The OSV query for a dependency's current version, when OSV covers its
