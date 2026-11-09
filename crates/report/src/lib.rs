@@ -932,8 +932,15 @@ macro_rules! ordered_by {
     ($name:ident, |$v:ident| $key:expr) => {
         impl Ord for $name {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                let key = |$v: &Self| $key;
-                key(self).cmp(&key(other))
+                let mine = {
+                    let $v = self;
+                    $key
+                };
+                let theirs = {
+                    let $v = other;
+                    $key
+                };
+                mine.cmp(&theirs)
             }
         }
         impl PartialOrd for $name {
