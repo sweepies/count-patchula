@@ -88,14 +88,12 @@ fn blob_text(bytes: &[u8]) -> std::result::Result<String, serde_json::Error> {
     String::from_utf8(decoded).map_err(serde::de::Error::custom)
 }
 
-/// Parse the PostgreSQL release notes of one major.
 pub(super) fn compact_sgml(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&parse_release_sgml(&blob_text(bytes)?))
 }
 const PARSED_POSTGRES_SGML: patchula_http::Derived<serde_json::Error> =
     patchula_http::Derived::new("parsed-postgres-sgml", compact_sgml);
 
-/// Parse the Go release history.
 pub(super) fn compact_history(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&parse_go_history(&blob_text(bytes)?))
 }
@@ -373,7 +371,6 @@ fn sgml_tag_end(text: &str, open: usize) -> Option<usize> {
     None
 }
 
-/// The name and attributes of one tag.
 fn sgml_tag(tag: &str) -> (String, Vec<(String, String)>) {
     let mut end = tag.len();
     for (index, character) in tag.char_indices() {
@@ -435,7 +432,6 @@ fn sgml_tag(tag: &str) -> (String, Vec<(String, String)>) {
     (name, attrs)
 }
 
-/// Whether a name is an SGML element name.
 fn sgml_element(name: &str) -> bool {
     !name.is_empty()
         && name.starts_with(|c: char| c.is_ascii_alphabetic())
@@ -444,7 +440,6 @@ fn sgml_element(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
-/// One attribute of an element.
 fn sgml_attr(attrs: &[(String, String)], name: &str) -> Option<String> {
     attrs
         .iter()
@@ -525,7 +520,6 @@ fn collapse(text: &str) -> String {
     out
 }
 
-/// Inline SGML content as Markdown.
 fn sgml_inline(node: &Node) -> String {
     match node {
         Node::Text(text) => expand_entities(text),
@@ -565,7 +559,6 @@ fn sgml_inline(node: &Node) -> String {
     }
 }
 
-/// Inline content of several nodes.
 fn sgml_inline_children(nodes: &[Node]) -> String {
     let mut text = String::new();
     for node in nodes {
@@ -574,12 +567,10 @@ fn sgml_inline_children(nodes: &[Node]) -> String {
     text
 }
 
-/// Whether an element is a list.
 fn sgml_list(name: &str) -> bool {
     matches!(name, "itemizedlist" | "simplelist")
 }
 
-/// Block-level SGML content as Markdown blocks.
 fn sgml_blocks(nodes: &[Node]) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut inline = String::new();
@@ -643,7 +634,6 @@ fn sgml_walk(nodes: &[Node], blocks: &mut Vec<String>, inline: &mut String, dept
     }
 }
 
-/// The title of a section.
 fn sgml_title(children: &[Node]) -> Option<String> {
     children.iter().find_map(|child| match child {
         Node::Element { name, children, .. } if name == "title" => {
@@ -775,7 +765,6 @@ fn sgml_version(id: &str) -> Option<String> {
     Some(format!("{major}.{minor}"))
 }
 
-/// The Markdown body of one release.
 fn sgml_body(children: &[Node]) -> String {
     let blocks = sgml_blocks(children);
     let mut body = String::new();
@@ -938,14 +927,12 @@ fn go_literal(text: &str) -> Option<(String, usize)> {
     }
 }
 
-/// The string value of a field.
 fn go_string(text: &str, field: &str) -> Option<String> {
     let index = text.find(field)?;
     let rest = text[index + field.len()..].trim_start();
     go_literal(rest).map(|(value, _)| value)
 }
 
-/// The string list of a field.
 fn go_strings(text: &str, field: &str) -> Vec<String> {
     let Some(index) = text.find(field) else {
         return Vec::new();
@@ -987,7 +974,6 @@ fn go_fixes(text: &str, field: &str) -> Option<GoFixes> {
     })
 }
 
-/// One Go release as a Markdown section.
 fn go_section(entry: &str) -> Option<Section> {
     let numbers = go_numbers(entry, "Version: Version")?;
     let date = go_numbers(entry, "Date: Date")?;
@@ -1153,12 +1139,10 @@ enum GoHtml {
 /// An open HTML element of the Go history.
 type GoFrame = (String, Option<String>, Vec<GoHtml>);
 
-/// The HTML of the Go history as Markdown.
 fn go_html(text: &str) -> String {
     go_html_render(&go_html_nodes(text)).trim().to_string()
 }
 
-/// The HTML nodes of the Go history.
 fn go_html_nodes(text: &str) -> Vec<GoHtml> {
     let mut root: Vec<GoHtml> = Vec::new();
     let mut stack: Vec<GoFrame> = Vec::new();
@@ -1325,7 +1309,6 @@ fn go_html_close(stack: &mut Vec<GoFrame>, root: &mut Vec<GoHtml>, name: &str) {
     }
 }
 
-/// The HTML nodes as Markdown.
 fn go_html_render(nodes: &[GoHtml]) -> String {
     let mut out = String::new();
     for node in nodes {
@@ -1334,7 +1317,6 @@ fn go_html_render(nodes: &[GoHtml]) -> String {
     out
 }
 
-/// One HTML node as Markdown.
 fn go_html_render_node(node: &GoHtml) -> String {
     match node {
         GoHtml::Text(text) => normalize(&expand_entities(text)),

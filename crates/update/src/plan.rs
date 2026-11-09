@@ -3,7 +3,6 @@ use patchula_manager::{Dependency, Edit, hash};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
 use patchula_words::{Source, Update as UpdateKind};
 use serde::{Deserialize, Serialize};
-use sha1::Digest;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -381,14 +380,7 @@ impl Change {
     }
 }
 pub fn blob_sha(content: &str) -> String {
-    let mut digest = sha1::Sha1::new();
-    digest.update(format!("blob {}\0", content.len()));
-    digest.update(content.as_bytes());
-    digest
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    patchula_github::blob_sha(content.as_bytes())
 }
 /// Readable branch labels; repository planning resolves manager collisions.
 pub fn branch_name(prefix: &str, label: &str) -> Result<String, String> {

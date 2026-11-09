@@ -9,7 +9,7 @@ mod policy;
 mod registry;
 mod sandbox;
 
-pub use lookup::{Lookup, PACKAGE, Query, Release};
+pub use lookup::{Bootstrap, Lookup, PACKAGE, Query, Release, bootstrap};
 pub use policy::check;
 pub use registry::{backends, listed_github_repository};
 pub use sandbox::sandbox_env;

@@ -205,7 +205,6 @@ impl Replay {
     }
 }
 
-/// Rebuild the transport response a recorded one stands for.
 fn respond(response: &RecordedResponse) -> Result<Response, Error> {
     let mut headers = HeaderMap::new();
     for (name, values) in &response.headers {
@@ -228,7 +227,9 @@ fn respond(response: &RecordedResponse) -> Result<Response, Error> {
     })
 }
 
-/// The Git blob SHA of `bytes`, for checking a cassette's REST blob reads.
+/// The Git blob SHA of `bytes`.
+// Independent oracle: testkit must not depend on patchula-github.
+#[cfg(test)]
 fn git_blob_sha(bytes: &[u8]) -> String {
     use sha1::Digest as _;
     let mut digest = sha1::Sha1::new();
@@ -239,116 +240,6 @@ fn git_blob_sha(bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
-}
-
-/// The bytes of a recorded `GET /repos/{o}/{r}/git/blobs/{sha}` response.
-fn blob_bytes(body: &Body) -> Option<Vec<u8>> {
-    let parsed;
-    let json = match body {
-        Body::Json(json) => json,
-        Body::Text(text) => {
-            parsed = serde_json::from_str::<serde_json::Value>(text).ok()?;
-            &parsed
-        }
-    };
-    if json.get("encoding")?.as_str()? != "base64" {
-        return None;
-    }
-    let content = json.get("content")?.as_str()?;
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD
-        .decode(
-            content
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .collect::<String>(),
-        )
-        .ok()
-}
-
-impl Replay {
-    /// Answer a GraphQL blob batch from the REST blob reads the cassette
-    /// holds, for cassettes recorded before batching existed. Returns the
-    /// cassette indices the synthesized texts stand in for; binary or
-    /// unverifiable blobs stay for their REST reads.
-    fn blob_batch(
-        &self,
-        request: &Request,
-        key: &RecordedRequest,
-        used: &[bool],
-    ) -> Option<(Vec<usize>, RecordedResponse)> {
-        if key.method != "POST" {
-            return None;
-        }
-        let url = reqwest::Url::parse(&key.url).ok()?;
-        if !url.path().ends_with("/graphql") {
-            return None;
-        }
-        let body = request.body()?.as_bytes()?;
-        let json: serde_json::Value = serde_json::from_slice(body).ok()?;
-        let query = json.get("query")?.as_str()?;
-        let variables = json.get("variables")?.as_object()?;
-        let owner = variables.get("owner")?.as_str()?;
-        let name = variables.get("name")?.as_str()?;
-        // The batch aliases each blob `b{i}` on `object(oid: $o{i})`.
-        static ALIAS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-            regex::Regex::new(r"(\w+)\s*:\s*object\s*\(\s*oid\s*:\s*\$(o\d+)\s*\)").unwrap()
-        });
-        let mut aliases = Vec::new();
-        let mut seen = std::collections::BTreeSet::new();
-        for captures in ALIAS.captures_iter(query) {
-            let variable = captures[2].to_owned();
-            let sha = variables.get(&variable)?.as_str()?.to_owned();
-            seen.insert(variable);
-            aliases.push((captures[1].to_owned(), sha));
-        }
-        if aliases.is_empty()
-            || variables.keys().any(|key| {
-                key.strip_prefix('o')
-                    .is_some_and(|rest| rest.parse::<usize>().is_ok())
-                    && !seen.contains(key)
-            })
-        {
-            return None;
-        }
-        let mut repository = serde_json::Map::new();
-        let mut consumed = Vec::new();
-        for (alias, sha) in aliases {
-            let path = format!("/repos/{owner}/{name}/git/blobs/{sha}");
-            // Each recorded read answers once, as it would on its own.
-            let index = self.cassette.interactions.iter().enumerate().position(
-                |(index, interaction)| {
-                    !used[index]
-                        && !consumed.contains(&index)
-                        && interaction.request.method == "GET"
-                        && reqwest::Url::parse(&interaction.request.url)
-                            .is_ok_and(|url| url.path() == path)
-                },
-            )?;
-            let bytes = blob_bytes(&self.cassette.interactions[index].response.body)?;
-            let blob = match std::str::from_utf8(&bytes) {
-                Ok(text) if git_blob_sha(&bytes) == sha => {
-                    consumed.push(index);
-                    serde_json::json!({"text": text, "isBinary": false, "isTruncated": false})
-                }
-                _ => serde_json::json!({"text": null, "isBinary": true, "isTruncated": false}),
-            };
-            repository.insert(alias, blob);
-        }
-        Some((
-            consumed,
-            RecordedResponse {
-                status: 200,
-                headers: BTreeMap::from([(
-                    "content-type".to_owned(),
-                    vec!["application/json".to_owned()],
-                )]),
-                body: Body::Json(serde_json::json!({
-                    "data": { "repository": repository }
-                })),
-            },
-        ))
-    }
 }
 
 impl Transport for Replay {
@@ -369,12 +260,6 @@ impl Transport for Replay {
             {
                 Some(index) => index,
                 None => {
-                    if let Some((consumed, response)) = self.blob_batch(&request, &key, &used) {
-                        for index in consumed {
-                            used[index] = true;
-                        }
-                        return Ok(respond(&response).expect("a synthesized batch is well formed"));
-                    }
                     // An unmatched request is an ordinary transport failure:
                     // callers decide whether a missing interaction matters.
                     return Err(patchula_http::Error::Network);
@@ -551,4 +436,21 @@ pub fn check_directory(path: &Path, redactor: &Redactor) -> Result<usize, Error>
         }
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::git_blob_sha;
+
+    #[test]
+    fn git_blob_sha_matches_known_vectors() {
+        assert_eq!(
+            git_blob_sha(b"hello\n"),
+            "ce013625030ba8dba906f756967f9e9ca394464a"
+        );
+        assert_eq!(
+            git_blob_sha(b""),
+            "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        );
+    }
 }
