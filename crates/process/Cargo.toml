@@ -11,6 +11,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-base64 = "0.23"
+serde = { workspace = true }
 rustix = { version = "1", features = ["process"] }
 tokio = { workspace = true, features = ["process", "io-util"] }

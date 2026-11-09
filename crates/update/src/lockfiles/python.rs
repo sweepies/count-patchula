@@ -36,7 +36,7 @@ impl Runner {
         &self,
         context: node::NodeContext<'_>,
         jobs: &[&Job],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let node::NodeContext {
             driver,
             root,
@@ -103,6 +103,7 @@ impl Runner {
                             ("UV_NO_PROGRESS".into(), "1".into()),
                         ],
                         credentials: credentials::scopes(netrc_entries.iter().copied()),
+                        secrets: credentials::secrets(netrc_entries.iter().copied()),
                         public,
                         args,
                     },
@@ -139,6 +140,9 @@ impl Runner {
                         credentials: credentials::scopes(
                             poetry_entries.iter().chain(netrc_entries.iter()).copied(),
                         ),
+                        secrets: credentials::secrets(
+                            poetry_entries.iter().chain(netrc_entries.iter()).copied(),
+                        ),
                         public,
                         args,
                     },
@@ -160,7 +164,7 @@ impl Runner {
                 self.held_tool(driver, invocation).await?;
             }
             if !cwd.join(leaf).is_file() {
-                return Err(format!("tool did not produce {leaf}"));
+                return Err(format!("tool did not produce {leaf}").into());
             }
             let before = baseline
                 .get(&node::join(directory, leaf))
@@ -178,7 +182,8 @@ impl Runner {
                     } else {
                         directory
                     }
-                ));
+                )
+                .into());
             }
         }
         Ok(())

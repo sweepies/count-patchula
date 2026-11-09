@@ -35,7 +35,7 @@ impl Runner {
         &self,
         context: node::NodeContext<'_>,
         jobs: &[&Job],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let node::NodeContext {
             driver,
             root,
@@ -54,7 +54,8 @@ impl Runner {
         if config.lockfiles.php == PhpBuild::Static && !full {
             return Err(format!(
                 "static PHP needs an exact version, not {php}; pin php to x.y.z or set lockfiles.php = \"compiled\""
-            ));
+            )
+            .into());
         }
         let cwd = root.join(directory);
         let lock = node::join(directory, "composer.lock");
@@ -109,6 +110,7 @@ impl Runner {
                 cwd: Some(cwd),
                 env,
                 credentials: credentials::scopes(entries.iter().copied()),
+                secrets: credentials::secrets(entries.iter().copied()),
                 public,
                 args,
             },
@@ -124,7 +126,8 @@ impl Runner {
                 } else {
                     directory
                 }
-            ));
+            )
+            .into());
         }
         Ok(())
     }

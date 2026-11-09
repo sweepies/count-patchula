@@ -389,12 +389,19 @@ async fn a_stuck_install_is_reported_and_retried_by_the_next_lookup() {
     impl patchula_process::Executor for Failing {
         fn run(
             &self,
-            _: patchula_process::CommandSpec,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + '_>>
-        {
+            command: patchula_process::CommandSpec,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Vec<u8>, patchula_process::Failure>>
+                    + Send
+                    + '_,
+            >,
+        > {
             Box::pin(async move {
                 self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Err("tool exceeded 1800s time limit".into())
+                Err(patchula_process::Failure::TimedOut {
+                    limit: command.timeout,
+                })
             })
         }
     }

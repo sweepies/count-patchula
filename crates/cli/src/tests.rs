@@ -388,13 +388,20 @@ fn github_remotes_name_their_repository() {
     }
 }
 
+/// How the `gh` stand-in fails.
+#[derive(Clone, Copy, Debug)]
+enum GhFailure {
+    Missing,
+    SignedOut,
+    Hung,
+}
 /// Stands in for `gh`: records each command and answers with `result`.
 struct Gh {
-    result: Result<&'static str, &'static str>,
+    result: Result<&'static str, GhFailure>,
     calls: Mutex<Vec<(String, Vec<String>, std::time::Duration)>>,
 }
 impl Gh {
-    fn answering(result: Result<&'static str, &'static str>) -> Self {
+    fn answering(result: Result<&'static str, GhFailure>) -> Self {
         Self {
             result,
             calls: Mutex::default(),
@@ -405,8 +412,13 @@ impl patchula_process::Executor for Gh {
     fn run(
         &self,
         command: patchula_process::CommandSpec,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + Send + '_>>
-    {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<u8>, patchula_process::Failure>>
+                + Send
+                + '_,
+        >,
+    > {
         self.calls.lock().unwrap().push((
             command.program.display().to_string(),
             command.args,
@@ -415,7 +427,20 @@ impl patchula_process::Executor for Gh {
         let result = self
             .result
             .map(|out| out.as_bytes().to_vec())
-            .map_err(String::from);
+            .map_err(|kind| match kind {
+                GhFailure::Missing => patchula_process::Failure::Spawn {
+                    program: "gh".into(),
+                    message: "No such file or directory".into(),
+                },
+                GhFailure::SignedOut => patchula_process::Failure::Exited {
+                    status: "exit status: 1".into(),
+                    stdout: String::new(),
+                    stderr: "no oauth token found for github.com".into(),
+                },
+                GhFailure::Hung => patchula_process::Failure::TimedOut {
+                    limit: command.timeout,
+                },
+            });
         Box::pin(async move { result })
     }
 }
@@ -472,9 +497,9 @@ async fn without_variables_the_github_cli_token_for_github_com_is_used() {
 #[tokio::test]
 async fn a_missing_signed_out_or_hung_github_cli_gives_no_token() {
     for result in [
-        Err("cannot start gh: No such file or directory"),
-        Err("exit status: 1: no oauth token found for github.com"),
-        Err("tool exceeded 10s time limit"),
+        Err(GhFailure::Missing),
+        Err(GhFailure::SignedOut),
+        Err(GhFailure::Hung),
         Ok("  \n"),
     ] {
         let gh = Gh::answering(result);

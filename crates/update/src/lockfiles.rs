@@ -23,7 +23,7 @@ use futures_util::StreamExt;
 use patchula_cache::State;
 use patchula_config::{Config, NpmEngine};
 use patchula_manager::Dependency;
-use patchula_process::{Executor, SystemExecutor};
+use patchula_process::{Executor, Failure, SystemExecutor};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
 use patchula_words::{Manager, Source};
 use serde::{Deserialize, Serialize};
@@ -527,6 +527,7 @@ pub fn maintenance(
         batch: None,
         tooling: Vec::new(),
         hold: (!due).then_some(crate::plan::Hold::MaintenanceWindow),
+        failure: None,
     }))
 }
 
@@ -766,7 +767,18 @@ impl Runner {
             Ok(added) => added,
             Err(error) => {
                 plan.action.status = BranchStatus::Error;
-                plan.action.reason = Some(format!("lockfile generation failed: {error}"));
+                match error {
+                    Error::Tool(tool) => {
+                        plan.action.reason = Some(format!("lockfile generation failed: {tool}"));
+                        plan.failure = Some(crate::text::tool_failure(
+                            &format!("lockfile generation failed: {}", tool.context),
+                            &tool.failure,
+                        ));
+                    }
+                    Error::Text(text) => {
+                        plan.action.reason = Some(format!("lockfile generation failed: {text}"));
+                    }
+                }
                 BTreeMap::new()
             }
         }
@@ -775,7 +787,7 @@ impl Runner {
         &self,
         plan: &mut Plan,
         config: &Config,
-    ) -> Result<BTreeMap<String, Blob>, String> {
+    ) -> Result<BTreeMap<String, Blob>, Error> {
         std::fs::create_dir_all(&self.cache).map_err(|e| e.to_string())?;
         self.prune_caches();
         let run = tempfile::Builder::new()
@@ -808,7 +820,7 @@ impl Runner {
             .filter(|(path, _)| scanner.credential_checked(path))
         {
             if let Some(kind) = patchula_manager::committed_credentials(path, text) {
-                return Err(patchula_manager::credential_reason(path, &kind));
+                return Err(patchula_manager::credential_reason(path, &kind).into());
             }
         }
         for (path, content) in &plan.contents {
@@ -958,6 +970,7 @@ impl Runner {
                         .collect();
                     let (env, entries) = self.cargo_env(&registries);
                     let credentials = credentials::scopes(entries.iter().copied());
+                    let secrets = credentials::secrets(entries.iter().copied());
                     for job in jobs {
                         self.cargo_update(
                             &driver,
@@ -965,7 +978,7 @@ impl Runner {
                             &versions["rust"],
                             job,
                             plan.maintenance,
-                            (&env, &credentials, public),
+                            (&env, &credentials, &secrets, public),
                         )
                         .await?;
                     }
@@ -976,6 +989,7 @@ impl Runner {
                     // finishes, and their hosts private to Go.
                     let (netrc, hosts, entries) = self.netrc();
                     let credentials = credentials::scopes(entries.iter().copied());
+                    let secrets = credentials::secrets(entries.iter().copied());
                     let held = !hosts.is_empty();
                     let mut _netrc = node::Private::default();
                     let mut env = Vec::new();
@@ -1046,6 +1060,7 @@ impl Runner {
                                         cwd: None,
                                         env: run_env,
                                         credentials: credentials.clone(),
+                                        secrets: secrets.clone(),
                                         public,
                                         args: args.clone(),
                                     },
@@ -1079,6 +1094,7 @@ impl Runner {
                             cwd: None,
                             env,
                             credentials: credentials::scopes(entries.iter().copied()),
+                            secrets: credentials::secrets(entries.iter().copied()),
                             public: false,
                             args: vec![
                                 format!("-chdir={}", cwd.display()),
@@ -1107,7 +1123,7 @@ impl Runner {
                 continue;
             }
             if !writable(&path) && plan.contents.get(&path) != after {
-                return Err(format!("tool modified unexpected file {path}"));
+                return Err(format!("tool modified unexpected file {path}").into());
             }
             if path.rsplit('/').next() == Some("mise.lock")
                 && !plan
@@ -1115,7 +1131,7 @@ impl Runner {
                     .iter()
                     .any(|j| j.ecosystem == Ecosystem::Mise && j.directory == directory(&path))
             {
-                return Err(format!("tool modified unexpected mise lockfile {path}"));
+                return Err(format!("tool modified unexpected mise lockfile {path}").into());
             }
             let old = before.map_or("", |b| b.content.as_str());
             let new = after.map_or("", String::as_str);
@@ -1167,8 +1183,9 @@ impl Runner {
         rust: &str,
         job: &Job,
         maintenance: bool,
-        (env, credentials, public): (&[(String, String)], &[String], bool),
-    ) -> Result<(), String> {
+        access: CargoAccess<'_>,
+    ) -> Result<(), Error> {
+        let (env, credentials, secrets, public) = access;
         let update = |args: Vec<String>| {
             let mut all = vec![
                 "update".into(),
@@ -1184,6 +1201,7 @@ impl Runner {
                     cwd: None,
                     env: env.to_vec(),
                     credentials: credentials.to_vec(),
+                    secrets: secrets.to_vec(),
                     public,
                     args: all,
                 },
@@ -1297,7 +1315,7 @@ impl Runner {
         }
         Ok((env, Some(hold)))
     }
-    async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
+    async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Error> {
         let mut spec = self.command(driver);
         // A first use installs the tool inside this call, from scratch.
         if !self.installed(&call.tools) {
@@ -1365,19 +1383,21 @@ impl Runner {
             spec.args.push(call.bin.clone());
         }
         spec.args.extend(call.args);
+        spec.secrets = call.secrets;
         let bin = call.bin;
-        let output = self
-            .executor
-            .run(spec)
-            .await
-            .map_err(|e| format!("{bin}: {e}"))?;
+        let output = self.executor.run(spec).await.map_err(|failure| {
+            Error::Tool(ToolFailure {
+                context: bin,
+                failure,
+            })
+        })?;
         self.record_use(&call.tools);
         Ok(output)
     }
     /// Run a tool that may hold registry credentials. When it does, a failure
     /// shows none of its output, which may quote what a private registry
     /// answered: failure reasons reach reports, dashboards and public pages.
-    async fn held_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, String> {
+    async fn held_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Error> {
         let bin = call.bin.clone();
         let held = !call.credentials.is_empty();
         let result = self.tool(driver, call).await;
@@ -1385,10 +1405,57 @@ impl Runner {
             return result;
         }
         result.map_err(|_| {
-            format!("{bin} failed while it held registry credentials, so its output is not shown")
+            Error::Text(format!(
+                "{bin} failed while it held registry credentials, so its output is not shown"
+            ))
         })
     }
 }
+
+/// A lockfile tool's process failure with what it ran, kept structured so
+/// the report renders it without reparsing prose.
+#[derive(Debug)]
+pub struct ToolFailure {
+    /// The binary that failed, such as `cargo`.
+    pub context: String,
+    pub failure: Failure,
+}
+impl std::fmt::Display for ToolFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.context, self.failure)
+    }
+}
+
+/// Why lockfile generation failed: a tool's process failure kept
+/// structured, or reason text.
+#[derive(Debug)]
+pub enum Error {
+    Tool(ToolFailure),
+    Text(String),
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tool(tool) => write!(f, "{tool}"),
+            Self::Text(text) => f.write_str(text),
+        }
+    }
+}
+impl From<String> for Error {
+    fn from(text: String) -> Self {
+        Self::Text(text)
+    }
+}
+impl From<&str> for Error {
+    fn from(text: &str) -> Self {
+        Self::Text(text.into())
+    }
+}
+
+/// What a Cargo run is given: its registry environment, the credential
+/// scopes it holds, every secret value a failure must not repeat, and
+/// whether it may share the `public` cache partition.
+type CargoAccess<'a> = (&'a [(String, String)], &'a [String], &'a [String], bool);
 
 /// One ecosystem tool invocation: the mise tools it needs, the binary to run
 /// and the arguments to pass.
@@ -1401,6 +1468,9 @@ struct Invocation {
     /// The `Credential::scope()`s of the registry entries this run receives.
     /// They decide its cache partition and whether a failure shows its output.
     credentials: Vec<String>,
+    /// Every secret value the run was given, in every form: a failure must
+    /// never repeat one.
+    secrets: Vec<String>,
     /// Whether the run can fetch only from its ecosystem's well-known
     /// public registry, which lets it share the `public` cache partition
     /// when it holds no operator credentials.

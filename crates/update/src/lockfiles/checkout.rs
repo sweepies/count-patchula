@@ -1,6 +1,6 @@
 use super::{
-    Blob, Ecosystem, Plan, Runner, blob_sha, cargo_config, collect, directory_of_cargo_config,
-    hash, materialized, safe_path, under,
+    Blob, Ecosystem, Error, Plan, Runner, ToolFailure, blob_sha, cargo_config, collect,
+    directory_of_cargo_config, hash, materialized, safe_path, under,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::{collections::BTreeMap, path::Path};
@@ -11,7 +11,7 @@ impl Runner {
         driver: &Path,
         git_dir: &Path,
         args: Vec<String>,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, Error> {
         let mut spec = self.command(driver);
         spec.args.extend([
             "exec".into(),
@@ -43,27 +43,26 @@ impl Runner {
         } else {
             self.token.clone()
         };
-        spec.env.insert(
-            "GIT_CONFIG_VALUE_0".into(),
-            format!(
-                "Authorization: Basic {}",
-                STANDARD.encode(format!("x-access-token:{token}"))
-            )
-            .into(),
-        );
+        let encoded = STANDARD.encode(format!("x-access-token:{token}"));
+        let header = format!("Authorization: Basic {encoded}");
+        spec.env
+            .insert("GIT_CONFIG_VALUE_0".into(), header.clone().into());
+        spec.secrets = vec![header, encoded, token];
         spec.complete_output = true;
         spec.output_limit = 16 * 1024 * 1024;
-        self.executor
-            .run(spec)
-            .await
-            .map_err(|e| format!("git: {e}"))
+        self.executor.run(spec).await.map_err(|failure| {
+            Error::Tool(ToolFailure {
+                context: "git".into(),
+                failure,
+            })
+        })
     }
     pub(super) async fn checkout(
         &self,
         plan: &Plan,
         root: &Path,
         driver: &Path,
-    ) -> Result<(BTreeMap<String, Blob>, BTreeMap<String, String>), String> {
+    ) -> Result<(BTreeMap<String, Blob>, BTreeMap<String, String>), Error> {
         let clones = self.cache.join("clones");
         std::fs::create_dir_all(&clones).map_err(|e| e.to_string())?;
         let name = hash(plan.action.repository.as_bytes());
@@ -188,7 +187,7 @@ impl Runner {
                 continue;
             }
             if !regular {
-                return Err(format!("unsupported checkout mode for {path}"));
+                return Err(format!("unsupported checkout mode for {path}").into());
             }
             entries.insert(path.to_owned(), (oid.to_owned(), mode.to_owned()));
         }
@@ -208,7 +207,7 @@ impl Runner {
         for (path, content) in files {
             let (sha, mode) = entries.get(&path).ok_or("unexpected checkout file")?;
             if blob_sha(&content) != *sha {
-                return Err(format!("checkout blob SHA mismatch: {path}"));
+                return Err(format!("checkout blob SHA mismatch: {path}").into());
             }
             baseline.insert(
                 path,
@@ -222,10 +221,9 @@ impl Runner {
         // Manifest edits were extracted through the API; the clone must agree.
         for file in &plan.action.files {
             if baseline.get(&file.path).map(|b| b.sha.as_str()) != Some(&file.blob_sha) {
-                return Err(format!(
-                    "checkout disagrees with extracted manifest {}",
-                    file.path
-                ));
+                return Err(
+                    format!("checkout disagrees with extracted manifest {}", file.path).into(),
+                );
             }
         }
         let cargo_configs = self
@@ -257,7 +255,7 @@ impl Runner {
         base: &str,
         driver: &Path,
         oids: BTreeMap<String, String>,
-    ) -> Result<BTreeMap<String, String>, String> {
+    ) -> Result<BTreeMap<String, String>, Error> {
         let mut out = BTreeMap::new();
         if oids.is_empty() {
             return Ok(out);

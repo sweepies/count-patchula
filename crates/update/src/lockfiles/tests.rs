@@ -1,6 +1,6 @@
 use super::*;
 use patchula_http::{Exchange, Transport};
-use patchula_process::CommandSpec;
+use patchula_process::{CommandSpec, Failure};
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 mod real_python_indexes;
@@ -34,7 +34,7 @@ impl Executor for Fixture {
     fn run(
         &self,
         mut spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         Box::pin(async move {
             self.calls.lock().unwrap().push(spec.args.clone());
             self.envs.lock().unwrap().push(spec.env.clone());
@@ -199,7 +199,7 @@ impl Executor for Fixture {
             let root = spec.cwd.parent().unwrap().join("tree");
             if self.fail {
                 write(&root, "bun.lock", "half-written").unwrap();
-                return Err("fixture resolution failure".into());
+                return Err(Failure::Io("fixture resolution failure".into()));
             }
             let leaf = if let Some(leaf) = &self.leaf {
                 leaf.clone()
@@ -469,7 +469,7 @@ impl Executor for Overlap {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         use std::sync::atomic::Ordering;
         Box::pin(async move {
             let tool = !spec.args.iter().any(|arg| arg == "git");
@@ -1278,6 +1278,7 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
                 cwd: None,
                 env: Vec::new(),
                 credentials: Vec::new(),
+                secrets: Vec::new(),
                 public: false,
                 args: vec![
                     "-C".into(),
@@ -1291,7 +1292,7 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
         )
     };
     let stale = frozen("stale", &BTreeMap::new()).await.unwrap_err();
-    assert!(stale.contains("out of date"), "{stale}");
+    assert!(stale.to_string().contains("out of date"), "{stale}");
     frozen("accepted", &p.contents).await.unwrap();
 }
 
@@ -1370,6 +1371,7 @@ async fn process_output_is_bounded_and_tool_timeout_terminates_the_process() {
             .run(spec)
             .await
             .unwrap_err()
+            .to_string()
             .contains("time limit")
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(3));
@@ -1379,8 +1381,8 @@ async fn process_output_is_bounded_and_tool_timeout_terminates_the_process() {
     spec.env
         .insert("MISE_EXEC_AUTO_INSTALL".into(), "false".into());
     let error = SystemExecutor.run(spec).await.unwrap_err();
-    assert!(error.contains("exit"));
-    assert!(error.len() <= 8300);
+    assert!(error.to_string().contains("exit"));
+    assert!(error.to_string().len() <= 8300);
 }
 
 struct LocalCheckout {
@@ -1391,7 +1393,7 @@ impl Executor for LocalCheckout {
     fn run(
         &self,
         mut spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         Box::pin(async move {
             self.calls.lock().unwrap().push(spec.args.clone());
             for arg in &mut spec.args {
@@ -1592,7 +1594,7 @@ impl Executor for CargoFixture {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         if spec.args.iter().any(|arg| arg == "git") {
             return self.git.run(spec);
         }
@@ -1619,7 +1621,7 @@ impl Executor for CargoFixture {
                     std::fs::write(&lock, text.replace("0.23.1", "0.23.0")).unwrap();
                 }
                 _ => {
-                    return Err("failed to select a version for the requirement `base64 = \"^0.22\"` required by package `other`".into());
+                    return Err(Failure::Io("failed to select a version for the requirement `base64 = \"^0.22\"` required by package `other`".into()));
                 }
             }
             Ok(Vec::new())
@@ -1638,7 +1640,7 @@ impl Executor for HeldLock {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         Box::pin(async move {
             let at = spec.args.iter().position(|arg| arg == "cargo").unwrap();
             let args = spec.args[at + 1..].to_vec();
@@ -1668,9 +1670,9 @@ impl Executor for HeldLock {
                                 "registry+https://github.com/rust-lang/crates.io-index#hcl-edit@{held}"
                             )
                     {
-                        return Err(format!(
+                        return Err(Failure::Io(format!(
                             "error: package ID specification `{spec}` did not match any packages\nhelp: there are similar package ID specifications:\n\n  hcl-edit@{held}"
-                        ));
+                        )));
                     }
                     std::fs::write(&path, lock.replace(&held, target)).unwrap();
                 }
@@ -1758,7 +1760,7 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
             lock_only: false,
         };
         runner
-            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[], false))
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[], &[], false))
             .await
             .unwrap_or_else(|e| panic!("{locked} -> {target}: {e}"));
         let commands: Vec<_> = executor
@@ -1784,7 +1786,7 @@ impl Executor for CargoEnv {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         if spec.args.iter().any(|arg| arg == "git") {
             return self.git.run(spec);
         }
@@ -1988,7 +1990,7 @@ impl Executor for MiseFixture {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         if spec.args.iter().any(|arg| arg == "git") {
             return self.git.run(spec);
         }
@@ -2014,7 +2016,7 @@ impl Executor for MiseFixture {
             assert!(!text.contains("tasks") && !text.contains("env") && !text.contains("hooks"));
             let mut lock = std::fs::read_to_string(work.join("mise.lock")).unwrap();
             if self.fault == "failure" {
-                return Err("offline fixture failure".into());
+                return Err(Failure::Io("offline fixture failure".into()));
             }
             if self.fault != "stale" {
                 lock = lock.replace("22.0.0", "24.0.0");
@@ -2197,7 +2199,7 @@ impl Executor for ConfigSpy {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         if let Some(at) = spec.args.iter().position(|arg| arg == "--cd") {
             let work = Path::new(&spec.args[at + 1]);
             let config = std::fs::read_to_string(work.join("mise.toml")).unwrap();
@@ -2347,7 +2349,7 @@ impl Executor for LockEdit {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         let work = spec
             .args
             .iter()
@@ -3063,7 +3065,7 @@ impl Executor for Recorder {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         Box::pin(async move {
             assert!(spec.env.contains_key(std::ffi::OsStr::new("MISE_DATA_DIR")));
             self.0.lock().unwrap().push(spec.args.clone());
@@ -3443,7 +3445,7 @@ impl Executor for Timeouts {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         Box::pin(async move {
             if spec.args.iter().any(|a| a == "exec") {
                 self.0.lock().unwrap().push(spec.timeout);
@@ -3475,6 +3477,7 @@ async fn first_tool_use_allows_for_the_install() {
         cwd: None,
         env: Vec::new(),
         credentials: Vec::new(),
+        secrets: Vec::new(),
         public: false,
         args: vec!["lock".into()],
     };
@@ -3664,7 +3667,7 @@ impl Executor for SourcedLock {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         Box::pin(async move {
             let at = spec.args.iter().position(|arg| arg == "cargo").unwrap();
             let args = spec.args[at + 1..].to_vec();
@@ -3695,15 +3698,15 @@ impl Executor for SourcedLock {
                 .collect();
             match matching.as_slice() {
                 [] => {
-                    return Err(format!(
+                    return Err(Failure::Io(format!(
                         "package ID specification `{id}` did not match any packages"
-                    ));
+                    )));
                 }
                 [n] => packages.get_mut(*n).unwrap()["version"] = toml_edit::value(*target),
                 _ => {
-                    return Err(format!(
+                    return Err(Failure::Io(format!(
                         "There are multiple `{name}` packages in your project, and the specification `{id}` is ambiguous."
-                    ));
+                    )));
                 }
             }
             std::fs::write(&path, lock.to_string()).unwrap();
@@ -3753,7 +3756,7 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
             lock_only: false,
         };
         runner
-            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[], false))
+            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[], &[], false))
             .await
             .unwrap_or_else(|e| panic!("git {git}, crates.io {registry}: {e}"));
         assert_eq!(
@@ -3906,7 +3909,7 @@ impl Executor for NixFake {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         if !spec.args.iter().any(|a| a == "nix") {
             return self.inner.run(spec);
         }
@@ -4429,7 +4432,7 @@ impl Executor for Packslip {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         Box::pin(async move {
             let install = spec
                 .args
@@ -4440,7 +4443,11 @@ impl Executor for Packslip {
             self.calls.lock().unwrap().push(spec);
             tokio::task::yield_now().await;
             if self.fail {
-                return Err("exit exit status: 1:  Error: \n   0: \u{1b}[91mHTTP 403 for https://api.github.com/repos/jdx/mise\u{1b}[0m\n\nLocation:\n   \u{1b}[35msrc/install.rs\u{1b}[0m:\u{1b}[35m411\u{1b}[0m\n".into());
+                return Err(Failure::Exited {
+                    status: "exit status: 1".into(),
+                    stdout: " Error: \n   0: \u{1b}[91mHTTP 403 for https://api.github.com/repos/jdx/mise\u{1b}[0m\n\nLocation:\n   \u{1b}[35msrc/install.rs\u{1b}[0m:\u{1b}[35m411\u{1b}[0m\n".into(),
+                    stderr: String::new(),
+                });
             }
             std::fs::create_dir_all(install.join("bin")).unwrap();
             std::fs::write(install.join("bin/mise"), "").unwrap();
@@ -4551,7 +4558,7 @@ async fn a_failed_mise_install_says_why() {
     assert_eq!(
         error,
         format!(
-            "packslip could not install mise {}: exit exit status: 1: Error: 0: HTTP 403 for https://api.github.com/repos/jdx/mise",
+            "packslip could not install mise {}: exit status: 1: Error: 0: HTTP 403 for https://api.github.com/repos/jdx/mise",
             pinned_mise()
         )
     );
@@ -5793,6 +5800,7 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         cwd: None,
         env: Vec::new(),
         credentials,
+        secrets: Vec::new(),
         public,
         args: vec!["x".into()],
     };
@@ -5959,6 +5967,7 @@ async fn tool_caches_partition_by_installation_when_not_public() {
         cwd: None,
         env: Vec::new(),
         credentials: Vec::new(),
+        secrets: Vec::new(),
         public,
         args: vec!["x".into()],
     };

@@ -1,4 +1,4 @@
-cargo: exit exit status: 101:  mise by @jdx – installing 1 tool
+ mise by @jdx – installing 1 tool
 mise rust@1.99.0 info: downloading installer
 mise rust@1.99.0 warn: it looks like you have an existing rustup settings file at:
 mise rust@1.99.0 warn: /home/runner/.rustup/settings.toml

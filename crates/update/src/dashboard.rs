@@ -460,7 +460,10 @@ pub fn render(
                     Action::Create(update_key(plan)),
                 )
             } else {
-                let failure = text::failure(reason);
+                let failure = plan
+                    .failure
+                    .clone()
+                    .unwrap_or_else(|| text::failure(reason));
                 let mut row = format!("- {}: {}\n", titled(plan), escape(&failure.summary));
                 if let Some(detail) = &failure.detail {
                     row.push_str(&details(detail, "  "));

@@ -1,19 +1,25 @@
 //! Runs one external command with an explicit environment, a time limit, a
 //! bounded output and a process group that dies with it.
 #![forbid(unsafe_code)]
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::{
-    collections::BTreeMap, ffi::OsString, future::Future, path::PathBuf, pin::Pin, process::Stdio,
-    time::Duration,
+    collections::BTreeMap, error::Error, ffi::OsString, fmt, future::Future, path::PathBuf,
+    pin::Pin, process::Stdio, time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-/// Deliberately not Debug: the environment may contain authorization.
+/// Bytes of each stream a failed command keeps for its `Failure`.
+const FAILURE_STREAM_LIMIT: usize = 4096;
+
+/// Deliberately not Debug: the environment may contain authorization, and
+/// `secrets` the values a failure must never repeat.
 pub struct CommandSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<OsString, OsString>,
+    /// Every secret the run was given, in every form it was delivered:
+    /// env values, file contents, encodings. Empty strings are ignored.
+    pub secrets: Vec<String>,
     pub timeout: Duration,
     pub output_limit: usize,
     pub complete_output: bool,
@@ -22,18 +28,114 @@ pub trait Executor: Send + Sync {
     fn run(
         &self,
         command: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>>;
 }
+
+/// How a command failed. Output is already redacted for every declared
+/// secret and bounded to [`FAILURE_STREAM_LIMIT`] bytes a stream.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Failure {
+    /// The program could not be started.
+    Spawn {
+        program: PathBuf,
+        message: String,
+    },
+    TimedOut {
+        limit: Duration,
+    },
+    /// The program ran and failed.
+    Exited {
+        status: String,
+        stdout: String,
+        stderr: String,
+    },
+    OutputTooLarge,
+    Io(String),
+}
+
+impl fmt::Display for Failure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Spawn { program, message } => {
+                write!(f, "cannot start {}: {message}", program.display())
+            }
+            Self::TimedOut { limit } => {
+                write!(f, "tool exceeded {}s time limit", limit.as_secs())
+            }
+            Self::Exited {
+                status,
+                stdout,
+                stderr,
+            } => write!(f, "{status}: {stdout} {stderr}"),
+            Self::OutputTooLarge => f.write_str("command output exceeded size limit"),
+            Self::Io(message) => f.write_str(message),
+        }
+    }
+}
+impl Error for Failure {}
+
+/// `text` with every declared secret replaced; longer secrets first so an
+/// overlapping pair cannot leave half of the longer one behind.
+fn redact(text: &str, secrets: &[String]) -> String {
+    let mut secrets: Vec<&str> = secrets
+        .iter()
+        .map(String::as_str)
+        .filter(|secret| !secret.is_empty())
+        .collect();
+    if secrets.is_empty() || text.is_empty() {
+        return text.to_owned();
+    }
+    secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+    let mut redacted = text.to_owned();
+    for secret in secrets {
+        redacted = redacted.replace(secret, "[redacted]");
+    }
+    redacted
+}
+
+/// One failure stream: redacted over everything captured, then cut to
+/// [`FAILURE_STREAM_LIMIT`]. When the capture itself stopped early, a tail that
+/// begins a secret is dropped too, so no fragment of one survives the cut.
+fn failure_stream(captured: &[u8], cut_short: bool, secrets: &[String]) -> String {
+    let mut text = redact(&String::from_utf8_lossy(captured), secrets);
+    let mut end = text.len().min(FAILURE_STREAM_LIMIT);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let cut = end < text.len() || cut_short;
+    text.truncate(end);
+    if cut {
+        let fragment = secrets
+            .iter()
+            .flat_map(|secret| {
+                (1..secret.len())
+                    .filter(|k| secret.is_char_boundary(*k))
+                    .map(move |k| &secret[..k])
+            })
+            .filter(|prefix| text.ends_with(prefix))
+            .map(str::len)
+            .max();
+        if let Some(fragment) = fragment {
+            text.truncate(text.len() - fragment);
+        }
+    }
+    text
+}
+
 pub struct SystemExecutor;
 async fn drain(
     mut reader: impl AsyncRead + Unpin,
     limit: usize,
-) -> Result<(Vec<u8>, bool), String> {
+) -> Result<(Vec<u8>, bool), Failure> {
     let mut result = Vec::new();
     let mut truncated = false;
     let mut buf = [0; 8192];
     loop {
-        let len = reader.read(&mut buf).await.map_err(|e| e.to_string())?;
+        let len = reader
+            .read(&mut buf)
+            .await
+            .map_err(|e| Failure::Io(e.to_string()))?;
         if len == 0 {
             break;
         }
@@ -47,7 +149,7 @@ impl Executor for SystemExecutor {
     fn run(
         &self,
         spec: CommandSpec,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         Box::pin(async move {
             let mut command = tokio::process::Command::new(&spec.program);
             command
@@ -63,19 +165,36 @@ impl Executor for SystemExecutor {
             {
                 command.process_group(0);
             }
-            let mut child = command
-                .spawn()
-                .map_err(|e| format!("cannot start mise: {e}"))?;
+            let mut child = command.spawn().map_err(|e| Failure::Spawn {
+                program: spec.program.clone(),
+                message: e.to_string(),
+            })?;
             let pid = child.id();
-            let stdout = child.stdout.take().ok_or("missing stdout")?;
-            let stderr = child.stderr.take().ok_or("missing stderr")?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| Failure::Io("missing stdout".into()))?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| Failure::Io("missing stderr".into()))?;
+            // A secret longer than the lookahead that starts inside the kept
+            // window is cut short, and `failure_stream` drops its fragment.
+            let longest = spec
+                .secrets
+                .iter()
+                .map(String::len)
+                .max()
+                .unwrap_or(0)
+                .min(FAILURE_STREAM_LIMIT);
             let result = tokio::time::timeout(spec.timeout, async {
                 let (status, out, err) = tokio::join!(
                     child.wait(),
                     drain(stdout, spec.output_limit),
-                    drain(stderr, 4096)
+                    // Room for a secret that starts inside the kept window.
+                    drain(stderr, FAILURE_STREAM_LIMIT + longest)
                 );
-                Ok::<_, String>((status.map_err(|e| e.to_string())?, out?, err?))
+                Ok::<_, Failure>((status.map_err(|e| Failure::Io(e.to_string()))?, out?, err?))
             })
             .await;
             match result {
@@ -90,71 +209,48 @@ impl Executor for SystemExecutor {
                     }
                     let _ = child.kill().await;
                     let _ = child.wait().await;
-                    Err(format!(
-                        "tool exceeded {}s time limit",
-                        spec.timeout.as_secs()
-                    ))
+                    Err(Failure::TimedOut {
+                        limit: spec.timeout,
+                    })
                 }
                 Ok(result) => {
-                    let (status, (out, truncated), (err, _)) = result?;
+                    let (status, (out, truncated), (err, err_truncated)) = result?;
                     if !status.success() {
-                        let mut message = format!(
-                            "exit {status}: {} {}",
-                            String::from_utf8_lossy(&out[..out.len().min(4096)]),
-                            String::from_utf8_lossy(&err)
-                        );
-                        // Credentials passed through the environment never reach errors.
-                        if let Some(token) = spec
-                            .env
-                            .get(std::ffi::OsStr::new("MISE_GITHUB_TOKEN"))
-                            .and_then(|s| s.to_str())
-                            .filter(|token| !token.is_empty())
-                        {
-                            message = message.replace(token, "[redacted]");
-                        }
-                        // nix reads its per-host tokens from NIX_CONFIG.
-                        if let Some(config) = spec
-                            .env
-                            .get(std::ffi::OsStr::new("NIX_CONFIG"))
-                            .and_then(|s| s.to_str())
-                        {
-                            for token in config
-                                .lines()
-                                .filter_map(|line| line.trim().strip_prefix("access-tokens"))
-                                .flat_map(|tokens| {
-                                    tokens.trim_start_matches([' ', '=']).split_whitespace()
-                                })
-                                .filter_map(|entry| entry.split_once('=').map(|(_, token)| token))
-                                .filter(|token| !token.is_empty())
-                            {
-                                message = message.replace(token, "[redacted]");
-                            }
-                        }
-                        if let Some(value) = spec
-                            .env
-                            .get(std::ffi::OsStr::new("GIT_CONFIG_VALUE_0"))
-                            .and_then(|s| s.to_str())
-                        {
-                            message = message.replace(value, "[redacted]");
-                            if let Some(encoded) = value.strip_prefix("Authorization: Basic ") {
-                                message = message.replace(encoded, "[redacted]");
-                                if let Ok(bytes) = STANDARD.decode(encoded)
-                                    && let Ok(credentials) = String::from_utf8(bytes)
-                                    && let Some((_, token)) = credentials.split_once(':')
-                                    && !token.is_empty()
-                                {
-                                    message = message.replace(token, "[redacted]");
-                                }
-                            }
-                        }
-                        Err(message)
+                        Err(Failure::Exited {
+                            status: status.to_string(),
+                            stdout: failure_stream(&out, truncated, &spec.secrets),
+                            stderr: failure_stream(&err, err_truncated, &spec.secrets),
+                        })
                     } else if truncated && spec.complete_output {
-                        Err("command output exceeded size limit".into())
+                        Err(Failure::OutputTooLarge)
                     } else {
                         Ok(out)
                     }
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_secret_across_the_cut_leaves_no_fragment() {
+        let secret = "s3cr3t-token-value".to_string();
+        let mut out = "x".repeat(FAILURE_STREAM_LIMIT - 5).into_bytes();
+        out.extend_from_slice(secret.as_bytes());
+        let text = failure_stream(&out, false, std::slice::from_ref(&secret));
+        assert!(!text.contains("s3cr"), "{}", &text[text.len() - 20..]);
+        assert!(text.len() <= FAILURE_STREAM_LIMIT);
+    }
+
+    #[test]
+    fn a_capture_cut_inside_a_secret_drops_the_fragment() {
+        let secret = "s3cr3t-token-value".to_string();
+        let out = format!("error: {}", &secret[..6]);
+        let text = failure_stream(out.as_bytes(), true, std::slice::from_ref(&secret));
+        assert_eq!(text, "error: ");
     }
 }

@@ -556,6 +556,7 @@ fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
             batch: None,
             tooling: Vec::new(),
             hold: None,
+            failure: None,
         };
         plan.hold(hold);
         plan

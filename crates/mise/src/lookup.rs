@@ -1,6 +1,6 @@
 //! Version lists from the pinned mise, run in a sandbox.
 use crate::{Error, policy, sandbox_env};
-use patchula_process::{CommandSpec, Executor};
+use patchula_process::{CommandSpec, Executor, Failure};
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
@@ -101,6 +101,7 @@ impl Lookup {
             args: vec!["--no-config".into()],
             cwd: work.into(),
             env,
+            secrets: token.map(str::to_owned).into_iter().collect(),
             timeout: LOOKUP_TIMEOUT,
             output_limit: OUTPUT_LIMIT,
             complete_output: true,
@@ -114,10 +115,10 @@ impl Lookup {
         versions_host: bool,
         configure: impl FnOnce(&mut CommandSpec),
     ) -> Result<Vec<u8>, Error> {
-        let scratch = tempfile::tempdir().map_err(|e| Error::Failed(e.to_string()))?;
+        let scratch = tempfile::tempdir().map_err(|e| Error::Failed(Failure::Io(e.to_string())))?;
         let (home, work) = (scratch.path().join("home"), scratch.path().join("work"));
         for dir in [&home, &work] {
-            std::fs::create_dir_all(dir).map_err(|e| Error::Failed(e.to_string()))?;
+            std::fs::create_dir_all(dir).map_err(|e| Error::Failed(Failure::Io(e.to_string())))?;
         }
         let mut spec = self.spec(&home, &work, token, versions_host);
         configure(&mut spec);
@@ -159,7 +160,7 @@ impl Lookup {
             .slots
             .acquire()
             .await
-            .map_err(|e| Error::Failed(e.to_string()))?;
+            .map_err(|e| Error::Failed(Failure::Io(e.to_string())))?;
         self.install(query.token).await?;
         let mut args = vec!["ls-remote", "--json", "--prerelease", "--", query.tool];
         args.extend(query.prefix);
@@ -182,7 +183,7 @@ impl Lookup {
             .slots
             .acquire()
             .await
-            .map_err(|e| Error::Failed(e.to_string()))?;
+            .map_err(|e| Error::Failed(Failure::Io(e.to_string())))?;
         self.install(token).await?;
         let out = self
             .run(token, true, |spec| {

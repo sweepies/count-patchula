@@ -4,6 +4,40 @@ use reqwest::{Request, Url};
 use std::time::{Duration, Instant};
 use tracing::Instrument;
 
+/// Prefixes that mark credential material: the token shapes tracing and
+/// test recordings both redact on. `v1.` keeps its own pattern in recordings:
+/// only a long run after it is a token, so versions such as v1.2.3 survive.
+pub const TOKEN_SHAPES: &[&str] = &[
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "ghu_",
+    "ghr_",
+    "github_pat_",
+    "npm_",
+    "sk-",
+    "xoxb-",
+    "xoxp-",
+];
+
+/// Whether `text` holds a token shape at a word boundary: `sk-` inside
+/// `task-1` is not a key.
+fn shaped(text: &str) -> bool {
+    TOKEN_SHAPES.iter().any(|shape| {
+        text.match_indices(shape).any(|(at, _)| {
+            !text[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    })
+}
+
+/// Words that mark credential material in a path without being a token
+/// shape: the schemes authorization headers use and credential query
+/// parameters. Tracing only; recordings get them from their own rules.
+const PATH_MARKERS: &[&str] = &["bearer", "authorization", "token="];
+
 pub struct RequestTrace {
     span: tracing::Span,
     started: Instant,
@@ -20,24 +54,7 @@ impl RequestTrace {
                 let lower = percent_encoding::percent_decode_str(part)
                     .decode_utf8_lossy()
                     .to_ascii_lowercase();
-                if [
-                    "ghp_",
-                    "gho_",
-                    "ghs_",
-                    "ghu_",
-                    "ghr_",
-                    "github_pat_",
-                    "npm_",
-                    "bearer",
-                    "authorization",
-                    "token=",
-                    "sk-",
-                    "xoxb-",
-                    "xoxp-",
-                ]
-                .iter()
-                .any(|prefix| lower.contains(prefix))
-                {
+                if shaped(&lower) || PATH_MARKERS.iter().any(|marker| lower.contains(marker)) {
                     "[redacted]"
                 } else {
                     part
@@ -109,5 +126,19 @@ impl PhaseTrace {
 impl Drop for PhaseTrace {
     fn drop(&mut self) {
         tracing::debug!(target: "patchula_http", phase = self.name, total_ms = self.started.elapsed().as_secs_f64() * 1000.0, "phase.end");
+    }
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::shaped;
+
+    #[test]
+    fn token_shapes_count_only_at_a_word_boundary() {
+        assert!(shaped("ghp_abc123"));
+        assert!(shaped("x-npm_abc"));
+        assert!(!shaped("task-1"));
+        assert!(!shaped("v1.0.0.info"));
+        assert!(!shaped("@v"));
     }
 }

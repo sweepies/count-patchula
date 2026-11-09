@@ -388,7 +388,11 @@ async fn node_keeps_its_catalog_when_the_lts_listing_fails() {
         run(&["node"], listing(&["22.1.0", "24.2.0", "26.1.0"])),
         run(
             &["node", "lts"],
-            Outcome::Error("exit status: 1: mise ERROR no such release line".into()),
+            Outcome::Failure(patchula_process::Failure::Exited {
+                status: "exit status: 1".into(),
+                stdout: String::new(),
+                stderr: "mise ERROR no such release line".into(),
+            }),
         ),
     ]));
     let catalog = client(Some(&replay), memory().await, "a-token")

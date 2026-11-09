@@ -231,7 +231,7 @@ impl Runner {
         jobs: &[&Job],
         maintenance: bool,
         config: &Config,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let directory = &jobs.first().ok_or("missing mise lock job")?.directory;
         let lock_path = if directory.is_empty() {
             "mise.lock".into()
@@ -405,10 +405,12 @@ impl Runner {
             ]);
         }
         command.args.extend(selected.iter().cloned());
-        self.executor
-            .run(command)
-            .await
-            .map_err(|e| format!("mise lock: {e}"))?;
+        self.executor.run(command).await.map_err(|failure| {
+            Error::Tool(ToolFailure {
+                context: "mise lock".into(),
+                failure,
+            })
+        })?;
         if std::fs::read_to_string(work.join("mise.toml")).map_err(|e| e.to_string())? != sanitized
         {
             return Err("mise lock modified the requested tool declarations".into());
@@ -443,10 +445,11 @@ impl Runner {
             if !declared.is_empty() && recorded != declared {
                 return Err(format!(
                     "mise lock recorded the requests {recorded:?} for {name}, not the manifest's {declared:?}"
-                ));
+                )
+                .into());
             }
             if !platforms(&before["tools"][name]).is_subset(&platforms(&after["tools"][name])) {
-                return Err(format!("mise lock dropped an existing platform for {name}"));
+                return Err(format!("mise lock dropped an existing platform for {name}").into());
             }
             for job in jobs
                 .iter()
@@ -459,7 +462,7 @@ impl Runner {
                         })
                     })
                 {
-                    return Err(format!("mise lock did not resolve {name} to {target}"));
+                    return Err(format!("mise lock did not resolve {name} to {target}").into());
                 }
             }
         }
@@ -472,6 +475,6 @@ impl Runner {
         {
             return Err("mise lock produced unsupported sidecar files".into());
         }
-        write(root, &lock_path, &generated)
+        write(root, &lock_path, &generated).map_err(Error::from)
     }
 }
