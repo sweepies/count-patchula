@@ -1,8 +1,5 @@
 use patchula_report::Repository;
-use patchula_update::{
-    Inventory,
-    dashboard::{self, MARKER},
-};
+use patchula_update::{Inventory, dashboard, markers::DASHBOARD as MARKER};
 use patchula_words::Recheck;
 use serde_json::json;
 
@@ -337,7 +334,7 @@ fn the_dashboard_hides_the_advertised_server_under_its_marker() {
         patchula_update::advertise::find(&text),
         Some("https://patchula.acme.dev")
     );
-    assert_eq!(text.lines().filter(|l| *l == dashboard::MARKER).count(), 1);
+    assert_eq!(text.lines().filter(|l| *l == MARKER).count(), 1);
     assert_eq!(
         patchula_update::advertise::find(&dashboard::render(&repo, &[], &[], Recheck::Now, None)),
         None

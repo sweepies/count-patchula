@@ -332,7 +332,7 @@ pub async fn restore_inventory(
             && (name.starts_with(&config.prs.branch)
                 || r["target"]["message"]
                     .as_str()
-                    .is_some_and(|m| m.contains("\nPatchula: v1")))
+                    .is_some_and(crate::trailers::version))
     });
     let mut restored = 0;
     for plan in plans
@@ -350,10 +350,21 @@ pub async fn restore_inventory(
                 pr["id"] == receipt.pr["node_id"]
                     && pr["state"] == "CLOSED"
                     && pr["merged"].as_bool() == Some(false)
-                    && pr["body"] == receipt.pr["body"]
+                    && crate::pull_requests::body_hash(pr["body"].as_str().unwrap_or(""))
+                        == crate::pull_requests::body_hash(
+                            receipt.pr["body"].as_str().unwrap_or(""),
+                        )
                     && actor_login(&pr["author"]).as_deref() == Some(actor)
-                    && pr["headRepository"]["nameWithOwner"] == repository.repository
-                    && pr["baseRepository"]["nameWithOwner"] == repository.repository
+                    && pr["headRepository"]["nameWithOwner"]
+                        .as_str()
+                        .is_some_and(|r| {
+                            crate::pull_requests::same_repository(r, &repository.repository)
+                        })
+                    && pr["baseRepository"]["nameWithOwner"]
+                        .as_str()
+                        .is_some_and(|r| {
+                            crate::pull_requests::same_repository(r, &repository.repository)
+                        })
             }) {
                 Err("pr-state-changed")
             } else {

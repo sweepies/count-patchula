@@ -2,7 +2,7 @@ use patchula_datasource::{Advisory, AdvisoryQuery, Affected, Event, Range};
 use patchula_lookup::{advisory_query, affects, fixes, report_advisories};
 use patchula_manager::{Dependency, Location};
 use patchula_versioning::Ecosystem;
-use patchula_words::{DependencyKind, Manager, Scheme, Source};
+use patchula_words::{DependencyKind, Manager, Scheme, Severity, Source};
 use std::sync::Arc;
 
 fn dependency(source: Source, package: &str, current: &str, resolved: Option<&str>) -> Dependency {
@@ -52,7 +52,7 @@ fn advisory(
         modified: "2026-10-01T00:00:00Z".into(),
         aliases: vec!["CVE-2026-0001".into()],
         summary: Some("Prototype pollution".into()),
-        severity: Some("high".into()),
+        severity: Some(Severity::High),
         affected: vec![Affected {
             ecosystem: ecosystem.into(),
             package: package.into(),

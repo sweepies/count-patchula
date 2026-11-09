@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use patchula_words::{
-    DependencyKind, LookupErrorKind, Manager, ReleaseChannel, ResolutionKind, Source,
+    DependencyKind, LookupErrorKind, Manager, ReleaseChannel, ResolutionKind, Severity, Source,
     ToolingDetail, ToolingRule, Update as UpdateKind, VersionPolicy,
 };
 use serde::{Deserialize, Serialize};
@@ -332,8 +332,12 @@ pub struct Advisory {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     /// low, moderate, high or critical, when the advisory database rates it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub severity: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "patchula_words::severity",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub severity: Option<Severity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     pub url: String,

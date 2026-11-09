@@ -138,12 +138,7 @@ fn method(repo: &Value, keys: [&str; 3]) -> Option<String> {
         .find_map(|(key, method)| (repo[key].as_bool() == Some(true)).then(|| method.into()))
 }
 pub(crate) fn requested(plan: &Plan, config: &Config) -> bool {
-    !plan.action.lockfile_pending
-        && if plan.maintenance {
-            config.defaults.merge
-        } else {
-            !plan.changes.is_empty() && plan.changes.iter().all(|c| c.merge)
-        }
+    crate::pull_requests::merge_requested(plan, &config.defaults)
 }
 fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
     if repo.degraded() {
@@ -228,7 +223,8 @@ fn same_head(pr: &Value, proof: &Value, actor: &str, repo: &str) -> bool {
         && pr["head"]["sha"] == proof["head"]["sha"]
         && pr["head"]["ref"] == proof["head"]["ref"]
         && pr["base"]["ref"] == proof["base"]["ref"]
-        && pr["body"] == proof["body"]
+        && crate::pull_requests::body_hash(pr["body"].as_str().unwrap_or(""))
+            == crate::pull_requests::body_hash(proof["body"].as_str().unwrap_or(""))
 }
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Native {
@@ -420,7 +416,10 @@ pub async fn reconcile(
                 .await
                 .unwrap_or_else(|e| (PullRequestStatus::Error, format!("auto-merge: {e}")))
         };
-        pr["patchula_merge"] = json!(reason);
+        crate::pull_requests::set_merge_note(
+            pr,
+            Some(crate::pull_requests::MergeNote::Reason(reason.clone())),
+        );
         if status == PullRequestStatus::Merged {
             plan.action.status = BranchStatus::Merged;
         }
@@ -461,7 +460,7 @@ pub fn dashboard_prs(inventory: &Inventory, repo: &str, plans: &[Plan]) -> Vec<V
 }
 pub fn dashboard_history(inventory: &Inventory, mut prs: Vec<Value>, plans: &[Plan]) -> Vec<Value> {
     // Untracked historical/native merges are not presented as fallback outcomes.
-    prs.retain(|p| p["merged_at"].is_null() || !p["patchula_merge"].is_null());
+    prs.retain(|p| p["merged_at"].is_null() || crate::pull_requests::merge_note(p).is_some());
     for pr in &inventory.merged_prs {
         if !prs.iter().any(|p| p["number"] == pr["number"]) {
             prs.push(pr.clone());

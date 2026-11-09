@@ -5,7 +5,7 @@
 //! summary wrapped, at 80 columns.
 use crate::{cli, palette, updates};
 use patchula_report::{BranchStatus, PullRequestStatus, Report, Repository, Status};
-use patchula_words::Update as UpdateKind;
+use patchula_words::{Severity, Update as UpdateKind};
 use std::fmt::Write;
 
 /// The width the summary wraps to when the stream is not a terminal.
@@ -318,11 +318,11 @@ pub fn kind_paint(kind: UpdateKind) -> Paint {
     }
 }
 
-fn severity_paint(severity: &str) -> Paint {
+fn severity_paint(severity: Severity) -> Paint {
     match severity {
-        "critical" | "high" => Paint::Error,
-        "moderate" | "medium" => Paint::Warning,
-        _ => Paint::Dim,
+        Severity::Critical | Severity::High => Paint::Error,
+        Severity::Moderate => Paint::Warning,
+        Severity::Low => Paint::Dim,
     }
 }
 
@@ -540,9 +540,7 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
             .map(|(dep, advisory)| {
                 let severity = advisory
                     .severity
-                    .as_deref()
-                    .unwrap_or("unknown")
-                    .to_ascii_lowercase();
+                    .map_or("unknown".to_owned(), |s| s.as_str().to_owned());
                 let cves: Vec<_> = advisory
                     .aliases
                     .iter()
@@ -560,7 +558,7 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
                     .clone()
                     .or_else(|| dep.current.value.clone())
                     .unwrap_or_default();
-                let paint = severity_paint(&severity);
+                let paint = advisory.severity.map_or(Paint::Dim, severity_paint);
                 vec![
                     (severity, paint),
                     (format!("{} {current}", dep.name), Paint::Bold),

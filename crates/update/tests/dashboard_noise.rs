@@ -2,7 +2,7 @@
 //! repository: grouped, readable, and never mentioning anyone.
 use patchula_report::{BranchAction, BranchStatus, Repository};
 use patchula_update::{Change, Plan, dashboard};
-use patchula_words::Recheck;
+use patchula_words::{Recheck, Severity};
 use serde_json::{Value, json};
 
 const ZSTD_SAFE: [(&str, &str); 12] = [
@@ -425,9 +425,9 @@ fn vulnerabilities_are_one_bullet_per_package_and_version_with_the_files_listed(
 fn vulnerabilities_come_most_severe_first_then_by_package() {
     let mut repo = repository();
     let deps = &mut repo.package_files[0].dependencies;
-    deps[0].metadata.as_mut().unwrap().advisories[0].severity = Some("low".into());
-    deps[2].metadata.as_mut().unwrap().advisories[0].severity = Some("critical".into());
-    deps[3].metadata.as_mut().unwrap().advisories[0].severity = Some("high".into());
+    deps[0].metadata.as_mut().unwrap().advisories[0].severity = Some(Severity::Low);
+    deps[2].metadata.as_mut().unwrap().advisories[0].severity = Some(Severity::Critical);
+    deps[3].metadata.as_mut().unwrap().advisories[0].severity = Some(Severity::High);
     let text = render_with(&repo);
     let order: Vec<_> = [
         "`unsafe-libyaml`",
@@ -501,7 +501,7 @@ fn equally_severe_packages_are_ordered_by_name() {
     let mut repo = repository();
     for dep in &mut repo.package_files[0].dependencies {
         for advisory in &mut dep.metadata.as_mut().unwrap().advisories {
-            advisory.severity = Some("high".into());
+            advisory.severity = Some(Severity::High);
         }
     }
     let text = render_with(&repo);

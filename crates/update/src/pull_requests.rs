@@ -1,18 +1,15 @@
 use crate::Plan;
+use crate::markers;
 use chrono::{DateTime, Duration, Utc};
 use patchula_config::{Config, PackageId};
 use patchula_github::Client;
 use patchula_manager::hash;
 use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus};
-use patchula_words::{Recheck, ToolingDetail, ToolingRule, Update as UpdateKind};
-use serde::{Deserialize, Serialize};
+use patchula_words::{Recheck, Severity, ToolingDetail, ToolingRule, Update as UpdateKind};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const BODY_LIMIT: usize = 32_000;
-const MARKER: &str = "<!-- patchula:";
-const RECHECK: &str = "<!-- patchula-recheck -->";
-const OBSOLETE: &str = "<!-- patchula-closed:obsolete -->";
 pub const ENABLE_AUTO_MERGE: &str = "mutation($input:EnablePullRequestAutoMergeInput!){enablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
 const DISABLE_AUTO_MERGE: &str = "mutation($input:DisablePullRequestAutoMergeInput!){disablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
 
@@ -30,26 +27,6 @@ pub(crate) fn recheck_hashed(recheck: Recheck) -> &'static str {
         Recheck::Now => "Now",
         Recheck::NextRun => "NextRun",
     }
-}
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct Marker {
-    version: u32,
-    identity: String,
-    update: String,
-}
-fn marker(body: &str) -> Option<Marker> {
-    let (_, rest) = body.split_once(MARKER)?;
-    if rest.contains(MARKER) {
-        return None;
-    }
-    let (json, _) = rest.split_once(" -->")?;
-    if json.len() > 1024 {
-        return None;
-    }
-    let m: Marker = serde_json::from_str(json).ok()?;
-    let valid_hash = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit());
-    (m.version == 1 && valid_hash(&m.identity) && valid_hash(&m.update)).then_some(m)
 }
 /// One PR's update: its branch and the targets it moves to. The branch makes
 /// the key unique per PR, so groups on different branches that bump the same
@@ -72,27 +49,49 @@ pub fn update_key(plan: &Plan) -> String {
             .as_bytes(),
     )
 }
+/// Whether the Count should merge this plan itself once its checks pass:
+/// never while a lockfile is pending; maintenance plans follow the default
+/// policy, and every other plan merges only when all its changes opt in.
+pub(crate) fn merge_requested(plan: &Plan, policy: &patchula_config::Policy) -> bool {
+    !plan.action.lockfile_pending
+        && if plan.maintenance {
+            policy.merge
+        } else {
+            !plan.changes.is_empty() && plan.changes.iter().all(|c| c.merge)
+        }
+}
+/// The Count's note on a PR's merge state, carried on the PR object the
+/// lifecycle, receipts and dashboard share.
+#[derive(Clone, Debug)]
+pub(crate) enum MergeNote {
+    /// "auto-merge waiting for a later run with a verified receipt and passing checks"
+    Waiting,
+    /// "native auto-merge enabled"
+    Native,
+    /// Why the Count's merge did not happen, in its own words.
+    Reason(String),
+}
+impl MergeNote {
+    fn text(&self) -> &str {
+        match self {
+            Self::Waiting => {
+                "auto-merge waiting for a later run with a verified receipt and passing checks"
+            }
+            Self::Native => "native auto-merge enabled",
+            Self::Reason(reason) => reason,
+        }
+    }
+}
+/// The note a PR object carries, if any.
+pub(crate) fn merge_note(pr: &Value) -> Option<&str> {
+    pr["patchula_merge"].as_str()
+}
+/// Set the note on a PR object; `None` leaves it unset.
+pub(crate) fn set_merge_note(pr: &mut Value, note: Option<MergeNote>) {
+    pr["patchula_merge"] = note.map_or(Value::Null, |n| json!(n.text()));
+}
 fn body(pr: &Value) -> &str {
     pr["body"].as_str().unwrap_or("")
-}
-/// Opens the part of the description the Count writes. His ownership marker
-/// closes it. Whatever else the description holds, before or after, belongs to
-/// someone else: a person, or a tool that edits descriptions.
-const START: &str = "<!-- patchula-begin -->";
-
-/// A body split by the Count's markers: the text before his section, the
-/// section itself, and the text after it. His section starts at the last start
-/// marker before his ownership marker: text others wrote above it may quote the
-/// marker, but his own section cannot hold one, because rendered upstream text
-/// never keeps an HTML comment. A body with no start marker (one written before
-/// it existed) is his from its first byte.
-fn regions(body: &str) -> Option<(&str, &str, &str)> {
-    marker(body)?;
-    let (before, rest) = body.split_once(MARKER)?;
-    let (json, _) = rest.split_once(" -->")?;
-    let end = before.len() + MARKER.len() + json.len() + " -->".len();
-    let start = before.rfind(START).unwrap_or(0);
-    Some((&body[..start], &body[start..end], &body[end..]))
 }
 /// The Count's rendering between whatever the PR's body has right now before
 /// and after his section. Only the section of `text` is used, so a text that
@@ -100,7 +99,8 @@ fn regions(body: &str) -> Option<(&str, &str, &str)> {
 /// doubles or loses what others wrote, and a body he leaves alone comes out
 /// byte for byte the same. A foreign edit inside his section is overwritten.
 fn with_foreign(text: String, current: &str) -> String {
-    let (Some((_, section, _)), Some((before, _, after))) = (regions(&text), regions(current))
+    let (Some((_, section, _)), Some((before, _, after))) =
+        (markers::regions(&text), markers::regions(current))
     else {
         return text;
     };
@@ -125,16 +125,23 @@ pub(crate) fn body_hash(text: &str) -> String {
 fn branch(pr: &Value) -> &str {
     pr["head"]["ref"].as_str().unwrap_or("")
 }
+/// Whether two GitHub repository names name the same repository: repository
+/// names are case-insensitive.
+pub fn same_repository(name: &str, other: &str) -> bool {
+    name.eq_ignore_ascii_case(other)
+}
 fn same_repo(pr: &Value, repo: &str) -> bool {
     pr["head"]["repo"]["full_name"]
         .as_str()
-        .is_some_and(|s| s.eq_ignore_ascii_case(repo))
+        .is_some_and(|s| same_repository(s, repo))
         && pr["base"]["repo"]["full_name"]
             .as_str()
-            .is_some_and(|s| s.eq_ignore_ascii_case(repo))
+            .is_some_and(|s| same_repository(s, repo))
 }
 pub fn owned_pr(pr: &Value, actor: &str, repo: &str) -> bool {
-    pr["user"]["login"] == actor && same_repo(pr, repo) && marker(body(pr)).is_some()
+    pr["user"]["login"] == actor
+        && same_repo(pr, repo)
+        && markers::ownership_marker(body(pr)).is_some()
 }
 fn action(
     repo: &str,
@@ -152,57 +159,20 @@ fn action(
         reason,
     }
 }
-/// Every checkbox line outside fenced code: whether it is ticked, and its
-/// text after the box. The one reader of the Count's checkboxes, so the
-/// dashboard, PR and batch controls agree on what is ticked and what is code.
-pub(crate) fn checkboxes(text: &str) -> Vec<(bool, &str)> {
-    let mut fence = None;
-    let mut out = Vec::new();
-    for line in text.lines().map(str::trim) {
-        if line.starts_with("```") || line.starts_with("~~~") {
-            let kind = &line[..3];
-            if fence == Some(kind) {
-                fence = None;
-            } else if fence.is_none() {
-                fence = Some(kind);
-            }
-            continue;
-        }
-        if fence.is_some() {
-            continue;
-        }
-        let Some((state, rest)) = line.strip_prefix("- [").and_then(|s| s.split_once("] ")) else {
-            continue;
-        };
-        match state {
-            "x" | "X" => out.push((true, rest)),
-            " " => out.push((false, rest)),
-            _ => {}
-        }
-    }
-    out
-}
-/// The text of ticked checkboxes outside fenced code.
-pub(crate) fn ticked_lines(text: &str) -> Vec<&str> {
-    checkboxes(text)
-        .into_iter()
-        .filter_map(|(ticked, rest)| ticked.then_some(rest))
-        .collect()
-}
 /// The update key recorded by a patchula PR's ownership marker.
 pub(crate) fn marker_update(text: &str) -> Option<String> {
-    marker(text).map(|m| m.update)
+    markers::ownership_marker(text).map(|m| m.update)
 }
 /// Whether an edit ticked a patchula control: re-check, add to batch or
 /// remove from batch.
 pub fn controls_edited(before: &str, after: &str) -> bool {
     let controls = |text| -> BTreeSet<String> {
-        ticked_lines(text)
+        markers::ticked_lines(text)
             .into_iter()
             .filter(|l| {
-                l.ends_with(RECHECK)
-                    || l.ends_with(crate::batch::ADD)
-                    || l.contains(crate::batch::REMOVE)
+                l.ends_with(markers::RECHECK)
+                    || l.ends_with(markers::ADD)
+                    || l.contains(markers::REMOVE)
             })
             .map(str::to_owned)
             .collect()
@@ -212,20 +182,22 @@ pub fn controls_edited(before: &str, after: &str) -> bool {
 }
 /// Batched closures and batch PRs never suppress an update.
 fn suppresses(pr: &Value) -> bool {
-    !body(pr).contains(OBSOLETE)
-        && !body(pr).contains(crate::batch::BATCHED)
-        && !body(pr).contains(crate::batch::ITEMS)
+    let body = body(pr);
+    !markers::closed(body, markers::OBSOLETE)
+        && !markers::closed(body, markers::BATCHED)
+        && markers::section_json::<Vec<crate::batch::Item>>(body, markers::ITEMS, markers::PAYLOAD)
+            .is_none()
 }
 pub fn checked(pr: &Value) -> bool {
-    body(pr).matches(RECHECK).count() == 1
-        && ticked_lines(body(pr))
+    body(pr).matches(markers::RECHECK).count() == 1
+        && markers::ticked_lines(body(pr))
             .iter()
-            .any(|line| line.ends_with(RECHECK))
+            .any(|line| line.ends_with(markers::RECHECK))
 }
 fn untick(text: &str) -> String {
     text.split_inclusive('\n')
         .map(|line| {
-            if line.trim_end().ends_with(RECHECK) {
+            if line.trim_end().ends_with(markers::RECHECK) {
                 line.replacen("- [x]", "- [ ]", 1)
                     .replacen("- [X]", "- [ ]", 1)
             } else {
@@ -285,7 +257,7 @@ impl Lifecycle {
                 && p["state"] == "closed"
                 && p["merged_at"].is_null()
                 && suppresses(p)
-                && marker(body(p)).is_some_and(|m| m.update == key)
+                && markers::ownership_marker(body(p)).is_some_and(|m| m.update == key)
         })
     }
     /// Authoritative inventory includes closed history and all pages. No cached
@@ -365,7 +337,8 @@ impl Lifecycle {
                 || pr["state"] != "open"
                 || !owned_pr(pr, actor, repo)
                 || desired.contains(branch(pr))
-                || marker(body(pr)).is_some_and(|m| state.batched.contains(&m.update))
+                || markers::ownership_marker(body(pr))
+                    .is_some_and(|m| state.batched.contains(&m.update))
             {
                 continue;
             }
@@ -423,9 +396,9 @@ impl Lifecycle {
             if current["commit"]["sha"] != base {
                 return Err("base moved before obsolete PR closure; rerun".into());
             }
-            let mut text = truncate(body(&fresh), FOREIGN_LIMIT - 100);
+            let mut text = markers::truncate_marked(body(&fresh), FOREIGN_LIMIT - 100);
             text.push_str("\n\n");
-            text.push_str(OBSOLETE);
+            text.push_str(markers::OBSOLETE);
             client
                 .patch(
                     &format!("repos/{repo}/pulls/{number}"),
@@ -480,7 +453,7 @@ impl Lifecycle {
                     p["state"] == "closed"
                         && p["merged_at"].is_null()
                         && suppresses(p)
-                        && marker(body(p)).is_some_and(|m| m.update == key)
+                        && markers::ownership_marker(body(p)).is_some_and(|m| m.update == key)
                 })
             {
                 plan.hold(crate::plan::Hold::ClosedByOwner);
@@ -489,7 +462,9 @@ impl Lifecycle {
             if let Some(pr) = existing.first() {
                 // A newer target must not take over a PR that just moved into
                 // the batch; it gets its own PR once that one closes.
-                if marker(body(pr)).is_some_and(|m| state.batched.contains(&m.update)) {
+                if markers::ownership_marker(body(pr))
+                    .is_some_and(|m| state.batched.contains(&m.update))
+                {
                     plan.hold(crate::plan::Hold::WaitingForBatch);
                     continue;
                 }
@@ -642,7 +617,8 @@ impl Lifecycle {
                 p["state"] == "open"
                     && branch(p) != plan.action.branch
                     && owned_pr(p, &self.actor, &self.repo)
-                    && marker(body(p)).is_some_and(|m| self.batched.contains(&m.update))
+                    && markers::ownership_marker(body(p))
+                        .is_some_and(|m| self.batched.contains(&m.update))
             })
             .filter_map(|p| p["number"].as_u64())
             .collect();
@@ -651,15 +627,16 @@ impl Lifecycle {
             let fresh = client.get_fresh(&path).await.map_err(|e| e.to_string())?;
             if fresh["state"] != "open"
                 || !owned_pr(&fresh, &self.actor, &self.repo)
-                || !marker(body(&fresh)).is_some_and(|m| self.batched.contains(&m.update))
+                || !markers::ownership_marker(body(&fresh))
+                    .is_some_and(|m| self.batched.contains(&m.update))
             {
                 continue;
             }
             // Closed first: a closed PR is never visited again, so a failure
             // after this cannot repeat the comment.
-            let mut text = truncate(body(&fresh), FOREIGN_LIMIT - 100);
+            let mut text = markers::truncate_marked(body(&fresh), FOREIGN_LIMIT - 100);
             text.push_str("\n\n");
-            text.push_str(crate::batch::BATCHED);
+            text.push_str(markers::BATCHED);
             let closed = client
                 .patch(&path, json!({"state":"closed","body":text}))
                 .await
@@ -715,13 +692,7 @@ impl Lifecycle {
         sources: &patchula_datasource::Client,
         plan: &Plan,
     ) -> Result<(), String> {
-        if self
-            .branch_permits
-            .get(&plan.action.branch)
-            .is_some_and(|permits| {
-                crate::dashboard::permit_marker(permits).len() + 1000 > BODY_LIMIT
-            })
-        {
+        if self.reserved(plan) > BODY_LIMIT {
             return Err(
                 "manual release-age evidence exceeds the PR body budget; split this update group"
                     .into(),
@@ -749,7 +720,8 @@ impl Lifecycle {
                     .map_err(|e| e.to_string())?;
                 if !owned_pr(&fresh, &self.actor, &self.repo)
                     || branch(&fresh) != plan.action.branch
-                    || marker(body(&fresh)) != marker(body(&pr))
+                    || markers::ownership_marker(body(&fresh))
+                        != markers::ownership_marker(body(&pr))
                 {
                     return Err(
                         "PR ownership marker or repository changed during this run; left untouched"
@@ -842,12 +814,7 @@ impl Lifecycle {
                     .collect::<Vec<_>>()
             );
         }
-        let merge = !plan.action.lockfile_pending
-            && if plan.maintenance {
-                self.maintenance_policy.merge
-            } else {
-                !plan.changes.is_empty() && plan.changes.iter().all(|c| c.merge)
-            };
+        let merge = merge_requested(plan, &self.maintenance_policy);
         let enabled = !pr["auto_merge"].is_null();
         let mut native = enabled;
         if merge && !enabled {
@@ -889,11 +856,9 @@ impl Lifecycle {
             Value::Null
         };
         if merge && !native {
-            pr["patchula_merge"] = json!(
-                "auto-merge waiting for a later run with a verified receipt and passing checks"
-            );
+            set_merge_note(&mut pr, Some(MergeNote::Waiting));
         } else if merge && !pr["auto_merge"].is_null() {
-            pr["patchula_merge"] = json!("native auto-merge enabled");
+            set_merge_note(&mut pr, Some(MergeNote::Native));
         }
         self.actions.push(action(
             &self.repo,
@@ -993,17 +958,92 @@ impl Lifecycle {
             }
             .expect("serializable body intent"),
         );
-        let content_marker = format!("<!-- patchula-content:{content_hash} -->");
+        let content_marker = format!("{}{content_hash} -->", markers::CONTENT);
         (text, content_marker)
     }
     fn reusable_body(&self, plan: &Plan, existing: Option<&Value>, content_marker: &str) -> bool {
         existing.is_some_and(|pr| {
-            body(pr).contains(content_marker)
+            markers::section(body(pr)).is_some_and(|s| s.contains(content_marker))
                 && !checked(pr)
                 && !plan.retry
-                && marker(body(pr))
+                && markers::ownership_marker(body(pr))
                     .is_some_and(|m| m.identity == plan.identity && m.update == update_key(plan))
         })
+    }
+    /// The batch controls his body offers: the "Add to batch" box and the
+    /// reviewed targets marker, when the group is small enough to record.
+    /// The reviewed targets travel with the PR, so batching keeps them even
+    /// after a newer release changes this branch's plan.
+    fn controls(plan: &Plan) -> String {
+        if plan.batch.is_some() || plan.maintenance {
+            return String::new();
+        }
+        let targets = markers::hidden(markers::TARGETS, &plan.changes);
+        if targets.len() > 12_000 {
+            return String::new();
+        }
+        format!(
+            "- [ ] Add to the batch PR. This one closes and the update moves there. {}\n{targets}\n",
+            markers::ADD,
+        )
+    }
+    /// Everything after the release notes, hidden markers included, in the
+    /// order `render` writes it: the age permits, the server advert, the
+    /// content marker, the re-check box, the batch controls and the
+    /// ownership marker. The batch box is the tail's lowest priority: it
+    /// joins only when the whole body still fits his budget.
+    fn tail(
+        &self,
+        plan: &Plan,
+        content_marker: &str,
+        controls: &str,
+        permit: Option<&str>,
+    ) -> String {
+        let mut tail = String::new();
+        if let Some(marker) = permit {
+            tail.push('\n');
+            tail.push_str(marker);
+        }
+        if let Some(url) = &self.server {
+            tail.push('\n');
+            tail.push_str(&crate::advertise::marker(url));
+        }
+        tail.push('\n');
+        tail.push_str(content_marker);
+        let timing = recheck_timing(self.recheck);
+        tail.push_str(&format!(
+            "\n- [ ] Tick to re-check this PR {timing}. {}\n",
+            markers::RECHECK
+        ));
+        let ownership = markers::ownership(&markers::Marker::new(
+            plan.identity.clone(),
+            update_key(plan),
+        ));
+        let with_controls = format!("{tail}{controls}\n{ownership}\n");
+        if markers::START.len() + 1 + with_controls.len() <= BODY_LIMIT {
+            with_controls
+        } else {
+            format!("{tail}\n{ownership}\n")
+        }
+    }
+    /// The bytes `tail` reserves for this plan, for budget checks before
+    /// the body is rendered.
+    fn reserved(&self, plan: &Plan) -> usize {
+        let controls = Self::controls(plan);
+        let permit = self
+            .branch_permits
+            .get(&plan.action.branch)
+            .map(crate::dashboard::permit_marker);
+        markers::START.len()
+            + 1
+            + self
+                .tail(
+                    plan,
+                    &" ".repeat(markers::CONTENT_MARKER_LEN),
+                    &controls,
+                    permit.as_deref(),
+                )
+                .len()
     }
     async fn render(
         &mut self,
@@ -1011,29 +1051,25 @@ impl Lifecycle {
         plan: &Plan,
         existing: Option<&Value>,
     ) -> String {
-        let (mut text, content_marker) = self.body_intent(plan);
+        let (intent, content_marker) = self.body_intent(plan);
         if let Some(pr) = existing.filter(|_| self.reusable_body(plan, existing, &content_marker)) {
             // Rebases, label reconciliation and receipt repair do not change
             // body inputs. Reuse their notes without metadata or network reads.
             return body(pr).into();
         }
-        // The reviewed targets travel with the PR, so batching keeps them even
-        // after a newer release changes this branch's plan. A group too large
-        // to record within the body budget cannot be batched.
-        let targets = crate::batch::hidden_marker(crate::batch::TARGETS, &plan.changes);
-        let controls = if plan.batch.is_none() && !plan.maintenance && targets.len() <= 12_000 {
-            format!(
-                "- [ ] Add to the batch PR. This one closes and the update moves there. {}\n{targets}\n",
-                crate::batch::ADD,
-            )
-        } else {
-            String::new()
-        };
-        let reserve = controls.len();
+        let controls = Self::controls(plan);
+        let permit = self
+            .branch_permits
+            .get(&plan.action.branch)
+            .map(crate::dashboard::permit_marker);
+        // The intent and the release notes share the room the budget leaves
+        // after his controls, exactly as releases have always counted it.
+        let mut notes = crate::body::Body::new(BODY_LIMIT - 1_500, controls.len());
+        notes.push(&intent, usize::MAX);
         let mut releases = BTreeSet::new();
         for change in &plan.changes {
-            if releases.len() >= 8 || text.len() + reserve > BODY_LIMIT - 2500 {
-                text.push_str("\nOut of room for more release notes. The source repositories have the rest.\n");
+            if releases.len() >= 8 || notes.room(usize::MAX) < 1_000 {
+                notes.push("\nOut of room for more release notes. The source repositories have the rest.\n", usize::MAX);
                 break;
             }
             if change.kind == UpdateKind::Pin || !change.release_notes {
@@ -1060,46 +1096,29 @@ impl Lifecycle {
                     .unwrap_or_default();
                 self.notes.insert(key.clone(), note);
             }
-            let budget = (BODY_LIMIT - 1500)
-                .saturating_sub(text.len() + reserve + 2)
-                .min(12_000);
-            text.push('\n');
-            text.push_str(&self.notes[&key].render(&change.package, budget));
-            text.push('\n');
+            let budget = notes.room(12_002).saturating_sub(2);
+            notes.push("\n", usize::MAX);
+            notes.push(
+                &self.notes[&key].render(&change.package, budget),
+                usize::MAX,
+            );
+            notes.push("\n", usize::MAX);
         }
-        if let Some(permits) = self.branch_permits.get(&plan.action.branch) {
-            let marker = crate::dashboard::permit_marker(permits);
+        let mut visible = notes.into_text();
+        if let Some(marker) = &permit {
             // Keep policy evidence with the PR even if its local cache is lost.
-            text = patchula_datasource::notes::fit(
-                &text,
-                BODY_LIMIT.saturating_sub(marker.len() + reserve + 1000),
+            visible = patchula_datasource::notes::fit(
+                &visible,
+                BODY_LIMIT.saturating_sub(marker.len() + controls.len() + 1_000),
             )
             .0;
-            text.push('\n');
-            text.push_str(&marker);
         }
-        if let Some(url) = &self.server {
-            text.push('\n');
-            text.push_str(&crate::advertise::marker(url));
-        }
-        text.push('\n');
-        text.push_str(&content_marker);
-        let timing = recheck_timing(self.recheck);
-        text.push_str(&format!(
-            "\n- [ ] Tick to re-check this PR {timing}. {RECHECK}\n"
-        ));
-        text.push_str(&controls);
-        text.push('\n');
-        let m = Marker {
-            version: 1,
-            identity: plan.identity.clone(),
-            update: update_key(plan),
-        };
-        text.push_str(MARKER);
-        text.push_str(&serde_json::to_string(&m).expect("marker"));
-        text.push_str(" -->\n");
-        debug_assert!(text.len() + START.len() < BODY_LIMIT);
-        format!("{START}\n{text}")
+        // Every hidden marker is reserved before the visible text is added,
+        // so the result always fits and no marker is ever cut.
+        let tail = self.tail(plan, &content_marker, &controls, permit.as_deref());
+        let mut body = crate::body::Body::new(BODY_LIMIT, markers::START.len() + 1 + tail.len());
+        body.push(&visible, usize::MAX);
+        format!("{}\n{}{}", markers::START, body.text(), tail)
     }
 }
 /// One caution per tooling warning on this PR, ahead of everything else.
@@ -1150,7 +1169,7 @@ fn security_section(changes: &[crate::Change]) -> String {
                 } else {
                     format!(" ({})", cves.join(", "))
                 },
-                cell(advisory.severity.as_deref().unwrap_or("unrated")),
+                cell(advisory.severity.map_or("unrated", Severity::as_str)),
                 cell(&change.package),
                 prose_cell(advisory.summary.as_deref().unwrap_or("")),
             ));
@@ -1198,7 +1217,7 @@ fn image_section(changes: &[crate::Change]) -> String {
                     "| [{}]({}) | {} | {} | {} | {} | {} |\n",
                     cell(&fixed.id),
                     safe(&advisory.url),
-                    cell(advisory.severity.as_deref().unwrap_or("unrated")),
+                    cell(advisory.severity.map_or("unrated", Severity::as_str)),
                     cell(&fixed.package),
                     cell(&fixed.old),
                     cell(fixed.new.as_deref().unwrap_or("removed")),
@@ -1216,7 +1235,7 @@ fn image_section(changes: &[crate::Change]) -> String {
                         "[{}]({}) ({})",
                         cell(id),
                         safe(&advisory.url),
-                        cell(advisory.severity.as_deref().unwrap_or("unrated"))
+                        cell(advisory.severity.map_or("unrated", Severity::as_str))
                     );
                     if !brings_in.contains(&shown) {
                         brings_in.push(shown);
@@ -1790,7 +1809,8 @@ mod tooling_tests {
 
 #[cfg(test)]
 mod foreign_text_tests {
-    use super::{FOREIGN_LIMIT, MARKER, START, body_hash, regions, with_foreign};
+    use super::{FOREIGN_LIMIT, body_hash, with_foreign};
+    use crate::markers::{OWNERSHIP as MARKER, START, regions};
 
     /// What the Count writes: his section, opened by the start marker and
     /// closed by the ownership marker.

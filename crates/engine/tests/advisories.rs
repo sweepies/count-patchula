@@ -207,7 +207,13 @@ async fn advisories_mark_fixing_updates_and_warm_runs_reuse_records() {
     let advisories = &dep.metadata.as_ref().unwrap().advisories;
     let summary: Vec<_> = advisories
         .iter()
-        .map(|a| (a.id.as_str(), a.severity.as_deref(), a.fixed_in.as_deref()))
+        .map(|a| {
+            (
+                a.id.as_str(),
+                a.severity.map(patchula_words::Severity::as_str),
+                a.fixed_in.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(
         summary,

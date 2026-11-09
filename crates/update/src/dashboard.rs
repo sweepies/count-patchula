@@ -1,6 +1,6 @@
 //! A deterministic issue, discovered by ownership and marker rather than title.
 use crate::{
-    Inventory, Plan,
+    Inventory, Plan, markers,
     text::{self, code},
     update_key,
 };
@@ -9,12 +9,11 @@ use patchula_config::Config;
 use patchula_github::Client;
 use patchula_manager::{Declaration, hash};
 use patchula_report::{Dependency, Repository};
-use patchula_words::{Recheck, ToolingDetail, ToolingRule};
+use patchula_words::{Recheck, Severity, ToolingDetail, ToolingRule};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const MARKER: &str = "<!-- patchula-dashboard:v1 -->";
 const TITLE: &str = "Count Patchula's dependency dashboard";
 const LIMIT: usize = 60_000;
 
@@ -88,16 +87,10 @@ pub struct Controls {
 }
 fn checked_actions(body: &str) -> BTreeSet<Action> {
     let mut counts = BTreeMap::<Action, (usize, bool)>::new();
-    for (checked, rest) in crate::pull_requests::checkboxes(body) {
-        let Some((_, marker)) = rest.split_once("<!-- patchula-action:") else {
+    for (checked, rest) in markers::checkboxes(body) {
+        let Some(json) = markers::line_end(rest, markers::ACTION, 256) else {
             continue;
         };
-        let Some(json) = marker.strip_suffix(" -->") else {
-            continue;
-        };
-        if json.len() > 256 {
-            continue;
-        }
         let Ok(action) = serde_json::from_str::<Action>(json) else {
             continue;
         };
@@ -223,21 +216,13 @@ impl Controls {
         Ok(result)
     }
 }
-const PERMIT_MARKER: &str = "<!-- patchula-age-permits:v1 ";
 pub(crate) fn permit_marker(permits: &BTreeSet<String>) -> String {
-    format!(
-        "{PERMIT_MARKER}{} -->\n",
-        serde_json::to_string(permits).expect("permits")
-    )
+    format!("{}\n", markers::hidden(markers::PERMITS, permits))
 }
 fn pr_permits(body: &str) -> BTreeSet<String> {
-    let mut lines = body.lines().filter_map(|l| l.strip_prefix(PERMIT_MARKER));
-    let Some(json) = lines.next().and_then(|l| l.strip_suffix(" -->")) else {
+    let Some(json) = markers::section_line(body, markers::PERMITS, 32_000) else {
         return BTreeSet::new();
     };
-    if lines.next().is_some() || json.len() > 32_000 {
-        return BTreeSet::new();
-    }
     let Ok(permits) = serde_json::from_str::<BTreeSet<String>>(json) else {
         return BTreeSet::new();
     };
@@ -320,16 +305,15 @@ fn escape(text: &str) -> String {
 }
 fn checkbox(label: &str, action: Action) -> String {
     format!(
-        "- [ ] {label} <!-- patchula-action:{} -->\n",
+        "- [ ] {label} {}{} -->\n",
+        markers::ACTION,
         serde_json::to_string(&action).expect("action")
     )
 }
 pub fn issue(inventory: &Inventory) -> Result<Option<&Value>, String> {
     let mut issues = inventory.issues.iter().filter(|i| {
         crate::receipts::actor_login(&i["author"]).as_deref() == Some(&inventory.actor)
-            && i["body"]
-                .as_str()
-                .is_some_and(|b| b.lines().filter(|l| *l == MARKER).count() == 1)
+            && i["body"].as_str().is_some_and(markers::dashboard)
     });
     let result = issues.next();
     if issues.next().is_some() {
@@ -356,7 +340,7 @@ pub fn render(
                 format!(
                     "- #{number}: {} — {}\n",
                     safe(pr["title"].as_str().unwrap_or("Update dependencies")),
-                    safe(pr["patchula_merge"].as_str().unwrap_or("merged"))
+                    safe(crate::pull_requests::merge_note(pr).unwrap_or("merged"),)
                 ),
             ));
         }
@@ -403,8 +387,7 @@ pub fn render(
                         format!(
                             "- #{number}: {}{}\n",
                             titled(plan),
-                            pr["patchula_merge"]
-                                .as_str()
+                            crate::pull_requests::merge_note(pr)
                                 .map(|reason| format!(" — {}", safe(reason)))
                                 .unwrap_or_default()
                         ),
@@ -730,7 +713,8 @@ pub fn render(
         .map(|url| format!("{}\n", crate::advertise::marker(url)))
         .unwrap_or_default();
     let mut text = format!(
-        "{MARKER}\n{advertised}\n[The Count](https://count-patchula.sweepy.dev) keeps watch over this repository's dependencies. Tick a box and he will see to it {timing}.\n\n"
+        "{}\n{advertised}\n[The Count](https://count-patchula.sweepy.dev) keeps watch over this repository's dependencies. Tick a box and he will see to it {timing}.\n\n",
+        markers::DASHBOARD
     );
     text.push_str(&checkbox(
         "Re-check this repository",
@@ -974,16 +958,13 @@ struct Vulnerable<'a> {
     files: BTreeSet<String>,
     advisories: BTreeMap<String, (&'a patchula_report::Advisory, Fix)>,
 }
-const SEVERITIES: [&str; 4] = ["critical", "high", "moderate", "low"];
-fn severity_rank(severity: Option<&str>) -> usize {
-    let severity = severity.map(str::to_ascii_lowercase);
-    SEVERITIES
-        .iter()
-        .position(|s| {
-            Some(*s) == severity.as_deref()
-                || (*s == "moderate" && severity.as_deref() == Some("medium"))
-        })
-        .unwrap_or(SEVERITIES.len())
+fn severity_rank(severity: Option<Severity>) -> usize {
+    severity.map_or(Severity::ALL.len(), |s| {
+        Severity::ALL
+            .iter()
+            .position(|v| *v == s)
+            .unwrap_or(Severity::ALL.len())
+    })
 }
 impl Vulnerable<'_> {
     /// Its severity rank, most severe first, and its bullet.
@@ -991,12 +972,12 @@ impl Vulnerable<'_> {
         let rank = self
             .advisories
             .values()
-            .map(|(a, _)| severity_rank(a.severity.as_deref()))
+            .map(|(a, _)| severity_rank(a.severity))
             .min()
-            .unwrap_or(SEVERITIES.len());
-        let severity = SEVERITIES
+            .unwrap_or(Severity::ALL.len());
+        let severity = Severity::ALL
             .get(rank)
-            .map(|s| format!("**{s}**: "))
+            .map(|s| format!("**{}**: ", s.as_str()))
             .unwrap_or_default();
         let files: Vec<_> = self.files.iter().map(|f| code(f)).collect();
         let files = if files.len() > 5 {
@@ -1043,7 +1024,7 @@ impl Vulnerable<'_> {
             safe(&self.version)
         );
         let mut advisories: Vec<_> = self.advisories.values().map(|(a, _)| *a).collect();
-        advisories.sort_by_key(|a| (severity_rank(a.severity.as_deref()), a.id.clone()));
+        advisories.sort_by_key(|a| (severity_rank(a.severity), a.id.clone()));
         let row = if let [advisory] = advisories[..] {
             format!(
                 "{head}: {}{}{}. {}.\n",
@@ -1077,8 +1058,7 @@ impl Vulnerable<'_> {
                     aliases(advisory),
                     advisory
                         .severity
-                        .as_ref()
-                        .map(|s| format!(", {}", safe(s)))
+                        .map(|s| format!(", {}", safe(s.as_str())))
                         .unwrap_or_default(),
                     advisory
                         .summary
@@ -1234,8 +1214,10 @@ pub async fn reconcile(
         let unchanged = previous
             .as_ref()
             .is_some_and(|r| r.number == number && r.actor == inventory.actor && r.hash == digest)
-            && existing["body"] == body;
-        if !unchanged && existing["body"] != body {
+            && crate::pull_requests::body_hash(existing["body"].as_str().unwrap_or("")) == digest;
+        if !unchanged
+            && crate::pull_requests::body_hash(existing["body"].as_str().unwrap_or("")) != digest
+        {
             client
                 .patch(&format!("{path}/{number}"), json!({"body":body}))
                 .await
