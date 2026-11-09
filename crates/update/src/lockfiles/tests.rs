@@ -3953,6 +3953,7 @@ async fn real_cargo_moves_a_locked_package_without_a_manifest_change() {
         file: "Cargo.lock".into(),
         package: "offline-patch-fixture".into(),
         version: "1.0.0".into(),
+        syntax: patchula_manager::Syntax::Toml,
         location: patchula_manager::Location {
             start: 0,
             end: 1,

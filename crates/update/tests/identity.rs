@@ -1,6 +1,6 @@
 //! The persisted key recipes: declaration, retry and held keys reach GitHub
 //! and caches, so their bytes are pinned.
-use patchula_manager::{Dependency as ManagerDependency, Location};
+use patchula_manager::{Dependency as ManagerDependency, EditForm, Location, Syntax};
 use patchula_report::{Current, Dependency as ReportDependency, DependencyMetadata};
 use patchula_update::{Change, dashboard};
 use patchula_words::{DependencyKind, Manager, Scheme, Source, Update as UpdateKind};
@@ -16,6 +16,7 @@ fn manager_dep() -> ManagerDependency {
             column: 3,
             pointer: "/dependencies/fixture".into(),
         },
+        form: EditForm::Scalar(Syntax::Json),
         name: "fixture".into(),
         package: "fixture".into(),
         kind: DependencyKind::Production,

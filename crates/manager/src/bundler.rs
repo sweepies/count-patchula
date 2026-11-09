@@ -18,6 +18,11 @@ fn ruby(path: &str, text: &str, start: usize, version: &str, pointer: &str) -> D
         manager: Manager::Bundler,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), pointer.into()),
+        form: EditForm::Scalar(if path.ends_with(".ruby-version") {
+            Syntax::Bare
+        } else {
+            Syntax::Inner
+        }),
         name: "ruby".into(),
         package: "ruby".into(),
         kind: DependencyKind::Toolchain,
@@ -142,6 +147,7 @@ pub(super) fn extract(
             manager: Manager::Bundler,
             file: path.into(),
             location: Location::new(text, first.start(), first.end(), format!("/gems/{name}")),
+            form: EditForm::Scalar(Syntax::Inner),
             name: name.into(),
             package: name.into(),
             kind: DependencyKind::Production,

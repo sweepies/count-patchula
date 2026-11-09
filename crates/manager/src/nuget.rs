@@ -19,15 +19,16 @@ fn package(
     path: &str,
     text: &str,
     name: &str,
-    start: usize,
-    version: &str,
+    located: (usize, &str, Syntax),
     pointer: String,
     kind: DependencyKind,
 ) -> Dependency {
+    let (start, version, syntax) = located;
     Dependency {
         manager: Manager::Nuget,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), pointer),
+        form: EditForm::Scalar(syntax),
         name: name.into(),
         package: name.into(),
         kind,
@@ -85,6 +86,7 @@ fn msbuild(path: &str, text: &str) -> Vec<Dependency> {
                     version = Some((
                         attributes.start() + value.start(),
                         value.as_str().to_string(),
+                        Syntax::InnerToken,
                     ))
                 }
                 _ => {}
@@ -100,11 +102,15 @@ fn msbuild(path: &str, text: &str) -> Vec<Dependency> {
                 let body = &text[whole.end()..whole.end() + end];
                 if let Some(c) = CHILD.captures(body) {
                     let v = c.get(1).unwrap();
-                    version = Some((whole.end() + v.start(), v.as_str().to_string()));
+                    version = Some((
+                        whole.end() + v.start(),
+                        v.as_str().to_string(),
+                        Syntax::Bare,
+                    ));
                 }
             }
         }
-        let Some((start, version)) = version.filter(|(_, v)| pinned(v)) else {
+        let Some((start, version, syntax)) = version.filter(|(_, v, _)| pinned(v)) else {
             continue;
         };
         let kind = if &item[1] == "GlobalPackageReference" {
@@ -116,8 +122,7 @@ fn msbuild(path: &str, text: &str) -> Vec<Dependency> {
             path,
             text,
             &name,
-            start,
-            &version,
+            (start, &version, syntax),
             format!("/{}/{name}", &item[1]),
             kind,
         ));
@@ -148,8 +153,7 @@ fn tools(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
                     path,
                     text,
                     name,
-                    start,
-                    &version.value,
+                    (start, &version.value, Syntax::InnerToken),
                     format!("/tools/{name}/version"),
                     DependencyKind::Tool,
                 ));
@@ -193,6 +197,7 @@ fn sdk(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
             start + version.value.len(),
             "/sdk/version".into(),
         ),
+        form: EditForm::Scalar(Syntax::InnerToken),
         name: "dotnet-sdk".into(),
         package,
         kind: DependencyKind::Toolchain,

@@ -161,6 +161,7 @@ fn add<'a>(
             span.end,
             format!("/{}/{name}/version", kind.as_str()),
         ),
+        form: EditForm::Scalar(Syntax::Json),
         name: name.into(),
         package: provider_package(package).into(),
         kind,

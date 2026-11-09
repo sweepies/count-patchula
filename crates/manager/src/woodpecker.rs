@@ -60,7 +60,15 @@ pub(super) fn extract(
                 if !seen.insert(location.start) {
                     continue;
                 }
-                match images::dependency(Manager::Woodpecker, path, text, image, location.clone()) {
+                match images::dependency(
+                    Manager::Woodpecker,
+                    path,
+                    text,
+                    image,
+                    location.clone(),
+                    Syntax::Yaml,
+                    None,
+                ) {
                     Some(dep) => out.push(dep),
                     None => skipped.push(skip("not an image reference".into())),
                 }

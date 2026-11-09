@@ -53,6 +53,7 @@ pub(super) fn extract(
                     manager: Manager::Regex,
                     file: path.into(),
                     location: Location::new(text, current.start(), current.end(), String::new()),
+                    form: EditForm::Scalar(Syntax::Text),
                     name: template(&extractor.dependency, &captures)?,
                     package: package.clone(),
                     kind: DependencyKind::Production,

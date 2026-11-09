@@ -186,6 +186,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
             manager: Manager::Maven,
             file: path.into(),
             location,
+            form: EditForm::Scalar(Syntax::Bare),
             name: format!("{group}:{artifact}"),
             package: format!("{group}:{artifact}"),
             kind,

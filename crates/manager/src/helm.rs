@@ -38,6 +38,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
             manager: Manager::Helm,
             file: path.into(),
             location,
+            form: EditForm::Scalar(Syntax::Yaml),
             name: name.into(),
             package,
             kind: DependencyKind::Chart,

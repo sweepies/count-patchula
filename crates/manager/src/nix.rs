@@ -259,6 +259,7 @@ pub(super) fn extract(
                 span.end() - 1,
                 format!("/nodes/{}/locked/{field}", pointer_token(node)),
             ),
+            form: EditForm::Scalar(Syntax::InnerToken),
             name: name.clone(),
             package: root_url(original).unwrap_or_else(|| current.clone()),
             kind: DependencyKind::FlakeInput,

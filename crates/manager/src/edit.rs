@@ -38,7 +38,7 @@ pub fn edits(
         actions::replacement(dep, text, value, digest)?
     } else if dep.kind == DependencyKind::Runner {
         actions::runner_replacement(dep, text, value)?
-    } else if dep.kind == DependencyKind::ContainerImage {
+    } else if let EditForm::Image { .. } = dep.form {
         return image_edits(dep, text, raw, value, digest);
     } else {
         let current = scalar(dep, raw)?;
@@ -63,48 +63,15 @@ pub fn edits(
     }])
 }
 
-/// npm and Bun dependencies live in JSON manifests, YAML catalogs and plain
-/// Node version files, so their syntax follows the file rather than the manager.
-fn json(dep: &Dependency) -> bool {
-    (matches!(dep.manager, Manager::Npm | Manager::Bun) && dep.file.ends_with("package.json"))
-        // HCL version strings are quoted like JSON strings, without interpolation.
-        || (dep.manager == Manager::Terraform && dep.file.ends_with(".tf"))
-}
-fn yaml(dep: &Dependency) -> bool {
-    matches!(
-        dep.manager,
-        Manager::GithubActions
-            | Manager::Compose
-            | Manager::Kubernetes
-            | Manager::Kustomize
-            | Manager::Flux
-            | Manager::HelmValues
-            | Manager::PreCommit
-            | Manager::Helm
-            | Manager::Woodpecker
-            | Manager::Gitlabci
-            | Manager::GitlabciInclude
-    ) || (matches!(dep.manager, Manager::Npm | Manager::Bun)
-        && (dep.file.ends_with(".yaml") || dep.file.ends_with(".yml")))
-}
-fn toml(dep: &Dependency) -> bool {
-    (matches!(dep.manager, Manager::Cargo | Manager::Mise)
-        && !dep.file.ends_with(".tool-versions")
-        // Toolchain pins are located inside their string, not as a TOML value.
-        && dep.kind != DependencyKind::Toolchain)
-        // Poetry constraints are whole TOML strings; PEP 508 specifiers are
-        // spans inside one and are replaced as raw text.
-        || (dep.manager == Manager::Pyproject && dep.location.pointer.starts_with("/tool/poetry/"))
-}
 fn scalar(dep: &Dependency, raw: &str) -> Result<String, String> {
-    if json(dep) {
+    let syntax = dep.form.syntax();
+    if syntax == Syntax::Json {
         serde_json::from_str(raw).map_err(|e| e.to_string())
-    } else if yaml(dep) {
+    } else if matches!(syntax, Syntax::Yaml | Syntax::YamlName) {
         let value: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(raw).map_err(|e| e.to_string())?;
         // GitLab refs are tag names: a plain `1.0` is the text, not a float.
-        if value.is_number() && matches!(dep.manager, Manager::Gitlabci | Manager::GitlabciInclude)
-        {
+        if value.is_number() && syntax == Syntax::YamlName {
             return Ok(raw.trim().into());
         }
         value
@@ -113,7 +80,7 @@ fn scalar(dep: &Dependency, raw: &str) -> Result<String, String> {
             .or_else(|| value.as_u64().map(|v| v.to_string()))
             .or_else(|| value.as_f64().map(|v| v.to_string()))
             .ok_or_else(|| "unsupported YAML scalar".into())
-    } else if toml(dep) {
+    } else if syntax == Syntax::Toml {
         let doc = toml_edit::Document::parse(format!("v = {raw}")).map_err(|e| e.to_string())?;
         doc["v"]
             .as_str()
@@ -127,10 +94,11 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
     if target.contains(['\n', '\r', '\0']) {
         return Err("multiline or NUL update is not supported".into());
     }
-    if dep.manager == Manager::Pyproject && !toml(dep) && target.contains(['"', '\'', '\\']) {
+    let syntax = dep.form.syntax();
+    if syntax == Syntax::InnerToken && target.contains(['"', '\'', '\\']) {
         return Err("unsafe replacement inside a TOML string".into());
     }
-    if json(dep) || raw.starts_with('"') {
+    if syntax == Syntax::Json || raw.starts_with('"') {
         if raw.starts_with("\"\"\"") {
             if target.contains(['"', '\\']) {
                 return Err("unsafe multiline TOML replacement".into());
@@ -141,7 +109,7 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
     }
     if raw.starts_with('\'') {
         let delimiter = if raw.starts_with("'''") { "'''" } else { "'" };
-        let escaped = if yaml(dep) {
+        let escaped = if matches!(syntax, Syntax::Yaml | Syntax::YamlName) {
             target.replace('\'', "''")
         } else {
             if target.contains('\'') {
@@ -151,13 +119,13 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
         };
         return Ok(format!("{delimiter}{escaped}{delimiter}"));
     }
-    if yaml(dep) {
+    if matches!(syntax, Syntax::Yaml | Syntax::YamlName) {
         let parsed =
             serde_yaml_ng::from_str::<serde_yaml_ng::Value>(target).map_err(|e| e.to_string())?;
         if parsed.as_str() != Some(target) && !parsed.is_number() {
             return serde_json::to_string(target).map_err(|e| e.to_string());
         }
-    } else if dep.manager == Manager::Gradle {
+    } else if syntax == Syntax::Gradle {
         // Gradle versions sit inside script strings and properties, where
         // quotes, `$` and backslashes would change their meaning.
         if !target
@@ -166,13 +134,13 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
         {
             return Err("unsafe replacement inside a Gradle string".into());
         }
-    } else if matches!(dep.manager, Manager::Bundler | Manager::Composer) {
+    } else if syntax == Syntax::Inner {
         // Gem requirements sit inside a Ruby string and Composer constraints
         // inside a JSON string; both may contain spaces (`^7.0 || ^8.0`).
         if target.contains(['"', '\'', '\\']) {
             return Err("unsafe replacement inside a quoted requirement".into());
         }
-    } else if target.chars().any(char::is_whitespace) && dep.manager != Manager::Regex {
+    } else if syntax != Syntax::Text && target.chars().any(char::is_whitespace) {
         return Err("unsafe unquoted replacement".into());
     }
     Ok(target.into())
@@ -199,30 +167,33 @@ fn image_edits(
     {
         return Err("invalid image tag or content digest".into());
     }
-    let literal = if dep.manager == Manager::GithubActions {
+    let EditForm::Image {
+        digest_pointer,
+        comment,
+        ..
+    } = &dep.form
+    else {
+        return Err("not an image edit form".into());
+    };
+    let literal = if *comment {
         raw.split_once(" #").map_or(raw, |(a, _)| a).trim_end()
     } else {
         raw
     };
     let suffix = &raw[literal.len()..];
     let current = scalar(dep, literal)?;
-    let split = dep.location.pointer.ends_with("/tag") || dep.location.pointer.ends_with("/newTag");
     if dep.digest.is_some() && value != dep.current && digest.is_none() {
         return Err("cannot change a pinned image without its target digest".into());
     }
     let mut out = Vec::new();
-    let target = if split {
+    let target = if let Some(pointer) = digest_pointer {
         if current != dep.current {
             return Err("image tag location mismatch".into());
         }
         if let Some(digest) = digest {
-            let pointer = format!(
-                "{}/digest",
-                dep.location.pointer.rsplit_once('/').unwrap().0
-            );
             let locations = crate::yaml_locations::parse(text)?;
             let location = locations
-                .get(&pointer)
+                .get(pointer)
                 .ok_or("adding a separate YAML digest field is not supported yet")?;
             let old = text
                 .get(location.start..location.end)

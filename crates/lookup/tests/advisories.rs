@@ -1,6 +1,6 @@
 use patchula_datasource::{Advisory, AdvisoryQuery, Affected, Event, Range};
 use patchula_lookup::{advisory_query, affects, fixes, report_advisories};
-use patchula_manager::{Dependency, Location};
+use patchula_manager::{Dependency, EditForm, Location, Syntax};
 use patchula_versioning::Ecosystem;
 use patchula_words::{DependencyKind, Manager, Scheme, Severity, Source};
 use std::sync::Arc;
@@ -23,6 +23,7 @@ fn dependency(source: Source, package: &str, current: &str, resolved: Option<&st
             column: 1,
             pointer: String::new(),
         },
+        form: EditForm::Scalar(Syntax::Json),
         name: package.into(),
         package: package.into(),
         kind: if manager == Manager::GithubActions {

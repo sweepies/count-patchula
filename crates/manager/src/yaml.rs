@@ -48,15 +48,30 @@ pub(super) struct Scan<'a> {
     out: Vec<Dependency>,
 }
 impl<'a> Scan<'a> {
-    fn location(&self, _key: &str, _value: &str, pointer: &str) -> Result<Location, String> {
+    fn location(&self, pointer: &str) -> Result<Location, String> {
         self.locations.get(pointer).cloned().ok_or_else(||format!("cannot locate YAML scalar {pointer}; aliased/template scalars need a concrete value"))
     }
-    fn image(&mut self, image: &str, key: &str, value: &str, pointer: &str) -> Result<(), String> {
+    /// `digest_pointer` is the pointer of the sibling field holding the image
+    /// digest when the located value is the tag alone.
+    fn image(
+        &mut self,
+        image: &str,
+        pointer: &str,
+        digest_pointer: Option<String>,
+    ) -> Result<(), String> {
         if image.contains(['$', '{']) {
             return Ok(());
         }
-        let location = self.location(key, value, pointer)?;
-        if let Some(dep) = images::dependency(self.manager, self.path, self.text, image, location) {
+        let location = self.location(pointer)?;
+        if let Some(dep) = images::dependency(
+            self.manager,
+            self.path,
+            self.text,
+            image,
+            location,
+            Syntax::Yaml,
+            digest_pointer,
+        ) {
             self.out.push(dep);
         }
         Ok(())
@@ -72,12 +87,12 @@ impl<'a> Scan<'a> {
         let Some(current) = scalar(version) else {
             return Ok(());
         };
-        let key = pointer.rsplit('/').next().unwrap();
-        let location = self.location(key, &current, pointer)?;
+        let location = self.location(pointer)?;
         self.out.push(Dependency {
             manager: self.manager,
             file: self.path.into(),
             location,
+            form: EditForm::Scalar(Syntax::Yaml),
             name: name.into(),
             package,
             kind: DependencyKind::Chart,
@@ -108,7 +123,11 @@ impl<'a> Scan<'a> {
                             .filter(|d| !d.is_empty())
                             .map_or(String::new(), |d| format!("@{d}"))
                     );
-                    self.image(&image, "tag", &tag, &format!("{pointer}/tag"))?;
+                    self.image(
+                        &image,
+                        &format!("{pointer}/tag"),
+                        Some(format!("{pointer}/digest")),
+                    )?;
                 }
                 for (key, v) in map {
                     let Some(key) = key.as_str() else {
@@ -118,7 +137,7 @@ impl<'a> Scan<'a> {
                     if key == "image"
                         && let Some(image) = v.as_str()
                     {
-                        self.image(image, "image", image, &p)?;
+                        self.image(image, &p, None)?;
                     } else {
                         self.images(v, &p, values)?;
                     }
@@ -168,6 +187,7 @@ pub(super) fn extract(
                     version.end(),
                     "/flux-version".into(),
                 ),
+                form: EditForm::Scalar(Syntax::Yaml),
                 name: "fluxcd/flux2".into(),
                 package: "fluxcd/flux2".into(),
                 kind: DependencyKind::Toolchain,
@@ -192,12 +212,11 @@ pub(super) fn extract(
                         if let Some(image) = get(service, "image") {
                             scan.image(
                                 &image,
-                                "image",
-                                &image,
                                 &format!(
                                     "{pointer}/services/{}/image",
                                     name.as_str().unwrap_or("?")
                                 ),
+                                None,
                             )?;
                         }
                     }
@@ -237,7 +256,7 @@ pub(super) fn extract(
                             && key.ends_with("_IMAGE")
                             && image.contains([':', '@'])
                         {
-                            scan.image(image, key, image, &format!("{pointer}/data/{key}"))?;
+                            scan.image(image, &format!("{pointer}/data/{key}"), None)?;
                         }
                     }
                 }
@@ -253,12 +272,11 @@ pub(super) fn extract(
                             );
                             scan.image(
                                 &full,
-                                "newTag",
-                                &tag,
                                 &format!("{pointer}/images/{i}/newTag"),
+                                Some(format!("{pointer}/images/{i}/digest")),
                             )?;
                         } else if let Some(image) = image.as_str() {
-                            scan.image(image, "images", image, &format!("{pointer}/images/{i}"))?;
+                            scan.image(image, &format!("{pointer}/images/{i}"), None)?;
                         }
                     }
                 }

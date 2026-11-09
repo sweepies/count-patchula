@@ -516,6 +516,96 @@ fn apm_refs_keep_their_tag_and_pins_keep_the_tag_comment() {
 }
 
 #[test]
+fn package_lock_versions_are_edited_as_json_strings() {
+    let text = "{\n  \"name\": \"app\",\n  \"lockfileVersion\": 3,\n  \"packages\": {\n    \"\": {\n      \"name\": \"app\"\n    },\n    \"node_modules/fixture\": {\n      \"version\": \"1.0.0\"\n    }\n  }\n}\n";
+    let extraction = Scanner::new(&config(Manager::Npm))
+        .unwrap()
+        .extract(&read_files([("package-lock.json".into(), text.into())]))
+        .unwrap();
+    let dep = extraction
+        .locked
+        .iter()
+        .find(|l| l.package == "fixture")
+        .expect("lockfile package")
+        .dependency();
+    let changed = apply(text, edits(&dep, text, "2.0.0", None).unwrap()).unwrap();
+    assert_eq!(changed, text.replace("\"1.0.0\"", "\"2.0.0\""));
+}
+
+#[test]
+fn ruby_version_files_are_bare_while_gemfile_ruby_is_quoted_inner() {
+    assert_eq!(
+        replace(Manager::Bundler, ".ruby-version", "3.2.1\n", "3.3.0", None),
+        "3.3.0\n"
+    );
+    let deps = Scanner::new(&config(Manager::Bundler))
+        .unwrap()
+        .extract(&read_files([(".ruby-version".into(), "3.2.1\n".into())]))
+        .unwrap()
+        .dependencies;
+    assert!(edits(&deps[0], "3.2.1\n", "3.3.0 extra", None).is_err());
+    let gemfile = "ruby \"3.2.1\"\n";
+    assert_eq!(
+        replace(Manager::Bundler, "Gemfile", gemfile, "3.3.0", None),
+        gemfile.replace("3.2.1", "3.3.0")
+    );
+}
+
+#[test]
+fn quoted_string_pins_refuse_targets_that_would_break_out() {
+    let text = "[toolchain]\nchannel = \"1.82.0\"\n";
+    let deps = Scanner::new(&config(Manager::Cargo))
+        .unwrap()
+        .extract(&read_files([("rust-toolchain.toml".into(), text.into())]))
+        .unwrap()
+        .dependencies;
+    assert_eq!(deps.len(), 1);
+    assert!(edits(&deps[0], text, "1.0\"; evil", None).is_err());
+    assert_eq!(
+        apply(text, edits(&deps[0], text, "1.99.0", None).unwrap()).unwrap(),
+        text.replace("1.82.0", "1.99.0")
+    );
+    for (path, text) in [
+        ("global.json", "{\"sdk\":{\"version\":\"8.0.100\"}}\n"),
+        (
+            ".config/dotnet-tools.json",
+            "{\"tools\":{\"dotnet-ef\":{\"version\":\"9.0.0\"}}}\n",
+        ),
+    ] {
+        let deps = Scanner::new(&config(Manager::Nuget))
+            .unwrap()
+            .extract(&read_files([(path.into(), text.into())]))
+            .unwrap()
+            .dependencies;
+        assert_eq!(deps.len(), 1, "{path}");
+        assert!(edits(&deps[0], text, "9.0\"100", None).is_err(), "{path}");
+    }
+    let project = "<Project><ItemGroup><PackageReference Include=\"A\" Version=\"1.0.0\" /></ItemGroup></Project>";
+    let deps = Scanner::new(&config(Manager::Nuget))
+        .unwrap()
+        .extract(&read_files([("App.csproj".into(), project.into())]))
+        .unwrap()
+        .dependencies;
+    assert_eq!(deps.len(), 1);
+    assert!(edits(&deps[0], project, "2.0\"0", None).is_err());
+    assert_eq!(
+        apply(project, edits(&deps[0], project, "2.0.0", None).unwrap()).unwrap(),
+        project.replace("1.0.0", "2.0.0")
+    );
+    let devcontainer = "{\"image\":\"alpine:3.19\"}";
+    assert_eq!(
+        replace(
+            Manager::Devcontainer,
+            ".devcontainer.json",
+            devcontainer,
+            "3.20",
+            None
+        ),
+        devcontainer.replace("3.19", "3.20")
+    );
+}
+
+#[test]
 fn apm_pins_leave_a_tab_separated_comment_after_the_new_one() {
     let sha = "fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c";
     assert_eq!(

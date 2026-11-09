@@ -1,6 +1,6 @@
 use patchula_datasource::{Catalog, Version};
 use patchula_lookup::Evaluator;
-use patchula_manager::{Dependency, Location};
+use patchula_manager::{Dependency, EditForm, Location, Syntax};
 use patchula_words::{DependencyKind, Manager, Scheme, Source, Update, VersionPolicy};
 fn config(name: &str) -> patchula_config::Config {
     patchula_config::load(
@@ -20,6 +20,7 @@ fn dependency(name: &str) -> Dependency {
             column: 1,
             pointer: String::new(),
         },
+        form: EditForm::Scalar(Syntax::Json),
         name: name.into(),
         package: name.into(),
         kind: DependencyKind::Production,
@@ -1334,6 +1335,11 @@ fn image(digest: &str) -> Dependency {
         digest: Some(digest.into()),
         source: Source::Docker,
         scheme: Scheme::Loose,
+        form: EditForm::Image {
+            syntax: Syntax::Bare,
+            digest_pointer: None,
+            comment: false,
+        },
         ..dependency("unused")
     }
 }

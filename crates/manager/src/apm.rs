@@ -161,6 +161,7 @@ fn dependency(
         manager: Manager::Apm,
         file: path.into(),
         location: Location::new(text, location.start, end, location.pointer.clone()),
+        form: EditForm::Scalar(Syntax::Bare),
         name: name.into(),
         package,
         kind,

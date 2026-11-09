@@ -96,6 +96,7 @@ pub(super) fn extract(
         manager: Manager::Copier,
         file: path.into(),
         location,
+        form: EditForm::Scalar(Syntax::Bare),
         name: src.into(),
         package,
         kind: DependencyKind::Template,

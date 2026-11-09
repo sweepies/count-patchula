@@ -67,6 +67,7 @@ pub(super) fn extract(
                     offset + n + version.len(),
                     format!("/require/{name}"),
                 ),
+                form: EditForm::Scalar(Syntax::Bare),
                 name: name.into(),
                 package: name.into(),
                 kind: DependencyKind::Production,
@@ -103,6 +104,7 @@ pub(super) fn extract(
                     offset + n + version.len(),
                     format!("/{}", &c["kind"]),
                 ),
+                form: EditForm::Scalar(Syntax::Bare),
                 name: c["kind"].into(),
                 package: "go".into(),
                 kind: if &c["kind"] == "go" {
