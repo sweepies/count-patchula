@@ -1505,33 +1505,6 @@ async fn escaped_npm_names_are_refused_and_mirrored_reads_count_as_credentialed(
 }
 
 #[tokio::test]
-async fn a_package_from_its_own_registry_has_no_public_release_notes() {
-    let dir = tempfile::tempdir().unwrap();
-    // No request is expected: the fake transport panics on any.
-    let client = patchula_notes::Client::new(
-        auth_client(Arc::new(AuthSteps(Mutex::new(VecDeque::new()))), dir.path()).await,
-    );
-    let private = patchula_config::PackageId::new(
-        Source::Npm,
-        Some("https://npm.acme.dev".into()),
-        "@acme/ui",
-    );
-    assert!(!private.is_public());
-    assert!(
-        client
-            .source_repository(&private, "1.0.0")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    let notes = client
-        .release_notes(&private, "1.0.0", "2.0.0")
-        .await
-        .unwrap();
-    assert!(notes.source.is_none());
-}
-
-#[tokio::test]
 async fn a_python_package_is_read_from_its_private_index_or_not_at_all() {
     let json = r#"{"meta":{"api-version":"1.1"},"name":"acme-core","files":[
         {"filename":"acme_core-1.0.0-py3-none-any.whl","upload-time":"2026-01-01T00:00:00Z"},

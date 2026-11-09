@@ -2228,7 +2228,6 @@ dependencies = [
  "patchula-github",
  "patchula-http",
  "patchula-mise",
- "patchula-notes",
  "patchula-process",
  "patchula-testkit",
  "patchula-versioning",

@@ -2209,6 +2209,30 @@ async fn an_oci_chart_source_is_its_first_forge_in_sources_with_the_charts_direc
 }
 
 #[tokio::test]
+async fn a_package_from_its_own_registry_has_no_public_release_notes() {
+    // No request is expected: the fake transport panics on any.
+    let client = notes(routes(&[]), memory().await).await;
+    let private = patchula_config::PackageId::new(
+        Source::Npm,
+        Some("https://npm.acme.dev".into()),
+        "@acme/ui",
+    );
+    assert!(!private.is_public());
+    assert!(
+        client
+            .source_repository(&private, "1.0.0")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let notes = client
+        .release_notes(&private, "1.0.0", "2.0.0")
+        .await
+        .unwrap();
+    assert!(notes.source.is_none());
+}
+
+#[tokio::test]
 async fn an_image_without_labels_takes_its_manifests_source_annotation() {
     let digest = format!("sha256:{}", "b".repeat(64));
     let routes = routes(&[
