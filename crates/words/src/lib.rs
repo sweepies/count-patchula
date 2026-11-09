@@ -240,55 +240,46 @@ words!(
 });
 
 words!(
-    /// A tooling warning the Count raises on a pull request.
+    /// A tooling warning: something about the repository makes an update
+    /// that merges itself riskier than it looks. `warnings.quiet` names these.
     ToolingRule {
-    /// The pull request merged without CI.
+    /// Nothing tests the PR before it merges.
     MergeWithoutCi => "merge-without-ci",
-    /// The pull request merged without required checks.
+    /// Native auto-merge is allowed and no status check is required.
     MergeWithoutRequiredChecks => "merge-without-required-checks",
-    /// A security update merged without delivery.
+    /// A security fix merges itself and nothing delivers the default branch.
     SecurityMergeWithoutDelivery => "security-merge-without-delivery",
 });
 
 words!(
-    /// The detail a tooling warning carries, when it has one.
+    /// The case of a tooling warning that has its own wording.
     ToolingDetail {
-    /// Only reviews were required.
+    /// The default branch requires a review but no checks.
     ReviewsOnly => "reviews-only",
-    /// The merge used a tagged release.
+    /// Only tags or releases trigger delivery.
     TaggedRelease => "tagged-release",
-    /// The repository's own tooling handled it.
+    /// GitHub's auto-merge, not the Count, merges the PR.
     Native => "native",
 });
 
 words!(
-    /// When a skipped update is checked again.
+    /// When a ticked checkbox says it takes effect: wording only.
+    #[derive(Default)]
     Recheck {
-    /// Immediately.
     Now => "now",
-    /// On the next run.
+    #[default]
     NextRun => "next-run",
 });
 
-impl Default for Recheck {
-    fn default() -> Self {
-        Self::NextRun
-    }
-}
-
 words!(
     /// Where an image's SBOM came from.
+    #[derive(Default)]
     SbomSource {
+    #[default]
     Attestation => "attestation",
     CosignAtt => "cosign-att",
     CosignSbom => "cosign-sbom",
 });
-
-impl Default for SbomSource {
-    fn default() -> Self {
-        Self::Attestation
-    }
-}
 
 impl Update {
     /// The order competing proposals apply in when several could write the
