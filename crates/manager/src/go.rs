@@ -116,6 +116,10 @@ pub(super) fn extract(
         }
         offset += line.len();
     }
+    // Go rejects a file whose block never closes, as `replaced` and `uses` do.
+    if block {
+        return Err("a `require (` block does not end".into());
+    }
     Ok(out)
 }
 
@@ -219,7 +223,7 @@ pub(crate) fn workspace_modules(files: &Files) -> Vec<String> {
     files
         .iter()
         .filter(|(path, _)| work_file(path))
-        .filter_map(|(path, text)| uses(path, text))
+        .filter_map(|(path, text)| uses(path, text.read().ok()?))
         .flatten()
         .map(|dir| format!("{dir}go.mod"))
         .collect()
@@ -267,10 +271,11 @@ pub(crate) fn modules(files: &Files) -> Modules {
         .iter()
         .filter(|(path, _)| work_file(path))
         .map(|(path, text)| {
-            let read = || Some((replaced(text)?, uses(path, text)?));
-            let entry = (!crate::unreadable_text(text.as_str()))
-                .then(read)
-                .flatten()
+            let read = |text: &str| Some((replaced(text)?, uses(path, text)?));
+            let entry = text
+                .read()
+                .ok()
+                .and_then(read)
                 .map(|(replaced, uses)| Workspace { replaced, uses })
                 .ok_or_else(|| format!("{path}, which the Count cannot read"));
             (path.clone(), entry)
@@ -279,7 +284,8 @@ pub(crate) fn modules(files: &Files) -> Modules {
     let mods = files
         .iter()
         .filter(|(path, _)| path.ends_with("go.mod"))
-        .filter(|(_, text)| !crate::unreadable_text(text.as_str()))
+        // An unread go.mod is not extracted, so it shapes no lookup here.
+        .filter_map(|(path, text)| Some((path, text.read().ok()?)))
         .map(|(path, text)| {
             let entry = replaced(text)
                 .map(|replaced| Module {

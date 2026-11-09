@@ -314,7 +314,12 @@ fn file_option(word: &str) -> Option<(&'static str, Option<&str>)> {
 /// so it need not.
 pub(crate) fn referenced(files: &Files) -> Vec<(String, Vec<String>, bool)> {
     let mut out = Vec::new();
-    for (path, text) in files {
+    // An unread file names nothing more to read; the lookups it shapes fail
+    // through `private_repositories`.
+    for (path, text) in files
+        .iter()
+        .filter_map(|(path, text)| Some((path, text.read().ok()?)))
+    {
         if path == ".mvn/maven.config" || path.ends_with("/.mvn/maven.config") {
             let base = path.strip_suffix(".mvn/maven.config").unwrap_or("");
             let mut words = text.split_whitespace();
@@ -390,21 +395,13 @@ pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repo
         .iter()
         .filter(|(path, _)| repository_file(path) || poms.contains(path.as_str()))
     {
-        if matches!(
-            text.as_str(),
-            crate::UNREADABLE_SETTINGS | crate::UNREADABLE_DEEP
-        ) {
-            let reason = if text.as_str() == crate::UNREADABLE_DEEP {
-                format!(
-                    "include chain deeper than {} rounds starting at {path}; the remaining files were not read",
-                    crate::MORE_ROUNDS
-                )
-            } else {
-                format!("{path}, which the Count cannot read")
-            };
-            out.close(reason);
-            return Some(out);
-        }
+        let text = match text.read() {
+            Ok(text) => text,
+            Err(unread) => {
+                out.close(unread.reason(path));
+                return Some(out);
+            }
+        };
         if path.ends_with("maven.config") {
             continue;
         }

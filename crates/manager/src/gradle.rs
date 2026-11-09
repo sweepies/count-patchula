@@ -158,9 +158,9 @@ fn catalog(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
     Ok(out)
 }
 
-fn script(path: &str, text: &str) -> Vec<Dependency> {
+fn script(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
     // Commented-out declarations are not dependencies.
-    let text = &crate::gradle_vars::mask(text);
+    let text = &without_comments(path, text).ok_or(UNLEXED)?;
     static COORDINATE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"["']([A-Za-z0-9_.-]+):([A-Za-z0-9_.-]+):([0-9][A-Za-z0-9_.+-]*)["']"#)
             .expect("coordinate pattern")
@@ -220,8 +220,11 @@ fn script(path: &str, text: &str) -> Vec<Dependency> {
             ));
         }
     }
-    out
+    Ok(out)
 }
+
+/// Why a build script the lexer cannot read is skipped.
+const UNLEXED: &str = "a comment, string or template does not end, or braces do not balance";
 
 /// The wrapper's distribution version. A recorded `distributionSha256Sum`
 /// is refreshed by the lockfile runner from Gradle's published checksum.
@@ -286,7 +289,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
         // Properties are only versions through a reference; see gradle_vars.
         Ok(Vec::new())
     } else {
-        Ok(script(path, text))
+        script(path, text)
     }
 }
 
@@ -618,6 +621,11 @@ pub(crate) fn wanted(files: &Files) -> (Vec<String>, Vec<String>) {
     let mut builds = Vec::new();
     let mut scripts = Vec::new();
     for (path, text) in files.iter().filter(|(path, _)| logic_source(path)) {
+        // An unread script names nothing more to read; `private_repositories`
+        // fails its lookups.
+        let Ok(text) = text.read() else {
+            continue;
+        };
         let Some((code, strings)) = code(path, text) else {
             continue;
         };
@@ -638,6 +646,9 @@ pub(crate) fn wanted(files: &Files) -> (Vec<String>, Vec<String>) {
 struct Lexer<'a> {
     bytes: &'a [u8],
     out: Vec<u8>,
+    /// The text with only comments blanked, from the same pass, so both
+    /// views agree on where every comment and string is.
+    kept: Vec<u8>,
     /// Each string's start and literal text, with `$` standing for each
     /// template.
     strings: Vec<(usize, String)>,
@@ -645,10 +656,28 @@ struct Lexer<'a> {
     kotlin: bool,
     /// Java: strings hold no templates, and there are no slashy strings.
     java: bool,
+    /// How many `${ … }` templates enclose the lexer now. Each costs stack,
+    /// so text nested deeper than [`MAX_NESTING`] does not lex.
+    nesting: usize,
 }
 
+/// The deepest templates may nest: far past real build logic, and well within
+/// the stack.
+const MAX_NESTING: usize = 32;
+
 impl Lexer<'_> {
+    /// Blank a comment in both views.
     fn blank(&mut self, from: usize, to: usize) {
+        for out in [&mut self.out, &mut self.kept] {
+            for b in &mut out[from..to] {
+                if *b != b'\n' {
+                    *b = b' ';
+                }
+            }
+        }
+    }
+    /// Blank part of a string, or a quoted name, in the code view only.
+    fn blank_literal(&mut self, from: usize, to: usize) {
         for b in &mut self.out[from..to] {
             if *b != b'\n' {
                 *b = b' ';
@@ -658,7 +687,20 @@ impl Lexer<'_> {
 
     /// Code from `i`: to the end, or, in a template, past the `}` that
     /// closes it. None when a comment, string or template does not end.
-    fn code(&mut self, mut i: usize, template: bool) -> Option<usize> {
+    fn code(&mut self, i: usize, template: bool) -> Option<usize> {
+        if !template {
+            return self.code_in(i, false);
+        }
+        if self.nesting >= MAX_NESTING {
+            return None;
+        }
+        self.nesting += 1;
+        let end = self.code_in(i, true);
+        self.nesting -= 1;
+        end
+    }
+
+    fn code_in(&mut self, mut i: usize, template: bool) -> Option<usize> {
         let bytes = self.bytes;
         let mut depth = 0usize;
         while i < bytes.len() {
@@ -692,10 +734,10 @@ impl Lexer<'_> {
                     .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
                     && name.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_');
                 if plain {
-                    self.blank(i, i + 1);
-                    self.blank(end, end + 1);
+                    self.blank_literal(i, i + 1);
+                    self.blank_literal(end, end + 1);
                 } else {
-                    self.blank(i, end + 1);
+                    self.blank_literal(i, end + 1);
                 }
                 i = end + 1;
             } else if !self.java && rest.starts_with(b"$/") {
@@ -712,7 +754,9 @@ impl Lexer<'_> {
                 i += 1;
             }
         }
-        (!template).then_some(bytes.len())
+        // The end of the text ends the code only outside templates, with every
+        // brace closed.
+        (!template && depth == 0).then_some(bytes.len())
     }
 
     /// Whether a `/` at `i` opens a Groovy slashy string rather than
@@ -725,9 +769,31 @@ impl Lexer<'_> {
             .rev()
             .find(|b| !b.is_ascii_whitespace())
             .copied();
+        // Or after a keyword that takes an expression, as in `return /re/`.
+        let word: Vec<u8> = self.out[..i]
+            .iter()
+            .rev()
+            .skip_while(|b| b.is_ascii_whitespace())
+            .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_')
+            .copied()
+            .collect();
+        let keyword = [
+            &b"return"[..],
+            b"println",
+            b"print",
+            b"assert",
+            b"case",
+            b"in",
+            b"throw",
+            b"yield",
+            b"else",
+            b"do",
+        ]
+        .iter()
+        .any(|k| word.iter().rev().eq(k.iter()));
         !matches!(next, b'/' | b'*')
             && !next.is_ascii_whitespace()
-            && before.is_none_or(|b| b"=~(,:[{!&|?;".contains(&b))
+            && (keyword || before.is_none_or(|b| b"=~(,:[{}!&|?;+-*/%^<>".contains(&b)))
     }
 
     /// A Groovy slashy (`/…/`) or dollar-slashy (`$/…/$`) string from
@@ -749,16 +815,16 @@ impl Lexer<'_> {
             let escape: &[u8] = if open == b"/" { b"\\/" } else { b"$/" };
             if bytes[i..].starts_with(escape) || (open != b"/" && bytes[i..].starts_with(b"$$")) {
                 literal.extend_from_slice(&bytes[i..i + 2]);
-                self.blank(i, i + 2);
+                self.blank_literal(i, i + 2);
                 i += 2;
             } else if bytes[i..].starts_with(b"${") {
-                self.blank(i, i + 2);
+                self.blank_literal(i, i + 2);
                 let end = self.code(i + 2, true)?;
-                self.blank(end - 1, end);
+                self.blank_literal(end - 1, end);
                 i = end;
             } else {
                 literal.push(bytes[i]);
-                self.blank(i, i + 1);
+                self.blank_literal(i, i + 1);
                 i += 1;
             }
         }
@@ -785,18 +851,18 @@ impl Lexer<'_> {
             let raw = self.kotlin && width == 3;
             if bytes[i] == b'\\' && !raw && i + 1 < bytes.len() {
                 literal.extend_from_slice(&bytes[i..i + 2]);
-                self.blank(i, i + 2);
+                self.blank_literal(i, i + 2);
                 i += 2;
             } else if templates && bytes[i..].starts_with(b"${") {
                 // The template's code stays; its braces are the template's.
                 literal.push(b'$');
-                self.blank(i, i + 2);
+                self.blank_literal(i, i + 2);
                 let end = self.code(i + 2, true)?;
-                self.blank(end - 1, end);
+                self.blank_literal(end - 1, end);
                 i = end;
             } else {
                 literal.push(bytes[i]);
-                self.blank(i, i + 1);
+                self.blank_literal(i, i + 1);
                 i += 1;
             }
         }
@@ -810,15 +876,34 @@ fn code(path: &str, text: &str) -> Option<(String, Vec<(usize, String)>)> {
     let mut lexer = Lexer {
         bytes: text.as_bytes(),
         out: text.as_bytes().to_vec(),
+        kept: text.as_bytes().to_vec(),
         strings: Vec::new(),
         kotlin: path.ends_with(".kt") || path.ends_with(".kts"),
         java: path.ends_with(".java"),
+        nesting: 0,
     };
     lexer.code(0, false)?;
     // Blanking replaced whole bytes, so a multi-byte character inside a
     // string becomes spaces and the rest stays as it was.
     let code = String::from_utf8(lexer.out).ok()?;
     Some((code, lexer.strings))
+}
+
+/// `text` with only its comments blanked, keeping offsets and strings, for
+/// the readers that match declarations inside strings; none when a comment,
+/// string or template does not end, or braces do not balance.
+pub(crate) fn without_comments(path: &str, text: &str) -> Option<String> {
+    let mut lexer = Lexer {
+        bytes: text.as_bytes(),
+        out: text.as_bytes().to_vec(),
+        kept: text.as_bytes().to_vec(),
+        strings: Vec::new(),
+        kotlin: path.ends_with(".kt") || path.ends_with(".kts"),
+        java: path.ends_with(".java"),
+        nesting: 0,
+    };
+    lexer.code(0, false)?;
+    String::from_utf8(lexer.kept).ok()
 }
 
 /// `code` with each `publishing { … }` block blanked, since it says where
@@ -1057,22 +1142,13 @@ pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repo
         .collect();
     let mut seen: BTreeSet<&str> = queue.iter().copied().collect();
     while let Some(path) = queue.pop() {
-        let text = &files[path];
-        if matches!(
-            text.as_str(),
-            crate::UNREADABLE_SETTINGS | crate::UNREADABLE_DEEP
-        ) {
-            let reason = if text.as_str() == crate::UNREADABLE_DEEP {
-                format!(
-                    "include chain deeper than {} rounds starting at {path}; the remaining files were not read",
-                    crate::MORE_ROUNDS
-                )
-            } else {
-                format!("{path}, which the Count cannot read")
-            };
-            out.close(reason);
-            return Some(out);
-        }
+        let text = match files[path].read() {
+            Ok(text) => text,
+            Err(unread) => {
+                out.close(unread.reason(path));
+                return Some(out);
+            }
+        };
         let unread = || format!("build logic in {path} the Count cannot read");
         let Some((code, strings)) = code(path, text) else {
             out.close(unread());

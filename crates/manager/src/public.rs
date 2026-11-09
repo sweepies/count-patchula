@@ -968,7 +968,17 @@ fn nuget_config_public(text: &str) -> bool {
 /// runner checking those too, so each verdict covers the file alone —
 /// plus, for a Gemfile, the lockfile sitting beside it that its `source`
 /// lines and Bundler's resolution share.
-pub(crate) fn verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
+/// An unread file can name anything, so it is never public, for every file type
+/// a verdict covers.
+pub(crate) fn verdict(path: &str, text: &crate::Text, files: &Files) -> Option<bool> {
+    match text.read() {
+        Ok(text) => read_verdict(path, text, files),
+        // Asked of empty text only to learn whether the file type is covered.
+        Err(_) => read_verdict(path, "", files).map(|_| false),
+    }
+}
+
+fn read_verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
     let leaf = path.rsplit('/').next().unwrap_or(path);
     let flag = match leaf {
         "package.json" => json_public(text, false, &crate::npm::NPM, package_json_rule),
@@ -1002,8 +1012,7 @@ pub(crate) fn verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
         _ if leaf.ends_with(".sln") => lines_public(text, &crate::nuget::NUGET_ORG),
         _ => return None,
     };
-    // A file that could not be read can name anything.
-    Some(flag && text != crate::UNREADABLE_SETTINGS)
+    Some(flag)
 }
 
 #[cfg(test)]
@@ -1020,32 +1029,55 @@ mod tests {
             (".npmrc".into(), "registry=https://registry.npmjs.org/\n".into()),
             ("package-lock.json".into(), "{\"packages\":{\"\":{\"resolved\":\"https://registry.npmjs.org/x/-/x-1.0.0.tgz\"}}}".into()),
         ]);
-        assert_eq!(verdict("package.json", "{}", &files), Some(true));
+        assert_eq!(read_verdict("package.json", "{}", &files), Some(true));
         assert_eq!(
-            verdict(".npmrc", "registry=https://registry.npmjs.org/\n", &files),
+            read_verdict(".npmrc", "registry=https://registry.npmjs.org/\n", &files),
             Some(true)
         );
         // A private or unknown registry is not public.
         for text in [
             "registry=https://npm.acme.dev/\n",
             "registry=${NPM_REGISTRY}\n",
-            // A file the Count could not read.
-            crate::UNREADABLE_SETTINGS,
         ] {
-            assert_eq!(verdict(".npmrc", text, &files), Some(false), "{text:?}");
+            assert_eq!(
+                read_verdict(".npmrc", text, &files),
+                Some(false),
+                "{text:?}"
+            );
+        }
+        // Whatever the reason, an unread file is never public, and a file type
+        // no verdict covers stays uncovered.
+        for unread in [crate::Unread::Failed, crate::Unread::TooDeep] {
+            assert_eq!(
+                verdict("README.md", &crate::Text::Unread(unread), &files),
+                None
+            );
+            for path in ["yarn.lock", "Gemfile.lock", "app.sln", ".npmrc", "Gemfile"] {
+                assert_eq!(
+                    verdict(path, &crate::Text::Unread(unread), &files),
+                    Some(false),
+                    "{path} {unread:?}"
+                );
+            }
         }
         // A lockfile `resolved` URL on a non-public host is not public.
         let lock = "{\"packages\":{\"\":{\"resolved\":\"https://npm.acme.dev/x.tgz\"}}}";
-        assert_eq!(verdict("package-lock.json", lock, &files), Some(false));
+        assert_eq!(read_verdict("package-lock.json", lock, &files), Some(false));
         let lock = "{\"packages\":{\"\":{\"resolved\":\"https://registry.npmjs.org/x.tgz\"}}}";
-        assert_eq!(verdict("package-lock.json", lock, &files), Some(true));
+        assert_eq!(read_verdict("package-lock.json", lock, &files), Some(true));
         // A Gemfury-style index URL is not public.
         let pyproject = "[tool.uv]\nindex-url = \"https://pypi.fury.io/acme/simple\"\n";
-        assert_eq!(verdict("pyproject.toml", pyproject, &files), Some(false));
+        assert_eq!(
+            read_verdict("pyproject.toml", pyproject, &files),
+            Some(false)
+        );
         let pyproject = "[project]\ndependencies = [\"requests\"]\n";
-        assert_eq!(verdict("pyproject.toml", pyproject, &files), Some(true));
+        assert_eq!(
+            read_verdict("pyproject.toml", pyproject, &files),
+            Some(true)
+        );
         // A non-steering file has no verdict.
-        assert_eq!(verdict("README.md", "hi", &files), None);
+        assert_eq!(read_verdict("README.md", "hi", &files), None);
     }
 
     #[test]
@@ -1690,7 +1722,7 @@ mod tests {
         ];
         for (path, text, expect) in cases {
             assert_eq!(
-                verdict(path, text, &files),
+                read_verdict(path, text, &files),
                 Some(*expect),
                 "{path} {text:?}"
             );

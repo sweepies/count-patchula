@@ -100,12 +100,24 @@ pub(super) fn extract(
     static RUBY: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"(?m)^[ \t]*ruby[ \t(]+["']([0-9][0-9.]*)["']"#).expect("ruby pattern")
     });
-    let lock_text = files.get(&format!("{path}.lock"));
-    let lock = lock_text.map(|l| locked(l)).unwrap_or_default();
+    let lock_name = format!("{path}.lock");
+    // An unread lockfile may record any remote for any gem, unlike an absent
+    // one: every lookup it could steer fails instead of trusting the Gemfile.
+    let (lock_text, unread) = match files.get(&lock_name).map(Text::read) {
+        Some(Ok(text)) => (Some(text), false),
+        Some(Err(_)) => (None, true),
+        None => (None, false),
+    };
+    let lock = lock_text.map(locked).unwrap_or_default();
     let Gemfile {
         mut origins, gems, ..
     } = gemfile(path, text);
-    origins.locks.extend(lock_text.map(|l| lock_origins(l)));
+    origins.locks.extend(lock_text.map(lock_origins));
+    if unread {
+        origins.uncertain.push(Named::Unusable(format!(
+            "(a {lock_name} the Count could not read)"
+        )));
+    }
     origins.uncertain.extend(bundle_config(
         dir,
         files.get(&format!("{dir}.bundle/config")),
@@ -619,12 +631,14 @@ const BUNDLE_SETTINGS: [&str; 30] = [
 /// `BUNDLE_SETTINGS`, or a file the Count cannot read. Bundler reads the file
 /// line by line as `KEY: value`, not as YAML, so the Count does too, and any
 /// line of another shape, such as an indented one, is unreadable.
-fn bundle_config(dir: &str, text: Option<&String>) -> Option<Named> {
-    let text = text?;
+fn bundle_config(dir: &str, text: Option<&Text>) -> Option<Named> {
     let unread = || {
         Some(Named::Unusable(format!(
             "{dir}.bundle/config, which the Count cannot read"
         )))
+    };
+    let Ok(text) = text?.read() else {
+        return unread();
     };
     for line in text.lines() {
         let line = line.strip_suffix('\r').unwrap_or(line);
@@ -716,9 +730,10 @@ pub(crate) fn public_only(path: &str, text: &str, files: &Files) -> bool {
         && remote
             .iter()
             .all(|url| crate::public::fetch_ok(url, &RUBYGEMS))
-        && files
-            .get(&format!("{path}.lock"))
-            .is_none_or(|lock| crate::public::lines_public(lock, &RUBYGEMS))
+        && files.get(&format!("{path}.lock")).is_none_or(|lock| {
+            lock.read()
+                .is_ok_and(|lock| crate::public::lines_public(lock, &RUBYGEMS))
+        })
 }
 
 /// The URLs a Gemfile's `source` directives and `gem` `source:` options
@@ -768,7 +783,7 @@ mod tests {
 
     #[test]
     fn bundle_config_is_read_as_bundler_reads_it() {
-        let read = |text: &str| bundle_config("", Some(&text.to_owned()));
+        let read = |text: &str| bundle_config("", Some(&Text::from(text)));
         assert_eq!(
             read("---\nBUNDLE_PATH: \"vendor/bundle\"\nBUNDLE_BUILD__PG: \"--with-pg\"\n"),
             None
@@ -781,10 +796,10 @@ mod tests {
             // YAML would read one setting here; Bundler reads two.
             "---\nBUNDLE_PATH: |\n BUNDLE_MIRROR__ALL: https://gems.acme.dev\n",
             "../shared/bundle-config",
-            crate::UNREADABLE_SETTINGS,
         ] {
             assert!(read(text).is_some(), "{text}");
         }
+        assert!(bundle_config("", Some(&Text::Unread(crate::Unread::Failed))).is_some());
     }
 
     #[test]

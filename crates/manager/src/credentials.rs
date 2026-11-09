@@ -36,21 +36,28 @@ pub fn credential_scope(path: &str) -> bool {
         )
 }
 
-/// Whether `path`'s text is checked for committed credentials, as a Boolean:
-/// `true` scans it, `false` skips it because its format can hold nothing
-/// but names, versions and hashes. `None` means nobody decided; files like
-/// that are scanned anyway. Every file type the lockfile runner
-/// materializes must have a decision, which a test in `patchula-update`
-/// walks the materialized list to enforce.
-pub fn credential_check(path: &str) -> Option<bool> {
+/// Whether a file's text is checked for committed credentials.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialCheck {
+    Scan,
+    /// Its format can hold nothing but names, versions and hashes.
+    Skip,
+    /// Nobody decided, so it is scanned. Every file type the lockfile runner
+    /// materializes must have a decision, which a test in `patchula-update`
+    /// walks the materialized list to enforce.
+    Undecided,
+}
+
+/// Whether `path`'s text is checked for committed credentials.
+pub fn credential_check(path: &str) -> CredentialCheck {
     let leaf = path.rsplit('/').next().unwrap_or(path);
-    Some(match leaf {
+    match leaf {
         "go.sum"
         | "go.work.sum"
         | ".terraform.lock.hcl"
         | "packages.lock.json"
         | ".python-version"
-        | ".tool-versions" => false,
+        | ".tool-versions" => CredentialCheck::Skip,
         "package.json"
         | "package-lock.json"
         | "npm-shrinkwrap.json"
@@ -86,7 +93,7 @@ pub fn credential_check(path: &str) -> Option<bool> {
         | ".yarnrc.yml"
         | ".npmrc"
         | "uv.toml"
-        | "poetry.toml" => true,
+        | "poetry.toml" => CredentialCheck::Scan,
         _ if leaf.eq_ignore_ascii_case("nuget.config")
             || crate::cargo::config_file(path)
             || [
@@ -95,17 +102,17 @@ pub fn credential_check(path: &str) -> Option<bool> {
             .iter()
             .any(|extension| path.ends_with(extension)) =>
         {
-            true
+            CredentialCheck::Scan
         }
-        _ => return None,
-    })
+        _ => CredentialCheck::Undecided,
+    }
 }
 
 /// Why `text` committed at `path` refuses the repository, if it does: the
 /// kind of credential found, such as "a `_authToken` in .npmrc" or "a
 /// password in a registry URL". Never the credential itself.
 pub fn committed_credentials(path: &str, text: &str) -> Option<String> {
-    if credential_check(path) == Some(false) {
+    if credential_check(path) == CredentialCheck::Skip {
         return None;
     }
     keyed(path, text)

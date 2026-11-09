@@ -1405,7 +1405,8 @@ fn validate_targets(
     if plan.changes.is_empty() {
         return Ok(());
     }
-    let extraction = patchula_manager::Scanner::new(config)?.extract(files)?;
+    let extraction =
+        patchula_manager::Scanner::new(config)?.extract(&patchula_manager::all_read(files))?;
     let paths: BTreeSet<String> = files.keys().cloned().collect();
     for change in &plan.changes {
         let leaf = change.file.rsplit('/').next().unwrap_or("");

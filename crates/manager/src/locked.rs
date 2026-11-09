@@ -97,7 +97,7 @@ pub(crate) fn cargo(
                 package: name.into(),
                 version: text.into(),
                 location: Location::new(
-                    &files[*path],
+                    crate::read_text(files, path),
                     span.start,
                     span.end,
                     format!("/package/{name}@{text}"),
@@ -152,7 +152,7 @@ pub(crate) fn npm(
                 package: name.into(),
                 version: version.value.to_string(),
                 location: Location::new(
-                    &files[*path],
+                    crate::read_text(files, path),
                     version.range.start,
                     version.range.end,
                     format!("/packages/{}", key.replace('~', "~0").replace('/', "~1")),
@@ -194,6 +194,10 @@ fn read(files: &Files) -> Result<Aube, String> {
         .iter()
         .filter(|(p, _)| p.rsplit('/').next() == Some("aube-lock.yaml"))
     {
+        // An unread lock is no lock at all, as with npm's.
+        let Ok(text) = text.read() else {
+            return Err(format!("{path}: the Count could not read this lockfile"));
+        };
         let lock: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(text).map_err(|e| format!("{path}: {e}"))?;
         let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);

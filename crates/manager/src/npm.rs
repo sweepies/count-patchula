@@ -26,7 +26,13 @@ pub(super) fn locks(files: &Files) -> Result<BTreeMap<&str, Value<'_>>, String> 
     files
         .iter()
         .filter(|(path, _)| path.ends_with("package-lock.json") || path.ends_with("bun.lock"))
-        .map(|(path, text)| Ok((path.as_str(), ast(text, path.ends_with("bun.lock"))?)))
+        .map(|(path, text)| {
+            // An unread lock is no lock at all: extraction fails.
+            let text = text
+                .read()
+                .map_err(|_| format!("{path}: the Count could not read this lockfile"))?;
+            Ok((path.as_str(), ast(text, path.ends_with("bun.lock"))?))
+        })
         .collect()
 }
 fn escape(name: &str) -> String {
@@ -439,11 +445,13 @@ pub(super) fn extracted_registry(value: &str) -> Option<String> {
 pub(super) struct Npmrc {
     default: Option<Named>,
     scopes: BTreeMap<String, Named>,
+    /// The file was not read, so it may name any registry for any scope.
+    unread: bool,
 }
 
 impl Npmrc {
     fn names_any(&self) -> bool {
-        self.default.is_some() || !self.scopes.is_empty()
+        self.unread || self.default.is_some() || !self.scopes.is_empty()
     }
     /// Every registry it names, public or not.
     fn values(&self) -> impl Iterator<Item = &Named> {
@@ -458,6 +466,9 @@ pub(super) fn env_registry_warnings(files: &crate::Files) -> Vec<String> {
     let mut out = Vec::new();
     for (path, text) in files {
         let leaf = path.rsplit('/').next().unwrap_or(path);
+        let Ok(text) = text.read() else {
+            continue;
+        };
         let npmrc = match leaf {
             ".npmrc" => npmrc(text),
             ".yarnrc.yml" => yarnrc(text),
@@ -553,11 +564,18 @@ pub(super) fn npmrcs(files: &crate::Files) -> BTreeMap<&str, Npmrc> {
                 None if path == leaf => "",
                 _ => continue,
             };
-            let read = parse(text);
+            let read = match text.read() {
+                Ok(text) => parse(text),
+                Err(_) => Npmrc {
+                    unread: true,
+                    ..Npmrc::default()
+                },
+            };
             if !read.names_any() {
                 continue;
             }
             let entry = found.entry(directory).or_default();
+            entry.unread |= read.unread;
             if read.default.is_some() {
                 entry.default = read.default;
             }
@@ -584,6 +602,13 @@ pub(super) fn registry_for(
         directory = directory.rsplit_once('/').map_or("", |(d, _)| d);
     }
     let settings: Vec<&Npmrc> = directories.iter().filter_map(|d| npmrcs.get(d)).collect();
+    // A settings file the Count did not read may set this package's registry,
+    // so its lookup fails rather than guessing past it.
+    if settings.iter().any(|s| s.unread) {
+        return recorded(&Named::Unusable(
+            "(an npm settings file the Count could not read)".into(),
+        ));
+    }
     let scope = package
         .split_once('/')
         .map(|(scope, _)| scope)

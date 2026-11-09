@@ -11,10 +11,19 @@ use yaml_rust2::{
 };
 
 struct Frame {
-    pointer: String,
+    /// `None` inside a node no pointer can name, such as a complex key.
+    pointer: Option<String>,
     mapping: bool,
-    key: Option<String>,
+    slot: Slot,
     index: usize,
+}
+/// What a mapping's next node is.
+#[derive(PartialEq)]
+enum Slot {
+    Key,
+    /// The value of this key; `None` when the key was not a scalar, such as
+    /// `? [a, b]` or an alias, so no pointer names the value.
+    Value(Option<String>),
 }
 struct Receiver<'a> {
     text: &'a str,
@@ -37,26 +46,27 @@ impl Receiver<'_> {
             .nth(mark.col())?;
         Some(start + column)
     }
-    fn next(&mut self) -> String {
-        if let Some(frame) = self.stack.last_mut() {
-            if frame.mapping {
-                format!(
-                    "{}/{}",
-                    frame.pointer,
-                    frame
-                        .key
-                        .take()
-                        .unwrap_or_default()
-                        .replace('~', "~0")
-                        .replace('/', "~1")
-                )
-            } else {
-                let p = format!("{}/{}", frame.pointer, frame.index);
-                frame.index += 1;
-                p
+    /// The pointer of the node starting now, moving its parent past it.
+    fn next(&mut self) -> Option<String> {
+        let Some(frame) = self.stack.last_mut() else {
+            return Some(format!("/{}", self.doc));
+        };
+        if !frame.mapping {
+            let index = frame.index;
+            frame.index += 1;
+            return Some(format!("{}/{index}", frame.pointer.as_ref()?));
+        }
+        match std::mem::replace(&mut frame.slot, Slot::Key) {
+            // A key that is not a scalar: it and its value are unnamed.
+            Slot::Key => {
+                frame.slot = Slot::Value(None);
+                None
             }
-        } else {
-            format!("/{}", self.doc)
+            Slot::Value(key) => Some(format!(
+                "{}/{}",
+                frame.pointer.as_ref()?,
+                key?.replace('~', "~0").replace('/', "~1")
+            )),
         }
     }
     fn end(&self, start: usize, style: TScalarStyle, value: &str) -> Option<usize> {
@@ -93,13 +103,15 @@ impl MarkedEventReceiver for Receiver<'_> {
             Event::DocumentEnd => self.doc += 1,
             Event::MappingStart(anchor, _) | Event::SequenceStart(anchor, _) => {
                 let pointer = self.next();
-                if anchor > 0 {
+                if anchor > 0
+                    && let Some(pointer) = &pointer
+                {
                     self.anchors.insert(anchor, pointer.clone());
                 }
                 self.stack.push(Frame {
                     pointer,
                     mapping: matches!(event, Event::MappingStart(..)),
-                    key: None,
+                    slot: Slot::Key,
                     index: 0,
                 });
             }
@@ -109,12 +121,14 @@ impl MarkedEventReceiver for Receiver<'_> {
             Event::Scalar(value, style, anchor, _) => {
                 if let Some(frame) = self.stack.last_mut()
                     && frame.mapping
-                    && frame.key.is_none()
+                    && frame.slot == Slot::Key
                 {
-                    frame.key = Some(value);
+                    frame.slot = Slot::Value(Some(value));
                     return;
                 }
-                let pointer = self.next();
+                let Some(pointer) = self.next() else {
+                    return;
+                };
                 if anchor > 0 {
                     self.anchors.insert(anchor, pointer.clone());
                 }
@@ -128,8 +142,9 @@ impl MarkedEventReceiver for Receiver<'_> {
                 }
             }
             Event::Alias(anchor) => {
-                let pointer = self.next();
-                if let Some(target) = self.anchors.get(&anchor) {
+                if let Some(pointer) = self.next()
+                    && let Some(target) = self.anchors.get(&anchor)
+                {
                     self.aliases.insert(pointer, target.clone());
                 }
             }
@@ -202,6 +217,26 @@ mod tests {
             let locations = super::parse(text).unwrap();
             let b = &locations["/0/b"];
             assert_eq!(&text[b.start..b.end], "c", "{text:?}");
+        }
+    }
+    /// A complex or alias key names no pointer, and the keys after it keep
+    /// their own values.
+    #[test]
+    fn keys_after_a_complex_or_alias_key_keep_their_values() {
+        for text in [
+            "versions:\n  ? [a, b]\n  : 1.0\n  jackson: 2.15.0\n",
+            "versions:\n  ? {a: b}\n  : 1.0\n  jackson: 2.15.0\n",
+            "base: &k key\nversions:\n  *k : 1.0\n  jackson: 2.15.0\n",
+        ] {
+            let locations = super::parse(text).unwrap();
+            let jackson = &locations["/0/versions/jackson"];
+            assert_eq!(&text[jackson.start..jackson.end], "2.15.0", "{text:?}");
+            assert!(
+                !locations
+                    .keys()
+                    .any(|k| k.contains("1.0") || k.ends_with("/a")),
+                "{text:?}: {locations:?}"
+            );
         }
     }
 }

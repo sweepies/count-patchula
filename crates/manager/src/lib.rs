@@ -13,7 +13,7 @@ mod cargo;
 mod composer;
 mod credentials;
 pub use credentials::{
-    committed_credentials, credential_check, credential_reason, credential_scope,
+    CredentialCheck, committed_credentials, credential_check, credential_reason, credential_scope,
 };
 mod custom;
 mod devcontainer;
@@ -222,7 +222,45 @@ pub(crate) fn gitea_host(host: &str) -> bool {
         && (matches!(host, "codeberg.org" | "gitea.com")
             || labels().any(|l| matches!(l, "gitea" | "forgejo")))
 }
-pub type Files = BTreeMap<String, String>;
+/// The files extraction reads, by path, each with its text or the reason it
+/// has none.
+pub type Files = BTreeMap<String, Text>;
+
+/// A file as the Count holds it: its text, or why the Count has none. An
+/// unread file is not an absent one: it may say anything, so whatever it
+/// could steer must fail rather than fall back to a default.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum Text {
+    Read(String),
+    Unread(Unread),
+}
+impl Text {
+    /// The file's text, or why there is none. The only way to the text, so
+    /// every reader decides what an unread file means for it.
+    pub fn read(&self) -> Result<&str, Unread> {
+        match self {
+            Self::Read(text) => Ok(text),
+            Self::Unread(unread) => Err(*unread),
+        }
+    }
+}
+/// Files that were all read, as extraction takes them.
+pub fn all_read(files: &BTreeMap<String, String>) -> Files {
+    files
+        .iter()
+        .map(|(path, text)| (path.clone(), Text::Read(text.clone())))
+        .collect()
+}
+impl From<String> for Text {
+    fn from(text: String) -> Self {
+        Self::Read(text)
+    }
+}
+impl From<&str> for Text {
+    fn from(text: &str) -> Self {
+        Self::Read(text.to_owned())
+    }
+}
 pub fn supported(manager: Manager) -> bool {
     match manager {
         Manager::Npm
@@ -613,7 +651,13 @@ impl Scanner {
             .iter()
             .filter(|(path, _)| yaml_managers.iter().any(|m| self.selected(*m, path)))
         {
-            match yaml::docs(text).and_then(|d| Ok((d, yaml_locations::parse(text)?))) {
+            let parsed = text
+                .read()
+                .map_err(|unread| unread.why().to_owned())
+                .and_then(|text| {
+                    yaml::docs(text).and_then(|d| Ok((d, yaml_locations::parse(text)?)))
+                });
+            match parsed {
                 Ok((docs, spans)) => {
                     documents.insert(path.as_str(), docs);
                     locations.insert(path.as_str(), spans);
@@ -640,6 +684,19 @@ impl Scanner {
             Manager::Bun
         };
         for (path, text) in files {
+            // An unread file says nothing a manager can extract; whatever it
+            // could steer is failed by the readers that consult it.
+            let text = match text.read() {
+                Ok(text) => text,
+                Err(unread) => {
+                    if self.config.managers.iter().any(|m| self.selected(*m, path)) {
+                        result
+                            .warnings
+                            .push(format!("{path}: skipped: {}", unread.why()));
+                    }
+                    continue;
+                }
+            };
             let extraction = if self.selected(node, path) && path.ends_with("package.json") {
                 npm::extract(path, text, node, &locks).map(|mut deps| {
                     npm::assign_registries(&mut deps, &npmrcs);
@@ -1022,23 +1079,46 @@ pub fn linked_settings(path: &str) -> Option<String> {
     }
 }
 
-/// What a settings file the Count could not read becomes: text no TOML or
-/// YAML mapping parser accepts, so it is unreadable rather than absent.
-pub const UNREADABLE_SETTINGS: &str = "= the Count could not read this file\n";
+/// The text of a file that was read, as one a document was parsed from must
+/// be; empty for any other.
+pub(crate) fn read_text<'a>(files: &'a Files, path: &str) -> &'a str {
+    files
+        .get(path)
+        .and_then(|text| text.read().ok())
+        .unwrap_or("")
+}
 
-/// What a file the include chain reached but the read rounds ran out on
-/// becomes: unreadable the same way, so its packages' lookups fail.
-pub const UNREADABLE_DEEP: &str = "= the Count did not read this file: include chain too deep\n";
+/// Why a file in [`Files`] holds no text the Count read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum Unread {
+    /// The read failed.
+    Failed,
+    /// The include chain reached it after the read rounds ran out.
+    TooDeep,
+}
+impl Unread {
+    /// Why, in a few words, for a warning that skips the file.
+    pub fn why(self) -> &'static str {
+        match self {
+            Self::Failed => "the Count could not read it",
+            Self::TooDeep => "the include chain was too deep to reach it",
+        }
+    }
+    /// Why lookups that depend on the file at `path` fail.
+    pub(crate) fn reason(self, path: &str) -> String {
+        match self {
+            Self::Failed => format!("{path}, which the Count cannot read"),
+            Self::TooDeep => format!(
+                "include chain deeper than {MORE_ROUNDS} rounds starting at {path}; the remaining files were not read"
+            ),
+        }
+    }
+}
 
 /// How many times the files read so far may name more to read: Gradle
 /// builds include builds and apply scripts, and Maven POMs name modules, a
 /// few levels deep at most.
 pub const MORE_ROUNDS: usize = 16;
-
-/// Whether `text` is the stand-in for a file the Count did not read.
-pub(crate) fn unreadable_text(text: &str) -> bool {
-    matches!(text, UNREADABLE_SETTINGS | UNREADABLE_DEEP)
-}
 
 /// The host of an http or https `url`, lowercased and without a default
 /// port, whatever the case of its scheme.

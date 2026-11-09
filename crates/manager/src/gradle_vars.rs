@@ -13,55 +13,6 @@ use std::{
     sync::LazyLock,
 };
 
-/// Comments blanked to spaces, keeping byte offsets, newlines and strings.
-pub(super) fn mask(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = bytes.to_vec();
-    let mut i = 0;
-    let blank = |out: &mut Vec<u8>, from: usize, to: usize| {
-        for b in &mut out[from..to] {
-            if *b != b'\n' {
-                *b = b' ';
-            }
-        }
-    };
-    while i < bytes.len() {
-        let rest = &bytes[i..];
-        if rest.starts_with(b"//") {
-            let end = rest
-                .iter()
-                .position(|b| *b == b'\n')
-                .map_or(bytes.len(), |n| i + n);
-            blank(&mut out, i, end);
-            i = end;
-        } else if rest.starts_with(b"/*") {
-            let end = rest[2..]
-                .windows(2)
-                .position(|w| w == b"*/")
-                .map_or(bytes.len(), |n| i + n + 4);
-            blank(&mut out, i, end);
-            i = end;
-        } else if rest.starts_with(b"\"\"\"") || rest.starts_with(b"'''") {
-            let delimiter = &rest[..3];
-            i += 3 + bytes[i + 3..]
-                .windows(3)
-                .position(|w| w == delimiter)
-                .map_or(bytes.len() - i - 3, |n| n + 3);
-        } else if matches!(rest[0], b'"' | b'\'') {
-            let quote = rest[0];
-            i += 1;
-            while i < bytes.len() && bytes[i] != quote && bytes[i] != b'\n' {
-                i += if bytes[i] == b'\\' { 2 } else { 1 };
-            }
-            i += 1;
-        } else {
-            i += 1;
-        }
-    }
-    // Only ASCII bytes outside strings were replaced by ASCII spaces.
-    String::from_utf8(out).unwrap_or_else(|_| text.to_string())
-}
-
 /// `rootProject.ext.x`, `project.x` and `extra.x` all name `x`.
 fn normalise(name: &str) -> &str {
     let mut name = name;
@@ -295,12 +246,28 @@ pub(super) fn extract(files: &Files, selected: impl Fn(&str) -> bool) -> Vec<Dep
     let mut definitions = Vec::new();
     let mut uses = Vec::new();
     let mut masked = BTreeMap::new();
+    // An unread script or properties file may define or redefine any name,
+    // so no definition can be trusted to be the only one.
+    let mut read = Vec::new();
     for (path, text) in files.iter().filter(|(p, _)| selected(p)) {
+        match text.read() {
+            Ok(text) => read.push((path, text)),
+            Err(_) => return Vec::new(),
+        }
+    }
+    for (path, text) in read {
         let leaf = path.rsplit('/').next().unwrap_or(path);
         if leaf == "gradle.properties" {
             properties(path, text, &mut definitions);
         } else if leaf.ends_with(".gradle") || leaf.ends_with(".gradle.kts") {
-            let text = masked.entry(path.as_str()).or_insert_with(|| mask(text));
+            // A script the lexer cannot read defines nothing here; its own
+            // extraction is skipped with a warning.
+            let Some(text) = masked
+                .entry(path.as_str())
+                .or_insert_with(|| crate::gradle::without_comments(path, text))
+            else {
+                continue;
+            };
             script_definitions(path, text, &mut definitions);
             references(path, text, &mut uses);
         }
@@ -338,7 +305,9 @@ pub(super) fn extract(files: &Files, selected: impl Fn(&str) -> bool) -> Vec<Dep
         if !super::gradle::literal(&definition.value) || !claimed.insert(reference.name.clone()) {
             continue;
         }
-        let text = &files[&definition.file];
+        let Ok(text) = files[&definition.file].read() else {
+            continue;
+        };
         out.push(super::gradle::maven(
             &definition.file,
             text,

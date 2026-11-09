@@ -162,8 +162,10 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
     let scanner = scanner("amends \"PatchulaConfig.pkl\"\n");
     let (_, files, _) = patchula_engine::read_tree(&root, &scanner).unwrap();
     assert_eq!(
-        files.get("uv.toml").map(String::as_str),
-        Some(patchula_manager::UNREADABLE_SETTINGS)
+        files.get("uv.toml"),
+        Some(&patchula_manager::Text::Unread(
+            patchula_manager::Unread::Failed
+        ))
     );
     let extraction = scanner.extract(&files).unwrap();
     let registry = extraction
@@ -178,12 +180,16 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
         "{registry:?}"
     );
     assert_eq!(
-        files.get(".bundle/config").map(String::as_str),
-        Some(patchula_manager::UNREADABLE_SETTINGS)
+        files.get(".bundle/config"),
+        Some(&patchula_manager::Text::Unread(
+            patchula_manager::Unread::Failed
+        ))
     );
     assert_eq!(
-        files.get("app/.bundle/config").map(String::as_str),
-        Some(patchula_manager::UNREADABLE_SETTINGS)
+        files.get("app/.bundle/config"),
+        Some(&patchula_manager::Text::Unread(
+            patchula_manager::Unread::Failed
+        ))
     );
     let rake = extraction
         .dependencies

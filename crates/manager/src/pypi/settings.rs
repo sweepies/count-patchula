@@ -474,9 +474,12 @@ enum Loaded<T> {
 }
 
 fn load<T: DeserializeOwned>(files: &Files, path: &str) -> Option<Loaded<T>> {
-    let text = files.get(path)?;
-    let read = toml_edit::de::from_str::<Value>(text)
+    // An unread file is present but not understood.
+    let read = files
+        .get(path)?
+        .read()
         .ok()
+        .and_then(|text| toml_edit::de::from_str::<Value>(text).ok())
         .and_then(|value| serde_json::from_value(value).ok());
     Some(read.map_or(Loaded::Unreadable, Loaded::Read))
 }
@@ -596,7 +599,7 @@ pub(crate) fn discover(path: &str, files: &Files) -> Discovery {
     let poetry_lock = join(project_dir, "poetry.lock");
     for (lock, poetry) in [(&uv_lock, false), (&poetry_lock, true)] {
         if let Some(text) = files.get(lock) {
-            match locked(text, poetry) {
+            match text.read().ok().and_then(|text| locked(text, poetry)) {
                 Some(recorded) => origins.locks.push(recorded),
                 None => origins.uncertain.push(unreadable(lock)),
             }

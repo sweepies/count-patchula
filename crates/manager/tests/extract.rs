@@ -1,5 +1,34 @@
 use patchula_config::{DependencyKind, Manager};
 use patchula_manager::{Files, Scanner};
+
+/// Files from paths and texts the Count read.
+#[allow(dead_code)]
+fn read_files<const N: usize>(entries: [(String, String); N]) -> patchula_manager::Files {
+    entries
+        .into_iter()
+        .map(|(path, text)| {
+            let text = fixture(&text);
+            (path, text)
+        })
+        .collect()
+}
+/// Fixture text that stands for a file the Count did not read.
+const UNREAD: &str = "\u{0}unread";
+/// Fixture text that stands for a file past the include chain's rounds.
+const UNREAD_DEEP: &str = "\u{0}unread-deep";
+/// A fixture's file: read, unless it is one of the stand-ins above.
+fn fixture(text: &str) -> patchula_manager::Text {
+    match text {
+        UNREAD => patchula_manager::Text::Unread(patchula_manager::Unread::Failed),
+        UNREAD_DEEP => patchula_manager::Text::Unread(patchula_manager::Unread::TooDeep),
+        text => text.into(),
+    }
+}
+/// The text of a file the test gave as read.
+#[allow(dead_code)]
+fn read<'a>(files: &'a patchula_manager::Files, path: &str) -> &'a str {
+    files[path].read().expect("read in the test")
+}
 fn config() -> patchula_config::Config {
     patchula_config::load(std::path::Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -9,7 +38,7 @@ fn config() -> patchula_config::Config {
 }
 #[test]
 fn manifests_workspaces_aliases_overrides_and_lock_resolution() {
-    let files=Files::from([
+    let files=read_files([
         ("package.json".into(),r#"{"workspaces":["packages/*"],"dependencies":{"foo":"^1.0.0"},"devDependencies":{"alias":"npm:real@~2.0.0"},"peerDependencies":{"peer":"1.x"},"optionalDependencies":{"opt":"3.0.0"},"overrides":{"parent":{"foo":"4.0.0"}},"packageManager":"bun@1.2.3"}"#.into()),
         ("packages/a/package.json".into(),r#"{"dependencies":{"foo":"^1.0.0","local":"workspace:*"}}"#.into()),
         ("bun.lock".into(),r#"{// Bun JSONC
@@ -30,7 +59,7 @@ fn manifests_workspaces_aliases_overrides_and_lock_resolution() {
     assert_eq!(alias.resolved.as_deref(), Some("2.1.0"));
     assert_eq!(alias.kind, DependencyKind::Development);
     for dep in &extraction.dependencies {
-        let text = &files[&dep.file];
+        let text = &read(&files, &dep.file);
         assert!(dep.location.start < dep.location.end);
         assert!(text[dep.location.start..dep.location.end].contains(&dep.current));
     }
@@ -43,7 +72,7 @@ fn manifests_workspaces_aliases_overrides_and_lock_resolution() {
 }
 #[test]
 fn workflows_composites_pins_containers_and_local_refs() {
-    let files = Files::from([
+    let files = read_files([
         (
             ".github/workflows/test.yml".into(),
             r#"jobs:
@@ -88,7 +117,7 @@ fn workflows_composites_pins_containers_and_local_refs() {
 #[test]
 fn action_comment_digest_only_and_ref_models_keep_edit_format() {
     let text = "jobs:\n  a:\n    steps:\n      - uses: 'org/action/path@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' #  v1.2.3 trailing note\n      - uses: org/plain@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n      - uses: org/ref@main\n";
-    let files = Files::from([(".github/workflows/test.yml".into(), text.into())]);
+    let files = read_files([(".github/workflows/test.yml".into(), text.into())]);
     let deps = Scanner::new(&config())
         .unwrap()
         .extract(&files)
@@ -118,7 +147,7 @@ fn hosted_runner_literals_preserve_families_and_skip_self_hosted_and_expressions
     let text = "jobs:\n  a:\n    runs-on: ubuntu-latest\n  b:\n    runs-on: [macos-15, windows-2025, ubuntu-24.04-arm]\n  c:\n    runs-on:\n      - macos-26-intel\n  d:\n    runs-on: [self-hosted, ubuntu-22.04]\n  e:\n    runs-on: ${{ matrix.os }}\n  f:\n    runs-on: custom-linux\n";
     let deps = Scanner::new(&config())
         .unwrap()
-        .extract(&Files::from([(
+        .extract(&read_files([(
             ".github/workflows/test.yml".into(),
             text.into(),
         )]))
@@ -142,7 +171,7 @@ fn hosted_runner_locations_do_not_select_identical_self_hosted_labels_or_run_tex
     let text = "'jobs': # workflows\n  own:\n    runs-on: [self-hosted, ubuntu-22.04]\n  hosted: # GitHub hosted job\n    steps:\n      - run: echo ubuntu-22.04\n    \"runs-on\": ubuntu-22.04\n";
     let deps = Scanner::new(&config())
         .unwrap()
-        .extract(&Files::from([(
+        .extract(&read_files([(
             ".github/workflows/test.yml".into(),
             text.into(),
         )]))
@@ -157,7 +186,7 @@ fn hosted_runner_locations_do_not_select_identical_self_hosted_labels_or_run_tex
 }
 #[test]
 fn mise_forms_and_custom_capture_locations() {
-    let files=Files::from([("mise.toml".into(),"[tools]\nbun = \"1.2.3\"\nnode = [\"20\", \"22\"]\n\"github:org/tool\" = { version = \"v2.0.0\", os = [\"linux\"] }\n".into()),(".tool-versions".into(),"bun 1.2.3 1.3.0 # comment\n".into()),("infra/versions.ts".into(),"// renovate: datasource=npm depName=renovate\nexport const RENOVATE_VERSION = \"44.0.0\";\n".into())]);
+    let files=read_files([("mise.toml".into(),"[tools]\nbun = \"1.2.3\"\nnode = [\"20\", \"22\"]\n\"github:org/tool\" = { version = \"v2.0.0\", os = [\"linux\"] }\n".into()),(".tool-versions".into(),"bun 1.2.3 1.3.0 # comment\n".into()),("infra/versions.ts".into(),"// renovate: datasource=npm depName=renovate\nexport const RENOVATE_VERSION = \"44.0.0\";\n".into())]);
     let deps = Scanner::new(&config())
         .unwrap()
         .extract(&files)
@@ -166,7 +195,9 @@ fn mise_forms_and_custom_capture_locations() {
     assert_eq!(deps.len(), 7);
     assert!(deps.iter().any(|d| d.manager == Manager::Regex));
     for dep in &deps {
-        assert!(files[&dep.file][dep.location.start..dep.location.end].contains(&dep.current));
+        assert!(
+            read(&files, &dep.file)[dep.location.start..dep.location.end].contains(&dep.current)
+        );
     }
 }
 
@@ -179,7 +210,7 @@ fn npm_is_strict_json_and_bun_lock_is_jsonc() {
         "{\"dependencies\":{\"a\":\"1.0.0\" \"b\":\"2.0.0\"}}",
     ] {
         let extraction = scanner
-            .extract(&Files::from([("package.json".into(), text.into())]))
+            .extract(&read_files([("package.json".into(), text.into())]))
             .unwrap();
         assert!(extraction.dependencies.is_empty());
         assert!(extraction.warnings[0].starts_with("package.json: skipped:"));
@@ -198,7 +229,7 @@ fn unparseable_files_are_skipped_with_a_warning() {
     )
     .unwrap();
     let scanner = Scanner::new(&defaults).unwrap();
-    let files = Files::from([
+    let files = read_files([
         (
             "config/email.yml".into(),
             "production:\n  smtp:\n    tls: <%= ENV.fetch('SMTP_TLS', false) == 'true' ? true : nil %>\n".into(),
@@ -229,7 +260,7 @@ fn catalogs_and_node_version_files_are_npm_dependencies() {
     ] {
         assert!(scanner.needs(path), "{path}");
     }
-    let files = Files::from([
+    let files = read_files([
         (
             "pnpm-workspace.yaml".into(),
             "packages: [packages/*]\ncatalog:\n  zod: 3.23.8\n  local: link:../x\ncatalogs:\n  legacy:\n    hono: 4.6.0\n".into(),
@@ -294,7 +325,7 @@ any = "*"
 coverage = "7.6.0"
 "#;
     let lock = "version = 1\n[[package]]\nname = \"httpx\"\nversion = \"0.27.2\"\n[[package]]\nname = \"pydantic-core\"\nversion = \"2.8.0\"\n";
-    let files = Files::from([
+    let files = read_files([
         ("pyproject.toml".into(), pyproject.into()),
         ("uv.lock".into(), lock.into()),
         ("svc/.python-version".into(), "3.12.4\n".into()),
@@ -327,7 +358,7 @@ coverage = "7.6.0"
         ]
     );
     for dep in &deps {
-        let text = &files[&dep.file];
+        let text = &read(&files, &dep.file);
         let slice = &text[dep.location.start..dep.location.end];
         // Poetry constraints are whole TOML strings; PEP 508 locations are the
         // specifier inside a string.
@@ -363,7 +394,7 @@ fn pre_commit_revs_use_github_or_forge_tags() {
   - repo: local
     hooks: [{id: mine}]
 "#;
-    let files = Files::from([(".pre-commit-config.yaml".into(), text.into())]);
+    let files = read_files([(".pre-commit-config.yaml".into(), text.into())]);
     let deps = scanner.extract(&files).unwrap().dependencies;
     let got: Vec<_> = deps
         .iter()
@@ -393,7 +424,7 @@ fn toolchain_files_charts_and_devcontainers() {
         Manager::Devcontainer,
     ];
     let scanner = Scanner::new(&config).unwrap();
-    let files = Files::from([
+    let files = read_files([
         ("rust-toolchain.toml".into(), "[toolchain]\nchannel = \"1.82.0\"\ncomponents = [\"clippy\"]\n".into()),
         ("tools/rust-toolchain".into(), "nightly-2026-01-01\n".into()),
         (".terraform-version".into(), "v1.14.7\n".into()),
@@ -440,7 +471,7 @@ fn toolchain_files_charts_and_devcontainers() {
         ]
     );
     for dep in &deps {
-        let slice = &files[&dep.file][dep.location.start..dep.location.end];
+        let slice = &read(&files, &dep.file)[dep.location.start..dep.location.end];
         assert!(
             slice.trim_matches('"') == dep.current || slice.ends_with(&format!(":{}", dep.current)),
             "{} {slice:?}",
@@ -491,7 +522,7 @@ dynamic = "com.example:dyn:1.+"
 android = { id = "com.android.application", version.ref = "agp" }
 "#;
     let script = "plugins {\n    id(\"org.jetbrains.kotlin.jvm\") version \"2.0.0\"\n}\ndependencies {\n    implementation(\"io.ktor:ktor-client-core:2.3.12\")\n    implementation(\"x:y:$v\")\n}\n";
-    let files = Files::from([
+    let files = read_files([
         ("pom.xml".into(), pom.into()),
         ("gradle/libs.versions.toml".into(), catalog.into()),
         ("app/build.gradle.kts".into(), script.into()),
@@ -556,14 +587,14 @@ android = { id = "com.android.application", version.ref = "agp" }
     );
     for dep in &deps {
         assert_eq!(
-            &files[&dep.file][dep.location.start..dep.location.end],
+            &read(&files, &dep.file)[dep.location.start..dep.location.end],
             dep.current,
             "{}",
             dep.name
         );
     }
     // A pinned checksum is refreshed by the lockfile runner, not skipped.
-    let pinned = Files::from([(
+    let pinned = read_files([(
         "gradle/wrapper/gradle-wrapper.properties".into(),
         "distributionSha256Sum=abc\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.10-bin.zip\n".into(),
     )]);
@@ -586,7 +617,7 @@ fn nuget_projects_central_versions_tools_and_sdk() {
   </ItemGroup>
 </Project>
 "#;
-    let files = Files::from([
+    let files = read_files([
         ("src/App/App.csproj".into(), project.into()),
         (
             "Directory.Packages.props".into(),
@@ -612,7 +643,7 @@ fn nuget_projects_central_versions_tools_and_sdk() {
     );
     for dep in &deps {
         assert_eq!(
-            &files[&dep.file][dep.location.start..dep.location.end],
+            &read(&files, &dep.file)[dep.location.start..dep.location.end],
             dep.current,
             "{}",
             dep.name
@@ -637,7 +668,7 @@ group :test do
 end
 "#;
     let lock = "GEM\n  remote: https://rubygems.org/\n  specs:\n    rails (7.1.3.4)\n      actionpack (= 7.1.3.4)\n    puma (6.4.2)\n    nokogiri (1.16.6-x86_64-linux)\n\nPLATFORMS\n  ruby\n";
-    let files = Files::from([
+    let files = read_files([
         ("Gemfile".into(), gemfile.into()),
         ("Gemfile.lock".into(), lock.into()),
         ("api/.ruby-version".into(), "ruby-3.3.4\n".into()),
@@ -666,7 +697,7 @@ end
     );
     for dep in &deps {
         assert_eq!(
-            &files[&dep.file][dep.location.start..dep.location.end],
+            &read(&files, &dep.file)[dep.location.start..dep.location.end],
             dep.current,
             "{}",
             dep.name
@@ -694,7 +725,7 @@ fn composer_requirements_and_lock_resolutions() {
 }
 "#;
     let lock = r#"{"packages": [{"name": "laravel/framework", "version": "v11.14.0", "notification-url": "https://packagist.org/downloads/"}, {"name": "guzzlehttp/guzzle", "version": "7.8.1", "notification-url": "https://packagist.org/downloads/"}], "packages-dev": [{"name": "phpunit/phpunit", "version": "11.2.5", "notification-url": "https://packagist.org/downloads/"}]}"#;
-    let files = Files::from([
+    let files = read_files([
         ("composer.json".into(), manifest.into()),
         ("composer.lock".into(), lock.into()),
     ]);
@@ -800,7 +831,7 @@ dependencies {
     implementation("com.example:dotted:$ktorVersion.extra")
 }
 "#;
-    let files = Files::from([
+    let files = read_files([
         ("build.gradle".into(), root.into()),
         ("gradle/dependencies.gradle".into(), versions.into()),
         ("app/build.gradle.kts".into(), kotlin.into()),
@@ -871,7 +902,7 @@ dependencies {
     );
     for dep in &deps {
         assert_eq!(
-            &files[&dep.file][dep.location.start..dep.location.end],
+            &read(&files, &dep.file)[dep.location.start..dep.location.end],
             dep.current,
             "{}",
             dep.name
@@ -881,7 +912,7 @@ dependencies {
 
 #[test]
 fn lockfile_only_registry_packages_are_listed_apart_from_dependencies() {
-    let files = Files::from([
+    let files = read_files([
         (
             "package.json".into(),
             r#"{"dependencies":{"foo":"^1.0.0"}}"#.into(),
@@ -907,7 +938,7 @@ fn lockfile_only_registry_packages_are_listed_apart_from_dependencies() {
         .collect();
     assert_eq!(locked, [(Manager::Npm, "bar", "2.0.0")]);
     let bar = &extraction.locked[0];
-    let text = &files["package-lock.json"];
+    let text = read(&files, "package-lock.json");
     assert_eq!(&text[bar.location.start..bar.location.end], "\"2.0.0\"");
     let dep = bar.dependency();
     assert_eq!(dep.kind, DependencyKind::Transitive);
@@ -919,7 +950,7 @@ fn lockfile_only_registry_packages_are_listed_apart_from_dependencies() {
 #[test]
 fn aube_lock_yaml_gives_direct_versions_and_lists_transitive_packages() {
     let lock = "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      foo:\n        specifier: ^1.0.0\n        version: 1.2.0(peer@3.0.0)\n      '@scope/baz':\n        specifier: 2.0.0\n        version: 2.0.0\n    devDependencies:\n      aliased:\n        specifier: npm:string-width@^4\n        version: string-width@4.2.3\n\n  packages/app:\n    dependencies:\n      foo:\n        specifier: ^1.0.0\n        version: 1.1.0\n      shared:\n        specifier: workspace:*\n        version: link:../shared\n\npackages:\n\n  '@scope/baz@2.0.0':\n    resolution: {integrity: sha512-aaa}\n\n  bar@2.0.0:\n    resolution: {integrity: sha512-bbb}\n\n  foo@1.1.0:\n    resolution: {integrity: sha512-ccc}\n\n  foo@1.2.0:\n    resolution: {integrity: sha512-ddd}\n\n  gitdep@1.0.0:\n    resolution: {tarball: https://example.invalid/gitdep.tgz}\n\nsnapshots: {}\n";
-    let files = Files::from([
+    let files = read_files([
         (
             "package.json".into(),
             r#"{"dependencies":{"foo":"^1.0.0","@scope/baz":"2.0.0"},"devDependencies":{"aliased":"npm:string-width@^4"}}"#.into(),
@@ -997,7 +1028,7 @@ fn woodpecker_steps_services_clone_anchors_and_variables() {
     ] {
         assert_eq!(scanner.needs(path), needed, "{path}");
     }
-    let files = Files::from([
+    let files = read_files([
         (
             ".woodpecker.yml".into(),
             "pipeline:\n  build:\n    image: golang:1.20\n  publish:\n    image: plugins/docker:20\nservices:\n  db:\n    image: postgres:15\n".into(),
@@ -1016,7 +1047,7 @@ fn woodpecker_steps_services_clone_anchors_and_variables() {
         .dependencies
         .iter()
         .map(|d| {
-            let text = &files[&d.file];
+            let text = &read(&files, &d.file);
             (
                 d.file.as_str(),
                 d.package.as_str(),
@@ -1125,7 +1156,7 @@ fn forgejo_and_gitea_workflows_resolve_bare_refs_on_their_default_action_host() 
           go-version: 1.25.1
       - uses: https://git.example.com/owner/action@v1
 "#;
-    let files = Files::from([
+    let files = read_files([
         (".forgejo/workflows/ci.yml".into(), text.into()),
         (".gitea/workflows/ci.yml".into(), text.into()),
     ]);
@@ -1247,8 +1278,13 @@ fn forgejo_and_gitea_workflows_resolve_bare_refs_on_their_default_action_host() 
         ]
     );
     for dep in &deps {
-        patchula_manager::edits(dep, &files[&dep.file], &dep.current, dep.digest.as_deref())
-            .unwrap();
+        patchula_manager::edits(
+            dep,
+            read(&files, &dep.file),
+            &dep.current,
+            dep.digest.as_deref(),
+        )
+        .unwrap();
     }
     let pin = deps.iter().find(|d| d.name == "actions/checkout").unwrap();
     let edit =
@@ -1313,7 +1349,7 @@ test/unit:
 pinned:
   image: "alpine:3.20@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 "#;
-    let files = Files::from([(".gitlab-ci.yml".into(), text.into())]);
+    let files = read_files([(".gitlab-ci.yml".into(), text.into())]);
     let extraction = scanner.extract(&files).unwrap();
     assert!(extraction.warnings.is_empty(), "{:?}", extraction.warnings);
     let mut got: Vec<_> = extraction
@@ -1434,7 +1470,7 @@ fn gitlab_include_projects_resolve_on_the_configured_host() {
     config.gitlab.host = "gitlab.example.com".into();
     let scanner = Scanner::new(&config).unwrap();
     let text = "include:\n  project: grp/proj\n  ref: 1.0\n---\ninclude:\n  - component: $CI_SERVER_HOST/grp/comp/name@2.1.0\n";
-    let files = Files::from([("sub/.gitlab-ci.yaml".into(), text.into())]);
+    let files = read_files([("sub/.gitlab-ci.yaml".into(), text.into())]);
     let deps = scanner.extract(&files).unwrap().dependencies;
     let got: Vec<_> = deps
         .iter()
@@ -1464,7 +1500,7 @@ fn gitlab_ci_aliased_images_build_metadata_and_numeric_refs() {
     config.managers = vec![Manager::Gitlabci, Manager::GitlabciInclude];
     let scanner = Scanner::new(&config).unwrap();
     let text = "variables:\n  BASE: &base alpine:3.20\ninclude:\n  - component: gitlab.com/grp/proj/comp@1.2.3+build.1\n  - project: grp/proj\n    ref: 1.0\none:\n  image: *base\ntwo:\n  image: *base\n";
-    let files = Files::from([(".gitlab-ci.yml".into(), text.into())]);
+    let files = read_files([(".gitlab-ci.yml".into(), text.into())]);
     let deps = scanner.extract(&files).unwrap().dependencies;
     let mut got: Vec<_> = deps
         .iter()
@@ -1486,7 +1522,7 @@ fn gitlab_refs_shared_through_an_anchor_are_skipped() {
     config.managers = vec![Manager::GitlabciInclude];
     let scanner = Scanner::new(&config).unwrap();
     let text = "variables:\n  V: &v 1.0.0\ninclude:\n  - project: grp/a\n    ref: *v\n  - project: grp/b\n    ref: *v\n  - project: grp/c\n    ref: 2.0.0\n";
-    let files = Files::from([(".gitlab-ci.yml".into(), text.into())]);
+    let files = read_files([(".gitlab-ci.yml".into(), text.into())]);
     let extraction = scanner.extract(&files).unwrap();
     let got: Vec<_> = extraction
         .dependencies
@@ -1525,7 +1561,7 @@ fn copier_answers_read_template_and_tag_and_skip_what_cannot_be_looked_up() {
             "# Changes here will be overwritten by Copier\n_commit: {commit}\n_src_path: {src}\nproject_name: demo\n"
         )
     };
-    let files = Files::from([
+    let files = read_files([
         (
             ".copier-answers.yml".into(),
             answers("gh:acme/python-template", "v1.4.0"),
@@ -1577,7 +1613,7 @@ fn copier_answers_read_template_and_tag_and_skip_what_cannot_be_looked_up() {
                 d.package.as_str(),
                 patchula_manager::word(&d.source),
                 d.current.as_str(),
-                &files[&d.file][d.location.start..d.location.end],
+                &read(&files, &d.file)[d.location.start..d.location.end],
             )
         })
         .collect();
@@ -1713,10 +1749,10 @@ fn flake_inputs_come_from_the_lock_beside_flake_nix() {
     assert!(scanner.needs("dev/flake.lock") && scanner.needs("dev/flake.nix"));
     // A lock without its flake.nix is not a flake.
     let alone = scanner
-        .extract(&Files::from([("dev/flake.lock".into(), lock.into())]))
+        .extract(&read_files([("dev/flake.lock".into(), lock.into())]))
         .unwrap();
     assert!(alone.dependencies.is_empty());
-    let files = Files::from([
+    let files = read_files([
         ("dev/flake.lock".into(), lock.to_string()),
         (
             "dev/flake.nix".into(),
@@ -1731,7 +1767,7 @@ fn flake_inputs_come_from_the_lock_beside_flake_nix() {
             assert_eq!(d.manager, Manager::Nix);
             assert_eq!(d.kind, DependencyKind::FlakeInput);
             assert_eq!(
-                &files[&d.file][d.location.start..d.location.end],
+                &read(&files, &d.file)[d.location.start..d.location.end],
                 d.digest.as_deref().unwrap()
             );
             (d.name.as_str(), d.package.as_str(), d.current.as_str())
@@ -1799,7 +1835,7 @@ fn apm_git_tags_commit_pins_and_skipped_entries() {
         assert_eq!(scanner.needs(path), needed, "{path}");
     }
     let text = "name: demo\nversion: 1.0.0\ndependencies:\n  apm:\n    - microsoft/apm-sample-package#v1.0.0  # Design standards\n    - gitlab.com/team/project#v2.3.0\n    - owner/repo/skills/review#fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c # v1.2.3 keep\n    - 'codeberg.org/forge/pack#1.4'\n    - owner/unpinned\n    - owner/branch#main\n    - owner/short#abc1234\n    - owner/bare#fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c\n    - bitbucket.org/team/repo#v1.0.0\n    - https://github.com/owner/url.git\n    - ./packages/local\n    - git: https://gitlab.com/acme/repo.git\n      ref: v2.0\n    - path: ./local\n  mcp:\n    - owner/mcp#v1.0.0\ndevDependencies:\n  apm:\n    - owner/dev-tools#v0.3.0\n".to_string();
-    let files = Files::from([("apm.yml".into(), text.clone())]);
+    let files = read_files([("apm.yml".into(), text.clone())]);
     let extraction = scanner.extract(&files).unwrap();
     let got: Vec<_> = extraction
         .dependencies
@@ -1901,7 +1937,7 @@ fn apm_tab_separated_comments_and_flow_lists_are_left_alone() {
     let mut config = config();
     config.managers = vec![Manager::Apm];
     let text = "dependencies:\n  apm: [owner/flow#v1.0.0]\ndevDependencies:\n  apm:\n    - owner/tab#fb2851683d0b49ef9e1e0c6d0a9a3e6a1f0e2b3c\t# v1.0.0\n    - owner/tagged#v1.0.0\t# note\n";
-    let files = Files::from([("apm.yml".into(), text.to_string())]);
+    let files = read_files([("apm.yml".into(), text.to_string())]);
     let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
     let got: Vec<_> = extraction
         .dependencies
@@ -1931,7 +1967,7 @@ fn apm_block_entries_with_anchors_or_on_their_own_line_are_read() {
     let mut config = config();
     config.managers = vec![Manager::Apm];
     let text = "dependencies:\n  apm:\n    - &pkg owner/anchored#v1.0.0\n    -\n      owner/next-line#v2.0.0\n    - !!str owner/tagged#v3.0.0\n";
-    let files = Files::from([("apm.yml".into(), text.to_string())]);
+    let files = read_files([("apm.yml".into(), text.to_string())]);
     let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
     let got: Vec<_> = extraction
         .dependencies
@@ -1946,7 +1982,7 @@ fn apm_block_entries_with_anchors_or_on_their_own_line_are_read() {
 fn cargo_local_and_alternate_registry_dependencies_are_skipped() {
     let mut config = config();
     config.managers = vec![Manager::Cargo];
-    let files = Files::from([
+    let files = read_files([
         (
             "Cargo.toml".into(),
             r#"[workspace]
@@ -2033,7 +2069,7 @@ explicit = { version = "4.0.0", registry = "crates-io" }
 fn mise_http_and_s3_tools_are_skipped_because_they_list_no_versions() {
     let mut config = config();
     config.managers = vec![Manager::Mise];
-    let files = Files::from([
+    let files = read_files([
         (
             "mise.toml".into(),
             "[tools]\njq = \"1.7.1\"\n\"http:deepsource\" = { version = \"2.0.55\", url = \"https://example.com/{{ version }}.tar.gz\" }\n\"s3:internal\" = \"1.0.0\"\n\"github:org/tool\" = { version = \"v2.0.0\" }\n".into(),
@@ -2081,7 +2117,7 @@ fn mise_task_tools_are_extracted_from_config_and_included_task_files() {
         manager: Manager::Mise,
         paths: vec!["mise.toml".into(), "tasks.toml".into()],
     }];
-    let files = Files::from([
+    let files = read_files([
         (
             "mise.toml".into(),
             "[task_config]\nincludes = [\"tasks.toml\"]\n[tools]\njq = \"1.7.1\"\n[tasks.lint]\nrun = \"hk check\"\ntools.hk = \"1.2.0\"\n[tasks.test]\ntools = { python = \"3.14.8\", uv = { version = \"0.13.1\" } }\n[tasks.plain]\nrun = \"true\"\n[tasks]\nshort = \"echo hi\"\n".into(),
@@ -2116,7 +2152,7 @@ fn mise_task_tools_are_extracted_from_config_and_included_task_files() {
     );
     for dep in &extraction.dependencies {
         assert_eq!(
-            files[&dep.file][dep.location.start..dep.location.end].trim_matches('"'),
+            read(&files, &dep.file)[dep.location.start..dep.location.end].trim_matches('"'),
             dep.current
         );
     }
@@ -2145,7 +2181,7 @@ fn mise_files(paths: &[&str]) -> patchula_config::Config {
 #[test]
 fn mise_task_files_are_found_by_what_includes_them_not_by_their_names() {
     let config = mise_files(&["mise.toml", "tasks/**/*.toml", "scripts/*.toml"]);
-    let files = Files::from([
+    let files = read_files([
         (
             "mise.toml".into(),
             "[task_config]\nincludes = [\"tasks/*.toml\", \"scripts\"]\n".into(),
@@ -2224,7 +2260,7 @@ fn mise_includes_resolve_from_the_including_directory_inside_the_repository() {
 #[test]
 fn mise_pointers_escape_slashes_and_tildes_in_names() {
     let config = mise_files(&["mise.toml"]);
-    let files = Files::from([(
+    let files = read_files([(
         "mise.toml".into(),
         "[tools]\n\"github:org/tool\" = \"1.0.0\"\n[tasks.\"a/b~c\"]\ntools = { \"github:org/other\" = \"2.0.0\" }\n".into(),
     )]);
@@ -2276,7 +2312,7 @@ fn mise_includes_of_the_repository_root_reach_every_task_file_below_it() {
 
 #[test]
 fn npm_dependencies_take_their_registry_from_the_nearest_npmrc_or_yarnrc() {
-    let files = Files::from([
+    let files = read_files([
         (
             ".npmrc".into(),
             "# project registries\nregistry=https://npm.acme.dev/\n@acme:registry=https://acme.jfrog.io/artifactory/api/npm/npm-local\n//acme.jfrog.io/:_authToken=${NPM_TOKEN}\n@env:registry=${PRIVATE_REGISTRY}\n@plain:registry=http://insecure.acme.dev\n"
@@ -2374,7 +2410,7 @@ fn extractors_can_name_a_registry_from_a_capture() {
         extract: None,
         registry: Some("{registry}".into()),
     });
-    let files = Files::from([(
+    let files = read_files([(
         "deploy/versions.txt".into(),
         "@acme/ui=1.2.3 registry=https://npm.acme.dev/\n@acme/cli=2.0.0\n@acme/old=1.0.0 registry=http://old.acme.dev\n".into(),
     )]);
@@ -2444,7 +2480,7 @@ fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
         extract: None,
         registry: None,
     });
-    let files = Files::from([
+    let files = read_files([
         (
             ".npmrc".into(),
             "@acme:registry=https://npm.acme.dev\n".into(),
@@ -2507,7 +2543,7 @@ fn project(extra: &str) -> String {
 fn python_packages_come_from_what_their_lockfile_records() {
     let acme = "{ registry = \"https://pypi.acme.dev/simple\" }";
     let pypi = "{ registry = \"https://pypi.org/simple\" }";
-    let files = Files::from([
+    let files = read_files([
         // No index configured: PyPI, locked or not.
         ("plain/pyproject.toml".into(), project("")),
         ("plain-locked/pyproject.toml".into(), project("")),
@@ -2670,16 +2706,16 @@ fn python_settings_the_count_cannot_read_fail_every_lookup() {
         ("braces", "[tool.uv.workspace]\nmembers = [\"libs/{core,old}\"]\n".to_owned(), None),
         ("badlock", project(""), Some(("uv.lock", "version = [\n"))),
     ] {
-        files.insert(format!("{dir}/pyproject.toml"), pyproject);
+        files.insert(format!("{dir}/pyproject.toml"), pyproject.into());
         if let Some((leaf, text)) = extra {
             files.insert(format!("{dir}/{leaf}"), text.into());
         }
         // A lockfile recording the package does not help either.
         files
             .entry(format!("{dir}/uv.lock"))
-            .or_insert_with(|| lock.clone());
+            .or_insert_with(|| lock.clone().into());
     }
-    files.insert("braces/libs/core/pyproject.toml".into(), project(""));
+    files.insert("braces/libs/core/pyproject.toml".into(), project("").into());
     let extraction = python_scan(&files);
     for dir in [
         "toml", "key", "indexkey", "poetry", "hatch", "pixi", "pdm", "rye",
@@ -2733,7 +2769,7 @@ fn python_index_files_are_read_and_secrets_never_recorded() {
         assert!(scanner.needs(path), "{path}");
     }
     let with_index = |url: &str| project(&format!("[tool.uv]\nindex-url = \"{url}\"\n"));
-    let files = Files::from([
+    let files = read_files([
         (
             "services/token/pyproject.toml".into(),
             with_index("https://ci:s3cret@pypi.acme.dev/simple?token=x"), // betterleaks:allow
@@ -2776,7 +2812,7 @@ fn python_index_files_are_read_and_secrets_never_recorded() {
 
 #[test]
 fn python_packages_from_outside_an_index_are_skipped_with_a_reason() {
-    let files = Files::from([
+    let files = read_files([
         (
             "pyproject.toml".into(),
             "[project]\nname = \"app\"\ndependencies = [\"acme-wheel @ https://files.acme.dev/acme_wheel-1.0-py3-none-any.whl\"]\n[tool.poetry.dependencies]\ninternal = { git = \"https://github.com/acme/internal.git\" }\n".into(),
@@ -2803,7 +2839,7 @@ fn python_packages_from_outside_an_index_are_skipped_with_a_reason() {
 
 #[test]
 fn a_toml_error_does_not_quote_the_line_it_is_on() {
-    let files = Files::from([(
+    let files = read_files([(
         "pyproject.toml".into(),
         "[project]\nname = \"p\"\n[[tool.uv.index]]\nurl = \"https://ci:s3c\\qret@pypi.acme.dev/simple\"\n".into(), // betterleaks:allow
     )]);
@@ -2848,7 +2884,7 @@ fn pip_requirements_files_are_not_maintained_and_the_count_says_why() {
     );
     assert!(scanner.unsupported(["vendor/requirements.txt"]).is_empty());
     // Nothing is extracted from them, and nothing warns.
-    let files = Files::from([("requirements.txt".into(), "requests==2.31.0\n".into())]);
+    let files = read_files([("requirements.txt".into(), "requests==2.31.0\n".into())]);
     let extraction = scanner.extract(&files).unwrap();
     assert!(extraction.dependencies.is_empty() && extraction.warnings.is_empty());
     // Without Python projects enabled, there is nothing to say.
@@ -2867,7 +2903,7 @@ fn gems_come_from_their_gemfile_when_it_is_plain_else_their_lockfile() {
     let blocks = gemfile(
         "source \"https://gems.acme.dev\" do\n  gem \"acme-a\", \"~> 1.0\"\nend\ngem \"acme-b\", \"~> 1.0\", source: \"https://gems.acme.dev\"\ngem \"rake\", \"~> 13.0\"\n",
     );
-    let files = Files::from([
+    let files = read_files([
         // Plain lines and RubyGems alone: an unrecorded gem is RubyGems'.
         (
             "public/Gemfile".into(),
@@ -2934,7 +2970,7 @@ fn gems_come_from_their_gemfile_when_it_is_plain_else_their_lockfile() {
         ("symlink/Gemfile".into(), gemfile("gem \"rake\", \"~> 13.0\"\n")),
         (
             "symlink/.bundle/config".into(),
-            patchula_manager::UNREADABLE_SETTINGS.into(),
+            UNREAD.into(),
         ),
         // From git, by option or as the lockfile records.
         (
@@ -3033,7 +3069,7 @@ fn composer_packages_come_from_their_lockfile_or_packagist_alone() {
         ),
     );
     let private = ",\n  \"repositories\": [{\"type\": \"composer\", \"url\": \"https://bot:s3cr3t@repo.acme.dev\"}]";
-    let files = Files::from([
+    let files = read_files([
         ("plain/composer.json".into(), manifest("")),
         (
             "enabled/composer.json".into(),
@@ -3194,7 +3230,7 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
     let acme = "<add key=\"Acme\" value=\"https://bot:s3cr3t@nuget.acme.dev/v3/index.json\" />\n";
     let mapping = "<packageSourceMapping>\n<packageSource key=\"nuget.org\"><package pattern=\"*\" /><package pattern=\"Acme.Public\" /></packageSource>\n<packageSource key=\"Acme\"><package pattern=\"Acme.*\" /></packageSource>\n</packageSourceMapping>";
     let packages = ["Newtonsoft.Json", "Acme.Lib", "Acme.Public"];
-    let files = Files::from([
+    let files = read_files([
         ("none/App.csproj".into(), project(&packages)),
         ("public/nuget.config".into(), nuget_config(&sources(""))),
         ("public/App.csproj".into(), project(&packages)),
@@ -3374,7 +3410,7 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
 fn registry_of(manager: Manager, files: &[(&str, &str)], file: &str, name: &str) -> Option<String> {
     let files: Files = files
         .iter()
-        .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+        .map(|(path, text)| ((*path).to_owned(), fixture(text)))
         .collect();
     let mut config = config();
     config.managers = vec![manager];
@@ -3445,7 +3481,7 @@ fn maven_lookups_fail_when_any_build_file_names_another_repository() {
         ],
         vec![
             ("pom.xml", plain.as_str()),
-            ("lib/pom.xml", patchula_manager::UNREADABLE_SETTINGS),
+            ("lib/pom.xml", UNREAD),
         ],
         vec![
             ("pom.xml", relative_parent.as_str()),
@@ -3594,7 +3630,7 @@ fn gradle_lookups_fail_when_build_logic_could_add_another_repository() {
         ],
         vec![
             ("build.gradle.kts", plain.as_str()),
-            ("lib/build.gradle", patchula_manager::UNREADABLE_SETTINGS),
+            ("lib/build.gradle", UNREAD),
         ],
         vec![
             ("build.gradle.kts", plain.as_str()),
@@ -3711,10 +3747,7 @@ fn crates_io_lookups_fail_where_cargo_configuration_replaces_crates_io() {
             ("app/Cargo.toml", manifest),
             (".cargo/config.toml", "[source\n"),
         ],
-        vec![
-            ("app/Cargo.toml", manifest),
-            (".cargo/config.toml", patchula_manager::UNREADABLE_SETTINGS),
-        ],
+        vec![("app/Cargo.toml", manifest), (".cargo/config.toml", UNREAD)],
     ] {
         let found = lookup(&files);
         assert!(fails(found.clone()), "{files:?}: {found:?}");
@@ -3754,10 +3787,7 @@ fn crates_patched_or_included_from_elsewhere_fail_their_lookups() {
         ("app/Cargo.toml", git.as_str()),
     ];
     assert!(fails(lookup(&root, "serde")));
-    let unreadable = [
-        ("Cargo.toml", patchula_manager::UNREADABLE_SETTINGS),
-        ("app/Cargo.toml", git.as_str()),
-    ];
+    let unreadable = [("Cargo.toml", UNREAD), ("app/Cargo.toml", git.as_str())];
     assert!(fails(lookup(&unreadable, "serde")));
     let plain = manifest("");
     let include = [
@@ -3786,7 +3816,7 @@ fn go_modules_a_replace_directive_names_are_skipped() {
     let extract = |files: &[(&str, &str)]| {
         let files: Files = files
             .iter()
-            .map(|(p, t)| ((*p).to_owned(), (*t).to_owned()))
+            .map(|(p, t)| ((*p).to_owned(), fixture(t)))
             .collect();
         let mut config = config();
         config.managers = vec![Manager::Go];
@@ -3876,10 +3906,7 @@ fn go_modules_a_replace_directive_names_are_skipped() {
         vec![("app/go.mod", module("\nreplace github.com/acme/fork\n"))],
         vec![
             ("app/go.mod", plain.clone()),
-            (
-                "go.work".to_owned().leak(),
-                patchula_manager::UNREADABLE_SETTINGS.to_owned(),
-            ),
+            ("go.work".to_owned().leak(), UNREAD.into()),
         ],
     ] {
         let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (*p, t.as_str())).collect();
@@ -3999,7 +4026,7 @@ dependencies {
     implementation "org.opensaml:opensaml-core:4.3.0"
 }
 "#;
-    let files = Files::from([("build.gradle".into(), build.into())]);
+    let files = read_files([("build.gradle".into(), build.into())]);
     let mut config = config();
     config.managers = vec![Manager::Gradle];
     let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
@@ -4048,7 +4075,7 @@ fn a_deeper_include_chain_fails_saying_the_rounds_ran_out() {
             "build.gradle",
             "plugins { id 'java' }\nrepositories { mavenCentral() }\ndependencies { implementation \"org.springframework:spring-core:6.1.0\" }\n",
         ),
-        ("lib/build.gradle", patchula_manager::UNREADABLE_DEEP),
+        ("lib/build.gradle", UNREAD_DEEP),
     ];
     let reason = lookup(&files).unwrap();
     assert!(
@@ -4065,15 +4092,11 @@ fn a_registry_in_a_settings_file_fails_a_mise_npm_tool() {
     let mut config = config();
     config.managers = vec![Manager::Mise];
     let scan = |extra: &[(&str, &str)]| {
-        let mut files = Files::from([(
+        let mut files = read_files([(
             "mise.toml".into(),
             "# the registry these install from is fine\n[tools]\n\"npm:markdownlint-cli\" = \"1\"\n".into(),
         )]);
-        files.extend(
-            extra
-                .iter()
-                .map(|(p, t)| ((*p).to_owned(), (*t).to_owned())),
-        );
+        files.extend(extra.iter().map(|(p, t)| ((*p).to_owned(), fixture(t))));
         Scanner::new(&config).unwrap().extract(&files).unwrap()
     };
     let registry = |extra: &[(&str, &str)]| {
@@ -4103,4 +4126,113 @@ fn a_registry_in_a_settings_file_fails_a_mise_npm_tool() {
         ".yarnrc.yml",
         "npmRegistryServer: [unclosed\n"
     )])));
+}
+
+/// A `.npmrc` or `.yarnrc.yml` the Count did not read may set any registry,
+/// so packages under it fail their lookups instead of reading npmjs, even
+/// when a readable file further up names their scope.
+#[test]
+fn an_unread_npm_settings_file_fails_lookups_under_it() {
+    for (leaf, unread) in [(".npmrc", UNREAD), (".yarnrc.yml", UNREAD_DEEP)] {
+        let files = read_files([
+            (
+                ".npmrc".into(),
+                "@acme:registry=https://npm.acme.dev\n".into(),
+            ),
+            (format!("app/{leaf}"), unread.into()),
+            (
+                "app/package.json".into(),
+                r#"{"dependencies":{"left-pad":"1.0.0","@acme/ui":"1.0.0"}}"#.into(),
+            ),
+        ]);
+        let extraction = Scanner::new(&config()).unwrap().extract(&files).unwrap();
+        for name in ["left-pad", "@acme/ui"] {
+            let registry = extraction
+                .dependencies
+                .iter()
+                .find(|d| d.name == name)
+                .unwrap()
+                .registry
+                .clone();
+            assert!(
+                registry
+                    .as_deref()
+                    .is_some_and(|r| r.contains("could not read")),
+                "{leaf} {name}: {registry:?}"
+            );
+        }
+    }
+}
+
+/// A Gemfile.lock the Count did not read may record any remote, so the gems
+/// it could steer fail their lookups instead of trusting the Gemfile, and an
+/// unread aube-lock.yaml fails like npm's locks.
+#[test]
+fn an_unread_lockfile_is_not_an_absent_one() {
+    let mut config = config();
+    config.managers = vec![Manager::Bundler];
+    for unread in [UNREAD, UNREAD_DEEP] {
+        let files = read_files([
+            (
+                "Gemfile".into(),
+                "source \"https://rubygems.org\"\ngem \"foo\", \"~> 1.0\"\n".into(),
+            ),
+            ("Gemfile.lock".into(), unread.into()),
+        ]);
+        let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+        let registry = extraction
+            .dependencies
+            .iter()
+            .find(|d| d.name == "foo")
+            .unwrap()
+            .registry
+            .clone();
+        assert!(
+            registry
+                .as_deref()
+                .is_some_and(|r| r.contains("could not read")),
+            "{unread:?}: {registry:?}"
+        );
+    }
+    let files = read_files([
+        (
+            "package.json".into(),
+            r#"{"dependencies":{"left-pad":"1.0.0"}}"#.into(),
+        ),
+        ("aube-lock.yaml".into(), UNREAD.into()),
+    ]);
+    let error = Scanner::new(&self::config())
+        .unwrap()
+        .extract(&files)
+        .unwrap_err();
+    assert!(error.contains("could not read this lockfile"), "{error}");
+}
+
+/// An unread mise config may include a configuration in any folder through
+/// `task_config`, so the tools of every other mise configuration fail their
+/// lookups rather than read the public backends.
+#[test]
+fn an_unread_mise_config_may_govern_any_other() {
+    let mut config = config();
+    config.managers = vec![Manager::Mise];
+    let files = read_files([
+        ("config/mise.toml".into(), UNREAD.into()),
+        (
+            "other/mise.toml".into(),
+            "[tools]\n\"npm:prettier\" = \"3.3.0\"\n".into(),
+        ),
+    ]);
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let dep = extraction
+        .dependencies
+        .iter()
+        .find(|d| d.file == "other/mise.toml")
+        .expect("the readable configuration is still extracted");
+    assert!(
+        dep.registry
+            .as_deref()
+            .is_some_and(|r| r.contains("config/mise.toml")),
+        "{:?}",
+        dep.registry
+    );
 }

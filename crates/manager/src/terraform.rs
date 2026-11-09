@@ -12,7 +12,9 @@ pub(super) fn documents(files: &Files) -> Result<BTreeMap<&str, Body>, String> {
         .map(|(p, t)| {
             Ok((
                 p.as_str(),
-                t.parse()
+                t.read()
+                    .map_err(|_| format!("{p}: the Count could not read it"))?
+                    .parse()
                     .map_err(|e: hcl_edit::parser::Error| format!("{p}: {e}"))?,
             ))
         })
@@ -29,8 +31,8 @@ pub(super) fn extract(
         return Ok(out);
     }
     for terraform in body.get_blocks("terraform") {
-        if let Some(version) = terraform.body.get_attribute("required_version") {
-            add(
+        if let Some(version) = terraform.body.get_attribute("required_version")
+            && let Some(dep) = add(
                 path,
                 text,
                 "hashicorp/terraform",
@@ -38,11 +40,10 @@ pub(super) fn extract(
                 &version.value,
                 DependencyKind::Toolchain,
                 &mut out,
-            );
-            if let Some(dep) = out.last_mut().filter(|d| d.name == "hashicorp/terraform") {
-                dep.source = Source::GithubReleases;
-                dep.extract = Some("^v?(?<version>.*)$".into());
-            }
+            )
+        {
+            dep.source = Source::GithubReleases;
+            dep.extract = Some("^v?(?<version>.*)$".into());
         }
         for providers in terraform.body.get_blocks("required_providers") {
             for attribute in providers.body.attributes() {
@@ -139,17 +140,17 @@ fn field<'a>(object: &'a Object, name: &str) -> Option<&'a Expression> {
         (key == Some(name)).then_some(value.expr())
     })
 }
-fn add(
+fn add<'a>(
     path: &str,
     text: &str,
     name: &str,
     package: &str,
     version: &Expression,
     kind: DependencyKind,
-    out: &mut Vec<Dependency>,
-) {
+    out: &'a mut Vec<Dependency>,
+) -> Option<&'a mut Dependency> {
     let (Some(current), Some(span)) = (version.as_str(), version.span()) else {
-        return;
+        return None;
     };
     out.push(Dependency {
         manager: Manager::Terraform,
@@ -172,6 +173,7 @@ fn add(
         included_by: None,
         registry: None,
     });
+    out.last_mut()
 }
 
 fn provider_package(package: &str) -> &str {

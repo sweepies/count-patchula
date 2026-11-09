@@ -39,7 +39,7 @@ impl Pinned {
             return Ok(pinned);
         }
         let files = collect(root)?;
-        let extraction = Scanner::new(config)?.extract(&files)?;
+        let extraction = Scanner::new(config)?.extract(&patchula_manager::all_read(&files))?;
         let mut edits = BTreeMap::<&str, Vec<Edit>>::new();
         let mut found = BTreeSet::new();
         for dep in &extraction.dependencies {

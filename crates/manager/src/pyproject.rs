@@ -208,7 +208,12 @@ pub(super) fn extract(
         .resolved_lock
         .as_ref()
         .and_then(|lock| files.get(lock))
-        .map(|text| Document::parse(text.as_str()).map_err(|e| toml_error(text, &e)))
+        .map(|text| {
+            let text = text
+                .read()
+                .map_err(|_| "its lockfile, which the Count could not read".to_owned())?;
+            Document::parse(text).map_err(|e| toml_error(text, &e))
+        })
         .transpose()?;
     let mut scan = Scan {
         path,
