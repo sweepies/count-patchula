@@ -451,7 +451,9 @@ pub struct Update {
 patchula_words::words!(
     /// How far an image comparison got, from worst to best: a comparison takes
     /// the worst of its platforms. Declaration order is that order.
+    #[derive(Default)]
     ImageState {
+    #[default]
     Unreadable => "unreadable",
     PreviousUnavailable => "previous-unavailable",
     NoSbom => "no-sbom",
@@ -461,11 +463,6 @@ patchula_words::words!(
     Checked => "checked",
     NoOsPackages => "no-os-packages",
 });
-impl Default for ImageState {
-    fn default() -> Self {
-        Self::Unreadable
-    }
-}
 impl ImageState {
     /// Whether the state means the Count can't tell, so it is a warning.
     pub fn warns(self) -> bool {
