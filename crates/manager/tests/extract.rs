@@ -4207,3 +4207,32 @@ fn an_unread_lockfile_is_not_an_absent_one() {
         .unwrap_err();
     assert!(error.contains("could not read this lockfile"), "{error}");
 }
+
+/// An unread mise config may include a configuration in any folder through
+/// `task_config`, so the tools of every other mise configuration fail their
+/// lookups rather than read the public backends.
+#[test]
+fn an_unread_mise_config_may_govern_any_other() {
+    let mut config = config();
+    config.managers = vec![Manager::Mise];
+    let files = read_files([
+        ("config/mise.toml".into(), UNREAD.into()),
+        (
+            "other/mise.toml".into(),
+            "[tools]\n\"npm:prettier\" = \"3.3.0\"\n".into(),
+        ),
+    ]);
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let dep = extraction
+        .dependencies
+        .iter()
+        .find(|d| d.file == "other/mise.toml")
+        .expect("the readable configuration is still extracted");
+    assert!(
+        dep.registry
+            .as_deref()
+            .is_some_and(|r| r.contains("config/mise.toml")),
+        "{:?}",
+        dep.registry
+    );
+}

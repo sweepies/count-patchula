@@ -604,6 +604,16 @@ pub(crate) fn redirected(
     files: &Files,
     feeds: &crate::nuget::Feeds,
 ) -> Option<String> {
+    // An unread config may include any file through `task_config`, from any
+    // folder, so it may govern this one however far away it is.
+    if let Some(config) = configs
+        .iter()
+        .find(|config| files.get(**config).is_some_and(|text| text.read().is_err()))
+    {
+        return Some(format!(
+            "{config}, which the Count cannot read and which may include this configuration"
+        ));
+    }
     let mut dirs = vec![&dep.file[..dep.file.rfind('/').map_or(0, |i| i + 1)]];
     if let Some(including) = &dep.included_by {
         dirs.push(governed(including));
