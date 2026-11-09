@@ -817,6 +817,8 @@ impl Engine {
         // The revalidated complete tag namespace already carries peeled target
         // commits. Reuse those for both current and proposed action tags instead
         // of adding a serial /commits/{tag} round trip after policy evaluation.
+        // Digests a catalog fetched this run carries: fresh, even on a retry.
+        let mut carried = BTreeSet::new();
         for (package, reference) in keys.digests.keys() {
             if let Some(Ok(catalog)) = lookups.catalogs.iter().find_map(|(key, result)| {
                 (key.1.name == *package
@@ -833,11 +835,14 @@ impl Engine {
                 lookups
                     .digests
                     .insert((package.clone(), reference.clone()), Ok(digest.clone()));
+                carried.insert((package.clone(), reference.clone()));
             }
         }
-        // A ref under a manual retry is read again whatever a hint holds.
-        keys.digests
-            .retain(|key, revalidate| *revalidate || !lookups.digests.contains_key(key));
+        // A ref under a manual retry is read again when only a prior run's
+        // hint holds it; one a catalog fetched this run carries is fresh.
+        keys.digests.retain(|key, revalidate| {
+            !lookups.digests.contains_key(key) || (*revalidate && !carried.contains(key))
+        });
         // Forge refs resolve only through their tag catalog. A ref missing
         // from it is not sent to GitHub.
         keys.digests.retain(|(package, reference), _| {
