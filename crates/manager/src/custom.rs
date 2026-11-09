@@ -64,22 +64,27 @@ pub(super) fn extract(
                     extract: extractor.extract.clone(),
                     included_by: None,
                     // An optional capture that did not take part, or is empty,
-                    // means the source's public registry. A value the Count
-                    // cannot read from is kept as written, so that one lookup
-                    // fails instead of reading the public package of the name.
-                    // Without a template, npm packages follow `.npmrc`.
+                    // means the source's public registry — an explicit public
+                    // answer the `.npmrc` fallback must not override. A value
+                    // the Count cannot read from is kept as written, so that
+                    // one lookup fails instead of reading the public package
+                    // of the name. Without a template, npm packages follow
+                    // `.npmrc`.
                     registry: match &extractor.registry {
                         Some(registry) => match template(registry, &captures) {
                             Ok(raw) if raw.is_empty() => None,
                             Ok(raw) if source == Source::Npm => npm::extracted_registry(&raw),
-                            Ok(raw) if source == Source::Pypi => pypi::named(&raw).recorded(),
-                            Ok(raw) => {
-                                Some(registry_url(&raw).unwrap_or_else(|| crate::redacted(&raw)))
-                            }
+                            Ok(raw) if source == Source::Pypi => pypi::named(&raw).registry(),
+                            Ok(raw) => Some(match registry_url(&raw) {
+                                Some(url) => Registry::Url(url),
+                                None => Registry::Unusable(crate::redacted(&raw)),
+                            }),
                             Err(error) if error.starts_with("unmatched template capture") => None,
                             Err(error) => return Err(error),
                         },
-                        None if source == Source::Npm => npm::registry_for(path, &package, npmrcs),
+                        None if source == Source::Npm => {
+                            npm::named_for(path, &package, npmrcs).registry()
+                        }
                         None => None,
                     },
                 });

@@ -6,7 +6,7 @@ pub use imports::import_files;
 mod model;
 mod package;
 pub mod settings;
-pub use package::PackageId;
+pub use package::{PackageId, Registry, join_package, split_package};
 mod validate;
 pub use model::*;
 

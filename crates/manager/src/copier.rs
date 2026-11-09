@@ -118,6 +118,9 @@ impl crate::Ecosystem for Descriptor {
     fn selected(&self, _config: &Config, path: &str) -> bool {
         selected(path.rsplit('/').next().unwrap_or(path))
     }
+    fn edit_refusal(&self, _dep: &Dependency) -> Option<String> {
+        Some("a copier template moves only with copier update; a bare _commit bump would drop the template's changes".into())
+    }
     fn prepare<'a>(
         &self,
         _scanner: &'a Scanner,

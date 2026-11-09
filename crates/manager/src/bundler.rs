@@ -771,6 +771,12 @@ impl crate::Ecosystem for Descriptor {
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Bundler, path).registry
     }
+    fn preserves_ranges(&self) -> bool {
+        true
+    }
+    fn movable_lockfile(&self, dep: &Dependency) -> bool {
+        dep.source == Source::Rubygems
+    }
     fn prepare<'a>(
         &self,
         _scanner: &'a Scanner,

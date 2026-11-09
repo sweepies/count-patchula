@@ -1,4 +1,5 @@
 use super::*;
+use patchula_config::split_package;
 use patchula_http::{CacheError, Derived};
 
 fn encode(catalog: &Catalog) -> std::result::Result<Vec<u8>, CacheError> {
@@ -144,7 +145,7 @@ impl Client {
     }
     /// One chart from a Helm repository's index; `package` is `repository|chart`.
     pub async fn helm_chart(&self, package: &str) -> Result<HelmChart> {
-        let (repo, chart) = package.rsplit_once('|').ok_or(Error::Invalid)?;
+        let (repo, chart) = split_package(package).ok_or(Error::Invalid)?;
         if chart.is_empty()
             || !chart
                 .bytes()

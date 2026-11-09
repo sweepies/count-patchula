@@ -321,6 +321,12 @@ impl crate::Ecosystem for Descriptor {
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Composer, path).registry
     }
+    fn preserves_ranges(&self) -> bool {
+        true
+    }
+    fn movable_lockfile(&self, dep: &Dependency) -> bool {
+        dep.source == Source::Packagist
+    }
     fn prepare<'a>(
         &self,
         _scanner: &'a Scanner,

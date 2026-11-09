@@ -2353,7 +2353,8 @@ fn npm_dependencies_take_their_registry_from_the_nearest_npmrc_or_yarnrc() {
             .find(|d| d.file == file && d.name == name)
             .unwrap_or_else(|| panic!("{file} {name}"))
             .registry
-            .clone()
+            .as_ref()
+            .map(|r| r.recorded().to_owned())
     };
     let acme = Some("https://acme.jfrog.io/artifactory/api/npm/npm-local".to_owned());
     assert_eq!(
@@ -2380,8 +2381,17 @@ fn npm_dependencies_take_their_registry_from_the_nearest_npmrc_or_yarnrc() {
         .iter()
         .find(|l| l.package == "@acme/core")
         .unwrap();
-    assert_eq!(core.registry, acme);
-    assert_eq!(core.dependency().registry, acme);
+    assert_eq!(
+        core.registry.as_ref().map(|r| r.recorded().to_owned()),
+        acme
+    );
+    assert_eq!(
+        core.dependency()
+            .registry
+            .as_ref()
+            .map(|r| r.recorded().to_owned()),
+        acme
+    );
     // Corepack does not read .npmrc.
     assert_eq!(registry("package.json", "pnpm"), None);
     // A manifest below reads the nearest .npmrc above it.
@@ -2424,7 +2434,8 @@ fn extractors_can_name_a_registry_from_a_capture() {
             .find(|d| d.name == name)
             .unwrap()
             .registry
-            .clone()
+            .as_ref()
+            .map(|r| r.recorded().to_owned())
     };
     assert_eq!(
         registry("@acme/ui").as_deref(),
@@ -2437,6 +2448,59 @@ fn extractors_can_name_a_registry_from_a_capture() {
     assert_eq!(
         registry("@acme/old").as_deref(),
         Some("http://old.acme.dev")
+    );
+}
+
+/// A registry template that resolves to the public registry is an explicit
+/// public answer: `.npmrc` does not apply to it. Only an extractor that
+/// names no registry follows `.npmrc`.
+#[test]
+fn extractor_registries_that_name_the_public_registry_stay_public() {
+    let mut config = config();
+    config.extractors.push(patchula_config::Extractor {
+        note: String::new(),
+        paths: vec!["deploy/versions.txt".into()],
+        patterns: vec![
+            r"(?<dependency>@[\w./-]+)=(?<current>\S+)(?: registry=(?<registry>\S+))?".into(),
+        ],
+        source: "npm".into(),
+        dependency: "{dependency}".into(),
+        package: "{dependency}".into(),
+        scheme: "semver".into(),
+        extract: None,
+        registry: Some("{registry}".into()),
+    });
+    let files = read_files([
+        (
+            ".npmrc".into(),
+            "@acme:registry=https://npm.acme.dev\n".into(),
+        ),
+        (
+            "deploy/versions.txt".into(),
+            "@acme/ui=1.2.3 registry=https://registry.npmjs.org\n@acme/cli=2.0.0\n@acme/priv=3.0.0 registry=https://priv.acme.dev\n".into(),
+        ),
+    ]);
+    let deps = Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    let registry = |name: &str| {
+        deps.iter()
+            .find(|d| d.name == name)
+            .unwrap()
+            .registry
+            .as_ref()
+            .map(|r| r.recorded().to_owned())
+    };
+    // The template resolved to the public registry.
+    assert_eq!(registry("@acme/ui"), None);
+    // An unmatched optional capture is the same explicit public answer.
+    assert_eq!(registry("@acme/cli"), None);
+    // A template naming another registry keeps it, whatever `.npmrc` says.
+    assert_eq!(
+        registry("@acme/priv").as_deref(),
+        Some("https://priv.acme.dev")
     );
 }
 
@@ -2493,7 +2557,10 @@ fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
         .unwrap()
         .dependencies;
     let ui = deps.iter().find(|d| d.name == "@acme/ui").unwrap();
-    assert_eq!(ui.registry.as_deref(), Some("https://npm.acme.dev"));
+    assert_eq!(
+        ui.registry.as_ref().map(|r| r.recorded()),
+        Some("https://npm.acme.dev")
+    );
 }
 
 /// The registry of `name` in `file`, failing the test when it is missing.
@@ -2508,7 +2575,8 @@ fn python_registry(
         .find(|d| d.file == file && d.name == name)
         .unwrap_or_else(|| panic!("{file} {name}"))
         .registry
-        .clone()
+        .as_ref()
+        .map(|r| r.recorded().to_owned())
 }
 
 fn python_scan(files: &Files) -> patchula_manager::Extraction {
@@ -2801,7 +2869,7 @@ fn python_index_files_are_read_and_secrets_never_recorded() {
     ]);
     let extraction = scanner.extract(&files).unwrap();
     for dep in &extraction.dependencies {
-        let recorded = dep.registry.clone().unwrap_or_default();
+        let recorded = dep.registry.as_ref().map(|r| r.recorded()).unwrap_or("");
         for secret in ["s3cret", "token", "pa/ss", "ci:"] {
             assert!(!recorded.contains(secret), "{recorded}");
         }
@@ -2996,7 +3064,8 @@ fn gems_come_from_their_gemfile_when_it_is_plain_else_their_lockfile() {
             .find(|d| d.file == file && d.name == name)
             .unwrap_or_else(|| panic!("{file} {name}"))
             .registry
-            .clone()
+            .as_ref()
+            .map(|r| r.recorded().to_owned())
     };
     let acme = Some("https://gems.acme.dev".to_owned());
     let ambiguous = |found: Option<String>| found.is_some_and(|r| r.starts_with("ambiguous: "));
@@ -3157,7 +3226,7 @@ fn composer_packages_come_from_their_lockfile_or_packagist_alone() {
             .dependencies
             .iter()
             .find(|d| d.file == file && d.name == name)
-            .map(|d| d.registry.clone())
+            .map(|d| d.registry.as_ref().map(|r| r.recorded().to_owned()))
     };
     let registry =
         |file: &str, name: &str| found(file, name).unwrap_or_else(|| panic!("{file} {name}"));
@@ -3352,7 +3421,8 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
             .find(|d| d.file == file && d.name == name)
             .unwrap_or_else(|| panic!("{file} {name}"))
             .registry
-            .clone()
+            .as_ref()
+            .map(|r| r.recorded().to_owned())
     };
     for file in ["none/App.csproj", "public/App.csproj"] {
         for name in packages {
@@ -3402,7 +3472,11 @@ fn nuget_packages_come_from_nuget_org_alone_or_as_source_mapping_says() {
         .iter()
         .find(|d| d.file == "public/App.csproj" && d.name == "Newtonsoft.Json")
         .unwrap();
-    assert!(fails(dep.registry.clone()), "{:?}", dep.registry);
+    assert!(
+        fails(dep.registry.as_ref().map(|r| r.recorded().to_owned())),
+        "{:?}",
+        dep.registry
+    );
 }
 
 /// The registry the Count gives `name` from `file` when a repository holds
@@ -3421,7 +3495,8 @@ fn registry_of(manager: Manager, files: &[(&str, &str)], file: &str, name: &str)
         .find(|d| d.file == file && d.name == name)
         .unwrap_or_else(|| panic!("{file} {name}"))
         .registry
-        .clone()
+        .as_ref()
+        .map(|r| r.recorded().to_owned())
 }
 
 #[test]
@@ -3827,7 +3902,7 @@ fn go_modules_a_replace_directive_names_are_skipped() {
             .dependencies
             .iter()
             .find(|d| d.file == "app/go.mod" && d.name == name)
-            .map(|d| d.registry.clone())
+            .map(|d| d.registry.as_ref().map(|r| r.recorded().to_owned()))
     };
     let plain = module("");
     let extraction = extract(&[("app/go.mod", &plain)]);
@@ -4048,8 +4123,9 @@ dependencies {
             .find(|d| d.name == name)
             .unwrap_or_else(|| panic!("{name}"))
             .registry
-            .as_deref()
-            .unwrap_or_default();
+            .as_ref()
+            .map(|r| r.recorded())
+            .unwrap_or("");
         assert!(
             reason.contains("build.gradle") && reason.contains("build.shibboleth.net"),
             "{name}: {reason}"
@@ -4106,7 +4182,8 @@ fn a_registry_in_a_settings_file_fails_a_mise_npm_tool() {
             .find(|d| d.name == "npm:markdownlint-cli")
             .unwrap()
             .registry
-            .clone()
+            .as_ref()
+            .map(|r| r.recorded().to_owned())
     };
     assert_eq!(registry(&[(".npmrc", "save-exact=true\n")]), None);
     for npmrc in [
@@ -4153,7 +4230,8 @@ fn an_unread_npm_settings_file_fails_lookups_under_it() {
                 .find(|d| d.name == name)
                 .unwrap()
                 .registry
-                .clone();
+                .as_ref()
+                .map(|r| r.recorded().to_owned());
             assert!(
                 registry
                     .as_deref()
@@ -4186,7 +4264,8 @@ fn an_unread_lockfile_is_not_an_absent_one() {
             .find(|d| d.name == "foo")
             .unwrap()
             .registry
-            .clone();
+            .as_ref()
+            .map(|r| r.recorded().to_owned());
         assert!(
             registry
                 .as_deref()
@@ -4230,7 +4309,8 @@ fn an_unread_mise_config_may_govern_any_other() {
         .expect("the readable configuration is still extracted");
     assert!(
         dep.registry
-            .as_deref()
+            .as_ref()
+            .map(|r| r.recorded())
             .is_some_and(|r| r.contains("config/mise.toml")),
         "{:?}",
         dep.registry

@@ -448,9 +448,11 @@ fn expected(
         );
         return Some(Expect::NotFromIndex);
     };
-    match dependency.registry.clone() {
+    match dependency.registry.as_ref().map(|r| r.recorded()) {
         None => Some(Expect::PyPi),
-        Some(url) if url.starts_with("http") && !url.contains(' ') => Some(Expect::Index(url)),
+        Some(url) if url.starts_with("http") && !url.contains(' ') => {
+            Some(Expect::Index(url.to_owned()))
+        }
         Some(_) => None,
     }
 }

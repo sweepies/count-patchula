@@ -89,7 +89,7 @@ pub(super) fn extract(
                 registry: replacements
                     .as_ref()
                     .err()
-                    .and_then(|reason| crate::origins::Named::Unusable(reason.clone()).recorded()),
+                    .and_then(|reason| crate::origins::Named::Unusable(reason.clone()).registry()),
             });
         } else if let Some(c) = directive.captures(code) {
             let version = c.name("version").unwrap();
@@ -361,6 +361,23 @@ impl crate::Ecosystem for Descriptor {
     }
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Go, path).registry
+    }
+    fn movable_lockfile(&self, dep: &Dependency) -> bool {
+        dep.source == Source::Go
+    }
+    fn declared_form(
+        &self,
+        dep: &Dependency,
+        current: &str,
+        value: &str,
+    ) -> Result<Option<String>, String> {
+        if dep.location.pointer != "/toolchain" {
+            return Ok(None);
+        }
+        if current != format!("go{}", dep.current) {
+            return Err("Go toolchain location mismatch".into());
+        }
+        Ok(Some(format!("go{}", value.trim_start_matches("go"))))
     }
     fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
         let wanted = workspace_modules(files);

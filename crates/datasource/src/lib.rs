@@ -20,7 +20,7 @@ pub use registries::HelmChart;
 mod rubygems;
 mod rules;
 use patchula_cache::{Cache, Release, State};
-use patchula_config::PackageId;
+use patchula_config::{PackageId, Registry};
 use patchula_github::Error as GithubError;
 use patchula_http::Cached;
 use patchula_versioning::{Ecosystem, Versioning};
@@ -260,22 +260,30 @@ impl Client {
     /// URL standing in for the source's public registry. npm and PyPI take one;
     /// an ambiguous or unusable registry fails without a request.
     pub async fn lookup(&self, id: &PackageId) -> Result<Catalog> {
-        let (source, registry, package) = (id.source, id.registry.as_deref(), id.name.as_str());
+        let (source, registry, package) = (id.source, id.registry.as_ref(), id.name.as_str());
+        let mut index = None;
         if let Some(registry) = registry {
-            if let Some(registries) = id.ambiguous() {
-                return Err(Error::Registry(format!(
-                    "{package} could come from several registries ({registries}); commit a lockfile that records where it comes from"
-                )));
-            }
-            // A value the manager kept as written (`${VAR}`, a redacted URL,
-            // find-links) is no URL to request, though a URL parser takes it.
-            if !matches!(source, Source::Npm | Source::Pypi)
-                || registry.contains([' ', '$', '{', '(', '@', '?', '#'])
-                || patchula_http::url_prefix(registry).is_none()
-            {
-                return Err(Error::Registry(format!(
-                    "cannot read {package} from the registry {registry}"
-                )));
+            match registry {
+                Registry::Ambiguous { indexes, .. } => {
+                    return Err(Error::Registry(format!(
+                        "{package} could come from several registries ({}); commit a lockfile that records where it comes from",
+                        indexes.join(", ")
+                    )));
+                }
+                Registry::Url(url) | Registry::Unusable(url) => {
+                    // A value the manager kept as written (`${VAR}`, a
+                    // redacted URL, find-links) is no URL to request, though
+                    // a URL parser takes it.
+                    if !matches!(source, Source::Npm | Source::Pypi)
+                        || url.contains([' ', '$', '{', '(', '@', '?', '#'])
+                        || patchula_http::url_prefix(url).is_none()
+                    {
+                        return Err(Error::Registry(format!(
+                            "cannot read {package} from the registry {url}"
+                        )));
+                    }
+                    index = Some(url.as_str());
+                }
             }
         }
         // npm names are URL-safe; an escape could reach another path on a
@@ -292,13 +300,13 @@ impl Client {
             return Err(Error::Invalid);
         }
         match source {
-            Source::Npm => self.npm(registry, package).await,
+            Source::Npm => self.npm(index, package).await,
             Source::GithubReleases | Source::GithubTags => {
                 self.github_versions(source, package).await
             }
             Source::Crates => self.crates(package).await,
             Source::Go => self.go(package).await,
-            Source::Pypi => match registry {
+            Source::Pypi => match index {
                 Some(index) => self.pypi_index(index, package).await,
                 None => self.pypi(package).await,
             },

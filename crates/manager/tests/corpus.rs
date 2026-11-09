@@ -61,7 +61,7 @@ fn corpus_extraction_matches_its_snapshot() {
         .dependencies
         .iter()
         .filter(|d| d.source == patchula_words::Source::Maven)
-        .filter_map(|d| d.registry.as_deref())
+        .filter_map(|d| d.registry.as_ref().map(|r| r.recorded()))
         .collect();
     assert!(private.is_empty(), "{private:?}");
     let mut lines: Vec<String> = extraction

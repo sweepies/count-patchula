@@ -15,7 +15,7 @@ use forge::{compare_link, releases_url};
 use markdown::demote_headings;
 pub use markdown::{Links, fit, inert, sanitise};
 use patchula_cache::State;
-use patchula_config::PackageId;
+use patchula_config::{PackageId, split_package};
 use patchula_datasource::upstream::{ChartNotes, MirrorList, directory, mapped, mirror_url};
 pub use patchula_datasource::upstream::{Forge, ForgeKind, Repository};
 use patchula_datasource::{Error, Result, truncate};
@@ -129,10 +129,7 @@ const NOTES_SECTIONS: usize = 32;
 /// than its repository's URL.
 fn tag_name(id: &PackageId) -> &str {
     match id.source {
-        Source::Helm => id
-            .name
-            .rsplit_once('|')
-            .map_or(id.name.as_str(), |(_, chart)| chart),
+        Source::Helm => split_package(&id.name).map_or(id.name.as_str(), |(_, chart)| chart),
         _ => id.name.as_str(),
     }
 }

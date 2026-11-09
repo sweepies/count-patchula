@@ -1570,7 +1570,7 @@ async fn a_python_package_is_read_from_its_private_index_or_not_at_all() {
     // An ambiguous package is never looked up, with a reason to act on.
     let ambiguous = patchula_config::PackageId::new(
         Source::Pypi,
-        Some(patchula_config::PackageId::ambiguous_registry(&[
+        Some(patchula_config::Registry::ambiguous(&[
             "https://pypi.org/simple".into(),
             "https://pypi.acme.dev/simple".into(),
         ])),

@@ -484,13 +484,7 @@ pub(crate) fn job(
         }
         _ => return Ok(None),
     };
-    let targeted = matches!(
-        ecosystem,
-        Ecosystem::Cargo | Ecosystem::Go | Ecosystem::Python | Ecosystem::Ruby | Ecosystem::Php
-    ) && matches!(
-        dep.source,
-        Source::Crates | Source::Go | Source::Pypi | Source::Rubygems | Source::Packagist
-    );
+    let targeted = dep.movable_lockfile();
     Ok(Some(Job {
         ecosystem,
         directory: root.into(),

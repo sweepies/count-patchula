@@ -1,4 +1,5 @@
 use crate::*;
+use patchula_config::join_package;
 use serde_yaml_ng::Value;
 
 fn scalar(v: &Value) -> Option<String> {
@@ -274,7 +275,7 @@ pub(super) fn extract(
                                         repo.trim_start_matches("oci://").trim_end_matches('/')
                                     )
                                 } else {
-                                    format!("{repo}|{name}")
+                                    join_package(&repo, &name)
                                 },
                                 if repo.starts_with("oci://") {
                                     Source::Oci
@@ -331,7 +332,7 @@ pub(super) fn extract(
                                 name
                             )
                         } else {
-                            format!("{url}|{name}")
+                            join_package(url, &name)
                         };
                         scan.chart(
                             &name,
@@ -463,6 +464,10 @@ impl crate::Ecosystem for Descriptor {
             }
             _ => false,
         }
+    }
+    fn edit_refusal(&self, dep: &Dependency) -> Option<String> {
+        (self.manager == Manager::Flux && dep.location.pointer == "/flux-version")
+            .then(|| "generated Flux bundles require regeneration".to_owned())
     }
     fn prepare<'a>(
         &self,

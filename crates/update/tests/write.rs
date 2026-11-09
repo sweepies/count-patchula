@@ -520,7 +520,7 @@ fn setup(
                 name: d.name.clone(),
                 occurrence: None,
                 package: d.package.clone(),
-                registry: d.registry.clone(),
+                registry: d.registry.as_ref().map(|r| r.recorded().to_owned()),
                 current: Current {
                     value: Some(d.current.clone()),
                     version: d.resolved.clone(),
@@ -2985,7 +2985,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
             manager: dep.manager,
             name: dep.name.clone(),
             package: dep.package.clone(),
-            registry: dep.registry.clone(),
+            registry: dep.registry.as_ref().map(|r| r.recorded().to_owned()),
             occurrence: None,
             current: Current {
                 value: Some(dep.current.clone()),
@@ -3553,7 +3553,7 @@ fn reference_data_pins_get_their_own_branch() {
             manager: dep.manager,
             name: dep.name.clone(),
             package: dep.package.clone(),
-            registry: dep.registry.clone(),
+            registry: dep.registry.as_ref().map(|r| r.recorded().to_owned()),
             occurrence: None,
             current: Current {
                 value: Some(dep.current.clone()),

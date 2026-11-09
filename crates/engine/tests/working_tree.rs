@@ -188,7 +188,8 @@ async fn a_symlinked_settings_file_is_unreadable_not_absent() {
         .and_then(|d| d.registry.clone());
     assert!(
         registry
-            .as_deref()
+            .as_ref()
+            .map(|r| r.recorded())
             .is_some_and(|r| r.contains("uv.toml the Count cannot read")),
         "{registry:?}"
     );
@@ -210,7 +211,8 @@ async fn a_symlinked_settings_file_is_unreadable_not_absent() {
         .find(|d| d.name == "rake")
         .and_then(|d| d.registry.clone());
     assert!(
-        rake.as_deref()
+        rake.as_ref()
+            .map(|r| r.recorded())
             .is_some_and(|r| r.contains(".bundle/config, which the Count cannot read")),
         "{rake:?}"
     );

@@ -5,7 +5,7 @@ use crate::{
     update_key,
 };
 use patchula_cache::{Cache, State};
-use patchula_config::Config;
+use patchula_config::{Config, Registry};
 use patchula_github::Client;
 use patchula_manager::{Declaration, hash};
 use patchula_report::{Dependency, Repository};
@@ -130,7 +130,14 @@ impl Controls {
                 .flat_map(|c| {
                     dependencies
                         .iter()
-                        .filter(|d| c.touches(&d.file, d.source, &d.package, d.registry.as_deref()))
+                        .filter(|d| {
+                            c.touches(
+                                &d.file,
+                                d.source,
+                                &d.package,
+                                d.registry.as_ref().map(Registry::recorded),
+                            )
+                        })
                         .filter_map(|d| {
                             c.version
                                 .as_deref()
@@ -147,7 +154,14 @@ impl Controls {
             let age_click = plan.changes.iter().any(|c| {
                 dependencies
                     .iter()
-                    .filter(|d| c.touches(&d.file, d.source, &d.package, d.registry.as_deref()))
+                    .filter(|d| {
+                        c.touches(
+                            &d.file,
+                            d.source,
+                            &d.package,
+                            d.registry.as_ref().map(Registry::recorded),
+                        )
+                    })
                     .any(|d| {
                         c.version
                             .as_deref()

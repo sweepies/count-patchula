@@ -500,7 +500,7 @@ impl crate::Ecosystem for Descriptor {
                     .iter_mut()
                     .filter(|dep| dep.manager == Manager::Maven && dep.source == Source::Maven)
                 {
-                    dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+                    dep.registry = origins::Named::Unusable(reason.clone()).registry();
                 }
                 Ok(())
             })),

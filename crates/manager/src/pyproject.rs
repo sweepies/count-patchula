@@ -350,6 +350,12 @@ impl crate::Ecosystem for Descriptor {
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Pyproject, path).registry
     }
+    fn preserves_ranges(&self) -> bool {
+        true
+    }
+    fn movable_lockfile(&self, dep: &Dependency) -> bool {
+        dep.source == Source::Pypi
+    }
     /// The settings the pip and uv backends mise runs read.
     fn backend_settings(&self, path: &str) -> bool {
         matches!(

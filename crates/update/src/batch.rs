@@ -4,7 +4,7 @@
 //! returns its updates to individual PRs.
 use crate::markers;
 use crate::{Change, Plan, Snapshot, pull_requests, update_key};
-use patchula_config::Config;
+use patchula_config::{Config, Registry};
 use patchula_manager::Dependency;
 use patchula_report::Repository;
 use serde::{Deserialize, Serialize};
@@ -29,9 +29,14 @@ fn branch(pr: &Value) -> &str {
 }
 fn overlaps(item: &Item, targets: &[Change]) -> bool {
     item.targets.iter().any(|a| {
-        targets
-            .iter()
-            .any(|b| a.touches(&b.file, b.source, &b.package, b.registry.as_deref()))
+        targets.iter().any(|b| {
+            a.touches(
+                &b.file,
+                b.source,
+                &b.package,
+                b.registry.as_ref().map(Registry::recorded),
+            )
+        })
     })
 }
 
@@ -133,9 +138,14 @@ pub fn apply(
         .into_iter()
         .filter(|i| {
             i.targets.iter().any(|t| {
-                plan.changes
-                    .iter()
-                    .any(|c| c.touches(&t.file, t.source, &t.package, t.registry.as_deref()))
+                plan.changes.iter().any(|c| {
+                    c.touches(
+                        &t.file,
+                        t.source,
+                        &t.package,
+                        t.registry.as_ref().map(Registry::recorded),
+                    )
+                })
             })
         })
         .collect();

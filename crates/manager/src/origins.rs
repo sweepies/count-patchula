@@ -46,9 +46,15 @@ impl Named {
     }
     /// The registry a dependency records: none for the public one.
     pub(crate) fn recorded(&self) -> Option<String> {
+        self.registry()
+            .map(|registry| registry.recorded().to_owned())
+    }
+    /// The registry a dependency records, typed: none for the public one.
+    pub(crate) fn registry(&self) -> Option<Registry> {
         match self {
             Self::Public => None,
-            Self::Url(value) | Self::Unusable(value) => Some(value.clone()),
+            Self::Url(value) => Some(Registry::Url(value.clone())),
+            Self::Unusable(value) => Some(Registry::Unusable(value.clone())),
         }
     }
     fn label(&self, public: &Public) -> String {
@@ -98,6 +104,9 @@ pub(crate) struct Origins {
     /// Where the declarations, read with certainty, say each package comes
     /// from.
     pub declared: BTreeMap<String, Origin>,
+    /// Origins that depend on where the declaration sits — npm's `.npmrc`
+    /// scopes answer per manifest — by file, then package.
+    pub local: BTreeMap<String, BTreeMap<String, Origin>>,
     /// The registries and other sources the project configures besides the
     /// public one; empty when it configures none.
     pub configured: Vec<Named>,
@@ -111,9 +120,12 @@ pub(crate) struct Origins {
 }
 
 impl Origins {
-    fn origin(&self, package: &str) -> Origin {
+    fn origin(&self, file: &str, package: &str) -> Origin {
         if self.outside.contains(package) {
             return Origin::Other;
+        }
+        if let Some(origin) = self.local.get(file).and_then(|m| m.get(package)) {
+            return origin.clone();
         }
         if let Some(origin) = Origin::of(self.uncertain.iter().cloned().map(Origin::Index)) {
             return origin;
@@ -146,6 +158,7 @@ impl Origins {
                 .configured
                 .iter()
                 .all(|named| matches!(named, Named::Public))
+            && self.local.values().flat_map(|m| m.values()).all(&public)
             && self.declared.values().all(&public)
             && self.locks.iter().all(|lock| lock.values().all(&public))
     }
@@ -156,14 +169,15 @@ impl Origins {
     pub(crate) fn assign(&self, deps: &mut Vec<Dependency>, public: &Public) -> Vec<Dependency> {
         let mut dropped = Vec::new();
         deps.retain_mut(|dep| {
-            if dep.source != public.source {
+            // A registry already recorded — an extractor's own — stands.
+            if dep.source != public.source || dep.registry.is_some() {
                 return true;
             }
-            match self.origin(&dep.package) {
-                Origin::Index(named) => dep.registry = named.recorded(),
+            match self.origin(&dep.file, &dep.package) {
+                Origin::Index(named) => dep.registry = named.registry(),
                 Origin::Ambiguous(named) => {
                     let labels: Vec<_> = named.iter().map(|n| n.label(public)).collect();
-                    dep.registry = Some(PackageId::ambiguous_registry(&labels));
+                    dep.registry = Some(Registry::ambiguous(&labels));
                 }
                 Origin::Other => {
                     dropped.push(dep.clone());
@@ -173,6 +187,19 @@ impl Origins {
             true
         });
         dropped
+    }
+
+    /// The registry `file`'s `package` records, for lockfile entries that
+    /// are not dependencies: the decision `assign` makes, without dropping.
+    pub(crate) fn recorded(&self, file: &str, package: &str, public: &Public) -> Option<Registry> {
+        match self.origin(file, package) {
+            Origin::Index(named) => named.registry(),
+            Origin::Ambiguous(named) => {
+                let labels: Vec<_> = named.iter().map(|n| n.label(public)).collect();
+                Some(Registry::ambiguous(&labels))
+            }
+            Origin::Other => None,
+        }
     }
 }
 

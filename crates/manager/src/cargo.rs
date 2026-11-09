@@ -588,6 +588,16 @@ impl crate::Ecosystem for Descriptor {
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Cargo, path).registry
     }
+    fn preserves_ranges(&self) -> bool {
+        true
+    }
+    fn movable_lockfile(&self, dep: &Dependency) -> bool {
+        dep.source == Source::Crates
+    }
+    fn inventory_only(&self, _dep: &Dependency, raw: &str) -> bool {
+        // workspace=true is inventory; the root declaration owns its version.
+        raw == "true"
+    }
     fn backend_settings(&self, path: &str) -> bool {
         config_file(path)
     }
@@ -641,7 +651,7 @@ impl crate::Ecosystem for Descriptor {
                     extract(path, text, &extract_state.docs, &mut out.skipped).map(|mut deps| {
                         if let Some(reason) = replaced(files, &extract_state.parsed, path) {
                             for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
-                                dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+                                dep.registry = origins::Named::Unusable(reason.clone()).registry();
                             }
                         }
                         deps
@@ -663,7 +673,7 @@ impl crate::Ecosystem for Descriptor {
                         .entry(locked.file.clone())
                         .or_insert_with(|| replaced(files, &state.parsed, &locked.file));
                     if let Some(reason) = reason {
-                        locked.registry = Some(reason.clone());
+                        locked.registry = Some(Registry::Unusable(reason.clone()));
                     }
                 }
                 Ok(())

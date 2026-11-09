@@ -1,6 +1,7 @@
 //! Maven repositories: `maven-metadata.xml` lists versions, and each POM's
 //! `Last-Modified` dates the newest releases for the release-age wait.
 use super::*;
+use patchula_config::split_package;
 
 const CENTRAL: &str = "https://repo.maven.apache.org/maven2";
 const GOOGLE: &str = "https://dl.google.com/dl/android/maven2";
@@ -10,7 +11,7 @@ const DATED: usize = 10;
 /// `group:artifact`, optionally prefixed by `repository-url|`. Android groups
 /// default to Google's Maven repository, everything else to Maven Central.
 fn coordinates(package: &str) -> Result<(String, String, String)> {
-    let (repository, coordinate) = match package.split_once('|') {
+    let (repository, coordinate) = match split_package(package) {
         Some((repository, coordinate)) => (Some(repository), coordinate),
         None => (None, package),
     };
