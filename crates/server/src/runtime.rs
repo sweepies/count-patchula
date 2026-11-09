@@ -374,15 +374,16 @@ impl Batch for Engines {
                 skip_report("installation not allowlisted", false);
                 return Ok(BatchOutcome::default());
             }
-            let credentials = self.app.installation(id);
+            // One client serves discovery, check candidates and the public
+            // record: every batch past the allowlist check needs it anyway.
+            let client = Client::with_credentials(
+                self.app.installation(id),
+                self.cache.clone(),
+                patchula_engine::settings::github_options(settings),
+                self.transport.clone(),
+            )
+            .map_err(|_| Error("cannot create installation client"))?;
             if work.iter().any(|w| w.repo.is_empty()) {
-                let client = Client::with_credentials(
-                    credentials.clone(),
-                    self.cache.clone(),
-                    patchula_engine::settings::github_options(settings),
-                    self.transport.clone(),
-                )
-                .map_err(|_| Error("cannot create installation client"))?;
                 let mut repos = Vec::new();
                 let mut listed = Vec::new();
                 for page in 1..=1000 {
@@ -433,13 +434,6 @@ impl Batch for Engines {
                 tracing::info!(target: "patchula_server", installation = id,
                     "discovery completed; repository work queued for a separate batch");
             }
-            let client = Client::with_credentials(
-                credentials.clone(),
-                self.cache.clone(),
-                patchula_engine::settings::github_options(settings),
-                self.transport.clone(),
-            )
-            .map_err(|_| Error("cannot create check-event client"))?;
             let mut repositories = Vec::new();
             for item in work
                 .iter()

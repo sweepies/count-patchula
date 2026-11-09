@@ -10,7 +10,7 @@ use axum::{
 };
 use hmac::{Hmac, KeyInit, Mac};
 use patchula_cache::{Cache, queue::Work};
-use patchula_config::settings::Settings;
+use patchula_config::settings::{Settings, Triggers};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -470,6 +470,48 @@ fn metadata_word(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
+/// The configured switch a delivery's event and action answer to.
+/// `classify` and `ignored_reason` share this table, so a trigger added for
+/// one cannot be missing from the other.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Trigger {
+    Push,
+    Dashboard,
+    PullRequestEdited,
+    PullRequestClosed,
+    Installation,
+    Checks,
+}
+
+impl Trigger {
+    /// The switch `event`/`action` belongs to, or `None` for a delivery no
+    /// trigger claims. The mapping is deliberately coarse: `classify` still
+    /// checks the finer conditions — a completed check, an edited issue, an
+    /// owned pull request — before it enqueues work.
+    fn of(event: &str, action: &str) -> Option<Self> {
+        Some(match (event, action) {
+            ("push", _) => Self::Push,
+            ("issues", _) => Self::Dashboard,
+            ("pull_request", "closed") => Self::PullRequestClosed,
+            ("pull_request", _) => Self::PullRequestEdited,
+            ("installation", _) | ("installation_repositories", _) => Self::Installation,
+            ("check_suite", _) | ("check_run", _) => Self::Checks,
+            _ => return None,
+        })
+    }
+
+    fn enabled(self, triggers: &Triggers) -> bool {
+        match self {
+            Self::Push => triggers.push,
+            Self::Dashboard => triggers.dashboard,
+            Self::PullRequestEdited => triggers.pull_request_edited,
+            Self::PullRequestClosed => triggers.pull_request_closed,
+            Self::Installation => triggers.installation,
+            Self::Checks => triggers.checks,
+        }
+    }
+}
+
 pub(crate) fn ignored_reason(
     event: &str,
     payload: &Payload,
@@ -492,18 +534,10 @@ pub(crate) fn ignored_reason(
     else {
         return "not allowlisted";
     };
-    let enabled = match event {
-        "push" => settings.server.triggers.push,
-        "issues" => settings.server.triggers.dashboard,
-        "pull_request" if payload.action.as_deref() == Some("closed") => {
-            settings.server.triggers.pull_request_closed
-        }
-        "pull_request" => settings.server.triggers.pull_request_edited,
-        "installation" | "installation_repositories" => settings.server.triggers.installation,
-        "check_suite" | "check_run" => settings.server.triggers.checks,
-        _ => return "unrelated event or action",
+    let Some(trigger) = Trigger::of(event, payload.action.as_deref().unwrap_or("")) else {
+        return "unrelated event or action";
     };
-    if !enabled {
+    if !trigger.enabled(&settings.server.triggers) {
         return "trigger disabled";
     }
     if matches!(event, "installation" | "installation_repositories") {
@@ -548,7 +582,8 @@ pub(crate) fn classify(
         return Vec::new();
     };
     let action = payload.action.as_deref().unwrap_or("");
-    if settings.server.triggers.installation
+    if Trigger::of(event, action) == Some(Trigger::Installation)
+        && Trigger::Installation.enabled(&settings.server.triggers)
         && ((event == "installation" && action == "created")
             || (event == "installation_repositories" && action == "added"))
     {
@@ -575,8 +610,8 @@ pub(crate) fn classify(
     else {
         return Vec::new();
     };
-    if matches!(event, "check_suite" | "check_run")
-        && settings.server.triggers.checks
+    if Trigger::of(event, action) == Some(Trigger::Checks)
+        && Trigger::Checks.enabled(&settings.server.triggers)
         && action == "completed"
     {
         let checks = if event == "check_suite" {
@@ -623,36 +658,40 @@ pub(crate) fn classify(
     let null = Value::Null;
     let pr = payload.pull_request.as_ref().unwrap_or(&null);
     let owned = patchula_update::pull_requests::owned_pr(pr, bot, repo);
-    let trigger = match event {
-        "push" if settings.server.triggers.push => {
-            let branch = repository.and_then(|repo| repo.default_branch.as_deref());
-            !payload.deleted.unwrap_or(false)
-                && branch.is_some_and(|b| {
-                    payload.reference.as_deref() == Some(format!("refs/heads/{b}").as_str())
-                })
-        }
-        "issues" if settings.server.triggers.dashboard && action == "edited" => {
-            let after = issue.and_then(|issue| issue.body.as_deref()).unwrap_or("");
-            issue
-                .and_then(|issue| issue.user.as_ref())
-                .and_then(|user| user.login.as_deref())
-                == Some(bot)
-                && patchula_update::markers::dashboard(after)
-                && before.is_some_and(|before| {
-                    patchula_update::dashboard::Controls::checkbox_edited(before, after)
-                })
-        }
-        "pull_request" if owned => {
-            (settings.server.triggers.pull_request_closed && action == "closed")
-                || (settings.server.triggers.pull_request_edited
+    let trigger = match Trigger::of(event, action) {
+        Some(t) if t.enabled(&settings.server.triggers) => match t {
+            Trigger::Push => {
+                let branch = repository.and_then(|repo| repo.default_branch.as_deref());
+                !payload.deleted.unwrap_or(false)
+                    && branch.is_some_and(|b| {
+                        payload.reference.as_deref() == Some(format!("refs/heads/{b}").as_str())
+                    })
+            }
+            Trigger::Dashboard => {
+                let after = issue.and_then(|issue| issue.body.as_deref()).unwrap_or("");
+                action == "edited"
+                    && issue
+                        .and_then(|issue| issue.user.as_ref())
+                        .and_then(|user| user.login.as_deref())
+                        == Some(bot)
+                    && patchula_update::markers::dashboard(after)
+                    && before.is_some_and(|before| {
+                        patchula_update::dashboard::Controls::checkbox_edited(before, after)
+                    })
+            }
+            Trigger::PullRequestClosed => owned && action == "closed",
+            Trigger::PullRequestEdited => {
+                owned
                     && action == "edited"
                     && before.is_some_and(|before| {
                         patchula_update::pull_requests::controls_edited(
                             before,
                             pr["body"].as_str().unwrap_or(""),
                         )
-                    }))
-        }
+                    })
+            }
+            _ => false,
+        },
         _ => false,
     };
     if trigger {

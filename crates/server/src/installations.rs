@@ -50,7 +50,7 @@ impl Resolver {
                 .organization
                 .as_ref()
                 .and_then(|org| org.login.as_deref())
-                .filter(|org| valid_repo(&format!("{org}/placeholder")) && !org.contains('/'))
+                .filter(|org| valid_login(org))
             else {
                 return Ok(None);
             };
@@ -100,5 +100,51 @@ impl Resolver {
                 .map_err(|error| error.kind())?;
         }
         Ok(installation)
+    }
+}
+
+/// A GitHub login — user or organization — as `organization.login` reports
+/// it: 1–39 ASCII alphanumerics or hyphens, never starting or ending with a
+/// hyphen. Repo-name rules do not apply: `_` and `.` are not login
+/// characters, and a login has a length bound a repository name does not.
+fn valid_login(login: &str) -> bool {
+    !login.is_empty()
+        && login.len() <= 39
+        && login
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !login.starts_with('-')
+        && !login.ends_with('-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_login;
+
+    #[test]
+    fn org_logins_follow_github_login_rules() {
+        for login in [
+            "octocat",
+            "github",
+            "a",
+            "a-b-c",
+            "Org-With-Hyphens",
+            &"x".repeat(39),
+        ] {
+            assert!(valid_login(login), "{login}");
+        }
+        for login in [
+            "",
+            "-octocat",
+            "octocat-",
+            "octo.cat",
+            "octo_cat",
+            "octo/cat",
+            "octo cat",
+            &"x".repeat(40),
+            "öctocat",
+        ] {
+            assert!(!valid_login(login), "{login}");
+        }
     }
 }
