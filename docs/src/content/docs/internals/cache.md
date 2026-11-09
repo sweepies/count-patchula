@@ -117,9 +117,7 @@ must initialise tracing for the warnings to show.
   (16) each, independent of repository work. `http.hostConcurrency` overrides
   single hosts, such as `["api.github.com"] = 8`. Limits must be 1–100.
 - GitHub REST and GraphQL share one governor, sized by the `api.github.com`
-  host limit like every other host: `http.hostConcurrency`'s entry when set,
-  else `http.defaultHostConcurrency` (16). That is below GitHub's 100
-  simultaneous requests, but does not
+  host limit. The server keeps 4 unless `api.github.com` is set. That is below GitHub's 100 simultaneous requests, but does not
   by itself avoid its point and CPU
   [secondary limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits).
 - The shared reqwest pool keeps up to 32 idle connections per host.

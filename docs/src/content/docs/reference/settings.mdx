@@ -47,9 +47,8 @@ server {
 
 The server builds each installation's HTTP clients from `http` and its
 registry credentials, and rebuilds them when either changes. Its GitHub client
-takes the `api.github.com` host limit like every other host —
-`http.hostConcurrency`'s entry when set, else `http.defaultHostConcurrency`
-(16) — as does the CLI's.
+keeps 4 requests in flight unless `http.hostConcurrency` sets `api.github.com`;
+the CLI uses the host limit, 16 by default.
 
 ## Registries
 
