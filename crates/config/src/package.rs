@@ -124,6 +124,19 @@ impl<'de> Deserialize<'de> for Registry {
     }
 }
 
+/// `registry|name`, the package encoding `split_package` reads: a package
+/// qualified by the registry URL or repository it comes from.
+pub fn join_package(registry: &str, name: &str) -> String {
+    format!("{registry}|{name}")
+}
+
+/// `package` split at its last `|` into the registry or repository it comes
+/// from and the name there. No package name contains `|`, so the last one
+/// is the separator; `None` is an unqualified package.
+pub fn split_package(package: &str) -> Option<(&str, &str)> {
+    package.rsplit_once('|')
+}
+
 impl PackageId {
     pub fn new(source: Source, registry: Option<Registry>, name: impl Into<String>) -> Self {
         Self {

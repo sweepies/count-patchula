@@ -1,4 +1,4 @@
-use patchula_config::{Config, PackageId, Registry};
+use patchula_config::{Config, PackageId, Registry, split_package};
 use patchula_manager::{Dependency, Edit, hash};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
 use patchula_words::{Source, Update as UpdateKind};
@@ -655,7 +655,7 @@ pub fn unified(path: &str, old: &str, new: &str) -> String {
 /// Registry-qualified identities (`registry|name`) name their branch after the
 /// package, not the registry URL.
 fn package_slug(package: &str) -> String {
-    slug(package.rsplit_once('|').map_or(package, |(_, name)| name))
+    slug(split_package(package).map_or(package, |(_, name)| name))
 }
 fn slug(value: &str) -> String {
     let s = value

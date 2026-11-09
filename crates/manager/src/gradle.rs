@@ -2,6 +2,7 @@
 //! plugin versions in Gradle scripts, and the wrapper distribution. Versions
 //! held in variables are resolved by `gradle_vars`.
 use crate::*;
+use patchula_config::{join_package, split_package};
 use regex::Regex;
 use std::{collections::BTreeSet, sync::LazyLock};
 use toml_edit::{Document, Item, Value};
@@ -9,7 +10,7 @@ use toml_edit::{Document, Item, Value};
 const PORTAL: &str = "https://plugins.gradle.org/m2";
 
 pub(super) fn plugin(id: &str) -> String {
-    format!("{PORTAL}|{id}:{id}.gradle.plugin")
+    join_package(PORTAL, &format!("{id}:{id}.gradle.plugin"))
 }
 pub(super) fn maven(
     path: &str,
@@ -24,8 +25,7 @@ pub(super) fn maven(
         manager: Manager::Gradle,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), pointer),
-        name: package
-            .rsplit_once('|')
+        name: split_package(&package)
             .map_or(package.as_str(), |(_, c)| c)
             .to_string(),
         package,

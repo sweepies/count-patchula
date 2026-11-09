@@ -1,6 +1,7 @@
 //! Helm `Chart.yaml` dependencies from HTTP and OCI chart repositories.
 //! `file://` charts and repository aliases (`@name`, `alias:`) are local.
 use crate::*;
+use patchula_config::join_package;
 
 pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
     let locations = crate::yaml_locations::parse(text)?;
@@ -22,7 +23,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
             (format!("{}/{name}", oci.trim_end_matches('/')), Source::Oci)
         } else if repository.starts_with("https://") || repository.starts_with("http://") {
             (
-                format!("{}|{name}", repository.trim_end_matches('/')),
+                join_package(repository.trim_end_matches('/'), name),
                 Source::Helm,
             )
         } else {

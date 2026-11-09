@@ -1,4 +1,5 @@
 //! Which advisories a version is affected by, from OSV's affected ranges.
+use patchula_config::split_package;
 use patchula_datasource::{Advisory, AdvisoryQuery, Event};
 use patchula_manager::Dependency;
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
@@ -15,7 +16,7 @@ pub fn advisory_query(dep: &Dependency) -> Option<AdvisoryQuery> {
     }
     let scheme = Ecosystem::of(dep.scheme, dep.source);
     let (ecosystem, package) = match dep.source {
-        Source::Npm if !dep.package.contains('|') => ("npm", dep.package.clone()),
+        Source::Npm if split_package(&dep.package).is_none() => ("npm", dep.package.clone()),
         Source::Crates => ("crates.io", dep.package.clone()),
         Source::Pypi => ("PyPI", dep.package.clone()),
         Source::Go => ("Go", dep.package.clone()),

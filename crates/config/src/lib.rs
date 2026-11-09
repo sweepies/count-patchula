@@ -4,7 +4,7 @@
 mod model;
 mod package;
 pub mod settings;
-pub use package::{PackageId, Registry};
+pub use package::{PackageId, Registry, join_package, split_package};
 mod validate;
 pub use model::*;
 
