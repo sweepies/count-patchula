@@ -173,12 +173,32 @@ pub trait State: serde::Serialize + serde::de::DeserializeOwned {
     type Scope: serde::Serialize;
 }
 
-/// The `namespace` column of a state row: the shape's name and version, plus
-/// this build's version when the value depends on the build's code.
 /// The release whose code wrote a `PER_BUILD` value.
 pub(crate) const BUILD: &str = env!("CARGO_PKG_VERSION");
 
+/// Whether a `State::NAMESPACE` leaves `@` and `+` to the row key: `@v` starts
+/// the version and `+` the build, which opening the cache relies on.
+const fn plain(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'@' || bytes[i] == b'+' {
+            return false;
+        }
+        i += 1;
+    }
+    !bytes.is_empty()
+}
+
+/// The `namespace` column of a state row: the shape's name and version, plus
+/// this build's version when the value depends on the build's code.
 fn state_namespace<T: State>() -> String {
+    const {
+        assert!(
+            plain(T::NAMESPACE),
+            "a state namespace is nonempty and has no @ or +"
+        )
+    };
     let namespace = format!("{}@v{}", T::NAMESPACE, T::VERSION);
     if T::PER_BUILD {
         format!("{namespace}+{BUILD}")
