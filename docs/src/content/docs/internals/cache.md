@@ -172,7 +172,9 @@ entry's credentials is keyed by that entry's prefix and a one-way digest of its
 credentials as well as the request, so a read without the entry, with another
 one, or after its secret or account changes never sees it. The key never holds
 the secret. Such responses follow the registry's `no-store` and `Vary: *`,
-digest-addressed ones included. Tokens a registry issues to an account
+digest-addressed ones included. A response that varies on authorization is
+kept only when the key names who authorized it: an operator entry's scope
+does, a token the registry issued does not. Tokens a registry issues to an account
 stay in memory and are never written to the cache.
 
 ## Manifest digests

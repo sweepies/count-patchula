@@ -123,8 +123,10 @@ async fn a_vary_response_is_stored_once_and_revalidated_but_vary_star_is_not() {
         "<https://api.github.com/next>; rel=\"next\""
     );
     assert_eq!(client.stats().await.not_modified, 1);
+    // An immutable read answers from any stored entry, so three requests
+    // prove nothing was stored.
     for _ in 0..3 {
-        client.get("repos/o/r/vary-star").await.unwrap();
+        client.get_immutable("repos/o/r/vary-star").await.unwrap();
     }
     let counts = transport.counts.lock().unwrap();
     // One store and one revalidation: the Vary response lives under a single key.

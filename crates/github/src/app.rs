@@ -50,7 +50,7 @@ impl App {
         Ok(Arc::new(Self {
             id,
             key,
-            api_url,
+            api_url: crate::api_root(&api_url),
             transport,
             tokens: Mutex::new(BTreeMap::new()),
         }))

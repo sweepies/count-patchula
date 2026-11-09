@@ -203,6 +203,8 @@ impl Client {
         cache: Cache,
         transport: Arc<dyn Transport>,
     ) -> Self {
+        let mut options = options;
+        options.api_url = api_root(&options.api_url);
         let governor = Governor::new(options.concurrency, options.max_rate_wait);
         Self(Arc::new(Inner {
             credentials,
@@ -502,7 +504,7 @@ impl Client {
                 .map_err(|_| Error::Json)?
                 .map_err(|_| Error::Json)?;
             }
-            if conditional::storable(&response) {
+            if conditional::storable(&response, true) {
                 let entry = conditional::entry(&response, conditional::unix_now());
                 if not_modified {
                     self.0
@@ -604,6 +606,16 @@ pub(crate) fn text<'a>(response: &'a Response, name: &str) -> Option<&'a str> {
 
 /// Whether `url` is a usable API root: HTTPS, a host, no credentials, query
 /// or fragment.
+/// An API base as a directory URL, so relative paths join under it:
+/// `https://ghe.example/api/v3` and `https://ghe.example/api/v3/` are the same root.
+pub(crate) fn api_root(url: &Url) -> Url {
+    let mut root = url.clone();
+    if !root.path().ends_with('/') {
+        root.set_path(&format!("{}/", root.path()));
+    }
+    root
+}
+
 pub(crate) fn valid_api_url(url: &Url) -> bool {
     url.scheme() == "https"
         && url.host_str().is_some()

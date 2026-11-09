@@ -69,11 +69,10 @@ pub fn entry(response: &Response, now: i64) -> HttpEntry {
         .into_iter()
         .flat_map(|value| value.split(','))
         .find_map(|part| {
-            part.trim()
-                .strip_prefix("max-age=")?
-                .trim_matches('"')
-                .parse::<i64>()
-                .ok()
+            let (name, value) = part.split_once('=')?;
+            name.trim()
+                .eq_ignore_ascii_case("max-age")
+                .then(|| value.trim().trim_matches('"').parse::<i64>().ok())?
         })
         .filter(|age| *age >= 0);
     let age = text(response, "age")
@@ -115,19 +114,36 @@ pub fn entry(response: &Response, now: i64) -> HttpEntry {
     }
 }
 
-/// Whether the response may be stored. A client sends a fixed set of request
-/// headers and authorization is covered by the credential scope in the key,
-/// so any `Vary` other than `*` selects the same values every time; only
-/// `no-store` and `Vary: *` are uncacheable.
-pub fn storable(response: &Response) -> bool {
+/// Whether the response may be stored under its key. A client sends a fixed
+/// set of request headers, so a `Vary` on one the key holds, one it never
+/// sends, or `Accept-Encoding` (bodies are stored decoded) selects the same
+/// response every time. `no-store`, `Vary: *` and `Vary: User-Agent` (the
+/// agent names this build) are uncacheable, and so is a `Vary` on
+/// authorization unless `authorization_in_key`: the key's credential scope
+/// names whoever authorized the request.
+pub fn storable(response: &Response, authorization_in_key: bool) -> bool {
     let no_store = comma_header(response, "cache-control").is_some_and(|control| {
         control
             .split(',')
             .any(|part| part.trim().eq_ignore_ascii_case("no-store"))
     });
-    let vary_all = comma_header(response, "vary")
-        .is_some_and(|vary| vary.split(',').any(|name| name.trim() == "*"));
-    !(no_store || vary_all)
+    let varies = comma_header(response, "vary").unwrap_or_default();
+    let vary_ok = varies
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .all(|name| {
+            match name.to_ascii_lowercase().as_str() {
+                "*" => false,
+                // The key carries who authorized only when the caller says so.
+                "authorization" | "proxy-authorization" | "cookie" => authorization_in_key,
+                // The agent names this build, which the key does not.
+                "user-agent" => false,
+                // In the key, decoded away (accept-encoding), or never sent.
+                _ => true,
+            }
+        });
+    !no_store && vary_ok
 }
 
 /// Send the entry's validators on a revalidating request.
@@ -311,16 +327,28 @@ mod tests {
     }
 
     #[test]
-    fn storable_rejects_no_store_and_vary_star_only() {
-        assert!(!storable(&response(
-            200,
-            &[("cache-control", "private, no-store")]
-        )));
-        assert!(!storable(&response(200, &[("vary", "Accept, *")])));
-        assert!(storable(&response(
-            200,
-            &[("vary", "Accept, Authorization, Cookie")]
-        )));
-        assert!(storable(&response(200, &[])));
+    fn storable_follows_what_the_key_holds() {
+        let stored = |headers: &[(&'static str, &'static str)], authorization_in_key| {
+            storable(&response(200, headers), authorization_in_key)
+        };
+        assert!(!stored(&[("cache-control", "private, no-store")], true));
+        assert!(!stored(&[("vary", "Accept, *")], true));
+        assert!(!stored(&[("vary", "User-Agent")], true));
+        assert!(stored(
+            &[("vary", "Accept, Accept-Encoding, X-Requested-With")],
+            false
+        ));
+        assert!(stored(&[("vary", "Accept, Authorization, Cookie")], true));
+        assert!(!stored(&[("vary", "Authorization")], false));
+        assert!(stored(&[], false));
+    }
+
+    #[test]
+    fn max_age_is_read_whatever_its_case() {
+        let entry = entry(
+            &response(200, &[("cache-control", "public, Max-Age = 300")]),
+            1000,
+        );
+        assert_eq!(entry.expires_at, Some(1300));
     }
 }

@@ -898,7 +898,10 @@ impl Cached {
                 .as_ref()
                 .is_some_and(|entry| entry.auth != crate::Auth::Anonymous);
         let public_digest = registry.is_some() && immutable(&url) && !account;
-        if foreign || !(public_digest || conditional::storable(&response)) {
+        // A registry bearer token is not in the key; operator credentials are,
+        // through their scope.
+        let authorization_in_key = !matches!(registry, Some(Some(_)));
+        if foreign || !(public_digest || conditional::storable(&response, authorization_in_key)) {
             self.inner.cache.http_remove(&key).await?;
         } else {
             let entry = conditional::entry(&response, conditional::unix_now());

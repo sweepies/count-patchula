@@ -51,9 +51,11 @@ and a blob counts from GraphQL only when its text hashes to the SHA asked for.
 Binary, truncated or mismatched blobs come through REST instead. Either way the
 blob is cached as its REST representation. A 304 reuses the
 cached status and body and merges headers, keeping a cached pagination `Link`
-if GitHub omits it. `no-store` and `Vary: *` responses are not kept; any
-other `Vary` names headers the client sends identically every time, so it
-does not split the key. Keys include the normalised URL, `Accept`, the API
+if GitHub omits it. `no-store`, `Vary: *` and `Vary: User-Agent` responses are
+not kept. Any other `Vary` names a header the key holds (`Accept`, the API
+version), one the client never sends, `Accept-Encoding` (bodies are stored
+decoded) or authorization, which the key's credential namespace covers: a
+refreshed token is the same installation. So `Vary` never splits the key. Keys include the normalised URL, `Accept`, the API
 version and a SHA-256 namespace of the credential, so data is never shared
 between credentials; tokens are never stored in keys. Cookies and
 authorization are never cached.
