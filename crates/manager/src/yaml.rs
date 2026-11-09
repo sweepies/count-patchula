@@ -373,13 +373,6 @@ pub(crate) fn prepare<'a>(
     files: &'a Files,
     warnings: &mut Vec<String>,
 ) -> Docs<'a> {
-    const MANAGERS: [Manager; 5] = [
-        Manager::Compose,
-        Manager::Kubernetes,
-        Manager::Kustomize,
-        Manager::Flux,
-        Manager::HelmValues,
-    ];
     let mut documents = BTreeMap::new();
     let mut locations = BTreeMap::new();
     for (path, text) in files
@@ -410,6 +403,41 @@ pub(crate) fn prepare<'a>(
 /// Flux and Helm values share the parsed documents.
 pub(crate) struct Descriptor {
     pub(crate) manager: Manager,
+}
+
+/// The managers that read Kubernetes-style YAML documents, parsed once for
+/// all of them. Each has its descriptor in `DESCRIPTORS`, at the same index.
+pub(crate) const MANAGERS: [Manager; 5] = [
+    Manager::Compose,
+    Manager::Kubernetes,
+    Manager::Kustomize,
+    Manager::Flux,
+    Manager::HelmValues,
+];
+static DESCRIPTORS: [Descriptor; 5] = [
+    Descriptor {
+        manager: MANAGERS[0],
+    },
+    Descriptor {
+        manager: MANAGERS[1],
+    },
+    Descriptor {
+        manager: MANAGERS[2],
+    },
+    Descriptor {
+        manager: MANAGERS[3],
+    },
+    Descriptor {
+        manager: MANAGERS[4],
+    },
+];
+/// The descriptor of a YAML-family manager.
+pub(crate) fn descriptor(manager: Manager) -> &'static Descriptor {
+    let at = MANAGERS
+        .iter()
+        .position(|m| *m == manager)
+        .expect("a YAML-family manager");
+    &DESCRIPTORS[at]
 }
 
 impl crate::Ecosystem for Descriptor {

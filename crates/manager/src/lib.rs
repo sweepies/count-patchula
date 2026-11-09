@@ -508,21 +508,6 @@ static NODE_NPM: npm::Descriptor = npm::Descriptor {
 static NODE_BUN: npm::Descriptor = npm::Descriptor {
     manager: Manager::Bun,
 };
-static YAML_COMPOSE: yaml::Descriptor = yaml::Descriptor {
-    manager: Manager::Compose,
-};
-static YAML_KUBERNETES: yaml::Descriptor = yaml::Descriptor {
-    manager: Manager::Kubernetes,
-};
-static YAML_KUSTOMIZE: yaml::Descriptor = yaml::Descriptor {
-    manager: Manager::Kustomize,
-};
-static YAML_FLUX: yaml::Descriptor = yaml::Descriptor {
-    manager: Manager::Flux,
-};
-static YAML_HELM_VALUES: yaml::Descriptor = yaml::Descriptor {
-    manager: Manager::HelmValues,
-};
 static GITLABCI: gitlabci::Descriptor = gitlabci::Descriptor {
     manager: Manager::Gitlabci,
 };
@@ -540,13 +525,12 @@ pub(crate) fn ecosystem(manager: Manager) -> &'static dyn Ecosystem {
         Manager::Mise => &mise::DESCRIPTOR,
         Manager::Cargo => &cargo::DESCRIPTOR,
         Manager::Dockerfile => &images::DESCRIPTOR,
-        Manager::Compose => &YAML_COMPOSE,
+        Manager::Compose => yaml::descriptor(manager),
         Manager::Go => &go::DESCRIPTOR,
         Manager::Terraform => &terraform::DESCRIPTOR,
-        Manager::Kubernetes => &YAML_KUBERNETES,
-        Manager::Kustomize => &YAML_KUSTOMIZE,
-        Manager::Flux => &YAML_FLUX,
-        Manager::HelmValues => &YAML_HELM_VALUES,
+        Manager::Kubernetes | Manager::Kustomize | Manager::Flux | Manager::HelmValues => {
+            yaml::descriptor(manager)
+        }
         Manager::Pyproject => &pyproject::DESCRIPTOR,
         Manager::PreCommit => &precommit::DESCRIPTOR,
         Manager::Helm => &helm::DESCRIPTOR,
@@ -681,15 +665,9 @@ impl Scanner {
         // A file that does not parse (a template such as ERB-rendered YAML)
         // is skipped with a warning. Warnings suppress branch cleanup, so the
         // skipped file's open updates are never closed as obsolete.
-        let yaml = if [
-            Manager::Compose,
-            Manager::Kubernetes,
-            Manager::Kustomize,
-            Manager::Flux,
-            Manager::HelmValues,
-        ]
-        .iter()
-        .any(|m| self.config.managers.contains(m))
+        let yaml = if yaml::MANAGERS
+            .iter()
+            .any(|m| self.config.managers.contains(m))
         {
             Some(yaml::prepare(self, files, &mut result.warnings))
         } else {
@@ -835,6 +813,13 @@ fn requirements_name(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_manager_has_a_descriptor() {
+        for manager in super::Manager::ALL {
+            let _ = super::ecosystem(*manager);
+        }
+    }
+
     #[test]
     fn extraction_names_every_manager_once() {
         let mut order = super::EXTRACT_ORDER.to_vec();
