@@ -14,10 +14,15 @@ Repositories run concurrently behind one GitHub governor. On a cold scan, the
 default branch, commit and tree come from one GraphQL snapshot, and only the
 selected manager files and the config modules they need are fetched as blobs,
 in GraphQL batches (see [the GitHub client](/internals/github-client/#conditional-reads)).
-A truncated tree or an invalid selected file is an error for that repository.
-A file the scan cannot read, such as a symlink on GitHub or in a local
-checkout, stays in the extraction as unreadable rather than absent, so its
-packages fail their lookups instead of falling back to public registries.
+A truncated tree is an error for that repository, as is a selected file
+whose blob cannot be fetched or whose contents are not text — a
+registry-settings file excepted, which stays unreadable so its packages
+fail their lookups rather than using a public registry. A symlink is never
+read through: the entry stays in the extraction as unreadable rather than
+absent, and a symlinked settings file fails its packages' lookups the same
+way. Files the include chain names in later rounds that cannot be read are
+unreadable too. In a local checkout, files below a symlinked directory are
+omitted from the tree entirely.
 A repository without `patchula.pkl` at its root is skipped. A local `--config`
 applies to every selected repository and is evaluated before network access.
 

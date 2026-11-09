@@ -33,6 +33,16 @@ pub struct Entry {
     pub mode: String,
 }
 
+/// A path the listing saw that is not a file the tree carries.
+pub struct Hidden {
+    /// The path, relative to the repository root.
+    pub path: String,
+    /// Whether it resolves on disk, following whatever links stand in its
+    /// way: false for a tracked file deleted from the working tree, which
+    /// is absent rather than unreadable.
+    pub resolves: bool,
+}
+
 /// A repository's file listing.
 pub struct Listing {
     /// Every file the tree carries, symlinks included.
@@ -40,7 +50,7 @@ pub struct Listing {
     /// Paths the listing saw that are not files the tree carries: below a
     /// symlinked directory, or not a regular file at all. Always empty for
     /// GitHub, whose trees hold no such paths.
-    pub hidden: Vec<String>,
+    pub hidden: Vec<Hidden>,
 }
 
 /// What reading a repository's files gives extraction and the snapshot.
@@ -84,7 +94,7 @@ pub async fn view<S: Source>(
         .map(|entry| (entry.path.as_str(), entry))
         .collect();
     let paths: BTreeSet<String> = entries.iter().map(|entry| entry.path.clone()).collect();
-    let hidden: BTreeSet<String> = hidden.into_iter().collect();
+    let hidden_paths: BTreeSet<String> = hidden.iter().map(|h| h.path.clone()).collect();
     // Flux and Argo CD manifests are YAML anywhere in the tree, so the
     // delivery warning reads every YAML file, unless the tree has more
     // than it will take, when delivery stays unknown. Only a config
@@ -111,7 +121,12 @@ pub async fn view<S: Source>(
         .iter()
         .filter(|entry| entry.mode == "120000")
         .map(|entry| entry.path.as_str())
-        .chain(hidden.iter().map(String::as_str))
+        .chain(
+            hidden
+                .iter()
+                .filter(|h| h.resolves)
+                .map(|h| h.path.as_str()),
+        )
         .filter_map(linked_settings)
         .filter(|settings| scanner.needs(settings))
         .collect();
@@ -141,7 +156,10 @@ pub async fn view<S: Source>(
     // What the files read so far name, such as the sources of a Gradle
     // build the settings include, until they name nothing new.
     for _ in 0..MORE_ROUNDS {
-        let more = scanner.more(&files, paths.iter().chain(&hidden).map(String::as_str));
+        let more = scanner.more(
+            &files,
+            paths.iter().chain(&hidden_paths).map(String::as_str),
+        );
         if more.is_empty() {
             break;
         }
@@ -161,7 +179,10 @@ pub async fn view<S: Source>(
     }
     // What the chain still names when the rounds run out is unreadable the
     // same way, so its lookups fail saying why.
-    let deep = scanner.more(&files, paths.iter().chain(&hidden).map(String::as_str));
+    let deep = scanner.more(
+        &files,
+        paths.iter().chain(&hidden_paths).map(String::as_str),
+    );
     for path in &deep {
         files.insert(path.clone(), Text::Unread(Unread::TooDeep));
     }
@@ -209,7 +230,9 @@ fn place(
 ) -> Result<()> {
     let bytes = match content {
         Ok(bytes) => bytes,
-        Err(reason) if primary => {
+        // A registry-settings file that cannot be read is unreadable, so
+        // its packages' lookups fail rather than go to a public registry.
+        Err(reason) if primary && !registry_settings(&entry.path) => {
             return Err(Error::Invalid(format!(
                 "cannot read {}: {reason}",
                 entry.path
@@ -271,7 +294,11 @@ pub fn list_local(dir: &Path) -> Result<Listing> {
                 std::fs::symlink_metadata(dir.join(parent)).is_ok_and(|meta| meta.is_symlink())
             });
         if below_symlink {
-            hidden.push(relative);
+            let resolves = std::fs::metadata(dir.join(&relative)).is_ok();
+            hidden.push(Hidden {
+                path: relative,
+                resolves,
+            });
             continue;
         }
         match std::fs::symlink_metadata(dir.join(&relative)) {
@@ -285,7 +312,13 @@ pub fn list_local(dir: &Path) -> Result<Listing> {
                 sha: None,
                 mode: local_mode(&meta),
             }),
-            _ => hidden.push(relative),
+            _ => {
+                let resolves = std::fs::metadata(dir.join(&relative)).is_ok();
+                hidden.push(Hidden {
+                    path: relative,
+                    resolves,
+                });
+            }
         }
     }
     Ok(Listing { entries, hidden })
@@ -366,8 +399,15 @@ fn git_files(dir: &Path) -> std::io::Result<Option<Vec<String>>> {
             .stdout
             .split(|byte| *byte == 0)
             .filter(|path| !path.is_empty())
-            .map(|path| String::from_utf8_lossy(path).into_owned())
-            .collect(),
+            .map(|path| {
+                std::str::from_utf8(path).map(str::to_owned).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "repository path is not UTF-8",
+                    )
+                })
+            })
+            .collect::<std::io::Result<Vec<_>>>()?,
     ))
 }
 
@@ -388,7 +428,13 @@ fn walk(dir: &Path) -> std::io::Result<Vec<String>> {
             listed.push(
                 path.strip_prefix(dir)
                     .expect("walked below the root")
-                    .to_string_lossy()
+                    .to_str()
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("repository path is not UTF-8: {}", path.display()),
+                        )
+                    })?
                     .replace('\\', "/"),
             );
         }

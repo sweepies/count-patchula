@@ -2583,7 +2583,16 @@ impl Engine {
             }
         };
         let scanner = Scanner::new(&config).map_err(Error::Invalid)?;
-        let view = repository::local_view(dir, &scanner, &config).await?;
+        // The local source reads synchronously; the whole view runs on the
+        // blocking pool so a large checkout does not stall engine workers.
+        let dir = dir.to_owned();
+        let view_config = config.clone();
+        let (view, scanner) = tokio::task::spawn_blocking(move || {
+            futures_executor::block_on(repository::local_view(&dir, &scanner, &view_config))
+                .map(|view| (view, scanner))
+        })
+        .await
+        .map_err(|e| Error::Invalid(e.to_string()))??;
         let repository::View {
             paths,
             files,
@@ -2788,9 +2797,11 @@ impl Engine {
     async fn config(&self, repo: &str, path: &str, entries: &[Entry]) -> Result<Config> {
         // The config's local-module closure is the config crate's walk; the
         // module texts it asks for come from the tree's blobs.
+        // Symlinks are never read, as in the view: a linked config module
+        // is missing here, not fetched as the link's target text.
         let shas: BTreeMap<String, String> = entries
             .iter()
-            .filter(|entry| entry.kind == "blob")
+            .filter(|entry| entry.kind == "blob" && entry.mode != "120000")
             .map(|entry| (entry.path.clone(), entry.sha.clone()))
             .collect();
         let mut read = |module: &str| {

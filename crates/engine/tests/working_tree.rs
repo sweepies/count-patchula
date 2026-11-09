@@ -278,6 +278,24 @@ async fn the_sources_of_an_included_gradle_build_are_read() {
     assert!(!view.files.contains_key("app/src/main/kotlin/App.kt"));
 }
 
+/// A tracked file deleted from the working tree is absent, not unreadable:
+/// `git ls-files` still lists it, but nothing resolves, so deleting
+/// `.npmrc` cannot fail the scoped lookups it would have guided.
+#[tokio::test]
+async fn a_deleted_tracked_file_is_absent_not_unreadable() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    write(root, ".npmrc", "@acme:registry=https://npm.acme.dev\n");
+    write(root, "package.json", MANIFEST);
+    git(root, &["add", "."]);
+    std::fs::remove_file(root.join(".npmrc")).unwrap();
+    let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
+    let view = view(root, &config, &scanner).await;
+    assert!(!view.files.contains_key(".npmrc"), "{:?}", view.files);
+    assert!(!view.paths.contains(".npmrc"));
+}
+
 /// A selected file that is not UTF-8 refuses the local read, the same way
 /// GitHub extraction refuses the repository, rather than being dropped.
 #[tokio::test]

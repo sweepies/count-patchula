@@ -186,7 +186,10 @@ pub fn evaluate_local(
     // Evaluate exactly like API-supplied repository modules. In particular a
     // missing schema must be a real module, so Pkl retains nested class defaults.
     let absolute = std::path::absolute(path).into_diagnostic()?;
-    let entry = absolute.to_string_lossy().into_owned();
+    let entry = absolute
+        .to_str()
+        .ok_or_else(|| miette::miette!("config path {} is not UTF-8", absolute.display()))?
+        .to_owned();
     // The module reads are synchronous filesystem reads, so the walk's
     // future completes in one poll and needs no runtime.
     let files =
