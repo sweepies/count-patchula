@@ -1,6 +1,8 @@
-//! Looks up tool versions by running the pinned `mise ls-remote --json` in a
-//! sandbox, so every backend mise supports works without the Count reading
-//! mise's registry or backend rules.
+//! The pinned `mise` runner and its registry snapshot, used by catalog
+//! lookup, lockfile updates and the manager. Tool versions come from
+//! `mise ls-remote --json` run in a sandbox; the snapshot only maps tool
+//! names to registry backends and the GitHub repositories the
+//! mise-versions mirror lists.
 #![forbid(unsafe_code)]
 mod lookup;
 mod policy;
@@ -22,8 +24,4 @@ pub enum Error {
     Unreadable(String),
     #[error("mise lists no versions of `{0}`")]
     Empty(String),
-    #[error(
-        "mise lists no release versions of `{tool}`, only `{sample}`: it installs from a Git ref"
-    )]
-    NoReleases { tool: String, sample: String },
 }

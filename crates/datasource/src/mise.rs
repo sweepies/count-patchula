@@ -110,11 +110,10 @@ impl Client {
         // URL, lists the one version `HEAD`: there is nothing to update to.
         // Any other listing is kept, even when its versions do not order.
         if versions.iter().all(|v| v.version == GIT_REF) {
-            return Err(patchula_mise::Error::NoReleases {
+            return Err(Error::NoReleases {
                 tool: tool.into(),
                 sample: GIT_REF.into(),
-            }
-            .into());
+            });
         }
         let mut dist_tags = BTreeMap::new();
         // mise lists no channels, but `lts` selects the newest LTS line. When

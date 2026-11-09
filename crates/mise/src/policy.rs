@@ -1,8 +1,9 @@
 //! Which tool names the Count passes to mise.
 use crate::Error;
 
-/// Backends that clone a plugin and run its scripts.
-const PLUGINS: &[&str] = &["asdf", "vfox"];
+/// Backends that clone a plugin and run its scripts: refused as tool
+/// names here and disabled inside mise itself.
+pub(crate) const PLUGIN_BACKENDS: &[&str] = &["asdf", "vfox"];
 
 /// Names the Count lets through to `mise ls-remote`: a registry shorthand or
 /// `backend:tool` for any backend mise has, apart from the plugin backends.
@@ -47,7 +48,7 @@ pub fn check(tool: &str) -> Result<(), Error> {
         ));
     }
     if let Some((backend, _)) = tool.split_once(':')
-        && PLUGINS.contains(&backend)
+        && PLUGIN_BACKENDS.contains(&backend)
     {
         return refuse(&format!(
             "the {backend} backend runs plugin code, which the Count never runs"

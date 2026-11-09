@@ -57,6 +57,10 @@ pub enum Error {
     Notes(String),
     #[error("registry rate limit reached; retry after {0} seconds")]
     RateLimit(u64),
+    #[error(
+        "mise lists no release versions of `{tool}`, only `{sample}`: it installs from a Git ref"
+    )]
+    NoReleases { tool: String, sample: String },
 }
 pub type Result<T> = std::result::Result<T, Error>;
 impl Error {
@@ -75,9 +79,9 @@ impl Error {
             Error::Github(GithubError::RateLimit) | Error::RateLimit(_) => {
                 LookupErrorKind::RateLimit
             }
-            Error::Mise(
-                patchula_mise::Error::Empty(_) | patchula_mise::Error::NoReleases { .. },
-            ) => LookupErrorKind::NotFound,
+            Error::Mise(patchula_mise::Error::Empty(_)) | Error::NoReleases { .. } => {
+                LookupErrorKind::NotFound
+            }
             Error::Http(
                 CacheError::Worker
                 | CacheError::Configuration
