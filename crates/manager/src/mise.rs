@@ -271,9 +271,113 @@ impl Reader<'_> {
     }
 }
 
-/// Backends that install from a package registry a project's settings can
-/// redirect: npm and Python indexes, Cargo sources and NuGet feeds.
-const PACKAGE_BACKENDS: [&str; 7] = ["npm", "pypi", "pipx", "cargo", "gem", "dotnet", "go"];
+/// A backend mise installs tools with, and how the Count checks whether
+/// a project can send its installs elsewhere.
+struct Backend {
+    /// The names `backends()` reports and `[settings]` tables spell it
+    /// by. `pypi` and `pipx` share a row: pipx tools read the same index
+    /// settings, so either name's settings or pip variables redirect
+    /// both.
+    names: &'static [&'static str],
+    /// `[env]` key prefixes that can redirect it.
+    env: &'static [&'static str],
+    /// The project files `project_redirect` checks for it. `None` states
+    /// that no project file redirects the backend — `gem` and `go`
+    /// included, whose installs read no per-project registry settings.
+    project: Option<ProjectCheck>,
+    /// A package backend installs from a registry project settings can
+    /// redirect, so the variables an `[env]` `_` directive loads could
+    /// reach it.
+    package: bool,
+}
+
+/// The project files a backend's settings live in, returning why a
+/// lookup there fails.
+type ProjectCheck = fn(&str, &str, &Files, &crate::nuget::Feeds) -> Option<String>;
+
+const BACKENDS: &[Backend] = &[
+    Backend {
+        names: &["npm"],
+        env: &["NPM_CONFIG_", "YARN_", "COREPACK_"],
+        project: Some(npm_project),
+        package: true,
+    },
+    Backend {
+        names: &["pypi", "pipx"],
+        env: &["PIP_", "UV_", "PIPX_"],
+        project: Some(python_project),
+        package: true,
+    },
+    Backend {
+        names: &["cargo"],
+        env: &["CARGO_"],
+        project: Some(cargo_project),
+        package: true,
+    },
+    Backend {
+        names: &["gem"],
+        env: &["GEM_", "BUNDLE_"],
+        project: None,
+        package: true,
+    },
+    Backend {
+        names: &["dotnet"],
+        env: &["NUGET_", "DOTNET_"],
+        project: Some(dotnet_project),
+        package: true,
+    },
+    Backend {
+        names: &["go"],
+        env: &["GO"],
+        project: None,
+        package: true,
+    },
+    // Backend kinds that install tools but read no registry settings the
+    // Count checks: no env prefix or project file redirects them, though
+    // a `[settings.<name>]` table still moves their tools.
+    Backend {
+        names: &["aqua"],
+        env: &[],
+        project: None,
+        package: false,
+    },
+    Backend {
+        names: &["ubi"],
+        env: &[],
+        project: None,
+        package: false,
+    },
+    Backend {
+        names: &["github"],
+        env: &[],
+        project: None,
+        package: false,
+    },
+    Backend {
+        names: &["gitlab"],
+        env: &[],
+        project: None,
+        package: false,
+    },
+    Backend {
+        names: &["http"],
+        env: &[],
+        project: None,
+        package: false,
+    },
+    Backend {
+        names: &["conda"],
+        env: &[],
+        project: None,
+        package: false,
+    },
+    Backend {
+        names: &["spm"],
+        env: &[],
+        project: None,
+        package: false,
+    },
+];
 
 /// Top-level tables of a mise configuration that cannot change where a tool
 /// installs from, apart from `env` and `settings`, which are read below.
@@ -400,38 +504,38 @@ fn redirected_backends(path: &str, text: &str) -> Option<BTreeSet<String>> {
                     .get("_")
                     .and_then(|d| d.as_table_like())
                     .is_none_or(|d| d.iter().any(|(name, _)| !matches!(name, "path" | "python")));
-            let kinds: &[&str] = if key == "_" && !loads {
-                &[]
-            } else if key == "_" {
-                &PACKAGE_BACKENDS
+            if key == "_" {
+                if loads {
+                    out.extend(
+                        BACKENDS
+                            .iter()
+                            .filter(|backend| backend.package)
+                            .flat_map(|backend| backend.names.iter().copied())
+                            .map(str::to_owned),
+                    );
+                }
             } else if key.starts_with("MISE_") {
-                &["*"]
-            } else if key.starts_with("NPM_CONFIG_") || key.starts_with("YARN_") {
-                &["npm"]
-            } else if ["PIP_", "UV_", "PIPX_"].iter().any(|p| key.starts_with(p)) {
-                &["pypi", "pipx"]
-            } else if key.starts_with("CARGO_") {
-                &["cargo"]
-            } else if key.starts_with("GEM_") || key.starts_with("BUNDLE_") {
-                &["gem"]
-            } else if key.starts_with("NUGET_") || key.starts_with("DOTNET_") {
-                &["dotnet"]
-            } else if key.starts_with("GO") {
-                &["go"]
-            } else if key.starts_with("COREPACK_") {
-                &["npm"]
-            } else if ["HOME", "PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME"].contains(&key.as_str())
-                || ["MIRROR", "DIST_SERVER", "PROXY", "_CONFIG", "RC"]
-                    .iter()
-                    .any(|part| key.contains(part))
-            {
-                // Where tools read their configuration, find commands, or
-                // download from: homes, paths, mirrors and proxies.
-                &["*"]
+                out.insert("*".to_owned());
             } else {
-                &[]
-            };
-            out.extend(kinds.iter().map(|k| (*k).to_owned()));
+                let mut redirected = false;
+                for backend in BACKENDS {
+                    if backend.env.iter().any(|prefix| key.starts_with(*prefix)) {
+                        out.extend(backend.names.iter().map(|name| (*name).to_owned()));
+                        redirected = true;
+                    }
+                }
+                if !redirected
+                    && (["HOME", "PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]
+                        .contains(&key.as_str())
+                        || ["MIRROR", "DIST_SERVER", "PROXY", "_CONFIG", "RC"]
+                            .iter()
+                            .any(|part| key.contains(part)))
+                {
+                    // Where tools read their configuration, find commands,
+                    // or download from: homes, paths, mirrors and proxies.
+                    out.insert("*".to_owned());
+                }
+            }
         }
     }
     if let Some(settings) = doc.get("settings") {
@@ -439,36 +543,145 @@ fn redirected_backends(path: &str, text: &str) -> Option<BTreeSet<String>> {
         for (key, _) in settings.iter() {
             // A backend's own settings move its tools only; a core tool's,
             // such as `[settings.python]`, that tool only.
-            match key {
-                key if PLAIN_SETTINGS.contains(&key) => {}
-                "pipx" | "pypi" => {
-                    out.extend(["pypi".to_owned(), "pipx".to_owned()]);
-                }
-                key if PACKAGE_BACKENDS.contains(&key)
-                    || [
-                        "aqua", "ubi", "github", "gitlab", "http", "conda", "go", "spm",
-                    ]
-                    .contains(&key) =>
-                {
-                    out.insert(key.to_owned());
-                }
-                key if CORE_TOOLS.contains(&key) => {
-                    out.insert(format!("tool:{key}"));
-                }
-                _ => {
-                    out.insert("*".to_owned());
-                }
+            if PLAIN_SETTINGS.contains(&key) {
+            } else if let Some(backend) =
+                BACKENDS.iter().find(|backend| backend.names.contains(&key))
+            {
+                out.extend(backend.names.iter().map(|name| (*name).to_owned()));
+            } else if CORE_TOOLS.contains(&key) {
+                out.insert(format!("tool:{key}"));
+            } else {
+                out.insert("*".to_owned());
             }
         }
     }
     Some(out)
 }
 
-/// The project's own registry settings in or below `dir`, or above it, that
-/// a package backend reads when mise runs it there: `.npmrc` and
-/// `.yarnrc.yml` naming a registry for npm, Python index settings for pypi,
-/// Cargo source replacement or registries for cargo, and NuGet feeds for
-/// dotnet. One the Count cannot read counts.
+/// Whether `path` is in or below `dir`, or governs it: the folder a
+/// file's settings apply to. A `.cargo` configuration applies to its
+/// parent's folder, Cargo reading it from wherever it runs up to the
+/// repository root.
+fn related(dir: &str, path: &str) -> bool {
+    let folder = &path[..path.rfind('/').map_or(0, |i| i + 1)];
+    let folder = folder.strip_suffix(".cargo/").unwrap_or(folder);
+    dir.starts_with(folder) || folder.starts_with(dir)
+}
+
+fn leaf(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// The first file `related` to `dir` that `test` accepts, as the reason
+/// a lookup there fails. A test sees `Err` for a file the Count did not
+/// read, which may say anything.
+fn found(
+    dir: &str,
+    files: &Files,
+    test: &dyn Fn(&str, Result<&str, crate::Unread>) -> bool,
+    what: &str,
+) -> Option<String> {
+    files
+        .iter()
+        .find(|(path, text)| related(dir, path) && test(path, text.read()))
+        .map(|(path, _)| format!("the {what} {path} may name"))
+}
+
+/// The project's own npm registry settings in or below `dir`, or above
+/// it, that mise's npm backend reads when it runs there.
+fn npm_project(
+    dir: &str,
+    _tool: &str,
+    files: &Files,
+    _feeds: &crate::nuget::Feeds,
+) -> Option<String> {
+    found(
+        dir,
+        files,
+        // npm's own config parser accepts forms the Count's reader does
+        // not (quoted keys, lone `\r` line breaks), so any mention of a
+        // registry counts.
+        &|path, text| {
+            matches!(leaf(path), ".npmrc" | ".yarnrc.yml")
+                && text.map_or(true, |text| text.to_ascii_lowercase().contains("registry"))
+        },
+        "npm registry",
+    )
+}
+
+/// The project's own Python index settings in or below `dir`, or above
+/// it, that mise's pypi and pipx backends read when they run there.
+fn python_project(
+    dir: &str,
+    _tool: &str,
+    files: &Files,
+    _feeds: &crate::nuget::Feeds,
+) -> Option<String> {
+    found(
+        dir,
+        files,
+        &|path, text| match leaf(path) {
+            "uv.toml" => text.map_or(true, crate::pypi::settings::uv_private_index),
+            // pip's config parser accepts more than the Count could
+            // check safely (`--` key prefixes, lone `\r`, Unicode case
+            // folding, options that pull in requirement files), so any
+            // pip configuration counts.
+            "pip.conf" | "pip.ini" => true,
+            "pyproject.toml" => text.map_or(true, crate::pypi::settings::private_index),
+            _ => false,
+        },
+        "Python index",
+    )
+}
+
+/// The project's own Cargo source replacement or registries in or below
+/// `dir`, or above it, that mise's cargo backend reads when it runs
+/// there.
+fn cargo_project(
+    dir: &str,
+    _tool: &str,
+    files: &Files,
+    _feeds: &crate::nuget::Feeds,
+) -> Option<String> {
+    crate::cargo::replaced(
+        files,
+        &crate::cargo::parsed(files, |_| true),
+        &format!("{dir}x"),
+    )
+    .or_else(|| {
+        found(
+            dir,
+            files,
+            &|path, text| {
+                crate::cargo::config_file(path)
+                    && text.map_or(true, crate::cargo::nonpublic_registry)
+            },
+            "Cargo registry",
+        )
+    })
+}
+
+/// The NuGet feeds around `dir` that are not nuget.org's, which mise's
+/// dotnet backend reads when it runs there.
+fn dotnet_project(
+    dir: &str,
+    tool: &str,
+    _files: &Files,
+    feeds: &crate::nuget::Feeds,
+) -> Option<String> {
+    let package = tool.split_once(':').map_or(tool, |(_, name)| name);
+    match feeds.origin(&format!("{dir}x"), package) {
+        crate::origins::Origin::Index(crate::origins::Named::Public) => None,
+        _ => Some(format!("NuGet feeds around {dir} that are not nuget.org's")),
+    }
+}
+
+/// The project's own registry settings a package backend reads when mise
+/// runs it in `dir`: `.npmrc` and `.yarnrc.yml` naming a registry for
+/// npm, Python index settings for pypi and pipx, Cargo source
+/// replacement or registries for cargo, and NuGet feeds for dotnet. One
+/// the Count cannot read counts; a backend whose row states `project:
+/// None` has no such check.
 fn project_redirect(
     kind: &str,
     dir: &str,
@@ -476,69 +689,11 @@ fn project_redirect(
     files: &Files,
     feeds: &crate::nuget::Feeds,
 ) -> Option<String> {
-    let related = |path: &str| {
-        let folder = &path[..path.rfind('/').map_or(0, |i| i + 1)];
-        // A `.cargo` configuration applies to its parent's folder, Cargo
-        // reading it from wherever it runs up to the repository root.
-        let folder = folder.strip_suffix(".cargo/").unwrap_or(folder);
-        dir.starts_with(folder) || folder.starts_with(dir)
-    };
-    let leaf = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
-    // A test sees `Err` for a file the Count did not read, which may say
-    // anything.
-    let found = |test: &dyn Fn(&str, Result<&str, crate::Unread>) -> bool, what: &str| {
-        files
-            .iter()
-            .find(|(path, text)| related(path) && test(path, text.read()))
-            .map(|(path, _)| format!("the {what} {path} may name"))
-    };
-    match kind {
-        "npm" => found(
-            // npm's own config parser accepts forms the Count's reader does
-            // not (quoted keys, lone `\r` line breaks), so any mention of a
-            // registry counts.
-            &|path, text| {
-                matches!(leaf(path).as_str(), ".npmrc" | ".yarnrc.yml")
-                    && text.map_or(true, |text| text.to_ascii_lowercase().contains("registry"))
-            },
-            "npm registry",
-        ),
-        "pypi" | "pipx" => found(
-            &|path, text| match leaf(path).as_str() {
-                "uv.toml" => text.map_or(true, crate::pypi::settings::uv_private_index),
-                // pip's config parser accepts more than the Count could
-                // check safely (`--` key prefixes, lone `\r`, Unicode case
-                // folding, options that pull in requirement files), so any
-                // pip configuration counts.
-                "pip.conf" | "pip.ini" => true,
-                "pyproject.toml" => text.map_or(true, crate::pypi::settings::private_index),
-                _ => false,
-            },
-            "Python index",
-        ),
-        "cargo" => crate::cargo::replaced(
-            files,
-            &crate::cargo::parsed(files, |_| true),
-            &format!("{dir}x"),
-        )
-        .or_else(|| {
-            found(
-                &|path, text| {
-                    crate::cargo::config_file(path)
-                        && text.map_or(true, crate::cargo::nonpublic_registry)
-                },
-                "Cargo registry",
-            )
-        }),
-        "dotnet" => {
-            let package = tool.split_once(':').map_or(tool, |(_, name)| name);
-            match feeds.origin(&format!("{dir}x"), package) {
-                crate::origins::Origin::Index(crate::origins::Named::Public) => None,
-                _ => Some(format!("NuGet feeds around {dir} that are not nuget.org's")),
-            }
-        }
-        _ => None,
-    }
+    BACKENDS
+        .iter()
+        .find(|backend| backend.names.contains(&kind))
+        .and_then(|backend| backend.project)
+        .and_then(|check| check(dir, tool, files, feeds))
 }
 
 /// Options on the tool's entry, in any of `configs` or its own file,
@@ -663,10 +818,7 @@ pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        matches!(
-            path.rsplit('/').next().unwrap_or(path),
-            "mise.toml" | ".mise.toml" | ".tool-versions"
-        )
+        crate::roles::eco_roles(Manager::Mise, path).selected
     }
     /// A package backend mise runs in the project reads its settings.
     fn registry_file(&self, path: &str) -> bool {

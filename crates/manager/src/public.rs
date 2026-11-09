@@ -1035,6 +1035,17 @@ pub(crate) fn verdict(path: &str, text: &crate::Text, files: &Files) -> Option<b
 type VerdictRule = fn(&str, &str, &Files) -> Option<bool>;
 
 fn npm_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
+    use crate::roles as taxonomy;
+    // Coverage is the taxonomy's file set; the leaf match only picks the
+    // parser for a covered name, and fails closed on one it does not know.
+    if !(taxonomy::named(taxonomy::NODE_MANIFEST, path)
+        || taxonomy::named(taxonomy::NODE_SETTINGS, path)
+        || taxonomy::named(taxonomy::PNPM_WORKSPACE, path)
+        || taxonomy::named(taxonomy::NPM_LOCKS, path)
+        || taxonomy::named(taxonomy::BUN_LOCK, path))
+    {
+        return None;
+    }
     let leaf = path.rsplit('/').next().unwrap_or(path);
     let flag = match leaf {
         "package.json" => json_public(text, false, &crate::npm::NPM, package_json_rule),
@@ -1053,6 +1064,12 @@ fn npm_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
 }
 
 fn pypi_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
+    use crate::roles as taxonomy;
+    if !(taxonomy::named(taxonomy::PYTHON_LOCKS, path)
+        || taxonomy::named(taxonomy::PYTHON_SETTINGS, path))
+    {
+        return None;
+    }
     let leaf = path.rsplit('/').next().unwrap_or(path);
     let flag = match leaf {
         "pyproject.toml" => toml_public(text, &crate::pypi::PYPI, pyproject_rule),
@@ -1067,41 +1084,47 @@ fn pypi_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
 }
 
 fn bundler_verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    let flag = match leaf {
-        "Gemfile" => crate::bundler::public_only(path, text, files),
-        "Gemfile.lock" => lines_public(text, &crate::bundler::RUBYGEMS),
-        _ => return None,
+    use patchula_words::Manager;
+    let flag = if crate::roles::named(crate::roles::manifest_names(Manager::Bundler), path) {
+        crate::bundler::public_only(path, text, files)
+    } else if crate::roles::named(crate::roles::lock_names(Manager::Bundler).supported, path) {
+        lines_public(text, &crate::bundler::RUBYGEMS)
+    } else {
+        return None;
     };
     Some(flag)
 }
 
 fn composer_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    let flag = match leaf {
-        "composer.json" => composer_json_public(text),
-        "composer.lock" => composer_lock_public(text),
-        _ => return None,
+    use patchula_words::Manager;
+    let flag = if crate::roles::named(crate::roles::manifest_names(Manager::Composer), path) {
+        composer_json_public(text)
+    } else if crate::roles::named(crate::roles::lock_names(Manager::Composer).supported, path) {
+        composer_lock_public(text)
+    } else {
+        return None;
     };
     Some(flag)
 }
 
 fn cargo_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    let flag = match leaf {
-        "Cargo.toml" => toml_public(text, &crate::cargo::CRATES, cargo_rule),
-        "Cargo.lock" => toml_public(text, &crate::cargo::CRATES, no_rules),
-        _ => return None,
+    use patchula_words::Manager;
+    let flag = if crate::roles::named(crate::roles::manifest_names(Manager::Cargo), path) {
+        toml_public(text, &crate::cargo::CRATES, cargo_rule)
+    } else if crate::roles::named(crate::roles::lock_names(Manager::Cargo).supported, path) {
+        toml_public(text, &crate::cargo::CRATES, no_rules)
+    } else {
+        return None;
     };
     Some(flag)
 }
 
 fn nuget_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    if matches!(
-        leaf,
-        "packages.lock.json" | "global.json" | "dotnet-tools.json"
-    ) {
+    use crate::roles as taxonomy;
+    use patchula_words::Manager;
+    if taxonomy::named(taxonomy::lock_names(Manager::Nuget).supported, path)
+        || taxonomy::named(taxonomy::NUGET_JSON, path)
+    {
         return Some(json_public(text, false, &crate::nuget::NUGET_ORG, no_rules));
     }
     if crate::nuget::config_file(path) {
@@ -1110,6 +1133,7 @@ fn nuget_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
     if crate::nuget::msbuild_file(path) {
         return Some(msbuild_public(text));
     }
+    let leaf = path.rsplit('/').next().unwrap_or(path);
     if leaf.ends_with(".slnx") {
         return Some(xml_public(text, &crate::nuget::NUGET_ORG, &[]));
     }
@@ -1201,6 +1225,89 @@ mod tests {
         );
         // A non-steering file has no verdict.
         assert_eq!(read_verdict("README.md", "hi", &files), None);
+    }
+
+    /// Every file the taxonomy scans for credentials or gives a settings
+    /// role can steer what a tool fetches, so it needs a verdict rule —
+    /// or a documented reason it has none. `read_verdict` on empty text
+    /// answers `Some` exactly for the files a verdict covers.
+    #[test]
+    fn scanned_and_settings_files_have_verdicts() {
+        /// Scanned or settings files no verdict covers, and why.
+        fn exempt(path: &str) -> bool {
+            // pip's own config steers pip installs through mise lookups,
+            // which `project_redirect` rules on; no lockfile run's
+            // `steers` covers it.
+            path == "pip.conf" || path == "pip.ini"
+                // `.bundle/config` is materialized into no tool run.
+                || crate::bundle_config(path)
+                // Cargo's configs reach runs through the checkout's
+                // cargo credentials; Cargo's `steers` covers only its
+                // manifest and lockfile.
+                || crate::cargo::config_file(path)
+                // `go.work` names modules, not fetch sources, and Go
+                // runs fetch through the module proxy.
+                || crate::go::work_file(path)
+                // Maven's repository files feed lookups only; no Maven
+                // lockfile run's `steers` covers them.
+                || crate::maven::repository_file(path)
+                // Gradle's build logic feeds lookups only; the wrapper
+                // has no lockfile runs.
+                || crate::gradle::build_logic(path)
+                // mise's configs steer lookups via `redirected`; mise's
+                // `steers` is empty.
+                || crate::mise::config_file(path)
+        }
+        for path in [
+            ".npmrc",
+            ".yarnrc.yml",
+            "pnpm-workspace.yaml",
+            "pyproject.toml",
+            "uv.toml",
+            "poetry.toml",
+            "pdm.toml",
+            "pixi.toml",
+            "hatch.toml",
+            "pip.conf",
+            "pip.ini",
+            ".python-version",
+            "Gemfile",
+            ".bundle/config",
+            "composer.json",
+            "Cargo.toml",
+            ".cargo/config.toml",
+            ".cargo/config",
+            "go.work",
+            "nuget.config",
+            "Directory.Build.targets",
+            "global.json",
+            "dotnet-tools.json",
+            "packages.lock.json",
+            "pom.xml",
+            "settings.xml",
+            ".mvn/maven.config",
+            "build.gradle.kts",
+            "settings.gradle.kts",
+            "gradle-wrapper.properties",
+            "mise.toml",
+            "mise.local.toml",
+            ".miserc",
+            ".config/mise.toml",
+            "mise/tools.toml",
+            ".tool-versions",
+            "app.sln",
+            "flake.nix",
+            "apm.yml",
+        ] {
+            let required = crate::credential_scope(path) || crate::roles::roles(path).settings;
+            let covered = read_verdict(path, "", &Files::new()).is_some();
+            if exempt(path) {
+                assert!(required, "{path} exempt but has no scan or settings role");
+                assert!(!covered, "{path} exempt but a verdict covers it");
+            } else if required {
+                assert!(covered, "{path} can steer fetches but has no verdict");
+            }
+        }
     }
 
     #[test]
