@@ -1013,16 +1013,22 @@ impl Plan {
             let check = (|| {
                 // A symlinked file is written through its link.
                 let target = std::fs::canonicalize(dir.join(file))?;
+                // Only a regular file: opening a pipe or device to write may block
+                // or reach something that is not the manifest.
+                if !std::fs::metadata(&target)?.is_file() {
+                    return Err(std::io::Error::other("not a regular file"));
+                }
                 let handle = std::fs::OpenOptions::new().write(true).open(&target)?;
-                if !identities.insert(identity(&target, &handle.metadata()?)) {
+                let id = identity(&target, &handle.metadata()?);
+                if !identities.insert(id.clone()) {
                     return Err(std::io::Error::other(
                         "another file in this write is the same file",
                     ));
                 }
-                Ok(target)
+                Ok((target, id))
             })();
             match check {
-                Ok(target) => checked.push((file, target, content)),
+                Ok((target, id)) => checked.push((file, target, id, content)),
                 Err(error) => {
                     return Err(WriteError {
                         written: Vec::new(),
@@ -1033,12 +1039,24 @@ impl Plan {
             }
         }
         let mut written = Vec::new();
-        for (file, target, content) in checked {
+        for (file, target, id, content) in checked {
             let mut opened = None;
-            let result = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&target)
+            let result = std::fs::metadata(&target)
+                .and_then(|metadata| {
+                    if metadata.is_file() {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::other("not a regular file"))
+                    }
+                })
+                .and_then(|()| std::fs::OpenOptions::new().write(true).open(&target))
                 .and_then(|handle| {
+                    // The file checked, not one put in its place since.
+                    if identity(&target, &handle.metadata()?) != id {
+                        return Err(std::io::Error::other(
+                            "the file changed since the Count checked it",
+                        ));
+                    }
                     let handle = opened.insert(handle);
                     handle.set_len(0)?;
                     handle.write_all(content.as_bytes())?;
@@ -1059,7 +1077,9 @@ impl Plan {
 }
 
 /// What makes two paths the same file: the device and inode where there are
-/// such, else the resolved path.
+/// such, else the resolved path. A filesystem that makes up inode numbers
+/// (some FUSE and network ones) can make distinct files look the same, which
+/// refuses the write rather than risking it.
 #[cfg(unix)]
 fn identity(_: &Path, metadata: &std::fs::Metadata) -> (u64, u64, PathBuf) {
     use std::os::unix::fs::MetadataExt;

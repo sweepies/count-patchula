@@ -1211,6 +1211,12 @@ fn hard_links_are_one_file_and_wide_plans_write() {
         .write(root)
         .unwrap_err();
     assert!(error.to_string().contains("same file"), "{error}");
+    std::fs::create_dir(root.join("dir.txt")).unwrap();
+    let error = plan(vec!["a.txt".into(), "dir.txt".into()])
+        .write(root)
+        .unwrap_err();
+    assert!(error.to_string().contains("not a regular file"), "{error}");
+    assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "old");
     assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "old");
 
     let names: Vec<String> = (0..5000).map(|n| format!("wide/f{n}.txt")).collect();
