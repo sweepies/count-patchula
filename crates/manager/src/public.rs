@@ -312,9 +312,12 @@ fn possible_source(value: &str) -> bool {
             return true;
         }
     }
-    value.rsplit_once('@').is_some_and(|(before, after)| {
-        !before.is_empty() && !before.contains("://") && after.contains(':')
-    })
+    // A locator whose reference is `patch:` wraps another locator, which
+    // may be percent-encoded and so show no `:` of its own.
+    value.to_ascii_lowercase().contains("@patch:")
+        || value.rsplit_once('@').is_some_and(|(before, after)| {
+            !before.is_empty() && !before.contains("://") && after.contains(':')
+        })
 }
 
 /// Whether `value` — a whole string a file holds — names no fetch source
@@ -1281,6 +1284,18 @@ mod tests {
                 "package.json",
                 "{\"dependencies\":{\"x\":\"git+https://git.acme.dev/x.git\"}}",
                 false,
+            ),
+            // A `patch:` reference is judged by the locator it wraps, even
+            // percent-encoded and without Yarn's `::` parameters.
+            (
+                "package.json",
+                "{\"resolutions\":{\"x\":\"x@patch:x@https%3A//npm.acme.dev/x.tgz#./x.patch\"}}",
+                false,
+            ),
+            (
+                "package.json",
+                "{\"resolutions\":{\"x\":\"x@patch:x@npm%3A1.0.0#./x.patch\"}}",
+                true,
             ),
             (
                 "package.json",
