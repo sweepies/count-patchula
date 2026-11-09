@@ -42,6 +42,27 @@ use jsonc_parser::ast::Value;
 /// installation's private registry.
 const PUBLIC_HOSTS: &[&str] = &["github.com", "gitlab.com", "bitbucket.org", "codeberg.org"];
 
+/// The `scheme:` prefixes that name a local source — a path, a link, a
+/// workspace member, a patch — which fetches nothing. npm's specifier check
+/// reads the same list, so a protocol one calls local the other does too.
+pub(crate) const LOCAL_SCHEMES: &[&str] = &[
+    "file",
+    "link",
+    "workspace",
+    "portal",
+    "path",
+    "catalog",
+    "patch",
+    "exec",
+    "root",
+    "virtual",
+    "editable",
+    "directory",
+    "local",
+    "static",
+    "symlink",
+];
+
 /// `package.json` keys, at the top level, whose values never steer a
 /// fetch.
 const PACKAGE_JSON_INERT: &[&str] = &[
@@ -182,10 +203,8 @@ pub(crate) fn fetch_ok(value: &str, public: &Public) -> bool {
         return true;
     };
     match scheme.to_ascii_lowercase().as_str() {
-        // Local sources fetch nothing.
-        "file" | "link" | "workspace" | "portal" | "path" | "catalog" | "patch" | "npm"
-        | "exec" | "root" | "virtual" | "editable" | "directory" | "local" | "static"
-        | "symlink" => true,
+        // Local sources fetch nothing; `npm:` names a registry alias.
+        scheme if LOCAL_SCHEMES.contains(&scheme) || scheme == "npm" => true,
         // The public forges.
         "github" | "gitlab" | "bitbucket" | "gist" => true,
         "https" | "http" | "git" | "ftp" => {

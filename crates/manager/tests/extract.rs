@@ -286,6 +286,46 @@ fn catalogs_and_node_version_files_are_npm_dependencies() {
     assert_eq!(node.kind, DependencyKind::Toolchain);
     assert_eq!(node.resolved.as_deref(), Some("22.1.0"));
 }
+/// Specifiers in a local protocol — a portal, a patch, a link, an exec —
+/// name no registry version, in manifests and catalogs alike; `npm:` still
+/// aliases one.
+#[test]
+fn local_protocol_specifiers_are_not_registry_versions() {
+    let mut config = config();
+    config.managers = vec![Manager::Npm];
+    let scanner = Scanner::new(&config).unwrap();
+    let files = read_files([
+        (
+            "package.json".into(),
+            r#"{"dependencies":{
+                "portal-dep":"portal:../local",
+                "patch-dep":"patch:real@npm:1.0.0#./fixes/dep.patch",
+                "exec-dep":"exec:./script.sh",
+                "linked":"link:../x",
+                "aliased":"npm:real@^2.0.0",
+                "plain":"^1.2.3"
+            }}"#
+            .into(),
+        ),
+        (
+            "pnpm-workspace.yaml".into(),
+            "catalog:\n  portaldep: \"portal:../x\"\n  patchdep: \"patch:a@1.0.0#./p.patch\"\n  realdep: 1.2.3\n".into(),
+        ),
+    ]);
+    let deps = scanner.extract(&files).unwrap().dependencies;
+    let names: Vec<_> = deps
+        .iter()
+        .map(|d| (d.file.as_str(), d.name.as_str(), d.current.as_str()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("package.json", "aliased", "^2.0.0"),
+            ("package.json", "plain", "^1.2.3"),
+            ("pnpm-workspace.yaml", "realdep", "1.2.3"),
+        ]
+    );
+}
 #[test]
 fn pyproject_tables_lock_resolutions_and_python_version() {
     let mut config = config();
