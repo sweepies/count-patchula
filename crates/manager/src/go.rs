@@ -365,6 +365,20 @@ impl crate::Ecosystem for Descriptor {
     fn movable_lockfile(&self, dep: &Dependency) -> bool {
         dep.source == Source::Go
     }
+    fn declared_form(
+        &self,
+        dep: &Dependency,
+        current: &str,
+        value: &str,
+    ) -> Result<Option<String>, String> {
+        if dep.location.pointer != "/toolchain" {
+            return Ok(None);
+        }
+        if current != format!("go{}", dep.current) {
+            return Err("Go toolchain location mismatch".into());
+        }
+        Ok(Some(format!("go{}", value.trim_start_matches("go"))))
+    }
     fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
         let wanted = workspace_modules(files);
         (!wanted.is_empty()).then(move || {

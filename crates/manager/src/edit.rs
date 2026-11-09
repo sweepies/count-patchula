@@ -15,22 +15,15 @@ pub fn edits(
     value: &str,
     digest: Option<&str>,
 ) -> Result<Vec<Edit>, String> {
-    if dep.manager == Manager::Copier {
-        return Err("a copier template moves only with copier update; a bare _commit bump would drop the template's changes".into());
+    let descriptor = ecosystem(dep.manager);
+    if let Some(reason) = descriptor.edit_refusal(dep) {
+        return Err(reason);
     }
     let raw = text
         .get(dep.location.start..dep.location.end)
         .ok_or("invalid UTF-8 edit range")?;
-    if dep.manager == Manager::Cargo && raw == "true" {
-        // workspace=true is inventory; the root declaration owns its version.
+    if descriptor.inventory_only(dep, raw) {
         return Ok(Vec::new());
-    }
-    if dep.manager == Manager::Nix {
-        // A flake input is locked, never declared: nix rewrites the lock.
-        return Ok(Vec::new());
-    }
-    if dep.location.pointer == "/flux-version" {
-        return Err("generated Flux bundles require regeneration".into());
     }
     let replacement = if dep.tagged_action() {
         if value.is_empty()
@@ -49,49 +42,17 @@ pub fn edits(
         return image_edits(dep, text, raw, value, digest);
     } else {
         let current = scalar(dep, raw)?;
-        let target = if matches!(dep.manager, Manager::Npm | Manager::Bun)
-            && dep.location.pointer == "/packageManager"
-        {
-            if current
-                != format!(
-                    "{}@{}{}",
-                    dep.name,
-                    dep.current,
-                    dep.digest
-                        .as_ref()
-                        .map_or(String::new(), |d| format!("+{d}"))
-                )
-            {
-                return Err("packageManager location mismatch".into());
+        let target = match descriptor.declared_form(dep, &current, value)? {
+            Some(form) => form,
+            None => {
+                if current != dep.current {
+                    return Err(format!(
+                        "extracted scalar does not match {} at {}",
+                        dep.name, dep.location.pointer
+                    ));
+                }
+                value.into()
             }
-            if dep.digest.is_some() {
-                return Err("packageManager integrity requires lockfile tooling".into());
-            }
-            format!("{}@{value}", dep.name)
-        } else if matches!(dep.manager, Manager::Npm | Manager::Bun) && current.starts_with("npm:")
-        {
-            if current != format!("npm:{}@{}", dep.package, dep.current) {
-                return Err("npm alias location mismatch".into());
-            }
-            format!("npm:{}@{value}", dep.package)
-        } else if dep.manager == Manager::Mise && current.starts_with("tag:") {
-            if current.strip_prefix("tag:") != Some(&dep.current) {
-                return Err("mise tag location mismatch".into());
-            }
-            format!("tag:{value}")
-        } else if dep.manager == Manager::Go && dep.location.pointer == "/toolchain" {
-            if current != format!("go{}", dep.current) {
-                return Err("Go toolchain location mismatch".into());
-            }
-            format!("go{}", value.trim_start_matches("go"))
-        } else {
-            if current != dep.current {
-                return Err(format!(
-                    "extracted scalar does not match {} at {}",
-                    dep.name, dep.location.pointer
-                ));
-            }
-            value.into()
         };
         quote(dep, raw, &target)?
     };

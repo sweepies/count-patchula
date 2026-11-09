@@ -653,6 +653,38 @@ impl crate::Ecosystem for Descriptor {
     fn backend_settings(&self, path: &str) -> bool {
         self.registry_file(path)
     }
+    fn declared_form(
+        &self,
+        dep: &Dependency,
+        current: &str,
+        value: &str,
+    ) -> Result<Option<String>, String> {
+        if dep.location.pointer == "/packageManager" {
+            if current
+                != format!(
+                    "{}@{}{}",
+                    dep.name,
+                    dep.current,
+                    dep.digest
+                        .as_ref()
+                        .map_or(String::new(), |d| format!("+{d}"))
+                )
+            {
+                return Err("packageManager location mismatch".into());
+            }
+            if dep.digest.is_some() {
+                return Err("packageManager integrity requires lockfile tooling".into());
+            }
+            return Ok(Some(format!("{}@{value}", dep.name)));
+        }
+        if current.starts_with("npm:") {
+            if current != format!("npm:{}@{}", dep.package, dep.current) {
+                return Err("npm alias location mismatch".into());
+            }
+            return Ok(Some(format!("npm:{}@{value}", dep.package)));
+        }
+        Ok(None)
+    }
     fn prepare<'a>(
         &self,
         scanner: &'a Scanner,

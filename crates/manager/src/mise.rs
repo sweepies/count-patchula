@@ -669,6 +669,20 @@ impl crate::Ecosystem for Descriptor {
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Mise, path).registry
     }
+    fn declared_form(
+        &self,
+        dep: &Dependency,
+        current: &str,
+        value: &str,
+    ) -> Result<Option<String>, String> {
+        if !current.starts_with("tag:") {
+            return Ok(None);
+        }
+        if current.strip_prefix("tag:") != Some(&dep.current) {
+            return Err("mise tag location mismatch".into());
+        }
+        Ok(Some(format!("tag:{value}")))
+    }
     fn prepare<'a>(
         &self,
         scanner: &'a Scanner,

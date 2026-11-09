@@ -594,6 +594,10 @@ impl crate::Ecosystem for Descriptor {
     fn movable_lockfile(&self, dep: &Dependency) -> bool {
         dep.source == Source::Crates
     }
+    fn inventory_only(&self, _dep: &Dependency, raw: &str) -> bool {
+        // workspace=true is inventory; the root declaration owns its version.
+        raw == "true"
+    }
     fn backend_settings(&self, path: &str) -> bool {
         config_file(path)
     }

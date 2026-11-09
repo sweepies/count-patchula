@@ -427,6 +427,24 @@ pub(crate) trait Ecosystem {
     fn movable_lockfile(&self, _dep: &Dependency) -> bool {
         false
     }
+    /// Why `dep` refuses edits outright, when it does.
+    fn edit_refusal(&self, _dep: &Dependency) -> Option<String> {
+        None
+    }
+    /// Whether `dep` is inventory the Count records but never edits.
+    fn inventory_only(&self, _dep: &Dependency, _raw: &str) -> bool {
+        false
+    }
+    /// The replacement `value` takes in `dep`'s declared form, when the
+    /// ecosystem wraps versions, or `None` for the plain scalar.
+    fn declared_form(
+        &self,
+        _dep: &Dependency,
+        _current: &str,
+        _value: &str,
+    ) -> Result<Option<String>, String> {
+        Ok(None)
+    }
     /// Shared parsed state and the per-file extractor and finishing step,
     /// built once per extraction.
     fn prepare<'a>(

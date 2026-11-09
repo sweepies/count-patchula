@@ -465,6 +465,10 @@ impl crate::Ecosystem for Descriptor {
             _ => false,
         }
     }
+    fn edit_refusal(&self, dep: &Dependency) -> Option<String> {
+        (self.manager == Manager::Flux && dep.location.pointer == "/flux-version")
+            .then(|| "generated Flux bundles require regeneration".to_owned())
+    }
     fn prepare<'a>(
         &self,
         _scanner: &'a Scanner,

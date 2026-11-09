@@ -286,6 +286,10 @@ impl crate::Ecosystem for Descriptor {
             "flake.nix" | "flake.lock"
         )
     }
+    fn inventory_only(&self, _dep: &Dependency, _raw: &str) -> bool {
+        // A flake input is locked, never declared: nix rewrites the lock.
+        true
+    }
     fn prepare<'a>(
         &self,
         _scanner: &'a Scanner,
