@@ -60,6 +60,13 @@ impl Ecosystem {
     pub fn supports_ranges(&self) -> bool {
         !matches!(self, Self::Loose | Self::Go | Self::Docker)
     }
+    /// Whether `range` is a requirement this scheme can evaluate, without a
+    /// candidate version: it is evaluated against the scheme's floor version,
+    /// which surfaces syntax errors and nothing else.
+    pub fn check_range(&self, range: &str) -> Result<()> {
+        let floor = self.parse("0.0.0").or_else(|_| self.parse("0"))?;
+        self.matches(range, &floor).map(|_| ())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

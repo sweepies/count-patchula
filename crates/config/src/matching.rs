@@ -118,7 +118,12 @@ impl Filter {
                 }
                 match scheme.parse(text) {
                     Ok(version) => scheme.matches(range, &version).map_err(|e| e.to_string())?,
-                    Err(_) => false,
+                    // A value that is not a version (a range, a tag) does not
+                    // match, but an invalid requirement is still an error.
+                    Err(_) => {
+                        scheme.check_range(range).map_err(|e| e.to_string())?;
+                        false
+                    }
                 }
             }
         };
