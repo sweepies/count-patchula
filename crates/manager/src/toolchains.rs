@@ -10,12 +10,13 @@ fn pin(
     tool: &str,
     start: usize,
     version: &str,
+    syntax: Syntax,
 ) -> Dependency {
     Dependency {
         manager,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), format!("/{tool}")),
-        form: EditForm::Scalar(Syntax::Bare),
+        form: EditForm::Scalar(syntax),
         name: tool.into(),
         package: tool.into(),
         kind: DependencyKind::Toolchain,
@@ -56,11 +57,12 @@ pub(super) fn rust(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
             "rust",
             span.start + 1,
             version,
+            Syntax::InnerToken,
         )]);
     }
     Ok(first_token(text)
         .filter(|(_, v)| numeric(v))
-        .map(|(start, v)| pin(path, text, Manager::Cargo, "rust", start, v))
+        .map(|(start, v)| pin(path, text, Manager::Cargo, "rust", start, v, Syntax::Bare))
         .into_iter()
         .collect())
 }
@@ -77,6 +79,7 @@ pub(super) fn terraform(path: &str, text: &str) -> Vec<Dependency> {
                     "terraform",
                     start + (v.len() - version.len()),
                     version,
+                    Syntax::Bare,
                 )
             })
         })

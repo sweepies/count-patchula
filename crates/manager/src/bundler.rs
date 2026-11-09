@@ -18,7 +18,11 @@ fn ruby(path: &str, text: &str, start: usize, version: &str, pointer: &str) -> D
         manager: Manager::Bundler,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), pointer.into()),
-        form: EditForm::Scalar(Syntax::Inner),
+        form: EditForm::Scalar(if path.ends_with(".ruby-version") {
+            Syntax::Bare
+        } else {
+            Syntax::Inner
+        }),
         name: "ruby".into(),
         package: "ruby".into(),
         kind: DependencyKind::Toolchain,

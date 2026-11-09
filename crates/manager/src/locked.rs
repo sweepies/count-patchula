@@ -155,7 +155,7 @@ pub(crate) fn npm(
                 file: (*path).into(),
                 package: name.into(),
                 version: version.value.to_string(),
-                syntax: Syntax::Bare,
+                syntax: Syntax::Json,
                 location: Location::new(
                     crate::read_text(files, path),
                     version.range.start,
