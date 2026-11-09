@@ -4,18 +4,21 @@ mod advisories;
 pub use advisories::{advisory_query, affects, fixes, report_advisories};
 pub mod images;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use patchula_config::{Config, Patterns, Policy, Rule};
+use patchula_config::{Config, Filter, Patterns, Policy, Rule};
 use patchula_datasource::{Catalog, Version};
 use patchula_manager::Dependency;
 use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy, Window};
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
-use patchula_words::{
-    DependencyKind, Manager, ReleaseChannel, Scheme, Source, Update, VersionPolicy,
-};
+use patchula_words::{DependencyKind, Manager, ReleaseChannel, Source, Update, VersionPolicy};
 use regex::Regex;
 use std::cmp::Ordering;
 
 pub type Result<T> = std::result::Result<T, String>;
+/// When a release published at `published` clears a `wait_hours` release-age
+/// gate, or `None` when the timestamp overflows.
+pub fn eligible_at(published: DateTime<Utc>, wait_hours: u32) -> Option<DateTime<Utc>> {
+    published.checked_add_signed(Duration::hours(i64::from(wait_hours)))
+}
 #[derive(Default)]
 pub struct Evaluation {
     pub updates: Vec<Proposal>,
@@ -28,36 +31,6 @@ pub struct Evaluation {
 pub struct NotProposed {
     pub version: String,
     pub reason: String,
-}
-enum FilterKind {
-    Regex(Regex),
-    Semver(semver::VersionReq),
-}
-struct Filter {
-    negated: bool,
-    kind: FilterKind,
-}
-impl Filter {
-    fn compile(text: &str) -> Result<Self> {
-        let (negated, text) = text.strip_prefix('!').map_or((false, text), |v| (true, v));
-        let kind = if let Some(value) = text.strip_prefix("regex:") {
-            FilterKind::Regex(Regex::new(value).map_err(|e| e.to_string())?)
-        } else if let Some(value) = text.strip_prefix("semver:") {
-            FilterKind::Semver(semver::VersionReq::parse(value).map_err(|e| e.to_string())?)
-        } else {
-            return Err("invalid version filter".into());
-        };
-        Ok(Self { negated, kind })
-    }
-    fn matches(&self, text: &str) -> bool {
-        let yes = match &self.kind {
-            FilterKind::Regex(r) => r.is_match(text),
-            FilterKind::Semver(r) => {
-                semver::Version::parse(text.trim_start_matches('v')).is_ok_and(|v| r.matches(&v))
-            }
-        };
-        yes != self.negated
-    }
 }
 struct CompiledRule {
     rule: Rule,
@@ -74,6 +47,8 @@ pub struct Evaluator {
     exclude: Patterns,
     permitted: Option<Filter>,
     security_permitted: Option<Filter>,
+    /// `dep.extract` patterns, compiled once per distinct pattern.
+    extractors: std::sync::Mutex<std::collections::BTreeMap<String, Result<Regex>>>,
 }
 /// The advisories affecting a dependency's current version, with the query
 /// that found them.
@@ -126,40 +101,58 @@ impl Evaluator {
             Update::Digest,
         ]
         .into_iter()
-        .map(|kind| self.effective(dep, kind))
+        .filter_map(|kind| self.effective(dep, kind).ok())
         .filter(|effective| effective.policy.active)
         .map(|effective| effective.policy.wait_hours)
         .min()
         .unwrap_or(0)
     }
     /// Effective class exclusions, including digest policy, are report evidence.
-    pub fn disabled_updates(&self, dep: &Dependency) -> Vec<Update> {
-        [
+    pub fn disabled_updates(&self, dep: &Dependency) -> Result<Vec<Update>> {
+        let mut disabled = Vec::new();
+        for kind in [
             Update::Major,
             Update::Minor,
             Update::Patch,
             Update::Pin,
             Update::Digest,
-        ]
-        .into_iter()
-        .filter(|kind| {
-            let effective = self.effective(dep, *kind);
-            self.ignored(dep)
+        ] {
+            let effective = self.effective(dep, kind)?;
+            if self.ignored(dep)
                 || !effective.policy.active
-                || (*kind == Update::Digest && !effective.digest)
-        })
-        .collect()
+                || (kind == Update::Digest && !effective.digest)
+            {
+                disabled.push(kind);
+            }
+        }
+        Ok(disabled)
+    }
+    /// The compiled `extract` pattern for a dependency's `extract` field,
+    /// compiled once per distinct pattern. A pattern that fails to compile is
+    /// an evaluation error, not a non-match.
+    fn extractor(&self, pattern: &str) -> Result<Regex> {
+        let mut cache = self.extractors.lock().expect("extractor cache");
+        if let Some(compiled) = cache.get(pattern) {
+            return compiled.clone();
+        }
+        let compiled = Regex::new(pattern).map_err(|e| e.to_string());
+        cache.insert(pattern.to_owned(), compiled.clone());
+        compiled
     }
     pub fn lookup_evidence(
         &self,
         dep: &Dependency,
         catalog: Option<&Catalog>,
         now: DateTime<Utc>,
-    ) -> patchula_report::LookupEvidence {
-        let scheme = scheme(dep).ok();
+    ) -> Result<patchula_report::LookupEvidence> {
+        let scheme = Ecosystem::of(dep.scheme, dep.source);
         let current = dep.resolved.as_deref().unwrap_or(&dep.current);
-        let baseline = scheme.and_then(|s| s.parse(current).ok());
-        let extract = dep.extract.as_ref().and_then(|v| Regex::new(v).ok());
+        let baseline = scheme.parse(current).ok();
+        let extract = dep
+            .extract
+            .as_ref()
+            .map(|pattern| self.extractor(pattern))
+            .transpose()?;
         let mut rejected = Vec::new();
         for version in catalog.into_iter().flat_map(|c| &c.versions) {
             if !version.deprecated && !version.yanked {
@@ -176,8 +169,7 @@ impl Evaluator {
             } else {
                 &version.version
             };
-            if let Some(scheme) = scheme
-                && let Some(baseline) = &baseline
+            if let Some(baseline) = &baseline
                 && scheme
                     .parse(value)
                     .is_ok_and(|v| scheme.order(&v, baseline).is_gt())
@@ -195,12 +187,12 @@ impl Evaluator {
         }
         rejected.sort_by(|a, b| a.version.cmp(&b.version).then(a.reason.cmp(&b.reason)));
         rejected.dedup();
-        patchula_report::LookupEvidence {
+        Ok(patchula_report::LookupEvidence {
             evaluated_at: timestamp(now),
-            disabled_updates: self.disabled_updates(dep),
+            disabled_updates: self.disabled_updates(dep)?,
             rejected,
             catalog: None,
-        }
+        })
     }
     pub fn new(config: &Config) -> Result<Self> {
         let rules = config
@@ -245,6 +237,7 @@ impl Evaluator {
                 .as_deref()
                 .map(Filter::compile)
                 .transpose()?,
+            extractors: Default::default(),
         })
     }
     pub fn ignored(&self, dep: &Dependency) -> bool {
@@ -258,12 +251,22 @@ impl Evaluator {
             return false;
         }
         if dep.source == Source::Nix {
-            return !self.ignored(dep) && self.effective(dep, Update::Digest).policy.active;
+            // A policy that cannot be evaluated still gets looked up, so the
+            // evaluation reports the configuration error.
+            return !self.ignored(dep)
+                && self
+                    .effective(dep, Update::Digest)
+                    .map(|effective| effective.policy.active)
+                    .unwrap_or(true);
         }
         if self.ignored(dep)
             || ![Update::Major, Update::Minor, Update::Patch, Update::Pin]
                 .into_iter()
-                .any(|k| self.effective(dep, k).policy.active)
+                .any(|k| {
+                    self.effective(dep, k)
+                        .map(|effective| effective.policy.active)
+                        .unwrap_or(true)
+                })
         {
             return false;
         }
@@ -287,9 +290,9 @@ impl Evaluator {
             && Ecosystem::Loose
                 .parse(dep.resolved.as_deref().unwrap_or(&dep.current))
                 .is_ok()
-            && self.digest_proposal(dep, "probe").is_some()
+            && self.digest_policy_applies(dep)
     }
-    fn effective(&self, dep: &Dependency, update: Update) -> Effective<'_> {
+    fn effective(&self, dep: &Dependency, update: Update) -> Result<Effective<'_>> {
         let mut effective = Effective {
             policy: self.config.defaults.clone(),
             digest: if dep.kind == DependencyKind::ContainerImage {
@@ -307,6 +310,8 @@ impl Evaluator {
         {
             effective.policy.versions = VersionPolicy::Preserve;
         }
+        let scheme = Ecosystem::of(dep.scheme, dep.source);
+        let current = dep.resolved.as_deref().unwrap_or(&dep.current);
         for compiled in &self.rules {
             let s = &compiled.rule.select;
             if !compiled.packages.matches(&dep.package)
@@ -316,10 +321,11 @@ impl Evaluator {
                 || !any(&s.sources, dep.source)
                 || !(s.kinds.is_empty() || dep.kinds().iter().any(|kind| s.kinds.contains(kind)))
                 || !any(&s.updates, update)
-                || compiled
-                    .current
-                    .as_ref()
-                    .is_some_and(|f| !f.matches(dep.resolved.as_deref().unwrap_or(&dep.current)))
+            {
+                continue;
+            }
+            if let Some(filter) = &compiled.current
+                && !filter.matches(scheme, current)?
             {
                 continue;
             }
@@ -334,7 +340,7 @@ impl Evaluator {
                 VersionPolicy::Widen
             };
         }
-        effective
+        Ok(effective)
     }
     pub fn needs_digest(&self, dep: &Dependency, proposal: &Proposal) -> bool {
         let update = proposal.update_type;
@@ -349,89 +355,160 @@ impl Evaluator {
                         | DependencyKind::ContainerImage
                         | DependencyKind::Chart
                 ))
-            && self.effective(dep, update).digest
+            && self
+                .effective(dep, update)
+                .map(|effective| effective.digest)
+                // A policy that cannot be evaluated still gets its digest
+                // looked up, so the evaluation reports the error.
+                .unwrap_or(true)
     }
     /// Put an image rebuild under `security.apply` once its SBOMs show it
     /// fixes an advisory. Like a package fix, it is refused, and the proposal
     /// left as it was, when `security.apply` turns off updates or digests for
     /// the image or does not permit the tag it moves to.
-    pub fn secure(&self, dep: &Dependency, update: &mut Proposal) -> bool {
+    pub fn secure(&self, dep: &Dependency, update: &mut Proposal) -> Result<bool> {
         let kind = update.update_type;
-        let mut effective = self.effective(dep, kind);
+        let mut effective = self.effective(dep, kind)?;
         effective.apply(
             &self.config.security.apply,
             self.security_permitted.as_ref(),
         );
+        let scheme = Ecosystem::of(dep.scheme, dep.source);
         let tag = update
             .new_version
             .as_deref()
             .filter(|_| !matches!(kind, Update::Digest | Update::Pin));
-        if !effective.policy.active
-            || !effective.digest
-            || tag.is_some_and(|tag| effective.permitted.is_some_and(|p| !p.matches(tag)))
+        if !effective.policy.active || !effective.digest {
+            return Ok(false);
+        }
+        if let Some(tag) = tag
+            && !permitted_matches(effective.permitted, scheme, tag)?
         {
-            return false;
+            return Ok(false);
         }
         let secured = proposal(None, None, None, Update::Digest, &effective.policy);
         update.policy = secured.policy;
         update.group = secured.group;
-        true
+        Ok(true)
     }
-    pub fn digest_proposal(&self, dep: &Dependency, new_digest: &str) -> Option<Proposal> {
-        if self.ignored(dep)
-            || dep.kind == DependencyKind::Runner
-            || dep.digest.as_deref() == Some(new_digest)
-        {
-            return None;
-        }
+    /// The effective policy a digest change answers to, when digest updates
+    /// are on for it: `Digest` when the dependency already pins one, `Pin`
+    /// otherwise.
+    fn digest_effective(&self, dep: &Dependency) -> Result<Option<(Update, Effective<'_>)>> {
         let update = if dep.digest.is_some() {
             Update::Digest
         } else {
             Update::Pin
         };
-        let effective = self.effective(dep, update);
-        if !effective.policy.active || !effective.digest {
-            return None;
+        let effective = self.effective(dep, update)?;
+        Ok((effective.policy.active && effective.digest).then_some((update, effective)))
+    }
+    /// Whether proposing a digest change for `dep` would pass policy: the
+    /// dependency is not ignored, is not a runner, and its digest update class
+    /// is active with digests enabled.
+    pub fn digest_policy_applies(&self, dep: &Dependency) -> bool {
+        !self.ignored(dep)
+            && dep.kind != DependencyKind::Runner
+            && self
+                .digest_effective(dep)
+                .map(|effective| effective.is_some())
+                // A policy that cannot be evaluated still gets its digest
+                // looked up, so the evaluation reports the error.
+                .unwrap_or(true)
+    }
+    pub fn digest_proposal(&self, dep: &Dependency, new_digest: &str) -> Result<Option<Proposal>> {
+        if self.ignored(dep)
+            || dep.kind == DependencyKind::Runner
+            || dep.digest.as_deref() == Some(new_digest)
+        {
+            return Ok(None);
         }
-        Some(proposal(
+        let Some((update, effective)) = self.digest_effective(dep)? else {
+            return Ok(None);
+        };
+        Ok(Some(proposal(
             dep.resolved.clone().or_else(|| Some(dep.current.clone())),
             dep.resolved.clone(),
             Some(new_digest.into()),
             update,
             &effective.policy,
-        ))
+        )))
     }
     pub fn digest_proposal_with_catalog(
         &self,
         dep: &Dependency,
         new_digest: &str,
         catalog: Option<&Catalog>,
-    ) -> Option<Proposal> {
-        let mut proposal = self.digest_proposal(dep, new_digest)?;
-        if dep.tagged_action() {
+    ) -> Result<Option<Proposal>> {
+        let Some(mut proposal) = self.digest_proposal(dep, new_digest)? else {
+            return Ok(None);
+        };
+        if dep.tagged_action()
+            && let Some(catalog) = catalog
+        {
             let mut target = dep.clone();
             target.digest = Some(new_digest.into());
-            if let Some(version) = catalog.and_then(|c| resolved_current_version(&target, c)) {
+            if let Some(version) = self.resolved_current_version(&target, catalog)? {
                 proposal.new_version = Some(version);
             }
         }
-        Some(proposal)
+        Ok(Some(proposal))
+    }
+    /// The newest non-prerelease release a floating `latest` tool tag resolves
+    /// to, under the Pin policy's `permitted` filter.
+    fn latest_target(
+        &self,
+        dep: &Dependency,
+        catalog: &Catalog,
+        scheme: Ecosystem,
+        normalize: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Option<String>> {
+        let effective = self.effective(dep, Update::Pin)?;
+        let mut best: Option<(Parsed, String)> = None;
+        for version in &catalog.versions {
+            if version.yanked || version.deprecated {
+                continue;
+            }
+            let Some(value) = normalize(&version.version) else {
+                continue;
+            };
+            let Ok(parsed) = scheme.parse(&value) else {
+                continue;
+            };
+            if !parsed.0.pre.is_empty() || !permitted_matches(effective.permitted, scheme, &value)?
+            {
+                continue;
+            }
+            let newer = best
+                .as_ref()
+                .is_none_or(|(b, bv)| scheme.order(&parsed, b).then_with(|| value.cmp(bv)).is_gt());
+            if newer {
+                best = Some((parsed, value));
+            }
+        }
+        Ok(best.map(|(_, value)| value))
     }
     /// A lockfile-only package's one update: the lowest fixed release that
     /// fixes the most of its advisories without a breaking change, under
     /// `security.apply`. Only Cargo locks can be moved to an exact version of
     /// one package.
-    pub fn transitive_fix(&self, dep: &Dependency, advisories: Advisories<'_>) -> Option<Proposal> {
+    pub fn transitive_fix(
+        &self,
+        dep: &Dependency,
+        advisories: Advisories<'_>,
+    ) -> Result<Option<Proposal>> {
         let (query, found) = advisories;
         if dep.kind != DependencyKind::Transitive
             || dep.source != Source::Crates
             || self.ignored(dep)
         {
-            return None;
+            return Ok(None);
         }
-        let scheme = scheme(dep).ok()?;
-        let current = scheme.parse(&dep.current).ok()?;
-        let (target, fixes) = found
+        let scheme = Ecosystem::of(dep.scheme, dep.source);
+        let Ok(current) = scheme.parse(&dep.current) else {
+            return Ok(None);
+        };
+        let fixed = found
             .iter()
             .filter_map(|a| crate::advisories::fixed_in(a, query, scheme, &current))
             .filter_map(|v| Some((scheme.parse(&v).ok()?, v)))
@@ -447,19 +524,25 @@ impl Evaluator {
                     .cmp(&b.2.len())
                     .then_with(|| scheme.order(&b.0, &a.0))
             })
-            .map(|(_, v, fixes)| (v, fixes))?;
-        let kind = scheme.classify(&current, &scheme.parse(&target).ok()?);
-        let mut effective = self.effective(dep, kind);
+            .map(|(_, v, fixes)| (v, fixes));
+        let Some((target, fixes)) = fixed else {
+            return Ok(None);
+        };
+        let Ok(target_parsed) = scheme.parse(&target) else {
+            return Ok(None);
+        };
+        let kind = scheme.classify(&current, &target_parsed);
+        let mut effective = self.effective(dep, kind)?;
         effective.apply(
             &self.config.security.apply,
             self.security_permitted.as_ref(),
         );
         if !effective.policy.active {
-            return None;
+            return Ok(None);
         }
         let mut update = proposal(None, Some(target), None, kind, &effective.policy);
         update.fixes = fixes;
-        Some(update)
+        Ok(Some(update))
     }
     pub fn propose(&self, dep: &Dependency, catalog: &Catalog) -> Result<Vec<Proposal>> {
         Ok(self.evaluate_at(dep, catalog, Utc::now())?.updates)
@@ -501,6 +584,7 @@ impl Evaluator {
         if self.ignored(dep) {
             return Ok(Evaluation::default());
         }
+        let scheme = Ecosystem::of(dep.scheme, dep.source);
         let mut held_back = Vec::new();
         let mut not_proposed = Vec::new();
         let mut eligible = |version: &Version,
@@ -509,19 +593,12 @@ impl Evaluator {
                             effective: &Effective<'_>|
          -> Result<bool> {
             if effective.policy.channel == ReleaseChannel::Lts {
-                let node = (dep.source == Source::Mise
-                    && matches!(dep.package.as_str(), "node" | "core:node"))
-                    || (dep.source == Source::GithubReleases
-                        && dep.package == "actions/node-versions");
-                if !node {
-                    return Err("LTS channel is supported only for Node distributions and setup-node inputs".into());
-                }
                 let lts = catalog
                     .dist_tags
                     .get("lts")
-                    .and_then(|v| Ecosystem::Loose.parse(v).ok())
-                    .ok_or_else(|| "Node catalog has no LTS channel evidence".to_owned())?;
-                if !Ecosystem::Loose
+                    .and_then(|v| scheme.parse(v).ok())
+                    .ok_or_else(|| "catalog has no LTS channel evidence".to_owned())?;
+                if !scheme
                     .parse(selected)
                     .is_ok_and(|v| v.0.major == lts.0.major)
                 {
@@ -536,8 +613,7 @@ impl Evaluator {
                 return Ok(true);
             }
             let published = published(version)?;
-            let until = published
-                .checked_add_signed(Duration::hours(i64::from(effective.policy.wait_hours)))
+            let until = eligible_at(published, effective.policy.wait_hours)
                 .ok_or_else(|| "release eligibility timestamp overflow".to_owned())?;
             if until <= now {
                 return Ok(true);
@@ -556,7 +632,7 @@ impl Evaluator {
         // A flake input follows whatever its reference resolves to now, so its
         // only update is a new locked revision, dated by that commit.
         if dep.source == Source::Nix {
-            let effective = self.effective(dep, Update::Digest);
+            let effective = self.effective(dep, Update::Digest)?;
             let Some((version, digest)) = catalog
                 .versions
                 .first()
@@ -582,11 +658,10 @@ impl Evaluator {
                 ..Default::default()
             });
         }
-        let scheme = scheme(dep)?;
         let extractor = dep
             .extract
             .as_ref()
-            .map(|s| Regex::new(s).map_err(|e| e.to_string()))
+            .map(|pattern| self.extractor(pattern))
             .transpose()?;
         let normalize = |text: &str| -> Option<String> {
             if let Some(regex) = &extractor {
@@ -598,7 +673,7 @@ impl Evaluator {
                 Some(text.into())
             }
         };
-        let resolved = resolved_current_version(dep, catalog);
+        let resolved = self.resolved_current_version(dep, catalog)?;
         let current = resolved
             .as_deref()
             .or(dep.resolved.as_deref())
@@ -606,34 +681,21 @@ impl Evaluator {
         let current = normalize(current).unwrap_or_else(|| current.into());
         // Dist-tags and mise's latest are intentionally floating values. Exact
         // policy can pin them without pretending a resolved version was known.
+        let latest = if dep.kind == DependencyKind::Tool && dep.current == "latest" {
+            self.latest_target(dep, catalog, scheme, &normalize)?
+        } else {
+            None
+        };
         let tag_target = catalog
             .dist_tags
             .get(&dep.current)
             .and_then(|v| normalize(v))
-            .or_else(|| {
-                if dep.kind != DependencyKind::Tool || dep.current != "latest" {
-                    return None;
-                }
-                let effective = self.effective(dep, Update::Pin);
-                catalog
-                    .versions
-                    .iter()
-                    .filter(|v| !v.yanked && !v.deprecated)
-                    .filter_map(|v| {
-                        let value = normalize(&v.version)?;
-                        let parsed = scheme.parse(&value).ok()?;
-                        (parsed.0.pre.is_empty()
-                            && effective.permitted.is_none_or(|f| f.matches(&value)))
-                        .then_some((parsed, value))
-                    })
-                    .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
-                    .map(|(_, v)| v)
-            });
+            .or(latest);
         if let Some(target) = tag_target {
-            let effective = self.effective(dep, Update::Pin);
+            let effective = self.effective(dep, Update::Pin)?;
             if effective.policy.active
                 && effective.policy.versions == VersionPolicy::Exact
-                && effective.permitted.is_none_or(|f| f.matches(&target))
+                && permitted_matches(effective.permitted, scheme, &target)?
             {
                 let ceiling = scheme.parse(&target).map_err(|e| e.to_string())?;
                 let mut candidates: Vec<_> = catalog
@@ -647,15 +709,17 @@ impl Evaluator {
                             scheme.parse(&normalize(&v.version)?).ok()?,
                         ))
                     })
-                    .filter(|(_, value, p)| {
+                    .filter(|(_, _, p)| {
                         scheme.order(p, &ceiling) != Ordering::Greater
                             && (p.0.pre.is_empty() || !ceiling.0.pre.is_empty())
-                            && effective.permitted.is_none_or(|f| f.matches(value))
                     })
                     .collect();
                 candidates.sort_by(|a, b| candidate_order(scheme, &b.2, b.0, &a.2, a.0));
                 let mut selected = None;
                 for (version, value, _) in candidates {
+                    if !permitted_matches(effective.permitted, scheme, &value)? {
+                        continue;
+                    }
                     if eligible(version, &value, Update::Pin, &effective)? {
                         selected = Some((version, value));
                         break;
@@ -764,20 +828,30 @@ impl Evaluator {
                 )
             })?;
         let policies = [Update::Major, Update::Minor, Update::Patch, Update::Pin]
-            .map(|kind| (kind, self.effective(dep, kind)));
-        let secured = policies.clone().map(|(kind, mut effective)| {
-            effective.apply(
-                &self.config.security.apply,
-                self.security_permitted.as_ref(),
-            );
-            (kind, effective)
-        });
+            .into_iter()
+            .map(|kind| self.effective(dep, kind).map(|effective| (kind, effective)))
+            .collect::<Result<Vec<_>>>()?;
+        let secured = policies
+            .iter()
+            .cloned()
+            .map(|(kind, mut effective)| {
+                effective.apply(
+                    &self.config.security.apply,
+                    self.security_permitted.as_ref(),
+                );
+                (kind, effective)
+            })
+            .collect::<Vec<_>>();
         // The lowest fix answers to neither `permitted` nor `channel`.
-        let unfiltered = secured.clone().map(|(kind, mut effective)| {
-            effective.permitted = None;
-            effective.policy.channel = patchula_words::ReleaseChannel::Stable;
-            (kind, effective)
-        });
+        let unfiltered = secured
+            .iter()
+            .cloned()
+            .map(|(kind, mut effective)| {
+                effective.permitted = None;
+                effective.policy.channel = patchula_words::ReleaseChannel::Stable;
+                (kind, effective)
+            })
+            .collect::<Vec<_>>();
         let mut fix_candidates: Vec<(Parsed, &Version, String, Update, usize)> = Vec::new();
         let mut best: Vec<(Parsed, &Version, String, Update, &Effective<'_>)> =
             Vec::with_capacity(3);
@@ -830,7 +904,7 @@ impl Evaluator {
             }
             let kind = if scheme == Ecosystem::Npm
                 && scheme.parse(&dep.current).is_err()
-                && self.effective(dep, Update::Pin).policy.versions == VersionPolicy::Exact
+                && self.effective(dep, Update::Pin)?.policy.versions == VersionPolicy::Exact
                 && scheme.matches(&dep.current, &parsed).unwrap_or(false)
             {
                 Update::Pin
@@ -847,7 +921,7 @@ impl Evaluator {
                 .expect("version classification")
                 .1;
             if !effective.policy.active
-                || effective.permitted.is_some_and(|p| !p.matches(&normalized))
+                || !permitted_matches(effective.permitted, scheme, &normalized)?
             {
                 continue;
             }
@@ -1060,11 +1134,11 @@ impl Evaluator {
             }
         }
         if scheme == Ecosystem::Npm
-            && self.effective(dep, Update::Pin).policy.versions == VersionPolicy::Exact
+            && self.effective(dep, Update::Pin)?.policy.versions == VersionPolicy::Exact
             && scheme.parse(&dep.current).is_err()
         {
             // Pin a range even when its highest satisfying release is unchanged.
-            let plain = self.effective(dep, Update::Pin);
+            let plain = self.effective(dep, Update::Pin)?;
             let mut secure = plain.clone();
             secure.apply(
                 &self.config.security.apply,
@@ -1081,7 +1155,7 @@ impl Evaluator {
                 if !effective.policy.active
                     || v.deprecated
                     || v.yanked
-                    || effective.permitted.is_some_and(|p| !p.matches(&v.version))
+                    || !permitted_matches(effective.permitted, scheme, &v.version)?
                 {
                     continue;
                 }
@@ -1186,6 +1260,13 @@ fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
 fn any<T: PartialEq>(values: &[T], value: T) -> bool {
     values.is_empty() || values.contains(&value)
 }
+/// Whether `text` passes the `permitted` filter, when one is set.
+fn permitted_matches(permitted: Option<&Filter>, scheme: Ecosystem, text: &str) -> Result<bool> {
+    match permitted {
+        Some(filter) => filter.matches(scheme, text),
+        None => Ok(true),
+    }
+}
 fn proposal(
     value: Option<String>,
     version: Option<String>,
@@ -1239,47 +1320,57 @@ fn release_age(version: &Version, now: DateTime<Utc>) -> Option<ReleaseAge> {
             evaluated_at: timestamp(now),
         })
 }
-/// Resolve an extracted version to its source identity without applying
-/// proposal filters. mise lists versions without tag prefixes; the extraction
-/// pattern strips them for sources that list raw tags, such as GitHub Actions.
-pub fn resolved_tool_version(dep: &Dependency, catalog: &Catalog) -> Option<String> {
-    if dep.manager != Manager::Mise
-        && !(dep.manager == Manager::GithubActions && dep.kind == DependencyKind::Tool)
-    {
-        return None;
+impl Evaluator {
+    /// Resolve an extracted version to its source identity without applying
+    /// proposal filters. mise lists versions without tag prefixes; the
+    /// extraction pattern strips them for sources that list raw tags, such as
+    /// GitHub Actions.
+    pub fn resolved_tool_version(
+        &self,
+        dep: &Dependency,
+        catalog: &Catalog,
+    ) -> Result<Option<String>> {
+        if dep.manager != Manager::Mise
+            && !(dep.manager == Manager::GithubActions && dep.kind == DependencyKind::Tool)
+        {
+            return Ok(None);
+        }
+        let scheme = Ecosystem::of(dep.scheme, dep.source);
+        let Some(current_text) = dep.resolved.as_deref() else {
+            return Ok(None);
+        };
+        let Ok(current) = scheme.parse(current_text) else {
+            return Ok(None);
+        };
+        let extract = dep
+            .extract
+            .as_ref()
+            .map(|pattern| self.extractor(pattern))
+            .transpose()?;
+        Ok(catalog
+            .versions
+            .iter()
+            .filter_map(|version| {
+                let value = if let Some(extract) = &extract {
+                    extract
+                        .captures(&version.version)?
+                        .name("version")?
+                        .as_str()
+                        .to_owned()
+                } else {
+                    version.version.clone()
+                };
+                let parsed = scheme.parse(&value).ok()?;
+                let matches = if numeric_fields(current_text).is_some_and(|n| n < 3) {
+                    numeric_prefix(current_text, &value) && parsed.0.pre.is_empty()
+                } else {
+                    scheme.order(&parsed, &current).is_eq()
+                };
+                matches.then_some((parsed, value))
+            })
+            .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
+            .map(|(_, value)| value))
     }
-    let scheme = scheme(dep).ok()?;
-    let current_text = dep.resolved.as_deref()?;
-    let current = scheme.parse(current_text).ok()?;
-    let extract = dep
-        .extract
-        .as_ref()
-        .map(|s| Regex::new(s))
-        .transpose()
-        .ok()?;
-    catalog
-        .versions
-        .iter()
-        .filter_map(|version| {
-            let value = if let Some(extract) = &extract {
-                extract
-                    .captures(&version.version)?
-                    .name("version")?
-                    .as_str()
-                    .to_owned()
-            } else {
-                version.version.clone()
-            };
-            let parsed = scheme.parse(&value).ok()?;
-            let matches = if numeric_fields(current_text).is_some_and(|n| n < 3) {
-                numeric_prefix(current_text, &value) && parsed.0.pre.is_empty()
-            } else {
-                scheme.order(&parsed, &current).is_eq()
-            };
-            matches.then_some((parsed, value))
-        })
-        .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
-        .map(|(_, value)| value)
 }
 
 // SemVer precedence deliberately ignores build metadata. Break equal-precedence
@@ -1335,71 +1426,61 @@ fn action_value(current: &str, target: &str) -> String {
     }
 }
 
-/// Resolve floating action aliases by their commit and mise numeric selectors
-/// by their release line. Never infer a pinned action's version from a different
-/// commit, or use release-age policy to rewrite the observed current version.
-pub fn resolved_current_version(dep: &Dependency, catalog: &Catalog) -> Option<String> {
-    if matches!(dep.manager, Manager::Terraform | Manager::Npm)
-        && dep.kind == DependencyKind::Toolchain
-    {
-        let scheme = scheme(dep).ok()?;
-        return catalog
+impl Evaluator {
+    /// Resolve floating action aliases by their commit and mise numeric
+    /// selectors by their release line. Never infer a pinned action's version
+    /// from a different commit, or use release-age policy to rewrite the
+    /// observed current version.
+    pub fn resolved_current_version(
+        &self,
+        dep: &Dependency,
+        catalog: &Catalog,
+    ) -> Result<Option<String>> {
+        if matches!(dep.manager, Manager::Terraform | Manager::Npm)
+            && dep.kind == DependencyKind::Toolchain
+        {
+            let scheme = Ecosystem::of(dep.scheme, dep.source);
+            return Ok(catalog
+                .versions
+                .iter()
+                .filter(|v| !v.yanked && !v.deprecated)
+                .filter_map(|v| Some((scheme.parse(&v.version).ok()?, &v.version)))
+                .filter(|(parsed, _)| {
+                    parsed.0.pre.is_empty() && scheme.matches(&dep.current, parsed).unwrap_or(false)
+                })
+                .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
+                .map(|(_, version)| version.trim_start_matches('v').into()));
+        }
+        if dep.manager == Manager::Mise || dep.kind == DependencyKind::Tool {
+            return self.resolved_tool_version(dep, catalog);
+        }
+        if dep.manager != Manager::GithubActions || !dep.tagged_action() {
+            return Ok(None);
+        }
+        let current = dep.resolved.as_deref().unwrap_or(&dep.current);
+        let Some(n) = numeric_fields(current) else {
+            return Ok(None);
+        };
+        if n >= 3 {
+            return Ok(Some(current.into()));
+        }
+        let digest = dep.digest.as_ref().or_else(|| {
+            catalog
+                .versions
+                .iter()
+                .find(|v| v.version == current)
+                .and_then(|v| v.digest.as_ref())
+        });
+        Ok(catalog
             .versions
             .iter()
-            .filter(|v| !v.yanked && !v.deprecated)
-            .filter_map(|v| Some((scheme.parse(&v.version).ok()?, &v.version)))
-            .filter(|(parsed, _)| {
-                parsed.0.pre.is_empty() && scheme.matches(&dep.current, parsed).unwrap_or(false)
+            .filter(|v| {
+                numeric_fields(&v.version).is_some_and(|n| n == 3)
+                    && numeric_prefix(current, &v.version)
+                    && digest.is_some_and(|d| v.digest.as_ref() == Some(d))
             })
-            .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
-            .map(|(_, version)| version.trim_start_matches('v').into());
-    }
-    if dep.manager == Manager::Mise || dep.kind == DependencyKind::Tool {
-        return resolved_tool_version(dep, catalog);
-    }
-    if dep.manager != Manager::GithubActions || !dep.tagged_action() {
-        return None;
-    }
-    let current = dep.resolved.as_deref().unwrap_or(&dep.current);
-    let n = numeric_fields(current)?;
-    if n >= 3 {
-        return Some(current.into());
-    }
-    let digest = dep.digest.as_ref().or_else(|| {
-        catalog
-            .versions
-            .iter()
-            .find(|v| v.version == current)
-            .and_then(|v| v.digest.as_ref())
-    });
-    catalog
-        .versions
-        .iter()
-        .filter(|v| {
-            numeric_fields(&v.version).is_some_and(|n| n == 3)
-                && numeric_prefix(current, &v.version)
-                && digest.is_some_and(|d| v.digest.as_ref() == Some(d))
-        })
-        .filter_map(|v| Some((Ecosystem::Loose.parse(&v.version).ok()?, &v.version)))
-        .max_by(|(a, av), (b, bv)| Ecosystem::Loose.order(a, b).then_with(|| av.cmp(bv)))
-        .map(|(_, v)| v.clone())
-}
-pub fn scheme(dep: &Dependency) -> Result<Ecosystem> {
-    match dep.scheme {
-        Scheme::Semver => Ok(if dep.source == Source::Crates {
-            Ecosystem::Cargo
-        } else {
-            Ecosystem::Npm
-        }),
-        Scheme::Go => Ok(Ecosystem::Go),
-        Scheme::Loose => Ok(Ecosystem::Loose),
-        Scheme::Docker => Ok(Ecosystem::Docker),
-        Scheme::Pep440 => Ok(Ecosystem::Pep440),
-        Scheme::Poetry => Ok(Ecosystem::Poetry),
-        Scheme::Maven => Ok(Ecosystem::Maven),
-        Scheme::Nuget => Ok(Ecosystem::Nuget),
-        Scheme::Rubygems => Ok(Ecosystem::Rubygems),
-        Scheme::Composer => Ok(Ecosystem::Composer),
-        Scheme::Hashicorp => Ok(Ecosystem::Hashicorp),
+            .filter_map(|v| Some((Ecosystem::Loose.parse(&v.version).ok()?, &v.version)))
+            .max_by(|(a, av), (b, bv)| Ecosystem::Loose.order(a, b).then_with(|| av.cmp(bv)))
+            .map(|(_, v)| v.clone()))
     }
 }

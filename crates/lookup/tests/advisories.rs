@@ -447,7 +447,7 @@ fn lockfile_only_crates_get_the_lowest_compatible_fix() {
         Arc::new(advisory("crates.io", "time", ranges(&["0.3.23"]), &[])),
         Arc::new(breaking),
     ];
-    let fix = eval.transitive_fix(&dep, (&q, &found)).unwrap();
+    let fix = eval.transitive_fix(&dep, (&q, &found)).unwrap().unwrap();
     assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
     assert_eq!(fix.new_value, None);
     assert_eq!(fix.fixes, ["GHSA-test"]);
@@ -455,13 +455,17 @@ fn lockfile_only_crates_get_the_lowest_compatible_fix() {
     assert_eq!(policy.wait_hours, 0);
     assert_eq!(policy.commit_prefix, "fix(deps):");
     // Only a breaking release fixes it: the lock cannot get there alone.
-    assert!(eval.transitive_fix(&dep, (&q, &found[1..])).is_none());
+    assert!(
+        eval.transitive_fix(&dep, (&q, &found[1..]))
+            .unwrap()
+            .is_none()
+    );
     // npm locks cannot be moved to an exact version of one package.
     let mut npm = dependency(Source::Npm, "bar", "2.0.0", Some("2.0.0"));
     npm.kind = DependencyKind::Transitive;
     let q = advisory_query(&npm).unwrap();
     let found = vec![Arc::new(advisory("npm", "bar", ranges(&["2.0.1"]), &[]))];
-    assert!(eval.transitive_fix(&npm, (&q, &found)).is_none());
+    assert!(eval.transitive_fix(&npm, (&q, &found)).unwrap().is_none());
 }
 
 #[test]

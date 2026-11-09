@@ -1,6 +1,6 @@
 //! Native auto-merge, or conservative later-run merging backed by write receipts.
 use crate::{Inventory, Plan, pull_requests::owned_pr};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use patchula_cache::{Cache, State};
 use patchula_config::Config;
 use patchula_github::{Client, GraphqlPage};
@@ -173,10 +173,11 @@ fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
                     p.merge
                         && u.release_age.as_ref().is_none_or(|age| {
                             DateTime::parse_from_rfc3339(&age.published_at).is_ok_and(|published| {
-                                published
-                                    .with_timezone(&Utc)
-                                    .checked_add_signed(Duration::hours(i64::from(p.wait_hours)))
-                                    .is_some_and(|eligible| eligible <= now)
+                                patchula_lookup::eligible_at(
+                                    published.with_timezone(&Utc),
+                                    p.wait_hours,
+                                )
+                                .is_some_and(|eligible| eligible <= now)
                             })
                         })
                 })

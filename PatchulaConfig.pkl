@@ -100,6 +100,8 @@ typealias DependencyKind =
 /// Match lists are OR; populated selector fields are AND. Empty means any.
 /// Patterns are path-aware globs, or `regex:...`; prefix `!` excludes a match.
 /// Version filters are `semver:...`, `regex:...`, or their `!` negations.
+/// `semver:` ranges use the dependency's own versioning; a scheme without
+/// ranges, such as a loose tag, rejects the filter.
 class Selector {
   packages: Listing<String> = new {}
   dependencies: Listing<String> = new {}
@@ -125,7 +127,8 @@ class Policy {
   /// `exact` pins every declaration. The built-in rules below set `preserve`
   /// for Cargo, pyproject, Bundler and Composer.
   versions: VersionPolicy = "exact"
-  /// Node LTS is opt-in; other sources retain stable selection by default.
+  /// `lts` keeps releases on the catalog's `lts` dist-tag line; `stable`,
+  /// the default, selects the newest release the other rules allow.
   channel: ReleaseChannel = "stable"
   actionDigests: Boolean = true
   imageDigests: Boolean = true
@@ -188,7 +191,7 @@ class Extractor {
   extract: String? = null
   /// The https URL of the registry to look the package up in, or a template
   /// such as "{registry}", when it is not the source's public one. Only npm
-  /// takes a registry.
+  /// and pypi take a registry.
   registry: String? = null
 }
 
@@ -365,6 +368,3 @@ warnings: Warnings = new {}
 gitlab: Gitlab = new {}
 /// Prefer mise-versions for public catalogs; false uses the upstream sources.
 useVersionsHost: Boolean = true
-submodules: Boolean = false
-/// Commits by these authors do not trigger a new extraction.
-ignoreAuthors: Listing<String> = new {}

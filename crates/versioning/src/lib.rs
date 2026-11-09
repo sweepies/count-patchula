@@ -1,7 +1,7 @@
 //! Ecosystem version semantics. npm ranges are deliberately not Cargo requirements.
 #![forbid(unsafe_code)]
 
-use patchula_words::{Update, VersionPolicy};
+use patchula_words::{Scheme, Source, Update, VersionPolicy};
 use semver::{Version, VersionReq};
 use std::cmp::Ordering;
 mod composer;
@@ -30,6 +30,43 @@ pub enum Ecosystem {
     /// Composer versions and constraints.
     Composer,
     Hashicorp,
+}
+
+impl Ecosystem {
+    /// The version semantics a dependency's declared scheme and source select.
+    pub fn of(scheme: Scheme, source: Source) -> Self {
+        match scheme {
+            Scheme::Semver => {
+                if source == Source::Crates {
+                    Self::Cargo
+                } else {
+                    Self::Npm
+                }
+            }
+            Scheme::Go => Self::Go,
+            Scheme::Loose => Self::Loose,
+            Scheme::Docker => Self::Docker,
+            Scheme::Pep440 => Self::Pep440,
+            Scheme::Poetry => Self::Poetry,
+            Scheme::Maven => Self::Maven,
+            Scheme::Nuget => Self::Nuget,
+            Scheme::Rubygems => Self::Rubygems,
+            Scheme::Composer => Self::Composer,
+            Scheme::Hashicorp => Self::Hashicorp,
+        }
+    }
+    /// Whether `matches` evaluates a range for this ecosystem. Loose, Go and
+    /// Docker compare one exact version, so a range filter cannot apply.
+    pub fn supports_ranges(&self) -> bool {
+        !matches!(self, Self::Loose | Self::Go | Self::Docker)
+    }
+    /// Whether `range` is a requirement this scheme can evaluate, without a
+    /// candidate version: it is evaluated against the scheme's floor version,
+    /// which surfaces syntax errors and nothing else.
+    pub fn check_range(&self, range: &str) -> Result<()> {
+        let floor = self.parse("0.0.0").or_else(|_| self.parse("0"))?;
+        self.matches(range, &floor).map(|_| ())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

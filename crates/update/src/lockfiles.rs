@@ -467,23 +467,7 @@ pub fn maintenance(
     if jobs.is_empty() {
         return Ok(None);
     }
-    let mut windows: Vec<_> = config
-        .defaults
-        .windows
-        .iter()
-        .map(|w| patchula_report::Window {
-            cron: w.cron.clone(),
-            zone: w.zone.clone(),
-        })
-        .collect();
-    if windows.is_empty() {
-        // Monday 00:00 to 04:00 UTC, unless the repository sets windows.
-        windows.push(patchula_report::Window {
-            cron: vec!["* 0-3 * * 1".into()],
-            zone: "UTC".into(),
-        });
-    }
-    let due = crate::plan::in_window(&windows, since, now);
+    let due = patchula_config::due(&config.maintenance_windows(), since, now);
     let period = format!("{}-{:02}", now.iso_week().year(), now.iso_week().week());
     let fingerprint = hash(
         serde_json::to_string(&(period, &jobs, &config.lockfiles))

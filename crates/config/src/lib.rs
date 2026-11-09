@@ -7,6 +7,7 @@ pub use package::PackageId;
 mod validate;
 pub use model::*;
 
+use chrono::{DateTime, Duration, Utc};
 use miette::{Diagnostic, IntoDiagnostic, NamedSource, SourceSpan, WrapErr};
 use std::path::{Path, PathBuf};
 
@@ -87,6 +88,52 @@ fn weekday_names(field: &str) -> String {
         .map(|day| NAMES[day])
         .collect::<Vec<_>>()
         .join(",")
+}
+
+impl Window {
+    /// Whether one of the window's cron times fell after the repository's
+    /// previous run (`since`) and at or before `now`, in the window's own
+    /// timezone. However often runs happen, a daily time is due on the first
+    /// run after it. With no previous run recorded, the current minute must be
+    /// one of those times.
+    pub fn due(&self, since: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+        let Ok(zone) = self.zone.parse::<chrono_tz::Tz>() else {
+            return false;
+        };
+        let local = now.with_timezone(&zone);
+        let from = since
+            .filter(|since| *since < now)
+            .map_or(local - Duration::minutes(1), |since| {
+                since.with_timezone(&zone)
+            });
+        self.cron.iter().any(|expr| {
+            schedule(expr, false)
+                .ok()
+                .and_then(|s| s.after(&from).next())
+                .is_some_and(|t| t <= local)
+        })
+    }
+}
+
+/// Whether a schedule lets this run act: one of the windows' cron times fell
+/// after `since` and at or before `now`. No windows means no restriction.
+pub fn due(windows: &[Window], since: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    windows.is_empty() || windows.iter().any(|w| w.due(since, now))
+}
+
+impl Config {
+    /// The windows lockfile maintenance runs in: `defaults.windows`, or Monday
+    /// 00:00 to 04:00 UTC when the repository sets none.
+    pub fn maintenance_windows(&self) -> Vec<Window> {
+        if self.defaults.windows.is_empty() {
+            vec![Window {
+                cron: vec!["* 0-3 * * 1".into()],
+                zone: "UTC".into(),
+            }]
+        } else {
+            self.defaults.windows.clone()
+        }
+    }
 }
 
 /// A repository's config file, relative to its root.
@@ -262,7 +309,7 @@ pub fn problem(path: &Path, source: &str, field: &str, message: &str) -> miette:
 }
 
 mod matching;
-pub use matching::Patterns;
+pub use matching::{Filter, Patterns};
 
 mod virtual_files;
 pub use virtual_files::load_files;

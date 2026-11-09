@@ -203,12 +203,28 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
     cfg.defaults.channel = ReleaseChannel::Lts;
     cfg.rules.clear();
     dep = dependency("arbitrary-npm-package");
+    // `lts` is not Node-only: any catalog carrying the tag answers to it.
+    let mut tagged = catalog(&["1.4.0", "1.5.0", "2.0.0"]);
+    tagged.dist_tags.insert("lts".into(), "1.5.0".into());
+    let lts = Evaluator::new(&cfg)
+        .unwrap()
+        .propose(&dep, &tagged)
+        .unwrap();
+    assert!(
+        lts.iter()
+            .any(|p| p.new_version.as_deref() == Some("1.5.0"))
+    );
+    assert!(
+        lts.iter()
+            .all(|p| p.new_version.as_deref() != Some("2.0.0"))
+    );
+    // Without the tag the evaluation says so rather than guessing at stable.
     assert!(
         Evaluator::new(&cfg)
             .unwrap()
             .propose(&dep, &catalog(&["2.0.0"]))
             .unwrap_err()
-            .contains("supported only for Node")
+            .contains("no LTS channel evidence")
     );
 }
 
@@ -265,6 +281,7 @@ fn action_digest_targets_resolve_the_new_commit_without_expanding_ref_precision(
         dep.digest = digest;
         let p = eval
             .digest_proposal_with_catalog(&dep, &"a".repeat(40), Some(&versions))
+            .unwrap()
             .unwrap();
         assert_eq!(p.new_value.as_deref(), Some("v2"));
         assert_eq!(p.new_version.as_deref(), Some("v2.2.0"));
@@ -380,11 +397,19 @@ fn grouping_ops_workflow_opt_out_and_opaque_refs() {
             .unwrap()
             .is_empty()
     );
-    assert!(eval.digest_proposal(&dep, &"a".repeat(40)).is_none());
+    assert!(
+        eval.digest_proposal(&dep, &"a".repeat(40))
+            .unwrap()
+            .is_none()
+    );
     dep.name = "actions/checkout".into();
     dep.package.clone_from(&dep.name);
     dep.kind = DependencyKind::Action;
-    assert!(eval.digest_proposal(&dep, &"a".repeat(40)).is_some());
+    assert!(
+        eval.digest_proposal(&dep, &"a".repeat(40))
+            .unwrap()
+            .is_some()
+    );
 }
 #[test]
 fn exact_preserve_nightly_and_deprecated_yanked_filters() {
@@ -434,13 +459,15 @@ fn lookup_evidence_records_rejected_versions_and_per_class_policy() {
     versions.versions[0].deprecated = true;
     versions.versions[1].deprecated = true;
     versions.versions[2].yanked = true;
-    let evidence = eval.lookup_evidence(
-        &dep,
-        Some(&versions),
-        chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
-            .unwrap()
-            .into(),
-    );
+    let evidence = eval
+        .lookup_evidence(
+            &dep,
+            Some(&versions),
+            chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
+                .unwrap()
+                .into(),
+        )
+        .unwrap();
     assert_eq!(evidence.rejected.len(), 2);
     assert_eq!(evidence.rejected[0].version, "1.1.0");
     assert_eq!(evidence.rejected[0].reason, "deprecated");
@@ -448,7 +475,7 @@ fn lookup_evidence_records_rejected_versions_and_per_class_policy() {
     dep.source = Source::Docker;
     dep.package = "postgres".into();
     dep.file = "apps/notifuse/deployment-database.yaml".into();
-    assert_eq!(eval.disabled_updates(&dep), [Update::Major]);
+    assert_eq!(eval.disabled_updates(&dep).unwrap(), [Update::Major]);
 }
 #[test]
 fn rules_replace_lists_in_order_and_windows_are_reported() {
@@ -536,7 +563,11 @@ fn extracted_reusable_workflow_matches_runner_digest_opt_out() {
     let eval = Evaluator::new(&config).unwrap();
     assert!(!eval.needs_lookup(dep));
     assert!(eval.propose(dep, &catalog(&["v1.0.0"])).unwrap().is_empty());
-    assert!(eval.digest_proposal(dep, &"a".repeat(40)).is_none());
+    assert!(
+        eval.digest_proposal(dep, &"a".repeat(40))
+            .unwrap()
+            .is_none()
+    );
 }
 
 fn instant(value: &str) -> chrono::DateTime<chrono::Utc> {
@@ -779,6 +810,7 @@ fn mise_current_versions_resolve_from_the_listing_without_proposal_filters() {
         )]))
         .unwrap()
         .dependencies;
+    let eval = Evaluator::new(&cfg).unwrap();
     for (name, listed, expected) in [
         ("age", "1.2.3", "1.2.3"),
         ("fnox", "2.3.4", "2.3.4"),
@@ -789,7 +821,9 @@ fn mise_current_versions_resolve_from_the_listing_without_proposal_filters() {
         catalog.versions[0].published_at = Some("2099-01-01T00:00:00Z".into());
         catalog.versions[0].yanked = true;
         assert_eq!(
-            patchula_lookup::resolved_tool_version(dep, &catalog).as_deref(),
+            eval.resolved_tool_version(dep, &catalog)
+                .unwrap()
+                .as_deref(),
             Some(expected)
         );
     }
@@ -812,7 +846,9 @@ fn floating_action_aliases_resolve_by_commit_and_keep_comment_precision() {
     versions.versions[4].digest = Some("d".repeat(40));
     versions.versions[5].digest = Some("d".repeat(40));
     assert_eq!(
-        patchula_lookup::resolved_current_version(&dep, &versions).as_deref(),
+        eval.resolved_current_version(&dep, &versions)
+            .unwrap()
+            .as_deref(),
         Some("v2.4.2")
     );
     let proposals = eval.propose(&dep, &versions).unwrap();
@@ -828,7 +864,11 @@ fn floating_action_aliases_resolve_by_commit_and_keep_comment_precision() {
     assert_eq!(major.new_value.as_deref(), Some("v3"));
     assert_eq!(major.new_version.as_deref(), Some("v3.2.1"));
     dep.digest = Some("e".repeat(40));
-    assert!(patchula_lookup::resolved_current_version(&dep, &versions).is_none());
+    assert!(
+        eval.resolved_current_version(&dep, &versions)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -894,8 +934,11 @@ fn numeric_mise_selectors_resolve_the_release_line_without_fake_zero_patches() {
     dep.current = "24".into();
     dep.resolved = Some("24".into());
     let versions = catalog(&["24.0.1", "24.6.2", "26.1.0"]);
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
     assert_eq!(
-        patchula_lookup::resolved_current_version(&dep, &versions).as_deref(),
+        eval.resolved_current_version(&dep, &versions)
+            .unwrap()
+            .as_deref(),
         Some("24.6.2")
     );
     let p = Evaluator::new(&config("renovate-migration"))
@@ -922,8 +965,11 @@ fn runtime_support_intervals_are_observed_without_spurious_exact_pins() {
     assert_eq!(dep.kind, DependencyKind::Toolchain);
     assert_eq!(dep.location.pointer, "/engines/node");
     let versions = catalog(&["22.1.0", "24.2.0", "26.3.0", "27.0.0"]);
+    let eval = Evaluator::new(&cfg).unwrap();
     assert_eq!(
-        patchula_lookup::resolved_current_version(dep, &versions).as_deref(),
+        eval.resolved_current_version(dep, &versions)
+            .unwrap()
+            .as_deref(),
         Some("26.3.0")
     );
     assert!(
@@ -1258,7 +1304,11 @@ fn apm_short_tags_are_fixed_tags_not_floating_aliases() {
     dep.current = "v1.0".into();
     dep.resolved = Some("v1.0".into());
     let versions = catalog(&["v1.0", "v1.0.1", "v1.1"]);
-    assert!(patchula_lookup::resolved_current_version(&dep, &versions).is_none());
+    assert!(
+        eval.resolved_current_version(&dep, &versions)
+            .unwrap()
+            .is_none()
+    );
     let proposals = eval.propose(&dep, &versions).unwrap();
     let patch = proposals
         .iter()
@@ -1302,12 +1352,13 @@ fn an_image_rebuild_is_secured_only_as_security_apply_allows() {
         let dep = image(&format!("sha256:{}", "a".repeat(64)));
         let mut update = eval
             .digest_proposal(&dep, &format!("sha256:{}", "b".repeat(64)))
+            .unwrap()
             .unwrap();
         if let Some(tag) = tag {
             update.update_type = Update::Minor;
             update.new_version = Some(tag.into());
         }
-        let applied = eval.secure(&dep, &mut update);
+        let applied = eval.secure(&dep, &mut update).unwrap();
         // A refused rebuild keeps the policy it had.
         assert_eq!(
             update.policy.as_ref().unwrap().wait_hours == 0,
@@ -1328,15 +1379,34 @@ fn an_image_rebuild_is_secured_only_as_security_apply_allows() {
     assert!(!secured("waitHours = 0; active = false", None));
     assert!(!secured("waitHours = 0; digest = false", None));
     // `permitted` filters the tag a rebuild moves to, not a same-tag rebuild.
-    assert!(secured("waitHours = 0; permitted = \"semver:<2\"", None));
     assert!(secured(
-        "waitHours = 0; permitted = \"semver:<2\"",
+        "waitHours = 0; permitted = \"regex:^1\\\\.\"",
+        None
+    ));
+    assert!(secured(
+        "waitHours = 0; permitted = \"regex:^1\\\\.\"",
         Some("1.5.0")
     ));
     assert!(!secured(
-        "waitHours = 0; permitted = \"semver:<2\"",
+        "waitHours = 0; permitted = \"regex:^1\\\\.\"",
         Some("3.0.0")
     ));
+    // A `semver:` filter needs range support; loose image tags reject it as a
+    // policy error rather than silently never matching.
+    std::fs::write(
+        &path,
+        "amends \"PatchulaConfig.pkl\"\nsecurity { apply { permitted = \"semver:<2\" } }\n",
+    )
+    .unwrap();
+    let eval = Evaluator::new(&patchula_config::load(&path).unwrap()).unwrap();
+    let dep = image(&format!("sha256:{}", "a".repeat(64)));
+    let mut update = eval
+        .digest_proposal(&dep, &format!("sha256:{}", "b".repeat(64)))
+        .unwrap()
+        .unwrap();
+    update.update_type = Update::Minor;
+    update.new_version = Some("1.5.0".into());
+    assert!(eval.secure(&dep, &mut update).is_err());
 }
 
 /// Cargo, pyproject, Bundler and Composer keep one version per package in a

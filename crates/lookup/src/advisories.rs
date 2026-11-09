@@ -1,5 +1,4 @@
 //! Which advisories a version is affected by, from OSV's affected ranges.
-use crate::scheme;
 use patchula_datasource::{Advisory, AdvisoryQuery, Event};
 use patchula_manager::Dependency;
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
@@ -14,7 +13,7 @@ pub fn advisory_query(dep: &Dependency) -> Option<AdvisoryQuery> {
     if !dep.id().is_public() {
         return None;
     }
-    let scheme = scheme(dep).ok()?;
+    let scheme = Ecosystem::of(dep.scheme, dep.source);
     let (ecosystem, package) = match dep.source {
         Source::Npm if !dep.package.contains('|') => ("npm", dep.package.clone()),
         Source::Crates => ("crates.io", dep.package.clone()),
@@ -69,8 +68,8 @@ pub fn report_advisories(
     query: &AdvisoryQuery,
     advisories: &[std::sync::Arc<Advisory>],
 ) -> Vec<patchula_report::Advisory> {
-    let scheme = scheme(dep).ok();
-    let current = scheme.and_then(|s| parse(s, &query.version));
+    let scheme = Ecosystem::of(dep.scheme, dep.source);
+    let current = parse(scheme, &query.version);
     let mut entries: Vec<_> = advisories
         .iter()
         .map(|advisory| patchula_report::Advisory {
@@ -79,9 +78,9 @@ pub fn report_advisories(
             severity: advisory.severity.clone(),
             summary: advisory.summary.clone(),
             url: format!("https://osv.dev/vulnerability/{}", advisory.id),
-            fixed_in: scheme
-                .zip(current.as_ref())
-                .and_then(|(scheme, current)| fixed_in(advisory, query, scheme, current)),
+            fixed_in: current
+                .as_ref()
+                .and_then(|current| fixed_in(advisory, query, scheme, current)),
         })
         .collect();
     entries.sort();
@@ -96,9 +95,7 @@ pub fn fixes(
     advisories: &[std::sync::Arc<Advisory>],
     target: &str,
 ) -> Vec<String> {
-    let Ok(scheme) = scheme(dep) else {
-        return Vec::new();
-    };
+    let scheme = Ecosystem::of(dep.scheme, dep.source);
     advisories
         .iter()
         .filter(|advisory| affects(advisory, query, scheme, target) == Some(false))

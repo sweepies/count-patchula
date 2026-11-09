@@ -401,7 +401,15 @@ fn build(
             if !secure || !update.fixes.is_empty() {
                 prefixes.insert(policy.commit_prefix.clone());
             }
-            if !in_window(&policy.windows, since, now) {
+            let windows: Vec<patchula_config::Window> = policy
+                .windows
+                .iter()
+                .map(|w| patchula_config::Window {
+                    cron: w.cron.clone(),
+                    zone: w.zone.clone(),
+                })
+                .collect();
+            if !patchula_config::due(&windows, since, now) {
                 keep(&mut hold, Hold::Window);
             }
         }
@@ -590,35 +598,6 @@ fn build(
     })
 }
 
-/// Whether a schedule lets this run propose updates: one of the times its cron
-/// expressions name fell after the repository's previous run (`since`) and at
-/// or before `now`. However often runs happen, a daily time is due on the first
-/// run after it. With no previous run recorded, the current minute must be one
-/// of those times.
-pub(crate) fn in_window(
-    windows: &[patchula_report::Window],
-    since: Option<chrono::DateTime<chrono::Utc>>,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    windows.is_empty()
-        || windows.iter().any(|w| {
-            let Ok(zone) = w.zone.parse::<chrono_tz::Tz>() else {
-                return false;
-            };
-            let local = now.with_timezone(&zone);
-            let from = since
-                .filter(|since| *since < now)
-                .map_or(local - chrono::Duration::minutes(1), |since| {
-                    since.with_timezone(&zone)
-                });
-            w.cron.iter().any(|expr| {
-                patchula_config::schedule(expr, false)
-                    .ok()
-                    .and_then(|s| s.after(&from).next())
-                    .is_some_and(|t| t <= local)
-            })
-        })
-}
 /// A one-hunk unified diff of a file's change, as dry runs print it.
 pub fn unified(path: &str, old: &str, new: &str) -> String {
     let a: Vec<_> = old.split_inclusive('\n').collect();
@@ -694,9 +673,8 @@ fn proposal_order(dep: &Dependency, a: &Update, b: &Update) -> std::cmp::Orderin
             .or_else(|| u.new_value.clone())
             .unwrap_or_else(|| dep.current.clone())
     };
-    if let Ok(scheme) = patchula_lookup::scheme(dep)
-        && let (Ok(a), Ok(b)) = (scheme.parse(&value(a)), scheme.parse(&value(b)))
-    {
+    let scheme = patchula_versioning::Ecosystem::of(dep.scheme, dep.source);
+    if let (Ok(a), Ok(b)) = (scheme.parse(&value(a)), scheme.parse(&value(b))) {
         return scheme.order(&a, &b);
     }
     value(a).cmp(&value(b))
@@ -709,9 +687,7 @@ fn superseded(dep: &Dependency, target: &Change) -> bool {
     let Some(version) = target.version.as_deref() else {
         return false;
     };
-    let Ok(scheme) = patchula_lookup::scheme(dep) else {
-        return false;
-    };
+    let scheme = patchula_versioning::Ecosystem::of(dep.scheme, dep.source);
     let Ok(wanted) = scheme.parse(version) else {
         return false;
     };
@@ -999,76 +975,4 @@ pub fn batch_plan(
     );
     plan.input_fingerprint.clone_from(&plan.fingerprint);
     Ok(Some(plan))
-}
-
-#[cfg(test)]
-mod window_tests {
-    use super::in_window;
-    use chrono::{DateTime, Utc};
-    fn at(text: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(text).unwrap().to_utc()
-    }
-    fn window(cron: &str) -> Vec<patchula_report::Window> {
-        vec![patchula_report::Window {
-            cron: vec![cron.into()],
-            zone: "UTC".into(),
-        }]
-    }
-
-    #[test]
-    fn a_daily_time_is_due_once_on_the_first_run_after_it() {
-        let daily = window("0 3 * * *");
-        // Hourly runs: only the one after 03:00 proposes.
-        assert!(in_window(
-            &daily,
-            Some(at("2026-10-22T02:00:00Z")),
-            at("2026-10-22T03:00:05Z")
-        ));
-        assert!(!in_window(
-            &daily,
-            Some(at("2026-10-22T03:00:05Z")),
-            at("2026-10-22T04:00:00Z")
-        ));
-        // A run every six hours still catches it.
-        assert!(in_window(
-            &daily,
-            Some(at("2026-10-22T00:00:00Z")),
-            at("2026-10-22T06:00:00Z")
-        ));
-        // A webhook run at 03:30 takes the day's turn; the next sweep does not.
-        assert!(in_window(
-            &daily,
-            Some(at("2026-10-22T02:59:00Z")),
-            at("2026-10-22T03:30:00Z")
-        ));
-        assert!(!in_window(
-            &daily,
-            Some(at("2026-10-22T03:30:00Z")),
-            at("2026-10-22T04:00:00Z")
-        ));
-    }
-
-    #[test]
-    fn without_a_previous_run_only_the_current_minute_counts() {
-        let daily = window("0 3 * * *");
-        assert!(in_window(&daily, None, at("2026-10-22T03:00:30Z")));
-        assert!(!in_window(&daily, None, at("2026-10-22T04:00:00Z")));
-    }
-
-    #[test]
-    fn ranges_stay_open_and_empty_windows_always_allow() {
-        let mornings = window("* 0-6 * * 1");
-        // 2026-10-19 is a Monday.
-        assert!(in_window(
-            &mornings,
-            Some(at("2026-10-19T02:00:00Z")),
-            at("2026-10-19T03:00:00Z")
-        ));
-        assert!(!in_window(
-            &mornings,
-            Some(at("2026-10-19T08:00:00Z")),
-            at("2026-10-19T09:00:00Z")
-        ));
-        assert!(in_window(&[], None, at("2026-10-22T12:00:00Z")));
-    }
 }

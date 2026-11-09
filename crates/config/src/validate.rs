@@ -25,26 +25,12 @@ fn regex(field: &str, pattern: &str) -> Result<Regex> {
 }
 
 fn pattern(field: &str, value: &str) -> Result {
-    let value = value.strip_prefix('!').unwrap_or(value);
-    if value.is_empty() {
-        return fail(field, "pattern must not be empty");
-    }
-    if let Some(value) = value.strip_prefix("regex:") {
-        regex(field, value)?;
-    } else {
-        let value = value.strip_prefix("glob:").unwrap_or(value);
-        if value.is_empty() {
-            return fail(field, "glob must not be empty");
-        }
-        globset::GlobBuilder::new(value)
-            .literal_separator(true)
-            .build()
-            .map_err(|error| Issue {
-                field: field.into(),
-                message: format!("{field}: invalid glob: {error}"),
-            })?;
-    }
-    Ok(())
+    Patterns::compile(std::slice::from_ref(&value.to_owned()))
+        .map(|_| ())
+        .map_err(|error| Issue {
+            field: field.into(),
+            message: format!("{field}: {error}"),
+        })
 }
 
 fn patterns(field: &str, values: &[String]) -> Result {
@@ -58,18 +44,10 @@ fn filter(field: &str, value: &Option<String>) -> Result {
     let Some(value) = value else {
         return Ok(());
     };
-    let value = value.strip_prefix('!').unwrap_or(value);
-    if let Some(value) = value.strip_prefix("regex:") {
-        regex(field, value)?;
-    } else if let Some(value) = value.strip_prefix("semver:") {
-        semver::VersionReq::parse(value).map_err(|error| Issue {
-            field: field.into(),
-            message: format!("{field}: invalid semver constraint: {error}"),
-        })?;
-    } else {
-        return fail(field, "expected regex:... or semver:... version filter");
-    }
-    Ok(())
+    Filter::compile(value).map(|_| ()).map_err(|error| Issue {
+        field: field.into(),
+        message: format!("{field}: {error}"),
+    })
 }
 
 fn windows(field: &str, values: &[Window]) -> Result {

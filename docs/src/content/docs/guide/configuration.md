@@ -145,8 +145,10 @@ Patterns are case-sensitive, path-aware globs (`/` is a separator), optionally
 written `glob:...`, or Rust regexes written `regex:...`. A leading `!` excludes.
 A list made only of exclusions matches everything they do not exclude. Version
 filters must say which syntax they use: `current = "semver:<2"` or
-`current = "regex:^0\\."`. Manager, source, update and kind values are closed
-lists, so a typo is an error.
+`current = "regex:^0\\."`. A `semver:` range is read in the dependency's own
+versioning, so npm and Cargo ranges keep their own meanings, and a versioning
+scheme without ranges, such as loose tags, rejects the filter. Manager, source,
+update and kind values are closed lists, so a typo is an error.
 
 Both adding a version pin and adding a digest count as `pin`. Refreshing a
 lockfile is not an update type; it is configured under
@@ -158,7 +160,7 @@ lockfile is not an update type; it is configured under
 |---|---|
 | `active` | `false` stops updates for the selected dependencies |
 | `versions` | `exact` pins, `preserve` keeps and shifts ranges (and moves the lockfile alone for releases inside them), `widen` extends ranges to include the new version; the default is `exact`, with a built-in `preserve` rule for Cargo, pyproject, Bundler and Composer |
-| `channel` | `stable`, or `lts` for Node's long-term support line |
+| `channel` | `stable`, or `lts` for the line the source's catalog marks `lts` |
 | `digest` | `false` opts out of digest pinning |
 | `merge` | allow [auto-merge](/guide/auto-merge/) |
 | `group` | updates with the same group share a PR; `""` forces separate PRs |

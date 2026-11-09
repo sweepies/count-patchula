@@ -49,10 +49,13 @@ rules {
 How a declaration is rewritten, peer ranges, Cargo floors and Terraform
 constraints included, is under [version policies](/guide/versioning/#version-policies).
 
-## Node release channels
+## Release channels
 
-Newest stable is the default. To follow Node's newest LTS line instead, for
-mise's `node` and setup-node inputs, add a rule:
+Newest stable is the default. `channel = "lts"` follows the line the source's
+catalog marks with an `lts` dist-tag. For mise's `node` and setup-node's
+`actions/node-versions`, the Count reads the LTS line from Node's distribution
+index (`nodejs.org/dist/index.json`). Any other source whose catalog carries an
+`lts` dist-tag works the same way:
 
 ```pkl
 rules {
@@ -68,13 +71,10 @@ rules {
 }
 ```
 
-For mise's `node` the LTS line is what `mise ls-remote node lts` lists, which
-mise defines as the current LTS line (`node@lts`); for setup-node inputs it is
-the highest version with an LTS codename in Node's own [distribution
-index](https://nodejs.org/dist/index.json). Neither is a guess based on even
-majors. The release-age wait and `permitted` filters still apply. If there is
-no LTS evidence for a source, the Count reports it rather than quietly falling
-back to stable.
+Candidates stay on the `lts` tag's major line. The release-age wait and
+`permitted` filters still apply. If the catalog has no `lts` dist-tag, or its
+value does not parse as a version, the Count reports it rather than quietly
+falling back to stable.
 
 To stay on a fixed line for something that is not Node itself, such as
 `@types/node`, say so with a filter:
