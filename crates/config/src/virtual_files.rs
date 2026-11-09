@@ -105,6 +105,7 @@ impl pklr::EvalCapabilities for Files {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patchula_words::Manager;
     #[test]
     fn isolated_modules_and_no_host_imports() {
         let files = BTreeMap::from([

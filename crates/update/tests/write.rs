@@ -1,13 +1,14 @@
 //! Stateful synthetic GitHub: no sockets, tokens or network client.
 use patchula_cache::Cache;
-use patchula_config::{Config, Manager, Rebase};
+use patchula_config::{Config, Rebase};
 use patchula_github::Client;
 use patchula_http::{Exchange, Response, Transport};
-use patchula_manager::{Files, Scanner, word};
+use patchula_manager::{Files, Scanner};
 use patchula_report::{
     BranchStatus, Current, Dependency as ReportDependency, PackageFile, Repository, Status, Update,
 };
 use patchula_update::{Blob, Plan, Snapshot, apply, blob_sha, branch_name, plan};
+use patchula_words::{Manager, Source, Update as UpdateKind};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -480,7 +481,7 @@ fn setup(
         package_files: vec![PackageFile {
             path: "mise.toml".into(),
             dependencies: vec![ReportDependency {
-                manager: word(&d.manager),
+                manager: d.manager,
                 name: d.name.clone(),
                 occurrence: None,
                 package: d.package.clone(),
@@ -495,7 +496,7 @@ fn setup(
                     new_value: Some(target.into()),
                     new_version: Some(target.into()),
                     new_digest: None,
-                    update_type: "major".into(),
+                    update_type: UpdateKind::Major,
                     group: None,
                     policy: None,
                     release_age: None,
@@ -1102,7 +1103,7 @@ fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
     let d = &deps[0];
     repo.package_files[0].path = "package.json".into();
     let r = &mut repo.package_files[0].dependencies[0];
-    r.manager = "npm".into();
+    r.manager = Manager::Npm;
     r.name.clone_from(&d.name);
     r.package.clone_from(&d.package);
     r.current.value = Some(d.current.clone());
@@ -1191,7 +1192,7 @@ fn a_zero_x_crates_in_range_release_yields_to_its_next_minor() {
         .collect();
     repo.package_files[0].path = "Cargo.toml".into();
     let r = &mut repo.package_files[0].dependencies[0];
-    r.manager = "cargo".into();
+    r.manager = Manager::Cargo;
     r.name.clone_from(&d.name);
     r.package.clone_from(&d.package);
     r.current.value = Some(d.current.clone());
@@ -1202,13 +1203,13 @@ fn a_zero_x_crates_in_range_release_yields_to_its_next_minor() {
         Update {
             new_value: None,
             new_version: Some("0.9.9".into()),
-            update_type: "patch".into(),
+            update_type: UpdateKind::Patch,
             ..template.clone()
         },
         Update {
             new_value: Some("0.10.0".into()),
             new_version: Some("0.10.0".into()),
-            update_type: "major".into(),
+            update_type: UpdateKind::Major,
             ..template
         },
     ];
@@ -1254,7 +1255,7 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
     let d = &deps[0];
     repo.package_files[0].path = "package.json".into();
     let r = &mut repo.package_files[0].dependencies[0];
-    r.manager = "npm".into();
+    r.manager = Manager::Npm;
     r.name.clone_from(&d.name);
     r.package.clone_from(&d.package);
     r.current.value = Some(d.current.clone());
@@ -1311,7 +1312,7 @@ fn consolidates_minor_patch_digest_pins_and_keeps_only_latest_major() {
         ("pin", "20.0.0"),
     ] {
         let mut u = original.clone();
-        u.update_type = kind.into();
+        u.update_type = kind.parse().unwrap();
         u.new_value = Some(version.into());
         u.new_version = Some(version.into());
         updates.push(u);
@@ -1395,7 +1396,7 @@ fn container_occurrences_across_managers_share_target_and_slug_collisions_gain_m
         .dependencies
         .remove(0);
     let mut r = repo.package_files[0].dependencies[0].clone();
-    r.manager = "dockerfile".into();
+    r.manager = Manager::Dockerfile;
     r.current.value = Some(docker.current.clone());
     repo.package_files.push(PackageFile {
         path: "Dockerfile".into(),
@@ -1621,7 +1622,7 @@ async fn pr_cycle(
         plans,
         config,
         chrono::Utc::now(),
-        patchula_update::Recheck::NextRun,
+        patchula_words::Recheck::NextRun,
     )
     .await
     .unwrap();
@@ -1661,7 +1662,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         }
         let (mut p, snapshot) = make_plan("22.0.0");
         if case == "notes" {
-            p.changes[0].source = "github-tags".into();
+            p.changes[0].source = Source::GithubTags;
             p.changes[0].package = "actions/checkout".into();
             p.changes[0].release_notes = true;
         }
@@ -2556,7 +2557,7 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
     for origin in ["repository", "pr"] {
         let (config, repo) = pr_config();
         let (mut p, snapshot) = make_plan("22.0.0");
-        p.changes[0].source = "github-tags".into();
+        p.changes[0].source = Source::GithubTags;
         p.changes[0].package = "actions/checkout".into();
         p.changes[0].release_notes = true;
         let server = fake(&snapshot);
@@ -2638,7 +2639,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     let (mut p, snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
-    p.changes[0].source = "github-tags".into();
+    p.changes[0].source = Source::GithubTags;
     p.changes[0].package = "actions/checkout".into();
     p.changes[0].release_notes = true;
     let mut row = p.changes[0].clone();
@@ -2650,7 +2651,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         std::slice::from_mut(&mut p),
         &config,
         chrono::Utc::now(),
-        patchula_update::Recheck::Now,
+        patchula_words::Recheck::Now,
     )
     .await
     .unwrap();
@@ -2899,7 +2900,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
     snapshot.paths.insert("bun.lock".into());
     repo.package_files.clear();
     for dep in &deps {
-        let targets: &[(&str, &str)] = match (dep.package.as_str(), word(&dep.source).as_str()) {
+        let targets: &[(&str, &str)] = match (dep.package.as_str(), dep.source.as_str()) {
             ("actions/checkout", _) => &[("minor", "v4.4.0"), ("major", "v7.0.1")],
             ("jdx/mise-action", _) => &[("pin", "v2"), ("major", "v5")],
             ("ubuntu", _) => &[("major", "26.04")],
@@ -2931,16 +2932,16 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
             .map(|(kind, target)| Update {
                 new_value: Some((*target).into()),
                 new_version: Some((*target).into()),
-                new_digest: if dep.source == patchula_config::Source::Docker {
+                new_digest: if dep.source == patchula_words::Source::Docker {
                     Some(format!("sha256:{}", "b".repeat(64)))
                 } else if dep.manager == Manager::GithubActions
-                    && dep.source == patchula_config::Source::GithubTags
+                    && dep.source == patchula_words::Source::GithubTags
                 {
                     Some("b".repeat(40))
                 } else {
                     None
                 },
-                update_type: (*kind).into(),
+                update_type: (*kind).parse().unwrap(),
                 group: None,
                 policy: None,
                 release_age: None,
@@ -2949,7 +2950,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
             })
             .collect();
         let r = ReportDependency {
-            manager: word(&dep.manager),
+            manager: dep.manager,
             name: dep.name.clone(),
             package: dep.package.clone(),
             registry: dep.registry.clone(),
@@ -3029,7 +3030,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
 async fn pin_title_respects_prefix_and_pin_rows_never_request_release_notes() {
     let (mut config, mut repo, deps, snapshot) = setup("22.0.0", false);
     config.defaults.commit_prefix = "build(deps):".into();
-    repo.package_files[0].dependencies[0].updates[0].update_type = "pin".into();
+    repo.package_files[0].dependencies[0].updates[0].update_type = UpdateKind::Pin;
     let mut plans = plan(
         &repo,
         &config,
@@ -3041,11 +3042,11 @@ async fn pin_title_respects_prefix_and_pin_rows_never_request_release_notes() {
     )
     .unwrap();
     assert_eq!(plans[0].action.message, "build(deps): pin dependencies");
-    plans[0].changes[0].source = "github-tags".into();
+    plans[0].changes[0].source = Source::GithubTags;
     plans[0].changes[0].package = "actions/checkout".into();
     plans[0].changes[0].release_notes = true;
     let mut other = plans[0].changes[0].clone();
-    other.source = "docker".into();
+    other.source = Source::Docker;
     plans[0].changes.push(other);
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
@@ -3422,7 +3423,7 @@ async fn merged_pr_branch_can_be_reused_for_the_next_update_on_its_major_line() 
     let r = &mut repo.package_files[0].dependencies[0];
     r.current.value = Some("22.0.0".into());
     r.current.version = Some("22.0.0".into());
-    r.updates[0].update_type = "minor".into();
+    r.updates[0].update_type = UpdateKind::Minor;
     r.updates[0].new_value = Some("22.1.0".into());
     r.updates[0].new_version = Some("22.1.0".into());
     let mut plans = plan(
@@ -3517,7 +3518,7 @@ fn reference_data_pins_get_their_own_branch() {
             &[("pin", "3.9.10")]
         };
         let report = ReportDependency {
-            manager: word(&dep.manager),
+            manager: dep.manager,
             name: dep.name.clone(),
             package: dep.package.clone(),
             registry: dep.registry.clone(),
@@ -3534,7 +3535,7 @@ fn reference_data_pins_get_their_own_branch() {
                     new_value: Some((*target).into()),
                     new_version: Some((*target).into()),
                     new_digest: None,
-                    update_type: (*kind).into(),
+                    update_type: (*kind).parse().unwrap(),
                     group: None,
                     policy: None,
                     release_age: None,

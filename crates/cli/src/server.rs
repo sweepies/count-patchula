@@ -1,5 +1,5 @@
 //! Flags/env are operator overrides; secret contents never enter the usage model.
-use crate::cli::{App, Recheck, Serve};
+use crate::cli::{App, Serve};
 use std::{path::PathBuf, time::Duration};
 
 type Result<T> = std::result::Result<T, (u8, miette::Report)>;
@@ -68,9 +68,14 @@ pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
         return Err(invalid("shutdown timeout must be 1..3600 seconds"));
     }
     let recheck = match app.recheck {
-        Some(Recheck::Now) => Some("now".into()),
-        Some(Recheck::NextRun) => Some("next-run".into()),
-        None => env("PATCHULA_RECHECK")?,
+        Some(recheck) => Some(recheck),
+        None => env("PATCHULA_RECHECK")?
+            .map(|value| {
+                value
+                    .parse::<patchula_words::Recheck>()
+                    .map_err(|_| invalid("PATCHULA_RECHECK must be now or next-run"))
+            })
+            .transpose()?,
     };
     patchula_server::serve(patchula_server::Options {
         settings,

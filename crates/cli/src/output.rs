@@ -5,6 +5,7 @@
 //! summary wrapped, at 80 columns.
 use crate::{cli, palette, tui};
 use patchula_report::{BranchStatus, PullRequestStatus, Report, Repository, Status};
+use patchula_words::Update as UpdateKind;
 use std::fmt::Write;
 
 /// The width the summary wraps to when the stream is not a terminal.
@@ -308,20 +309,12 @@ fn pull_request_paint(status: PullRequestStatus) -> Paint {
     }
 }
 
-/// An enum's name as the JSON report spells it.
-fn word<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
-pub fn kind_paint(kind: &str) -> Paint {
+pub fn kind_paint(kind: UpdateKind) -> Paint {
     match kind {
-        "major" => Paint::Error,
-        "minor" => Paint::Warning,
-        "patch" => Paint::Success,
-        _ => Paint::AccentDim,
+        UpdateKind::Major => Paint::Error,
+        UpdateKind::Minor => Paint::Warning,
+        UpdateKind::Patch => Paint::Success,
+        UpdateKind::Digest | UpdateKind::Pin => Paint::AccentDim,
     }
 }
 
@@ -424,7 +417,7 @@ pub fn report(report: &Report, style: &Style) -> String {
                     .iter()
                     .map(|u| {
                         vec![
-                            (u.kind.clone(), kind_paint(&u.kind)),
+                            (u.kind.to_string(), kind_paint(u.kind)),
                             (u.name.clone(), Paint::Bold),
                             (format!("{} → {}", u.current, u.target()), Paint::Plain),
                             (u.file.clone(), Paint::Dim),
@@ -467,7 +460,7 @@ fn actions_section(
                 }
                 let note = notes.join(", ");
                 vec![
-                    (word(&branch.status), status_paint(branch.status)),
+                    (branch.status.to_string(), status_paint(branch.status)),
                     (branch.branch.clone(), Paint::Bold),
                     (note, Paint::Dim),
                 ]
@@ -504,7 +497,7 @@ fn actions_section(
             .iter()
             .map(|pr| {
                 vec![
-                    (word(&pr.status), pull_request_paint(pr.status)),
+                    (pr.status.to_string(), pull_request_paint(pr.status)),
                     (
                         pr.number.map(|n| format!("#{n}")).unwrap_or_default(),
                         Paint::Plain,
@@ -640,7 +633,7 @@ pub fn failures(
         let rows: Vec<_> = failures
             .iter()
             .map(|failure| {
-                let mut source = failure.datasource.clone();
+                let mut source = failure.datasource.to_string();
                 if failure.package != failure.name {
                     source = format!("{source} {}", failure.package);
                 }

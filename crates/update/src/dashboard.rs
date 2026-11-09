@@ -1,6 +1,6 @@
 //! A deterministic issue, discovered by ownership and marker rather than title.
 use crate::{
-    Inventory, Plan, Recheck,
+    Inventory, Plan,
     plan::hash,
     text::{self, code},
     update_key,
@@ -9,6 +9,7 @@ use patchula_cache::{Cache, ExtractionKey};
 use patchula_config::Config;
 use patchula_github::Client;
 use patchula_report::{Dependency, Repository};
+use patchula_words::{Recheck, ToolingDetail, ToolingRule};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,10 +60,10 @@ pub fn extracted_key(dep: &patchula_manager::Dependency) -> String {
     identity(
         serde_json::json!([
             &dep.file,
-            patchula_manager::word(&dep.manager),
+            dep.manager,
             &dep.name,
             &dep.package,
-            patchula_manager::word(&dep.source),
+            dep.source,
             Some(&dep.current),
             &dep.digest,
         ]),
@@ -79,11 +80,7 @@ pub fn retry_key(manager: &str, package: &str, source: &str) -> String {
     )
 }
 pub fn extracted_retry_key(dep: &patchula_manager::Dependency) -> String {
-    retry_key(
-        &patchula_manager::word(&dep.manager),
-        &dep.package,
-        &patchula_manager::word(&dep.source),
-    )
+    retry_key(dep.manager.as_str(), &dep.package, dep.source.as_str())
 }
 pub fn held_target(dependency: &str, version: &str, kind: &str) -> String {
     hash(
@@ -161,15 +158,13 @@ impl Controls {
                     dependencies
                         .iter()
                         .filter(|d| {
-                            d.file == c.file
-                                && d.package == c.package
-                                && patchula_manager::word(&d.source) == c.source
+                            d.file == c.file && d.package == c.package && d.source == c.source
                         })
                         .filter_map(|d| {
                             c.version
                                 .as_deref()
                                 .or(c.value.as_deref())
-                                .map(|v| held_target(&extracted_key(d), v, &c.kind))
+                                .map(|v| held_target(&extracted_key(d), v, c.kind.as_str()))
                         })
                 })
                 .filter(|target| self.age_permits.contains(target))
@@ -181,18 +176,17 @@ impl Controls {
             let age_click = plan.changes.iter().any(|c| {
                 dependencies
                     .iter()
-                    .filter(|d| {
-                        d.file == c.file
-                            && d.package == c.package
-                            && patchula_manager::word(&d.source) == c.source
-                    })
+                    .filter(|d| d.file == c.file && d.package == c.package && d.source == c.source)
                     .any(|d| {
                         c.version
                             .as_deref()
                             .or(c.value.as_deref())
                             .is_some_and(|v| {
-                                self.create
-                                    .contains(&held_target(&extracted_key(d), v, &c.kind))
+                                self.create.contains(&held_target(
+                                    &extracted_key(d),
+                                    v,
+                                    c.kind.as_str(),
+                                ))
                             })
                     })
             });
@@ -489,7 +483,7 @@ pub fn render(
                 for advisory in &metadata.advisories {
                     let fix = fix_status(plans, prs, &file.path, dep, metadata, advisory);
                     let group = vulnerabilities
-                        .entry((dep.manager.clone(), dep.package.clone(), version.into()))
+                        .entry((dep.manager.to_string(), dep.package.clone(), version.into()))
                         .or_insert_with(|| Vulnerable {
                             name: dep.name.clone(),
                             version: version.into(),
@@ -548,7 +542,7 @@ pub fn render(
                                     "Create it now anyway: {} → {} ({}, {}; eligible {})",
                                     code(&dep.name),
                                     safe(&held.version),
-                                    safe(&metadata.source),
+                                    safe(metadata.source.as_str()),
                                     code(&file.path),
                                     escape(&text::when(
                                         held.target_eligible_at
@@ -560,7 +554,7 @@ pub fn render(
                                     &file.path,
                                     dep,
                                     &held.version,
-                                    &held.update_type,
+                                    held.update_type.as_str(),
                                 )),
                             ),
                         ));
@@ -585,13 +579,13 @@ pub fn render(
                     // The lookup is shared by every file that declares the package.
                     let lookup = lookups
                         .entry((
-                            dep.manager.clone(),
+                            dep.manager.to_string(),
                             dep.package.clone(),
-                            metadata.source.clone(),
+                            metadata.source.to_string(),
                         ))
                         .or_insert_with(|| Lookup {
                             name: dep.name.clone(),
-                            source: metadata.source.clone(),
+                            source: metadata.source.to_string(),
                             ..Default::default()
                         });
                     lookup.files.insert(file.path.clone());
@@ -605,7 +599,7 @@ pub fn render(
                         .extend(warnings.into_iter().map(String::as_str));
                     lookup.failures.extend(failures.into_iter().map(|f| {
                         (
-                            f.datasource.clone(),
+                            f.datasource.to_string(),
                             f.kind.as_str().to_owned(),
                             f.message.clone(),
                         )
@@ -615,7 +609,7 @@ pub fn render(
             sections
                 .entry(format!(
                     "Detected: {} / {}",
-                    safe(&dep.manager),
+                    safe(dep.manager.as_str()),
                     safe(&file.path)
                 ))
                 .or_default()
@@ -718,7 +712,7 @@ pub fn render(
         let row = match &warning.silenced {
             Some(reason) => (
                 TOOLING_SILENCED,
-                format!("- `{}`: \"{}\"{open}\n", safe(&warning.rule), safe(reason)),
+                format!("- `{}`: \"{}\"{open}\n", warning.rule, safe(reason)),
             ),
             None => (
                 TOOLING,
@@ -745,10 +739,7 @@ pub fn render(
             .or_default()
             .insert((None, format!("- {}\n", safe(warning))));
     }
-    let timing = match recheck {
-        Recheck::Now => "now",
-        Recheck::NextRun => "on the next run",
-    };
+    let timing = crate::pull_requests::recheck_timing(recheck);
     let advertised = server
         .map(|url| format!("{}\n", crate::advertise::marker(url)))
         .unwrap_or_default();
@@ -1155,15 +1146,23 @@ const TOOLING_SILENCED: &str = "Tooling warnings: silenced";
 
 /// A tooling warning as a dashboard line.
 fn tooling_line(warning: &patchula_report::ToolingWarning, branch: &str) -> String {
-    use crate::tooling::*;
     let branch = safe(branch);
-    match (warning.rule.as_str(), warning.detail.as_deref()) {
-        (MERGE_WITHOUT_CI, Some(NATIVE)) => "**Updates are set to merge, but there's no CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so nothing tests them before GitHub merges them.".into(),
-        (MERGE_WITHOUT_CI, _) => "**Updates are set to merge, but there's no CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so these PRs stay open.".into(),
-        (MERGE_WITHOUT_REQUIRED_CHECKS, Some(REVIEWS_ONLY)) => format!("**Nothing requires checks before GitHub merges.** `{branch}` requires a review but no status checks."),
-        (MERGE_WITHOUT_REQUIRED_CHECKS, _) => format!("**Nothing requires checks before GitHub merges.** `{branch}` requires no status checks."),
-        (SECURITY_MERGE_WITHOUT_DELIVERY, Some(TAGGED_RELEASE)) => format!("**Security fixes merge, but nothing runs when they do.** No workflow runs when `{branch}` changes, and the only one that could deliver them runs on tags or releases."),
-        _ => format!("**Security fixes merge, but nothing ships them.** Fixes merge on their own, and no workflow runs when `{branch}` changes."),
+    match (warning.rule, warning.detail) {
+        (ToolingRule::MergeWithoutCi, Some(ToolingDetail::Native)) => "**Updates are set to merge, but there's no CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so nothing tests them before GitHub merges them.".into(),
+        (
+            ToolingRule::MergeWithoutCi,
+            Some(ToolingDetail::ReviewsOnly | ToolingDetail::TaggedRelease) | None,
+        ) => "**Updates are set to merge, but there's no CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so these PRs stay open.".into(),
+        (ToolingRule::MergeWithoutRequiredChecks, Some(ToolingDetail::ReviewsOnly)) => format!("**Nothing requires checks before GitHub merges.** `{branch}` requires a review but no status checks."),
+        (
+            ToolingRule::MergeWithoutRequiredChecks,
+            Some(ToolingDetail::Native | ToolingDetail::TaggedRelease) | None,
+        ) => format!("**Nothing requires checks before GitHub merges.** `{branch}` requires no status checks."),
+        (ToolingRule::SecurityMergeWithoutDelivery, Some(ToolingDetail::TaggedRelease)) => format!("**Security fixes merge, but nothing runs when they do.** No workflow runs when `{branch}` changes, and the only one that could deliver them runs on tags or releases."),
+        (
+            ToolingRule::SecurityMergeWithoutDelivery,
+            Some(ToolingDetail::Native | ToolingDetail::ReviewsOnly) | None,
+        ) => format!("**Security fixes merge, but nothing ships them.** Fixes merge on their own, and no workflow runs when `{branch}` changes."),
     }
 }
 
@@ -1187,7 +1186,10 @@ fn image_gap(check: &patchula_report::ImageCheck) -> String {
             "the previous image is gone from its registry, so the open update can't be compared"
                 .into()
         }
-        state => safe(state.word()),
+        ImageState::Unreadable
+        | ImageState::PartialSources
+        | ImageState::Checked
+        | ImageState::NoOsPackages => safe(check.state.as_str()),
     }
 }
 

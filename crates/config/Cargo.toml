@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+patchula-words = { path = "../words" }
 pklr = { version = "5.1.1", default-features = false, features = ["native-io", "miette-diagnostics"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

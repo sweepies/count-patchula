@@ -1,6 +1,6 @@
 //! Config coverage uses authored representative manifests.
-use patchula_config::Manager;
 use patchula_manager::{Files, Scanner};
+use patchula_words::Manager;
 use std::path::Path;
 
 #[test]
@@ -44,9 +44,9 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
             if evaluator.needs_lookup(dep) {
                 let mut catalog = patchula_datasource::Catalog::default();
                 catalog.versions.push(patchula_datasource::Version {
-                    version: if dep.source == patchula_config::Source::Go {
+                    version: if dep.source == patchula_words::Source::Go {
                         "v2.0.0"
-                    } else if dep.source == patchula_config::Source::Docker {
+                    } else if dep.source == patchula_words::Source::Docker {
                         "2.0.0-alpine"
                     } else {
                         "2.0.0"

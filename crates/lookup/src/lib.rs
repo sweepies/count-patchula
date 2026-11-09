@@ -4,13 +4,14 @@ mod advisories;
 pub use advisories::{advisory_query, affects, fixes, report_advisories};
 pub mod images;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use patchula_config::{
-    Config, DependencyKind, Manager, Patterns, Policy, Rule, Scheme, Source, Update, VersionPolicy,
-};
+use patchula_config::{Config, Patterns, Policy, Rule};
 use patchula_datasource::{Catalog, Version};
 use patchula_manager::Dependency;
 use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy, Window};
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
+use patchula_words::{
+    DependencyKind, Manager, ReleaseChannel, Scheme, Source, Update, VersionPolicy,
+};
 use regex::Regex;
 use std::cmp::Ordering;
 
@@ -132,7 +133,7 @@ impl Evaluator {
         .unwrap_or(0)
     }
     /// Effective class exclusions, including digest policy, are report evidence.
-    pub fn disabled_updates(&self, dep: &Dependency) -> Vec<String> {
+    pub fn disabled_updates(&self, dep: &Dependency) -> Vec<Update> {
         [
             Update::Major,
             Update::Minor,
@@ -147,7 +148,6 @@ impl Evaluator {
                 || !effective.policy.active
                 || (*kind == Update::Digest && !effective.digest)
         })
-        .map(|kind| patchula_manager::word(&kind))
         .collect()
     }
     pub fn lookup_evidence(
@@ -337,7 +337,7 @@ impl Evaluator {
         effective
     }
     pub fn needs_digest(&self, dep: &Dependency, proposal: &Proposal) -> bool {
-        let update = parse_update(&proposal.update_type);
+        let update = proposal.update_type;
         (dep.manager == Manager::Apm
             || (dep.source == Source::Docker
                 || dep.source == Source::Oci
@@ -356,7 +356,7 @@ impl Evaluator {
     /// left as it was, when `security.apply` turns off updates or digests for
     /// the image or does not permit the tag it moves to.
     pub fn secure(&self, dep: &Dependency, update: &mut Proposal) -> bool {
-        let kind = parse_update(&update.update_type);
+        let kind = update.update_type;
         let mut effective = self.effective(dep, kind);
         effective.apply(
             &self.config.security.apply,
@@ -508,7 +508,7 @@ impl Evaluator {
                             kind: Update,
                             effective: &Effective<'_>|
          -> Result<bool> {
-            if effective.policy.channel == patchula_config::ReleaseChannel::Lts {
+            if effective.policy.channel == ReleaseChannel::Lts {
                 let node = (dep.source == Source::Mise
                     && matches!(dep.package.as_str(), "node" | "core:node"))
                     || (dep.source == Source::GithubReleases
@@ -531,7 +531,7 @@ impl Evaluator {
             // The gate chooses proposals; it never removes extracted/current releases.
             if effective.policy.wait_hours == 0
                 || version.published_at.is_none()
-                || overrides.contains(&(selected.into(), patchula_manager::word(&kind)))
+                || overrides.contains(&(selected.into(), kind.to_string()))
             {
                 return Ok(true);
             }
@@ -546,7 +546,7 @@ impl Evaluator {
                 version: selected.into(),
                 versions: vec![selected.into()],
                 count: 1,
-                update_type: patchula_manager::word(&kind),
+                update_type: kind,
                 published_at: timestamp(published),
                 eligible_at: timestamp(until),
                 target_eligible_at: Some(timestamp(until)),
@@ -775,7 +775,7 @@ impl Evaluator {
         // The lowest fix answers to neither `permitted` nor `channel`.
         let unfiltered = secured.clone().map(|(kind, mut effective)| {
             effective.permitted = None;
-            effective.policy.channel = patchula_config::ReleaseChannel::Stable;
+            effective.policy.channel = patchula_words::ReleaseChannel::Stable;
             (kind, effective)
         });
         let mut fix_candidates: Vec<(Parsed, &Version, String, Update, usize)> = Vec::new();
@@ -1155,9 +1155,11 @@ impl Evaluator {
 fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
     releases.sort();
     releases.dedup();
-    let mut groups = std::collections::BTreeMap::<String, HeldBack>::new();
+    // Keyed by word, not the enum, so classes come out in the order reports
+    // have always written them.
+    let mut groups = std::collections::BTreeMap::<&'static str, HeldBack>::new();
     for release in releases {
-        if let Some(summary) = groups.get_mut(&release.update_type) {
+        if let Some(summary) = groups.get_mut(release.update_type.as_str()) {
             if scheme
                 .parse(&release.version)
                 .ok()
@@ -1176,22 +1178,13 @@ fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
             summary.versions.push(release.version);
             summary.count = summary.versions.len();
         } else {
-            groups.insert(release.update_type.clone(), release);
+            groups.insert(release.update_type.as_str(), release);
         }
     }
     groups.into_values().collect()
 }
 fn any<T: PartialEq>(values: &[T], value: T) -> bool {
     values.is_empty() || values.contains(&value)
-}
-fn parse_update(value: &str) -> Update {
-    match value {
-        "major" => Update::Major,
-        "minor" => Update::Minor,
-        "patch" => Update::Patch,
-        "digest" => Update::Digest,
-        _ => Update::Pin,
-    }
 }
 fn proposal(
     value: Option<String>,
@@ -1204,11 +1197,11 @@ fn proposal(
         new_value: value,
         new_version: version,
         new_digest: digest,
-        update_type: patchula_manager::word(&update),
+        update_type: update,
         group: policy.group.clone().filter(|g| !g.is_empty()),
         policy: Some(UpdatePolicy {
-            versions: Some(patchula_manager::word(&policy.versions)),
-            channel: Some(patchula_manager::word(&policy.channel)),
+            versions: Some(policy.versions),
+            channel: Some(policy.channel),
             wait_hours: policy.wait_hours,
             windows: policy
                 .windows

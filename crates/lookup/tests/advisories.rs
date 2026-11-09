@@ -1,8 +1,8 @@
-use patchula_config::{DependencyKind, Manager, Scheme, Source};
 use patchula_datasource::{Advisory, AdvisoryQuery, Affected, Event, Range};
 use patchula_lookup::{advisory_query, affects, fixes, report_advisories};
 use patchula_manager::{Dependency, Location};
 use patchula_versioning::Ecosystem;
+use patchula_words::{DependencyKind, Manager, Scheme, Source};
 use std::sync::Arc;
 
 fn dependency(source: Source, package: &str, current: &str, resolved: Option<&str>) -> Dependency {

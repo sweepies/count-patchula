@@ -4,6 +4,7 @@
 use super::*;
 use crate::docker::{Derive, MANIFEST, identity, validate_digest};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use patchula_words::SbomSource;
 use reqwest::Method;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -12,24 +13,6 @@ const SPDX: &str = "https://spdx.dev/Document";
 const BLOB: &str = "*/*";
 /// Generators that catalog a whole image, so an empty OS list means none.
 const CATALOGERS: [&str; 3] = ["docker-scout", "syft", "apko"];
-
-/// Where an image's SBOM was found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SbomSource {
-    Attestation,
-    CosignAtt,
-    CosignSbom,
-}
-impl SbomSource {
-    pub fn word(self) -> &'static str {
-        match self {
-            Self::Attestation => "attestation",
-            Self::CosignAtt => "cosign-att",
-            Self::CosignSbom => "cosign-sbom",
-        }
-    }
-}
 
 /// The OS-level contents of one platform's SBOM.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,6 +2,7 @@
 //! the files, through the same engine as the TUI's apply.
 use crate::output::{Paint, Style, count, kind_paint};
 use crate::{Services, cli, tui};
+use patchula_words::Manager;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -9,9 +10,6 @@ use std::{
     path::Path,
 };
 
-/// When several updates propose a change to one declaration, the earliest
-/// type here is the one applied.
-const RANK: [&str; 5] = ["major", "minor", "patch", "pin", "digest"];
 /// Some selected updates are still waiting after the command.
 const WAITING: u8 = 3;
 
@@ -58,30 +56,24 @@ pub async fn command(
             "patchula apply runs on this machine, since a server cannot write your files; drop --remote".into(),
         ));
     }
-    for manager in &options.manager {
-        serde_json::from_value::<patchula_config::Manager>(json!(manager)).map_err(|_| {
-            (
-                2,
-                miette::miette!(
-                    help = "the managers are listed at https://count-patchula.sweepy.dev/guide/managers/",
-                    "--manager {manager} is not a known manager"
-                ),
-            )
-        })?;
-    }
+    let managers: Vec<Manager> = options
+        .manager
+        .iter()
+        .map(|manager| {
+            manager.parse().map_err(|_| {
+                (
+                    2,
+                    miette::miette!(
+                        help = "the managers are listed at https://count-patchula.sweepy.dev/guide/managers/",
+                        "--manager {manager} is not a known manager"
+                    ),
+                )
+            })
+        })
+        .collect::<Result<_, _>>()?;
     let names = patchula_config::Patterns::compile(&options.dependency)
         .map_err(|e| (2, miette::miette!("--dependency: {e}")))?;
-    let types: Vec<&str> = options
-        .update_type
-        .iter()
-        .map(|kind| match kind {
-            cli::UpdateType::Major => "major",
-            cli::UpdateType::Minor => "minor",
-            cli::UpdateType::Patch => "patch",
-            cli::UpdateType::Pin => "pin",
-            cli::UpdateType::Digest => "digest",
-        })
-        .collect();
+    let types = &options.update_type;
     let lookup = cli::Lookup {
         repositories: Vec::new(),
         all_repos: false,
@@ -119,9 +111,9 @@ pub async fn command(
     let mut chosen: Vec<&tui::Update> = all
         .iter()
         .filter(|u| {
-            (options.manager.is_empty() || options.manager.contains(&u.manager))
+            (managers.is_empty() || managers.contains(&u.manager))
                 && names.matches_any(&u.name, &u.package)
-                && (types.is_empty() || types.contains(&u.kind.as_str()))
+                && (types.is_empty() || types.contains(&u.kind))
         })
         .collect();
     let filtered = all.len() - chosen.len();
@@ -130,7 +122,7 @@ pub async fn command(
         .iter()
         .flat_map(|r| &r.notices)
         .filter(|n| {
-            (options.manager.is_empty() || options.manager.contains(&n.manager))
+            (managers.is_empty() || managers.contains(&n.manager))
                 && names.matches_any(&n.name, &n.package)
                 && types.is_empty()
         })
@@ -152,11 +144,7 @@ pub async fn command(
     } else {
         (String::new(), true)
     };
-    chosen.sort_by_key(|u| {
-        RANK.iter()
-            .position(|k| *k == u.kind)
-            .unwrap_or_else(|| RANK.len())
-    });
+    chosen.sort_by_key(|u| u.kind.rank());
     let mut declarations = BTreeSet::new();
     chosen.retain(|u| declarations.insert((u.file.clone(), u.name.clone(), u.starts.clone())));
     chosen.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
@@ -341,7 +329,7 @@ fn summary(
     let updates = |n: usize| count(n, "update", "updates");
     let row = |u: &tui::Update| {
         vec![
-            (u.kind.clone(), kind_paint(&u.kind)),
+            (u.kind.to_string(), kind_paint(u.kind)),
             (u.name.clone(), Paint::Bold),
             (format!("{} → {}", u.current, u.target()), Paint::Plain),
             (u.file.clone(), Paint::Dim),

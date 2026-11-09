@@ -1,6 +1,7 @@
 use patchula_config::{Config, PackageId};
-use patchula_manager::{Dependency, Edit, word};
+use patchula_manager::{Dependency, Edit};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
+use patchula_words::{Source, Update as UpdateKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -148,7 +149,7 @@ impl Plan {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Change {
-    pub source: String,
+    pub source: Source,
     pub package: String,
     /// The registry the package comes from, when it is not the public one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,7 +160,7 @@ pub struct Change {
     pub value: Option<String>,
     pub version: Option<String>,
     pub digest: Option<String>,
-    pub kind: String,
+    pub kind: UpdateKind,
     pub merge: bool,
     pub labels: Vec<String>,
     pub release_notes: bool,
@@ -172,11 +173,9 @@ pub struct Change {
     pub image: Option<patchula_report::ImageCheck>,
 }
 impl Change {
-    /// The package the change updates, or None for a source word this build
-    /// does not know.
-    pub fn id(&self) -> Option<PackageId> {
-        let source = serde_json::from_value(serde_json::Value::String(self.source.clone())).ok()?;
-        Some(PackageId::new(source, self.registry.clone(), &self.package))
+    /// The package the change updates.
+    pub fn id(&self) -> PackageId {
+        PackageId::new(self.source, self.registry.clone(), &self.package)
     }
 }
 pub(crate) fn hash(bytes: &[u8]) -> String {
@@ -215,7 +214,7 @@ pub fn branch_name(prefix: &str, label: &str, _identity: &str) -> Result<String,
 }
 /// Each branch label's packages, by source, package and registry; a label
 /// shared by several gets a prefix to tell their branches apart.
-type PackageNames = BTreeMap<String, BTreeSet<(String, String, Option<String>)>>;
+type PackageNames = BTreeMap<String, BTreeSet<(Source, String, Option<String>)>>;
 
 struct Item<'a> {
     dep: &'a Dependency,
@@ -239,7 +238,7 @@ pub fn plan(
         package_names
             .entry(package_slug(&dep.package))
             .or_default()
-            .insert((word(&dep.source), dep.package.clone(), dep.registry.clone()));
+            .insert((dep.source, dep.package.clone(), dep.registry.clone()));
     }
     let mut groups = BTreeMap::<String, (String, Vec<Item<'_>>)>::new();
     for file in &repo.package_files {
@@ -247,7 +246,7 @@ pub fn plan(
             for update in &reported.updates {
                 for dep in dependencies.iter().filter(|d| {
                     d.file == file.path
-                        && word(&d.manager) == reported.manager
+                        && d.manager == reported.manager
                         && d.name == reported.name
                         && d.package == reported.package
                         && reported.current.value.as_deref() == Some(&d.current)
@@ -255,10 +254,10 @@ pub fn plan(
                         && d.registry == reported.registry
                 }) {
                     // One best proposal per occurrence and track avoids overlapping edits.
-                    let track = |u: &Update| match u.update_type.as_str() {
-                        "pin" => "pin",
-                        "major" => "major",
-                        _ => "non-major",
+                    let track = |u: &Update| match u.update_type {
+                        UpdateKind::Pin => "pin",
+                        UpdateKind::Major => "major",
+                        UpdateKind::Minor | UpdateKind::Patch | UpdateKind::Digest => "non-major",
                     };
                     let best = reported
                         .updates
@@ -335,8 +334,8 @@ pub fn plan(
 /// flake input that nix relocks), or a release a direct dependency's declared
 /// range already allows, which has no `newValue`.
 fn lock_only(dep: &Dependency, update: &Update) -> bool {
-    dep.kind == patchula_config::DependencyKind::Transitive
-        || dep.manager == patchula_config::Manager::Nix
+    dep.kind == patchula_words::DependencyKind::Transitive
+        || dep.manager == patchula_words::Manager::Nix
         || (update.new_value.is_none() && update.new_version.is_some())
 }
 
@@ -436,7 +435,10 @@ fn build(
         );
     }
     let prefix = prefixes.first().unwrap_or(&config.defaults.commit_prefix);
-    let mut message = if items.iter().all(|item| item.update.update_type == "pin") {
+    let mut message = if items
+        .iter()
+        .all(|item| item.update.update_type == UpdateKind::Pin)
+    {
         format!("{prefix} pin dependencies")
     } else {
         format!(
@@ -517,7 +519,7 @@ fn build(
             let p = u.policy.as_ref();
             Change {
                 current_version: item.current_version.map(str::to_owned),
-                source: word(&item.dep.source),
+                source: item.dep.source,
                 package: item.dep.package.clone(),
                 registry: item.dep.registry.clone(),
                 file: item.dep.file.clone(),
@@ -533,7 +535,7 @@ fn build(
                 value: u.new_value.clone(),
                 version: u.new_version.clone(),
                 digest: u.new_digest.clone(),
-                kind: u.update_type.clone(),
+                kind: u.update_type,
                 merge: p.map_or(config.defaults.merge, |p| p.merge),
                 labels: p.map_or_else(|| config.defaults.labels.clone(), |p| p.labels.clone()),
                 release_notes: p.map_or(config.defaults.release_notes, |p| p.release_notes),
@@ -661,11 +663,11 @@ fn slug(value: &str) -> String {
 fn manager_slug(dep: &Dependency) -> String {
     if matches!(
         dep.source,
-        patchula_config::Source::Docker | patchula_config::Source::Oci
+        patchula_words::Source::Docker | patchula_words::Source::Oci
     ) {
         "docker".into()
     } else {
-        word(&dep.manager)
+        dep.manager.to_string()
     }
 }
 fn proposal_order(dep: &Dependency, a: &Update, b: &Update) -> std::cmp::Ordering {
@@ -744,24 +746,24 @@ fn branch_identity(
     // line with the grouped upgrade.
     let reference_data = dep
         .kinds()
-        .contains(&patchula_config::DependencyKind::ReferenceData);
-    if update.update_type == "pin"
+        .contains(&patchula_words::DependencyKind::ReferenceData);
+    if update.update_type == UpdateKind::Pin
         && !reference_data
         && snapshot.is_none_or(|snapshot| crate::lockfiles::job(dep, update, snapshot).is_ok())
     {
         ("pins".into(), "pin-dependencies".into())
-    } else if update.update_type == "pin" && reference_data {
+    } else if update.update_type == UpdateKind::Pin && reference_data {
         (
-            serde_json::json!(["pin", word(&dep.source), dep.package]).to_string(),
+            serde_json::json!(["pin", dep.source, dep.package]).to_string(),
             format!("pin-{}", package_slug(&dep.package)),
         )
     } else if let Some(group) = &update.group {
-        let major = update.update_type == "major";
+        let major = update.update_type == UpdateKind::Major;
         (
             serde_json::json!(["group", group, major]).to_string(),
             format!("{}{}", if major { "major-" } else { "" }, slug(group)),
         )
-    } else if dep.manager == patchula_config::Manager::Nix {
+    } else if dep.manager == patchula_words::Manager::Nix {
         // An input belongs to its own lock: the same name in two flakes moves
         // on two branches, named after the input rather than its long URL. A
         // slug never holds "--", so it keeps the directory apart from the name.
@@ -781,14 +783,10 @@ fn branch_identity(
             // A package from its own registry is another branch than the public
             // package of its name; other identities stay as they were.
             match &dep.registry {
-                Some(registry) => serde_json::json!([
-                    "dependency",
-                    word(&dep.source),
-                    dep.package,
-                    line,
-                    registry
-                ]),
-                None => serde_json::json!(["dependency", word(&dep.source), dep.package, line]),
+                Some(registry) => {
+                    serde_json::json!(["dependency", dep.source, dep.package, line, registry])
+                }
+                None => serde_json::json!(["dependency", dep.source, dep.package, line]),
             }
             .to_string(),
             {
@@ -821,7 +819,7 @@ fn branch_identity(
 }
 
 fn line(dep: &Dependency, reported: &patchula_report::Dependency, update: &Update) -> String {
-    let value = if update.update_type == "major" {
+    let value = if update.update_type == UpdateKind::Major {
         update
             .new_version
             .as_deref()
@@ -846,7 +844,7 @@ fn line(dep: &Dependency, reported: &patchula_report::Dependency, update: &Updat
     // Keep container variants independent while sharing the numeric major line.
     let variant = if matches!(
         dep.source,
-        patchula_config::Source::Docker | patchula_config::Source::Oci
+        patchula_words::Source::Docker | patchula_words::Source::Oci
     ) {
         dep.current
             .split_once('-')
@@ -877,9 +875,7 @@ pub fn batch_plan(
         let candidates: Vec<_> = dependencies
             .iter()
             .filter(|d| {
-                d.file == target.file
-                    && d.package == target.package
-                    && word(&d.source) == target.source
+                d.file == target.file && d.package == target.package && d.source == target.source
             })
             .collect();
         let current = |d: &Dependency| {
@@ -932,7 +928,7 @@ pub fn batch_plan(
                     new_value: target.value.clone(),
                     new_version: target.version.clone(),
                     new_digest: target.digest.clone(),
-                    update_type: target.kind.clone(),
+                    update_type: target.kind,
                     group: None,
                     policy: None,
                     release_age: None,

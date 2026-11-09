@@ -1,9 +1,9 @@
 //! Independently simulated registry metadata from ecosystem specifications.
 use patchula_cache::Cache;
-use patchula_config::Source;
 use patchula_datasource::{Client, escape_go};
 use patchula_http::Cached;
 use patchula_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
+use patchula_words::Source;
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 #[tokio::test]

@@ -2,9 +2,10 @@
 //! fixture is recorded from mirror.gcr.io and OSV.dev by this implementation;
 //! replay is offline.
 use patchula_cache::Cache;
-use patchula_datasource::{Client, ImageSbom, SbomSource};
+use patchula_datasource::{Client, ImageSbom};
 use patchula_http::{Cached, Network};
 use patchula_lookup::images::{Side, compare, image_queries, image_state};
+use patchula_words::SbomSource;
 use std::{path::Path, sync::Arc};
 
 const OLD: &str = "sha256:1e42bbe2508154c9126d48c2b8a75420c3544343bf86fd041fb7527e017a4b4a";

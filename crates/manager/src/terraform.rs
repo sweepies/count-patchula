@@ -159,7 +159,7 @@ fn add<'a>(
             text,
             span.start,
             span.end,
-            format!("/{}/{name}/version", word(&kind)),
+            format!("/{}/{name}/version", kind.as_str()),
         ),
         name: name.into(),
         package: provider_package(package).into(),

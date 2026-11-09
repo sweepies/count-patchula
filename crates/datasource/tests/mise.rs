@@ -1,9 +1,9 @@
 //! Independent, offline source payloads; no installed mise or network in tests.
 use patchula_cache::Cache;
-use patchula_config::Source;
 use patchula_datasource::Client;
 use patchula_http::Cached;
 use patchula_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
+use patchula_words::Source;
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 

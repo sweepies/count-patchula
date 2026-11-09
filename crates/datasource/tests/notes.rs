@@ -3,7 +3,6 @@
 mod support;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use patchula_cache::Cache;
-use patchula_config::Source;
 use patchula_datasource::{
     Client,
     notes::{
@@ -12,6 +11,7 @@ use patchula_datasource::{
     },
 };
 use patchula_http::{Cached, Exchange, Response, Transport};
+use patchula_words::Source;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -1726,8 +1726,8 @@ async fn forge_tags_page_newest_first_until_a_short_page() {
 
 #[test]
 fn compare_urls_follow_the_tag_source() {
-    use patchula_config::Source;
     use patchula_datasource::notes::compare_url;
+    use patchula_words::Source;
     assert_eq!(
         compare_url(Source::GithubTags, "acme/template", "v1.4.0", "v1.6.0").as_deref(),
         Some("https://github.com/acme/template/compare/v1.4.0...v1.6.0")

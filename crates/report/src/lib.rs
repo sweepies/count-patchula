@@ -1,6 +1,10 @@
 //! Versioned caller interface for lookup/run batches, independent of log output.
 #![forbid(unsafe_code)]
 
+use patchula_words::{
+    DependencyKind, LookupErrorKind, Manager, ReleaseChannel, ResolutionKind, Source,
+    ToolingDetail, ToolingRule, Update as UpdateKind, VersionPolicy,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -13,7 +17,10 @@ pub const ACTIONS_SCHEMA_VERSION: u32 = 2;
 pub enum Error {
     #[error("invalid report JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("unsupported report schemaVersion {0}; expected 6")]
+    #[error(
+        "unsupported report schemaVersion {0}; expected {expected}",
+        expected = SCHEMA_VERSION
+    )]
     Version(u32),
     #[error("invalid report: {0}")]
     Invalid(String),
@@ -52,46 +59,44 @@ pub struct PullRequestAction {
     pub reason: Option<String>,
 }
 
-/// What happened to a branch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum BranchStatus {
+patchula_words::words!(
+    /// What happened to a branch.
+    BranchStatus {
     /// Would be written; dry runs only, or not yet reached.
-    Planned,
-    Created,
-    Updated,
-    Rebased,
-    Unchanged,
+    Planned => "planned",
+    Created => "created",
+    Updated => "updated",
+    Rebased => "rebased",
+    Unchanged => "unchanged",
     /// Its pull request was merged.
-    Merged,
+    Merged => "merged",
     /// Obsolete and deleted.
-    Deleted,
+    Deleted => "deleted",
     /// Held; the reason says why.
-    Skipped,
+    Skipped => "skipped",
     /// The default branch changed or moved since extraction, so nothing
     /// was written; a rerun retries it.
-    Stale,
+    Stale => "stale",
     /// Left alone because it holds work that is not the Count's.
-    Protected,
-    Error,
-}
+    Protected => "protected",
+    Error => "error",
+});
 
-/// What happened to a pull request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PullRequestStatus {
+patchula_words::words!(
+    /// What happened to a pull request.
+    PullRequestStatus {
     /// Would be opened or updated; dry runs only.
-    Planned,
-    Created,
-    Updated,
-    Unchanged,
-    Closed,
-    Merged,
+    Planned => "planned",
+    Created => "created",
+    Updated => "updated",
+    Unchanged => "unchanged",
+    Closed => "closed",
+    Merged => "merged",
     /// Held; the reason says why.
-    Skipped,
-    Protected,
-    Error,
-}
+    Skipped => "skipped",
+    Protected => "protected",
+    Error => "error",
+});
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -159,12 +164,12 @@ pub struct Repository {
 pub struct ToolingWarning {
     /// `merge-without-ci`, `merge-without-required-checks` or
     /// `security-merge-without-delivery`.
-    pub rule: String,
+    pub rule: ToolingRule,
     /// The case with its own wording: `reviews-only` when the default branch
     /// requires a review but no checks, `tagged-release` when only tags
     /// trigger delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
+    pub detail: Option<ToolingDetail>,
     /// Branches of the updates it applies to.
     pub branches: Vec<String>,
     /// Why it is left off PRs, from `warnings.quiet`.
@@ -175,7 +180,7 @@ pub struct ToolingWarning {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Skipped {
-    pub manager: String,
+    pub manager: Manager,
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
@@ -186,41 +191,14 @@ pub struct Skipped {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LookupFailure {
-    pub manager: String,
+    pub manager: Manager,
     pub path: String,
     pub name: String,
     pub package: String,
     /// The datasource that failed, such as npm, docker or github-tags.
-    pub datasource: String,
+    pub datasource: Source,
     pub kind: LookupErrorKind,
     pub message: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum LookupErrorKind {
-    /// The registry could not be reached, or answered with a server error.
-    Network,
-    /// The registry refused the credentials, or asked for some.
-    Auth,
-    NotFound,
-    RateLimit,
-    /// The registry answered with something the Count could not read.
-    Parse,
-    Other,
-}
-
-impl LookupErrorKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Network => "network",
-            Self::Auth => "auth",
-            Self::NotFound => "not-found",
-            Self::RateLimit => "rate-limit",
-            Self::Parse => "parse",
-            Self::Other => "other",
-        }
-    }
 }
 
 impl std::fmt::Display for LookupFailure {
@@ -249,7 +227,7 @@ impl Repository {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Notice {
-    pub manager: String,
+    pub manager: Manager,
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
@@ -297,7 +275,7 @@ pub struct PackageFile {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Dependency {
     /// Canonical patchula manager identifier; unknown upstream names stay literal.
-    pub manager: String,
+    pub manager: Manager,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence: Option<String>,
@@ -319,8 +297,8 @@ pub struct DependencyMetadata {
     /// Independently observed floating action tag commits, keyed by ref.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub tag_digests: std::collections::BTreeMap<String, String>,
-    pub source: String,
-    pub kinds: Vec<String>,
+    pub source: Source,
+    pub kinds: Vec<DependencyKind>,
     pub locations: Vec<Location>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub held_back: Vec<HeldBack>,
@@ -368,7 +346,7 @@ pub struct Advisory {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LookupEvidence {
     pub evaluated_at: String,
-    pub disabled_updates: Vec<String>,
+    pub disabled_updates: Vec<UpdateKind>,
     pub rejected: Vec<RejectedVersion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog: Option<CatalogEvidence>,
@@ -390,7 +368,7 @@ pub struct RejectedVersion {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Resolution {
     /// declared, lockfile, pinned-commit, floating-ref, release-line or supported-range.
-    pub kind: String,
+    pub kind: ResolutionKind,
     pub version: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -402,7 +380,7 @@ pub struct HeldBack {
     pub versions: Vec<String>,
     #[serde(default = "one")]
     pub count: usize,
-    pub update_type: String,
+    pub update_type: UpdateKind,
     pub published_at: String,
     pub eligible_at: String,
     /// Exact summary target's eligibility; eligibleAt remains the earliest in the class.
@@ -455,7 +433,7 @@ pub struct Update {
     pub new_version: Option<String>,
     pub new_digest: Option<String>,
     /// major, minor, patch, digest or pin.
-    pub update_type: String,
+    pub update_type: UpdateKind,
     pub group: Option<String>,
     /// Lookup metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -470,35 +448,25 @@ pub struct Update {
     pub image: Option<ImageCheck>,
 }
 
-/// How far an image comparison got, from worst to best: a comparison takes
-/// the worst of its platforms.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ImageState {
-    #[default]
-    Unreadable,
-    PreviousUnavailable,
-    NoSbom,
-    SbomWithoutOs,
-    OsNotCovered,
-    PartialSources,
-    Checked,
-    NoOsPackages,
+patchula_words::words!(
+    /// How far an image comparison got, from worst to best: a comparison takes
+    /// the worst of its platforms. Declaration order is that order.
+    ImageState {
+    Unreadable => "unreadable",
+    PreviousUnavailable => "previous-unavailable",
+    NoSbom => "no-sbom",
+    SbomWithoutOs => "sbom-without-os",
+    OsNotCovered => "os-not-covered",
+    PartialSources => "partial-sources",
+    Checked => "checked",
+    NoOsPackages => "no-os-packages",
+});
+impl Default for ImageState {
+    fn default() -> Self {
+        Self::Unreadable
+    }
 }
 impl ImageState {
-    /// The state as the report writes it.
-    pub fn word(self) -> &'static str {
-        match self {
-            Self::Unreadable => "unreadable",
-            Self::PreviousUnavailable => "previous-unavailable",
-            Self::NoSbom => "no-sbom",
-            Self::SbomWithoutOs => "sbom-without-os",
-            Self::OsNotCovered => "os-not-covered",
-            Self::PartialSources => "partial-sources",
-            Self::Checked => "checked",
-            Self::NoOsPackages => "no-os-packages",
-        }
-    }
     /// Whether the state means the Count can't tell, so it is a warning.
     pub fn warns(self) -> bool {
         matches!(
@@ -549,7 +517,7 @@ pub struct ImageCheck {
 pub struct ImageSbom {
     pub digest: String,
     /// attestation, cosign-att or cosign-sbom.
-    pub source: String,
+    pub source: patchula_words::SbomSource,
     pub generator: String,
 }
 
@@ -571,9 +539,9 @@ pub struct ImageAdvisory {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdatePolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub versions: Option<String>,
+    pub versions: Option<VersionPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel: Option<String>,
+    pub channel: Option<ReleaseChannel>,
     pub wait_hours: u32,
     pub windows: Vec<Window>,
     pub merge: bool,
@@ -738,8 +706,7 @@ impl Report {
                 }
                 let mut dependencies = BTreeSet::new();
                 for dep in &file.dependencies {
-                    if dep.manager.is_empty()
-                        || dep.name.is_empty()
+                    if dep.name.is_empty()
                         || dep.package.is_empty()
                         || dep.occurrence.as_ref().is_some_and(String::is_empty)
                         || !dependencies.insert((&dep.manager, &dep.name, &dep.occurrence))
@@ -750,10 +717,9 @@ impl Report {
                     }
                     let mut updates = BTreeSet::new();
                     for update in &dep.updates {
-                        if update.update_type.is_empty()
-                            || (update.new_value.is_none()
-                                && update.new_version.is_none()
-                                && update.new_digest.is_none())
+                        if (update.new_value.is_none()
+                            && update.new_version.is_none()
+                            && update.new_digest.is_none())
                             || !updates.insert(update)
                         {
                             return Err(Error::Invalid(
@@ -772,10 +738,10 @@ impl Report {
 /// IDs follow sorted identities, independent of source order; singleton names
 /// keep their original identity without an occurrence field.
 pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> {
-    let mut groups = std::collections::BTreeMap::<(String, String), Vec<Dependency>>::new();
+    let mut groups = std::collections::BTreeMap::<(&str, String), Vec<Dependency>>::new();
     for mut dep in dependencies {
         let group = groups
-            .entry((dep.manager.clone(), dep.name.clone()))
+            .entry((dep.manager.as_str(), dep.name.clone()))
             .or_default();
         if let Some(existing) = group
             .iter_mut()
@@ -866,6 +832,14 @@ mod tests {
                 Err(Error::Version(version)) if version == old
             ));
         }
+    }
+
+    #[test]
+    fn the_version_error_names_the_supported_schema() {
+        assert_eq!(
+            Error::Version(7).to_string(),
+            format!("unsupported report schemaVersion 7; expected {SCHEMA_VERSION}")
+        );
     }
 
     /// Version 5 added a dependency's `registry`; a version 4 reader would reject

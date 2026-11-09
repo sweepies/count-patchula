@@ -1,8 +1,8 @@
 //! Independently simulated protocol edge cases, never live HTTP.
 use patchula_cache::Cache;
-use patchula_config::Source;
 use patchula_datasource::Client;
 use patchula_http::{Cached, Exchange, Response, Transport};
+use patchula_words::Source;
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -1004,7 +1004,7 @@ async fn a_cosign_attestation_for_another_subject_is_ignored_for_the_sbom_tag() 
     let patchula_datasource::ImageSbom::Found(sbom) = found else {
         panic!("{found:?}");
     };
-    assert_eq!(sbom.source, patchula_datasource::SbomSource::CosignSbom);
+    assert_eq!(sbom.source, patchula_words::SbomSource::CosignSbom);
     assert_eq!(sbom.ecosystem.as_deref(), Some("Debian:12"));
     assert!(
         sbom.sources
@@ -1111,7 +1111,7 @@ async fn an_sbom_attestation_is_found_after_a_provenance_attestation() {
     let patchula_datasource::ImageSbom::Found(sbom) = found else {
         panic!("{found:?}");
     };
-    assert_eq!(sbom.source, patchula_datasource::SbomSource::Attestation);
+    assert_eq!(sbom.source, patchula_words::SbomSource::Attestation);
     assert!(steps.0.lock().unwrap().is_empty());
 }
 

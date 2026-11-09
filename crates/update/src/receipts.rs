@@ -1,9 +1,10 @@
 //! Receipts are proof of previously verified writes, never proof from a marker alone.
-use crate::{Lifecycle, Plan, Recheck, plan::hash};
+use crate::{Lifecycle, Plan, plan::hash};
 use patchula_cache::{Cache, ExtractionKey};
 use patchula_config::{Config, Rebase};
 use patchula_github::{Client, GraphqlPage};
 use patchula_report::{BranchStatus, Repository};
+use patchula_words::Recheck;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};

@@ -70,7 +70,7 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
     let cli = Engine::with_transport("offline-caller-token", cli_cache, 4, cli_fake)
         .unwrap()
         .with_versions_host(false)
-        .with_recheck(patchula_engine::Recheck::Now);
+        .with_recheck(patchula_words::Recheck::Now);
     let server = Engine::with_credentials(
         credentials.clone(),
         server_cache,
@@ -80,7 +80,7 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
         Default::default(),
     )
     .unwrap()
-    .with_recheck(patchula_engine::Recheck::Now);
+    .with_recheck(patchula_words::Recheck::Now);
     let options = || Options {
         repositories: vec!["demo/sandbox".into()],
         ..Default::default()
@@ -2089,7 +2089,7 @@ async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_conditio
     assert_eq!(
         report.repositories[0].tooling,
         [patchula_report::ToolingWarning {
-            rule: "merge-without-required-checks".into(),
+            rule: patchula_words::ToolingRule::MergeWithoutRequiredChecks,
             detail: None,
             branches: vec![
                 fake.prs.lock().unwrap()[0]["head"]["ref"]

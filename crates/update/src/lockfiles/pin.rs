@@ -54,7 +54,7 @@ impl Pinned {
                 continue;
             }
             let pin = patchula_lookup::scheme(dep)?
-                .new_range(&dep.current, target, patchula_config::VersionPolicy::Exact)
+                .new_range(&dep.current, target, patchula_words::VersionPolicy::Exact)
                 .map_err(|e| e.to_string())?;
             edits
                 .entry(&dep.file)

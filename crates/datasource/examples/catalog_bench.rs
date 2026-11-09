@@ -3,9 +3,9 @@
 #![forbid(unsafe_code)]
 use futures_util::{StreamExt, stream};
 use patchula_cache::Cache;
-use patchula_config::Source;
 use patchula_datasource::Client;
 use patchula_http::{Cached, Exchange, Response, Transport};
+use patchula_words::Source;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,

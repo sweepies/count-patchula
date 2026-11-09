@@ -164,7 +164,7 @@ pub fn compare(
             check.worse(sbom_state(sbom), Some(sbom.generator.clone()));
             sboms.insert(patchula_report::ImageSbom {
                 digest: digest.into(),
-                source: sbom.source.word().into(),
+                source: sbom.source,
                 generator: sbom.generator.clone(),
             });
         }
@@ -267,7 +267,7 @@ fn records<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use patchula_datasource::SbomSource;
+    use patchula_words::SbomSource;
 
     fn sbom(sources: &[(&str, &str)]) -> ImageSbom {
         ImageSbom::Found(Sbom {

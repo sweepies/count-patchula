@@ -14,7 +14,7 @@ pub const SCHEMA: &str = include_str!("../../../PatchulaSettings.pkl");
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
     pub concurrency: usize,
-    pub recheck: Option<String>,
+    pub recheck: Option<patchula_words::Recheck>,
     pub http: Http,
     pub registries: BTreeMap<String, Registry>,
     pub lockfiles: Lockfiles,
@@ -170,13 +170,6 @@ impl Settings {
     pub fn validate(&self) -> Result<(), &'static str> {
         if !(1..=100).contains(&self.concurrency) {
             return Err("concurrency must be 1..100");
-        }
-        if self
-            .recheck
-            .as_deref()
-            .is_some_and(|r| !matches!(r, "now" | "next-run"))
-        {
-            return Err("recheck must be now or next-run");
         }
         let mut prefixes = std::collections::BTreeSet::new();
         let mut mirrored = std::collections::BTreeSet::new();
@@ -421,11 +414,13 @@ impl Settings {
             && valid_repo(repo)
             && (allowed.is_empty() || allowed.iter().any(|a| a.eq_ignore_ascii_case(repo)))
     }
-    pub fn recheck(&self, override_wording: Option<&str>) -> patchula_engine::Recheck {
-        match override_wording.or(self.recheck.as_deref()) {
-            Some("next-run") => patchula_engine::Recheck::NextRun,
-            _ => patchula_engine::Recheck::Now,
-        }
+    pub fn recheck(
+        &self,
+        override_recheck: Option<patchula_words::Recheck>,
+    ) -> patchula_words::Recheck {
+        override_recheck
+            .or(self.recheck)
+            .unwrap_or(patchula_words::Recheck::Now)
     }
 }
 

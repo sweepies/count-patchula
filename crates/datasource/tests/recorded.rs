@@ -1,10 +1,10 @@
 //! Public endpoints recorded by this implementation; normal tests only replay.
 use patchula_cache::{Cache, Options as CacheOptions};
-use patchula_config::Source;
 use patchula_datasource::Client;
 use patchula_github::Options as GithubOptions;
 use patchula_http::{Cached, Network};
 use patchula_testkit::{Options, Redactor};
+use patchula_words::Source;
 use std::{path::Path, sync::Arc};
 
 /// Explicit public-only refresh when a GitHub recording credential is absent.

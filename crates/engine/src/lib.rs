@@ -2,19 +2,22 @@
 #![forbid(unsafe_code)]
 mod catalogs;
 mod overrides;
-pub use patchula_update::Recheck;
 
 use futures_util::{StreamExt, stream};
 use patchula_cache::{Cache, ExtractionKey};
-use patchula_config::{Config, Manager, PackageId, Source};
-use patchula_datasource::{Client as Sources, Failure, LookupErrorKind};
+use patchula_config::{Config, PackageId};
+use patchula_datasource::{Client as Sources, Failure};
 use patchula_github::{Client as Github, Options as GithubOptions};
 use patchula_http::{Cached, PhaseTrace, Transport};
 use patchula_lookup::{Evaluation, Evaluator};
-use patchula_manager::{Dependency, Extraction, Files, Scanner, word};
+use patchula_manager::{Dependency, Extraction, Files, Scanner};
 use patchula_report::{
     Current, Dependency as ReportDependency, LookupFailure, PackageFile, Report, Repository,
     SCHEMA_VERSION, Status,
+};
+use patchula_words::{
+    DependencyKind, LookupErrorKind, Manager, Recheck, ResolutionKind, Source, ToolingRule,
+    Update as UpdateKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1148,7 +1151,7 @@ impl Engine {
                                                     patchula_update::dashboard::held_target(
                                                         &dep_key,
                                                         v,
-                                                        &h.update_type,
+                                                        h.update_type.as_str(),
                                                     )
                                                 })
                                         }));
@@ -1160,7 +1163,7 @@ impl Engine {
                                             h.versions
                                                 .iter()
                                                 .chain(std::iter::once(&h.version))
-                                                .map(|v| (v.clone(), h.update_type.clone()))
+                                                .map(|v| (v.clone(), h.update_type.to_string()))
                                         })
                                         .filter(|(v, k)| {
                                             let target = patchula_update::dashboard::held_target(
@@ -1802,7 +1805,7 @@ impl Engine {
                 // the release, so it is a notice rather than a failure.
                 for missed in evaluation.not_proposed {
                     repo.report.notices.push(patchula_report::Notice {
-                        manager: word(&dep.manager),
+                        manager: dep.manager,
                         path: dep.file.clone(),
                         line: Some(dep.location.line),
                         name: dep.name.clone(),
@@ -1823,19 +1826,19 @@ impl Engine {
                 if dep.manager == Manager::Copier {
                     // Only copier update applies a template: report the
                     // newest eligible tag and propose nothing to edit.
-                    let rank = |kind: &str| match kind {
-                        "major" => 0,
-                        "minor" => 1,
-                        "patch" => 2,
-                        _ => 3,
+                    let rank = |kind: UpdateKind| match kind {
+                        UpdateKind::Major => 0,
+                        UpdateKind::Minor => 1,
+                        UpdateKind::Patch => 2,
+                        UpdateKind::Digest | UpdateKind::Pin => 3,
                     };
                     if let Some(available) = proposals
                         .iter()
-                        .min_by_key(|p| rank(&p.update_type))
+                        .min_by_key(|p| rank(p.update_type))
                         .and_then(|p| p.new_version.clone())
                     {
                         repo.report.notices.push(patchula_report::Notice {
-                            manager: word(&dep.manager),
+                            manager: dep.manager,
                             path: dep.file.clone(),
                             line: Some(dep.location.line),
                             name: dep.name.clone(),
@@ -1892,32 +1895,24 @@ impl Engine {
                 let resolution = resolved.as_ref().or(dep.resolved.as_ref()).map(|version| {
                     let kind = if dep.tagged_action() {
                         if dep.digest.is_some() {
-                            "pinned-commit"
+                            ResolutionKind::PinnedCommit
                         } else {
-                            "floating-ref"
+                            ResolutionKind::FloatingRef
                         }
                     } else if matches!(dep.manager, Manager::Npm | Manager::Cargo)
-                        && !matches!(
-                            dep.kind,
-                            patchula_config::DependencyKind::Toolchain
-                                | patchula_config::DependencyKind::Tool
-                        )
+                        && !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
                         && dep.resolved.is_some()
                     {
-                        "lockfile"
-                    } else if resolved.is_some()
-                        && matches!(dep.kind, patchula_config::DependencyKind::Tool)
-                    {
-                        "release-line"
-                    } else if resolved.is_some()
-                        && dep.kind == patchula_config::DependencyKind::Toolchain
-                    {
-                        "supported-range"
+                        ResolutionKind::Lockfile
+                    } else if resolved.is_some() && matches!(dep.kind, DependencyKind::Tool) {
+                        ResolutionKind::ReleaseLine
+                    } else if resolved.is_some() && dep.kind == DependencyKind::Toolchain {
+                        ResolutionKind::SupportedRange
                     } else {
-                        "declared"
+                        ResolutionKind::Declared
                     };
                     patchula_report::Resolution {
-                        kind: kind.into(),
+                        kind,
                         version: version.clone(),
                     }
                 });
@@ -1926,7 +1921,7 @@ impl Engine {
                     .filter_map(|p| p.new_value.clone())
                     .collect();
                 let value = ReportDependency {
-                    manager: word(&dep.manager),
+                    manager: dep.manager,
                     name: dep.name.clone(),
                     occurrence: None,
                     package: dep.package.clone(),
@@ -1941,7 +1936,7 @@ impl Engine {
                             .or_else(|| {
                                 patchula_lookup::scheme(dep)
                                     .ok()
-                                    .filter(|_| dep.kind != patchula_config::DependencyKind::Runner)
+                                    .filter(|_| dep.kind != patchula_words::DependencyKind::Runner)
                                     .and_then(|s| {
                                         patchula_versioning::Versioning::parse(&s, &dep.current)
                                             .ok()
@@ -1966,8 +1961,8 @@ impl Engine {
                         } else {
                             BTreeMap::new()
                         },
-                        source: word(&dep.source),
-                        kinds: dep.kinds().iter().map(word).collect(),
+                        source: dep.source,
+                        kinds: dep.kinds(),
                         locations: vec![patchula_report::Location {
                             start: dep.location.start,
                             end: dep.location.end,
@@ -2568,7 +2563,7 @@ impl Engine {
                 && !config
                     .warnings
                     .quiet
-                    .contains_key(patchula_update::tooling::SECURITY_MERGE_WITHOUT_DELIVERY);
+                    .contains_key(ToolingRule::SecurityMergeWithoutDelivery.as_str());
             let manifests = entries
                 .iter()
                 .filter(|e| {
@@ -3080,11 +3075,11 @@ fn local_name(dir: &std::path::Path) -> String {
 }
 fn lookup_failure(dep: &Dependency, failure: &Failure, message: String) -> LookupFailure {
     LookupFailure {
-        manager: word(&dep.manager),
+        manager: dep.manager,
         path: dep.file.clone(),
         name: dep.name.clone(),
         package: dep.package.clone(),
-        datasource: word(&dep.source),
+        datasource: dep.source,
         kind: failure.kind,
         message,
     }
@@ -3108,7 +3103,7 @@ fn skipped(skipped: &[patchula_manager::Skipped]) -> Vec<patchula_report::Skippe
     skipped
         .iter()
         .map(|s| patchula_report::Skipped {
-            manager: patchula_manager::word(&s.manager),
+            manager: s.manager,
             path: s.file.clone(),
             line: s.line,
             value: s.value.clone(),

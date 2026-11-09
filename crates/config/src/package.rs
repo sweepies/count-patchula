@@ -1,5 +1,5 @@
 //! The identity of a package as the Count looks it up.
-use crate::Source;
+use patchula_words::Source;
 use serde::{Deserialize, Serialize};
 
 /// A package where the Count looks it up: its source, the registry it comes
@@ -36,13 +36,6 @@ impl PackageId {
     /// which may be someone else's.
     pub fn is_public(&self) -> bool {
         self.registry.is_none()
-    }
-    /// The source's word, as in configuration and reports.
-    pub fn source_word(&self) -> String {
-        serde_json::to_value(self.source)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .unwrap_or_default()
     }
 }
 

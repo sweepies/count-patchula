@@ -46,7 +46,7 @@ pub struct Options {
     pub app_id: u64,
     pub private_key: Vec<u8>,
     pub webhook_secret: Vec<u8>,
-    pub recheck: Option<String>,
+    pub recheck: Option<patchula_words::Recheck>,
     pub shutdown_timeout: Duration,
 }
 
@@ -60,13 +60,6 @@ pub async fn serve(options: Options) -> miette::Result<()> {
 async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), Error> {
     if options.webhook_secret.is_empty() {
         return Err(Error("webhook secret must be nonempty"));
-    }
-    if options
-        .recheck
-        .as_deref()
-        .is_some_and(|r| !matches!(r, "now" | "next-run"))
-    {
-        return Err(Error("recheck must be now or next-run"));
     }
     std::fs::create_dir_all(&options.cache).map_err(|_| Error("cannot create cache directory"))?;
     // One queue owner per cache directory. The OS releases this advisory lock on crash.
@@ -350,7 +343,7 @@ struct Engines {
     /// Each installation's engine, behind its own lock: batches of different
     /// installations run at once, and a remote run waits only for its own.
     engines: Mutex<BTreeMap<u64, Slot>>,
-    recheck: Option<String>,
+    recheck: Option<patchula_words::Recheck>,
     bot_login: String,
     /// The server URL from the App's webhook URL, for `advertise`.
     derived_url: Option<String>,
@@ -571,10 +564,7 @@ impl Engines {
         }
         let (_, engine) = slot.as_mut().ok_or(Error("missing batch engine"))?;
         engine
-            .set_batch_options(
-                settings.concurrency,
-                settings.recheck(self.recheck.as_deref()),
-            )
+            .set_batch_options(settings.concurrency, settings.recheck(self.recheck))
             .map_err(|_| Error("invalid batch options"))?;
         engine.set_lockfile_cache_limit(settings.lockfiles.cache_gib);
         engine.set_advertised_server(

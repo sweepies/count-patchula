@@ -1,8 +1,8 @@
 //! Compact catalogs retain conditional HTTP semantics across process handles.
 use patchula_cache::{Cache, HttpKey};
-use patchula_config::Source;
 use patchula_datasource::Client;
 use patchula_http::{Cached, Exchange, Response, Transport};
+use patchula_words::Source;
 use reqwest::{StatusCode, header::HeaderMap};
 use serde_json::{Value, json};
 use std::{

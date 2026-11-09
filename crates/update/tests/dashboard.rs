@@ -1,8 +1,9 @@
 use patchula_report::Repository;
 use patchula_update::{
-    Inventory, Recheck,
+    Inventory,
     dashboard::{self, MARKER},
 };
+use patchula_words::Recheck;
 use serde_json::json;
 
 fn repository() -> Repository {
@@ -471,8 +472,8 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
     .unwrap();
     let warning = |rule: &str, detail: Option<&str>, silenced: Option<&str>| {
         patchula_report::ToolingWarning {
-            rule: rule.into(),
-            detail: detail.map(str::to_owned),
+            rule: rule.parse().unwrap(),
+            detail: detail.map(|d| d.parse().unwrap()),
             branches: vec!["patchula/fixture".into(), "patchula/other".into()],
             silenced: silenced.map(str::to_owned),
         }

@@ -1,7 +1,7 @@
-use patchula_config::{DependencyKind, Manager, Scheme, Source};
 use patchula_datasource::{Catalog, Version};
 use patchula_lookup::Evaluator;
 use patchula_manager::{Dependency, Location};
+use patchula_words::{DependencyKind, Manager, Scheme, Source, Update, VersionPolicy};
 fn config(name: &str) -> patchula_config::Config {
     patchula_config::load(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -84,7 +84,7 @@ fn peer_support_ranges_widen_without_pins_while_installed_dependencies_remain_ex
             .unwrap();
         assert_eq!(selected.new_value.as_deref(), Some(expected));
         if kind == DependencyKind::Peer {
-            assert!(proposals.iter().all(|p| p.update_type != "pin"));
+            assert!(proposals.iter().all(|p| p.update_type != Update::Pin));
         }
     }
     let mut dep = dependency("lib");
@@ -143,7 +143,7 @@ fn satisfying_provider_constraints_and_cargo_floors_are_retained() {
 
 #[test]
 fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
-    use patchula_config::ReleaseChannel;
+    use patchula_words::ReleaseChannel;
     let mut cfg = config("benchmark-public");
     let mut dep = dependency("node");
     dep.manager = Manager::Mise;
@@ -172,7 +172,12 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
     assert_eq!(lts.len(), 1);
     assert_eq!(lts[0].new_version.as_deref(), Some("24.2.0"));
     assert_eq!(
-        lts[0].policy.as_ref().unwrap().channel.as_deref(),
+        lts[0]
+            .policy
+            .as_ref()
+            .unwrap()
+            .channel
+            .map(ReleaseChannel::as_str),
         Some("lts")
     );
     versions.dist_tags.clear();
@@ -266,9 +271,9 @@ fn action_digest_targets_resolve_the_new_commit_without_expanding_ref_precision(
         assert_eq!(
             p.update_type,
             if dep.digest.is_some() {
-                "digest"
+                Update::Digest
             } else {
-                "pin"
+                Update::Pin
             }
         );
     }
@@ -295,7 +300,7 @@ fn mise_latest_pins_the_newest_listed_version() {
         };
         let proposals = eval.propose(&dep, &catalog(&versions)).unwrap();
         assert_eq!(proposals.len(), 1);
-        assert_eq!(proposals[0].update_type, "pin");
+        assert_eq!(proposals[0].update_type, Update::Pin);
         assert_eq!(proposals[0].new_version.as_deref(), Some(target));
     }
 }
@@ -336,7 +341,7 @@ fn docker_policy_keeps_variants_and_python_epochs_use_pep440_order() {
     assert!(
         proposals
             .iter()
-            .any(|p| p.new_value.as_deref() == Some("==1!0.1") && p.update_type == "major")
+            .any(|p| p.new_value.as_deref() == Some("==1!0.1") && p.update_type == Update::Major)
     );
     assert!(
         proposals
@@ -391,7 +396,7 @@ fn exact_preserve_nightly_and_deprecated_yanked_filters() {
     assert!(p.iter().any(|p| p.new_value.as_deref() == Some("^2.0.0")));
     let eval = Evaluator::new(&config("renovate-migration")).unwrap();
     let p = eval.propose(&dep, &catalog(&["1.0.0"])).unwrap();
-    assert_eq!(p[0].update_type, "pin");
+    assert_eq!(p[0].update_type, Update::Pin);
     assert_eq!(p[0].new_value.as_deref(), Some("1.0.0"));
     let mut versions = catalog(&["1.1.0", "2.0.0", "3.0.0-beta.1"]);
     versions.versions[0].deprecated = true;
@@ -443,7 +448,7 @@ fn lookup_evidence_records_rejected_versions_and_per_class_policy() {
     dep.source = Source::Docker;
     dep.package = "postgres".into();
     dep.file = "apps/notifuse/deployment-database.yaml".into();
-    assert_eq!(eval.disabled_updates(&dep), ["major"]);
+    assert_eq!(eval.disabled_updates(&dep), [Update::Major]);
 }
 #[test]
 fn rules_replace_lists_in_order_and_windows_are_reported() {
@@ -502,7 +507,7 @@ fn floating_dist_tags_and_latest_tools_can_be_pinned() {
     versions.dist_tags.insert("latest".into(), "2.0.0".into());
     let p = eval.propose(&dep, &versions).unwrap();
     assert_eq!(p.len(), 1);
-    assert_eq!(p[0].update_type, "pin");
+    assert_eq!(p[0].update_type, Update::Pin);
     assert_eq!(p[0].new_value.as_deref(), Some("2.0.0"));
     dep.manager = Manager::Mise;
     dep.source = Source::GithubReleases;
@@ -661,7 +666,7 @@ fn release_age_falls_back_and_reports_eligibility_without_hiding_current() {
     let patch = result
         .updates
         .iter()
-        .find(|p| p.update_type == "patch")
+        .find(|p| p.update_type == Update::Patch)
         .unwrap();
     assert_eq!(
         patch.release_age.as_ref().unwrap().evaluated_at,
@@ -738,7 +743,7 @@ fn floating_targets_fall_back_and_existing_lock_pins_survive_age_gate() {
     dep.current = "^1.0.0".into();
     dep.resolved = Some("1.0.1".into());
     let result = eval.evaluate_at(&dep, &versions, now).unwrap();
-    assert_eq!(result.updates[0].update_type, "pin");
+    assert_eq!(result.updates[0].update_type, Update::Pin);
     assert_eq!(result.updates[0].new_value.as_deref(), Some("1.0.1"));
     assert!(result.held_back.is_empty());
 }
@@ -816,7 +821,10 @@ fn floating_action_aliases_resolve_by_commit_and_keep_comment_precision() {
             .iter()
             .any(|p| p.new_version.as_deref() == Some("v2.0.1"))
     );
-    let major = proposals.iter().find(|p| p.update_type == "major").unwrap();
+    let major = proposals
+        .iter()
+        .find(|p| p.update_type == Update::Major)
+        .unwrap();
     assert_eq!(major.new_value.as_deref(), Some("v3"));
     assert_eq!(major.new_version.as_deref(), Some("v3.2.1"));
     dep.digest = Some("e".repeat(40));
@@ -838,7 +846,7 @@ fn docker_alias_precision_prevents_patch_and_date_tag_proposals() {
         .unwrap();
     assert_eq!(p.len(), 1);
     assert_eq!(p[0].new_value.as_deref(), Some("3.21"));
-    assert_eq!(p[0].update_type, "minor");
+    assert_eq!(p[0].update_type, Update::Minor);
 }
 
 #[test]
@@ -853,7 +861,7 @@ fn cargo_noop_ranges_are_not_updates_and_both_breaking_tracks_survive() {
         .propose(&dep, &catalog(&["0.2.4", "0.3.1", "1.2.3"]))
         .unwrap();
     assert_eq!(p.len(), 2);
-    assert!(p.iter().all(|p| p.update_type == "major"));
+    assert!(p.iter().all(|p| p.update_type == Update::Major));
     assert!(p.iter().any(|p| p.new_value.as_deref() == Some("0.3")));
     assert!(p.iter().any(|p| p.new_value.as_deref() == Some("1.0")));
 }
@@ -867,7 +875,7 @@ fn satisfying_npm_range_upgrade_is_one_pin_even_with_an_older_lock() {
     let p = eval
         .propose(&dep, &catalog(&["1.0.1", "1.2.0", "2.0.0"]))
         .unwrap();
-    let pins: Vec<_> = p.iter().filter(|p| p.update_type == "pin").collect();
+    let pins: Vec<_> = p.iter().filter(|p| p.update_type == Update::Pin).collect();
     assert_eq!(pins.len(), 1);
     assert_eq!(pins[0].new_value.as_deref(), Some("1.2.0"));
     assert!(
@@ -950,7 +958,7 @@ fn pyproject_pins_move_poetry_ranges_keep_form_and_satisfied_ranges_wait() {
     // moves the lock, without one there is nothing to change.
     dep.current = ">=0.6".into();
     let mut preserve = cfg.clone();
-    preserve.defaults.versions = patchula_config::VersionPolicy::Preserve;
+    preserve.defaults.versions = patchula_words::VersionPolicy::Preserve;
     let eval = Evaluator::new(&preserve).unwrap();
     let open = eval.propose(&dep, &releases).unwrap();
     assert_eq!(
@@ -1019,7 +1027,7 @@ fn unlocked_composer_and_gem_ranges_classify_from_their_floor() {
             .propose(&dep, &catalog(&["6.4.0", "7.2.0", "8.0.1"]))
             .unwrap();
         assert!(
-            proposals.iter().any(|p| p.update_type == "major"),
+            proposals.iter().any(|p| p.update_type == Update::Major),
             "{current}: {proposals:?}"
         );
     }
@@ -1217,7 +1225,7 @@ fn flake_inputs_get_digest_updates_after_the_release_age_wait() {
         .evaluate_at(&dep, &moved, "2026-10-20T12:00:00Z".parse().unwrap())
         .unwrap();
     assert!(early.updates.is_empty());
-    assert_eq!(early.held_back[0].update_type, "digest");
+    assert_eq!(early.held_back[0].update_type, Update::Digest);
     assert_eq!(early.held_back[0].eligible_at, "2026-10-21T00:00:00Z");
     let later = eval
         .evaluate_at(&dep, &moved, "2026-10-22T00:00:00Z".parse().unwrap())
@@ -1225,7 +1233,7 @@ fn flake_inputs_get_digest_updates_after_the_release_age_wait() {
     let [update] = later.updates.as_slice() else {
         panic!("one update expected: {:?}", later.updates);
     };
-    assert_eq!(update.update_type, "digest");
+    assert_eq!(update.update_type, Update::Digest);
     assert_eq!(update.new_digest.as_deref(), Some("2".repeat(40).as_str()));
     assert_eq!(update.new_value, None);
     assert!(update.release_age.is_some());
@@ -1252,9 +1260,15 @@ fn apm_short_tags_are_fixed_tags_not_floating_aliases() {
     let versions = catalog(&["v1.0", "v1.0.1", "v1.1"]);
     assert!(patchula_lookup::resolved_current_version(&dep, &versions).is_none());
     let proposals = eval.propose(&dep, &versions).unwrap();
-    let patch = proposals.iter().find(|p| p.update_type == "patch").unwrap();
+    let patch = proposals
+        .iter()
+        .find(|p| p.update_type == Update::Patch)
+        .unwrap();
     assert_eq!(patch.new_value.as_deref(), Some("v1.0.1"));
-    let minor = proposals.iter().find(|p| p.update_type == "minor").unwrap();
+    let minor = proposals
+        .iter()
+        .find(|p| p.update_type == Update::Minor)
+        .unwrap();
     assert_eq!(minor.new_value.as_deref(), Some("v1.1"));
 }
 
@@ -1290,7 +1304,7 @@ fn an_image_rebuild_is_secured_only_as_security_apply_allows() {
             .digest_proposal(&dep, &format!("sha256:{}", "b".repeat(64)))
             .unwrap();
         if let Some(tag) = tag {
-            update.update_type = "minor".into();
+            update.update_type = Update::Minor;
             update.new_version = Some(tag.into());
         }
         let applied = eval.secure(&dep, &mut update);
@@ -1386,7 +1400,7 @@ fn in_range_releases_are_lock_only_updates_when_a_lockfile_holds_the_version() {
         assert_eq!(proposals.len(), 1, "{manager:?}: {proposals:?}");
         assert_eq!(proposals[0].new_value, None, "{manager:?}");
         assert_eq!(proposals[0].new_version.as_deref(), Some(newer));
-        assert_eq!(proposals[0].update_type, "minor", "{manager:?}");
+        assert_eq!(proposals[0].update_type, Update::Minor, "{manager:?}");
         // The locked version is the baseline, not the range's floor: a lock
         // already at the newest release has nothing to move to.
         dep.resolved = Some(newer.into());
@@ -1449,7 +1463,7 @@ fn lock_only_updates_keep_the_wait_the_permitted_filter_and_exact_policy() {
     );
     assert!(result.held_back.is_empty(), "{:?}", result.held_back);
     // Exact policy still pins the declaration.
-    cfg.defaults.versions = patchula_config::VersionPolicy::Exact;
+    cfg.defaults.versions = patchula_words::VersionPolicy::Exact;
     cfg.rules.retain(|rule| rule.apply.versions.is_none());
     let exact = Evaluator::new(&cfg)
         .unwrap()
@@ -1548,7 +1562,12 @@ fn cargo_pyproject_bundler_and_composer_preserve_by_default_and_the_rest_pin() {
         let proposals = eval.propose(&dep, &releases).unwrap();
         assert_eq!(proposals.len(), 1, "{manager:?}");
         assert_eq!(
-            proposals[0].policy.as_ref().unwrap().versions.as_deref(),
+            proposals[0]
+                .policy
+                .as_ref()
+                .unwrap()
+                .versions
+                .map(VersionPolicy::as_str),
             Some(versions),
             "{manager:?}"
         );
@@ -1689,7 +1708,7 @@ fn bracketed_intervals_start_at_their_first_bound_and_widen() {
         dep.current = current.into();
         dep.resolved = None;
         let releases = catalog(&versions);
-        cfg.defaults.versions = patchula_config::VersionPolicy::Widen;
+        cfg.defaults.versions = patchula_words::VersionPolicy::Widen;
         let widen = Evaluator::new(&cfg)
             .unwrap()
             .evaluate_at(&dep, &releases, now)
@@ -1703,7 +1722,7 @@ fn bracketed_intervals_start_at_their_first_bound_and_widen() {
             [(Some(widened), Some(versions[2]))],
             "{current}"
         );
-        cfg.defaults.versions = patchula_config::VersionPolicy::Preserve;
+        cfg.defaults.versions = patchula_words::VersionPolicy::Preserve;
         let preserve = Evaluator::new(&cfg)
             .unwrap()
             .evaluate_at(&dep, &releases, now)

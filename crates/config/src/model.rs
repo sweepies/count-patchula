@@ -1,22 +1,10 @@
 //! Typed, strict representation of the bundled Pkl schema.
+use patchula_words::{DependencyKind, Manager, ReleaseChannel, Source, Update, VersionPolicy};
 use serde::{Deserialize, Serialize};
 
-macro_rules! words {
-    ($name:ident { $($variant:ident => $word:literal),+ $(,)? }) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-        pub enum $name { $(#[serde(rename = $word)] $variant),+ }
-    };
-}
-words!(Manager { Npm => "npm", Bun => "bun", GithubActions => "github-actions", Mise => "mise", Cargo => "cargo", Dockerfile => "dockerfile", Compose => "compose", Go => "go", Terraform => "terraform", Kubernetes => "kubernetes", Kustomize => "kustomize", Flux => "flux", HelmValues => "helm-values", Pyproject => "pyproject", PreCommit => "pre-commit", Helm => "helm", Devcontainer => "devcontainer", Woodpecker => "woodpecker", Copier => "copier", Maven => "maven", Gradle => "gradle", Nuget => "nuget", Bundler => "bundler", Composer => "composer", Gitlabci => "gitlabci", GitlabciInclude => "gitlabci-include", Nix => "nix", Apm => "apm", Regex => "regex" });
-words!(Source { Npm => "npm", GithubReleases => "github-releases", GithubTags => "github-tags", GithubRunners => "github-runners", Docker => "docker", Crates => "crates", Go => "go", Terraform => "terraform", Pypi => "pypi", Helm => "helm", Oci => "oci", Mise => "mise", ForgeTags => "forge-tags", Maven => "maven", Nuget => "nuget", Rubygems => "rubygems", Packagist => "packagist", Nix => "nix" });
-words!(Update { Major => "major", Minor => "minor", Patch => "patch", Digest => "digest", Pin => "pin" });
-words!(VersionPolicy { Exact => "exact", Preserve => "preserve", Widen => "widen" });
-words!(ReleaseChannel { Stable => "stable", Lts => "lts" });
-words!(Scheme { Semver => "semver", Docker => "docker", Pep440 => "pep440", Poetry => "poetry", Maven => "maven", Nuget => "nuget", Rubygems => "rubygems", Composer => "composer", Go => "go", Hashicorp => "hashicorp", Loose => "loose" });
-words!(Rebase { Conflicts => "conflicts", Behind => "behind" });
-words!(NpmEngine { Aube => "aube", Npm => "npm" });
-words!(PhpBuild { Static => "static", Compiled => "compiled" });
-words!(DependencyKind { Production => "production", Development => "development", Peer => "peer", Optional => "optional", Build => "build", Action => "action", ReusableWorkflow => "reusable-workflow", Runner => "runner", ContainerImage => "container-image", Tool => "tool", GoDirective => "go-directive", Toolchain => "toolchain", Provider => "provider", Module => "module", Chart => "chart", Template => "template", ReferenceData => "reference-data", Transitive => "transitive", FlakeInput => "flake-input" });
+patchula_words::words!(Rebase { Conflicts => "conflicts", Behind => "behind" });
+patchula_words::words!(NpmEngine { Aube => "aube", Npm => "npm" });
+patchula_words::words!(PhpBuild { Static => "static", Compiled => "compiled" });
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -158,13 +146,6 @@ pub struct Security {
 pub struct Warnings {
     pub quiet: std::collections::BTreeMap<String, String>,
 }
-
-/// The tooling warnings `warnings.quiet` can silence.
-pub const TOOLING_WARNINGS: [&str; 3] = [
-    "merge-without-ci",
-    "merge-without-required-checks",
-    "security-merge-without-delivery",
-];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

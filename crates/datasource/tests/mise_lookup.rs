@@ -2,11 +2,11 @@
 //! `fixtures/mise/listings.json` are what the pinned mise printed; nothing
 //! here starts mise or reaches the network.
 use patchula_cache::Cache;
-use patchula_config::Source;
 use patchula_datasource::{Client, Error};
 use patchula_http::{Cached, Exchange, Response, Transport};
 use patchula_mise::Lookup;
 use patchula_testkit::{MiseReplay, Outcome, Run};
+use patchula_words::Source;
 use std::{path::Path, sync::Arc};
 
 /// Answers the one public registry read the notes tests need.

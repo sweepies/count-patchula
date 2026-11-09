@@ -2,10 +2,10 @@
 #![forbid(unsafe_code)]
 mod support;
 use patchula_cache::Cache;
-use patchula_config::Source;
 use patchula_datasource::Client;
 use patchula_http::{Cached, Exchange, Network, Response, Transport};
 use patchula_testkit::{Options, Redactor};
+use patchula_words::Source;
 use std::{path::Path, sync::Arc};
 
 /// Existing captures remain verbatim REST evidence. During offline replay,

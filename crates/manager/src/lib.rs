@@ -45,7 +45,8 @@ mod woodpecker;
 mod yaml;
 mod yaml_locations;
 
-use patchula_config::{Config, DependencyKind, Manager, PackageId, Patterns, Scheme, Source};
+use patchula_config::{Config, PackageId, Patterns};
+use patchula_words::{DependencyKind, Manager, Scheme, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -937,13 +938,6 @@ pub(crate) fn registry_url(value: &str) -> Option<String> {
     valid.then(|| format!("https://{rest}"))
 }
 
-pub fn word<T: Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .expect("enum serializes")
-        .as_str()
-        .expect("enum word")
-        .into()
-}
 /// A pip requirements file by its name: `requirements.txt`,
 /// `dev-requirements.in`, `requirements-test.txt`, or any `.txt` or `.in`
 /// under a `requirements/` directory.

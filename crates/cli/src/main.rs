@@ -584,27 +584,19 @@ fn recheck(
     app: &App,
     run: bool,
     settings: &patchula_server::settings::Settings,
-) -> Result<patchula_engine::Recheck, (u8, miette::Report)> {
-    let wording = |value: &str| match value {
-        "now" => Some(patchula_engine::Recheck::Now),
-        "next-run" => Some(patchula_engine::Recheck::NextRun),
-        _ => None,
-    };
+) -> Result<patchula_words::Recheck, (u8, miette::Report)> {
     Ok(match app.recheck {
-        Some(cli::Recheck::Now) => patchula_engine::Recheck::Now,
-        Some(cli::Recheck::NextRun) => patchula_engine::Recheck::NextRun,
+        Some(recheck) => recheck,
         None if run => match std::env::var(RECHECK_VAR) {
-            Ok(value) => wording(&value).ok_or_else(|| {
+            Ok(value) => value.parse().map_err(|_| {
                 (
                     2,
                     miette::miette!("PATCHULA_RECHECK must be now or next-run"),
                 )
             })?,
-            Err(std::env::VarError::NotPresent) => settings
-                .recheck
-                .as_deref()
-                .and_then(wording)
-                .unwrap_or(patchula_engine::Recheck::NextRun),
+            Err(std::env::VarError::NotPresent) => {
+                settings.recheck.unwrap_or(patchula_words::Recheck::NextRun)
+            }
             Err(_) => {
                 return Err((
                     2,
@@ -612,7 +604,7 @@ fn recheck(
                 ));
             }
         },
-        None => patchula_engine::Recheck::NextRun,
+        None => patchula_words::Recheck::NextRun,
     })
 }
 

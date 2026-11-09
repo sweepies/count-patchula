@@ -6,18 +6,11 @@ use crate::{Plan, Snapshot, receipts::Inventory};
 use globset::{GlobBuilder, GlobMatcher};
 use patchula_config::Config;
 use patchula_report::ToolingWarning;
+use patchula_words::{ToolingDetail, ToolingRule};
 use serde::Serialize;
 use serde_json::Value;
 use serde_yaml_ng::{Mapping, Value as Yaml};
 use std::collections::BTreeMap;
-
-pub const MERGE_WITHOUT_CI: &str = "merge-without-ci";
-pub const MERGE_WITHOUT_REQUIRED_CHECKS: &str = "merge-without-required-checks";
-pub const SECURITY_MERGE_WITHOUT_DELIVERY: &str = "security-merge-without-delivery";
-pub const REVIEWS_ONLY: &str = "reviews-only";
-pub const TAGGED_RELEASE: &str = "tagged-release";
-/// GitHub's auto-merge, not the Count, merges the PR.
-pub const NATIVE: &str = "native";
 
 /// Most unread YAML files read to look for Flux and Argo CD manifests; a tree
 /// with more leaves delivery unknown.
@@ -36,8 +29,8 @@ const OTHER_CI: [&str; 6] = [
 /// A warning shown on one PR.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Callout {
-    pub rule: &'static str,
-    pub detail: Option<&'static str>,
+    pub rule: ToolingRule,
+    pub detail: Option<ToolingDetail>,
     /// The default branch, named in the wording.
     pub branch: String,
 }
@@ -451,7 +444,7 @@ pub fn apply(
     branch: &str,
     plans: &mut [Plan],
 ) -> Vec<ToolingWarning> {
-    let mut warnings = BTreeMap::<&str, ToolingWarning>::new();
+    let mut warnings = BTreeMap::<ToolingRule, ToolingWarning>::new();
     for plan in plans.iter_mut() {
         plan.tooling.clear();
         if !crate::automerge::requested(plan, config) {
@@ -468,12 +461,15 @@ pub fn apply(
         if evidence.branch_checks == Some(false)
             && evidence.ci.as_ref().is_some_and(|ci| !ci.runs(&files))
         {
-            holding.push((MERGE_WITHOUT_CI, evidence.native.then_some(NATIVE)));
+            holding.push((
+                ToolingRule::MergeWithoutCi,
+                evidence.native.then_some(ToolingDetail::Native),
+            ));
         }
         if let Some(required) = evidence.required.filter(|r| evidence.native && !r.checks) {
             holding.push((
-                MERGE_WITHOUT_REQUIRED_CHECKS,
-                required.reviews.then_some(REVIEWS_ONLY),
+                ToolingRule::MergeWithoutRequiredChecks,
+                required.reviews.then_some(ToolingDetail::ReviewsOnly),
             ));
         }
         if let Some(delivery) = &evidence.delivery
@@ -482,15 +478,15 @@ pub fn apply(
             && !delivery.ships(&files)
         {
             holding.push((
-                SECURITY_MERGE_WITHOUT_DELIVERY,
-                delivery.tags.then_some(TAGGED_RELEASE),
+                ToolingRule::SecurityMergeWithoutDelivery,
+                delivery.tags.then_some(ToolingDetail::TaggedRelease),
             ));
         }
         for (rule, detail) in holding {
-            let silenced = config.warnings.quiet.get(rule).cloned();
+            let silenced = config.warnings.quiet.get(rule.as_str()).cloned();
             let entry = warnings.entry(rule).or_insert_with(|| ToolingWarning {
-                rule: rule.into(),
-                detail: detail.map(str::to_owned),
+                rule,
+                detail,
                 branches: Vec::new(),
                 silenced: silenced.clone(),
             });
@@ -723,7 +719,7 @@ mod tests {
             fingerprint: String::new(),
             changes: vec![crate::Change {
                 registry: None,
-                source: "npm".into(),
+                source: patchula_words::Source::Npm,
                 package: "lodash".into(),
                 file: "app/package.json".into(),
                 current: "4.17.20".into(),
@@ -731,7 +727,7 @@ mod tests {
                 value: Some("4.17.21".into()),
                 version: Some("4.17.21".into()),
                 digest: None,
-                kind: "patch".into(),
+                kind: patchula_words::Update::Patch,
                 merge: true,
                 labels: Vec::new(),
                 release_notes: false,
@@ -782,7 +778,7 @@ mod tests {
         }
     }
 
-    fn rules(plan: &Plan) -> Vec<(&'static str, Option<&'static str>)> {
+    fn rules(plan: &Plan) -> Vec<(ToolingRule, Option<ToolingDetail>)> {
         plan.tooling.iter().map(|c| (c.rule, c.detail)).collect()
     }
 
@@ -793,21 +789,21 @@ mod tests {
         assert_eq!(
             rules(&plans[0]),
             [
-                (MERGE_WITHOUT_CI, Some(NATIVE)),
-                (MERGE_WITHOUT_REQUIRED_CHECKS, None),
-                (SECURITY_MERGE_WITHOUT_DELIVERY, None)
+                (ToolingRule::MergeWithoutCi, Some(ToolingDetail::Native)),
+                (ToolingRule::MergeWithoutRequiredChecks, None),
+                (ToolingRule::SecurityMergeWithoutDelivery, None)
             ]
         );
         assert_eq!(
             rules(&plans[1]),
             [
-                (MERGE_WITHOUT_CI, Some(NATIVE)),
-                (MERGE_WITHOUT_REQUIRED_CHECKS, None)
+                (ToolingRule::MergeWithoutCi, Some(ToolingDetail::Native)),
+                (ToolingRule::MergeWithoutRequiredChecks, None)
             ]
         );
         assert_eq!(plans[0].tooling[0].branch, "main");
         assert_eq!(warnings.len(), 3);
-        assert_eq!(warnings[0].rule, MERGE_WITHOUT_CI);
+        assert_eq!(warnings[0].rule, ToolingRule::MergeWithoutCi);
         assert_eq!(warnings[0].branches, ["patchula/fix", "patchula/plain"]);
         assert_eq!(warnings[2].branches, ["patchula/fix"]);
     }
@@ -873,7 +869,7 @@ mod tests {
                 apply(&reported, &config(), "main", &mut plans);
                 plans.remove(0)
             }),
-            [(MERGE_WITHOUT_REQUIRED_CHECKS, None)]
+            [(ToolingRule::MergeWithoutRequiredChecks, None)]
         );
         let native_off = Evidence {
             native: false,
@@ -881,7 +877,7 @@ mod tests {
         };
         let mut plans = vec![plan("patchula/fix", false)];
         apply(&native_off, &config(), "main", &mut plans);
-        assert_eq!(rules(&plans[0]), [(MERGE_WITHOUT_CI, None)]);
+        assert_eq!(rules(&plans[0]), [(ToolingRule::MergeWithoutCi, None)]);
     }
 
     #[test]
@@ -903,17 +899,20 @@ mod tests {
         };
         let mut config = config();
         config.warnings.quiet.insert(
-            MERGE_WITHOUT_REQUIRED_CHECKS.into(),
+            ToolingRule::MergeWithoutRequiredChecks.as_str().into(),
             "reviews gate every merge".into(),
         );
         let mut plans = vec![plan("patchula/fix", true)];
         let warnings = apply(&evidence, &config, "main", &mut plans);
         assert_eq!(
             rules(&plans[0]),
-            [(SECURITY_MERGE_WITHOUT_DELIVERY, Some(TAGGED_RELEASE))]
+            [(
+                ToolingRule::SecurityMergeWithoutDelivery,
+                Some(ToolingDetail::TaggedRelease)
+            )]
         );
-        assert_eq!(warnings[0].rule, MERGE_WITHOUT_REQUIRED_CHECKS);
-        assert_eq!(warnings[0].detail.as_deref(), Some(REVIEWS_ONLY));
+        assert_eq!(warnings[0].rule, ToolingRule::MergeWithoutRequiredChecks);
+        assert_eq!(warnings[0].detail, Some(ToolingDetail::ReviewsOnly));
         assert_eq!(
             warnings[0].silenced.as_deref(),
             Some("reviews gate every merge")

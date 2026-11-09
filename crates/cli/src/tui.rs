@@ -3,6 +3,7 @@
 //! tests draw frames on a test backend and drive it with key events.
 use crate::palette;
 use patchula_report::{LookupFailure, Report};
+use patchula_words::{DependencyKind, Manager, ResolutionKind, Update as UpdateKind};
 use ratatui::{
     Frame,
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -23,14 +24,14 @@ use std::{
 pub struct Update {
     pub repository: String,
     pub file: String,
-    pub manager: String,
+    pub manager: Manager,
     pub name: String,
     pub package: String,
     pub current: String,
     pub value: Option<String>,
     pub version: Option<String>,
     pub digest: Option<String>,
-    pub kind: String,
+    pub kind: UpdateKind,
     pub published_at: Option<String>,
     /// Advisories this update leaves behind, with their CVE aliases.
     pub fixes: Vec<String>,
@@ -92,14 +93,14 @@ pub fn updates(report: &Report) -> Vec<Update> {
                     updates.push(Update {
                         repository: repo.repository.clone(),
                         file: file.path.clone(),
-                        manager: dep.manager.clone(),
+                        manager: dep.manager,
                         name: dep.name.clone(),
                         package: dep.package.clone(),
                         current: current.clone(),
                         value: update.new_value.clone(),
                         version: update.new_version.clone(),
                         digest: update.new_digest.clone(),
-                        kind: update.update_type.clone(),
+                        kind: update.update_type,
                         published_at: update.release_age.as_ref().map(|a| a.published_at.clone()),
                         fixes: update
                             .fixes
@@ -121,11 +122,12 @@ pub fn updates(report: &Report) -> Vec<Update> {
                             })
                             .collect(),
                         starts: starts.clone(),
-                        transitive: metadata
-                            .is_some_and(|m| m.kinds.iter().any(|k| k == "transitive")),
+                        transitive: metadata.is_some_and(|m| {
+                            m.kinds.iter().any(|k| *k == DependencyKind::Transitive)
+                        }),
                         locked: metadata
                             .and_then(|m| m.resolution.as_ref())
-                            .is_some_and(|r| r.kind == "lockfile"),
+                            .is_some_and(|r| r.kind == ResolutionKind::Lockfile),
                         pick: Pick::Open,
                     });
                 }
@@ -140,7 +142,7 @@ pub struct Held {
     pub repository: String,
     pub name: String,
     pub version: String,
-    pub kind: String,
+    pub kind: UpdateKind,
     pub published_at: String,
     pub eligible_at: String,
 }
@@ -158,7 +160,7 @@ pub struct Template {
 pub struct Found {
     pub repository: String,
     pub file: String,
-    pub manager: String,
+    pub manager: Manager,
     pub name: String,
     pub current: String,
     pub resolved: Option<String>,
@@ -557,7 +559,7 @@ impl Model {
             }
             for file in &repo.package_files {
                 for dep in &file.dependencies {
-                    *managers.entry(dep.manager.clone()).or_default() += 1;
+                    *managers.entry(dep.manager.to_string()).or_default() += 1;
                     let current = dep
                         .current
                         .value
@@ -567,7 +569,7 @@ impl Model {
                     found.push(Found {
                         repository: repo.repository.clone(),
                         file: file.path.clone(),
-                        manager: dep.manager.clone(),
+                        manager: dep.manager,
                         name: dep.name.clone(),
                         current,
                         resolved: dep.current.version.clone(),
@@ -583,7 +585,7 @@ impl Model {
                             repository: repo.repository.clone(),
                             name: dep.name.clone(),
                             version: hold.version.clone(),
-                            kind: hold.update_type.clone(),
+                            kind: hold.update_type,
                             published_at: hold.published_at.clone(),
                             eligible_at: hold.eligible_at.clone(),
                         });
@@ -734,8 +736,8 @@ impl Model {
             .iter()
             .enumerate()
             .filter(|(_, u)| {
-                self.filter.matches(&u.kind)
-                    && self.query_matches(&[&u.name, &u.package, &u.file, &u.manager])
+                self.filter.matches(u.kind.as_str())
+                    && self.query_matches(&[&u.name, &u.package, &u.file, u.manager.as_str()])
             })
             .map(|(i, _)| i)
             .collect()
@@ -748,7 +750,7 @@ impl Model {
             Tab::Dependencies => self
                 .found
                 .iter()
-                .filter(|f| self.query_matches(&[&f.name, &f.file, &f.manager]))
+                .filter(|f| self.query_matches(&[&f.name, &f.file, f.manager.as_str()]))
                 .count(),
             Tab::Warnings => self.warning_rows,
             Tab::Stats => self.stats.len(),
@@ -1218,12 +1220,12 @@ fn uncommitted(dir: &Path) -> bool {
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
-fn kind_style(kind: &str) -> Style {
+fn kind_style(kind: UpdateKind) -> Style {
     Style::new().fg(match kind {
-        "major" => palette::ERROR,
-        "minor" => palette::WARNING,
-        "patch" => palette::SUCCESS,
-        _ => palette::ACCENT_DIM,
+        UpdateKind::Major => palette::ERROR,
+        UpdateKind::Minor => palette::WARNING,
+        UpdateKind::Patch => palette::SUCCESS,
+        UpdateKind::Digest | UpdateKind::Pin => palette::ACCENT_DIM,
     }
     .tui())
 }
@@ -1384,7 +1386,7 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
                 },
                 u.current.clone(),
                 u.target(),
-                u.kind.clone(),
+                u.kind.to_string(),
                 age(u.published_at.as_deref()),
                 if many {
                     format!("{}:{}", u.repository, u.file)
@@ -1444,7 +1446,7 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
                 }),
                 Cell::from(current).style(Style::new().fg(palette::MUTED.tui())),
                 Cell::from(target),
-                Cell::from(kind).style(kind_style(&u.kind)),
+                Cell::from(kind).style(kind_style(u.kind)),
                 Cell::from(age).style(Style::new().fg(palette::MUTED.tui())),
                 Cell::from(middle(&file, widths[6])).style(Style::new().fg(palette::MUTED.tui())),
             ])
@@ -1586,7 +1588,7 @@ fn draw_held(frame: &mut Frame, model: &mut Model, area: Rect) {
             TableRow::new(vec![
                 Cell::from(h.name.clone()),
                 Cell::from(h.version.clone()),
-                Cell::from(h.kind.clone()).style(kind_style(&h.kind)),
+                Cell::from(h.kind.to_string()).style(kind_style(h.kind)),
                 Cell::from(h.published_at.clone()).style(Style::new().fg(palette::MUTED.tui())),
                 Cell::from(h.eligible_at.clone()).style(Style::new().fg(palette::WARNING.tui())),
             ])
@@ -1697,7 +1699,7 @@ fn draw_found(frame: &mut Frame, model: &mut Model, area: Rect) {
     let found: Vec<&Found> = model
         .found
         .iter()
-        .filter(|f| model.query_matches(&[&f.name, &f.file, &f.manager]))
+        .filter(|f| model.query_matches(&[&f.name, &f.file, f.manager.as_str()]))
         .collect();
     let header = [
         "Manager",
@@ -1719,7 +1721,7 @@ fn draw_found(frame: &mut Frame, model: &mut Model, area: Rect) {
     let widths = fit(
         usize::from(area.width),
         &[
-            (natural(0, &|f| width(&f.manager)), 6),
+            (natural(0, &|f| width(f.manager.as_str())), 6),
             (natural(1, &|f| width(&f.name)), 12),
             (natural(2, &|f| width(&f.current)).min(40), 8),
             (
@@ -1735,7 +1737,7 @@ fn draw_found(frame: &mut Frame, model: &mut Model, area: Rect) {
         .iter()
         .map(|f| {
             TableRow::new(vec![
-                Cell::from(f.manager.clone()).style(Style::new().fg(palette::ACCENT_DIM.tui())),
+                Cell::from(f.manager.to_string()).style(Style::new().fg(palette::ACCENT_DIM.tui())),
                 Cell::from(middle(&f.name, widths[1])),
                 Cell::from(f.current.clone()),
                 Cell::from(f.resolved.clone().unwrap_or_default())
@@ -1872,7 +1874,7 @@ fn warning_lines(model: &Model, width: usize) -> Vec<Line<'static>> {
             let name = failures.iter().map(|f| columns(&f.name)).max().unwrap_or(0);
             let path = failures.iter().map(|f| columns(&f.path)).max().unwrap_or(0);
             for failure in failures {
-                let mut source = failure.datasource.clone();
+                let mut source = failure.datasource.to_string();
                 if failure.package != failure.name {
                     source = format!("{source} {}", failure.package);
                 }
@@ -2378,7 +2380,7 @@ mod tests {
         deps[3].updates[0].new_version = Some("2.1.3".into());
         let mut minor = deps[0].updates[0].clone();
         minor.new_value = Some("3.25.0".into());
-        minor.update_type = "minor".into();
+        minor.update_type = UpdateKind::Minor;
         deps[0].updates.push(minor);
         let mut updates = updates(&report);
         let lodash = updates.iter_mut().find(|u| u.name == "lodash").unwrap();
