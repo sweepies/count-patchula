@@ -227,21 +227,6 @@ fn respond(response: &RecordedResponse) -> Result<Response, Error> {
     })
 }
 
-/// The Git blob SHA of `bytes`.
-// Independent oracle: testkit must not depend on patchula-github.
-#[cfg(test)]
-fn git_blob_sha(bytes: &[u8]) -> String {
-    use sha1::Digest as _;
-    let mut digest = sha1::Sha1::new();
-    digest.update(format!("blob {}\0", bytes.len()));
-    digest.update(bytes);
-    digest
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 impl Transport for Replay {
     fn send(&self, request: Request) -> Exchange<'_> {
         Box::pin(async move {
@@ -436,21 +421,4 @@ pub fn check_directory(path: &Path, redactor: &Redactor) -> Result<usize, Error>
         }
     }
     Ok(count)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::git_blob_sha;
-
-    #[test]
-    fn git_blob_sha_matches_known_vectors() {
-        assert_eq!(
-            git_blob_sha(b"hello\n"),
-            "ce013625030ba8dba906f756967f9e9ca394464a"
-        );
-        assert_eq!(
-            git_blob_sha(b""),
-            "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
-        );
-    }
 }
