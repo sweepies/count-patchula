@@ -6,9 +6,10 @@ use patchula_http::{Exchange, Response, Transport};
 use patchula_testkit::{Options as FixtureOptions, Replay};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     path::Path,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -49,6 +50,86 @@ async fn every_get_uses_validators_and_304_preserves_body_and_link_metadata() {
     assert_eq!(second.headers["cache-control"], "private, max-age=120");
     assert_eq!(client.stats().await.not_modified, 1);
     replay.assert_finished().unwrap();
+}
+
+/// Answers conditional GETs per path: a `Vary` response revalidates with its
+/// stored validators; `Vary: *` is never stored, so every GET is a request.
+struct Vary {
+    counts: Mutex<BTreeMap<String, usize>>,
+}
+impl Transport for Vary {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        Box::pin(async move {
+            let path = request.url().path().to_owned();
+            *self.counts.lock().unwrap().entry(path.clone()).or_default() += 1;
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert("etag", "\"v1\"".parse().unwrap());
+            headers.insert("cache-control", "no-cache".parse().unwrap());
+            let starred = path.ends_with("star");
+            headers.insert(
+                "vary",
+                if starred {
+                    "*"
+                } else {
+                    "Accept, Authorization"
+                }
+                .parse()
+                .unwrap(),
+            );
+            if !starred && request.headers().contains_key("if-none-match") {
+                return Ok(Response {
+                    status: reqwest::StatusCode::NOT_MODIFIED,
+                    headers,
+                    body: Vec::new(),
+                });
+            }
+            if !starred {
+                headers.insert(
+                    "link",
+                    "<https://api.github.com/next>; rel=\"next\""
+                        .parse()
+                        .unwrap(),
+                );
+            }
+            Ok(Response {
+                status: reqwest::StatusCode::OK,
+                headers,
+                body: b"{\"ok\":true}".to_vec(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_vary_response_is_stored_once_and_revalidated_but_vary_star_is_not() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = Cache::open(
+        directory.path().join("cache.sqlite"),
+        CacheOptions::default(),
+    )
+    .await
+    .unwrap();
+    let transport = Arc::new(Vary {
+        counts: Mutex::new(BTreeMap::new()),
+    });
+    let client =
+        Client::with_transport(TOKEN, cache, Options::default(), transport.clone()).unwrap();
+    let first = client.get("repos/o/r/vary").await.unwrap();
+    let second = client.get("repos/o/r/vary").await.unwrap();
+    assert_eq!(first.body, second.body);
+    // The 304 kept the cached Link header the response did not repeat.
+    assert_eq!(
+        second.headers["link"],
+        "<https://api.github.com/next>; rel=\"next\""
+    );
+    assert_eq!(client.stats().await.not_modified, 1);
+    for _ in 0..3 {
+        client.get("repos/o/r/vary-star").await.unwrap();
+    }
+    let counts = transport.counts.lock().unwrap();
+    // One store and one revalidation: the Vary response lives under a single key.
+    assert_eq!(counts["/repos/o/r/vary"], 2);
+    assert_eq!(counts["/repos/o/r/vary-star"], 3);
 }
 
 /// Answers every request with the same JSON body, and counts them.

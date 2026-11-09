@@ -1,4 +1,5 @@
 use crate::{Error, Response, Result, text};
+use patchula_http::conditional;
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -245,17 +246,7 @@ impl Governor {
     ) -> Result<bool> {
         let status = response.status.as_u16();
         let rate_status = matches!(status, 403 | 429);
-        let retry_after = text(response, "retry-after").and_then(|value| {
-            value
-                .parse::<u64>()
-                .ok()
-                .map(Duration::from_secs)
-                .or_else(|| {
-                    httpdate::parse_http_date(value)
-                        .ok()
-                        .map(|date| date.duration_since(SystemTime::now()).unwrap_or_default())
-                })
-        });
+        let retry_after = conditional::retry_after(response);
         let exhausted = rate_status && number(response, "x-ratelimit-remaining") == Some(0);
         // Inspect only to classify; never attach this data to an error or log.
         let json: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();

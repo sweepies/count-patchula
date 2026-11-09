@@ -12,19 +12,23 @@ pub use pagination::GraphqlPage;
 pub use patchula_http::{Network, Response, Transport};
 
 use governor::Governor;
-use patchula_cache::{Cache, HttpEntry, HttpKey};
+use patchula_cache::Cache;
+use patchula_http::conditional;
 use reqwest::{
     Method, Request, StatusCode, Url,
     header::{self, HeaderValue},
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::{BTreeMap, HashSet},
-    fmt,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashSet, fmt, sync::Arc, time::Duration};
+
+const ACCEPT: &str = "application/vnd.github+json";
+const API_VERSION: &str = "2022-11-28";
+const USER_AGENT: &str = concat!("patchula/", env!("CARGO_PKG_VERSION"));
+/// The representation-selecting headers every GitHub GET sends; they are the
+/// cache key's `sent` headers.
+pub(crate) const SENT: &[(&str, &str)] =
+    &[("accept", ACCEPT), ("x-github-api-version", API_VERSION)];
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
@@ -86,7 +90,10 @@ struct Inner {
     credentials: Option<Arc<dyn Credentials>>,
     transport: Arc<dyn Transport>,
     cache: Cache,
-    authorization: HeaderValue,
+    /// `None` for refreshable credentials: `exchange` swaps in a fresh token
+    /// per request, so a path that skipped the swap sends no Authorization at
+    /// all rather than a placeholder.
+    authorization: Option<HeaderValue>,
     credential_scope: String,
     options: Options,
     governor: Governor,
@@ -123,14 +130,21 @@ impl Client {
         if credentials.scope().is_empty() {
             return Err(Error::Configuration);
         }
-        let mut client = Self::with_transport("installation", cache, options, transport)?;
-        let inner = Arc::get_mut(&mut client.0).expect("new client");
-        inner.credential_scope = Sha256::digest(credentials.scope().as_bytes())
+        Self::check_options(&options)?;
+        // `exchange` swaps in a fresh token per request, so requests carry no
+        // Authorization until then; a path that skipped the swap gets a 401.
+        let credential_scope = Sha256::digest(credentials.scope().as_bytes())
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        inner.credentials = Some(credentials);
-        Ok(client)
+        Ok(Self::assemble(
+            Some(credentials),
+            None,
+            credential_scope,
+            options,
+            cache,
+            transport,
+        ))
     }
     pub fn new(token: &str, cache: Cache, options: Options) -> Result<Self> {
         Self::with_transport(
@@ -148,31 +162,50 @@ impl Client {
         options: Options,
         transport: Arc<dyn Transport>,
     ) -> Result<Self> {
-        if token.is_empty()
-            || token.chars().any(char::is_whitespace)
-            || options.concurrency == 0
-            || options.concurrency > 100
-            || options.max_pages == 0
-            || options.max_retries > 10
-            || options.api_url.scheme() != "https"
-            || options.api_url.host_str().is_none()
-            || !options.api_url.username().is_empty()
-            || options.api_url.password().is_some()
-            || options.api_url.query().is_some()
-            || options.api_url.fragment().is_some()
-        {
+        if token.is_empty() || token.chars().any(char::is_whitespace) {
             return Err(Error::Configuration);
         }
+        Self::check_options(&options)?;
         let mut authorization =
             HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| Error::Configuration)?;
         authorization.set_sensitive(true);
-        let credential_scope = Sha256::digest(token.as_bytes())
+        let credential_scope = Sha256::digest(authorization.as_bytes())
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
+        Ok(Self::assemble(
+            None,
+            Some(authorization),
+            credential_scope,
+            options,
+            cache,
+            transport,
+        ))
+    }
+
+    fn check_options(options: &Options) -> Result<()> {
+        if options.concurrency == 0
+            || options.concurrency > patchula_http::MAX_CONCURRENCY
+            || options.max_pages == 0
+            || options.max_retries > 10
+            || !valid_api_url(&options.api_url)
+        {
+            return Err(Error::Configuration);
+        }
+        Ok(())
+    }
+
+    fn assemble(
+        credentials: Option<Arc<dyn Credentials>>,
+        authorization: Option<HeaderValue>,
+        credential_scope: String,
+        options: Options,
+        cache: Cache,
+        transport: Arc<dyn Transport>,
+    ) -> Self {
         let governor = Governor::new(options.concurrency, options.max_rate_wait);
-        Ok(Self(Arc::new(Inner {
-            credentials: None,
+        Self(Arc::new(Inner {
+            credentials,
             decoding: Arc::new(tokio::sync::Semaphore::new(4)),
             transport,
             cache,
@@ -180,7 +213,7 @@ impl Client {
             credential_scope,
             options,
             governor,
-        })))
+        }))
     }
 
     pub async fn stats(&self) -> Stats {
@@ -199,8 +232,8 @@ impl Client {
         }
         self.0
             .authorization
-            .to_str()
-            .ok()
+            .as_ref()
+            .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
             .map(str::to_owned)
             .ok_or(Error::Configuration)
@@ -227,66 +260,28 @@ impl Client {
         &self.0.credential_scope
     }
 
+    /// The configured API root every request path resolves against.
+    pub fn api_url(&self) -> &Url {
+        &self.0.options.api_url
+    }
+
     fn url(&self, path: &str) -> Result<Url> {
-        let url = self.0.options.api_url.join(path).map_err(|_| Error::Url)?;
-        if url.origin() != self.0.options.api_url.origin()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(Error::Url);
-        }
-        Ok(url)
+        join_api(&self.0.options.api_url, path)
     }
 
     fn request(&self, method: Method, url: Url) -> Request {
         let mut request = Request::new(method, url);
         let headers = request.headers_mut();
-        headers.insert(header::AUTHORIZATION, self.0.authorization.clone());
-        headers.insert(
-            header::ACCEPT,
-            HeaderValue::from_static("application/vnd.github+json"),
-        );
+        if let Some(authorization) = &self.0.authorization {
+            headers.insert(header::AUTHORIZATION, authorization.clone());
+        }
+        headers.insert(header::ACCEPT, HeaderValue::from_static(ACCEPT));
         headers.insert(
             "x-github-api-version",
-            HeaderValue::from_static("2022-11-28"),
+            HeaderValue::from_static(API_VERSION),
         );
-        headers.insert(
-            header::USER_AGENT,
-            HeaderValue::from_static(concat!("patchula/", env!("CARGO_PKG_VERSION"))),
-        );
+        headers.insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT));
         request
-    }
-
-    fn key(&self, request: &Request, vary: impl IntoIterator<Item = String>) -> Result<HttpKey> {
-        let mut headers = BTreeMap::new();
-        for name in ["accept".to_owned(), "x-github-api-version".into()]
-            .into_iter()
-            .chain(vary)
-        {
-            if name == "*" {
-                return Err(Error::Cache);
-            }
-            // Namespace handles authorization; never persist its plaintext.
-            if matches!(name.as_str(), "authorization" | "cookie") {
-                continue;
-            }
-            headers.insert(
-                name.clone(),
-                request
-                    .headers()
-                    .get(&name)
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("")
-                    .to_owned(),
-            );
-        }
-        headers.insert(
-            "x-patchula-credential-scope".into(),
-            self.0.credential_scope.clone(),
-        );
-        HttpKey::new(request.method().as_str(), request.url().as_str(), headers)
-            .map_err(|_| Error::Cache)
     }
 
     async fn exchange(&self, request: &Request, cached: bool) -> Result<Response> {
@@ -447,68 +442,35 @@ impl Client {
                 return Err(Error::Pagination);
             }
             let mut request = self.request(Method::GET, url.clone());
-            // Vary metadata is kept separately from representations so GET can
-            // discover its vary key before applying stored validators.
-            let representation = |key: HttpKey| match derived {
-                Some((format, _)) => key.representation(format),
-                None => key,
-            };
-            let base_key = representation(self.key(&request, [])?);
-            let metadata = self
+            // One key per request: the client sends a fixed header set, so any
+            // Vary the server names selects the same values every time.
+            let key = conditional::key(
+                "GET",
+                url.as_str(),
+                SENT,
+                derived.map(|(format, _)| format),
+                Some(&self.0.credential_scope),
+            )
+            .map_err(|_| Error::Cache)?;
+            let cached = self
                 .0
                 .cache
-                .http_get(&base_key)
+                .http_get(&key)
                 .await
                 .map_err(|_| Error::Cache)?;
-            let vary = metadata
-                .as_ref()
-                .and_then(|entry| entry.headers.get("vary"))
-                .map(|vary| parse_vary(vary))
-                .unwrap_or_default();
-            let cache_key = representation(self.key(&request, vary)?);
-            let cached = if cache_key == base_key {
-                metadata
-            } else {
-                self.0
-                    .cache
-                    .http_get(&cache_key)
-                    .await
-                    .map_err(|_| Error::Cache)?
-            };
             if read != Read::Revalidate
                 && let Some(entry) = &cached
                 && (200..300).contains(&entry.status)
             {
-                let mut headers = header::HeaderMap::new();
-                for (name, value) in &entry.headers {
-                    if let (Ok(name), Ok(value)) = (
-                        header::HeaderName::from_bytes(name.as_bytes()),
-                        HeaderValue::from_str(value),
-                    ) {
-                        headers.insert(name, value);
-                    }
-                }
-                return Ok(Some(Response {
-                    status: StatusCode::from_u16(entry.status).map_err(|_| Error::Cache)?,
-                    headers,
-                    body: entry.body.clone(),
-                }));
+                return Ok(Some(
+                    conditional::response(entry).map_err(|_| Error::Cache)?,
+                ));
             }
             if read == Read::Cached {
                 return Ok(None);
             }
             if let Some(entry) = &cached {
-                for (name, value) in [
-                    (header::IF_NONE_MATCH, &entry.etag),
-                    (header::IF_MODIFIED_SINCE, &entry.last_modified),
-                ] {
-                    if let Some(value) = value {
-                        request.headers_mut().insert(
-                            name,
-                            HeaderValue::from_str(value).map_err(|_| Error::Cache)?,
-                        );
-                    }
-                }
+                conditional::add_validators(&mut request, entry).map_err(|_| Error::Cache)?;
             }
             let mut response = self.exchange(&request, cached.is_some()).await?;
             if matches!(response.status.as_u16(), 301 | 302 | 303 | 307 | 308) {
@@ -525,65 +487,23 @@ impl Client {
             if not_modified {
                 let cached = cached.ok_or(Error::MissingBody)?;
                 self.0.governor.not_modified();
-                let mut headers = response.headers;
-                for (name, value) in cached.headers {
-                    if let (Ok(name), Ok(value)) = (
-                        header::HeaderName::from_bytes(name.as_bytes()),
-                        HeaderValue::from_str(&value),
-                    ) && !headers.contains_key(&name)
-                    {
-                        headers.insert(name, value);
-                    }
-                }
-                response = Response {
-                    status: StatusCode::from_u16(cached.status).map_err(|_| Error::Cache)?,
-                    headers,
-                    body: cached.body,
-                };
+                response = conditional::not_modified(response, cached).map_err(|_| Error::Cache)?;
             }
             if !response.status.is_success() {
                 return Err(Error::Status(response.status.as_u16()));
             }
             if !not_modified && let Some((_, derive)) = derived {
-                let permit = self
-                    .0
-                    .decoding
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| Error::Json)?;
-                let body = std::mem::take(&mut response.body);
-                response.body = tokio::task::spawn_blocking(move || {
-                    let _permit = permit;
-                    derive(&body)
-                })
+                response.body = conditional::derive(
+                    std::mem::take(&mut response.body),
+                    derive,
+                    &self.0.decoding,
+                )
                 .await
                 .map_err(|_| Error::Json)?
                 .map_err(|_| Error::Json)?;
             }
-            let control = comma_header(&response, "cache-control")
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            let vary = comma_header(&response, "vary")
-                .as_deref()
-                .map(parse_vary)
-                .unwrap_or_default();
-            if control.split(',').any(|part| part.trim() == "no-store")
-                || vary.iter().any(|name| name == "*")
-            {
-                self.0
-                    .cache
-                    .http_remove(&cache_key)
-                    .await
-                    .map_err(|_| Error::Cache)?;
-                self.0
-                    .cache
-                    .http_remove(&base_key)
-                    .await
-                    .map_err(|_| Error::Cache)?;
-            } else {
-                let entry = cache_entry(&response);
-                let key = representation(self.key(&request, vary)?);
+            if conditional::storable(&response) {
+                let entry = conditional::entry(&response, conditional::unix_now());
                 if not_modified {
                     self.0
                         .cache
@@ -597,24 +517,12 @@ impl Client {
                         .await
                         .map_err(|_| Error::Cache)?;
                 }
-                // The client sends a fixed request-header set. All dynamic Vary
-                // fields other than auth are absent/stable; the base copy keeps
-                // discovery and paginated Link headers intact.
-                if key != base_key {
-                    if not_modified {
-                        self.0
-                            .cache
-                            .http_refresh(&base_key, &entry)
-                            .await
-                            .map_err(|_| Error::Cache)?;
-                    } else {
-                        self.0
-                            .cache
-                            .http_put(&base_key, &entry)
-                            .await
-                            .map_err(|_| Error::Cache)?;
-                    }
-                }
+            } else {
+                self.0
+                    .cache
+                    .http_remove(&key)
+                    .await
+                    .map_err(|_| Error::Cache)?;
             }
             return Ok(Some(response));
         }
@@ -690,78 +598,33 @@ fn graphql_detail(messages: &str) -> String {
     }
 }
 
-fn parse_vary(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
-        .collect()
-}
-
 pub(crate) fn text<'a>(response: &'a Response, name: &str) -> Option<&'a str> {
     response.headers.get(name)?.to_str().ok()
 }
 
-fn comma_header(response: &Response, name: &str) -> Option<String> {
-    let values: Vec<_> = response
-        .headers
-        .get_all(name)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .collect();
-    (!values.is_empty()).then(|| values.join(", "))
+/// Whether `url` is a usable API root: HTTPS, a host, no credentials, query
+/// or fragment.
+pub(crate) fn valid_api_url(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
 }
 
-fn cache_entry(response: &Response) -> HttpEntry {
-    let fetched_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let cache_control = comma_header(response, "cache-control");
-    let max_age = cache_control
-        .as_deref()
-        .into_iter()
-        .flat_map(|value| value.split(','))
-        .find_map(|part| {
-            part.trim()
-                .strip_prefix("max-age=")?
-                .trim_matches('"')
-                .parse::<i64>()
-                .ok()
-        })
-        .filter(|age| *age >= 0);
-    let expires_at = max_age
-        .and_then(|age| fetched_at.checked_add(age))
-        .or_else(|| {
-            httpdate::parse_http_date(text(response, "expires")?)
-                .ok()?
-                .duration_since(UNIX_EPOCH)
-                .ok()
-                .map(|value| value.as_secs() as i64)
-        });
-    // Store only metadata needed to reconstitute a GET, never cookies or bodies in logs.
-    let headers = [
-        "etag",
-        "last-modified",
-        "link",
-        "cache-control",
-        "expires",
-        "vary",
-        "content-type",
-    ]
-    .into_iter()
-    .filter_map(|name| comma_header(response, name).map(|value| (name.into(), value)))
-    .collect();
-    HttpEntry {
-        status: response.status.as_u16(),
-        etag: text(response, "etag").map(str::to_owned),
-        last_modified: text(response, "last-modified").map(str::to_owned),
-        headers,
-        body: response.body.clone(),
-        fetched_at,
-        expires_at,
-        cache_control,
+/// Resolve `path` against an API base, refusing credentials, fragments and
+/// cross-origin escapes.
+pub(crate) fn join_api(base: &Url, path: &str) -> Result<Url> {
+    let url = base.join(path).map_err(|_| Error::Url)?;
+    if url.origin() != base.origin()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(Error::Url);
     }
+    Ok(url)
 }
 
 #[cfg(test)]

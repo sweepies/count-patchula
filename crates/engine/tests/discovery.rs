@@ -198,6 +198,116 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
 }
 
 #[tokio::test]
+async fn enterprise_api_url_drives_graphql_and_warm_branch_heads() {
+    struct Credentials;
+    impl patchula_github::Credentials for Credentials {
+        fn scope(&self) -> &str {
+            "enterprise-test"
+        }
+        fn token(&self) -> patchula_github::Token<'_> {
+            Box::pin(async { Ok("offline-token".to_owned()) })
+        }
+    }
+    fn ghe(path: &str, value: Value, status: u16) -> Interaction {
+        Interaction {
+            request: RecordedRequest {
+                method: "GET".into(),
+                url: format!("https://ghe.example.com/api/v3/{path}"),
+                headers: BTreeMap::from([
+                    ("accept".into(), vec!["application/vnd.github+json".into()]),
+                    ("x-github-api-version".into(), vec!["2022-11-28".into()]),
+                ]),
+                body: Body::Text(String::new()),
+            },
+            response: RecordedResponse {
+                status,
+                headers: BTreeMap::new(),
+                body: Body::Json(value),
+            },
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("enterprise.json");
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Independently simulated GitHub Enterprise API paths".into(),
+        interactions: vec![
+            Interaction {
+                request: RecordedRequest {
+                    method: "POST".into(),
+                    url: "https://ghe.example.com/api/v3/graphql".into(),
+                    headers: BTreeMap::from([
+                        ("accept".into(), vec!["application/vnd.github+json".into()]),
+                        ("x-github-api-version".into(), vec!["2022-11-28".into()]),
+                        ("content-type".into(), vec!["application/json".into()]),
+                    ]),
+                    body: Body::Json(
+                        json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"warm"}}),
+                    ),
+                },
+                response: RecordedResponse {
+                    status: 200,
+                    headers: BTreeMap::new(),
+                    body: Body::Json(
+                        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+                    ),
+                },
+            },
+            ghe(
+                "repos/demo/warm/git/trees/tree?recursive=1",
+                json!({"truncated":false,"tree":[]}),
+                200,
+            ),
+            ghe("repos/demo/warm", json!({"default_branch":"main"}), 200),
+            ghe(
+                "repos/demo/warm/branches/main",
+                json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}}),
+                200,
+            ),
+        ],
+    };
+    patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_credentials(
+        Arc::new(Credentials),
+        cache,
+        4,
+        replay.clone(),
+        Default::default(),
+        patchula_github::Options {
+            api_url: reqwest::Url::parse("https://ghe.example.com/api/v3/").unwrap(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let config = patchula_config::load_files(
+        "/repo/config.pkl",
+        BTreeMap::from([(
+            "/repo/config.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing {}".into(),
+        )]),
+    )
+    .unwrap();
+    let options = || Options {
+        repositories: vec!["demo/warm".into()],
+        config: Some(config.clone()),
+        ..Default::default()
+    };
+    engine.lookup(options()).await.unwrap();
+    let warm = engine.lookup(options()).await.unwrap();
+    assert_eq!(
+        warm.repositories[0].status,
+        patchula_report::Status::Complete
+    );
+    assert_eq!(warm.repositories[0].default_branch.as_deref(), Some("main"));
+    assert_eq!(warm.stats.unwrap().extraction_hits, 1);
+    replay.assert_finished().unwrap();
+}
+
+#[tokio::test]
 async fn installation_tokens_use_installation_repository_listing() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("installation.json");

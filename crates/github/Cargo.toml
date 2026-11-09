@@ -22,7 +22,6 @@ sha2 = "0.11.1"
 sha1 = "0.11"
 base64 = "0.23"
 futures-util = "0.3"
-httpdate = "1"
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 

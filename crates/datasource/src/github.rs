@@ -494,9 +494,11 @@ impl Client {
         if reference.is_empty() || reference.contains(['?', '#']) {
             return Err(Error::Invalid);
         }
-        let mut url =
-            reqwest::Url::parse(&format!("https://api.github.com/repos/{package}/commits/"))
-                .map_err(|_| Error::Invalid)?;
+        let mut url = self
+            .github
+            .api_url()
+            .join(&format!("repos/{package}/commits/"))
+            .map_err(|_| Error::Invalid)?;
         url.path_segments_mut()
             .map_err(|_| Error::Invalid)?
             .pop_if_empty()

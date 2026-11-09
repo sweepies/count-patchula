@@ -162,7 +162,7 @@ async fn fresh_reopen_304_changed_200_and_invalid_200_preserve_catalog_semantics
 
 #[tokio::test]
 async fn uncacheable_derived_responses_remove_body_and_validators() {
-    for (control, vary) in [("no-store", None), ("max-age=600", Some("x-unknown"))] {
+    for (control, vary) in [("no-store", None), ("max-age=600", Some("*"))] {
         let directory = tempfile::tempdir().unwrap();
         let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
             .await

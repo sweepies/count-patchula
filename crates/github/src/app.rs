@@ -1,14 +1,20 @@
 //! GitHub App JWTs and per-installation access tokens. No credentials reach SQLite.
-use crate::{Credentials, Error, Result, Token, Transport};
+use crate::{
+    ACCEPT, API_VERSION, Credentials, Error, Response, Result, Token, Transport, USER_AGENT,
+    join_api, pagination::next_link, valid_api_url,
+};
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use reqwest::{
-    Method, Request,
+    Method, Request, Url,
     header::{self, HeaderValue},
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 
 #[derive(Serialize)]
@@ -26,18 +32,25 @@ struct CachedToken {
 pub struct App {
     id: u64,
     key: EncodingKey,
+    api_url: Url,
     transport: Arc<dyn Transport>,
     tokens: Mutex<BTreeMap<u64, CachedToken>>,
 }
 impl App {
-    pub fn new(id: u64, pem: &[u8], transport: Arc<dyn Transport>) -> Result<Arc<Self>> {
-        if id == 0 {
+    pub fn new(
+        id: u64,
+        pem: &[u8],
+        transport: Arc<dyn Transport>,
+        api_url: Url,
+    ) -> Result<Arc<Self>> {
+        if id == 0 || !valid_api_url(&api_url) {
             return Err(Error::Configuration);
         }
         let key = EncodingKey::from_rsa_pem(pem).map_err(|_| Error::Configuration)?;
         Ok(Arc::new(Self {
             id,
             key,
+            api_url,
             transport,
             tokens: Mutex::new(BTreeMap::new()),
         }))
@@ -70,7 +83,7 @@ impl App {
     }
     async fn lookup_installation(&self, path: &str) -> Result<Option<u64>> {
         let value = match self
-            .request(Method::GET, path, Utc::now().timestamp())
+            .request_json(Method::GET, path, Utc::now().timestamp())
             .await
         {
             Ok(value) => value,
@@ -95,27 +108,24 @@ impl App {
         )
         .map_err(|_| Error::Configuration)
     }
-    async fn request(&self, method: Method, path: &str, now: i64) -> Result<Value> {
-        let mut request = Request::new(
-            method,
-            format!("https://api.github.com/{path}")
-                .parse()
-                .map_err(|_| Error::Url)?,
-        );
+    fn url(&self, path: &str) -> Result<Url> {
+        join_api(&self.api_url, path)
+    }
+    async fn request(&self, method: Method, url: Url, now: i64) -> Result<Response> {
+        let mut request = Request::new(method, url);
         let mut auth = HeaderValue::from_str(&format!("Bearer {}", self.jwt(now)?))
             .map_err(|_| Error::Configuration)?;
         auth.set_sensitive(true);
         request.headers_mut().insert(header::AUTHORIZATION, auth);
-        request.headers_mut().insert(
-            header::ACCEPT,
-            HeaderValue::from_static("application/vnd.github+json"),
-        );
         request
             .headers_mut()
-            .insert(header::USER_AGENT, HeaderValue::from_static("patchula"));
+            .insert(header::ACCEPT, HeaderValue::from_static(ACCEPT));
+        request
+            .headers_mut()
+            .insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT));
         request.headers_mut().insert(
             "x-github-api-version",
-            HeaderValue::from_static("2022-11-28"),
+            HeaderValue::from_static(API_VERSION),
         );
         let response = self
             .transport
@@ -125,12 +135,16 @@ impl App {
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
         }
+        Ok(response)
+    }
+    async fn request_json(&self, method: Method, path: &str, now: i64) -> Result<Value> {
+        let response = self.request(method, self.url(path)?, now).await?;
         serde_json::from_slice(&response.body).map_err(|_| Error::Json)
     }
     /// Authenticates the signing key with GitHub and returns the app's canonical bot login.
     pub async fn bot_login(&self) -> Result<String> {
         let value = self
-            .request(Method::GET, "app", Utc::now().timestamp())
+            .request_json(Method::GET, "app", Utc::now().timestamp())
             .await?;
         value["slug"]
             .as_str()
@@ -141,7 +155,7 @@ impl App {
     /// The App's OAuth client ID, which the CLI's device flow needs. It is public.
     pub async fn client_id(&self) -> Result<String> {
         let value = self
-            .request(Method::GET, "app", Utc::now().timestamp())
+            .request_json(Method::GET, "app", Utc::now().timestamp())
             .await?;
         value["client_id"]
             .as_str()
@@ -152,7 +166,7 @@ impl App {
     /// The webhook URL in the App's settings, where GitHub delivers events.
     pub async fn webhook_url(&self) -> Result<String> {
         let value = self
-            .request(Method::GET, "app/hook/config", Utc::now().timestamp())
+            .request_json(Method::GET, "app/hook/config", Utc::now().timestamp())
             .await?;
         value["url"]
             .as_str()
@@ -161,15 +175,20 @@ impl App {
             .ok_or(Error::Json)
     }
     pub async fn installations(&self) -> Result<Vec<u64>> {
+        let mut next = Some(self.url("app/installations?per_page=100")?);
+        let mut visited = HashSet::new();
         let mut ids = Vec::new();
-        for page in 1..=1000 {
-            let value = self
-                .request(
-                    Method::GET,
-                    &format!("app/installations?per_page=100&page={page}"),
-                    Utc::now().timestamp(),
-                )
+        for _ in 0..1000 {
+            let Some(url) = next.take() else {
+                return Ok(ids);
+            };
+            if !visited.insert(url.clone()) {
+                return Err(Error::Pagination);
+            }
+            let response = self
+                .request(Method::GET, url.clone(), Utc::now().timestamp())
                 .await?;
+            let value: Value = serde_json::from_slice(&response.body).map_err(|_| Error::Json)?;
             let entries = value.as_array().ok_or(Error::Json)?;
             for entry in entries {
                 if !entry["suspended_at"].is_null() {
@@ -182,9 +201,9 @@ impl App {
                         .ok_or(Error::Json)?,
                 );
             }
-            if entries.len() < 100 {
-                return Ok(ids);
-            }
+            next = next_link(&response, &url)?
+                .map(|target| self.url(target.as_str()))
+                .transpose()?;
         }
         Err(Error::Pagination)
     }
@@ -198,7 +217,7 @@ impl App {
             return Ok(token.value.clone());
         }
         let value = self
-            .request(
+            .request_json(
                 Method::POST,
                 &format!("app/installations/{id}/access_tokens"),
                 now,
@@ -294,7 +313,13 @@ mod tests {
             key.to_public_key().to_pkcs1_pem(LineEnding::LF).unwrap(),
         ));
         let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
-        let app = App::new(1, pem.as_bytes(), transport.clone()).unwrap();
+        let app = App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            Url::parse("https://api.github.com/").unwrap(),
+        )
+        .unwrap();
         let now = DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
             .unwrap()
             .timestamp();

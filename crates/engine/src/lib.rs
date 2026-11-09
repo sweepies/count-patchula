@@ -8,7 +8,7 @@ use patchula_cache::{Cache, State};
 use patchula_config::{Config, PackageId};
 use patchula_datasource::{Client as Sources, Failure};
 use patchula_github::{Client as Github, Options as GithubOptions};
-use patchula_http::{Cached, PhaseTrace, Transport};
+use patchula_http::{Cached, MAX_CONCURRENCY, PhaseTrace, Transport};
 use patchula_lookup::{Evaluation, Evaluator};
 use patchula_manager::{Dependency, Extraction, Files, Scanner};
 use patchula_report::{
@@ -253,31 +253,29 @@ impl Engine {
         github_options: GithubOptions,
     ) -> Result<Self> {
         let tool_registries = http_options.credentials.clone();
-        let mut engine = Self::with_http_options(
-            "installation",
-            cache.clone(),
-            concurrency,
-            transport.clone(),
-            http_options,
-        )?;
-        engine.github = Github::with_credentials(
+        let github = Github::with_credentials(
             credentials.clone(),
             cache.clone(),
             github_options,
-            transport,
+            transport.clone(),
         )?;
-        engine.sources = Sources::new(engine.github.clone(), engine.http.clone(), cache.clone());
-        engine.lockfiles = cache.workspace_dir().map(|path| {
+        let lockfiles = cache.workspace_dir().map(|path| {
             patchula_update::lockfiles::Runner::new(path.into(), "")
                 .with_credentials(credentials)
                 .with_registries(&tool_registries)
         });
-        engine.look_up_mise_tools_with_runner();
-        Ok(engine)
+        Self::build(
+            github,
+            cache,
+            concurrency,
+            transport,
+            http_options,
+            lockfiles,
+        )
     }
     /// Settings change only between batches; warm clients and receipts stay intact.
     pub fn set_batch_options(&mut self, concurrency: usize, recheck: Recheck) -> Result<()> {
-        if !(1..=100).contains(&concurrency) {
+        if !(1..=MAX_CONCURRENCY).contains(&concurrency) {
             return Err(Error::Invalid("concurrency must be 1..100".into()));
         }
         self.concurrency = concurrency;
@@ -314,9 +312,6 @@ impl Engine {
         transport: Arc<dyn Transport>,
         http_options: patchula_http::Options,
     ) -> Result<Self> {
-        if concurrency == 0 || concurrency > 100 {
-            return Err(Error::Invalid("concurrency must be 1..100".into()));
-        }
         let github = Github::with_transport(
             token,
             cache.clone(),
@@ -327,13 +322,33 @@ impl Engine {
             transport.clone(),
         )?;
         let tool_registries = http_options.credentials.clone();
-        let http = Cached::with_options(cache.clone(), transport, http_options)
-            .map_err(|e| Error::Invalid(e.to_string()))?;
-        let sources = Sources::new(github.clone(), http.clone(), cache.clone());
         let lockfiles = cache.workspace_dir().map(|path| {
             patchula_update::lockfiles::Runner::new(path.into(), token)
                 .with_registries(&tool_registries)
         });
+        Self::build(
+            github,
+            cache,
+            concurrency,
+            transport,
+            http_options,
+            lockfiles,
+        )
+    }
+    fn build(
+        github: Github,
+        cache: Cache,
+        concurrency: usize,
+        transport: Arc<dyn Transport>,
+        http_options: patchula_http::Options,
+        lockfiles: Option<patchula_update::lockfiles::Runner>,
+    ) -> Result<Self> {
+        if !(1..=MAX_CONCURRENCY).contains(&concurrency) {
+            return Err(Error::Invalid("concurrency must be 1..100".into()));
+        }
+        let http = Cached::with_options(cache.clone(), transport, http_options)
+            .map_err(|e| Error::Invalid(e.to_string()))?;
+        let sources = Sources::new(github.clone(), http.clone(), cache.clone());
         let mut engine = Self {
             lockfiles,
             lockfile_cache_gib: patchula_update::lockfiles::DEFAULT_CACHE_GIB,
@@ -2560,9 +2575,11 @@ impl Engine {
         })
     }
     async fn head(&self, repo: &str, branch: &str) -> Result<Value> {
-        let mut url =
-            reqwest::Url::parse(&format!("https://api.github.com/repos/{repo}/branches/"))
-                .expect("validated repository");
+        let mut url = self
+            .github
+            .api_url()
+            .join(&format!("repos/{repo}/branches/"))
+            .expect("validated repository");
         url.path_segments_mut()
             .expect("https URL")
             .pop_if_empty()

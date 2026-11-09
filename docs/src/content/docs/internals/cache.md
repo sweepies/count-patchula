@@ -49,6 +49,10 @@ Keys normalise method case, the URL (authority, default port, path, fragment)
 and header names. Query order is kept, because repeated parameters can be
 order-sensitive. Callers choose the vary-relevant headers; for authenticated
 data they include a digest of the credential namespace, never a raw token.
+The conditional-GET protocol the registry cache and the GitHub client share —
+keys, entries, validators, 304 merges, `Retry-After` and bounded decoding —
+lives in `patchula_http::conditional`; each client keeps its own freshness
+policy, sender and error mapping on top.
 An entry stores the status, validators, selected response headers such as
 `Link`, the compressed body, fetch time, expiry and Cache-Control hints.
 Expiry keeps validators. An invalid compressed body is a miss, and its
@@ -167,8 +171,8 @@ A response read with a [private registry](/guide/sources/#private-registries)
 entry's credentials is keyed by that entry's prefix and a one-way digest of its
 credentials as well as the request, so a read without the entry, with another
 one, or after its secret or account changes never sees it. The key never holds
-the secret. Such responses follow the registry's `no-store` and
-`Vary`, digest-addressed ones included. Tokens a registry issues to an account
+the secret. Such responses follow the registry's `no-store` and `Vary: *`,
+digest-addressed ones included. Tokens a registry issues to an account
 stay in memory and are never written to the cache.
 
 ## Manifest digests

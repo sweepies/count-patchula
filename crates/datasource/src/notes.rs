@@ -278,8 +278,11 @@ impl Client {
         Ok(serde_json::from_slice(&bytes)?)
     }
     async fn notes_directory(&self, repo: &str, directory: &str) -> Result<changelog::Tree> {
-        let mut url = reqwest::Url::parse(&format!("https://api.github.com/repos/{repo}/contents"))
-            .expect("upstream URL");
+        let mut url = self
+            .github
+            .api_url()
+            .join(&format!("repos/{repo}/contents"))
+            .expect("validated API URL");
         if !directory.is_empty() {
             url.path_segments_mut()
                 .expect("HTTP URL")
@@ -290,7 +293,7 @@ impl Client {
                 Ok(self
                     .github
                     .get_derived(
-                        url.as_str().trim_start_matches("https://api.github.com/"),
+                        url.as_str(),
                         "notes-changelog-directory-v1",
                         changelog::compact_tree,
                     )
