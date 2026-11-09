@@ -20,6 +20,66 @@ pub(super) enum Install {
     Nix,
 }
 
+/// How scheduled lockfile maintenance finds this ecosystem's work in a
+/// snapshot, from the same file roles `job()` maps dependencies through.
+pub(super) enum Refresh {
+    /// A supported lockfile of any listed manager claims the directory;
+    /// the run needs one of them enabled in `config.managers`.
+    Locks(&'static [Manager]),
+    /// `Locks`, but only beside a manifest of the same managers.
+    LocksBesideManifest(&'static [Manager]),
+    /// The managers' manifest files are the work itself.
+    Manifests(&'static [Manager]),
+    /// Maintenance never schedules this ecosystem.
+    Never,
+}
+
+impl Refresh {
+    /// Whether `leaf` in `directory` is this ecosystem's maintenance work
+    /// under `config`, given the snapshot's paths.
+    pub(super) fn claims(
+        &self,
+        config: &Config,
+        leaf: &str,
+        directory: &str,
+        paths: &BTreeSet<String>,
+    ) -> bool {
+        let enabled = |managers: &[Manager]| managers.iter().any(|m| config.managers.contains(m));
+        match self {
+            Self::Never => false,
+            Self::Manifests(managers) => {
+                enabled(managers) && managers.iter().any(|m| manifest_names(*m).contains(&leaf))
+            }
+            Self::Locks(managers) => {
+                managers
+                    .iter()
+                    .any(|m| lock_names(*m).supported.contains(&leaf))
+                    && enabled(managers)
+            }
+            Self::LocksBesideManifest(managers) => {
+                managers
+                    .iter()
+                    .any(|m| lock_names(*m).supported.contains(&leaf))
+                    && enabled(managers)
+                    && managers.iter().any(|m| {
+                        manifest_names(*m)
+                            .iter()
+                            .any(|name| paths.contains(&context::join(directory, name)))
+                    })
+            }
+        }
+    }
+}
+
+/// How much of a run's output the executor keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Output {
+    /// The executor's default limit.
+    Default,
+    /// Everything, for a tool whose answer is JSON.
+    Complete,
+}
+
 /// What the lockfile driver needs to know about one ecosystem.
 pub(super) struct Tool {
     /// The managers whose files steer this ecosystem's fetches, for the
@@ -35,6 +95,12 @@ pub(super) struct Tool {
     pub versions: bool,
     /// How its pinned tools become mise install specs.
     pub install: Install,
+    /// How maintenance discovers its work; `job()` does not consult this —
+    /// extraction already applied `config.managers` to the dependencies it
+    /// reports, while maintenance sees raw paths.
+    pub refresh: Refresh,
+    /// How much of the ecosystem's tool output a run keeps.
+    pub output: Output,
 }
 
 impl Tool {

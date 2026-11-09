@@ -146,18 +146,12 @@ pub fn credentials(
     (credentials, failed)
 }
 
-/// The installation GitHub client settings. It keeps the client's own
-/// lower default unless `http.hostConcurrency` sets api.github.com.
+/// The installation GitHub client settings: `api.github.com`'s host limit
+/// under the same rule the HTTP side applies to every host.
 pub fn github_options(settings: &Settings) -> GithubOptions {
-    let defaults = GithubOptions::default();
     GithubOptions {
-        concurrency: settings
-            .http
-            .host_concurrency
-            .get("api.github.com")
-            .copied()
-            .unwrap_or(defaults.concurrency),
-        ..defaults
+        concurrency: http_options(settings).host_limit("api.github.com"),
+        ..GithubOptions::default()
     }
 }
 
@@ -202,6 +196,27 @@ mod tests {
             "http { hostConcurrency { [\"api.github.com\"] = 0 } }",
         ] {
             assert!(rejected(&path, bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn github_options_take_the_http_host_limit_rule() {
+        // No entries: api.github.com gets http.defaultHostConcurrency,
+        // not the GitHub client's own lower default.
+        assert_eq!(github_options(&Settings::default()).concurrency, 16);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.pkl");
+        for (body, want) in [
+            ("http { defaultHostConcurrency = 8 }", 8),
+            ("http { hostConcurrency { [\"api.github.com\"] = 4 } }", 4),
+            (
+                "http { defaultHostConcurrency = 8\n  hostConcurrency { [\"api.github.com\"] = 4 } }",
+                4,
+            ),
+        ] {
+            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
+            let settings = Settings::load(&path).unwrap();
+            assert_eq!(github_options(&settings).concurrency, want, "{body}");
         }
     }
 

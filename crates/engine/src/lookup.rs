@@ -13,9 +13,7 @@ const SBOM_FAN_OUT: usize = 16;
 
 /// What discovery produced before any repository is read.
 pub(super) struct Discovery {
-    /// The repositories to scan.
     repos: BTreeSet<String>,
-    /// Per-repository config overrides.
     overrides: BTreeMap<String, Config>,
     /// Hash of the lookup inputs the hints are scoped by.
     inputs_hash: String,
@@ -23,30 +21,22 @@ pub(super) struct Discovery {
     schema_hash: String,
     /// The credential scope the hints are scoped by.
     credential_scope: String,
-    /// The digests earlier runs hinted at.
     hint: LookupHint,
 }
 
 /// What the scan stage produced.
 pub(super) struct Scanned {
-    /// One `Work` per repository.
     pub work: Vec<Work>,
-    /// Microscopic time the scans took.
     pub extraction: u64,
-    /// Microscopic time the hinted digest prefetch took.
     pub prefetch: u64,
-    /// The hinted digests read during the scan.
     pub digests: BTreeMap<DigestKey, std::result::Result<String, Failure>>,
 }
 
 /// What the plan stage decided the batch must fetch.
 #[derive(Default)]
 pub(super) struct Plan {
-    /// Catalog keys to read.
     keys: BTreeSet<LookupKey>,
-    /// Each key's reuse wait in hours.
     waits: BTreeMap<LookupKey, u32>,
-    /// Catalog keys a manual retry reads fresh.
     forced: BTreeSet<LookupKey>,
     /// Mutable action refs whose current commit is read up front, and
     /// whether a manual retry revalidates each.
@@ -61,7 +51,6 @@ pub(super) struct Plan {
 pub(super) struct EvalKeys {
     /// Action and image references, keyed by package and reference.
     digests: BTreeMap<DigestKey, bool>,
-    /// Image tag digests.
     images: BTreeMap<DigestKey, bool>,
 }
 
@@ -71,22 +60,6 @@ fn flagged<V: Ord>(map: &mut BTreeMap<V, bool>, key: V, revalidate: bool) {
     map.entry(key)
         .and_modify(|flag| *flag |= revalidate)
         .or_insert(revalidate);
-}
-
-/// The SBOM reads for one image package and digest on `platforms`.
-fn sbom_side(
-    sboms: &ImageSboms,
-    package: &str,
-    digest: &str,
-    platforms: &[String],
-) -> patchula_lookup::images::Side {
-    platforms
-        .iter()
-        .filter_map(|platform| {
-            let key = (package.to_owned(), digest.to_owned(), platform.clone());
-            Some((platform.clone(), sboms.get(&key)?.clone()))
-        })
-        .collect()
 }
 
 /// The advisory IDs one digest's SBOMs list, per the batch OSV listing.
@@ -188,16 +161,10 @@ impl Engine {
                     };
                     let mut work = match scanned {
                         Ok(work) => work,
-                        Err(error) => Work {
-                            report: repo_report(&repo, Status::Error, Some(error.to_string())),
-                            config: None,
-                            dependencies: Vec::new(),
-                            locked: Vec::new(),
-                            evaluator: None,
-                            snapshot: patchula_update::Snapshot::default(),
-                            inventory: None,
-                            controls: patchula_update::dashboard::Controls::default(),
-                        },
+                        Err(error) => Work::empty(
+                            repo_report(&repo, Status::Error, Some(error.to_string())),
+                            None,
+                        ),
                     };
                     if read_controls
                         && work.report.status == Status::Complete
@@ -645,14 +612,14 @@ impl Engine {
                             ) {
                                 Ok(p) => {
                                     let dep_key =
-                                        patchula_update::dashboard::extracted_key(&dep.dependency);
+                                        patchula_update::identity::extracted_key(&dep.dependency);
                                     if let Some(held) = &mut held {
                                         held.extend(p.held_back.iter().flat_map(|h| {
                                             h.versions
                                                 .iter()
                                                 .chain(std::iter::once(&h.version))
                                                 .map(|v| {
-                                                    patchula_update::dashboard::held_target(
+                                                    patchula_update::identity::held_target(
                                                         &dep_key,
                                                         v,
                                                         h.update_type.as_str(),
@@ -670,7 +637,7 @@ impl Engine {
                                                 .map(|v| (v.clone(), h.update_type.to_string()))
                                         })
                                         .filter(|(v, k)| {
-                                            let target = patchula_update::dashboard::held_target(
+                                            let target = patchula_update::identity::held_target(
                                                 &dep_key, v, k,
                                             );
                                             repo.controls.create.contains(&target)
@@ -690,7 +657,7 @@ impl Engine {
                                             Ok(p) => {
                                                 for (v, k) in overrides {
                                                     repo.controls.age_permits.insert(
-                                                        patchula_update::dashboard::held_target(
+                                                        patchula_update::identity::held_target(
                                                             &dep_key, &v, &k,
                                                         ),
                                                     );
@@ -1004,7 +971,7 @@ impl Engine {
         let mut fallback_reads = BTreeMap::new();
         for (package, digests, configured, listed, revalidate) in &mut image_deps {
             for digest in digests.iter() {
-                let side = sbom_side(
+                let side = image_side(
                     &image_sboms,
                     package.as_str(),
                     digest,

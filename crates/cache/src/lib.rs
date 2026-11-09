@@ -160,6 +160,13 @@ pub struct ReleaseList {
     pub releases: Vec<Release>,
 }
 
+/// The scope of state kept per repository: one entry per `owner/name`.
+#[derive(serde::Serialize)]
+pub struct RepositoryScope {
+    /// The repository the state is about.
+    pub repository: String,
+}
+
 /// A value the Count keeps between runs, under its own namespace.
 pub trait State: serde::Serialize + serde::de::DeserializeOwned {
     /// Names the stored shape. Never reused for a different shape.

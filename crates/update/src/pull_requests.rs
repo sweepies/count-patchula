@@ -6,6 +6,7 @@ use patchula_github::Client;
 use patchula_manager::hash;
 use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus};
 use patchula_words::{Recheck, Severity, ToolingDetail, ToolingRule, Update as UpdateKind};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -90,7 +91,7 @@ pub(crate) fn merge_note(pr: &Value) -> Option<&str> {
 pub(crate) fn set_merge_note(pr: &mut Value, note: Option<MergeNote>) {
     pr["patchula_merge"] = note.map_or(Value::Null, |n| json!(n.text()));
 }
-fn body(pr: &Value) -> &str {
+pub(crate) fn body(pr: &Value) -> &str {
     pr["body"].as_str().unwrap_or("")
 }
 /// The Count's rendering between whatever the PR's body has right now before
@@ -124,6 +125,42 @@ pub(crate) fn body_hash(text: &str) -> String {
 }
 fn branch(pr: &Value) -> &str {
     pr["head"]["ref"].as_str().unwrap_or("")
+}
+/// The pull-request fields the dashboard and batch read, decoded once per
+/// PR object rather than re-indexed at every use. Each field reads as the
+/// `Value` indexing it replaces did: a missing or mistyped field is absent.
+#[derive(Deserialize, Default)]
+pub(crate) struct Pr {
+    /// `open` or `closed`.
+    pub state: Option<String>,
+    pub number: Option<u64>,
+    pub title: Option<String>,
+    /// The merge timestamp; `None` while open or closed unmerged.
+    pub merged_at: Option<Value>,
+    #[serde(default)]
+    pub head: PrHead,
+}
+#[derive(Deserialize, Default)]
+pub(crate) struct PrHead {
+    /// The head branch's name (`head.ref`).
+    #[serde(rename = "ref", default)]
+    pub branch: Option<String>,
+}
+impl Pr {
+    pub(crate) fn read(pr: &Value) -> Self {
+        fn field<T: serde::de::DeserializeOwned>(pr: &Value, key: &str) -> Option<T> {
+            serde_json::from_value::<Option<T>>(pr.get(key).cloned().unwrap_or(Value::Null))
+                .ok()
+                .flatten()
+        }
+        Self {
+            state: field(pr, "state"),
+            number: field(pr, "number"),
+            title: field(pr, "title"),
+            merged_at: field(pr, "merged_at"),
+            head: field(pr, "head").unwrap_or_default(),
+        }
+    }
 }
 /// Whether two GitHub repository names name the same repository: repository
 /// names are case-insensitive.

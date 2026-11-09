@@ -1,6 +1,6 @@
 use super::{
     Blob, Ecosystem, Error, Plan, Runner, ToolFailure, blob_sha, cargo_config, collect,
-    directory_of_cargo_config, hash, materialized, safe_path, under,
+    directory_of_cargo_config, hash, materialized, safe_path, within,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::{collections::BTreeMap, path::Path};
@@ -233,8 +233,7 @@ impl Runner {
             && cargo_config(path)
             && plan.lock_jobs.iter().any(|job| {
                 let owner = directory_of_cargo_config(path);
-                job.ecosystem == Ecosystem::Cargo
-                    && (job.directory == owner || under(&job.directory, owner))
+                job.ecosystem == Ecosystem::Cargo && within(&job.directory, owner)
             })
     }
 

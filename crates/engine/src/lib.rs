@@ -137,13 +137,27 @@ struct Work {
     inventory: Option<patchula_update::Inventory>,
     controls: patchula_update::dashboard::Controls,
 }
+impl Work {
+    /// A repository's work before extraction: its report and config, with
+    /// nothing extracted, fetched or read yet.
+    fn empty(report: Repository, config: Option<Config>) -> Self {
+        Self {
+            report,
+            config,
+            dependencies: Vec::new(),
+            locked: Vec::new(),
+            evaluator: None,
+            snapshot: patchula_update::Snapshot::default(),
+            inventory: None,
+            controls: patchula_update::dashboard::Controls::default(),
+        }
+    }
+}
 /// One extracted dependency plus what the lookup stages made of it.
 struct Dep {
     /// The dependency as extraction reported it.
     dependency: Dependency,
-    /// What the batch fetches and checks for it.
     needs: Needs,
-    /// Policy's proposals for it.
     evaluation: Evaluation,
 }
 impl Dep {
@@ -172,22 +186,15 @@ struct Needs {
     versions: bool,
     /// Its forge-action tag catalog feeds digest pins.
     forge: bool,
-    /// The youngest catalog reuse its wait allows, in hours.
     wait_hours: u32,
     /// The OSV query its advisories are read under; whether they are fetched
     /// is the repository's settings' decision, not the query's.
     advisory: Option<patchula_datasource::AdvisoryQuery>,
-    /// A GithubTags ref whose current commit digest is read up front.
     current_ref: Option<DigestKey>,
-    /// Whether a digest proposal for it would pass policy.
     digest_policy: bool,
-    /// Whether policy ignores it.
     ignored: bool,
-    /// Whether it is a container image dependency.
     image: bool,
-    /// Whether its pinned digest's SBOMs are read and compared.
     sboms: bool,
-    /// Whether a manual retry revalidates every fetch it makes.
     revalidate: bool,
 }
 /// Everything the fetch stages produced, read by digest resolution and
@@ -198,51 +205,50 @@ struct Lookups {
     catalogs: Catalogs,
     /// When each catalog was fetched, and whether it was reused.
     evidence: catalogs::Evidence,
-    /// Catalog keys whose lookups carried credentials.
     credentialed: BTreeSet<LookupKey>,
     /// Git ref digests read so far: hints, current refs, proposals.
     digests: BTreeMap<DigestKey, std::result::Result<String, Failure>>,
-    /// OSV advisories per query.
     advisories:
         BTreeMap<patchula_datasource::AdvisoryQuery, Vec<Arc<patchula_datasource::Advisory>>>,
-    /// Container image tag digests.
     image_digests: BTreeMap<DigestKey, std::result::Result<String, Failure>>,
-    /// SBOM reads keyed by image, digest and platform.
     image_sboms: ImageSboms,
-    /// The OSV listing image advisories were judged against.
     image_listing: patchula_datasource::AdvisoryListing,
-    /// The OSV records image advisories were judged by.
     image_found: patchula_lookup::images::Found,
-    /// Why the image advisory read failed, when it did.
     osv_failure: Option<String>,
 }
-/// SBOM reads keyed by image, digest and platform.
 type ImageSboms =
     BTreeMap<(String, String, String), std::result::Result<patchula_datasource::ImageSbom, String>>;
+
+/// The SBOM side of one image digest on `platforms`.
+fn image_side(
+    sboms: &ImageSboms,
+    package: &str,
+    digest: &str,
+    platforms: &[String],
+) -> patchula_lookup::images::Side {
+    platforms
+        .iter()
+        .filter_map(|platform| {
+            let key = (package.to_owned(), digest.to_owned(), platform.clone());
+            Some((platform.clone(), sboms.get(&key)?.clone()))
+        })
+        .collect()
+}
 #[derive(Serialize, Deserialize)]
 struct CachedExtraction {
     extraction: Extraction,
     snapshot: patchula_update::Snapshot,
 }
-/// When a repository last completed a real run, in Unix seconds.
 #[derive(Serialize, Deserialize)]
 struct LastRun(i64);
-/// The default branch name a repository's head hint remembers.
 #[derive(Serialize, Deserialize)]
 struct BranchHint(String);
-/// The config a commit's patchula.pkl evaluates to, when it has one.
 #[derive(Serialize, Deserialize)]
 struct RepoConfig(Option<Config>);
-/// What the files a commit's config reads extract to.
 #[derive(Serialize, Deserialize)]
 struct FileExtraction(Extraction);
-/// The config evaluated from a commit's config files.
 #[derive(Serialize, Deserialize)]
 struct EvaluatedConfig(Config);
-#[derive(Serialize)]
-struct RepositoryScope {
-    repository: String,
-}
 #[derive(Serialize)]
 struct CredentialScope {
     repository: String,
@@ -282,7 +288,7 @@ struct ConfigFilesScope {
 impl State for LastRun {
     const NAMESPACE: &'static str = "last-run";
     const VERSION: u32 = 1;
-    type Scope = RepositoryScope;
+    type Scope = patchula_cache::RepositoryScope;
 }
 impl State for LookupHint {
     const NAMESPACE: &'static str = "lookup-hint";
@@ -697,14 +703,14 @@ impl Engine {
         &self,
         repo: &str,
     ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
-        let scope = RepositoryScope {
+        let scope = patchula_cache::RepositoryScope {
             repository: repo.into(),
         };
         let run = self.cache.state::<LastRun>(&scope).await?;
         Ok(run.and_then(|run| chrono::DateTime::from_timestamp(run.0, 0)))
     }
     async fn record_run(&self, repo: &str, now: chrono::DateTime<chrono::Utc>) -> Result<()> {
-        let scope = RepositoryScope {
+        let scope = patchula_cache::RepositoryScope {
             repository: repo.into(),
         };
         self.cache
@@ -1066,20 +1072,14 @@ impl Engine {
                     .map_err(|e| Error::Invalid(e.to_string()))?
                     .map_err(Error::Invalid)?,
                     None => {
-                        return Ok(Work {
-                            report: repo_report(
+                        return Ok(Work::empty(
+                            repo_report(
                                 repo,
                                 Status::Skipped,
                                 Some("no patchula.pkl: the Count visits only repositories that invite him; add one to opt in".into()),
                             ),
-                            config: None,
-                            dependencies: Vec::new(),
-                            locked: Vec::new(),
-                            evaluator: None,
-                            snapshot: patchula_update::Snapshot::default(),
-                            inventory: None,
-                            controls: patchula_update::dashboard::Controls::default(),
-                        });
+                            None,
+                        ));
                     }
                 }
             }
@@ -1104,16 +1104,10 @@ impl Engine {
             refusal,
         } = view;
         if let Some(reason) = refusal {
-            return Ok(Work {
-                report: repo_report(repo, Status::Error, Some(reason)),
-                config: Some(config),
-                dependencies: Vec::new(),
-                locked: Vec::new(),
-                evaluator: None,
-                snapshot: patchula_update::Snapshot::default(),
-                inventory: None,
-                controls: patchula_update::dashboard::Controls::default(),
-            });
+            return Ok(Work::empty(
+                repo_report(repo, Status::Error, Some(reason)),
+                Some(config),
+            ));
         }
         let mut extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
             .await
@@ -1134,18 +1128,14 @@ impl Engine {
         )?));
         report.default_branch = Some("local".into());
         Ok(Work {
-            report,
-            config: Some(config),
             dependencies: extraction.dependencies.into_iter().map(Dep::new).collect(),
             locked: extraction.locked,
-            evaluator: None,
             snapshot: patchula_update::Snapshot {
                 paths,
                 files: blobs,
                 public_only: extraction.public_only.clone(),
             },
-            inventory: None,
-            controls: patchula_update::dashboard::Controls::default(),
+            ..Work::empty(report, Some(config))
         })
     }
     async fn head(&self, repo: &str, branch: &str) -> Result<Value> {
@@ -1199,16 +1189,7 @@ impl Engine {
         let Some(config) = config else {
             report.status = Status::Skipped;
             report.reason = Some("no patchula.pkl: the Count visits only repositories that invite him; add one to opt in".into());
-            return Ok(Work {
-                report,
-                config: None,
-                dependencies: Vec::new(),
-                locked: Vec::new(),
-                evaluator: None,
-                snapshot: patchula_update::Snapshot::default(),
-                inventory: None,
-                controls: patchula_update::dashboard::Controls::default(),
-            });
+            return Ok(Work::empty(report, None));
         };
         let config_hash = patchula_manager::hash(&serde_json::to_vec(&config)?);
         let scope = ExtractionScope {
@@ -1240,16 +1221,7 @@ impl Engine {
             if let Some(reason) = refusal {
                 report.status = Status::Error;
                 report.reason = Some(reason);
-                return Ok(Work {
-                    report,
-                    config: Some(config),
-                    dependencies: Vec::new(),
-                    locked: Vec::new(),
-                    evaluator: None,
-                    snapshot: patchula_update::Snapshot::default(),
-                    inventory: None,
-                    controls: patchula_update::dashboard::Controls::default(),
-                });
+                return Ok(Work::empty(report, Some(config)));
             }
             // Extraction is a function of the config and the files it reads,
             // so a commit that leaves those as they were, whatever else it
@@ -1291,8 +1263,6 @@ impl Engine {
         report.warnings = cached.extraction.warnings;
         report.skipped = skipped(&cached.extraction.skipped);
         Ok(Work {
-            report,
-            config: Some(config),
             dependencies: cached
                 .extraction
                 .dependencies
@@ -1300,10 +1270,8 @@ impl Engine {
                 .map(Dep::new)
                 .collect(),
             locked: cached.extraction.locked,
-            evaluator: None,
             snapshot: cached.snapshot,
-            inventory: None,
-            controls: patchula_update::dashboard::Controls::default(),
+            ..Work::empty(report, Some(config))
         })
     }
     async fn config(&self, repo: &str, path: &str, entries: &[Entry]) -> Result<Config> {

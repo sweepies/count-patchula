@@ -6,6 +6,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["ruby"],
     versions: true,
     install: Install::Plain,
+    refresh: Refresh::Locks(&[Manager::Bundler]),
+    output: Output::Default,
 };
 
 /// `.ruby-version`, then the Gemfile's `ruby` directive, then the default.
@@ -42,10 +44,10 @@ fn ruby_version(cwd: &Path, pinned: &str) -> String {
 impl Runner {
     pub(super) async fn bundle_lock(
         &self,
-        context: node::NodeContext<'_>,
+        context: context::Context<'_>,
         jobs: &[&Job],
     ) -> Result<(), Error> {
-        let node::NodeContext {
+        let context::Context {
             driver,
             root,
             baseline,
@@ -56,7 +58,7 @@ impl Runner {
             public,
         } = context;
         let cwd = root.join(directory);
-        let lock = node::join(directory, "Gemfile.lock");
+        let lock = context::join(directory, "Gemfile.lock");
         let gems: BTreeSet<_> = jobs
             .iter()
             .filter_map(|j| j.package().map(str::to_owned))
@@ -67,13 +69,14 @@ impl Runner {
         }
         let home = driver.join("ruby");
         let path = |p: &str| home.join(p).to_string_lossy().into_owned();
-        let ruby = ruby_version(&cwd, &node::version(versions, "ruby")?);
+        let ruby = ruby_version(&cwd, &context::version(versions, "ruby")?);
         let (credentials, entries) = self.bundler_env();
         let scopes = credentials::scopes(entries.iter().copied());
         let secrets = credentials::secrets(entries.iter().copied());
         let invocation = |args| Invocation {
+            descriptor: &DESCRIPTOR,
             tools: vec![("ruby".into(), ruby.clone())],
-            bin: "bundle".into(),
+            bin: caches::Bin::Bundle,
             cwd: Some(cwd.clone()),
             env: vec![
                 // Repository .bundle/config never redirects the run.
@@ -103,7 +106,7 @@ impl Runner {
         }
         let before = baseline.get(&lock).map(|b| b.content.as_str());
         let after = std::fs::read_to_string(root.join(&lock)).ok();
-        let manifest = node::join(directory, "Gemfile");
+        let manifest = context::join(directory, "Gemfile");
         let edited = baseline.get(&manifest).map(|b| b.content.clone())
             != std::fs::read_to_string(root.join(&manifest)).ok();
         if !maintenance && (edited || !gems.is_empty()) && before == after.as_deref() {

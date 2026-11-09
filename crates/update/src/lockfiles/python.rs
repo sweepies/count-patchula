@@ -6,6 +6,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["python", "uv", "poetry"],
     versions: true,
     install: Install::Plain,
+    refresh: Refresh::Locks(&[Manager::Pyproject]),
+    output: Output::Default,
 };
 
 /// Lockfile names the Python ecosystem recognizes, from the manager's
@@ -44,10 +46,10 @@ fn python(
 impl Runner {
     pub(super) async fn python_locks(
         &self,
-        context: node::NodeContext<'_>,
+        context: context::Context<'_>,
         jobs: &[&Job],
     ) -> Result<(), Error> {
-        let node::NodeContext {
+        let context::Context {
             driver,
             root,
             baseline,
@@ -63,7 +65,7 @@ impl Runner {
         // locks are done, and Poetry by source name; Poetry's HTTP client may
         // read `~/.netrc` too.
         let (netrc, hosts, netrc_entries) = self.netrc();
-        let mut _netrc = node::Private::default();
+        let mut _netrc = context::Private::default();
         if !hosts.is_empty() {
             let home = driver.join("home");
             std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
@@ -96,18 +98,19 @@ impl Runner {
                     let package = job.package().unwrap_or_default();
                     args.extend([
                         "--upgrade-package".into(),
-                        match (job.lock_only, job.target()) {
+                        match (job.exact_version, job.target()) {
                             (true, Some(target)) => format!("{package}=={target}"),
                             _ => package.into(),
                         },
                     ]);
                 }
                 Invocation {
+                    descriptor: &DESCRIPTOR,
                     tools: vec![
-                        ("uv".into(), node::version(versions, "uv")?),
+                        ("uv".into(), context::version(versions, "uv")?),
                         ("python".into(), python.clone()),
                     ],
-                    bin: "uv".into(),
+                    bin: caches::Bin::Uv,
                     cwd: None,
                     // Resolve with the mise interpreter; never download another.
                     env: vec![
@@ -133,11 +136,12 @@ impl Runner {
                     args.push("--regenerate".into());
                 }
                 Invocation {
+                    descriptor: &DESCRIPTOR,
                     tools: vec![
-                        ("poetry".into(), node::version(versions, "poetry")?),
+                        ("poetry".into(), context::version(versions, "poetry")?),
                         ("python".into(), python.clone()),
                     ],
-                    bin: "poetry".into(),
+                    bin: caches::Bin::Poetry,
                     cwd: None,
                     env: [
                         ("POETRY_VIRTUALENVS_CREATE".into(), "false".into()),
@@ -173,10 +177,10 @@ impl Runner {
                 return Err(format!("tool did not produce {leaf}").into());
             }
             let before = baseline
-                .get(&node::join(directory, leaf))
+                .get(&context::join(directory, leaf))
                 .map(|b| b.content.as_str());
             let after = std::fs::read_to_string(cwd.join(leaf)).ok();
-            let manifest = node::join(directory, "pyproject.toml");
+            let manifest = context::join(directory, "pyproject.toml");
             let edited = baseline.get(&manifest).map(|b| b.content.clone())
                 != std::fs::read_to_string(root.join(&manifest)).ok();
             // A targeted upgrade must move the lock just like a manifest edit.

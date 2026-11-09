@@ -9,6 +9,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["php", "composer"],
     versions: true,
     install: Install::Php,
+    refresh: Refresh::Locks(&[Manager::Composer]),
+    output: Output::Default,
 };
 
 /// The mise tool specs for PHP and Composer. Both use the http backend for
@@ -40,10 +42,10 @@ pub(super) fn tools(build: PhpBuild, php: &str, composer: &str) -> Vec<(String, 
 impl Runner {
     pub(super) async fn composer_lock(
         &self,
-        context: node::NodeContext<'_>,
+        context: context::Context<'_>,
         jobs: &[&Job],
     ) -> Result<(), Error> {
-        let node::NodeContext {
+        let context::Context {
             driver,
             root,
             baseline,
@@ -53,7 +55,7 @@ impl Runner {
             maintenance,
             public,
         } = context;
-        let php = node::version(versions, "php")?;
+        let php = context::version(versions, "php")?;
         let full = php.split('.').count() == 3
             && php
                 .split('.')
@@ -65,7 +67,7 @@ impl Runner {
             .into());
         }
         let cwd = root.join(directory);
-        let lock = node::join(directory, "composer.lock");
+        let lock = context::join(directory, "composer.lock");
         let packages: BTreeSet<_> = jobs
             .iter()
             .filter_map(|j| j.package().map(str::to_owned))
@@ -77,7 +79,7 @@ impl Runner {
             args.extend(["--with-all-dependencies".into(), "--minimal-changes".into()]);
             // A declaration left as it is gets its version as a temporary
             // constraint for this run, which composer.json never records.
-            for job in jobs.iter().filter(|j| j.lock_only) {
+            for job in jobs.iter().filter(|j| j.exact_version) {
                 if let (Some(package), Some(target)) = (job.package(), job.target()) {
                     args.extend(["--with".into(), format!("{package}:{target}")]);
                 }
@@ -111,12 +113,13 @@ impl Runner {
         self.held_tool(
             driver,
             Invocation {
+                descriptor: &DESCRIPTOR,
                 tools: tools(
                     config.lockfiles.php,
                     &php,
-                    &node::version(versions, "composer")?,
+                    &context::version(versions, "composer")?,
                 ),
-                bin: "composer".into(),
+                bin: caches::Bin::Composer,
                 cwd: Some(cwd),
                 env,
                 credentials: credentials::scopes(entries.iter().copied()),

@@ -21,12 +21,6 @@ pub struct Item {
     pub targets: Vec<Change>,
 }
 
-fn body(pr: &Value) -> &str {
-    pr["body"].as_str().unwrap_or("")
-}
-fn branch(pr: &Value) -> &str {
-    pr["head"]["ref"].as_str().unwrap_or("")
-}
 fn overlaps(item: &Item, targets: &[Change]) -> bool {
     item.targets.iter().any(|a| {
         targets.iter().any(|b| {
@@ -46,34 +40,45 @@ fn overlaps(item: &Item, targets: &[Change]) -> bool {
 pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<Item> {
     let open: Vec<_> = prs
         .iter()
-        .filter(|p| p["state"] == "open" && pull_requests::owned_pr(p, actor, repo))
+        .map(|pr| (pr, pull_requests::Pr::read(pr)))
+        .filter(|(pr, fields)| {
+            fields.state.as_deref() == Some("open") && pull_requests::owned_pr(pr, actor, repo)
+        })
         .collect();
-    let batch = open.iter().find(|p| branch(p) == batch_branch);
+    let batch = open
+        .iter()
+        .find(|(_, fields)| fields.head.branch.as_deref() == Some(batch_branch));
     let mut items: Vec<Item> = batch
-        .and_then(|p| markers::section_json::<Vec<Item>>(body(p), markers::ITEMS, markers::PAYLOAD))
+        .and_then(|(pr, _)| {
+            markers::section_json::<Vec<Item>>(
+                pull_requests::body(pr),
+                markers::ITEMS,
+                markers::PAYLOAD,
+            )
+        })
         .unwrap_or_default();
-    if let Some(pr) = batch {
-        let removed: BTreeSet<_> = markers::ticked_lines(body(pr))
+    if let Some((pr, _)) = batch {
+        let removed: BTreeSet<_> = markers::ticked_lines(pull_requests::body(pr))
             .into_iter()
-            .filter_map(|line| {
-                line.rsplit_once(markers::REMOVE)
-                    .and_then(|(_, rest)| rest.strip_suffix(" -->"))
-                    .map(str::to_owned)
-            })
+            .filter_map(|line| markers::line_end(line, markers::REMOVE, 256).map(str::to_owned))
             .collect();
         items.retain(|item| !removed.contains(&item.origin));
     }
-    for pr in &open {
-        if branch(pr) == batch_branch
-            || !markers::ticked_lines(body(pr))
+    for (pr, fields) in &open {
+        if fields.head.branch.as_deref() == Some(batch_branch)
+            || !markers::ticked_lines(pull_requests::body(pr))
                 .iter()
                 .any(|line| line.ends_with(markers::ADD))
         {
             continue;
         }
         let (Some(origin), Some(targets)) = (
-            pull_requests::marker_update(body(pr)),
-            markers::section_json::<Vec<Change>>(body(pr), markers::TARGETS, markers::PAYLOAD),
+            pull_requests::marker_update(pull_requests::body(pr)),
+            markers::section_json::<Vec<Change>>(
+                pull_requests::body(pr),
+                markers::TARGETS,
+                markers::PAYLOAD,
+            ),
         ) else {
             continue;
         };
@@ -83,8 +88,8 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
         items.retain(|item| item.origin != origin && !overlaps(item, &targets));
         items.push(Item {
             origin,
-            number: pr["number"].as_u64(),
-            title: pr["title"].as_str().unwrap_or("").into(),
+            number: fields.number,
+            title: fields.title.clone().unwrap_or_default(),
             targets,
         });
     }

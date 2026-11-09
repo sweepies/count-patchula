@@ -7,6 +7,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["node", "bun", "aube", "yarn"],
     versions: true,
     install: Install::Plain,
+    refresh: Refresh::Locks(&[Manager::Npm, Manager::Bun]),
+    output: Output::Default,
 };
 
 /// Lockfile names the Node ecosystem regenerates in place, from the
@@ -150,23 +152,9 @@ pub(super) fn dependencies(text: &str) -> Option<String> {
     Some(canonical(&serde_json::Value::Object(projection)))
 }
 
-/// Everything one Node directory needs to regenerate its lockfiles.
-pub(super) struct NodeContext<'a> {
-    pub driver: &'a Path,
-    pub root: &'a Path,
-    pub baseline: &'a BTreeMap<String, Blob>,
-    pub directory: &'a str,
-    pub config: &'a Config,
-    pub versions: &'a BTreeMap<String, String>,
-    pub maintenance: bool,
-    /// Whether every file the run can read decided public-only, so its
-    /// tools may share the `public` cache partition.
-    pub public: bool,
-}
-
 impl Runner {
     /// Regenerate every Node lockfile committed in one directory.
-    pub(super) async fn node(&self, context: NodeContext<'_>) -> Result<(), Error> {
+    pub(super) async fn node(&self, context: context::Context<'_>) -> Result<(), Error> {
         // Operator registry credentials the entries allow tools to use, in
         // the run's own user configuration, gone when the tools finish.
         let _credentials = registry_credentials(context.driver, &self.registries)?;
@@ -189,8 +177,8 @@ impl Runner {
         }
         result
     }
-    async fn node_locks(&self, context: NodeContext<'_>) -> Result<(), Error> {
-        let NodeContext {
+    async fn node_locks(&self, context: context::Context<'_>) -> Result<(), Error> {
+        let context::Context {
             driver,
             root,
             baseline,
@@ -234,7 +222,7 @@ impl Runner {
             if engine == Engine::Aube
                 && leaf != "aube-lock.yaml"
                 && cwd.join("aube-lock.yaml").exists()
-                && !baseline.contains_key(&join(directory, "aube-lock.yaml"))
+                && !baseline.contains_key(&context::join(directory, "aube-lock.yaml"))
             {
                 return Err("aube wrote aube-lock.yaml instead of the existing lockfile".into());
             }
@@ -260,8 +248,8 @@ impl Runner {
         directory: &str,
         leaf: &str,
     ) -> bool {
-        let manifest = join(directory, "package.json");
-        let lock = join(directory, leaf);
+        let manifest = context::join(directory, "package.json");
+        let lock = context::join(directory, leaf);
         let before = baseline.get(&manifest).map(|b| b.content.as_str());
         let after = std::fs::read_to_string(root.join(&manifest)).ok();
         let changed = match (before, after) {
@@ -271,7 +259,7 @@ impl Runner {
             (None, None) => false,
         } || CATALOGS.iter().any(|leaf| {
             // A catalog edit changes recorded dependencies as much as a manifest edit.
-            let path = join(directory, leaf);
+            let path = context::join(directory, leaf);
             baseline.get(&path).map(|b| b.content.clone())
                 != std::fs::read_to_string(root.join(&path)).ok()
         });
@@ -299,7 +287,7 @@ impl Runner {
         maintenance: bool,
         public: bool,
     ) -> Result<(), Error> {
-        let version = version(versions, "bun")?;
+        let version = context::version(versions, "bun")?;
         if bun_too_old(&version) {
             return Err(format!(
                 "bun.lock requires Bun >=1.2; repository pins {version}; update its mise.toml first"
@@ -312,8 +300,9 @@ impl Runner {
         self.node_tool(
             driver,
             Invocation {
+                descriptor: &DESCRIPTOR,
                 tools: vec![("bun".into(), version)],
-                bin: "bun".into(),
+                bin: caches::Bin::Bun,
                 cwd: None,
                 env: Vec::new(),
                 credentials: Vec::new(),
@@ -351,8 +340,9 @@ impl Runner {
         self.node_tool(
             driver,
             Invocation {
-                tools: vec![("node".into(), version(versions, "node")?)],
-                bin: "npm".into(),
+                descriptor: &DESCRIPTOR,
+                tools: vec![("node".into(), context::version(versions, "node")?)],
+                bin: caches::Bin::Npm,
                 cwd: None,
                 env: Vec::new(),
                 credentials: Vec::new(),
@@ -377,7 +367,7 @@ impl Runner {
         // committed lockfile explicitly so a second lockfile cannot redirect it.
         // It may hold registry credentials, which no later tool reads.
         let config = driver.join(format!("aube-{}.npmrc", hash(leaf.as_bytes())));
-        let mut written = Private::default();
+        let mut written = context::Private::default();
         written.write(
             &config,
             &format!("default-lockfile={leaf}\n{}", npm_auth(&self.registries)),
@@ -400,8 +390,9 @@ impl Runner {
         self.node_tool(
             driver,
             Invocation {
-                tools: vec![("aube".into(), version(versions, "aube")?)],
-                bin: "aube".into(),
+                descriptor: &DESCRIPTOR,
+                tools: vec![("aube".into(), context::version(versions, "aube")?)],
+                bin: caches::Bin::Aube,
                 cwd: None,
                 env: vec![(
                     "NPM_CONFIG_USERCONFIG".into(),
@@ -449,11 +440,12 @@ impl Runner {
             .node_tool(
                 driver,
                 Invocation {
+                    descriptor: &DESCRIPTOR,
                     tools: vec![
-                        ("node".into(), version(versions, "node")?),
+                        ("node".into(), context::version(versions, "node")?),
                         ("yarn".into(), yarn),
                     ],
-                    bin: "yarn".into(),
+                    bin: caches::Bin::Yarn,
                     cwd: Some(cwd.to_path_buf()),
                     env: vec![
                         ("YARN_ENABLE_IMMUTABLE_INSTALLS".into(), "0".into()),
@@ -495,21 +487,6 @@ pub(super) fn aube_cannot_write_npm(cwd: &Path, leaf: &str) -> Result<bool, Stri
         .ok()
         .and_then(|value| value.get("lockfileVersion")?.as_u64())
         .is_some_and(|version| version < 2))
-}
-
-pub(super) fn join(directory: &str, leaf: &str) -> String {
-    if directory.is_empty() {
-        leaf.to_string()
-    } else {
-        format!("{directory}/{leaf}")
-    }
-}
-
-pub(super) fn version(versions: &BTreeMap<String, String>, tool: &str) -> Result<String, String> {
-    versions
-        .get(tool)
-        .cloned()
-        .ok_or_else(|| format!("missing {tool} version"))
 }
 
 fn bun_too_old(version: &str) -> bool {
@@ -604,45 +581,13 @@ pub(super) fn yarn_auth(registries: &[patchula_http::Credential]) -> Result<Stri
     serde_yaml_ng::to_string(&root).map_err(|e| e.to_string())
 }
 
-/// Files only this user can read, removed when dropped, so tools that run
-/// later never see what they hold.
-#[derive(Default)]
-pub(super) struct Private(Vec<std::path::PathBuf>);
-
-impl Private {
-    /// Write `text` to a new file at `path`, replacing whatever is there
-    /// without following it. The file is removed on drop even if writing fails.
-    pub(super) fn write(&mut self, path: &Path, text: &str) -> Result<(), String> {
-        use std::io::Write;
-        match std::fs::remove_file(path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
-            _ => {}
-        }
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut file = options.open(path).map_err(|e| e.to_string())?;
-        self.0.push(path.to_path_buf());
-        file.write_all(text.as_bytes()).map_err(|e| e.to_string())
-    }
-}
-
-impl Drop for Private {
-    fn drop(&mut self) {
-        for path in &self.0 {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-}
-
 /// The run's npm, Bun and Yarn user configuration holding registry
 /// credentials, gone when dropped.
 fn registry_credentials(
     driver: &Path,
     registries: &[patchula_http::Credential],
-) -> Result<Private, String> {
-    let mut written = Private::default();
+) -> Result<context::Private, String> {
+    let mut written = context::Private::default();
     if registries.is_empty() {
         return Ok(written);
     }
@@ -777,7 +722,7 @@ mod registry_credentials {
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         {
-            let mut written = Private::default();
+            let mut written = context::Private::default();
             written.write(&link, "secret").unwrap();
             assert!(!std::fs::symlink_metadata(&link).unwrap().is_symlink());
         }

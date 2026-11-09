@@ -63,7 +63,6 @@ pub struct View {
     pub blobs: BTreeMap<String, Blob>,
     /// The files among `paths` the Count does not maintain.
     pub unsupported: Vec<Skipped>,
-    /// The warnings the read itself gives.
     pub warnings: Vec<String>,
     /// Why the repository is refused for committed credentials, if it is.
     pub refusal: Option<String>,
@@ -408,7 +407,6 @@ fn git_files(dir: &Path) -> std::io::Result<Option<Vec<String>>> {
     ))
 }
 
-/// Every file below a directory outside Git, skipping `.git`.
 fn walk(dir: &Path) -> std::io::Result<Vec<String>> {
     let mut listed = Vec::new();
     let mut pending = vec![dir.to_owned()];

@@ -1285,8 +1285,9 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
         runner.tool(
             &driver,
             Invocation {
+                descriptor: &node::DESCRIPTOR,
                 tools: vec![("aube".into(), default_version("aube"))],
-                bin: "aube".into(),
+                bin: caches::Bin::Aube,
                 cwd: None,
                 env: Vec::new(),
                 credentials: Vec::new(),
@@ -1773,7 +1774,7 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
                 current: Some(current.into()),
                 target: Some(target.into()),
             },
-            lock_only: false,
+            exact_version: false,
         };
         runner
             .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[], &[], false))
@@ -2683,7 +2684,7 @@ fn lock_jobs_keep_their_serialized_field_layout() {
             current: Some("1.0.0".into()),
             target: Some("1.0.1".into()),
         },
-        lock_only: true,
+        exact_version: true,
     };
     assert_eq!(
         serde_json::to_string(&targeted).unwrap(),
@@ -2693,7 +2694,7 @@ fn lock_jobs_keep_their_serialized_field_layout() {
         ecosystem: Ecosystem::Node,
         directory: String::new(),
         scope: Scope::Directory,
-        lock_only: false,
+        exact_version: false,
     };
     assert_eq!(
         serde_json::to_string(&whole).unwrap(),
@@ -2879,7 +2880,7 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
                 current: Some("0.6.0".into()),
                 target: Some("0.6.9".into()),
             },
-            lock_only: false,
+            exact_version: false,
         }];
         p.contents.insert(
             "pyproject.toml".into(),
@@ -2931,7 +2932,7 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
             current: Some("0.6.0".into()),
             target: Some("0.6.9".into()),
         },
-        lock_only: false,
+        exact_version: false,
     }];
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
@@ -3114,7 +3115,7 @@ async fn gradle_wrapper_checksums_follow_the_distribution() {
     let baseline = BTreeMap::new();
     let versions = BTreeMap::new();
     let config = config();
-    let context = || node::NodeContext {
+    let context = || context::Context {
         driver: temp.path(),
         root: &root,
         baseline: &baseline,
@@ -3361,7 +3362,7 @@ async fn real_dotnet_restore_regenerates_packages_lock_json() {
         ecosystem: Ecosystem::Dotnet,
         directory: "app".into(),
         scope: Scope::Directory,
-        lock_only: false,
+        exact_version: false,
     }];
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
@@ -3572,8 +3573,9 @@ async fn first_tool_use_allows_for_the_install() {
     let driver = temp.path().join("driver");
     std::fs::create_dir_all(&driver).unwrap();
     let call = || Invocation {
+        descriptor: &python::DESCRIPTOR,
         tools: vec![("uv".into(), "0.13.1".into())],
-        bin: "uv".into(),
+        bin: caches::Bin::Uv,
         cwd: None,
         env: Vec::new(),
         credentials: Vec::new(),
@@ -3659,7 +3661,7 @@ fn a_vulnerable_transitive_crate_moves_through_its_lockfile_alone() {
                 current: Some("0.3.20".into()),
                 target: Some("0.3.23".into()),
             },
-            lock_only: true,
+            exact_version: true,
         }]
     );
     assert_eq!(plan.changes[0].advisories[0].id, "RUSTSEC-2023-0071");
@@ -3857,7 +3859,7 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
                 current: Some(registry.into()),
                 target: Some("0.9.9".into()),
             },
-            lock_only: false,
+            exact_version: false,
         };
         runner
             .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[], &[], false))
@@ -4773,7 +4775,7 @@ fn an_in_range_release_moves_a_direct_crate_through_its_lockfile_alone() {
                 current: Some("1.39.0".into()),
                 target: Some("1.40.0".into()),
             },
-            lock_only: true,
+            exact_version: true,
         }]
     );
     assert_eq!(plan.changes[0].value, None);
@@ -4921,7 +4923,7 @@ fn an_in_range_release_is_a_lock_only_plan_for_bundler_composer_and_pyproject() 
                     current: Some(locked.into()),
                     target: Some(target.into()),
                 },
-                lock_only: true,
+                exact_version: true,
             }],
             "{manager}"
         );
@@ -5028,7 +5030,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                     current: Some(locked.into()),
                     target: Some(target.into()),
                 },
-                lock_only: true,
+                exact_version: true,
             }];
             p.changes = vec![crate::plan::Change {
                 registry: None,
@@ -5905,9 +5907,10 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         .with_executor(executor.clone());
     let driver = temp.path().join("driver");
     std::fs::create_dir_all(&driver).unwrap();
-    let call = |bin: &str, credentials: Vec<String>, public: bool| Invocation {
-        tools: vec![(bin.into(), "1.0".into())],
-        bin: bin.into(),
+    let call = |bin: caches::Bin, credentials: Vec<String>, public: bool| Invocation {
+        descriptor: &go::DESCRIPTOR,
+        tools: vec![(bin.name().into(), "1.0".into())],
+        bin,
         cwd: None,
         env: Vec::new(),
         credentials,
@@ -5917,7 +5920,7 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     };
     // The npm-only entry never reaches Go's `.netrc`, so Go stays public.
     let (env, _) = runner
-        .use_caches(&call("go", Vec::new(), true))
+        .use_caches(&call(caches::Bin::Go, Vec::new(), true))
         .await
         .unwrap();
     assert_eq!(
@@ -5931,7 +5934,7 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         ]
     );
     runner
-        .tool(&driver, call("go", Vec::new(), true))
+        .tool(&driver, call(caches::Bin::Go, Vec::new(), true))
         .await
         .unwrap();
     assert_eq!(
@@ -5944,7 +5947,7 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     // With the registry it does get, npm goes private, named by its scope.
     let (env, _) = runner
         .use_caches(&call(
-            "npm",
+            caches::Bin::Npm,
             credentials::scopes([npm.clone()].iter()),
             false,
         ))
@@ -5965,33 +5968,34 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     // given; a private run never touches `public` — there is no read-only
     // lower layer.
     for (bin, key) in [
-        ("cargo", "CARGO_HOME"),
-        ("go", "GOMODCACHE"),
-        ("npm", "NPM_CONFIG_CACHE"),
-        ("aube", "AUBE_CACHE_DIR"),
-        ("bun", "BUN_INSTALL_CACHE_DIR"),
-        ("yarn", "YARN_GLOBAL_FOLDER"),
-        ("composer", "COMPOSER_CACHE_DIR"),
-        ("uv", "UV_CACHE_DIR"),
-        ("poetry", "POETRY_CACHE_DIR"),
-        ("dotnet", "NUGET_PACKAGES"),
-        ("bundle", "BUNDLE_USER_CACHE"),
+        (caches::Bin::Cargo, "CARGO_HOME"),
+        (caches::Bin::Go, "GOMODCACHE"),
+        (caches::Bin::Npm, "NPM_CONFIG_CACHE"),
+        (caches::Bin::Aube, "AUBE_CACHE_DIR"),
+        (caches::Bin::Bun, "BUN_INSTALL_CACHE_DIR"),
+        (caches::Bin::Yarn, "YARN_GLOBAL_FOLDER"),
+        (caches::Bin::Composer, "COMPOSER_CACHE_DIR"),
+        (caches::Bin::Uv, "UV_CACHE_DIR"),
+        (caches::Bin::Poetry, "POETRY_CACHE_DIR"),
+        (caches::Bin::Dotnet, "NUGET_PACKAGES"),
+        (caches::Bin::Bundle, "BUNDLE_USER_CACHE"),
     ] {
         let (env, hold) = runner
             .use_caches(&call(bin, credentials::scopes([npm.clone()].iter()), false))
             .await
             .unwrap();
-        assert!(env.iter().any(|(k, _)| k == key), "{bin}");
+        assert!(env.iter().any(|(k, _)| k == key), "{}", bin.name());
         assert!(
             env.iter()
                 .all(|(k, v)| v.starts_with(&partition) || k == "GOFLAGS"),
-            "{bin}: {env:?}"
+            "{}: {env:?}",
+            bin.name()
         );
         drop(hold);
     }
     let (go, _) = runner
         .use_caches(&call(
-            "go",
+            caches::Bin::Go,
             credentials::scopes([npm.clone()].iter()),
             false,
         ))
@@ -6007,7 +6011,11 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         go.iter().find(|(k, _)| k == "GOFLAGS").unwrap().1,
         "-modcacherw"
     );
-    let mut flagged = call("go", credentials::scopes([npm.clone()].iter()), false);
+    let mut flagged = call(
+        caches::Bin::Go,
+        credentials::scopes([npm.clone()].iter()),
+        false,
+    );
     flagged.env = vec![("GOFLAGS".into(), "-mod=mod".into())];
     let (go, _) = runner.use_caches(&flagged).await.unwrap();
     assert_eq!(
@@ -6016,7 +6024,7 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     );
     let (dotnet, _) = runner
         .use_caches(&call(
-            "dotnet",
+            caches::Bin::Dotnet,
             credentials::scopes([npm.clone()].iter()),
             false,
         ))
@@ -6073,8 +6081,9 @@ async fn tool_caches_partition_by_installation_when_not_public() {
         false,
     );
     let call = |public: bool| Invocation {
+        descriptor: &go::DESCRIPTOR,
         tools: vec![("go".into(), "1.0".into())],
-        bin: "go".into(),
+        bin: caches::Bin::Go,
         cwd: None,
         env: Vec::new(),
         credentials: Vec::new(),

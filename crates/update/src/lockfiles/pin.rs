@@ -26,7 +26,7 @@ impl Pinned {
     ) -> Result<Self, String> {
         let targets: BTreeMap<_, _> = jobs
             .iter()
-            .filter(|j| j.lock_only)
+            .filter(|j| j.exact_version)
             .filter_map(|j| Some((j.package()?, (j.current(), j.target()?))))
             .collect();
         let mut pinned = Self::none(root);

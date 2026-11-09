@@ -3,6 +3,7 @@ mod apm;
 mod caches;
 mod cargo;
 mod checkout;
+mod context;
 mod credentials;
 mod dotnet;
 mod go;
@@ -17,7 +18,7 @@ mod ruby;
 mod terraform;
 mod tool;
 mod tools;
-use tool::{Install, Tool, descriptor, descriptors};
+use tool::{Install, Output, Refresh, Tool, descriptor, descriptors};
 pub use tools::{bootstrap_mise, tools_dir};
 mod wrapper;
 use crate::{Blob, Plan, Snapshot, blob_sha, plan::unified};
@@ -71,7 +72,8 @@ pub struct Job {
     /// What the run is asked to move.
     pub scope: Scope,
     /// The manifest is not edited, so the tool must be told the exact version.
-    pub lock_only: bool,
+    /// Serialized as `lock_only`, the name the wire shape already has.
+    pub exact_version: bool,
 }
 impl Job {
     /// The package a targeted job moves.
@@ -119,7 +121,7 @@ impl Serialize for Job {
         state.serialize_field("package", &package)?;
         state.serialize_field("current", &current)?;
         state.serialize_field("target", &target)?;
-        state.serialize_field("lock_only", &self.lock_only)?;
+        state.serialize_field("lock_only", &self.exact_version)?;
         state.end()
     }
 }
@@ -147,7 +149,7 @@ impl<'de> Deserialize<'de> for Job {
             ecosystem: fields.ecosystem,
             directory: fields.directory,
             scope,
-            lock_only: fields.lock_only,
+            exact_version: fields.lock_only,
         })
     }
 }
@@ -184,6 +186,11 @@ fn directory(path: &str) -> &str {
 }
 fn under(path: &str, root: &str) -> bool {
     root.is_empty() || path.strip_prefix(root).is_some_and(|p| p.starts_with('/'))
+}
+/// Whether `path` is `root` or below it: the reach a `.cargo` configuration
+/// has over the projects in its directory and under it.
+fn within(path: &str, root: &str) -> bool {
+    path == root || under(path, root)
 }
 /// The repo files `names` names in `directory` or a directory above it,
 /// ordered root-first — by directory depth, then by `names` order (an
@@ -264,7 +271,7 @@ pub(crate) fn job(
             if !patchula_manager::roles::lock_names(Manager::Mise)
                 .supported
                 .iter()
-                .any(|lock| snapshot.paths.contains(&node::join(root, lock)))
+                .any(|lock| snapshot.paths.contains(&context::join(root, lock)))
             {
                 return Ok(None);
             }
@@ -276,7 +283,7 @@ pub(crate) fn job(
                     current: Some(dep.current.clone()),
                     target: update.new_version.clone().or(update.new_value.clone()),
                 },
-                lock_only: false,
+                exact_version: false,
             }));
         }
         // Node version files pin the runtime, which no lockfile records.
@@ -305,7 +312,7 @@ pub(crate) fn job(
                 patchula_manager::roles::lock_names(*manager)
                     .unsupported
                     .iter()
-                    .any(|lock| snapshot.paths.contains(&node::join(root, lock)))
+                    .any(|lock| snapshot.paths.contains(&context::join(root, lock)))
             }) {
                 return Err("unsupported lockfile format".into());
             }
@@ -332,7 +339,7 @@ pub(crate) fn job(
                 || !patchula_manager::roles::lock_names(Manager::Apm)
                     .supported
                     .iter()
-                    .any(|lock| snapshot.paths.contains(&node::join(root, lock)))
+                    .any(|lock| snapshot.paths.contains(&context::join(root, lock)))
             {
                 return Ok(None);
             }
@@ -371,7 +378,7 @@ pub(crate) fn job(
                     current: dep.digest.clone(),
                     target: update.new_digest.clone(),
                 },
-                lock_only: false,
+                exact_version: false,
             }));
         }
         // NuGet locks sit beside each project; a manifest under a directory
@@ -392,7 +399,7 @@ pub(crate) fn job(
                 ecosystem: Ecosystem::Dotnet,
                 directory: dir.into(),
                 scope: Scope::Directory,
-                lock_only: false,
+                exact_version: false,
             }));
         }
         Manager::Gradle
@@ -404,7 +411,7 @@ pub(crate) fn job(
                 ecosystem: Ecosystem::GradleWrapper,
                 directory: directory(&dep.file).into(),
                 scope: Scope::Directory,
-                lock_only: false,
+                exact_version: false,
             }));
         }
         // Gradle dependency locking writes per-configuration lockfiles that
@@ -470,7 +477,7 @@ pub(crate) fn job(
                     names
                         .unsupported
                         .iter()
-                        .find(|leaf| snapshot.paths.contains(&node::join(lock, leaf)))
+                        .find(|leaf| snapshot.paths.contains(&context::join(lock, leaf)))
                         .unwrap_or(&"lockfile")
                 ));
             }
@@ -503,7 +510,7 @@ pub(crate) fn job(
         } else {
             Scope::Directory
         },
-        lock_only: targeted && update.new_value.is_none(),
+        exact_version: targeted && update.new_value.is_none(),
     }))
 }
 
@@ -523,67 +530,35 @@ pub fn maintenance(
     let mut jobs = BTreeSet::new();
     for path in &snapshot.paths {
         let leaf = path.rsplit('/').next().unwrap();
-        let locks = |manager: Manager| lock_names(manager).supported.contains(&leaf);
-        let ecosystem = match leaf {
-            _ if [Manager::Npm, Manager::Bun]
-                .iter()
-                .any(|manager| locks(*manager))
-                && config
-                    .managers
-                    .iter()
-                    .any(|m| matches!(m, Manager::Npm | Manager::Bun)) =>
-            {
-                Ecosystem::Node
-            }
-            _ if locks(Manager::Cargo) && config.managers.contains(&Manager::Cargo) => {
-                Ecosystem::Cargo
-            }
-            _ if locks(Manager::Pyproject) && config.managers.contains(&Manager::Pyproject) => {
-                Ecosystem::Python
-            }
-            _ if locks(Manager::Nuget) && config.managers.contains(&Manager::Nuget) => {
-                Ecosystem::Dotnet
-            }
-            _ if locks(Manager::Bundler) && config.managers.contains(&Manager::Bundler) => {
-                Ecosystem::Ruby
-            }
-            _ if locks(Manager::Composer) && config.managers.contains(&Manager::Composer) => {
-                Ecosystem::Php
-            }
-            _ if locks(Manager::Nix)
-                && config.managers.contains(&Manager::Nix)
-                && manifest_names(Manager::Nix)
-                    .iter()
-                    .any(|name| snapshot.paths.contains(&node::join(directory(path), name))) =>
-            {
-                Ecosystem::Nix
-            }
-            _ if locks(Manager::Apm)
-                && config.managers.contains(&Manager::Apm)
-                && manifest_names(Manager::Apm)
-                    .iter()
-                    .any(|name| snapshot.paths.contains(&node::join(directory(path), name))) =>
-            {
-                Ecosystem::Apm
-            }
-            _ if locks(Manager::Mise) && config.managers.contains(&Manager::Mise) => {
-                Ecosystem::Mise
-            }
-            _ if manifest_names(Manager::Go).contains(&leaf)
-                && config.managers.contains(&Manager::Go) =>
-            {
-                Ecosystem::Go
-            }
-            _ if locks(Manager::Terraform) && config.managers.contains(&Manager::Terraform) => {
-                Ecosystem::Terraform
-            }
-            _ => continue,
+        // First match wins, in the order the ecosystems were always claimed:
+        // a lock name two ecosystems could read goes to the earlier one.
+        let ecosystem = [
+            Ecosystem::Node,
+            Ecosystem::Cargo,
+            Ecosystem::Python,
+            Ecosystem::Dotnet,
+            Ecosystem::Ruby,
+            Ecosystem::Php,
+            Ecosystem::Nix,
+            Ecosystem::Apm,
+            Ecosystem::Mise,
+            Ecosystem::Go,
+            Ecosystem::Terraform,
+        ]
+        .into_iter()
+        .find(|ecosystem| {
+            descriptor(*ecosystem)
+                .refresh
+                .claims(config, leaf, directory(path), &snapshot.paths)
+        });
+        let Some(ecosystem) = ecosystem else {
+            continue;
         };
         jobs.insert(Job {
             ecosystem,
             directory: directory(path).into(),
             scope: Scope::Directory,
-            lock_only: false,
+            exact_version: false,
         });
     }
     if jobs.is_empty() {
@@ -624,17 +599,13 @@ pub fn maintenance(
 /// When a repository's lockfile maintenance last completed.
 #[derive(Serialize, Deserialize)]
 struct MaintenanceSuccess(i64);
-#[derive(Serialize)]
-struct MaintenanceScope {
-    repository: String,
-}
 impl State for MaintenanceSuccess {
     const NAMESPACE: &'static str = "maintenance-success";
     const VERSION: u32 = 1;
-    type Scope = MaintenanceScope;
+    type Scope = patchula_cache::RepositoryScope;
 }
-fn refresh_scope(repo: &str) -> MaintenanceScope {
-    MaintenanceScope {
+fn refresh_scope(repo: &str) -> patchula_cache::RepositoryScope {
+    patchula_cache::RepositoryScope {
         repository: repo.into(),
     }
 }
@@ -929,7 +900,7 @@ impl Runner {
             // its tools may share the `public` cache partition. Fail
             // closed: any file without a verdict makes it not public.
             let public = public_only(tool, &baseline, &plan.public_only);
-            let context = node::NodeContext {
+            let context = context::Context {
                 driver: &driver,
                 root: &root,
                 baseline: &baseline,
@@ -1046,7 +1017,7 @@ impl Runner {
         if self.cache_gib == 0 {
             return Ok((Vec::new(), None));
         }
-        let Some(tool) = caches::tool(&call.bin) else {
+        let Some(cache) = call.bin.cache() else {
             return Ok((Vec::new(), None));
         };
         let mut scopes = call.credentials.clone();
@@ -1065,10 +1036,10 @@ impl Runner {
             caches::Partition::Installation(self.installation.clone())
         };
         let root = self.cache.join(caches::ROOT);
-        let bin = call.bin.clone();
         let call_env = call.env.clone();
+        let bin = call.bin;
         let (env, hold) = tokio::task::spawn_blocking(move || {
-            caches::acquire(&root, &partition, &tool, &bin, &call_env)
+            caches::acquire(&root, &partition, bin, cache, &call_env)
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -1091,8 +1062,8 @@ impl Runner {
         if let Some(cwd) = &call.cwd {
             spec.cwd.clone_from(cwd);
         }
-        // nix answers in JSON, which is read whole.
-        if call.bin == "nix" {
+        // A tool whose answer is JSON is read whole.
+        if call.descriptor.output == Output::Complete {
             spec.output_limit = 1 << 20;
             spec.complete_output = true;
         }
@@ -1108,7 +1079,7 @@ impl Runner {
             spec.args.push(format!("{tool}@{version}"));
         }
         spec.args.push("--".into());
-        if call.tools.iter().any(|(tool, _)| tool == "rust") {
+        if call.descriptor.tools.contains(&"rust") {
             let version = call
                 .tools
                 .iter()
@@ -1136,20 +1107,19 @@ impl Runner {
                 self.rustup.to_string_lossy().into_owned(),
                 "run".into(),
                 version,
-                call.bin.clone(),
+                call.bin.name().to_owned(),
             ]);
         } else {
-            spec.args.push(call.bin.clone());
+            spec.args.push(call.bin.name().into());
         }
         spec.args.extend(call.args);
         spec.secrets = call.secrets;
-        let bin = call.bin;
-        let output = self.executor.run(spec).await.map_err(|failure| {
-            Error::Tool(ToolFailure {
-                context: bin,
-                failure,
-            })
-        })?;
+        let context = call.bin.name().to_owned();
+        let output = self
+            .executor
+            .run(spec)
+            .await
+            .map_err(|failure| Error::Tool(ToolFailure { context, failure }))?;
         self.record_use(&call.tools);
         Ok(output)
     }
@@ -1157,7 +1127,7 @@ impl Runner {
     /// shows none of its output, which may quote what a private registry
     /// answered: failure reasons reach reports, dashboards and public pages.
     async fn held_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Error> {
-        let bin = call.bin.clone();
+        let bin = call.bin.name();
         let held = !call.credentials.is_empty();
         let result = self.tool(driver, call).await;
         if !held {
@@ -1211,12 +1181,15 @@ impl From<&str> for Error {
     }
 }
 
-/// One ecosystem tool invocation: the mise tools it needs, the binary to run
-/// and the arguments to pass.
+/// One ecosystem tool invocation: the ecosystem's descriptor, the mise
+/// tools it needs, the binary to run and the arguments to pass.
 #[derive(Clone)]
 struct Invocation {
+    /// The ecosystem the call belongs to: its output and toolchain
+    /// behavior, not the binary's name, decide how it runs.
+    descriptor: &'static Tool,
     tools: Vec<(String, String)>,
-    bin: String,
+    bin: caches::Bin,
     cwd: Option<PathBuf>,
     env: Vec<(String, String)>,
     /// The `Credential::scope()`s of the registry entries this run receives.
@@ -1313,7 +1286,7 @@ fn validate_targets(
                     ![Manager::Npm, Manager::Bun]
                         .iter()
                         .flat_map(|manager| lock_names(*manager).readable.iter().copied())
-                        .any(|leaf| paths.contains(&node::join(dir, leaf)))
+                        .any(|leaf| paths.contains(&context::join(dir, leaf)))
                 },
             );
         if !unread

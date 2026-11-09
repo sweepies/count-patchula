@@ -11,7 +11,6 @@ const READ_FAN_OUT: usize = 4;
 struct Saved {
     fetched_at: i64,
     catalog: Catalog,
-    /// Whether a request made for it carried credentials.
     credentialed: bool,
 }
 #[derive(Serialize)]
@@ -186,7 +185,7 @@ impl Engine {
                             !repo
                                 .dependencies
                                 .iter()
-                                .any(|dep| patchula_update::dashboard::extracted_key(dep) == *key)
+                                .any(|dep| patchula_update::identity::extracted_key(dep) == *key)
                         }) {
                             all = true;
                         }
@@ -203,10 +202,10 @@ impl Engine {
             .dependencies
             .iter()
             .map(|dep| {
-                all || dependencies.contains(&patchula_update::dashboard::extracted_key(dep))
+                all || dependencies.contains(&patchula_update::identity::extracted_key(dep))
                     || controls
                         .retry
-                        .contains(&patchula_update::dashboard::extracted_retry_key(dep))
+                        .contains(&patchula_update::identity::extracted_retry_key(dep))
             })
             .collect())
     }
@@ -251,7 +250,7 @@ impl Engine {
                                         dep.registry.as_ref().map(|r| r.recorded()),
                                     )
                                 })
-                                .map(|dep| patchula_update::dashboard::extracted_key(dep))
+                                .map(|dep| patchula_update::identity::extracted_key(dep))
                         })
                         .collect();
                     controls
@@ -270,10 +269,10 @@ impl Engine {
                         .into_iter()
                         .flat_map(|meta| &meta.held_back)
                     {
-                        let key = patchula_update::dashboard::dependency_key(&file.path, dep);
+                        let key = patchula_update::identity::dependency_key(&file.path, dep);
                         for version in std::iter::once(&held.version).chain(&held.versions) {
                             controls.targets.insert(
-                                patchula_update::dashboard::held_target(
+                                patchula_update::identity::held_target(
                                     &key,
                                     version,
                                     held.update_type.as_str(),

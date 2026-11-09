@@ -31,28 +31,106 @@ const AGE: Duration = Duration::from_secs(14 * 86_400);
 /// How often one process prunes each root, at most.
 pub(super) const EVERY: Duration = Duration::from_secs(3600);
 
-/// A tool whose package data persists: whether its own cache is documented
-/// as safe for concurrent use.
-pub(super) struct Tool {
-    /// Take the partition's `<tool>.lock` exclusively while it runs.
-    serial: bool,
+/// A tool binary a lockfile run executes: the name `mise exec` runs and
+/// its persistent-cache wiring, declared once so a rename cannot silently
+/// drop the cache partition or the tool's environment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Bin {
+    Cargo,
+    Go,
+    Npm,
+    Aube,
+    Bun,
+    Yarn,
+    Composer,
+    Uv,
+    Poetry,
+    Bundle,
+    Dotnet,
+    Terraform,
+    Nix,
+    Apm,
 }
 
-/// How a tool's cache is wired, or `None` for one with no cache to keep.
-pub(super) fn tool(bin: &str) -> Option<Tool> {
-    Some(match bin {
-        // Documented concurrent-safe caches, shared freely within a partition:
-        // Cargo locks its package cache itself, the Go module cache is
-        // designed for concurrent use, and so are npm's cacache and uv's cache.
-        "cargo" | "go" | "npm" | "uv" => Tool { serial: false },
-        // No documented concurrency guarantee: one run at a time per partition.
-        "aube" | "bun" | "yarn" | "composer" | "poetry" | "bundle" | "dotnet" => {
-            Tool { serial: true }
+/// One binary's cache wiring, or `None` for a tool with no cache to keep.
+#[derive(Clone, Copy)]
+pub(super) struct Cache {
+    /// `(ENV_VAR, partition-relative directory)` pairs placing the cache.
+    env: &'static [(&'static str, &'static str)],
+    /// Take the partition's `<bin>.lock` exclusively while it runs.
+    serial: bool,
+    /// Merge the call's own `GOFLAGS` with `-modcacherw`.
+    goflags: bool,
+}
+
+impl Bin {
+    /// The binary's name on the command line.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Cargo => "cargo",
+            Self::Go => "go",
+            Self::Npm => "npm",
+            Self::Aube => "aube",
+            Self::Bun => "bun",
+            Self::Yarn => "yarn",
+            Self::Composer => "composer",
+            Self::Uv => "uv",
+            Self::Poetry => "poetry",
+            Self::Bundle => "bundle",
+            Self::Dotnet => "dotnet",
+            Self::Terraform => "terraform",
+            Self::Nix => "nix",
+            Self::Apm => "apm",
         }
-        // Terraform's `providers lock` keeps no package cache, and nix and apm
-        // keep their own.
-        _ => return None,
-    })
+    }
+    /// How the binary's cache is wired, keyed by the binary itself rather
+    /// than a string a call site could rename.
+    pub(super) fn cache(self) -> Option<Cache> {
+        let cache = |env, serial| Cache {
+            env,
+            serial,
+            goflags: false,
+        };
+        Some(match self {
+            // Documented concurrent-safe caches, shared freely within a
+            // partition: Cargo locks its package cache itself, the Go module
+            // cache is designed for concurrent use, and so are npm's cacache
+            // and uv's cache. Cargo keeps credentials out of CARGO_HOME;
+            // tokens are env vars.
+            Self::Cargo => cache(&[("CARGO_HOME", "cargo")], false),
+            Self::Go => Cache {
+                env: &[("GOMODCACHE", "gomod")],
+                serial: false,
+                goflags: true,
+            },
+            Self::Npm => cache(&[("NPM_CONFIG_CACHE", "npm")], false),
+            Self::Uv => cache(&[("UV_CACHE_DIR", "uv")], false),
+            // No documented concurrency guarantee: one run at a time per
+            // partition.
+            Self::Aube => cache(
+                &[
+                    ("AUBE_CACHE_DIR", "aube/cache"),
+                    ("AUBE_STORE_DIR", "aube/store"),
+                ],
+                true,
+            ),
+            Self::Bun => cache(&[("BUN_INSTALL_CACHE_DIR", "bun")], true),
+            Self::Yarn => cache(&[("YARN_GLOBAL_FOLDER", "yarn")], true),
+            Self::Composer => cache(&[("COMPOSER_CACHE_DIR", "composer")], true),
+            Self::Poetry => cache(&[("POETRY_CACHE_DIR", "poetry")], true),
+            Self::Bundle => cache(&[("BUNDLE_USER_CACHE", "bundler")], true),
+            Self::Dotnet => cache(
+                &[
+                    ("NUGET_PACKAGES", "nuget/packages"),
+                    ("NUGET_HTTP_CACHE_PATH", "nuget/http-cache"),
+                ],
+                true,
+            ),
+            // Terraform's `providers lock` keeps no package cache, and nix
+            // and apm keep their own.
+            Self::Terraform | Self::Nix | Self::Apm => return None,
+        })
+    }
 }
 
 /// A tool-cache partition: the directory a run's package data lives in.
@@ -166,33 +244,6 @@ fn touch(partition: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// The environment placing `bin`'s cache inside `partition`; every value is
-/// a directory the run creates.
-fn env(bin: &str, partition: &Path) -> Vec<(String, String)> {
-    let path = |path: &str| partition.join(path).to_string_lossy().into_owned();
-    match bin {
-        // Cargo keeps credentials out of CARGO_HOME; tokens are env vars.
-        "cargo" => vec![("CARGO_HOME".into(), path("cargo"))],
-        "go" => vec![("GOMODCACHE".into(), path("gomod"))],
-        "npm" => vec![("NPM_CONFIG_CACHE".into(), path("npm"))],
-        "aube" => vec![
-            ("AUBE_CACHE_DIR".into(), path("aube/cache")),
-            ("AUBE_STORE_DIR".into(), path("aube/store")),
-        ],
-        "bun" => vec![("BUN_INSTALL_CACHE_DIR".into(), path("bun"))],
-        "yarn" => vec![("YARN_GLOBAL_FOLDER".into(), path("yarn"))],
-        "composer" => vec![("COMPOSER_CACHE_DIR".into(), path("composer"))],
-        "uv" => vec![("UV_CACHE_DIR".into(), path("uv"))],
-        "poetry" => vec![("POETRY_CACHE_DIR".into(), path("poetry"))],
-        "dotnet" => vec![
-            ("NUGET_PACKAGES".into(), path("nuget/packages")),
-            ("NUGET_HTTP_CACHE_PATH".into(), path("nuget/http-cache")),
-        ],
-        "bundle" => vec![("BUNDLE_USER_CACHE".into(), path("bundler"))],
-        _ => Vec::new(),
-    }
-}
-
 /// The `GOFLAGS` a cached Go run gets: the call's own flags ahead of
 /// `-modcacherw`, which keeps the module cache writable so eviction can
 /// remove it.
@@ -215,8 +266,8 @@ fn goflags(call: &[(String, String)]) -> (String, String) {
 pub(super) fn acquire(
     root: &Path,
     partition: &Partition,
-    tool: &Tool,
-    bin: &str,
+    bin: Bin,
+    cache: Cache,
     call: &[(String, String)],
 ) -> Result<(Vec<(String, String)>, Hold), String> {
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
@@ -225,16 +276,25 @@ pub(super) fn acquire(
     let dir = root.join(&name);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     touch(&dir)?;
-    let mut env = env(bin, &dir);
+    let mut env: Vec<(String, String)> = cache
+        .env
+        .iter()
+        .map(|(key, path)| {
+            (
+                (*key).to_owned(),
+                dir.join(path).to_string_lossy().into_owned(),
+            )
+        })
+        .collect();
     for (_, value) in &env {
         std::fs::create_dir_all(value).map_err(|e| e.to_string())?;
     }
-    if bin == "go" {
+    if cache.goflags {
         env.push(goflags(call));
     }
-    let serial = tool
+    let serial = cache
         .serial
-        .then(|| lock(&dir.join(format!("{bin}.lock")), true))
+        .then(|| lock(&dir.join(format!("{}.lock", bin.name())), true))
         .transpose()?;
     Ok((
         env,

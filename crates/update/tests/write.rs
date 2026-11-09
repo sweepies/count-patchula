@@ -1789,7 +1789,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 ecosystem: patchula_update::lockfiles::Ecosystem::Cargo,
                 directory: String::new(),
                 scope: patchula_update::lockfiles::Scope::Directory,
-                lock_only: false,
+                exact_version: false,
             });
             p.lockfiles_ready = true;
         }

@@ -257,7 +257,7 @@ pub(crate) fn ticked_lines(text: &str) -> Vec<&str> {
 }
 
 /// `text` cut to at most `len` bytes on a char boundary.
-pub(crate) fn cut(text: &str, len: usize) -> &str {
+pub(crate) fn cut_bytes(text: &str, len: usize) -> &str {
     if text.len() <= len {
         return text;
     }
@@ -273,11 +273,11 @@ pub(crate) fn cut(text: &str, len: usize) -> &str {
 /// section first, then what follows it.
 pub(crate) fn truncate_marked(body: &str, limit: usize) -> String {
     let Some((before, section, after)) = regions(body) else {
-        return cut(body, limit).to_owned();
+        return cut_bytes(body, limit).to_owned();
     };
     let room = limit.saturating_sub(section.len());
-    let before = cut(before, room);
-    let after = cut(after, room - before.len());
+    let before = cut_bytes(before, room);
+    let after = cut_bytes(after, room - before.len());
     format!("{before}{section}{after}")
 }
 
@@ -503,8 +503,8 @@ mod tests {
 
     #[test]
     fn cut_and_truncate_marked_never_sever_his_markers() {
-        assert_eq!(cut("héllo", 3), "hé");
-        assert_eq!(cut("abc", 10), "abc");
+        assert_eq!(cut_bytes("héllo", 3), "hé");
+        assert_eq!(cut_bytes("abc", 10), "abc");
         let text = body(" foreign tail");
         // Tight enough to cut the foreign text, generous enough for his
         // section: the markers come through whole and the result fits.

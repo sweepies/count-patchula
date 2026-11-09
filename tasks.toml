@@ -205,8 +205,7 @@ run = ["cargo test --locked -p patchula-datasource --test recorded refresh_publi
 
 ["fixtures:record-mise"]
 description = "Record what the pinned mise lists for the tools in fixtures/mise; needs the network, a mise on PATH and GH_TOKEN"
-env = { PATCHULA_RECORD = "1" }
-run = ["cargo test --locked -p patchula-update --test mise_listings -- --nocapture", "mise run fixtures:check"]
+run = ["cargo run --locked -p patchula-update --example record_mise_listings", "mise run fixtures:check"]
 
 ["fixtures:record-lookup"]
 description = "Record the public source and multi-repository lookup fixtures"

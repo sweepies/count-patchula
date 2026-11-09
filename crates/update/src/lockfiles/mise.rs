@@ -7,6 +7,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &[],
     versions: false,
     install: Install::Mise,
+    refresh: Refresh::Locks(&[Manager::Mise]),
+    output: Output::Default,
 };
 
 fn value(value: &toml_edit::Value) -> Value {
@@ -232,10 +234,10 @@ fn task_declarations(
 impl Runner {
     pub(super) async fn mise_lock(
         &self,
-        context: node::NodeContext<'_>,
+        context: context::Context<'_>,
         jobs: &[&Job],
     ) -> Result<(), Error> {
-        let node::NodeContext {
+        let context::Context {
             driver,
             root,
             baseline,
