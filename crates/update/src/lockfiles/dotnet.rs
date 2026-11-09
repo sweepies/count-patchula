@@ -81,11 +81,16 @@ fn nuget_configs(dir: &Path, out: &mut Vec<std::io::Result<String>>) {
         };
         let path = entry.path();
         if kind.is_dir() {
-            nuget_configs(&path, out);
-        } else if path
+            if path
+                .file_name()
+                .is_some_and(|n| n != "obj" && n != "bin" && n != ".git")
+            {
+                nuget_configs(&path, out);
+            }
+        } else if entry
             .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("nuget.config"))
+            .to_str()
+            .is_some_and(patchula_manager::roles::nuget_config)
         {
             out.push(std::fs::read_to_string(&path));
         }

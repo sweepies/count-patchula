@@ -2,15 +2,11 @@
 //! Berry `yarn.lock`, Bun for `bun.lock`.
 use super::*;
 
-/// Lockfile names the Node ecosystem regenerates in place.
-pub(super) const LOCKS: [&str; 6] = [
-    "aube-lock.yaml",
-    "bun.lock",
-    "npm-shrinkwrap.json",
-    "package-lock.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-];
+/// Lockfile names the Node ecosystem regenerates in place, from the
+/// managers' file roles.
+fn locks() -> Vec<&'static str> {
+    super::node_locks()
+}
 
 /// Workspace files whose `catalog`/`catalogs` feed `catalog:` specifiers.
 const CATALOGS: [&str; 2] = ["pnpm-workspace.yaml", ".yarnrc.yml"];
@@ -198,7 +194,7 @@ impl Runner {
             public,
         } = context;
         let cwd = root.join(directory);
-        for leaf in LOCKS {
+        for leaf in locks() {
             if !cwd.join(leaf).is_file() {
                 continue;
             }

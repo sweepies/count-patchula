@@ -667,15 +667,7 @@ impl crate::Ecosystem for Descriptor {
     }
     /// A package backend mise runs in the project reads its settings.
     fn registry_file(&self, path: &str) -> bool {
-        config_file(path)
-            || [
-                Manager::Npm,
-                Manager::Pyproject,
-                Manager::Cargo,
-                Manager::Nuget,
-            ]
-            .iter()
-            .any(|m| crate::ecosystem(*m).backend_settings(path))
+        crate::roles::eco_roles(Manager::Mise, path).registry
     }
     fn prepare<'a>(
         &self,

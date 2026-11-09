@@ -319,7 +319,7 @@ impl crate::Ecosystem for Descriptor {
         )
     }
     fn registry_file(&self, path: &str) -> bool {
-        path.rsplit('/').next() == Some("composer.lock")
+        crate::roles::eco_roles(Manager::Composer, path).registry
     }
     fn prepare<'a>(
         &self,

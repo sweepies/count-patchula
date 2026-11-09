@@ -769,7 +769,7 @@ impl crate::Ecosystem for Descriptor {
         selected(path)
     }
     fn registry_file(&self, path: &str) -> bool {
-        config_file(path) || msbuild_file(path)
+        crate::roles::eco_roles(Manager::Nuget, path).registry
     }
     fn backend_settings(&self, path: &str) -> bool {
         config_file(path)

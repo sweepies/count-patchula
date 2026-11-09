@@ -1238,7 +1238,7 @@ impl crate::Ecosystem for Descriptor {
         selected(path)
     }
     fn registry_file(&self, path: &str) -> bool {
-        build_logic(path)
+        crate::roles::eco_roles(Manager::Gradle, path).registry
     }
     fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
         let (included, applied) = wanted(files);

@@ -978,7 +978,10 @@ pub(crate) fn verdict(path: &str, text: &crate::Text, files: &Files) -> Option<b
     }
 }
 
-fn read_verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
+/// A public-only verdict rule for one file.
+type VerdictRule = fn(&str, &str, &Files) -> Option<bool>;
+
+fn npm_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
     let leaf = path.rsplit('/').next().unwrap_or(path);
     let flag = match leaf {
         "package.json" => json_public(text, false, &crate::npm::NPM, package_json_rule),
@@ -991,28 +994,95 @@ fn read_verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
         }
         "bun.lock" => json_public(text, true, &crate::npm::NPM, no_rules),
         "yarn.lock" => lines_public(text, &crate::npm::NPM),
+        _ => return None,
+    };
+    Some(flag)
+}
+
+fn pypi_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let flag = match leaf {
         "pyproject.toml" => toml_public(text, &crate::pypi::PYPI, pyproject_rule),
         "uv.toml" => toml_public(text, &crate::pypi::PYPI, uv_rule),
         "poetry.toml" => toml_public(text, &crate::pypi::PYPI, poetry_rule),
         "pdm.toml" => toml_public(text, &crate::pypi::PYPI, pdm_rule),
         "pixi.toml" => toml_public(text, &crate::pypi::PYPI, pixi_rule),
         "hatch.toml" | "uv.lock" | "poetry.lock" => toml_public(text, &crate::pypi::PYPI, no_rules),
-        "Gemfile" => crate::bundler::public_only(path, text, files),
-        "Gemfile.lock" => lines_public(text, &crate::bundler::RUBYGEMS),
-        "composer.json" => composer_json_public(text),
-        "composer.lock" => composer_lock_public(text),
-        "Cargo.toml" => toml_public(text, &crate::cargo::CRATES, cargo_rule),
-        "Cargo.lock" => toml_public(text, &crate::cargo::CRATES, no_rules),
-        "packages.lock.json" | "global.json" | "dotnet-tools.json" => {
-            json_public(text, false, &crate::nuget::NUGET_ORG, no_rules)
-        }
-        _ if crate::nuget::config_file(path) => nuget_config_public(text),
-        _ if crate::nuget::msbuild_file(path) => msbuild_public(text),
-        _ if leaf.ends_with(".slnx") => xml_public(text, &crate::nuget::NUGET_ORG, &[]),
-        _ if leaf.ends_with(".sln") => lines_public(text, &crate::nuget::NUGET_ORG),
         _ => return None,
     };
     Some(flag)
+}
+
+fn bundler_verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let flag = match leaf {
+        "Gemfile" => crate::bundler::public_only(path, text, files),
+        "Gemfile.lock" => lines_public(text, &crate::bundler::RUBYGEMS),
+        _ => return None,
+    };
+    Some(flag)
+}
+
+fn composer_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let flag = match leaf {
+        "composer.json" => composer_json_public(text),
+        "composer.lock" => composer_lock_public(text),
+        _ => return None,
+    };
+    Some(flag)
+}
+
+fn cargo_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let flag = match leaf {
+        "Cargo.toml" => toml_public(text, &crate::cargo::CRATES, cargo_rule),
+        "Cargo.lock" => toml_public(text, &crate::cargo::CRATES, no_rules),
+        _ => return None,
+    };
+    Some(flag)
+}
+
+fn nuget_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    if matches!(
+        leaf,
+        "packages.lock.json" | "global.json" | "dotnet-tools.json"
+    ) {
+        return Some(json_public(text, false, &crate::nuget::NUGET_ORG, no_rules));
+    }
+    if crate::nuget::config_file(path) {
+        return Some(nuget_config_public(text));
+    }
+    if crate::nuget::msbuild_file(path) {
+        return Some(msbuild_public(text));
+    }
+    if leaf.ends_with(".slnx") {
+        return Some(xml_public(text, &crate::nuget::NUGET_ORG, &[]));
+    }
+    if leaf.ends_with(".sln") {
+        return Some(lines_public(text, &crate::nuget::NUGET_ORG));
+    }
+    None
+}
+
+/// The verdict rule `manager`'s ecosystem applies, if it has one.
+fn verdict_rule(manager: patchula_words::Manager) -> Option<VerdictRule> {
+    match manager {
+        patchula_words::Manager::Npm => Some(npm_verdict),
+        patchula_words::Manager::Pyproject => Some(pypi_verdict),
+        patchula_words::Manager::Bundler => Some(bundler_verdict),
+        patchula_words::Manager::Composer => Some(composer_verdict),
+        patchula_words::Manager::Cargo => Some(cargo_verdict),
+        patchula_words::Manager::Nuget => Some(nuget_verdict),
+        _ => None,
+    }
+}
+
+fn read_verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
+    patchula_words::Manager::ALL
+        .iter()
+        .find_map(|manager| verdict_rule(*manager).and_then(|rule| rule(path, text, files)))
 }
 
 #[cfg(test)]

@@ -1,11 +1,12 @@
 //! Python lockfiles: `uv lock` for `uv.lock` and `poetry lock` for `poetry.lock`.
 use super::{pin::Pinned, *};
 
-/// Lockfile names the Python ecosystem regenerates in place.
-pub(super) const LOCKS: [&str; 2] = ["uv.lock", "poetry.lock"];
-
-/// Lockfiles of other Python tools, which nothing here regenerates.
-pub(super) const UNSUPPORTED_LOCKS: [&str; 3] = ["pdm.lock", "pylock.toml", "Pipfile.lock"];
+/// Lockfile names the Python ecosystem recognizes, from the manager's
+/// file roles: `supported` are regenerated in place, `unsupported` are
+/// names of other tools' lockfiles nothing here regenerates.
+fn locks() -> patchula_manager::roles::LockNames {
+    patchula_manager::roles::lock_names(Manager::Pyproject)
+}
 
 /// The interpreter both tools resolve against: the nearest `.python-version`,
 /// otherwise the repository mise pin or the runner default.
@@ -63,7 +64,7 @@ impl Runner {
             .map(|text| super::credentials::poetry_sources(&text))
             .unwrap_or_default()];
         let (poetry, poetry_entries) = self.poetry_env(&sources);
-        for leaf in LOCKS {
+        for &leaf in locks().supported {
             if !cwd.join(leaf).is_file() {
                 continue;
             }

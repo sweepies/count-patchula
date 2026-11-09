@@ -12,9 +12,8 @@ pub use mise::included_files;
 mod cargo;
 mod composer;
 mod credentials;
-pub use credentials::{
-    CredentialCheck, committed_credentials, credential_check, credential_reason, credential_scope,
-};
+pub use credentials::{CredentialCheck, committed_credentials, credential_reason};
+pub use roles::{credential_check, credential_scope, linked_settings, registry_settings};
 mod custom;
 mod devcontainer;
 mod gitlabci;
@@ -39,6 +38,7 @@ mod npm;
 mod nuget;
 mod precommit;
 mod pyproject;
+pub mod roles;
 mod terraform;
 mod toolchains;
 mod woodpecker;
@@ -813,6 +813,333 @@ fn requirements_name(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Today's per-path classification, pinned before the file-role taxonomy:
+    /// `needs`, `registry_settings`, `linked_settings`, `credential_scope`,
+    /// `credential_check`, public-verdict coverage and each manager's
+    /// `registry_file`, for root and nested forms of representative paths.
+    /// The taxonomy must reproduce every answer except the spec's permitted
+    /// fixes.
+    #[test]
+    fn file_classification_is_pinned() {
+        use super::CredentialCheck;
+        type Row = (
+            &'static str,
+            bool,
+            bool,
+            Option<&'static str>,
+            bool,
+            CredentialCheck,
+            bool,
+            &'static str,
+        );
+        /// (path, needs, registry_settings, linked_settings, credential_scope,
+        /// credential_check, public verdict, registry_file managers)
+        #[rustfmt::skip]
+        const TABLE: &[Row] = &[
+            ("package.json", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/package.json", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("package-lock.json", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/package-lock.json", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("npm-shrinkwrap.json", false, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/npm-shrinkwrap.json", false, false, None, false, CredentialCheck::Scan, true, ""),
+            ("aube-lock.yaml", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/aube-lock.yaml", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("pnpm-lock.yaml", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/pnpm-lock.yaml", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("yarn.lock", false, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/yarn.lock", false, false, None, false, CredentialCheck::Scan, true, ""),
+            ("bun.lock", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/bun.lock", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("bun.lockb", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/bun.lockb", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("pnpm-workspace.yaml", true, false, None, true, CredentialCheck::Scan, true, ""),
+            ("sub/dir/pnpm-workspace.yaml", true, false, None, true, CredentialCheck::Scan, true, ""),
+            (".npmrc", true, true, Some(".npmrc"), true, CredentialCheck::Scan, true, "npm,bun,mise"),
+            ("sub/dir/.npmrc", true, true, Some("sub/dir/.npmrc"), true, CredentialCheck::Scan, true, "npm,bun,mise"),
+            (".yarnrc.yml", true, true, Some(".yarnrc.yml"), true, CredentialCheck::Scan, true, "npm,bun,mise"),
+            ("sub/dir/.yarnrc.yml", true, true, Some("sub/dir/.yarnrc.yml"), true, CredentialCheck::Scan, true, "npm,bun,mise"),
+            (".nvmrc", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.nvmrc", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            (".node-version", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.node-version", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("pyproject.toml", true, true, Some("pyproject.toml"), true, CredentialCheck::Scan, true, "mise,pyproject"),
+            ("sub/dir/pyproject.toml", true, true, Some("sub/dir/pyproject.toml"), true, CredentialCheck::Scan, true, "mise,pyproject"),
+            ("uv.toml", true, true, Some("uv.toml"), true, CredentialCheck::Scan, true, "mise,pyproject"),
+            ("sub/dir/uv.toml", true, true, Some("sub/dir/uv.toml"), true, CredentialCheck::Scan, true, "mise,pyproject"),
+            ("poetry.toml", false, false, None, true, CredentialCheck::Scan, true, ""),
+            ("sub/dir/poetry.toml", false, false, None, true, CredentialCheck::Scan, true, ""),
+            ("pdm.toml", true, true, Some("pdm.toml"), false, CredentialCheck::Undecided, true, "pyproject"),
+            ("sub/dir/pdm.toml", true, true, Some("sub/dir/pdm.toml"), false, CredentialCheck::Undecided, true, "pyproject"),
+            ("pixi.toml", true, true, Some("pixi.toml"), false, CredentialCheck::Undecided, true, "pyproject"),
+            ("sub/dir/pixi.toml", true, true, Some("sub/dir/pixi.toml"), false, CredentialCheck::Undecided, true, "pyproject"),
+            ("hatch.toml", true, true, Some("hatch.toml"), false, CredentialCheck::Undecided, true, "pyproject"),
+            ("sub/dir/hatch.toml", true, true, Some("sub/dir/hatch.toml"), false, CredentialCheck::Undecided, true, "pyproject"),
+            ("uv.lock", true, false, None, false, CredentialCheck::Scan, true, "pyproject"),
+            ("sub/dir/uv.lock", true, false, None, false, CredentialCheck::Scan, true, "pyproject"),
+            ("poetry.lock", true, false, None, false, CredentialCheck::Scan, true, "pyproject"),
+            ("sub/dir/poetry.lock", true, false, None, false, CredentialCheck::Scan, true, "pyproject"),
+            (".python-version", true, false, None, false, CredentialCheck::Skip, false, ""),
+            ("sub/dir/.python-version", true, false, None, false, CredentialCheck::Skip, false, ""),
+            ("pip.conf", true, true, Some("pip.conf"), true, CredentialCheck::Undecided, false, "mise"),
+            ("sub/dir/pip.conf", true, true, Some("sub/dir/pip.conf"), true, CredentialCheck::Undecided, false, "mise"),
+            ("pip.ini", true, true, Some("pip.ini"), true, CredentialCheck::Undecided, false, "mise"),
+            ("sub/dir/pip.ini", true, true, Some("sub/dir/pip.ini"), true, CredentialCheck::Undecided, false, "mise"),
+            ("requirements.txt", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/requirements.txt", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("requirements.in", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/requirements.in", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("Pipfile", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/Pipfile", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("Pipfile.lock", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/Pipfile.lock", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("pdm.lock", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/pdm.lock", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("pylock.toml", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/pylock.toml", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("Gemfile", true, false, None, true, CredentialCheck::Scan, true, ""),
+            ("sub/dir/Gemfile", true, false, None, true, CredentialCheck::Scan, true, ""),
+            ("Gemfile.lock", true, false, None, false, CredentialCheck::Scan, true, "bundler"),
+            ("sub/dir/Gemfile.lock", true, false, None, false, CredentialCheck::Scan, true, "bundler"),
+            (".ruby-version", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.ruby-version", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("example.gemspec", false, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/example.gemspec", false, false, None, false, CredentialCheck::Scan, false, ""),
+            ("composer.json", true, false, None, true, CredentialCheck::Scan, true, ""),
+            ("sub/dir/composer.json", true, false, None, true, CredentialCheck::Scan, true, ""),
+            ("composer.lock", true, false, None, false, CredentialCheck::Scan, true, "composer"),
+            ("sub/dir/composer.lock", true, false, None, false, CredentialCheck::Scan, true, "composer"),
+            ("Cargo.toml", true, true, Some("Cargo.toml"), false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/Cargo.toml", true, true, Some("sub/dir/Cargo.toml"), false, CredentialCheck::Scan, true, ""),
+            ("Cargo.lock", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/Cargo.lock", true, false, None, false, CredentialCheck::Scan, true, ""),
+            (".cargo/config.toml", true, true, Some(".cargo/config.toml"), true, CredentialCheck::Scan, false, "mise,cargo"),
+            ("sub/dir/.cargo/config.toml", true, true, Some("sub/dir/.cargo/config.toml"), true, CredentialCheck::Scan, false, "mise,cargo"),
+            (".cargo/config", true, true, Some(".cargo/config"), true, CredentialCheck::Scan, false, "mise,cargo"),
+            ("sub/dir/.cargo/config", true, true, Some("sub/dir/.cargo/config"), true, CredentialCheck::Scan, false, "mise,cargo"),
+            ("rust-toolchain", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/rust-toolchain", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("rust-toolchain.toml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/rust-toolchain.toml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("lib.rs", false, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/lib.rs", false, false, None, false, CredentialCheck::Scan, false, ""),
+            ("go.mod", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/go.mod", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("go.work", true, true, Some("go.work"), false, CredentialCheck::Scan, false, "go"),
+            ("sub/dir/go.work", true, true, Some("sub/dir/go.work"), false, CredentialCheck::Scan, false, "go"),
+            ("go.sum", false, false, None, false, CredentialCheck::Skip, false, ""),
+            ("sub/dir/go.sum", false, false, None, false, CredentialCheck::Skip, false, ""),
+            ("go.work.sum", false, false, None, false, CredentialCheck::Skip, false, ""),
+            ("sub/dir/go.work.sum", false, false, None, false, CredentialCheck::Skip, false, ""),
+            ("main.go", false, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/main.go", false, false, None, false, CredentialCheck::Scan, false, ""),
+            ("nuget.config", true, true, Some("nuget.config"), true, CredentialCheck::Scan, true, "mise,nuget"),
+            ("sub/dir/nuget.config", true, true, Some("sub/dir/nuget.config"), true, CredentialCheck::Scan, true, "mise,nuget"),
+            ("NuGet.Config", true, true, Some("NuGet.Config"), true, CredentialCheck::Scan, true, "mise,nuget"),
+            ("sub/dir/NuGet.Config", true, true, Some("sub/dir/NuGet.Config"), true, CredentialCheck::Scan, true, "mise,nuget"),
+            ("NUGET.CONFIG", true, true, Some("NUGET.CONFIG"), true, CredentialCheck::Scan, true, "mise,nuget"),
+            ("sub/dir/NUGET.CONFIG", true, true, Some("sub/dir/NUGET.CONFIG"), true, CredentialCheck::Scan, true, "mise,nuget"),
+            ("packages.lock.json", true, false, None, false, CredentialCheck::Skip, true, ""),
+            ("sub/dir/packages.lock.json", true, false, None, false, CredentialCheck::Skip, true, ""),
+            ("global.json", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/global.json", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("dotnet-tools.json", false, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/dotnet-tools.json", false, false, None, false, CredentialCheck::Scan, true, ""),
+            (".config/dotnet-tools.json", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/.config/dotnet-tools.json", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("Directory.Packages.props", true, true, Some("Directory.Packages.props"), false, CredentialCheck::Scan, true, "nuget"),
+            ("sub/dir/Directory.Packages.props", true, true, Some("sub/dir/Directory.Packages.props"), false, CredentialCheck::Scan, true, "nuget"),
+            ("Directory.Build.props", true, true, Some("Directory.Build.props"), false, CredentialCheck::Scan, true, "nuget"),
+            ("sub/dir/Directory.Build.props", true, true, Some("sub/dir/Directory.Build.props"), false, CredentialCheck::Scan, true, "nuget"),
+            ("Directory.Build.targets", true, true, Some("Directory.Build.targets"), false, CredentialCheck::Scan, true, "nuget"),
+            ("sub/dir/Directory.Build.targets", true, true, Some("sub/dir/Directory.Build.targets"), false, CredentialCheck::Scan, true, "nuget"),
+            ("app.csproj", true, true, Some("app.csproj"), false, CredentialCheck::Scan, true, "nuget"),
+            ("sub/dir/app.csproj", true, true, Some("sub/dir/app.csproj"), false, CredentialCheck::Scan, true, "nuget"),
+            ("app.fsproj", true, true, Some("app.fsproj"), false, CredentialCheck::Scan, true, "nuget"),
+            ("sub/dir/app.fsproj", true, true, Some("sub/dir/app.fsproj"), false, CredentialCheck::Scan, true, "nuget"),
+            ("app.vbproj", true, true, Some("app.vbproj"), false, CredentialCheck::Scan, true, "nuget"),
+            ("sub/dir/app.vbproj", true, true, Some("sub/dir/app.vbproj"), false, CredentialCheck::Scan, true, "nuget"),
+            ("app.sln", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/app.sln", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("app.slnx", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("sub/dir/app.slnx", true, false, None, false, CredentialCheck::Scan, true, ""),
+            ("app.slnf", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/app.slnf", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("x.props", true, true, Some("x.props"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("sub/dir/x.props", true, true, Some("sub/dir/x.props"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("x.targets", true, true, Some("x.targets"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("sub/dir/x.targets", true, true, Some("sub/dir/x.targets"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("x.rsp", true, true, Some("x.rsp"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("sub/dir/x.rsp", true, true, Some("sub/dir/x.rsp"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("x.projitems", true, true, Some("x.projitems"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("sub/dir/x.projitems", true, true, Some("sub/dir/x.projitems"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("x.user", true, true, Some("x.user"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("sub/dir/x.user", true, true, Some("sub/dir/x.user"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("x.msbuild", true, true, Some("x.msbuild"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("sub/dir/x.msbuild", true, true, Some("sub/dir/x.msbuild"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("x.pubxml", true, true, Some("x.pubxml"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("sub/dir/x.pubxml", true, true, Some("sub/dir/x.pubxml"), false, CredentialCheck::Undecided, true, "nuget"),
+            ("main.tf", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/main.tf", true, false, None, false, CredentialCheck::Scan, false, ""),
+            (".terraform.lock.hcl", true, false, None, false, CredentialCheck::Skip, false, ""),
+            ("sub/dir/.terraform.lock.hcl", true, false, None, false, CredentialCheck::Skip, false, ""),
+            (".terraform-version", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.terraform-version", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("mise.toml", true, true, Some("mise.toml"), false, CredentialCheck::Scan, false, "mise"),
+            ("sub/dir/mise.toml", true, true, Some("sub/dir/mise.toml"), false, CredentialCheck::Scan, false, "mise"),
+            (".mise.toml", true, true, Some(".mise.toml"), false, CredentialCheck::Scan, false, "mise"),
+            ("sub/dir/.mise.toml", true, true, Some("sub/dir/.mise.toml"), false, CredentialCheck::Scan, false, "mise"),
+            ("mise.lock", false, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/mise.lock", false, false, None, false, CredentialCheck::Scan, false, ""),
+            (".tool-versions", true, false, None, false, CredentialCheck::Skip, false, ""),
+            ("sub/dir/.tool-versions", true, false, None, false, CredentialCheck::Skip, false, ""),
+            ("mise.local.toml", true, true, Some("mise.local.toml"), false, CredentialCheck::Undecided, false, "mise"),
+            ("sub/dir/mise.local.toml", true, true, Some("sub/dir/mise.local.toml"), false, CredentialCheck::Undecided, false, "mise"),
+            (".miserc", true, true, Some(".miserc"), false, CredentialCheck::Undecided, false, "mise"),
+            ("sub/dir/.miserc", true, true, Some("sub/dir/.miserc"), false, CredentialCheck::Undecided, false, "mise"),
+            (".config/mise.toml", true, true, Some(".config/mise.toml"), false, CredentialCheck::Scan, false, "mise"),
+            ("sub/dir/.config/mise.toml", true, true, Some("sub/dir/.config/mise.toml"), false, CredentialCheck::Scan, false, "mise"),
+            ("mise/tools.toml", true, true, Some("mise/tools.toml"), false, CredentialCheck::Undecided, false, "mise"),
+            ("sub/dir/mise/tools.toml", true, true, Some("sub/dir/mise/tools.toml"), false, CredentialCheck::Undecided, false, "mise"),
+            (".mise/tools.toml", true, true, Some(".mise/tools.toml"), false, CredentialCheck::Undecided, false, "mise"),
+            ("sub/dir/.mise/tools.toml", true, true, Some("sub/dir/.mise/tools.toml"), false, CredentialCheck::Undecided, false, "mise"),
+            ("pom.xml", true, true, Some("pom.xml"), false, CredentialCheck::Undecided, false, "maven"),
+            ("sub/dir/pom.xml", true, true, Some("sub/dir/pom.xml"), false, CredentialCheck::Undecided, false, "maven"),
+            ("settings.xml", true, true, Some("settings.xml"), false, CredentialCheck::Undecided, false, "maven"),
+            ("sub/dir/settings.xml", true, true, Some("sub/dir/settings.xml"), false, CredentialCheck::Undecided, false, "maven"),
+            ("custom-settings.xml", true, true, Some("custom-settings.xml"), false, CredentialCheck::Undecided, false, "maven"),
+            ("sub/dir/custom-settings.xml", true, true, Some("sub/dir/custom-settings.xml"), false, CredentialCheck::Undecided, false, "maven"),
+            (".mvn/maven.config", true, true, Some(".mvn/maven.config"), false, CredentialCheck::Undecided, false, "maven"),
+            ("sub/dir/.mvn/maven.config", true, true, Some("sub/dir/.mvn/maven.config"), false, CredentialCheck::Undecided, false, "maven"),
+            ("build.gradle.kts", true, true, Some("build.gradle.kts"), false, CredentialCheck::Undecided, false, "gradle"),
+            ("sub/dir/build.gradle.kts", true, true, Some("sub/dir/build.gradle.kts"), false, CredentialCheck::Undecided, false, "gradle"),
+            ("settings.gradle.kts", true, true, Some("settings.gradle.kts"), false, CredentialCheck::Undecided, false, "gradle"),
+            ("sub/dir/settings.gradle.kts", true, true, Some("sub/dir/settings.gradle.kts"), false, CredentialCheck::Undecided, false, "gradle"),
+            ("build.gradle", true, true, Some("build.gradle"), false, CredentialCheck::Undecided, false, "gradle"),
+            ("sub/dir/build.gradle", true, true, Some("sub/dir/build.gradle"), false, CredentialCheck::Undecided, false, "gradle"),
+            ("gradle.lockfile", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/gradle.lockfile", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("gradle-wrapper.properties", false, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/gradle-wrapper.properties", false, false, None, false, CredentialCheck::Scan, false, ""),
+            ("gradle/wrapper/gradle-wrapper.properties", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/gradle/wrapper/gradle-wrapper.properties", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("build-logic/settings.gradle.kts", true, true, Some("build-logic/settings.gradle.kts"), false, CredentialCheck::Undecided, false, "gradle"),
+            ("sub/dir/build-logic/settings.gradle.kts", true, true, Some("sub/dir/build-logic/settings.gradle.kts"), false, CredentialCheck::Undecided, false, "gradle"),
+            ("buildSrc/build.gradle.kts", true, true, Some("buildSrc/build.gradle.kts"), false, CredentialCheck::Undecided, false, "gradle"),
+            ("sub/dir/buildSrc/build.gradle.kts", true, true, Some("sub/dir/buildSrc/build.gradle.kts"), false, CredentialCheck::Undecided, false, "gradle"),
+            ("src/main/kotlin/App.kt", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/src/main/kotlin/App.kt", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("flake.nix", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/flake.nix", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("flake.lock", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/flake.lock", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("apm.yml", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/apm.yml", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("apm.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/apm.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("apm.lock.yaml", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("sub/dir/apm.lock.yaml", true, false, None, false, CredentialCheck::Scan, false, ""),
+            ("Chart.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/Chart.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("Chart.lock", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/Chart.lock", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            (".github/workflows/ci.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.github/workflows/ci.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            (".gitea/workflows/ci.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.gitea/workflows/ci.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            (".gitlab-ci.yml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.gitlab-ci.yml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            (".pre-commit-config.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.pre-commit-config.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("devcontainer.json", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/devcontainer.json", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            (".devcontainer.json", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.devcontainer.json", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("Dockerfile", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/Dockerfile", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("Dockerfile.dev", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/Dockerfile.dev", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("docker-compose.yml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/docker-compose.yml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("compose.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/compose.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            (".copier-answers.yml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.copier-answers.yml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            (".woodpecker/ci.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.woodpecker/ci.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("kustomization.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/kustomization.yaml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("action.yml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/action.yml", true, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("README.md", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/README.md", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("foo.toml", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/foo.toml", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("x/settings.json", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/x/settings.json", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("random.txt", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/random.txt", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            (".env", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.env", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("WORKSPACE", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/WORKSPACE", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("deno.json", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/deno.json", false, false, None, false, CredentialCheck::Undecided, false, ""),
+            (".bundle", false, false, Some(".bundle/config"), false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.bundle", false, false, Some("sub/dir/.bundle/config"), false, CredentialCheck::Undecided, false, ""),
+            (".bundle/config", true, true, Some(".bundle/config"), false, CredentialCheck::Undecided, false, "bundler"),
+            ("sub/dir/.bundle/config", true, true, Some("sub/dir/.bundle/config"), false, CredentialCheck::Undecided, false, "bundler"),
+            (".mvn", false, false, Some(".mvn/maven.config"), false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.mvn", false, false, Some("sub/dir/.mvn/maven.config"), false, CredentialCheck::Undecided, false, ""),
+            (".cargo", false, false, Some(".cargo/config.toml"), false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/.cargo", false, false, Some("sub/dir/.cargo/config.toml"), false, CredentialCheck::Undecided, false, ""),
+            ("build-logic", false, false, Some("build-logic/build.gradle.kts"), false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/build-logic", false, false, Some("sub/dir/build-logic/build.gradle.kts"), false, CredentialCheck::Undecided, false, ""),
+            ("buildSrc", false, false, Some("buildSrc/build.gradle.kts"), false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/buildSrc", false, false, Some("sub/dir/buildSrc/build.gradle.kts"), false, CredentialCheck::Undecided, false, ""),
+            ("build-conventions", false, false, Some("build-conventions/build.gradle.kts"), false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/build-conventions", false, false, Some("sub/dir/build-conventions/build.gradle.kts"), false, CredentialCheck::Undecided, false, ""),
+            ("gradle/plugins", false, false, Some("gradle/plugins/build.gradle.kts"), false, CredentialCheck::Undecided, false, ""),
+            ("sub/dir/gradle/plugins", false, false, Some("sub/dir/gradle/plugins/build.gradle.kts"), false, CredentialCheck::Undecided, false, ""),
+        ];
+        let config = patchula_config::defaults().unwrap();
+        let scanner = super::Scanner::new(&config).unwrap();
+        let files = super::Files::new();
+        for &(path, needs, settings, linked, scope, check, verdict, registry) in TABLE {
+            assert_eq!(scanner.needs(path), needs, "{path}: needs");
+            assert_eq!(
+                super::registry_settings(path),
+                settings,
+                "{path}: registry_settings"
+            );
+            assert_eq!(
+                super::linked_settings(path).as_deref(),
+                linked,
+                "{path}: linked_settings"
+            );
+            assert_eq!(
+                super::credential_scope(path),
+                scope,
+                "{path}: credential_scope"
+            );
+            assert_eq!(
+                super::credential_check(path),
+                check,
+                "{path}: credential_check"
+            );
+            assert_eq!(
+                super::public::verdict(path, &super::Text::Read(String::new()), &files).is_some(),
+                verdict,
+                "{path}: public verdict"
+            );
+            let managers: Vec<&str> = super::Manager::ALL
+                .iter()
+                .filter(|m| super::ecosystem(**m).registry_file(path))
+                .map(|m| m.as_str())
+                .collect();
+            assert_eq!(managers.join(","), registry, "{path}: registry_file");
+        }
+    }
+
     #[test]
     fn every_manager_has_a_descriptor() {
         for manager in super::Manager::ALL {
@@ -896,29 +1223,6 @@ pub mod known {
     };
 }
 
-/// A file that can say where packages come from: Python settings,
-/// Bundler's settings, a NuGet config, an MSBuild file that can set
-/// restore sources, or Maven or Gradle build files that can add
-/// repositories. One the Count cannot read, such as a symlink or a file
-/// that is not text, must reach the scanner as unreadable, since leaving it
-/// out would make its packages the public registry's.
-pub fn registry_settings(path: &str) -> bool {
-    python_settings(path)
-        || bundle_config(path)
-        || nuget::config_file(path)
-        || nuget::msbuild_file(path)
-        || maven::repository_file(path)
-        || gradle::build_logic(path)
-        || cargo::config_file(path)
-        || path.rsplit('/').next() == Some("Cargo.toml")
-        || go::work_file(path)
-        || mise::config_file(path)
-        || matches!(
-            path.rsplit('/').next().unwrap_or(path),
-            ".npmrc" | ".yarnrc.yml" | "pip.conf" | "pip.ini"
-        )
-}
-
 /// A file that can name a Python package index.
 pub(crate) fn python_settings(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
@@ -931,24 +1235,6 @@ pub(crate) fn python_settings(path: &str) -> bool {
 /// Bundler's settings for a project.
 pub(crate) fn bundle_config(path: &str) -> bool {
     path == ".bundle/config" || path.ends_with("/.bundle/config")
-}
-
-/// The settings file a symlink at `path` could stand for: the path itself
-/// when it is a settings file, or one inside a linked folder the tools
-/// follow: `.bundle` for Bundler, `.mvn` for Maven, and Gradle's build-logic
-/// folders, whose contents the Count then cannot read.
-pub fn linked_settings(path: &str) -> Option<String> {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    if registry_settings(path) {
-        return Some(path.to_owned());
-    }
-    match leaf {
-        ".bundle" => Some(format!("{path}/config")),
-        ".mvn" => Some(format!("{path}/maven.config")),
-        ".cargo" => Some(format!("{path}/config.toml")),
-        _ if gradle::logic_folder(path) => Some(format!("{path}/build.gradle.kts")),
-        _ => None,
-    }
 }
 
 /// The text of a file that was read, as one a document was parsed from must

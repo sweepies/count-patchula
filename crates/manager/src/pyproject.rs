@@ -348,11 +348,7 @@ impl crate::Ecosystem for Descriptor {
         )
     }
     fn registry_file(&self, path: &str) -> bool {
-        python_settings(path)
-            || matches!(
-                path.rsplit('/').next().unwrap_or(path),
-                "uv.lock" | "poetry.lock"
-            )
+        crate::roles::eco_roles(Manager::Pyproject, path).registry
     }
     /// The settings the pip and uv backends mise runs read.
     fn backend_settings(&self, path: &str) -> bool {
