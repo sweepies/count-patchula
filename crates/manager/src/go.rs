@@ -89,7 +89,7 @@ pub(super) fn extract(
                 registry: replacements
                     .as_ref()
                     .err()
-                    .and_then(|reason| crate::origins::Named::Unusable(reason.clone()).recorded()),
+                    .and_then(|reason| crate::origins::Named::Unusable(reason.clone()).registry()),
             });
         } else if let Some(c) = directive.captures(code) {
             let version = c.name("version").unwrap();

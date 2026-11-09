@@ -46,9 +46,15 @@ impl Named {
     }
     /// The registry a dependency records: none for the public one.
     pub(crate) fn recorded(&self) -> Option<String> {
+        self.registry()
+            .map(|registry| registry.recorded().to_owned())
+    }
+    /// The registry a dependency records, typed: none for the public one.
+    pub(crate) fn registry(&self) -> Option<Registry> {
         match self {
             Self::Public => None,
-            Self::Url(value) | Self::Unusable(value) => Some(value.clone()),
+            Self::Url(value) => Some(Registry::Url(value.clone())),
+            Self::Unusable(value) => Some(Registry::Unusable(value.clone())),
         }
     }
     fn label(&self, public: &Public) -> String {
@@ -160,10 +166,10 @@ impl Origins {
                 return true;
             }
             match self.origin(&dep.package) {
-                Origin::Index(named) => dep.registry = named.recorded(),
+                Origin::Index(named) => dep.registry = named.registry(),
                 Origin::Ambiguous(named) => {
                     let labels: Vec<_> = named.iter().map(|n| n.label(public)).collect();
-                    dep.registry = Some(PackageId::ambiguous_registry(&labels));
+                    dep.registry = Some(Registry::ambiguous(&labels));
                 }
                 Origin::Other => {
                     dropped.push(dep.clone());

@@ -2141,7 +2141,7 @@ impl Engine {
                     name: dep.name.clone(),
                     occurrence: None,
                     package: dep.package.clone(),
-                    registry: dep.registry.clone(),
+                    registry: dep.registry.as_ref().map(|r| r.recorded().to_owned()),
                     current: Current {
                         value: Some(dep.current.clone()),
                         version: catalogs

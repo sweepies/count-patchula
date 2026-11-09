@@ -1,3 +1,4 @@
+use crate::origins::Named;
 use crate::*;
 use jsonc_parser::{
     ast::{Object, Value},
@@ -382,18 +383,6 @@ pub(super) fn node_version(path: &str, text: &str, manager: Manager) -> Vec<Depe
     }]
 }
 
-/// What a registry setting names.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Named {
-    /// npm's or Yarn's public registry, which serve the same packages.
-    Public,
-    Url(String),
-    /// A value the Count cannot read from, such as `${VAR}` or plain http,
-    /// kept as written. Its packages are never looked up on the public
-    /// registry instead, where the same name may be someone else's.
-    Unusable(String),
-}
-
 /// Whether `url` is on npm's or Yarn's public registry host, over https or the
 /// plain http some old `.npmrc` files still name.
 fn public(url: &str) -> bool {
@@ -401,28 +390,14 @@ fn public(url: &str) -> bool {
         .is_some_and(|host| matches!(host.as_str(), "registry.npmjs.org" | "registry.yarnpkg.com"))
 }
 
+/// What a registry setting names, parsed the way every ecosystem's are.
 fn named(value: &str) -> Named {
-    let raw = value.trim().trim_matches(['"', '\'']);
-    if public(raw) {
-        return Named::Public;
-    }
-    match crate::registry_url(raw) {
-        Some(url) => Named::Url(url),
-        None => Named::Unusable(crate::redacted(raw)),
-    }
-}
-
-/// The registry a dependency records for a setting: none for the public one.
-fn recorded(named: &Named) -> Option<String> {
-    match named {
-        Named::Public => None,
-        Named::Url(value) | Named::Unusable(value) => Some(value.clone()),
-    }
+    Named::parse(value, &NPM)
 }
 
 /// An npm registry an extractor names, as a dependency records it.
-pub(super) fn extracted_registry(value: &str) -> Option<String> {
-    recorded(&named(value))
+pub(super) fn extracted_registry(value: &str) -> Option<Registry> {
+    named(value).registry()
 }
 
 /// The registries a project's `.npmrc` or `.yarnrc.yml` names.
@@ -576,7 +551,7 @@ pub(super) fn registry_for(
     file: &str,
     package: &str,
     npmrcs: &BTreeMap<&str, Npmrc>,
-) -> Option<String> {
+) -> Option<Registry> {
     let mut directories = Vec::new();
     let mut directory = file.rsplit_once('/').map_or("", |(d, _)| d);
     loop {
@@ -590,9 +565,8 @@ pub(super) fn registry_for(
     // A settings file the Count did not read may set this package's registry,
     // so its lookup fails rather than guessing past it.
     if settings.iter().any(|s| s.unread) {
-        return recorded(&Named::Unusable(
-            "(an npm settings file the Count could not read)".into(),
-        ));
+        return Named::Unusable("(an npm settings file the Count could not read)".into())
+            .registry();
     }
     let scope = package
         .split_once('/')
@@ -601,7 +575,7 @@ pub(super) fn registry_for(
     let named = scope
         .and_then(|scope| settings.iter().find_map(|s| s.scopes.get(scope)))
         .or_else(|| settings.iter().find_map(|s| s.default.as_ref()))?;
-    recorded(named)
+    named.registry()
 }
 
 /// Look each npm dependency up in the registry its `.npmrc` or `.yarnrc.yml`

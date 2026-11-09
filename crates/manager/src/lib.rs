@@ -45,7 +45,7 @@ mod woodpecker;
 mod yaml;
 mod yaml_locations;
 
-use patchula_config::{Config, PackageId, Patterns};
+use patchula_config::{Config, PackageId, Patterns, Registry};
 use patchula_words::{DependencyKind, Manager, Scheme, Source};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -109,10 +109,10 @@ pub struct Dependency {
     pub extract: Option<String>,
     /// The mise config that includes this file as a TOML task file.
     pub included_by: Option<String>,
-    /// The registry to look the package up in, as an https URL, when it is not
-    /// the source's public one.
+    /// The registry to look the package up in, when it is not the source's
+    /// public one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<String>,
+    pub registry: Option<Registry>,
 }
 /// A key as one token of a JSON Pointer, which escapes `~` and `/`.
 pub(crate) fn pointer_token(key: &str) -> String {
@@ -203,7 +203,7 @@ impl Dependency {
             source: Some(self.source),
             current: Some(self.current.as_str()),
             digest: self.digest.as_deref(),
-            registry: self.registry.as_deref(),
+            registry: self.registry.as_ref().map(Registry::recorded),
         }
     }
 }

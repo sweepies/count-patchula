@@ -705,7 +705,7 @@ impl crate::Ecosystem for Descriptor {
                     .filter(|d| d.manager == Manager::Mise && d.source == Source::Mise)
                 {
                     if let Some(reason) = redirected(dep, &configs, files, feeds) {
-                        dep.registry = origins::Named::Unusable(reason).recorded();
+                        dep.registry = origins::Named::Unusable(reason).registry();
                     }
                 }
                 Ok(())

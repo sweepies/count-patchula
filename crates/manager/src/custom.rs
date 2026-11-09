@@ -72,10 +72,11 @@ pub(super) fn extract(
                         Some(registry) => match template(registry, &captures) {
                             Ok(raw) if raw.is_empty() => None,
                             Ok(raw) if source == Source::Npm => npm::extracted_registry(&raw),
-                            Ok(raw) if source == Source::Pypi => pypi::named(&raw).recorded(),
-                            Ok(raw) => {
-                                Some(registry_url(&raw).unwrap_or_else(|| crate::redacted(&raw)))
-                            }
+                            Ok(raw) if source == Source::Pypi => pypi::named(&raw).registry(),
+                            Ok(raw) => Some(match registry_url(&raw) {
+                                Some(url) => Registry::Url(url),
+                                None => Registry::Unusable(crate::redacted(&raw)),
+                            }),
                             Err(error) if error.starts_with("unmatched template capture") => None,
                             Err(error) => return Err(error),
                         },

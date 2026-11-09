@@ -243,7 +243,7 @@ impl Engine {
                                         &dep.file,
                                         dep.source,
                                         &dep.package,
-                                        dep.registry.as_deref(),
+                                        dep.registry.as_ref().map(|r| r.recorded()),
                                     )
                                 })
                                 .map(patchula_update::dashboard::extracted_key)

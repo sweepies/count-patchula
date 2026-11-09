@@ -15,7 +15,7 @@ pub struct Locked {
     /// The registry its lockfile's project looks it up in, when it is not the
     /// public one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<String>,
+    pub registry: Option<Registry>,
 }
 impl Locked {
     /// The package as a `transitive` dependency of its lockfile.

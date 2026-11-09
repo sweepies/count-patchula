@@ -118,7 +118,7 @@ fn change(registry: Option<&str>) -> Change {
     Change {
         source: Source::Npm,
         package: "fixture".into(),
-        registry: registry.map(str::to_owned),
+        registry: registry.map(patchula_config::Registry::from_recorded),
         file: "package.json".into(),
         current: "^2.0.0".into(),
         current_version: None,

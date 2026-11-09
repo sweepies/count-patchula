@@ -1,4 +1,4 @@
-use patchula_config::{Config, PackageId};
+use patchula_config::{Config, PackageId, Registry};
 use patchula_manager::{Dependency, Edit, hash};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
 use patchula_words::{Source, Update as UpdateKind};
@@ -171,7 +171,7 @@ pub struct Change {
     pub package: String,
     /// The registry the package comes from, when it is not the public one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<String>,
+    pub registry: Option<Registry>,
     pub file: String,
     pub current: String,
     pub current_version: Option<String>,
@@ -208,7 +208,7 @@ impl Change {
         self.file == file
             && self.source == source
             && self.package == package
-            && self.registry.as_deref() == registry
+            && self.registry.as_ref().map(Registry::recorded) == registry
     }
     /// Whether `update` proposes exactly this change's target.
     pub fn same_target(&self, update: &Update) -> bool {
@@ -248,7 +248,7 @@ pub fn branch_name(prefix: &str, label: &str, _identity: &str) -> Result<String,
 }
 /// Each branch label's packages, by source, package and registry; a label
 /// shared by several gets a prefix to tell their branches apart.
-type PackageNames = BTreeMap<String, BTreeSet<(Source, String, Option<String>)>>;
+type PackageNames = BTreeMap<String, BTreeSet<(Source, String, Option<Registry>)>>;
 
 struct Item<'a> {
     dep: &'a Dependency,
@@ -797,7 +797,12 @@ fn branch_identity(
                 let manager = match &dep.registry {
                     _ if package_names[&package].len() <= 1 => String::default(),
                     // The whole registry, path included: one host can serve several.
-                    Some(registry) => format!("{}-", slug(registry.trim_start_matches("https://"))),
+                    Some(registry) => {
+                        format!(
+                            "{}-",
+                            slug(registry.recorded().trim_start_matches("https://"))
+                        )
+                    }
                     None => format!("{}-", manager_slug(dep)),
                 };
                 let variants: BTreeSet<_> = dependencies
@@ -877,7 +882,14 @@ pub fn batch_plan(
     for target in targets {
         let candidates: Vec<_> = dependencies
             .iter()
-            .filter(|d| target.touches(&d.file, d.source, &d.package, d.registry.as_deref()))
+            .filter(|d| {
+                target.touches(
+                    &d.file,
+                    d.source,
+                    &d.package,
+                    d.registry.as_ref().map(Registry::recorded),
+                )
+            })
             .collect();
         let current = |d: &Dependency| {
             format!(
@@ -982,4 +994,270 @@ pub fn batch_plan(
     );
     plan.input_fingerprint.clone_from(&plan.fingerprint);
     Ok(Some(plan))
+}
+
+#[cfg(test)]
+mod frozen_bytes {
+    //! Rule 3 pins: the bytes `registry` and `package` persist as — the
+    //! declaration key, the branch slug, the branch identity and the
+    //! serialized `Change` — computed from the code before `Registry` was
+    //! typed. Every registry form (public, URL, ambiguous, unusable) against
+    //! every package encoding (plain, `registry|name`, helm `repo|name`,
+    //! gradle plugin portal) must keep producing them.
+    use super::*;
+    use patchula_manager::{Dependency, Location};
+    use patchula_words::{DependencyKind, Manager, Scheme};
+
+    fn dep(registry: Option<&str>, package: &str) -> Dependency {
+        Dependency {
+            manager: Manager::Npm,
+            file: "package.json".into(),
+            location: Location {
+                start: 0,
+                end: 0,
+                line: 1,
+                column: 1,
+                pointer: "/dependencies/lodash".into(),
+            },
+            name: "lodash".into(),
+            package: package.into(),
+            kind: DependencyKind::Production,
+            current: "1.0.0".into(),
+            resolved: None,
+            digest: None,
+            source: Source::Npm,
+            scheme: Scheme::Semver,
+            extract: None,
+            included_by: None,
+            registry: registry.map(Registry::from_recorded),
+        }
+    }
+
+    fn change(dep: &Dependency) -> Change {
+        Change {
+            source: dep.source,
+            package: dep.package.clone(),
+            registry: dep.registry.clone(),
+            file: dep.file.clone(),
+            current: dep.current.clone(),
+            current_version: None,
+            value: Some("1.2.0".into()),
+            version: Some("1.2.0".into()),
+            digest: None,
+            kind: UpdateKind::Minor,
+            merge: false,
+            labels: Vec::new(),
+            release_notes: true,
+            body_notes: Vec::new(),
+            advisories: Vec::new(),
+            image: None,
+        }
+    }
+
+    #[test]
+    fn registry_and_package_bytes_are_frozen() {
+        // (registry, package, key, package slug, registry slug, identity, change)
+        type Case = (
+            Option<&'static str>,
+            &'static str,
+            &'static str,
+            &'static str,
+            Option<&'static str>,
+            &'static str,
+            &'static str,
+        );
+        let cases: [Case; 16] = [
+            (
+                None,
+                "lodash",
+                "cb360af58a71732d87bd6bbacf80b9294db02dffe0914bd10fe4536f5dc7083c",
+                "lodash",
+                None,
+                r#"["dependency","npm","lodash","1.x"]"#,
+                r#"{"source":"npm","package":"lodash","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                None,
+                "https://npm.acme.dev|lodash",
+                "8d6356b6f28e614a95be109042e4b1b478a83dcfbb7f84ff93a926cf1878c719",
+                "lodash",
+                None,
+                r#"["dependency","npm","https://npm.acme.dev|lodash","1.x"]"#,
+                r#"{"source":"npm","package":"https://npm.acme.dev|lodash","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                None,
+                "https://charts.acme.dev|mychart",
+                "49fa9d2169120fb496ba3ea0e797093271a26aac3e41d8200e99617dd32dcfa2",
+                "mychart",
+                None,
+                r#"["dependency","npm","https://charts.acme.dev|mychart","1.x"]"#,
+                r#"{"source":"npm","package":"https://charts.acme.dev|mychart","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                None,
+                "https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin",
+                "680ad27edf7ed85317291f1d740e82fccfff3b66e75bd79fc9c124d0b1f956db",
+                "com-acme-plugin-com-acme-plugin-gradle-plugin",
+                None,
+                r#"["dependency","npm","https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin","1.x"]"#,
+                r#"{"source":"npm","package":"https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("https://npm.acme.dev"),
+                "lodash",
+                "f0fa3fd0c5da69b981a696a6c79707a309bc9999fba1c52499d321d1834cbc12",
+                "lodash",
+                Some("npm-acme-dev"),
+                r#"["dependency","npm","lodash","1.x","https://npm.acme.dev"]"#,
+                r#"{"source":"npm","package":"lodash","registry":"https://npm.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("https://npm.acme.dev"),
+                "https://npm.acme.dev|lodash",
+                "3ff51b432f6b25c649b96f1be7b22989d57f4fb259625e7c681d76983a080e89",
+                "lodash",
+                Some("npm-acme-dev"),
+                r#"["dependency","npm","https://npm.acme.dev|lodash","1.x","https://npm.acme.dev"]"#,
+                r#"{"source":"npm","package":"https://npm.acme.dev|lodash","registry":"https://npm.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("https://npm.acme.dev"),
+                "https://charts.acme.dev|mychart",
+                "666ab325667a8ac68dce0957db9ed066153b09bf2806d27a5e00c79bd7a804ae",
+                "mychart",
+                Some("npm-acme-dev"),
+                r#"["dependency","npm","https://charts.acme.dev|mychart","1.x","https://npm.acme.dev"]"#,
+                r#"{"source":"npm","package":"https://charts.acme.dev|mychart","registry":"https://npm.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("https://npm.acme.dev"),
+                "https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin",
+                "46b451c1faef05470af7738835138b8eb7319962501d00168f60953aea17a881",
+                "com-acme-plugin-com-acme-plugin-gradle-plugin",
+                Some("npm-acme-dev"),
+                r#"["dependency","npm","https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin","1.x","https://npm.acme.dev"]"#,
+                r#"{"source":"npm","package":"https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin","registry":"https://npm.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("ambiguous: https://a.acme.dev, https://b.acme.dev"),
+                "lodash",
+                "cdef217c26da17014b8f4d13fffb4a50a6c587a96087642255322ff2adf28a6c",
+                "lodash",
+                Some("ambiguous-https-a-acme-dev-https-b-acme-dev"),
+                r#"["dependency","npm","lodash","1.x","ambiguous: https://a.acme.dev, https://b.acme.dev"]"#,
+                r#"{"source":"npm","package":"lodash","registry":"ambiguous: https://a.acme.dev, https://b.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("ambiguous: https://a.acme.dev, https://b.acme.dev"),
+                "https://npm.acme.dev|lodash",
+                "a56161de2f4d43d7851010b0c498df1ae0396d38984fec6c4d080967ae6838e3",
+                "lodash",
+                Some("ambiguous-https-a-acme-dev-https-b-acme-dev"),
+                r#"["dependency","npm","https://npm.acme.dev|lodash","1.x","ambiguous: https://a.acme.dev, https://b.acme.dev"]"#,
+                r#"{"source":"npm","package":"https://npm.acme.dev|lodash","registry":"ambiguous: https://a.acme.dev, https://b.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("ambiguous: https://a.acme.dev, https://b.acme.dev"),
+                "https://charts.acme.dev|mychart",
+                "cf820a0cda4a8d54de429fb9a1f98bbde2438b835c3cca7809ab665450636bf1",
+                "mychart",
+                Some("ambiguous-https-a-acme-dev-https-b-acme-dev"),
+                r#"["dependency","npm","https://charts.acme.dev|mychart","1.x","ambiguous: https://a.acme.dev, https://b.acme.dev"]"#,
+                r#"{"source":"npm","package":"https://charts.acme.dev|mychart","registry":"ambiguous: https://a.acme.dev, https://b.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("ambiguous: https://a.acme.dev, https://b.acme.dev"),
+                "https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin",
+                "23257b357d833adf409a1c5d8969bf9ae9089b7cc0a7ba9f83cf66282dfe22ed",
+                "com-acme-plugin-com-acme-plugin-gradle-plugin",
+                Some("ambiguous-https-a-acme-dev-https-b-acme-dev"),
+                r#"["dependency","npm","https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin","1.x","ambiguous: https://a.acme.dev, https://b.acme.dev"]"#,
+                r#"{"source":"npm","package":"https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin","registry":"ambiguous: https://a.acme.dev, https://b.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("${NPM_REGISTRY}"),
+                "lodash",
+                "be5cd094f73b6dfaf788210d52e1bb5f1e1fc9b704f30a4008493ed87f9cf0bc",
+                "lodash",
+                Some("npm-registry"),
+                r#"["dependency","npm","lodash","1.x","${NPM_REGISTRY}"]"#,
+                r#"{"source":"npm","package":"lodash","registry":"${NPM_REGISTRY}","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("${NPM_REGISTRY}"),
+                "https://npm.acme.dev|lodash",
+                "1c1f215e654d25b5ece6aeafda33961545c52f69865ecc790d82a3d947bd7d69",
+                "lodash",
+                Some("npm-registry"),
+                r#"["dependency","npm","https://npm.acme.dev|lodash","1.x","${NPM_REGISTRY}"]"#,
+                r#"{"source":"npm","package":"https://npm.acme.dev|lodash","registry":"${NPM_REGISTRY}","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("${NPM_REGISTRY}"),
+                "https://charts.acme.dev|mychart",
+                "6f8f98d2cd57d3ac4d6bb413c1cc1c5a84da91fa1883af5357cd9587306bbc6d",
+                "mychart",
+                Some("npm-registry"),
+                r#"["dependency","npm","https://charts.acme.dev|mychart","1.x","${NPM_REGISTRY}"]"#,
+                r#"{"source":"npm","package":"https://charts.acme.dev|mychart","registry":"${NPM_REGISTRY}","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+            (
+                Some("${NPM_REGISTRY}"),
+                "https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin",
+                "9a612f63dd398354a60fcfbf85650bf92702e346c28b674559a6cb97bacd642d",
+                "com-acme-plugin-com-acme-plugin-gradle-plugin",
+                Some("npm-registry"),
+                r#"["dependency","npm","https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin","1.x","${NPM_REGISTRY}"]"#,
+                r#"{"source":"npm","package":"https://plugins.gradle.org/m2|com.acme.plugin:com.acme.plugin.gradle.plugin","registry":"${NPM_REGISTRY}","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}"#,
+            ),
+        ];
+        for (registry, package, key, pslug, rslug, identity, change_json) in cases {
+            let dep = dep(registry, package);
+            assert_eq!(
+                dep.declaration().key(),
+                key,
+                "key for {registry:?} {package}"
+            );
+            assert_eq!(
+                package_slug(&dep.package),
+                pslug,
+                "package slug for {package}"
+            );
+            assert_eq!(
+                dep.registry
+                    .as_ref()
+                    .map(|r| slug(r.recorded().trim_start_matches("https://"))),
+                rslug.map(str::to_owned),
+                "registry slug for {registry:?}"
+            );
+            let identity_json = match &dep.registry {
+                Some(registry) => {
+                    serde_json::json!(["dependency", dep.source, dep.package, "1.x", registry])
+                }
+                None => serde_json::json!(["dependency", dep.source, dep.package, "1.x"]),
+            }
+            .to_string();
+            assert_eq!(
+                identity_json, identity,
+                "identity for {registry:?} {package}"
+            );
+            assert_eq!(
+                serde_json::to_string(&change(&dep)).unwrap(),
+                change_json,
+                "change for {registry:?} {package}"
+            );
+            if let Some(registry) = registry {
+                let recorded = dep.registry.as_ref().unwrap().recorded();
+                assert_eq!(recorded, registry, "recorded round-trip");
+                assert_eq!(
+                    Registry::from_recorded(recorded).recorded(),
+                    recorded,
+                    "serde round-trip"
+                );
+                let json = serde_json::to_string(&dep.registry).unwrap();
+                assert_eq!(json, format!("\"{recorded}\""), "registry serde");
+            }
+        }
+    }
 }
