@@ -27,6 +27,8 @@ struct ReleaseHead {
 fn compact_release_head(body: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&serde_json::from_slice::<Vec<ReleaseHead>>(body)?)
 }
+const GITHUB_RELEASE_HEAD: patchula_http::Derived<serde_json::Error> =
+    patchula_http::Derived::new("github-release-head", compact_release_head);
 
 /// The newest release's identity on a release source; a change refetches
 /// history. `None` records a source with no releases.
@@ -158,7 +160,7 @@ impl Client {
         };
         let warm = stream::iter(warm).map(|(package, scope, previous)| async move {
             let result = async {
-                let response = self.github.get_derived(&format!("repos/{package}/releases?per_page=1"), "github-release-head-v1", compact_release_head).await?;
+                let response = self.github.get_derived(&format!("repos/{package}/releases?per_page=1"), &GITHUB_RELEASE_HEAD).await?;
                 let nodes: Vec<Value> = serde_json::from_slice(&response.body)?;
                 let nodes: Vec<_> = nodes.iter().map(|node| json!({"tagName":node["tag_name"],"publishedAt":node["published_at"],"isDraft":node["draft"],"isPrerelease":node["prerelease"]})).collect();
                 self.release_catalog(&package, scope, previous, Head::Newest(json!({"nodes":nodes,"pageInfo":{"hasNextPage":true,"endCursor":null}}))).await
@@ -592,6 +594,7 @@ mod tests {
                         status: reqwest::StatusCode::OK,
                         headers: Default::default(),
                         body: serde_json::to_vec(&body).unwrap(),
+                        stale: None,
                     })
                 })
             }
@@ -638,7 +641,7 @@ mod tests {
         .unwrap();
         let client = Client::new(
             github,
-            Cached::new(cache.clone(), transport.clone(), 2).unwrap(),
+            crate::cached(cache.clone(), transport.clone(), 2).unwrap(),
             cache,
         );
         for (phase, date) in [
@@ -717,6 +720,7 @@ mod tests {
                         status: reqwest::StatusCode::OK,
                         headers: Default::default(),
                         body: serde_json::to_vec(&body).unwrap(),
+                        stale: None,
                     })
                 })
             }
@@ -732,7 +736,7 @@ mod tests {
         .unwrap();
         let client = Client::new(
             github,
-            Cached::new(cache.clone(), transport, 2).unwrap(),
+            crate::cached(cache.clone(), transport, 2).unwrap(),
             cache,
         );
         for _ in 0..2 {
@@ -782,7 +786,7 @@ mod tests {
                             serde_json::from_slice(request.body().unwrap().as_bytes().unwrap())
                                 .unwrap();
                         if body["query"].as_str().unwrap().contains("releases(") {
-                            return Ok(Response { status: reqwest::StatusCode::OK, headers: Default::default(), body: serde_json::to_vec(&json!({"data":{"r0":{"releases":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}})).unwrap() });
+                            return Ok(Response { status: reqwest::StatusCode::OK, headers: Default::default(), body: serde_json::to_vec(&json!({"data":{"r0":{"releases":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}})).unwrap(), stale: None });
                         }
                         assert!(body["query"].as_str().unwrap().contains("object(oid:$s0)"));
                         let targets: Vec<_> = body["variables"]
@@ -805,6 +809,7 @@ mod tests {
                         status: reqwest::StatusCode::OK,
                         headers: Default::default(),
                         body: serde_json::to_vec(&body).unwrap(),
+                        stale: None,
                     })
                 })
             }
@@ -831,7 +836,7 @@ mod tests {
         .unwrap();
         let client = Client::new(
             github,
-            Cached::new(cache.clone(), transport.clone(), 2).unwrap(),
+            crate::cached(cache.clone(), transport.clone(), 2).unwrap(),
             cache,
         );
         let cold = client
@@ -998,7 +1003,7 @@ mod tests {
         .unwrap();
         let client = Client::new(
             github.clone(),
-            Cached::new(cache.clone(), replay.clone(), 4).unwrap(),
+            crate::cached(cache.clone(), replay.clone(), 4).unwrap(),
             cache,
         );
         assert_eq!(

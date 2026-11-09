@@ -19,6 +19,8 @@ fn listing(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheErr
         serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&index.versions).map_err(|_| patchula_http::CacheError::Document)
 }
+const NUGET_FLAT: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("nuget-flat", listing);
 fn entries(items: &serde_json::Value) -> Vec<Entry> {
     items
         .as_array()
@@ -53,12 +55,16 @@ fn registration(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::Cac
     };
     serde_json::to_vec(&compact).map_err(|_| patchula_http::CacheError::Document)
 }
+const NUGET_REGISTRATION: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("nuget-registration", registration);
 fn page(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let page: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&serde_json::json!({"entries": entries(&page["items"])}))
         .map_err(|_| patchula_http::CacheError::Document)
 }
+const NUGET_REGISTRATION_PAGE: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("nuget-registration-page", page);
 
 impl Client {
     pub(crate) async fn nuget(&self, package: &str) -> Result<Catalog> {
@@ -74,8 +80,7 @@ impl Client {
             .get_derived(
                 &format!("https://api.nuget.org/v3-flatcontainer/{id}/index.json"),
                 "application/json",
-                "nuget-flat-v1",
-                listing,
+                &NUGET_FLAT,
             )
             .await?;
         let listed: Vec<String> = serde_json::from_slice(&response.body)?;
@@ -91,8 +96,7 @@ impl Client {
                 .get_derived(
                     &format!("https://api.nuget.org/v3/registration5-gz-semver2/{id}/index.json"),
                     "application/json",
-                    "nuget-registration-v1",
-                    registration,
+                    &NUGET_REGISTRATION,
                 )
                 .await?
                 .body,
@@ -105,7 +109,7 @@ impl Client {
             metadata.entries = serde_json::from_slice::<Metadata>(
                 &self
                     .http
-                    .get_derived(&url, "application/json", "nuget-registration-page-v1", page)
+                    .get_derived(&url, "application/json", &NUGET_REGISTRATION_PAGE)
                     .await?
                     .body,
             )?

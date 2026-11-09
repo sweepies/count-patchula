@@ -25,6 +25,8 @@ fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheEr
         .collect();
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
+const PACKAGIST_P2: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("packagist-p2", versions);
 
 impl Client {
     pub(crate) async fn packagist(&self, package: &str) -> Result<Catalog> {
@@ -46,8 +48,7 @@ impl Client {
                     name.to_ascii_lowercase()
                 ),
                 "application/json",
-                "packagist-p2-v1",
-                versions,
+                &PACKAGIST_P2,
             )
             .await?;
         let mut versions: Vec<Version> = serde_json::from_slice(&response.body)?;

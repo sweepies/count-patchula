@@ -2,7 +2,7 @@
 use patchula_cache::{Cache, Options as CacheOptions};
 use patchula_datasource::Client;
 use patchula_github::Options as GithubOptions;
-use patchula_http::{Cached, Network};
+use patchula_http::Network;
 use patchula_testkit::{Options, Redactor};
 use patchula_words::Source;
 use std::{path::Path, sync::Arc};
@@ -91,7 +91,7 @@ async fn public_sources_cold_and_conditional_warm() {
         transport.clone(),
     )
     .unwrap();
-    let http = Cached::new(cache.clone(), transport, 4).unwrap();
+    let http = patchula_datasource::cached(cache.clone(), transport, 4).unwrap();
     let client = Client::new(github.clone(), http.clone(), cache).with_versions_host(false);
     let packages = [
         (Source::Npm, "tiny-tarball"),

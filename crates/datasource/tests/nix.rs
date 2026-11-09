@@ -2,7 +2,7 @@
 //! nix or reaches the network.
 use patchula_cache::Cache;
 use patchula_datasource::{Client, Error, Flakes};
-use patchula_http::{Cached, Exchange, Transport};
+use patchula_http::{Exchange, Transport};
 use patchula_words::Source;
 use std::{
     future::Future,
@@ -50,7 +50,7 @@ async fn client(flakes: Option<Arc<Prefetch>>) -> Client {
     .unwrap();
     let client = Client::new(
         github,
-        Cached::new(cache.clone(), transport, 2).unwrap(),
+        patchula_datasource::cached(cache.clone(), transport, 2).unwrap(),
         cache,
     );
     match flakes {

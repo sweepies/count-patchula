@@ -3,7 +3,7 @@
 //! replay is offline.
 use patchula_cache::Cache;
 use patchula_datasource::{Client, ImageSbom};
-use patchula_http::{Cached, Network};
+use patchula_http::Network;
 use patchula_lookup::images::{Side, compare, image_queries, image_state};
 use patchula_words::SbomSource;
 use std::{path::Path, sync::Arc};
@@ -29,7 +29,7 @@ async fn an_alpine_rebuild_fixes_what_osv_lists_for_the_older_digest() {
         transport.clone(),
     )
     .unwrap();
-    let http = Cached::new(cache.clone(), transport, 4).unwrap();
+    let http = patchula_datasource::cached(cache.clone(), transport, 4).unwrap();
     let client = Client::new(github, http, cache).with_versions_host(false);
     let mut sides: Vec<Side> = Vec::new();
     for digest in [OLD, NEW] {
@@ -90,7 +90,7 @@ async fn registries_publish_sboms_in_each_known_way() {
         transport.clone(),
     )
     .unwrap();
-    let http = Cached::new(cache.clone(), transport, 4).unwrap();
+    let http = patchula_datasource::cached(cache.clone(), transport, 4).unwrap();
     let client = Client::new(github, http, cache).with_versions_host(false);
     let mut seen = Vec::new();
     for (package, tag) in [

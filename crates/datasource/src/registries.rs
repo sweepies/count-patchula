@@ -1,5 +1,5 @@
 use super::*;
-use patchula_http::CacheError;
+use patchula_http::{CacheError, Derived};
 
 fn encode(catalog: &Catalog) -> std::result::Result<Vec<u8>, CacheError> {
     serde_json::to_vec(catalog).map_err(|_| CacheError::Document)
@@ -42,6 +42,7 @@ fn terraform(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
     sort(&mut catalog.versions, Ecosystem::Hashicorp);
     encode(&catalog)
 }
+const TERRAFORM_CATALOG: Derived<CacheError> = Derived::new("terraform-catalog", terraform);
 
 /// One chart from a Helm repository index: its versions, and what release
 /// notes read from each version's metadata.
@@ -104,6 +105,7 @@ fn helm(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
         .collect();
     serde_json::to_vec(&charts).map_err(|_| CacheError::Document)
 }
+const HELM_INDEX: Derived<CacheError> = Derived::new("helm-index", helm);
 
 impl Client {
     pub(super) async fn terraform(&self, package: &str) -> Result<Catalog> {
@@ -132,8 +134,7 @@ impl Client {
             .get_derived(
                 &format!("https://registry.terraform.io/v1/{kind}/{package}/versions"),
                 "application/json",
-                "terraform-catalog-v1",
-                terraform,
+                &TERRAFORM_CATALOG,
             )
             .await?;
         Ok(serde_json::from_slice(&response.body)?)
@@ -154,7 +155,7 @@ impl Client {
         let url = format!("{}/index.yaml", repo.trim_end_matches('/'));
         let response = self
             .http
-            .get_derived(&url, "application/yaml", "helm-index-v2", helm)
+            .get_derived(&url, "application/yaml", &HELM_INDEX)
             .await?;
         let mut charts: BTreeMap<String, HelmChart> = serde_json::from_slice(&response.body)?;
         charts.remove(chart).ok_or(Error::Invalid)
@@ -167,8 +168,7 @@ impl Client {
             .get_derived(
                 &format!("{}/{package}/", index.trim_end_matches('/')),
                 "application/vnd.pypi.simple.v1+json, text/html;q=0.1",
-                "pypi-index-catalog-v2",
-                simple_any,
+                &PYPI_INDEX_CATALOG,
             )
             .await?;
         let mut catalogs: BTreeMap<String, Catalog> = serde_json::from_slice(&response.body)?;
@@ -182,8 +182,7 @@ impl Client {
             .get_derived(
                 &format!("https://pypi.org/simple/{package}/"),
                 "application/vnd.pypi.simple.v1+json",
-                "pypi-simple-catalog-v1",
-                simple,
+                &PYPI_SIMPLE_CATALOG,
             )
             .await?;
         Ok(serde_json::from_slice(&response.body)?)
@@ -319,11 +318,13 @@ fn simple_any(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
         .collect();
     serde_json::to_vec(&catalogs).map_err(|_| CacheError::Document)
 }
+const PYPI_INDEX_CATALOG: Derived<CacheError> = Derived::new("pypi-index-catalog", simple_any);
 
 /// PyPI's own page for one project.
 fn simple(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
     encode(&catalog_of(&simple_files(body)?))
 }
+const PYPI_SIMPLE_CATALOG: Derived<CacheError> = Derived::new("pypi-simple-catalog", simple);
 
 #[derive(Deserialize)]
 struct SimpleFile {

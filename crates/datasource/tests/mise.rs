@@ -1,7 +1,6 @@
 //! Independent, offline source payloads; no installed mise or network in tests.
 use patchula_cache::Cache;
 use patchula_datasource::Client;
-use patchula_http::Cached;
 use patchula_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
 use patchula_words::Source;
 use serde_json::json;
@@ -35,6 +34,7 @@ async fn setup_node_uses_node_lts_membership_without_replacing_github_release_da
                         "max-age=300".parse().unwrap(),
                     )]),
                     body: serde_json::to_vec(&body).unwrap(),
+                    stale: None,
                 })
             })
         }
@@ -50,7 +50,7 @@ async fn setup_node_uses_node_lts_membership_without_replacing_github_release_da
     .unwrap();
     let client = Client::new(
         github,
-        Cached::new(cache.clone(), transport, 2).unwrap(),
+        patchula_datasource::cached(cache.clone(), transport, 2).unwrap(),
         cache,
     )
     .with_versions_host(false);
@@ -112,7 +112,7 @@ async fn pypi_uses_real_metadata_shapes_and_fresh_bodies() {
         replay.clone(),
     )
     .unwrap();
-    let http = Cached::new(cache.clone(), replay.clone(), 4).unwrap();
+    let http = patchula_datasource::cached(cache.clone(), replay.clone(), 4).unwrap();
     let client = Client::new(github, http.clone(), cache).with_versions_host(false);
     let pypi = client
         .lookup(&patchula_config::PackageId::public(
@@ -202,7 +202,7 @@ async fn no_cache_revalidates_fresh_validators_and_304_retains_body() {
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
         .unwrap();
-    let http = Cached::new(cache, replay.clone(), 4).unwrap();
+    let http = patchula_datasource::cached(cache, replay.clone(), 4).unwrap();
     let first = http.get(url, "application/json").await.unwrap();
     let next = http.get(url, "application/json").await.unwrap();
     assert_eq!(first.body, next.body);

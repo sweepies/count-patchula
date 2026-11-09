@@ -63,6 +63,7 @@ fn response(status: u16, body: Value) -> Response {
         status: reqwest::StatusCode::from_u16(status).unwrap(),
         headers: Default::default(),
         body: serde_json::to_vec(&body).unwrap(),
+        stale: None,
     }
 }
 fn graphql_author(pr: &Value) -> Value {

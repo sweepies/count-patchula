@@ -17,12 +17,14 @@ mod nuget;
 mod packagist;
 mod registries;
 mod rubygems;
+mod rules;
 use patchula_cache::{Cache, Release, State};
 use patchula_config::PackageId;
 use patchula_github::Error as GithubError;
 use patchula_http::Cached;
 use patchula_versioning::{Ecosystem, Versioning};
 use patchula_words::{LookupErrorKind, Source};
+pub use rules::{cached, http_options, registry_rules};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -269,8 +271,7 @@ impl Client {
             .get_derived(
                 &npm_url(registry, package),
                 "application/json",
-                "npm-catalog-v1",
-                compact::npm,
+                &compact::NPM_CATALOG,
             )
             .await?;
         Ok(serde_json::from_slice(&response.body)?)
@@ -294,8 +295,7 @@ impl Client {
             .get_derived(
                 &format!("https://index.crates.io/{suffix}"),
                 "text/plain",
-                "crates-catalog-v1",
-                compact::crates,
+                &compact::CRATES_CATALOG,
             )
             .await?;
         Ok(serde_json::from_slice(&response.body)?)
@@ -417,8 +417,7 @@ impl Client {
             .get_derived(
                 &format!("https://pypi.org/pypi/{package}/json"),
                 "application/json",
-                "pypi-catalog-v1",
-                compact::pypi,
+                &compact::PYPI_CATALOG,
             )
             .await;
         let response = match response {

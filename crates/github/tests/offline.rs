@@ -81,6 +81,7 @@ impl Transport for Vary {
                     status: reqwest::StatusCode::NOT_MODIFIED,
                     headers,
                     body: Vec::new(),
+                    stale: None,
                 });
             }
             if !starred {
@@ -95,6 +96,7 @@ impl Transport for Vary {
                 status: reqwest::StatusCode::OK,
                 headers,
                 body: b"{\"ok\":true}".to_vec(),
+                stale: None,
             })
         })
     }
@@ -146,6 +148,7 @@ impl Transport for Counted {
                 status: reqwest::StatusCode::OK,
                 headers,
                 body: b"{\"content\":\"aGk=\"}".to_vec(),
+                stale: None,
             })
         })
     }
@@ -229,6 +232,7 @@ impl Transport for Blobs {
                 status: reqwest::StatusCode::OK,
                 headers: reqwest::header::HeaderMap::new(),
                 body: serde_json::to_vec(&body).unwrap(),
+                stale: None,
             })
         })
     }
@@ -331,6 +335,7 @@ impl Transport for Batches {
                 status: reqwest::StatusCode::from_u16(status).unwrap(),
                 headers: reqwest::header::HeaderMap::new(),
                 body: serde_json::to_vec(&body).unwrap(),
+                stale: None,
             })
         })
     }
@@ -564,6 +569,7 @@ impl Transport for Concurrent {
                 status: reqwest::StatusCode::OK,
                 headers: reqwest::header::HeaderMap::new(),
                 body: b"{\"data\":{\"ok\":true}}".to_vec(),
+                stale: None,
             })
         })
     }
@@ -634,12 +640,10 @@ async fn credentials_are_partitioned_in_cache_and_errors_hide_credentials_and_bo
     )
     .unwrap();
     // The remaining cassette expects validators. A different credential scope
-    // must miss the cache, so it fails matching without reaching any network.
-    let error = other.get("conditional").await.unwrap_err();
-    assert!(matches!(error, Error::Fixture(_)));
-    assert!(error.to_string().contains("unmatched GET"));
+    // must miss the cache, so its request finds no interaction and fails as an
+    // ordinary transport error without reaching any network.
     for error in [
-        error,
+        other.get("conditional").await.unwrap_err(),
         other
             .get("https://evil.invalid/?token=secret")
             .await

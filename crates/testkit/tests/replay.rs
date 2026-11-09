@@ -28,7 +28,6 @@ fn request() -> Request {
 async fn replay_matches_body_headers_method_and_url_without_a_network_client() {
     let path = fixtures().join("testkit/smoke.json");
     for change in 0..4 {
-        let replay = Replay::open(&path, Options::default()).unwrap();
         let mut request = request();
         match change {
             0 => *request.method_mut() = Method::GET,
@@ -38,20 +37,17 @@ async fn replay_matches_body_headers_method_and_url_without_a_network_client() {
             }
             _ => *request.body_mut() = Some("{}".into()),
         }
-        let error = replay.send(request).await.unwrap_err().to_string();
+        let replay = Replay::open(&path, Options::default()).unwrap();
         assert!(
-            error.contains("unmatched") && error.contains("replay never accesses the network"),
-            "{error}"
+            replay.send(request).await.is_err(),
+            "change {change} matched"
         );
     }
-    let replay = Replay::open(&path, Options::default()).unwrap();
+    let replay = Arc::new(Replay::open(&path, Options::default()).unwrap());
     assert!(replay.assert_finished().is_err());
     assert_eq!(replay.send(request()).await.unwrap().status, 200);
     replay.assert_finished().unwrap();
-    assert!(
-        replay.send(request()).await.is_err(),
-        "interactions are consumed once"
-    );
+    assert!(replay.send(request()).await.is_err());
     if !patchula_testkit::recording() {
         let transport = patchula_testkit::from_env(&path, Options::default(), || {
             panic!("replay must never construct a network client")
@@ -71,6 +67,7 @@ impl Transport for Echo {
                 status: reqwest::StatusCode::OK,
                 headers,
                 body: request.body().unwrap().as_bytes().unwrap().to_vec(),
+                stale: None,
             })
         })
     }

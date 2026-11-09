@@ -155,14 +155,9 @@ impl Client {
         let data = match self.graphql(&query, variables).await {
             Ok(data) => data,
             Err(Error::Status(status @ (401 | 403))) => return Err(Error::Status(status)),
-            Err(
-                Error::Graphql(_)
-                | Error::Status(_)
-                | Error::RateLimit
-                | Error::Transport
-                // Fixtures recorded before batching have only the REST reads.
-                | Error::Fixture(_),
-            ) => return Ok(Vec::new()),
+            Err(Error::Graphql(_) | Error::Status(_) | Error::RateLimit | Error::Transport) => {
+                return Ok(Vec::new());
+            }
             Err(error) => return Err(error),
         };
         Ok(shas
@@ -191,6 +186,7 @@ impl Client {
             status: StatusCode::OK,
             headers: HeaderMap::new(),
             body,
+            stale: None,
         };
         let url = self.url(&path(repo, sha))?;
         let key = conditional::key(

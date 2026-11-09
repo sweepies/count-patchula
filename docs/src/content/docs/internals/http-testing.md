@@ -6,9 +6,10 @@ Production code accepts a `patchula_http::Transport`, which takes a reqwest
 `Request` built with `Request::new`, so building a request needs no client.
 `patchula-testkit` belongs only in dev-dependencies. Replay holds only the
 cassette data, match options and a consumption cursor, with no reqwest client
-and no fallback transport. An unmatched request fails with the redacted method
-and URL and the fields to check. A test passes a panicking network factory and
-an unresolvable `.invalid` host to prove replay never reaches the network.
+and no fallback transport. An unmatched request fails as an ordinary transport
+error, and `assert_finished` catches interactions no request consumed. A test
+passes a panicking network factory and an unresolvable `.invalid` host to
+prove replay never reaches the network.
 
 ## Cassettes
 

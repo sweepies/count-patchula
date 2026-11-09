@@ -2,7 +2,7 @@
 //! list become OSV queries under their source package names. Image layers are
 //! never read.
 use super::*;
-use crate::docker::{Derive, MANIFEST, identity, validate_digest};
+use crate::docker::{MANIFEST, identity, validate_digest};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_words::SbomSource;
 use reqwest::Method;
@@ -96,6 +96,8 @@ fn compact_platform(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http:
     })
     .map_err(|_| Document)
 }
+const IMAGE_PLATFORM: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("image-platform", compact_platform);
 
 fn platform_name(os: &str, architecture: &str, variant: Option<&str>) -> String {
     match variant {
@@ -266,6 +268,8 @@ fn compact_sbom(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::Cac
     }
     serde_json::to_vec(&compact).map_err(|_| Document)
 }
+const SBOM_OS: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("sbom-os", compact_sbom);
 
 /// OSV's ecosystem name for an OS release, when OSV covers it.
 fn ecosystem(kind: &str, namespace: &str, distro: Option<&(String, String)>) -> Option<String> {
@@ -466,16 +470,8 @@ impl Client {
 
     async fn image_platform(&self, host: &str, path: &str, digest: &str) -> Result<Platform> {
         let url = format!("https://{host}/v2/{path}/blobs/{digest}");
-        let derive: Derive = compact_platform;
         let response = self
-            .registry_with(
-                host,
-                path,
-                &url,
-                BLOB,
-                Method::GET,
-                Some(("image-platform-v1", derive)),
-            )
+            .registry_with(host, path, &url, BLOB, Method::GET, Some(IMAGE_PLATFORM))
             .await?;
         let platform: Platform = serde_json::from_slice(&response.body)?;
         if format!("sha256:{}", platform.sha256) != digest {
@@ -488,16 +484,8 @@ impl Client {
         let digest = layer["digest"].as_str().ok_or(Error::Invalid)?;
         validate_digest(digest)?;
         let url = format!("https://{host}/v2/{path}/blobs/{digest}");
-        let derive: Derive = compact_sbom;
         let response = match self
-            .registry_with(
-                host,
-                path,
-                &url,
-                BLOB,
-                Method::GET,
-                Some(("sbom-os-v1", derive)),
-            )
+            .registry_with(host, path, &url, BLOB, Method::GET, Some(SBOM_OS))
             .await
         {
             Ok(response) => response,

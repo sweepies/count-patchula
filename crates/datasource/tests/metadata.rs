@@ -1,7 +1,6 @@
 //! Independently simulated registry metadata from ecosystem specifications.
 use patchula_cache::Cache;
 use patchula_datasource::{Client, escape_go};
-use patchula_http::Cached;
 use patchula_testkit::{Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Replay};
 use patchula_words::Source;
 use serde_json::json;
@@ -26,7 +25,7 @@ async fn registry_flags_tags_and_sparse_layout_are_preserved() {
     .unwrap();
     let client = Client::new(
         github,
-        Cached::new(cache.clone(), replay.clone(), 4).unwrap(),
+        patchula_datasource::cached(cache.clone(), replay.clone(), 4).unwrap(),
         cache,
     )
     .with_versions_host(false);

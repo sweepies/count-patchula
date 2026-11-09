@@ -3,7 +3,7 @@
 //! here starts mise or reaches the network.
 use patchula_cache::Cache;
 use patchula_datasource::{Client, Error};
-use patchula_http::{Cached, Exchange, Response, Transport};
+use patchula_http::{Exchange, Response, Transport};
 use patchula_mise::Lookup;
 use patchula_testkit::{MiseReplay, Outcome, Run};
 use patchula_words::Source;
@@ -22,6 +22,7 @@ impl Transport for Npm {
                 status: reqwest::StatusCode::OK,
                 headers: reqwest::header::HeaderMap::default(),
                 body: br#"{"repository":{"type":"git","url":"git+https://github.com/prettier/prettier.git"}}"#.to_vec(),
+                stale: None,
             })
         })
     }
@@ -47,7 +48,7 @@ fn client(replay: Option<&Arc<MiseReplay>>, cache: Cache, token: &str) -> Client
     .unwrap();
     let client = Client::new(
         github,
-        Cached::new(cache.clone(), transport, 2).unwrap(),
+        patchula_datasource::cached(cache.clone(), transport, 2).unwrap(),
         cache,
     );
     match replay {

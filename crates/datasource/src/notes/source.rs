@@ -188,11 +188,15 @@ fn compact_npm(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::Cach
     ))
     .map_err(|_| patchula_http::CacheError::Document)
 }
+const NOTES_SOURCE_NPM: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("notes-source-npm", compact_npm);
 fn compact_crate(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&metadata(&value["crate"])).map_err(|_| patchula_http::CacheError::Document)
 }
+const NOTES_SOURCE_CRATES: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("notes-source-crates", compact_crate);
 fn compact_pypi(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
@@ -223,6 +227,8 @@ fn compact_pypi(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::Cac
     });
     serde_json::to_vec(&source).map_err(|_| patchula_http::CacheError::Document)
 }
+const NOTES_SOURCE_PYPI: patchula_http::Derived<patchula_http::CacheError> =
+    patchula_http::Derived::new("notes-source-pypi", compact_pypi);
 
 pub(crate) fn mapped(group: &str, name: &str) -> Option<Repository> {
     Repository::from_url(UPSTREAMS.get(group)?.get(name)?)
@@ -373,8 +379,7 @@ impl Client {
                             version
                         ),
                         "application/json",
-                        "notes-source-npm-v1",
-                        compact_npm,
+                        &NOTES_SOURCE_NPM,
                     )
                     .await?
             }
@@ -383,8 +388,7 @@ impl Client {
                     .get_derived(
                         &format!("https://crates.io/api/v1/crates/{package}"),
                         "application/json",
-                        "notes-source-crates-v1",
-                        compact_crate,
+                        &NOTES_SOURCE_CRATES,
                     )
                     .await?
             }
@@ -393,8 +397,7 @@ impl Client {
                     .get_derived(
                         &format!("https://pypi.org/pypi/{package}/json"),
                         "application/json",
-                        "notes-source-pypi-v1",
-                        compact_pypi,
+                        &NOTES_SOURCE_PYPI,
                     )
                     .await?
             }

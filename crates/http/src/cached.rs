@@ -1,6 +1,6 @@
 //! Conditional, unauthenticated registry GETs sharing the batch transport pool.
 use crate::{
-    Credential, RequestTrace, Response, Transport, conditional,
+    Credential, RequestTrace, Response, Stale, Transport, conditional,
     credentials::{matching, mirrored},
 };
 use patchula_cache::{Cache, HttpEntry};
@@ -33,6 +33,11 @@ pub struct Options {
     /// Operator registry entries. A request under an entry's prefix carries
     /// its credentials, and its cache entries are scoped to that entry.
     pub credentials: Vec<Credential>,
+    /// The registry protocol knowledge freshness, quotas and special cases
+    /// consult. `NoRules` is the default: no floors, nothing immutable, no
+    /// quotas. `registry_freshness_secs` and `go_freshness_secs` stay
+    /// operator settings here; whoever builds the rules reads them.
+    pub rules: Arc<dyn RegistryRules>,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -43,6 +48,7 @@ impl Default for Options {
             go_freshness_secs: 3600,
             registry_retries: 3,
             credentials: Vec::new(),
+            rules: Arc::new(NoRules),
         }
     }
 }
@@ -183,12 +189,99 @@ impl Drop for Lease<'_> {
         }
     }
 }
-type Derive = fn(&[u8]) -> Result<Vec<u8>, Error>;
-/// How long a digest-addressed registry document stays fresh: ten years, so
-/// only the cache's size budget evicts it.
-const IMMUTABLE_SECS: u64 = 10 * 365 * 24 * 3600;
-/// How long a registry's 404 for a digest or a cosign tag is kept.
-const MISSING_SECS: i64 = 24 * 3600;
+/// Registry protocol knowledge the cached client consults instead of
+/// hardcoding one registry family's rules. Every method has a default that
+/// knows nothing, which is what `NoRules` supplies.
+pub trait RegistryRules: Send + Sync + std::fmt::Debug {
+    /// Whether a response at this URL can never change once fetched.
+    fn immutable(&self, _url: &Url) -> bool {
+        false
+    }
+    /// How long a stored entry stays fresh beyond its own expiry. `registry`
+    /// marks registry reads; a `None` answer leaves freshness to the
+    /// response's own headers.
+    fn freshness_floor(&self, _url: &Url, _entry: &HttpEntry, _registry: bool) -> Option<Duration> {
+        None
+    }
+    /// How long a registry's 404 at this URL is remembered instead of asked
+    /// again on the next run.
+    fn remember_missing(&self, _url: &Url) -> Option<Duration> {
+        None
+    }
+    /// Whether this request counts against a pull quota.
+    fn pull_quota(&self, _method: &Method, _url: &Url) -> bool {
+        false
+    }
+    /// The window a response reports the pull quota exhausted for.
+    fn quota_window(&self, _url: &Url, _response: &Response) -> Option<Duration> {
+        None
+    }
+    /// Whether a 429 reports the pull quota spent.
+    fn pull_limited(&self, _response: &Response) -> bool {
+        false
+    }
+}
+
+/// No registry knowledge: every floor, quota and special case is off.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoRules;
+impl RegistryRules for NoRules {}
+
+/// This build's version, which every derived representation key carries so a
+/// release never reads bodies another release's code derived.
+const BUILD: &str = env!("CARGO_PKG_VERSION");
+
+const fn plain(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'+' {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// The cache `representation` for a locally derived body: `"{name}+{build}"`.
+/// `+` is the build's separator, so a name never contains one.
+pub fn representation(name: &str) -> String {
+    debug_assert!(plain(name), "a representation name has no +");
+    format!("{name}+{BUILD}")
+}
+
+/// A body the client derives from a fetched document and caches under its
+/// own representation. `name` is stable across builds; the build suffix does
+/// the invalidating.
+pub struct Derived<E> {
+    pub name: &'static str,
+    pub derive: fn(&[u8]) -> std::result::Result<Vec<u8>, E>,
+}
+// A derived spec is a name and a function pointer; `E` need not be Clone.
+impl<E> Clone for Derived<E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<E> Copy for Derived<E> {}
+impl<E> Derived<E> {
+    /// Names must leave `+` to the build suffix, checked here like
+    /// `state_namespace`'s `plain` check.
+    pub const fn new(
+        name: &'static str,
+        derive: fn(&[u8]) -> std::result::Result<Vec<u8>, E>,
+    ) -> Self {
+        assert!(plain(name), "a derived name is nonempty and has no +");
+        Self { name, derive }
+    }
+    /// The cache `representation` this derived body is stored under.
+    pub fn representation(&self) -> String {
+        representation(self.name)
+    }
+}
 
 /// A registry bearer token, and whether it was issued to an account rather
 /// than anonymously.
@@ -196,11 +289,6 @@ const MISSING_SECS: i64 = 24 * 3600;
 pub struct Bearer<'a> {
     pub token: &'a str,
     pub account: bool,
-}
-
-/// A manifest or blob addressed by digest, which never changes.
-fn immutable(url: &Url) -> bool {
-    url.path().contains("/manifests/sha256:") || url.path().contains("/blobs/sha256:")
 }
 #[derive(Clone)]
 pub struct Cached {
@@ -417,10 +505,9 @@ impl Cached {
         url: &str,
         accept: &str,
         token: Option<Bearer<'_>>,
-        format: &'static str,
-        derive: Derive,
+        derived: &Derived<Error>,
     ) -> Result<Response, Error> {
-        self.registry_representation(url, accept, token, Some((format, derive)), Method::GET)
+        self.registry_representation(url, accept, token, Some(derived), Method::GET)
             .await
     }
     async fn registry_representation(
@@ -428,14 +515,14 @@ impl Cached {
         url: &str,
         accept: &str,
         token: Option<Bearer<'_>>,
-        derived: Option<(&'static str, Derive)>,
+        derived: Option<&Derived<Error>>,
         method: Method,
     ) -> Result<Response, Error> {
         let key = format!(
             "registry:{method}:{}:{}:{url}\n{accept}\n{}:{}",
             token.is_some(),
             token.is_some_and(|t| t.account),
-            derived.map_or("", |(format, _)| format),
+            derived.map_or("", |derived| derived.name),
             self.revalidating
         );
         // Boxed: the fetch future is large and would otherwise sit inline in
@@ -516,14 +603,9 @@ impl Cached {
             return Ok(None);
         };
         let mut response = conditional::response(entry).map_err(|_| Error::Configuration)?;
-        response
-            .headers
-            .insert("x-patchula-stale", HeaderValue::from_static("rate-limit"));
-        response.headers.insert(
-            "x-patchula-fetched-at",
-            HeaderValue::from_str(&entry.fetched_at.to_string())
-                .map_err(|_| Error::Configuration)?,
-        );
+        response.stale = Some(Stale {
+            fetched_at: entry.fetched_at,
+        });
         self.inner.cache_hits.fetch_add(1, Ordering::Relaxed);
         Ok(Some(response))
     }
@@ -534,10 +616,9 @@ impl Cached {
         &self,
         url: &str,
         accept: &str,
-        format: &'static str,
-        derive: Derive,
+        derived: &Derived<Error>,
     ) -> Result<Response, Error> {
-        let key = format!("{url}\n{accept}\n{format}:{}", self.revalidating);
+        let key = format!("{url}\n{accept}\n{}:{}", derived.name, self.revalidating);
         // Coalesce overlapping callers even when upstream requires revalidation.
         // A later sequential call still observes normal HTTP freshness rules.
         // Boxed: the fetch future is large and would otherwise sit inline in
@@ -545,7 +626,7 @@ impl Cached {
         let fetch = Box::pin(crate::tracked::tracked(self.get_representation(
             url,
             accept,
-            Some((format, derive)),
+            Some(derived),
             None,
             Method::GET,
         )));
@@ -556,7 +637,7 @@ impl Cached {
         &self,
         url: &str,
         accept: &str,
-        derived: Option<(&'static str, Derive)>,
+        derived: Option<&Derived<Error>>,
         registry: Option<Option<Bearer<'_>>>,
         method: Method,
     ) -> Result<Response, Error> {
@@ -590,7 +671,7 @@ impl Cached {
             method.as_str(),
             url.as_str(),
             &[("accept", accept)],
-            derived.map(|(format, _)| format),
+            derived.map(|derived| derived.representation()).as_deref(),
             scope,
         )?;
         let mut trace = RequestTrace::new(method.as_str(), &url);
@@ -608,30 +689,14 @@ impl Cached {
         let ttl = cached
             .as_ref()
             .and_then(|entry| {
-                let floor = if registry.is_some()
-                    && immutable(&url)
-                    && StatusCode::from_u16(entry.status).is_ok_and(|s| s.is_success())
-                {
-                    IMMUTABLE_SECS
-                } else if registry.is_some()
-                    && url.path().ends_with("/tags/list")
-                    && entry.etag.is_none()
-                    && entry.last_modified.is_none()
-                {
-                    self.inner.options.registry_freshness_secs
-                } else if requested.host_str() == Some("proxy.golang.org")
-                    && (requested.path().ends_with("/@v/list")
-                        || requested.path().ends_with("/@latest"))
-                {
-                    self.inner.options.go_freshness_secs
-                } else {
-                    0
-                };
-                let local = (floor > 0).then(|| {
-                    entry
-                        .fetched_at
-                        .saturating_add(floor.min(i64::MAX as u64) as i64)
-                });
+                let floor = self
+                    .inner
+                    .options
+                    .rules
+                    .freshness_floor(&requested, entry, registry.is_some())
+                    .filter(|floor| !floor.is_zero())
+                    .map(|floor| floor.as_secs().min(i64::MAX as u64) as i64);
+                let local = floor.map(|floor| entry.fetched_at.saturating_add(floor));
                 entry.expires_at.into_iter().chain(local).max()
             })
             .map(|expiry| expiry.saturating_sub(now));
@@ -692,10 +757,8 @@ impl Cached {
         let mut response = loop {
             let queued = Instant::now();
             let target = request.url().clone();
-            let pull_request = registry.is_some()
-                && method == Method::GET
-                && target.host_str() == Some("registry-1.docker.io")
-                && target.path().contains("/manifests/");
+            let pull_request =
+                registry.is_some() && self.inner.options.rules.pull_quota(&method, &target);
             let permit = match self.acquire(&target, pull_request).await {
                 Ok(permit) => permit,
                 Err(Error::Status(429)) if registry.is_some() => {
@@ -770,8 +833,7 @@ impl Cached {
                 continue;
             }
             if registry.is_some()
-                && target.host_str() == Some("registry-1.docker.io")
-                && let Some(window) = exhausted_quota(&response)
+                && let Some(window) = self.inner.options.rules.quota_window(&target, &response)
             {
                 // Docker's pull counter is also returned on successful HEADs.
                 // Only manifest GETs consume it; blocking HEADs here makes the
@@ -779,18 +841,21 @@ impl Cached {
                 self.cooldown(&target, window, true)?;
             }
             if registry.is_some() && response.status == StatusCode::TOO_MANY_REQUESTS {
-                let docker_hub = target.host_str() == Some("registry-1.docker.io");
                 // Only manifest GETs consume Docker Hub's pull counter, so only
                 // their 429 can mean it is spent. A HEAD or tag-list 429 cools
                 // the host for the counter's window when it names one (that is
                 // evidence those requests are throttled too), and is otherwise
                 // an ordinary throttle.
-                let throttle = if docker_hub && pull_request && pull_limit(&response) {
+                let throttle = if pull_request && self.inner.options.rules.pull_limited(&response) {
                     Throttle::Pulls(
-                        exhausted_quota(&response).unwrap_or(Duration::from_secs(21600)),
+                        self.inner
+                            .options
+                            .rules
+                            .quota_window(&target, &response)
+                            .unwrap_or(Duration::from_secs(21600)),
                     )
                 } else if let Some(window) =
-                    docker_hub.then(|| exhausted_quota(&response)).flatten()
+                    self.inner.options.rules.quota_window(&target, &response)
                 {
                     Throttle::Host(window)
                 } else {
@@ -832,9 +897,6 @@ impl Cached {
             }
             break response;
         };
-        // These are local provenance headers, never trusted from the network.
-        response.headers.remove("x-patchula-stale");
-        response.headers.remove("x-patchula-fetched-at");
         if registry.is_some()
             && response.status == StatusCode::TOO_MANY_REQUESTS
             && let Some(response) = self
@@ -859,7 +921,7 @@ impl Cached {
             // a day later, not on every run.
             if response.status == StatusCode::NOT_FOUND
                 && registry.is_some()
-                && (immutable(&url) || [".att", ".sbom"].iter().any(|s| url.path().ends_with(s)))
+                && let Some(window) = self.inner.options.rules.remember_missing(&url)
             {
                 self.inner
                     .cache
@@ -872,7 +934,9 @@ impl Cached {
                             headers: BTreeMap::new(),
                             body: Vec::new(),
                             fetched_at: now,
-                            expires_at: Some(now.saturating_add(MISSING_SECS)),
+                            expires_at: Some(
+                                now.saturating_add(window.as_secs().min(i64::MAX as u64) as i64),
+                            ),
                             cache_control: None,
                         },
                     )
@@ -880,10 +944,10 @@ impl Cached {
             }
             return Err(Error::Status(response.status.as_u16()));
         }
-        if !not_modified && let Some((_, derive)) = derived {
+        if !not_modified && let Some(derived) = derived {
             response.body = conditional::derive(
                 std::mem::take(&mut response.body),
-                derive,
+                derived.derive,
                 &self.inner.decoding,
             )
             .await
@@ -897,7 +961,8 @@ impl Cached {
             || credential
                 .as_ref()
                 .is_some_and(|entry| entry.auth != crate::Auth::Anonymous);
-        let public_digest = registry.is_some() && immutable(&url) && !account;
+        let public_digest =
+            registry.is_some() && self.inner.options.rules.immutable(&url) && !account;
         // A registry bearer token is not in the key; operator credentials are,
         // through their scope.
         let authorization_in_key = !matches!(registry, Some(Some(_)));
@@ -926,46 +991,6 @@ enum Throttle {
     Retry(Option<Duration>),
 }
 
-/// A manifest GET's 429 is Docker Hub's pull limit: its counter reads zero,
-/// its body says so, or it gives no `Retry-After`, which the pull limit omits.
-fn pull_limit(response: &Response) -> bool {
-    response
-        .headers
-        .get("ratelimit-remaining")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| {
-            v.split(';')
-                .next()
-                .is_some_and(|v| v.trim().parse::<u64>() == Ok(0))
-        })
-        || response
-            .body
-            .windows(b"pull rate limit".len())
-            .any(|v| v.eq_ignore_ascii_case(b"pull rate limit"))
-        || !response.headers.contains_key("retry-after")
-}
-
-// Docker Hub uses `remaining;w=seconds`, not the unrelated Hub REST API's X- headers.
-fn exhausted_quota(response: &Response) -> Option<Duration> {
-    let remaining = response.headers.get("ratelimit-remaining")?.to_str().ok()?;
-    if remaining.split(';').next()?.trim().parse::<u64>().ok()? != 0 {
-        return None;
-    }
-    let window = remaining
-        .split(';')
-        .chain(
-            response
-                .headers
-                .get("ratelimit-limit")
-                .and_then(|v| v.to_str().ok())
-                .into_iter()
-                .flat_map(|v| v.split(';')),
-        )
-        .find_map(|v| v.trim().strip_prefix("w=")?.parse::<u64>().ok())
-        .unwrap_or(21600);
-    Some(Duration::from_secs(window.max(61)))
-}
-
 fn retry_delay(response: &Response, attempt: u32) -> Option<Duration> {
     if response.headers.contains_key("retry-after") {
         conditional::retry_after(response)
@@ -978,6 +1003,101 @@ fn retry_delay(response: &Response, attempt: u32) -> Option<Duration> {
 mod tests {
     use super::*;
     use patchula_cache::HttpKey;
+
+    /// The registry rules these tests exercise: OCI digest immutability,
+    /// tag-page and Go proxy floors, remembered 404s and Docker Hub's pull
+    /// counter. Mirrors what the datasource installs.
+    #[derive(Debug)]
+    struct TestRules {
+        registry_freshness: Duration,
+        go_freshness: Duration,
+    }
+    fn test_rules(registry_freshness_secs: u64, go_freshness_secs: u64) -> Arc<dyn RegistryRules> {
+        Arc::new(TestRules {
+            registry_freshness: Duration::from_secs(registry_freshness_secs),
+            go_freshness: Duration::from_secs(go_freshness_secs),
+        })
+    }
+    fn exhausted_quota(response: &Response) -> Option<Duration> {
+        let remaining = response.headers.get("ratelimit-remaining")?.to_str().ok()?;
+        if remaining.split(';').next()?.trim().parse::<u64>().ok()? != 0 {
+            return None;
+        }
+        let window = remaining
+            .split(';')
+            .chain(
+                response
+                    .headers
+                    .get("ratelimit-limit")
+                    .and_then(|v| v.to_str().ok())
+                    .into_iter()
+                    .flat_map(|v| v.split(';')),
+            )
+            .find_map(|v| v.trim().strip_prefix("w=")?.parse::<u64>().ok())
+            .unwrap_or(21600);
+        Some(Duration::from_secs(window.max(61)))
+    }
+    fn pull_limit(response: &Response) -> bool {
+        response
+            .headers
+            .get("ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| {
+                v.split(';')
+                    .next()
+                    .is_some_and(|v| v.trim().parse::<u64>() == Ok(0))
+            })
+            || response
+                .body
+                .windows(b"pull rate limit".len())
+                .any(|v| v.eq_ignore_ascii_case(b"pull rate limit"))
+            || !response.headers.contains_key("retry-after")
+    }
+    impl RegistryRules for TestRules {
+        fn immutable(&self, url: &Url) -> bool {
+            url.path().contains("/manifests/sha256:") || url.path().contains("/blobs/sha256:")
+        }
+        fn freshness_floor(
+            &self,
+            url: &Url,
+            entry: &HttpEntry,
+            registry: bool,
+        ) -> Option<Duration> {
+            if registry && self.immutable(url) && (200..300).contains(&entry.status) {
+                return Some(Duration::from_secs(10 * 365 * 24 * 3600));
+            }
+            if registry
+                && url.path().ends_with("/tags/list")
+                && entry.etag.is_none()
+                && entry.last_modified.is_none()
+            {
+                return Some(self.registry_freshness);
+            }
+            if url.host_str() == Some("proxy.golang.org")
+                && (url.path().ends_with("/@v/list") || url.path().ends_with("/@latest"))
+            {
+                return Some(self.go_freshness);
+            }
+            None
+        }
+        fn remember_missing(&self, url: &Url) -> Option<Duration> {
+            (self.immutable(url) || [".att", ".sbom"].iter().any(|s| url.path().ends_with(s)))
+                .then_some(Duration::from_secs(24 * 3600))
+        }
+        fn pull_quota(&self, method: &Method, url: &Url) -> bool {
+            *method == Method::GET
+                && url.host_str() == Some("registry-1.docker.io")
+                && url.path().contains("/manifests/")
+        }
+        fn quota_window(&self, url: &Url, response: &Response) -> Option<Duration> {
+            (url.host_str() == Some("registry-1.docker.io"))
+                .then(|| exhausted_quota(response))
+                .flatten()
+        }
+        fn pull_limited(&self, response: &Response) -> bool {
+            pull_limit(response)
+        }
+    }
 
     struct Revalidate(std::sync::atomic::AtomicUsize);
     impl Transport for Revalidate {
@@ -992,6 +1112,7 @@ mod tests {
                         HeaderValue::from_static("max-age=3600"),
                     )]),
                     body: Vec::new(),
+                    stale: None,
                 })
             })
         }
@@ -1063,8 +1184,15 @@ mod tests {
         let tags = "https://ghcr.io/v2/example/image/tags/list?n=1000";
         cached_entry(&cache, go, Some("max-age=60"), 300, None).await;
         cached_entry(&cache, tags, None, 300, None).await;
-        let client =
-            Cached::with_options(cache.clone(), Arc::new(Never), Default::default()).unwrap();
+        let client = Cached::with_options(
+            cache.clone(),
+            Arc::new(Never),
+            Options {
+                rules: test_rules(3600, 3600),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(client.get(go, "text/plain").await.unwrap().body, b"catalog");
         assert_eq!(
             client
@@ -1079,8 +1207,7 @@ mod tests {
             cache.clone(),
             transport.clone(),
             Options {
-                go_freshness_secs: 0,
-                registry_freshness_secs: 0,
+                rules: test_rules(0, 0),
                 ..Default::default()
             },
         )
@@ -1089,7 +1216,15 @@ mod tests {
         client.registry_get(tags, "text/plain", None).await.unwrap();
         assert_eq!(transport.0.load(Ordering::Relaxed), 2);
         cached_entry(&cache, go, None, 3601, None).await;
-        let client = Cached::with_options(cache, transport.clone(), Default::default()).unwrap();
+        let client = Cached::with_options(
+            cache,
+            transport.clone(),
+            Options {
+                rules: test_rules(3600, 3600),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         client.get(go, "text/plain").await.unwrap();
         assert_eq!(
             transport.0.load(Ordering::Relaxed),
@@ -1106,6 +1241,7 @@ mod tests {
                     status: StatusCode::OK,
                     headers: Default::default(),
                     body: b"new".to_vec(),
+                    stale: None,
                 })
             })
         }
@@ -1114,8 +1250,15 @@ mod tests {
     async fn no_cache_validators_and_unrelated_urls_do_not_get_registry_grace() {
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let transport = Arc::new(Count(std::sync::atomic::AtomicUsize::new(0)));
-        let client =
-            Cached::with_options(cache.clone(), transport.clone(), Default::default()).unwrap();
+        let client = Cached::with_options(
+            cache.clone(),
+            transport.clone(),
+            Options {
+                rules: test_rules(3600, 3600),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         for (url, control, etag) in [
             ("https://ghcr.io/v2/a/b/tags/list", Some("no-cache"), None),
             ("https://ghcr.io/v2/a/c/tags/list", None, Some("tag")),
@@ -1151,6 +1294,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                     body: b"new".to_vec(),
+                    stale: None,
                 })
             })
         }
@@ -1234,6 +1378,7 @@ mod tests {
                     } else {
                         br#"{"errors":[{"code":"TOOMANYREQUESTS","message":"You have reached your unauthenticated pull rate limit"}]}"#.to_vec()
                     },
+                    stale: None,
                 })
             })
         }
@@ -1263,6 +1408,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                         body: Vec::new(),
+                        stale: None,
                     })
                 })
             }
@@ -1281,6 +1427,7 @@ mod tests {
                     Arc::new(VersionChecks),
                     Options {
                         default_host_concurrency: 1,
+                        rules: test_rules(3600, 3600),
                         ..Default::default()
                     },
                 )
@@ -1308,8 +1455,15 @@ mod tests {
                 header_only,
             });
             let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-            let client =
-                Cached::with_options(cache, transport.clone(), Default::default()).unwrap();
+            let client = Cached::with_options(
+                cache,
+                transport.clone(),
+                Options {
+                    rules: test_rules(3600, 3600),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
             let url = "https://registry-1.docker.io/v2/library/image/manifests/latest";
             let response = if header_only {
                 client.registry_head(url, "text/plain", None).await
@@ -1336,6 +1490,7 @@ mod tests {
                     status: StatusCode::OK,
                     headers: Default::default(),
                     body: Vec::new(),
+                    stale: None,
                 })
             })
         }
@@ -1392,6 +1547,7 @@ mod tests {
                         HeaderValue::from_static("no-store"),
                     )]),
                     body: b"blob".to_vec(),
+                    stale: None,
                 })
             })
         }
@@ -1400,8 +1556,15 @@ mod tests {
     async fn a_digest_is_cached_despite_no_store_unless_an_account_read_it() {
         for (account, stored) in [(false, true), (true, false)] {
             let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-            let client =
-                Cached::with_options(cache.clone(), Arc::new(NoStore), Default::default()).unwrap();
+            let client = Cached::with_options(
+                cache.clone(),
+                Arc::new(NoStore),
+                Options {
+                    rules: test_rules(3600, 3600),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
             let bearer = Bearer {
                 token: "t",
                 account,
@@ -1480,6 +1643,7 @@ mod tests {
                     .map(|(name, value)| (name.clone(), HeaderValue::from_static(value)))
                     .collect(),
                 body: body.to_vec(),
+                stale: None,
             };
         let entry = Credential::new(
             "https://acme.jfrog.io/artifactory/api/helm/charts",
@@ -1582,6 +1746,7 @@ mod tests {
                 )])
                 .collect(),
             body: b"body".to_vec(),
+            stale: None,
         };
         let entry = Credential::new(
             "https://acme.jfrog.io/charts",
@@ -1662,6 +1827,7 @@ mod tests {
             status: StatusCode::from_u16(status).unwrap(),
             headers: header::HeaderMap::new(),
             body: b"{}".to_vec(),
+            stale: None,
         };
         let entry = Credential::new(
             "https://acme.jfrog.io/api/npm/npm-remote",
@@ -1709,6 +1875,7 @@ mod tests {
                     status: StatusCode::TOO_MANY_REQUESTS,
                     headers: Default::default(),
                     body: Vec::new(),
+                    stale: None,
                 })
             })
         }
@@ -1724,6 +1891,7 @@ mod tests {
             transport.clone(),
             Options {
                 registry_retries: 0,
+                rules: test_rules(3600, 3600),
                 ..Default::default()
             },
         )
@@ -1751,7 +1919,11 @@ mod tests {
         let client = Cached::with_options(cache, transport.clone(), Default::default()).unwrap();
         let read = |client: Cached| async move {
             client
-                .get_derived("https://a.org/doc", "text/plain", "same", same)
+                .get_derived(
+                    "https://a.org/doc",
+                    "text/plain",
+                    &Derived::new("same", same),
+                )
                 .await
         };
         let first = tokio::spawn(read(client.clone()));

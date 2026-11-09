@@ -1,7 +1,7 @@
 //! Independent contract fixtures; no network client is constructed.
 use patchula_cache::Cache;
 use patchula_datasource::Client;
-use patchula_http::{Cached, Exchange, Response, Transport};
+use patchula_http::{Exchange, Response, Transport};
 use patchula_words::Source;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -25,7 +25,7 @@ impl Transport for Host {
             let github = request.url().host_str() == Some("api.github.com");
             assert_eq!(request.headers().contains_key("authorization"), github);
             if !github && self.lost {
-                return Err(patchula_http::Error::Fixture("lost connection".into()));
+                return Err(patchula_http::Error::Network);
             }
             let body = if github {
                 assert_eq!(path, "/graphql");
@@ -55,6 +55,7 @@ impl Transport for Host {
                 .into_iter()
                 .collect(),
                 body: body.into_bytes(),
+                stale: None,
             })
         })
     }
@@ -67,7 +68,11 @@ async fn client(host: Arc<Host>, cache: Cache) -> Client {
         host.clone(),
     )
     .unwrap();
-    Client::new(github, Cached::new(cache.clone(), host, 4).unwrap(), cache)
+    Client::new(
+        github,
+        patchula_datasource::cached(cache.clone(), host, 4).unwrap(),
+        cache,
+    )
 }
 async fn memory() -> Cache {
     Cache::open(":memory:", Default::default()).await.unwrap()
@@ -208,7 +213,7 @@ async fn cached_catalogs_do_not_freeze_mutable_lightweight_or_annotated_tag_targ
                 Ok(Response {status:reqwest::StatusCode::OK,headers:Default::default(),body:serde_json::to_vec(&json!({"data":{
                     "r0":{"t0":{"__typename":"Commit","oid":sha},
                     "t1":{"__typename":"Tag","oid":"c".repeat(40),"target":{"__typename":"Commit","oid":sha}}}
-                }})).unwrap()})
+                }})).unwrap(),stale:None})
             })
         }
     }
@@ -223,7 +228,7 @@ async fn cached_catalogs_do_not_freeze_mutable_lightweight_or_annotated_tag_targ
     .unwrap();
     let source = Client::new(
         github,
-        Cached::new(cache.clone(), moving.clone(), 4).unwrap(),
+        patchula_datasource::cached(cache.clone(), moving.clone(), 4).unwrap(),
         cache,
     );
     let keys = std::collections::BTreeSet::from([

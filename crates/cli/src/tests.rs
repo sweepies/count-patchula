@@ -222,6 +222,7 @@ impl Transport for Fake {
                 status: reqwest::StatusCode::from_u16(status).unwrap(),
                 headers: Default::default(),
                 body: serde_json::to_vec(&value).unwrap(),
+                stale: None,
             })
         })
     }

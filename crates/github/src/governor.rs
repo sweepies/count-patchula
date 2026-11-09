@@ -346,6 +346,7 @@ mod tests {
                 })
                 .collect::<HeaderMap>(),
             body: Vec::new(),
+            stale: None,
         }
     }
 
