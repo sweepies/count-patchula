@@ -112,7 +112,7 @@ pub async fn command(
         .filter(|u| {
             (managers.is_empty() || managers.contains(&u.manager))
                 && names.matches_any(&u.name, &u.package)
-                && (types.is_empty() || types.contains(&u.kind))
+                && (types.is_empty() || types.iter().any(|t| t.0 == u.kind))
         })
         .collect();
     let filtered = all.len() - chosen.len();
@@ -144,7 +144,7 @@ pub async fn command(
         (String::new(), true)
     };
     // Conflicts are the planner's to report, the same skips the TUI shows.
-    chosen.sort_by_key(|u| u.kind);
+    chosen.sort_by_key(|u| u.kind.rank());
     chosen.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
     let plan = plan::plan(&local, &chosen).map_err(|e| (1, miette::miette!("{e}")))?;
     let writes = !options.dry_run && !options.check;

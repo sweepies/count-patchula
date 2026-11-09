@@ -62,9 +62,6 @@ macro_rules! words {
 
             /// Every variant, in declaration order.
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
-
-            /// Every variant's word, in declaration order.
-            pub const WORDS: &'static [&'static str] = &[$($word),+];
         }
 
         impl std::fmt::Display for $name {
@@ -152,8 +149,8 @@ words!(
     Major => "major",
     Minor => "minor",
     Patch => "patch",
-    Pin => "pin",
     Digest => "digest",
+    Pin => "pin",
 });
 
 words!(
@@ -328,13 +325,40 @@ pub struct Window {
     pub zone: String,
 }
 
-/// The CLI's `--type` vocabulary is this enum's, so the flag, the TUI's
-/// filter and `Update::ALL` can never drift apart.
-impl usage_argv::spec::ValueEnum for Update {
-    const CHOICES: &'static [&'static str] = Update::WORDS;
+impl Update {
+    /// Every kind in the order competing proposals apply in when several
+    /// could write the same declaration: the widest change first, a pin
+    /// ahead of a bare digest move. Declaration order (`Ord`) does not give
+    /// this, and it is the order the CLI and TUI list kinds in.
+    pub const RANKED: [Self; 5] = [
+        Self::Major,
+        Self::Minor,
+        Self::Patch,
+        Self::Pin,
+        Self::Digest,
+    ];
 
-    fn from_choice(value: &str) -> Option<Self> {
-        value.parse().ok()
+    /// [`Self::RANKED`]'s words.
+    pub const RANKED_WORDS: [&'static str; 5] = {
+        let mut words = [""; 5];
+        let mut i = 0;
+        while i < 5 {
+            words[i] = Self::RANKED[i].as_str();
+            i += 1;
+        }
+        words
+    };
+
+    /// The kind's position in [`Self::RANKED`].
+    pub const fn rank(self) -> u8 {
+        let mut i = 0;
+        while i < Self::RANKED.len() {
+            if Self::RANKED[i] as u8 == self as u8 {
+                return i as u8;
+            }
+            i += 1;
+        }
+        unreachable!()
     }
 }
 
@@ -393,7 +417,7 @@ mod tests {
     #[test]
     fn declaration_order_is_ord_and_all() {
         assert!(Update::Major < Update::Minor);
-        assert!(Update::Pin < Update::Digest);
+        assert!(Update::Digest < Update::Pin);
         assert_eq!(Update::ALL[0], Update::Major);
         assert_eq!(Update::ALL.len(), 5);
     }
