@@ -810,7 +810,7 @@ mod tests {
             message: "m".into(),
         };
         // Npm is declared before Bun and Cargo; the report lists by word.
-        let mut failures = vec![
+        let mut failures = [
             failure(Manager::Npm, Source::Npm),
             failure(Manager::Cargo, Source::Crates),
             failure(Manager::Bun, Source::Npm),
