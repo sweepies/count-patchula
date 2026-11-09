@@ -214,6 +214,15 @@ async fn public_sandbox_note_ranges() {
                 newest,
                 "{package} {current}..{target} newest section"
             );
+            if newest.is_none() {
+                // No sections is a failure the notes must admit, not a
+                // silent pass: postgres's cassette predates the SGML
+                // adapter's directory walk, so its listing read misses.
+                assert!(
+                    notes.incomplete,
+                    "{package} {current}..{target}: empty notes must be incomplete"
+                );
+            }
             let text = notes.render(package, 12_000);
             assert!(text.len() <= 12_000);
             assert!(!text.trim().is_empty(), "{package} rendered notes");

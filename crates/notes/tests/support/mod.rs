@@ -1,10 +1,20 @@
 use serde_json::{Value, json};
 
 /// GraphQL projection of independent or previously recorded REST release
-/// evidence for the in-memory test transport. It answers the aliases and
-/// variables the request carries; fields the query did not select are
-/// ignored by the client.
+/// evidence for the in-memory test transport. It fails closed on any
+/// operation but `ReleaseNotes`, and answers each alias the fields its own
+/// selection set names; fields the query did not select stay absent, as a
+/// real GraphQL response would leave them.
 pub fn releases(request: &Value, lookup: impl Fn(&str, &str) -> Option<Value>) -> Value {
+    let query = request["query"]
+        .as_str()
+        .expect("a GraphQL request carries its query");
+    // Whitespace is not significant in GraphQL; compare the compact text.
+    let compact: String = query.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        compact.starts_with("queryReleaseNotes("),
+        "unexpected GraphQL operation: {query}"
+    );
     let variables = &request["variables"];
     let repo = format!(
         "{}/{}",
@@ -16,16 +26,30 @@ pub fn releases(request: &Value, lookup: impl Fn(&str, &str) -> Option<Value>) -
         let Some(tag) = variables[format!("t{i}")].as_str() else {
             break;
         };
+        // `r{i}:release(tagName:$t{i}){...}`: the alias's own selection set,
+        // flat fields up to the first closing brace.
+        let marker = format!("r{i}:release(tagName:$t{i}){{");
+        let body = compact
+            .find(&marker)
+            .and_then(|at| {
+                let rest = &compact[at + marker.len()..];
+                let end = rest.find('}')?;
+                rest[..end].contains("body").then_some(())
+            })
+            .is_some();
         let value = match lookup(&repo, tag) {
-            Some(body) if body["status"].as_u64().is_none_or(|status| status < 400) => {
-                json!({
-                    "updatedAt": body.get("updated_at").or(body.get("etag")).cloned().unwrap_or(json!("2026-10-15T00:00:00Z")),
-                    "body": body.get("body").cloned().unwrap_or(Value::Null),
-                    "draft": body.get("draft").cloned().unwrap_or(json!(false)),
-                    "prerelease": body.get("prerelease").cloned().unwrap_or(json!(false)),
-                })
+            Some(found) if found["status"].as_u64().is_none_or(|status| status < 400) => {
+                let mut value = json!({
+                    "updatedAt": found.get("updated_at").or(found.get("etag")).cloned().unwrap_or(json!("2026-10-15T00:00:00Z")),
+                });
+                if body {
+                    value["body"] = found.get("body").cloned().unwrap_or(Value::Null);
+                    value["draft"] = found.get("draft").cloned().unwrap_or(json!(false));
+                    value["prerelease"] = found.get("prerelease").cloned().unwrap_or(json!(false));
+                }
+                value
             }
-            Some(body) if body["status"] != 404 => {
+            Some(found) if found["status"] != 404 => {
                 return json!({"errors":[{"message":"simulated release failure"}]});
             }
             _ => Value::Null,
