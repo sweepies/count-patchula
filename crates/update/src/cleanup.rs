@@ -1,14 +1,8 @@
-use crate::{Plan, REF_UPDATE};
+use crate::{Plan, REF_UPDATE, trailers};
 use patchula_github::Client;
 use patchula_report::{BranchAction, BranchStatus};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-
-pub(crate) fn trailer<'a>(message: &'a str, key: &str) -> Option<&'a str> {
-    let mut lines = message.lines().filter_map(|l| l.strip_prefix(key));
-    let value = lines.next()?;
-    lines.next().is_none().then_some(value)
-}
 
 /// The base commit a branch tip records, when it can name one in a URL path:
 /// up to 64 ASCII letters and digits, which covers SHA-1 and SHA-256 names.
@@ -16,7 +10,7 @@ pub(crate) fn trailer<'a>(message: &'a str, key: &str) -> Option<&'a str> {
 /// only bounds the history inspected; ownership itself comes from every
 /// commit since it being the Count's own (see [`all_ours`]).
 pub(crate) fn recorded_base(message: &str) -> Option<&str> {
-    trailer(message, "Patchula-Base: ").filter(|base| {
+    trailers::base(message).filter(|base| {
         !base.is_empty() && base.len() <= 64 && base.bytes().all(|b| b.is_ascii_alphanumeric())
     })
 }
@@ -29,8 +23,8 @@ pub(crate) fn all_ours(commits: &[Value], actor: &str) -> bool {
             c["author"]["login"] == actor
                 && (c["committer"]["login"] == actor || c["committer"]["login"] == "web-flow")
                 && c["commit"]["verification"]["verified"].as_bool() == Some(true)
-                && trailer(message, "Patchula: ") == Some("v1")
-                && trailer(message, "Patchula-Branch: ").is_some()
+                && trailers::version(message)
+                && trailers::branch(message).is_some()
         })
 }
 

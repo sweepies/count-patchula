@@ -958,7 +958,7 @@ fn every_trigger_and_switch_and_filters() {
         "- [x] Any text <!-- patchula-action:{} -->",
         json!({"action":"recheck","target":"a".repeat(64)})
     );
-    dashboard["issue"] = json!({"user":{"login":"patchula[bot]"},"body":format!("{}\n{checkbox}", patchula_update::dashboard::MARKER)});
+    dashboard["issue"] = json!({"user":{"login":"patchula[bot]"},"body":format!("{}\n{checkbox}", patchula_update::markers::DASHBOARD)});
     dashboard["changes"] =
         json!({"body":{"from":dashboard["issue"]["body"].as_str().unwrap().replace("[x]", "[ ]")}});
     events.push(("issues", dashboard, "dashboard"));

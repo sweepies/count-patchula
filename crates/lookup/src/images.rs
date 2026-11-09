@@ -254,7 +254,7 @@ fn records<'a>(
         .map(|advisory| patchula_report::Advisory {
             id: advisory.id.clone(),
             aliases: advisory.aliases.clone(),
-            severity: advisory.severity.clone(),
+            severity: advisory.severity,
             summary: advisory.summary.clone(),
             url: format!("https://osv.dev/vulnerability/{}", advisory.id),
             fixed_in: None,

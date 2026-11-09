@@ -263,6 +263,42 @@ words!(
 });
 
 words!(
+    /// An advisory database's severity rating, worst first.
+    Severity {
+    Critical => "critical",
+    High => "high",
+    Moderate => "moderate",
+    Low => "low",
+});
+
+impl Severity {
+    /// The rating an advisory database's word names — any case, `medium`
+    /// for Moderate — or `None` for a word outside the vocabulary.
+    pub fn advisory(word: &str) -> Option<Self> {
+        match word.to_ascii_lowercase().as_str() {
+            "critical" => Some(Self::Critical),
+            "high" => Some(Self::High),
+            "moderate" | "medium" => Some(Self::Moderate),
+            "low" => Some(Self::Low),
+            _ => None,
+        }
+    }
+}
+
+/// Deserialize an advisory severity leniently: [`Severity::advisory`]'s
+/// reading, so a word outside the vocabulary — or none at all — is `None`.
+pub fn severity<'de, D>(deserializer: D) -> Result<Option<Severity>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(
+        <Option<String> as serde::Deserialize>::deserialize(deserializer)?
+            .as_deref()
+            .and_then(Severity::advisory),
+    )
+}
+
+words!(
     /// When a ticked checkbox says it takes effect: wording only.
     #[derive(Default)]
     Recheck {
@@ -335,6 +371,7 @@ mod tests {
         LookupErrorKind,
         ToolingRule,
         ToolingDetail,
+        Severity,
         Recheck,
         SbomSource,
     );

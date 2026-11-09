@@ -24,6 +24,21 @@ pub struct Blob {
     pub mode: String,
     pub content: String,
 }
+/// The plan fingerprint: the exact bytes the commit's `Patchula-Plan`
+/// trailer and the write receipts hash. `lock_jobs` may be the building
+/// `BTreeSet` or the plan's sorted `Vec`; both serialize the same array.
+fn plan_fingerprint(
+    contents: &BTreeMap<String, String>,
+    message: &str,
+    lockfile_pending: bool,
+    lock_jobs: &impl Serialize,
+) -> String {
+    hash(
+        serde_json::to_string(&(contents, message, lockfile_pending, lock_jobs))
+            .expect("serializable plan")
+            .as_bytes(),
+    )
+}
 #[derive(Debug)]
 pub struct Plan {
     pub action: BranchAction,
@@ -513,11 +528,7 @@ fn build(
             )),
         );
     }
-    let fingerprint = hash(
-        serde_json::to_string(&(&contents, &message, pending.is_some(), &lock_jobs))
-            .expect("serializable plan")
-            .as_bytes(),
-    );
+    let fingerprint = plan_fingerprint(&contents, &message, pending.is_some(), &lock_jobs);
     let action = BranchAction {
         repository: repo.repository.clone(),
         branch,
@@ -963,15 +974,11 @@ pub fn batch_plan(
         plan.changes.len(),
         if plan.changes.len() == 1 { "" } else { "s" }
     );
-    plan.fingerprint = hash(
-        serde_json::to_string(&(
-            &plan.contents,
-            &plan.action.message,
-            plan.action.lockfile_pending,
-            &plan.lock_jobs,
-        ))
-        .expect("serializable plan")
-        .as_bytes(),
+    plan.fingerprint = plan_fingerprint(
+        &plan.contents,
+        &plan.action.message,
+        plan.action.lockfile_pending,
+        &plan.lock_jobs,
     );
     plan.input_fingerprint.clone_from(&plan.fingerprint);
     Ok(Some(plan))

@@ -2,24 +2,14 @@
 //! keeps the targets that were reviewed; the individual PR closes as batched,
 //! which never suppresses the update. Unticking, removing or closing the batch
 //! returns its updates to individual PRs.
+use crate::markers;
 use crate::{Change, Plan, Snapshot, pull_requests, update_key};
 use patchula_config::Config;
 use patchula_manager::Dependency;
 use patchula_report::Repository;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
-
-/// Ticked on an update PR: move it into the batch.
-pub const ADD: &str = "<!-- patchula-batch-add -->";
-/// The reviewed targets of an update PR, recorded when its body was rendered.
-pub(crate) const TARGETS: &str = "<!-- patchula-targets:";
-/// The batch PR's items.
-pub(crate) const ITEMS: &str = "<!-- patchula-batch:";
-/// Ticked on a batch item: return it to an individual PR.
-pub(crate) const REMOVE: &str = "<!-- patchula-batch-remove:";
-/// A PR closed because its update moved into the batch.
-pub(crate) const BATCHED: &str = "<!-- patchula-closed:batched -->";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,23 +21,6 @@ pub struct Item {
     pub targets: Vec<Change>,
 }
 
-/// JSON in an HTML comment. `<` and `>` are escaped (they only occur inside
-/// JSON strings), so a value can neither end the comment nor forge a marker.
-pub(crate) fn hidden_marker<T: Serialize>(prefix: &str, value: &T) -> String {
-    let json = serde_json::to_string(value)
-        .expect("serializable marker")
-        .replace('<', "\\u003c")
-        .replace('>', "\\u003e");
-    format!("{prefix}{json} -->")
-}
-fn hidden<T: DeserializeOwned>(body: &str, prefix: &str) -> Option<T> {
-    let (_, rest) = body.split_once(prefix)?;
-    if rest.contains(prefix) {
-        return None;
-    }
-    let (json, _) = rest.split_once(" -->")?;
-    serde_json::from_str(json).ok()
-}
 fn body(pr: &Value) -> &str {
     pr["body"].as_str().unwrap_or("")
 }
@@ -77,13 +50,13 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
         .collect();
     let batch = open.iter().find(|p| branch(p) == batch_branch);
     let mut items: Vec<Item> = batch
-        .and_then(|p| hidden(body(p), ITEMS))
+        .and_then(|p| markers::hidden_json::<Vec<Item>>(body(p), markers::ITEMS, markers::PAYLOAD))
         .unwrap_or_default();
     if let Some(pr) = batch {
-        let removed: BTreeSet<_> = pull_requests::ticked_lines(body(pr))
+        let removed: BTreeSet<_> = markers::ticked_lines(body(pr))
             .into_iter()
             .filter_map(|line| {
-                line.rsplit_once(REMOVE)
+                line.rsplit_once(markers::REMOVE)
                     .and_then(|(_, rest)| rest.strip_suffix(" -->"))
                     .map(str::to_owned)
             })
@@ -92,15 +65,15 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
     }
     for pr in &open {
         if branch(pr) == batch_branch
-            || !pull_requests::ticked_lines(body(pr))
+            || !markers::ticked_lines(body(pr))
                 .iter()
-                .any(|line| line.ends_with(ADD))
+                .any(|line| line.ends_with(markers::ADD))
         {
             continue;
         }
         let (Some(origin), Some(targets)) = (
             pull_requests::marker_update(body(pr)),
-            hidden::<Vec<Change>>(body(pr), TARGETS),
+            markers::hidden_json::<Vec<Change>>(body(pr), markers::TARGETS, markers::PAYLOAD),
         ) else {
             continue;
         };
@@ -192,12 +165,13 @@ pub(crate) fn render(items: &[Item]) -> String {
             .map(|n| format!(" (from #{n})"))
             .unwrap_or_default();
         text.push_str(&format!(
-            "- [ ] {title}{from} {REMOVE}{} -->\n",
+            "- [ ] {title}{from} {}{} -->\n",
+            markers::REMOVE,
             item.origin
         ));
     }
     text.push('\n');
-    text.push_str(&hidden_marker(ITEMS, &items));
+    text.push_str(&markers::hidden(markers::ITEMS, &items));
     text.push('\n');
     text
 }
@@ -234,9 +208,10 @@ mod tests {
     }
     fn update_body(key: &str, targets: &[Change], ticked: bool) -> String {
         format!(
-            "{}\n- [{}] Add to the batch PR. This one closes and the update moves there. {ADD}\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{key}\"}} -->\n",
-            hidden_marker(TARGETS, &targets),
+            "{}\n- [{}] Add to the batch PR. This one closes and the update moves there. {}\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{key}\"}} -->\n",
+            markers::hidden(markers::TARGETS, &targets),
             if ticked { "x" } else { " " },
+            markers::ADD,
             "a".repeat(64)
         )
     }
@@ -396,10 +371,14 @@ mod tests {
 
     #[test]
     fn markers_cannot_be_closed_early_or_forged_by_values() {
-        let marker = hidden_marker(TARGETS, &vec![change("evil--><!-- patchula:x", "1.0.0")]);
+        let marker = markers::hidden(
+            markers::TARGETS,
+            &vec![change("evil--><!-- patchula:x", "1.0.0")],
+        );
         assert_eq!(marker.matches("-->").count(), 1);
         assert_eq!(marker.matches("<!--").count(), 1);
-        let parsed: Vec<Change> = hidden(&marker, TARGETS).unwrap();
+        let parsed: Vec<Change> =
+            markers::hidden_json(&marker, markers::TARGETS, markers::PAYLOAD).unwrap();
         assert_eq!(parsed[0].package, "evil--><!-- patchula:x");
     }
 }

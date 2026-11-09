@@ -1,5 +1,5 @@
-use crate::cleanup::{all_ours, recorded_base, trailer};
-use crate::{Plan, Snapshot, blob_sha};
+use crate::cleanup::{all_ours, recorded_base};
+use crate::{Plan, Snapshot, blob_sha, trailers};
 use futures_util::{FutureExt, StreamExt, stream};
 use patchula_config::Rebase;
 use patchula_github::Client;
@@ -342,7 +342,7 @@ async fn apply_inner(
         let actor = actor.as_str();
         let existing_tip = fresh(client, &format!("repos/{repo}/git/commits/{old}")).await?;
         let tip_message = existing_tip["message"].as_str().unwrap_or("");
-        if trailer(tip_message, "Patchula-Base: ").is_none() {
+        if trailers::base(tip_message).is_none() {
             plan.action.status = BranchStatus::Protected;
             plan.action.reason = Some("unmarked branch history; left untouched".into());
             return Ok(());
@@ -386,11 +386,11 @@ async fn apply_inner(
         let message = latest["commit"]["message"]
             .as_str()
             .ok_or("missing commit message")?;
-        let parent = trailer(message, "Patchula-Base: ").ok_or("missing patchula base marker")?;
+        let parent = trailers::base(message).ok_or("missing patchula base marker")?;
         moved_base = parent != plan.action.base_commit;
         if !moved_base
             || rebase == Rebase::Conflicts
-                && trailer(message, "Patchula-Plan: ") == Some(&plan.fingerprint)
+                && trailers::plan(message) == Some(plan.fingerprint.as_str())
         {
             let existing_tree = field(&existing_tip["tree"], "sha")?;
             let existing = fresh(
@@ -466,8 +466,10 @@ async fn apply_inner(
         ""
     };
     let message = format!(
-        "{}{}\n\nPatchula: v1\nPatchula-Branch: {}\nPatchula-Base: {}\nPatchula-Plan: {}",
-        plan.action.message, pending, plan.identity, plan.action.base_commit, plan.fingerprint
+        "{}{}\n\n{}",
+        plan.action.message,
+        pending,
+        trailers::block(&plan.identity, &plan.action.base_commit, &plan.fingerprint)
     );
     // App bot signing requires GitHub-supplied authorship and signature.
     let commit = client

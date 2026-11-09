@@ -3,6 +3,7 @@
 use crate::{Client, Error, Result};
 use futures_util::{StreamExt, stream};
 use patchula_cache::State;
+use patchula_words::Severity;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -32,7 +33,8 @@ pub struct Advisory {
     pub aliases: Vec<String>,
     pub summary: Option<String>,
     /// The advisory database's own rating: low, moderate, high or critical.
-    pub severity: Option<String>,
+    #[serde(default, deserialize_with = "patchula_words::severity")]
+    pub severity: Option<Severity>,
     pub affected: Vec<Affected>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -96,16 +98,12 @@ struct RecordRange {
 
 impl From<Record> for Advisory {
     fn from(record: Record) -> Self {
+        // OSV says "medium" where the Count says "moderate".
         let severity = record
             .database_specific
             .as_ref()
             .and_then(|d| d["severity"].as_str())
-            .map(str::to_ascii_lowercase)
-            .and_then(|s| match s.as_str() {
-                "low" | "moderate" | "high" | "critical" => Some(s),
-                "medium" => Some("moderate".into()),
-                _ => None,
-            });
+            .and_then(Severity::advisory);
         let event = |(kind, version): (String, String)| match kind.as_str() {
             "introduced" => Some(Event::Introduced(version)),
             "fixed" => Some(Event::Fixed(version)),

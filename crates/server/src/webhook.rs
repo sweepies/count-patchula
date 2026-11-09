@@ -446,7 +446,7 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
                 let same = |side: &str| {
                     pr[side]["repo"]["full_name"]
                         .as_str()
-                        .is_some_and(|r| r.eq_ignore_ascii_case(repo))
+                        .is_some_and(|r| patchula_update::pull_requests::same_repository(r, repo))
                         || (pr[side]["repo"]["id"].as_u64().is_some()
                             && pr[side]["repo"]["id"] == payload["repository"]["id"])
                 };
@@ -477,7 +477,7 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
         "issues" if settings.server.triggers.dashboard && action == "edited" => {
             let after = issue["body"].as_str().unwrap_or("");
             issue["user"]["login"] == bot
-                && after.contains(patchula_update::dashboard::MARKER)
+                && patchula_update::markers::dashboard(after)
                 && before.is_some_and(|before| {
                     patchula_update::dashboard::Controls::checkbox_edited(before, after)
                 })

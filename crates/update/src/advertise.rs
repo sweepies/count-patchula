@@ -1,18 +1,15 @@
 //! A server's URL, hidden in the PRs and dashboard the Count writes, so
 //! `patchula` in a checkout can offer to run there.
-const PREFIX: &str = "<!-- patchula-server:";
-const SUFFIX: &str = " -->";
+use crate::markers;
 
 /// The marker line for `url`, which the server has already validated.
 pub fn marker(url: &str) -> String {
-    format!("{PREFIX}{url}{SUFFIX}")
+    format!("{}{} -->", markers::SERVER, url)
 }
 
 /// The URL in `body`'s marker. The CLI still validates it as a server URL.
 pub fn find(body: &str) -> Option<&str> {
-    let (_, rest) = body.split_once(PREFIX)?;
-    let (url, _) = rest.split_once(SUFFIX)?;
-    (!url.is_empty() && !url.contains(char::is_whitespace)).then_some(url)
+    markers::server(body)
 }
 
 #[cfg(test)]
