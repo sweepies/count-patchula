@@ -362,6 +362,9 @@ impl crate::Ecosystem for Descriptor {
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Go, path).registry
     }
+    fn movable_lockfile(&self, dep: &Dependency) -> bool {
+        dep.source == Source::Go
+    }
     fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
         let wanted = workspace_modules(files);
         (!wanted.is_empty()).then(move || {

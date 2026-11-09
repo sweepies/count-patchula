@@ -174,15 +174,20 @@ impl Dependency {
     /// poetry.lock, Gemfile.lock and composer.lock. A release inside the
     /// declared range reaches such a dependency through its lockfile alone.
     pub fn locked(&self) -> Option<&str> {
-        matches!(
-            (self.manager, self.source),
-            (Manager::Cargo, Source::Crates)
-                | (Manager::Pyproject, Source::Pypi)
-                | (Manager::Bundler, Source::Rubygems)
-                | (Manager::Composer, Source::Packagist)
-        )
-        .then_some(self.resolved.as_deref())
-        .flatten()
+        let descriptor = ecosystem(self.manager);
+        (descriptor.preserves_ranges() && descriptor.movable_lockfile(self))
+            .then_some(self.resolved.as_deref())
+            .flatten()
+    }
+    /// Whether this dependency's ecosystem keeps its declared ranges behind
+    /// a committed lockfile: `versions = "preserve"` is its policy.
+    pub fn preserves_ranges(&self) -> bool {
+        ecosystem(self.manager).preserves_ranges()
+    }
+    /// Whether this dependency's committed lockfile records its resolved
+    /// version for update's lockfile job to move to a chosen version.
+    pub fn movable_lockfile(&self) -> bool {
+        ecosystem(self.manager).movable_lockfile(self)
     }
     /// The kinds rules select this dependency by: its own, plus
     /// `reference-data` for a package on the reference data list.
@@ -409,6 +414,18 @@ pub(crate) trait Ecosystem {
     /// from the files read so far.
     fn more<'a>(&self, _files: &'a Files) -> Option<PathPredicate<'a>> {
         None
+    }
+    /// Whether this ecosystem's manifests keep their declared ranges behind
+    /// a committed lockfile: `versions = "preserve"` is its built-in policy
+    /// and a release the range already allows is a lockfile move, not a
+    /// manifest edit.
+    fn preserves_ranges(&self) -> bool {
+        false
+    }
+    /// Whether `dep`'s committed lockfile records its resolved version for
+    /// the Count to move to a chosen version.
+    fn movable_lockfile(&self, _dep: &Dependency) -> bool {
+        false
     }
     /// Shared parsed state and the per-file extractor and finishing step,
     /// built once per extraction.
@@ -813,6 +830,36 @@ fn requirements_name(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// The schema's built-in `versions = "preserve"` rule names the managers
+    /// whose descriptors declare `preserves_ranges`; the two must agree.
+    #[test]
+    fn pkl_preserve_rule_matches_descriptors() {
+        use super::Manager;
+        let schema = patchula_config::SCHEMA;
+        let apply = schema
+            .find("versions = \"preserve\"")
+            .expect("the built-in preserve rule");
+        let rule_start = schema[..apply].rfind("new Rule").expect("a rule");
+        let rule = &schema[rule_start..apply];
+        let listing = rule
+            .split("managers = new Listing {")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("the rule's manager listing");
+        let declared: std::collections::BTreeSet<Manager> = listing
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(|word| word.parse().unwrap())
+            .collect();
+        let descriptors: std::collections::BTreeSet<Manager> = Manager::ALL
+            .iter()
+            .copied()
+            .filter(|manager| super::ecosystem(*manager).preserves_ranges())
+            .collect();
+        assert_eq!(declared, descriptors);
+    }
+
     /// Today's per-path classification, pinned before the file-role taxonomy:
     /// `needs`, `registry_settings`, `linked_settings`, `credential_scope`,
     /// `credential_check`, public-verdict coverage and each manager's

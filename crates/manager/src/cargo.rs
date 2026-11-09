@@ -588,6 +588,12 @@ impl crate::Ecosystem for Descriptor {
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Cargo, path).registry
     }
+    fn preserves_ranges(&self) -> bool {
+        true
+    }
+    fn movable_lockfile(&self, dep: &Dependency) -> bool {
+        dep.source == Source::Crates
+    }
     fn backend_settings(&self, path: &str) -> bool {
         config_file(path)
     }

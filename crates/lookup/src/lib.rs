@@ -1104,10 +1104,8 @@ impl Evaluator {
                     && effective.policy.versions != VersionPolicy::Exact;
                 if in_range
                     && !lock_only
-                    && (matches!(
-                        dep.manager,
-                        Manager::Cargo | Manager::Pyproject | Manager::Bundler | Manager::Composer
-                    ) || matches!(scheme, Ecosystem::Maven | Ecosystem::Nuget)
+                    && (dep.preserves_ranges()
+                        || matches!(scheme, Ecosystem::Maven | Ecosystem::Nuget)
                         || (matches!(dep.manager, Manager::Terraform | Manager::Npm)
                             && dep.kind == DependencyKind::Toolchain))
                 {
