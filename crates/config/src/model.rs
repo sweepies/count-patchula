@@ -22,8 +22,6 @@ pub struct Config {
     pub warnings: Warnings,
     pub gitlab: Gitlab,
     pub use_versions_host: bool,
-    pub submodules: bool,
-    pub ignore_authors: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
