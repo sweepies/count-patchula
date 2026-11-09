@@ -317,18 +317,67 @@ words!(
     CosignSbom => "cosign-sbom",
 });
 
+/// When updates may run: cron expressions, each read in `zone`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Window {
+    pub cron: Vec<String>,
+    pub zone: String,
+}
+
 impl Update {
-    /// The order competing proposals apply in when several could write the
-    /// same declaration: the widest change first, a pin ahead of a bare
-    /// digest move. Declaration order (`Ord`) does not give this.
-    pub const fn rank(self) -> u8 {
-        match self {
-            Self::Major => 0,
-            Self::Minor => 1,
-            Self::Patch => 2,
-            Self::Pin => 3,
-            Self::Digest => 4,
+    /// Every kind in the order competing proposals apply in when several
+    /// could write the same declaration: the widest change first, a pin
+    /// ahead of a bare digest move. Declaration order (`Ord`) does not give
+    /// this, and it is the order the CLI and TUI list kinds in.
+    pub const RANKED: [Self; 5] = [
+        Self::Major,
+        Self::Minor,
+        Self::Patch,
+        Self::Pin,
+        Self::Digest,
+    ];
+
+    /// [`Self::RANKED`]'s words.
+    pub const RANKED_WORDS: [&'static str; 5] = {
+        let mut words = [""; 5];
+        let mut i = 0;
+        while i < 5 {
+            words[i] = Self::RANKED[i].as_str();
+            i += 1;
         }
+        words
+    };
+
+    /// `RANKED` holds every kind exactly once, checked when this compiles.
+    const _RANKED_IS_COMPLETE: () = {
+        assert!(Self::RANKED.len() == Self::ALL.len());
+        let mut i = 0;
+        while i < Self::ALL.len() {
+            let mut found = 0;
+            let mut j = 0;
+            while j < Self::RANKED.len() {
+                if Self::RANKED[j] as u8 == Self::ALL[i] as u8 {
+                    found += 1;
+                }
+                j += 1;
+            }
+            assert!(found == 1, "Update::RANKED must hold every kind once");
+            i += 1;
+        }
+    };
+
+    /// The kind's position in [`Self::RANKED`].
+    pub const fn rank(self) -> u8 {
+        let () = Self::_RANKED_IS_COMPLETE;
+        let mut i = 0;
+        while i < Self::RANKED.len() {
+            if Self::RANKED[i] as u8 == self as u8 {
+                return i as u8;
+            }
+            i += 1;
+        }
+        unreachable!()
     }
 }
 

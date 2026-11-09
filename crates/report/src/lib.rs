@@ -371,7 +371,7 @@ pub struct RejectedVersion {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Resolution {
-    /// declared, lockfile, pinned-commit, floating-ref, release-line or supported-range.
+    /// How the current value was resolved; see [`ResolutionKind`].
     pub kind: ResolutionKind,
     pub version: String,
 }
@@ -551,12 +551,7 @@ pub struct UpdatePolicy {
     pub release_notes: bool,
     pub body_notes: Vec<String>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Window {
-    pub cron: Vec<String>,
-    pub zone: String,
-}
+pub use patchula_words::Window;
 
 impl Report {
     /// Check the version before deserializing its payload, including future schemas.

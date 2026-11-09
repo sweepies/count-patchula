@@ -1,8 +1,8 @@
 //! Resolve non-App webhooks without persisting JWTs or installation tokens.
+use crate::webhook::Payload;
 use patchula_cache::{Cache, installations::Mapping};
 use patchula_config::settings::valid_repo;
 use patchula_github::app::App;
-use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -20,7 +20,7 @@ impl Resolver {
             entries: Mutex::new(BTreeMap::new()),
         }
     }
-    pub(crate) async fn resolve(&self, payload: &Value) -> Result<Option<u64>, &'static str> {
+    pub(crate) async fn resolve(&self, payload: &Payload) -> Result<Option<u64>, &'static str> {
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
             self.resolve_at(payload, chrono::Utc::now().timestamp()),
@@ -30,22 +30,26 @@ impl Resolver {
     }
     pub(crate) async fn resolve_at(
         &self,
-        payload: &Value,
+        payload: &Payload,
         now: i64,
     ) -> Result<Option<u64>, &'static str> {
         // Never fall back to an org installation for an inaccessible repository:
         // a selected-repositories App may not have access to that repository.
-        let target = if !payload["repository"].is_null() {
-            let Some(repo) = payload["repository"]["full_name"]
-                .as_str()
+        let target = if payload.repository.is_some() {
+            let Some(repo) = payload
+                .repository
+                .as_ref()
+                .and_then(|repo| repo.full_name.as_deref())
                 .filter(|repo| valid_repo(repo))
             else {
                 return Ok(None);
             };
             format!("repos/{}", repo.to_ascii_lowercase())
         } else {
-            let Some(org) = payload["organization"]["login"]
-                .as_str()
+            let Some(org) = payload
+                .organization
+                .as_ref()
+                .and_then(|org| org.login.as_deref())
                 .filter(|org| valid_repo(&format!("{org}/placeholder")) && !org.contains('/'))
             else {
                 return Ok(None);

@@ -475,16 +475,22 @@ async fn installation_cache_uses_memory_disk_ttl_and_invalidates_on_not_found() 
     let app = lookup_app(transport.clone(), 1);
     let value = json!({"repository":{"full_name":"OWNER/Repo"}});
     let resolver = Resolver::new(app.clone(), cache.clone());
-    assert_eq!(resolver.resolve_at(&value, 100).await.unwrap(), Some(1));
+    assert_eq!(
+        resolver.resolve_at(&typed(&value), 100).await.unwrap(),
+        Some(1)
+    );
     cache
         .installation_remove(1, "repos/owner/repo".into())
         .await
         .unwrap();
-    assert_eq!(resolver.resolve_at(&value, 101).await.unwrap(), Some(1));
+    assert_eq!(
+        resolver.resolve_at(&typed(&value), 101).await.unwrap(),
+        Some(1)
+    );
     assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
     assert_eq!(
         resolver
-            .resolve_at(&value, 100 + TTL_SECONDS)
+            .resolve_at(&typed(&value), 100 + TTL_SECONDS)
             .await
             .unwrap(),
         Some(1)
@@ -496,7 +502,7 @@ async fn installation_cache_uses_memory_disk_ttl_and_invalidates_on_not_found() 
     let resolver = Resolver::new(app.clone(), cache.clone());
     assert_eq!(
         resolver
-            .resolve_at(&value, 101 + TTL_SECONDS)
+            .resolve_at(&typed(&value), 101 + TTL_SECONDS)
             .await
             .unwrap(),
         Some(1)
@@ -506,7 +512,7 @@ async fn installation_cache_uses_memory_disk_ttl_and_invalidates_on_not_found() 
     transport.status.store(404, Ordering::SeqCst);
     assert_eq!(
         resolver
-            .resolve_at(&value, 100 + 2 * TTL_SECONDS)
+            .resolve_at(&typed(&value), 100 + 2 * TTL_SECONDS)
             .await
             .unwrap(),
         None
@@ -523,7 +529,7 @@ async fn installation_cache_uses_memory_disk_ttl_and_invalidates_on_not_found() 
     transport.status.store(200, Ordering::SeqCst);
     assert_eq!(
         resolver
-            .resolve_at(&value, 101 + 2 * TTL_SECONDS)
+            .resolve_at(&typed(&value), 101 + 2 * TTL_SECONDS)
             .await
             .unwrap(),
         Some(1)
@@ -533,7 +539,7 @@ async fn installation_cache_uses_memory_disk_ttl_and_invalidates_on_not_found() 
     let other = Resolver::new(lookup_app(transport.clone(), 2), cache);
     assert_eq!(
         other
-            .resolve_at(&value, 101 + 2 * TTL_SECONDS)
+            .resolve_at(&typed(&value), 101 + 2 * TTL_SECONDS)
             .await
             .unwrap(),
         Some(1)
@@ -854,6 +860,9 @@ async fn state() -> Webhook {
 fn payload() -> Value {
     json!({"installation":{"id":1},"sender":{"login":"human"},"repository":{"id":100,"full_name":"owner/repo","default_branch":"main"},"ref":"refs/heads/main"})
 }
+fn typed(value: &Value) -> crate::webhook::Payload {
+    crate::webhook::Payload::parse(value).unwrap()
+}
 fn pr() -> Value {
     json!({"number":1,"body":format!("<!-- patchula:{} -->\n- [x] any wording <!-- patchula-recheck -->", json!({"version":1,"identity":"a".repeat(64),"update":"b".repeat(64)})),"user":{"login":"patchula[bot]"},"head":{"ref":"custom-deps/pkg-2.x","repo":{"full_name":"owner/repo"}},"base":{"repo":{"full_name":"owner/repo"}}})
 }
@@ -984,7 +993,7 @@ fn every_trigger_and_switch_and_filters() {
         events.push((event, checks, "checks"));
     }
     for (event, payload, switch) in events {
-        let work = crate::webhook::classify(event, &payload, &settings, "patchula[bot]");
+        let work = crate::webhook::classify(event, &typed(&payload), &settings, "patchula[bot]");
         assert_eq!(
             work,
             vec![Work {
@@ -998,28 +1007,45 @@ fn every_trigger_and_switch_and_filters() {
         value["server"]["triggers"][switch] = json!(false);
         let disabled: Settings = serde_json::from_value(value).unwrap();
         assert!(
-            crate::webhook::classify(event, &payload, &disabled, "patchula[bot]").is_empty(),
+            crate::webhook::classify(event, &typed(&payload), &disabled, "patchula[bot]")
+                .is_empty(),
             "{event} disabled"
         );
         let mut filtered = settings.clone();
         filtered.server.allowed_installations = vec![2];
-        assert!(crate::webhook::classify(event, &payload, &filtered, "patchula[bot]").is_empty());
+        assert!(
+            crate::webhook::classify(event, &typed(&payload), &filtered, "patchula[bot]")
+                .is_empty()
+        );
         filtered.server.allowed_installations.clear();
         filtered.server.allowed_repositories = vec!["other/repo".into()];
-        assert!(crate::webhook::classify(event, &payload, &filtered, "patchula[bot]").is_empty());
+        assert!(
+            crate::webhook::classify(event, &typed(&payload), &filtered, "patchula[bot]")
+                .is_empty()
+        );
         let mut own = payload.clone();
         own["sender"]["login"] = json!("patchula[bot]");
-        assert!(crate::webhook::classify(event, &own, &settings, "patchula[bot]").is_empty());
+        assert!(
+            crate::webhook::classify(event, &typed(&own), &settings, "patchula[bot]").is_empty()
+        );
     }
     let mut feature = payload();
     feature["ref"] = json!("refs/heads/feature");
-    assert!(crate::webhook::classify("push", &feature, &settings, "patchula[bot]").is_empty());
+    assert!(
+        crate::webhook::classify("push", &typed(&feature), &settings, "patchula[bot]").is_empty()
+    );
     let mut human_pr = payload();
     human_pr["action"] = json!("closed");
     human_pr["pull_request"] = pr();
     human_pr["pull_request"]["user"]["login"] = json!("human");
     assert!(
-        crate::webhook::classify("pull_request", &human_pr, &settings, "patchula[bot]").is_empty()
+        crate::webhook::classify(
+            "pull_request",
+            &typed(&human_pr),
+            &settings,
+            "patchula[bot]"
+        )
+        .is_empty()
     );
 }
 #[tokio::test]
@@ -1401,7 +1427,7 @@ async fn the_report_directory_keeps_only_the_newest_reports() {
     for entry in std::fs::read_dir(dir.path()).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-        if report_name(&name) {
+        if report_name::report(&name) {
             let decoded: Report = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             kept.push(decoded.repositories[0].repository.clone());
         } else {
@@ -1419,7 +1445,9 @@ async fn the_report_directory_keeps_only_the_newest_reports() {
 
 #[test]
 fn only_names_the_report_writer_makes_are_reports() {
-    assert!(report_name("batch-20261106T120000.123456789Z-42-7.json"));
+    assert!(report_name::report(
+        "batch-20261106T120000.123456789Z-42-7.json"
+    ));
     for name in [
         "batch-notes.json",
         "batch-20261106T120000.123456789Z-42-7.json.tmp",
@@ -1430,7 +1458,7 @@ fn only_names_the_report_writer_makes_are_reports() {
         "batch-20261106T120000.123456789Z--7.json",
         "batch-20261106T120000.123456789Z-42-x.json",
     ] {
-        assert!(!report_name(name), "{name}");
+        assert!(!report_name::report(name), "{name}");
     }
 }
 

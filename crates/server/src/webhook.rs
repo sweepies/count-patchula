@@ -11,6 +11,7 @@ use axum::{
 use hmac::{Hmac, KeyInit, Mac};
 use patchula_cache::{Cache, queue::Work};
 use patchula_config::settings::Settings;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use std::sync::{
@@ -19,6 +20,107 @@ use std::sync::{
 };
 
 pub const BODY_LIMIT: usize = 2 * 1024 * 1024;
+
+/// The fields of a webhook payload the server reads, typed. Everything else
+/// is ignored; `pull_request` stays a `Value` because `patchula_update`'s
+/// ownership check reads it as JSON. A missing field reads as `None`, the
+/// same as the key being absent.
+#[derive(Deserialize)]
+pub(crate) struct Payload {
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub installation: Option<Installation>,
+    #[serde(default)]
+    pub repository: Option<Repository>,
+    #[serde(default)]
+    pub sender: Option<Actor>,
+    #[serde(default)]
+    pub organization: Option<Actor>,
+    #[serde(default)]
+    pub issue: Option<Issue>,
+    #[serde(default)]
+    pub pull_request: Option<Value>,
+    #[serde(default)]
+    pub changes: Option<Changes>,
+    #[serde(default)]
+    pub check_suite: Option<Checks>,
+    #[serde(default)]
+    pub check_run: Option<Checks>,
+    #[serde(default)]
+    pub repositories: Option<Vec<Repository>>,
+    #[serde(default)]
+    pub repositories_added: Option<Vec<Repository>>,
+    #[serde(default)]
+    pub repositories_removed: Option<Vec<Repository>>,
+    #[serde(default)]
+    pub deleted: Option<bool>,
+    #[serde(default, rename = "ref")]
+    pub reference: Option<String>,
+}
+impl Payload {
+    /// The typed view of an already-validated payload `Value`.
+    #[cfg(test)]
+    pub(crate) fn parse(value: &Value) -> Option<Self> {
+        serde_json::from_value(value.clone()).ok()
+    }
+}
+#[derive(Deserialize)]
+pub(crate) struct Installation {
+    pub id: Option<u64>,
+}
+#[derive(Deserialize)]
+pub(crate) struct Actor {
+    pub login: Option<String>,
+}
+#[derive(Deserialize)]
+pub(crate) struct Repository {
+    pub full_name: Option<String>,
+    pub private: Option<bool>,
+    pub id: Option<u64>,
+    pub default_branch: Option<String>,
+}
+#[derive(Deserialize)]
+pub(crate) struct Issue {
+    pub body: Option<String>,
+    pub user: Option<Actor>,
+}
+#[derive(Deserialize)]
+pub(crate) struct Changes {
+    pub body: Option<BodyChange>,
+    pub repository: Option<RepositoryChange>,
+}
+#[derive(Deserialize)]
+pub(crate) struct BodyChange {
+    pub from: Option<String>,
+}
+#[derive(Deserialize)]
+pub(crate) struct RepositoryChange {
+    pub name: Option<NameChange>,
+}
+#[derive(Deserialize)]
+pub(crate) struct NameChange {
+    pub from: Option<String>,
+}
+#[derive(Deserialize)]
+pub(crate) struct Checks {
+    pub pull_requests: Option<Vec<CheckPull>>,
+}
+#[derive(Deserialize)]
+pub(crate) struct CheckPull {
+    pub number: Option<u64>,
+    pub head: Option<CheckSide>,
+    pub base: Option<CheckSide>,
+}
+#[derive(Deserialize)]
+pub(crate) struct CheckSide {
+    pub repo: Option<CheckRepo>,
+}
+#[derive(Deserialize)]
+pub(crate) struct CheckRepo {
+    pub full_name: Option<String>,
+    pub id: Option<u64>,
+}
 
 #[derive(Clone)]
 struct Failure {
@@ -38,12 +140,14 @@ impl Failure {
             repository: None,
         }
     }
-    fn delivery(mut self, event: &str, delivery: &str, payload: &Value) -> Self {
+    fn delivery(mut self, event: &str, delivery: &str, payload: &Payload) -> Self {
         self.event = Some(event.into());
         self.delivery = Some(delivery.into());
-        self.installation = payload["installation"]["id"].as_u64();
-        self.repository = payload["repository"]["full_name"]
-            .as_str()
+        self.installation = payload.installation.as_ref().and_then(|i| i.id);
+        self.repository = payload
+            .repository
+            .as_ref()
+            .and_then(|repo| repo.full_name.as_deref())
             .filter(|repo| patchula_config::settings::valid_repo(repo))
             .map(str::to_owned);
         self
@@ -179,20 +283,25 @@ pub async fn receive(
     let Some(event) = header(&headers, "x-github-event").filter(|s| metadata_word(s)) else {
         return Failure::new("invalid-event").response(StatusCode::BAD_REQUEST);
     };
-    let Ok(mut payload) = serde_json::from_slice::<Value>(&body) else {
+    let Ok(value) = serde_json::from_slice::<Value>(&body) else {
         return Failure::new("invalid-json").response(StatusCode::BAD_REQUEST);
     };
-    if !payload.is_object() {
+    if !value.is_object() {
         return Failure::new("invalid-payload").response(StatusCode::BAD_REQUEST);
     }
+    let Ok(mut payload) = serde_json::from_value::<Payload>(value) else {
+        return Failure::new("invalid-payload").response(StatusCode::BAD_REQUEST);
+    };
     if event == "ping" {
         log_delivery(event, delivery, &payload, "accepted", "ping", None);
         return StatusCode::OK.into_response();
     }
     let mut resolution = None;
-    if payload["installation"].is_null()
-        && !payload["sender"]["login"]
-            .as_str()
+    if payload.installation.is_none()
+        && !payload
+            .sender
+            .as_ref()
+            .and_then(|sender| sender.login.as_deref())
             .is_some_and(|login| login.eq_ignore_ascii_case(&state.bot_login))
     {
         let resolved = match &state.resolver {
@@ -201,7 +310,7 @@ pub async fn receive(
         };
         match resolved {
             Ok(Some(id)) => {
-                payload["installation"] = json!({"id":id});
+                payload.installation = Some(Installation { id: Some(id) });
                 resolution = Some("installation-resolved");
             }
             Ok(None) => resolution = Some("installation-not-found"),
@@ -261,35 +370,40 @@ pub async fn receive(
 pub(crate) async fn track(
     cache: &Cache,
     event: &str,
-    payload: &Value,
+    payload: &Payload,
     settings: &Settings,
 ) -> patchula_cache::Result<()> {
-    let Some(id) = payload["installation"]["id"].as_u64() else {
+    let Some(id) = payload.installation.as_ref().and_then(|i| i.id) else {
         return Ok(());
     };
-    let name = |repo: &Value| repo["full_name"].as_str().map(str::to_ascii_lowercase);
-    let listed = |key: &str| -> Vec<(String, bool)> {
-        payload[key]
-            .as_array()
-            .into_iter()
-            .flatten()
+    let name = |repo: &Repository| repo.full_name.as_deref().map(str::to_ascii_lowercase);
+    let listed = |repos: &[Repository]| -> Vec<(String, bool)> {
+        repos
+            .iter()
             // Unknown visibility counts as private, which the public API hides.
-            .filter_map(|repo| Some((name(repo)?, repo["private"].as_bool().unwrap_or(true))))
+            .filter_map(|repo| Some((name(repo)?, repo.private.unwrap_or(true))))
             .filter(|(repo, _)| settings.allows(id, repo))
             .collect()
     };
-    let repository = &payload["repository"];
-    match (event, payload["action"].as_str().unwrap_or("")) {
-        ("installation", "created") => cache.repositories_added(id, listed("repositories")).await?,
+    let repository = payload.repository.as_ref();
+    match (event, payload.action.as_deref().unwrap_or("")) {
+        ("installation", "created") => {
+            cache
+                .repositories_added(id, listed(payload.repositories.as_deref().unwrap_or(&[])))
+                .await?
+        }
         ("installation_repositories", "added") => {
             cache
-                .repositories_added(id, listed("repositories_added"))
+                .repositories_added(
+                    id,
+                    listed(payload.repositories_added.as_deref().unwrap_or(&[])),
+                )
                 .await?
         }
         ("installation_repositories", "removed") => {
-            let removed = payload["repositories_removed"]
-                .as_array()
-                .into_iter()
+            let removed = payload
+                .repositories_removed
+                .iter()
                 .flatten()
                 .filter_map(name)
                 .collect();
@@ -298,9 +412,13 @@ pub(crate) async fn track(
         // The payload names the repository as it is now. A rename names the
         // old one too; after a transfer, discovery drops the old name.
         ("repository", action @ ("renamed" | "transferred")) => {
-            let old = payload["changes"]["repository"]["name"]["from"]
-                .as_str()
-                .zip(name(repository))
+            let old = payload
+                .changes
+                .as_ref()
+                .and_then(|changes| changes.repository.as_ref())
+                .and_then(|change| change.name.as_ref())
+                .and_then(|name| name.from.as_deref())
+                .zip(repository.and_then(name))
                 .filter(|_| action == "renamed")
                 // A change of case only is the same repository.
                 .filter(|(from, repo)| {
@@ -313,14 +431,24 @@ pub(crate) async fn track(
                     .repositories_removed(vec![old.to_ascii_lowercase()])
                     .await?;
             }
-            if let Some(repo) = name(repository).filter(|repo| settings.allows(id, repo)) {
-                let private = repository["private"].as_bool().unwrap_or(true);
+            if let Some(repo) = repository
+                .and_then(name)
+                .filter(|repo| settings.allows(id, repo))
+            {
+                let private = payload
+                    .repository
+                    .as_ref()
+                    .and_then(|repo| repo.private)
+                    .unwrap_or(true);
                 cache.repositories_added(id, vec![(repo, private)]).await?;
             }
         }
         _ => {}
     }
-    if let (Some(repo), Some(private)) = (name(repository), repository["private"].as_bool()) {
+    if let (Some(repo), Some(private)) = (
+        repository.and_then(name),
+        repository.and_then(|repo| repo.private),
+    ) {
         cache.repository_visibility(&repo, private).await?;
     }
     Ok(())
@@ -328,12 +456,12 @@ pub(crate) async fn track(
 fn log_delivery(
     event: &str,
     delivery: &str,
-    payload: &Value,
+    payload: &Payload,
     outcome: &str,
     reason: &str,
     resolution: Option<&str>,
 ) {
-    tracing::info!(target: "patchula_server", event, action = payload["action"].as_str().filter(|s| metadata_word(s)).unwrap_or(""), delivery_id = delivery, installation = payload["installation"]["id"].as_u64(), repository = payload["repository"]["full_name"].as_str().filter(|s| patchula_config::settings::valid_repo(s)), outcome, reason, installation_resolution = resolution, "webhook received");
+    tracing::info!(target: "patchula_server", event, action = payload.action.as_deref().filter(|s| metadata_word(s)).unwrap_or(""), delivery_id = delivery, installation = payload.installation.as_ref().and_then(|i| i.id), repository = payload.repository.as_ref().and_then(|repo| repo.full_name.as_deref()).filter(|s| patchula_config::settings::valid_repo(s)), outcome, reason, installation_resolution = resolution, "webhook received");
 }
 fn metadata_word(value: &str) -> bool {
     !value.is_empty()
@@ -344,18 +472,22 @@ fn metadata_word(value: &str) -> bool {
 }
 pub(crate) fn ignored_reason(
     event: &str,
-    payload: &Value,
+    payload: &Payload,
     settings: &Settings,
     bot: &str,
 ) -> &'static str {
-    if payload["sender"]["login"]
-        .as_str()
+    if payload
+        .sender
+        .as_ref()
+        .and_then(|sender| sender.login.as_deref())
         .is_some_and(|s| s.eq_ignore_ascii_case(bot))
     {
         return "own-bot ignored";
     }
-    let Some(id) = payload["installation"]["id"]
-        .as_u64()
+    let Some(id) = payload
+        .installation
+        .as_ref()
+        .and_then(|installation| installation.id)
         .filter(|id| settings.installation_allowed(*id))
     else {
         return "not allowlisted";
@@ -363,7 +495,7 @@ pub(crate) fn ignored_reason(
     let enabled = match event {
         "push" => settings.server.triggers.push,
         "issues" => settings.server.triggers.dashboard,
-        "pull_request" if payload["action"] == "closed" => {
+        "pull_request" if payload.action.as_deref() == Some("closed") => {
             settings.server.triggers.pull_request_closed
         }
         "pull_request" => settings.server.triggers.pull_request_edited,
@@ -375,49 +507,60 @@ pub(crate) fn ignored_reason(
         return "trigger disabled";
     }
     if matches!(event, "installation" | "installation_repositories") {
-        return if (event == "installation" && payload["action"] == "created")
-            || (event == "installation_repositories" && payload["action"] == "added")
+        return if (event == "installation" && payload.action.as_deref() == Some("created"))
+            || (event == "installation_repositories" && payload.action.as_deref() == Some("added"))
         {
             "not allowlisted"
         } else {
             "unrelated event or action"
         };
     }
-    if !payload["repository"]["full_name"]
-        .as_str()
+    if !payload
+        .repository
+        .as_ref()
+        .and_then(|repo| repo.full_name.as_deref())
         .is_some_and(|repo| settings.allows(id, repo))
     {
         return "not allowlisted";
     }
     "unrelated event or action"
 }
-pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) -> Vec<Work> {
-    if payload["sender"]["login"]
-        .as_str()
+pub(crate) fn classify(
+    event: &str,
+    payload: &Payload,
+    settings: &Settings,
+    bot: &str,
+) -> Vec<Work> {
+    if payload
+        .sender
+        .as_ref()
+        .and_then(|sender| sender.login.as_deref())
         .is_some_and(|s| s.eq_ignore_ascii_case(bot))
     {
         return Vec::new();
     }
-    let Some(id) = payload["installation"]["id"]
-        .as_u64()
+    let Some(id) = payload
+        .installation
+        .as_ref()
+        .and_then(|installation| installation.id)
         .filter(|id| settings.installation_allowed(*id))
     else {
         return Vec::new();
     };
-    let action = payload["action"].as_str().unwrap_or("");
+    let action = payload.action.as_deref().unwrap_or("");
     if settings.server.triggers.installation
         && ((event == "installation" && action == "created")
             || (event == "installation_repositories" && action == "added"))
     {
-        let key = if event == "installation" {
-            "repositories"
+        let repos = if event == "installation" {
+            &payload.repositories
         } else {
-            "repositories_added"
+            &payload.repositories_added
         };
-        if let Some(repos) = payload[key].as_array().filter(|r| !r.is_empty()) {
+        if let Some(repos) = repos.as_ref().filter(|r| !r.is_empty()) {
             return repos
                 .iter()
-                .filter_map(|r| r["full_name"].as_str())
+                .filter_map(|r| r.full_name.as_deref())
                 .filter(|repo| settings.allows(id, repo))
                 .map(|repo| Work::repository(id, repo.to_ascii_lowercase()))
                 .collect();
@@ -425,8 +568,9 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
         // Discovery is durable too; repository enumeration runs in the worker.
         return vec![Work::repository(id, String::new())];
     }
-    let Some(repo) = payload["repository"]["full_name"]
-        .as_str()
+    let repository = payload.repository.as_ref();
+    let Some(repo) = repository
+        .and_then(|repo| repo.full_name.as_deref())
         .filter(|repo| settings.allows(id, repo))
     else {
         return Vec::new();
@@ -435,24 +579,30 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
         && settings.server.triggers.checks
         && action == "completed"
     {
+        let checks = if event == "check_suite" {
+            &payload.check_suite
+        } else {
+            &payload.check_run
+        };
         // Abbreviated GitHub check records omit author/body and may use a custom
         // configured branch prefix. Persist candidates; ownership is checked by
         // the worker without delaying the delivery response.
-        let checks = payload[event]["pull_requests"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|pr| {
-                let same = |side: &str| {
-                    pr[side]["repo"]["full_name"]
-                        .as_str()
+        let same = |side: Option<&CheckSide>| {
+            side.and_then(|side| side.repo.as_ref())
+                .is_some_and(|side| {
+                    side.full_name
+                        .as_deref()
                         .is_some_and(|r| patchula_update::pull_requests::same_repository(r, repo))
-                        || (pr[side]["repo"]["id"].as_u64().is_some()
-                            && pr[side]["repo"]["id"] == payload["repository"]["id"])
-                };
-                same("head") && same("base")
-            })
-            .filter_map(|pr| pr["number"].as_u64().filter(|number| *number > 0))
+                        || (side.id.is_some() && side.id == repository.and_then(|repo| repo.id))
+                })
+        };
+        let checks = checks
+            .as_ref()
+            .and_then(|checks| checks.pull_requests.as_deref())
+            .unwrap_or(&[])
+            .iter()
+            .filter(|pr| same(pr.head.as_ref()) && same(pr.base.as_ref()))
+            .filter_map(|pr| pr.number.filter(|number| *number > 0))
             .collect::<std::collections::BTreeSet<_>>();
         return if checks.is_empty() {
             Vec::new()
@@ -464,19 +614,29 @@ pub fn classify(event: &str, payload: &Value, settings: &Settings, bot: &str) ->
             }]
         };
     }
-    let before = payload["changes"]["body"]["from"].as_str();
-    let issue = &payload["issue"];
-    let pr = &payload["pull_request"];
+    let before = payload
+        .changes
+        .as_ref()
+        .and_then(|changes| changes.body.as_ref())
+        .and_then(|body| body.from.as_deref());
+    let issue = payload.issue.as_ref();
+    let null = Value::Null;
+    let pr = payload.pull_request.as_ref().unwrap_or(&null);
     let owned = patchula_update::pull_requests::owned_pr(pr, bot, repo);
     let trigger = match event {
         "push" if settings.server.triggers.push => {
-            let branch = payload["repository"]["default_branch"].as_str();
-            !payload["deleted"].as_bool().unwrap_or(false)
-                && branch.is_some_and(|b| payload["ref"] == format!("refs/heads/{b}"))
+            let branch = repository.and_then(|repo| repo.default_branch.as_deref());
+            !payload.deleted.unwrap_or(false)
+                && branch.is_some_and(|b| {
+                    payload.reference.as_deref() == Some(format!("refs/heads/{b}").as_str())
+                })
         }
         "issues" if settings.server.triggers.dashboard && action == "edited" => {
-            let after = issue["body"].as_str().unwrap_or("");
-            issue["user"]["login"] == bot
+            let after = issue.and_then(|issue| issue.body.as_deref()).unwrap_or("");
+            issue
+                .and_then(|issue| issue.user.as_ref())
+                .and_then(|user| user.login.as_deref())
+                == Some(bot)
                 && patchula_update::markers::dashboard(after)
                 && before.is_some_and(|before| {
                     patchula_update::dashboard::Controls::checkbox_edited(before, after)

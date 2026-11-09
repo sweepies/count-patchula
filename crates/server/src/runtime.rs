@@ -35,8 +35,6 @@ use tokio::{
     sync::{Mutex, watch},
 };
 
-/// Docker Hub credentials for authenticated pulls, as in the CLI.
-
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct Error(&'static str);
@@ -676,36 +674,53 @@ impl crate::remote::Runner for Engines {
         })
     }
 }
-/// Whether `name` is a batch report exactly as `output_report` names one:
-/// `batch-YYYYMMDDTHHMMSS.NNNNNNNNNZ-<pid>-<counter>.json`. Anything else in
-/// the directory belongs to someone else and is never counted or deleted.
-fn report_name(name: &str) -> bool {
-    let digits = |text: &str, len: Option<usize>| {
-        !text.is_empty()
-            && len.is_none_or(|len| text.len() == len)
-            && text.bytes().all(|b| b.is_ascii_digit())
-    };
-    let Some(rest) = name
-        .strip_prefix("batch-")
-        .and_then(|rest| rest.strip_suffix(".json"))
-    else {
-        return false;
-    };
-    let Some((time, rest)) = rest.split_once("Z-") else {
-        return false;
-    };
-    let (Some((date, clock)), Some((pid, counter))) = (time.split_once('T'), rest.split_once('-'))
-    else {
-        return false;
-    };
-    let Some((seconds, fraction)) = clock.split_once('.') else {
-        return false;
-    };
-    digits(date, Some(8))
-        && digits(seconds, Some(6))
-        && digits(fraction, Some(9))
-        && digits(pid, None)
-        && digits(counter, None)
+/// The batch report file grammar, `batch-<ts>-<pid>-<counter>.json`, in one
+/// place: `name` builds it for a write and `report` recognises it for
+/// pruning. Anything else in the directory belongs to someone else and is
+/// never counted or deleted.
+mod report_name {
+    use chrono::{DateTime, Utc};
+
+    /// `batch-YYYYMMDDTHHMMSS.NNNNNNNNNZ-<pid>-<counter>.json`.
+    pub fn name(at: DateTime<Utc>, pid: u32, counter: u64) -> String {
+        format!(
+            "batch-{}-{}-{}.json",
+            at.format("%Y%m%dT%H%M%S%.9fZ"),
+            pid,
+            counter
+        )
+    }
+
+    /// Whether `name` is a batch report exactly as [`name`] writes one.
+    pub fn report(name: &str) -> bool {
+        let digits = |text: &str, len: Option<usize>| {
+            !text.is_empty()
+                && len.is_none_or(|len| text.len() == len)
+                && text.bytes().all(|b| b.is_ascii_digit())
+        };
+        let Some(rest) = name
+            .strip_prefix("batch-")
+            .and_then(|rest| rest.strip_suffix(".json"))
+        else {
+            return false;
+        };
+        let Some((time, rest)) = rest.split_once("Z-") else {
+            return false;
+        };
+        let (Some((date, clock)), Some((pid, counter))) =
+            (time.split_once('T'), rest.split_once('-'))
+        else {
+            return false;
+        };
+        let Some((seconds, fraction)) = clock.split_once('.') else {
+            return false;
+        };
+        digits(date, Some(8))
+            && digits(seconds, Some(6))
+            && digits(fraction, Some(9))
+            && digits(pid, None)
+            && digits(counter, None)
+    }
 }
 /// How old a report's temporary file must be before it counts as abandoned by
 /// a writer that crashed, rather than one still being written.
@@ -727,12 +742,12 @@ fn prune_reports(directory: &std::path::Path, kept: usize) {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        if report_name(&name) {
+        if report_name::report(&name) {
             reports.push(name);
         } else if name
             .strip_prefix('.')
             .and_then(|name| name.strip_suffix(".tmp"))
-            .is_some_and(report_name)
+            .is_some_and(report_name::report)
             && entry
                 .metadata()
                 .and_then(|m| m.modified())
@@ -777,11 +792,10 @@ async fn output_report(
             // Batches finish side by side, so the counter keeps two in the
             // same instant apart.
             static REPORTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let name = format!(
-                "batch-{}-{}-{}.json",
-                Utc::now().format("%Y%m%dT%H%M%S%.9fZ"),
+            let name = report_name::name(
+                Utc::now(),
                 std::process::id(),
-                REPORTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                REPORTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             );
             let temporary = directory.join(format!(".{name}.tmp"));
             let file = std::fs::File::options()

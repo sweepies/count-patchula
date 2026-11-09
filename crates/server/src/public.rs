@@ -20,7 +20,7 @@ use patchula_github::Client;
 use patchula_report::{
     BranchStatus, LookupFailure, PackageFile, PullRequestAction, Report, Status,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 #[derive(Clone)]
@@ -105,30 +105,70 @@ struct Action<'a> {
     status: patchula_report::PullRequestStatus,
     reason: Option<&'a str>,
 }
+/// The pull-request fields the public API publishes, as GitHub sent them.
+#[derive(Deserialize)]
+struct GithubPull {
+    number: Option<u64>,
+    html_url: Option<String>,
+    title: Option<String>,
+    body: Option<String>,
+    draft: Option<bool>,
+    labels: Option<Vec<GithubLabel>>,
+    head: Option<GithubSide>,
+    base: Option<GithubSide>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    mergeable: Option<bool>,
+    mergeable_state: Option<String>,
+    auto_merge: Option<Value>,
+}
+#[derive(Deserialize)]
+struct GithubLabel {
+    name: Option<String>,
+}
+#[derive(Deserialize)]
+struct GithubSide {
+    #[serde(rename = "ref")]
+    reference: Option<String>,
+    sha: Option<String>,
+}
+/// The merged-PR fields the public API publishes.
+#[derive(Deserialize)]
+struct MergedPr {
+    number: Option<u64>,
+    title: Option<String>,
+    html_url: Option<String>,
+    merged_at: Option<String>,
+}
+/// The one repository field record() reads.
+#[derive(Deserialize)]
+struct RepoVisibility {
+    private: Option<bool>,
+}
 impl<'a> PullRequest<'a> {
     fn new(pr: &Value, actions: &[&'a PullRequestAction]) -> Option<Self> {
-        let text = |value: &Value| value.as_str().map(str::to_owned);
-        let number = pr["number"].as_u64()?;
+        let pr = GithubPull::deserialize(pr).ok()?;
+        let number = pr.number?;
         Some(Self {
             number,
-            url: text(&pr["html_url"]),
-            branch: text(&pr["head"]["ref"]),
-            title: text(&pr["title"]),
-            body: text(&pr["body"]),
-            draft: pr["draft"].as_bool().unwrap_or(false),
-            labels: pr["labels"]
-                .as_array()
-                .into_iter()
+            url: pr.html_url,
+            branch: pr.head.as_ref().and_then(|head| head.reference.clone()),
+            title: pr.title,
+            body: pr.body,
+            draft: pr.draft.unwrap_or(false),
+            labels: pr
+                .labels
+                .iter()
                 .flatten()
-                .filter_map(|label| text(&label["name"]))
+                .filter_map(|label| label.name.clone())
                 .collect(),
-            head_sha: text(&pr["head"]["sha"]),
-            base: text(&pr["base"]["ref"]),
-            created_at: text(&pr["created_at"]),
-            updated_at: text(&pr["updated_at"]),
-            mergeable: pr["mergeable"].as_bool(),
-            mergeable_state: text(&pr["mergeable_state"]),
-            auto_merge: !pr["auto_merge"].is_null(),
+            head_sha: pr.head.as_ref().and_then(|head| head.sha.clone()),
+            base: pr.base.as_ref().and_then(|base| base.reference.clone()),
+            created_at: pr.created_at,
+            updated_at: pr.updated_at,
+            mergeable: pr.mergeable,
+            mergeable_state: pr.mergeable_state,
+            auto_merge: pr.auto_merge.is_some(),
             action: actions
                 .iter()
                 .find(|action| action.number == Some(number))
@@ -207,17 +247,49 @@ pub(crate) fn withheld(report: &Report) -> Report {
         if !meta.credentialed {
             continue;
         }
+        // Rebuild the metadata field by field, every field named: a field a
+        // credentialed lookup could have filled must be classified here —
+        // kept as declared, or dropped — or this stops compiling.
+        let patchula_report::DependencyMetadata {
+            tag_digests: _,
+            source,
+            kinds,
+            locations,
+            held_back: _,
+            stale: _,
+            lookup: _,
+            resolution: _,
+            advisories: _,
+            image: _,
+            credentialed,
+        } = meta.clone();
         // Image advisories came from SBOMs read with the same credentials.
-        meta.advisories.clear();
+        *meta = patchula_report::DependencyMetadata {
+            tag_digests: Default::default(),
+            source,
+            kinds,
+            locations,
+            held_back: Vec::new(),
+            stale: Default::default(),
+            lookup: None,
+            resolution: None,
+            advisories: Vec::new(),
+            image: None,
+            credentialed,
+        };
         dep.updates.clear();
-        // The version a range resolves to came from the lookup too.
-        dep.current.version = None;
-        meta.resolution = None;
-        meta.held_back.clear();
-        meta.stale.clear();
-        meta.tag_digests.clear();
-        meta.lookup = None;
-        meta.image = None;
+        // The version a range resolves to came from the lookup too; every
+        // field of the current declaration is classified the same way.
+        let patchula_report::Current {
+            value,
+            version: _,
+            digest,
+        } = dep.current.clone();
+        dep.current = patchula_report::Current {
+            value,
+            version: None,
+            digest,
+        };
     }
     report
 }
@@ -244,9 +316,9 @@ pub(crate) async fn record(
     for (index, repo) in report.repositories.iter().enumerate() {
         let name = repo.repository.as_str();
         let private = match client.get(&format!("repos/{name}")).await {
-            Ok(response) => serde_json::from_slice::<Value>(&response.body)
+            Ok(response) => serde_json::from_slice::<RepoVisibility>(&response.body)
                 .ok()
-                .and_then(|value| value["private"].as_bool())
+                .and_then(|repo| repo.private)
                 .unwrap_or(true),
             Err(_) => true,
         };
@@ -284,15 +356,15 @@ pub(crate) async fn record(
             .await
             .iter()
             .filter_map(|pr| {
+                let pr = MergedPr::deserialize(pr).ok()?;
                 Some(Merged {
-                    number: pr["number"].as_u64()?,
-                    title: pr["title"].as_str().map(str::to_owned),
-                    url: pr["html_url"].as_str().map(str::to_owned),
+                    number: pr.number?,
+                    title: pr.title,
+                    url: pr.html_url,
                     // A merge the Count made himself has no recorded time.
-                    merged_at: pr["merged_at"]
-                        .as_str()
-                        .filter(|at| DateTime::parse_from_rfc3339(at).is_ok())
-                        .map(str::to_owned),
+                    merged_at: pr
+                        .merged_at
+                        .filter(|at| DateTime::parse_from_rfc3339(at).is_ok()),
                 })
             })
             .collect();
@@ -385,7 +457,10 @@ async fn open_pulls(client: &Client, bot: &str, repo: &str) -> Option<Vec<Value>
         }
     }
     for pr in &mut owned {
-        let Some(number) = pr["number"].as_u64() else {
+        let Some(number) = GithubPull::deserialize(&*pr)
+            .ok()
+            .and_then(|pull| pull.number)
+        else {
             continue;
         };
         if let Some(full) = client

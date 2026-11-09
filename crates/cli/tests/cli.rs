@@ -20,18 +20,22 @@ fn help_version_and_bundled_schema() {
         assert!(output.status.success(), "{output:?}");
         assert!(!output.stdout.is_empty());
     }
-    let output = cli(&["config", "schema"]);
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        patchula_config::SCHEMA
-    );
-    let output = cli(&["config", "settings-schema"]);
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        patchula_config::settings::SCHEMA
-    );
+    // The commands print the bundled schemas whole.
+    for (args, schema) in [
+        (["config", "schema"], patchula_config::SCHEMA),
+        (
+            ["config", "settings-schema"],
+            patchula_config::settings::SCHEMA,
+        ),
+    ] {
+        let output = cli(&args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            schema,
+            "{args:?}"
+        );
+    }
 }
 
 /// Every command's plain `--help`, as a pipe at 80 columns gets it.

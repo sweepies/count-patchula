@@ -6,6 +6,7 @@
 //! has it, the nearest xterm-256 entry when it has 256 colours, and an ANSI-16
 //! code otherwise. Whether to colour at all is decided elsewhere (--color,
 //! NO_COLOR, a terminal); this module only says which colour.
+use patchula_words::Update as UpdateKind;
 use ratatui::style::Color;
 use std::sync::OnceLock;
 
@@ -31,6 +32,17 @@ pub const ERROR: Colour = Colour::new((240, 80, 110), 204, 31);
 pub const MUTED: Colour = Colour::new((140, 130, 150), 245, 90);
 /// The TUI's cursor row, a background.
 pub const SELECTION: Colour = Colour::new((50, 36, 60), 236, 90);
+
+/// The colour an update kind is drawn in, wherever it appears: reports,
+/// tables and the TUI all read this one mapping.
+pub fn kind_colour(kind: UpdateKind) -> Colour {
+    match kind {
+        UpdateKind::Major => ERROR,
+        UpdateKind::Minor => WARNING,
+        UpdateKind::Patch => SUCCESS,
+        UpdateKind::Digest | UpdateKind::Pin => ACCENT_DIM,
+    }
+}
 
 /// The bat on the help page, top to bottom: coral to gold, like the title on
 /// the docs' landing page.

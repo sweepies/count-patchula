@@ -63,6 +63,11 @@ pub fn advisory_query(dep: &Dependency) -> Option<AdvisoryQuery> {
     })
 }
 
+/// The osv.dev page for one advisory.
+pub(crate) fn osv_url(id: &str) -> String {
+    format!("https://osv.dev/vulnerability/{id}")
+}
+
 /// Report entries for the advisories that affect the queried version.
 pub fn report_advisories(
     dep: &Dependency,
@@ -78,7 +83,7 @@ pub fn report_advisories(
             aliases: advisory.aliases.clone(),
             severity: advisory.severity,
             summary: advisory.summary.clone(),
-            url: format!("https://osv.dev/vulnerability/{}", advisory.id),
+            url: osv_url(&advisory.id),
             fixed_in: current
                 .as_ref()
                 .and_then(|current| fixed_in(advisory, query, scheme, current)),

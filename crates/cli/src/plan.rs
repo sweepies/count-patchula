@@ -293,6 +293,23 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
     })
 }
 
+/// What writing a plan does with its skips: the applicable subset is written
+/// and every skip is reported with its reason. This is `patchula apply`'s
+/// behaviour, which the TUI shares — a plan never writes nothing just
+/// because some of it cannot land.
+pub fn outcomes<'a>(
+    plan: &'a Plan,
+    updates: &'a [&'a Update],
+) -> (Vec<&'a Update>, Vec<(&'a Update, &'a str)>) {
+    (
+        plan.applied.iter().map(|&i| updates[i]).collect(),
+        plan.skipped
+            .iter()
+            .map(|(i, reason)| (updates[*i], reason.as_str()))
+            .collect(),
+    )
+}
+
 /// The local directory's config, as the lookup used it.
 pub fn local(dir: &Path, config: Option<patchula_config::Config>) -> Result<Local, String> {
     let config = match config {

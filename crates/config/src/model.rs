@@ -1,5 +1,7 @@
 //! Typed, strict representation of the bundled Pkl schema.
-use patchula_words::{DependencyKind, Manager, ReleaseChannel, Source, Update, VersionPolicy};
+use patchula_words::{
+    DependencyKind, Manager, ReleaseChannel, Source, Update, VersionPolicy, Window,
+};
 use serde::{Deserialize, Serialize};
 
 patchula_words::words!(Rebase { Conflicts => "conflicts", Behind => "behind" });
@@ -118,13 +120,6 @@ pub struct PullRequests {
     pub branch: String,
     pub rebase: Rebase,
     pub batch_merge: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Window {
-    pub cron: Vec<String>,
-    pub zone: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

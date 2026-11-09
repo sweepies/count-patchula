@@ -256,7 +256,7 @@ fn records<'a>(
             aliases: advisory.aliases.clone(),
             severity: advisory.severity,
             summary: advisory.summary.clone(),
-            url: format!("https://osv.dev/vulnerability/{}", advisory.id),
+            url: crate::advisories::osv_url(&advisory.id),
             fixed_in: None,
         })
         .collect();

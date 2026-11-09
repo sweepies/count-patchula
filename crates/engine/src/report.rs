@@ -487,13 +487,7 @@ impl Engine {
                 },
                 source: dep.source,
                 kinds: dep.kinds(),
-                locations: vec![patchula_report::Location {
-                    start: dep.location.start,
-                    end: dep.location.end,
-                    line: dep.location.line,
-                    column: dep.location.column,
-                    pointer: dep.location.pointer.clone(),
-                }],
+                locations: vec![dep.location.clone().into()],
                 held_back,
                 stale,
                 lookup: eval.and_then(|eval| {

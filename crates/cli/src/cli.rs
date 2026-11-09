@@ -79,6 +79,17 @@ pub struct App {
     pub command: Option<Command>,
 }
 
+/// `--type`'s value: an update kind, listed in rank order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UpdateType(pub patchula_words::Update);
+impl usage_rs::spec::ValueEnum for UpdateType {
+    const CHOICES: &'static [&'static str] = &patchula_words::Update::RANKED_WORDS;
+
+    fn from_choice(value: &str) -> Option<Self> {
+        value.parse().ok().map(Self)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Color {
     Auto,
@@ -407,12 +418,8 @@ pub struct Apply {
     #[usage(long, value_name = "PATTERN")]
     pub dependency: Vec<String>,
     /// Only updates of this type; repeat for more.
-    #[usage(
-        long = "type",
-        choices("major", "minor", "patch", "pin", "digest"),
-        value_name = "TYPE"
-    )]
-    pub update_type: Vec<patchula_words::Update>,
+    #[usage(long = "type", value_enum, value_name = "TYPE")]
+    pub update_type: Vec<UpdateType>,
     /// Print the unified diff of what would be written, and write nothing.
     #[usage(long, conflicts = "--check")]
     pub dry_run: bool,
@@ -606,7 +613,10 @@ mod tests {
         };
         assert_eq!(
             apply.update_type,
-            [patchula_words::Update::Pin, patchula_words::Update::Digest]
+            [
+                UpdateType(patchula_words::Update::Pin),
+                UpdateType(patchula_words::Update::Digest)
+            ]
         );
         assert_eq!(apply.manager, ["github-actions"]);
         assert_eq!(apply.dependency, ["glob:actions/*"]);

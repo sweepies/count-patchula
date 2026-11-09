@@ -2358,6 +2358,7 @@ dependencies = [
  "jsonc-parser",
  "patchula-config",
  "patchula-mise",
+ "patchula-report",
  "patchula-versioning",
  "patchula-words",
  "regex",

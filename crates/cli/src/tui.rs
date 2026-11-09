@@ -75,38 +75,25 @@ const TABS: [(Tab, &str); 6] = [
 ];
 
 /// Which update classes the Updates tab shows; `t` cycles through them.
+/// `None` is every class; `Some` cycles through [`UpdateKind::RANKED`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Filter {
-    All,
-    Major,
-    Minor,
-    Patch,
-    Pin,
-    Digest,
-}
+pub struct Filter(pub Option<UpdateKind>);
 impl Filter {
+    /// Every update class.
+    pub const ALL: Self = Self(None);
     fn next(self) -> Self {
-        match self {
-            Filter::All => Filter::Major,
-            Filter::Major => Filter::Minor,
-            Filter::Minor => Filter::Patch,
-            Filter::Patch => Filter::Pin,
-            Filter::Pin => Filter::Digest,
-            Filter::Digest => Filter::All,
-        }
+        Self(match self.0 {
+            None => UpdateKind::RANKED.first().copied(),
+            Some(kind) => UpdateKind::RANKED
+                .get(usize::from(kind.rank()) + 1)
+                .copied(),
+        })
     }
     fn label(self) -> &'static str {
-        match self {
-            Filter::All => "all",
-            Filter::Major => "major",
-            Filter::Minor => "minor",
-            Filter::Patch => "patch",
-            Filter::Pin => "pin",
-            Filter::Digest => "digest",
-        }
+        self.0.map_or("all", UpdateKind::as_str)
     }
-    fn matches(self, kind: &str) -> bool {
-        self == Filter::All || self.label() == kind
+    fn matches(self, kind: UpdateKind) -> bool {
+        self.0.is_none_or(|filter| filter == kind)
     }
 }
 
@@ -437,12 +424,7 @@ impl Model {
             for file in &repo.package_files {
                 for dep in &file.dependencies {
                     *managers.entry(dep.manager.to_string()).or_default() += 1;
-                    let current = dep
-                        .current
-                        .value
-                        .clone()
-                        .or_else(|| dep.current.version.clone())
-                        .unwrap_or_default();
+                    let current = crate::updates::current(dep);
                     found.push(Found {
                         repository: repo.repository.clone(),
                         file: file.path.clone(),
@@ -501,7 +483,7 @@ impl Model {
             warnings,
             stats,
             repositories: report.repositories.len(),
-            filter: Filter::All,
+            filter: Filter::ALL,
             search: String::new(),
             cursor: 0,
             scroll: 0,
@@ -613,7 +595,7 @@ impl Model {
             .iter()
             .enumerate()
             .filter(|(_, u)| {
-                self.filter.matches(u.kind.as_str())
+                self.filter.matches(u.kind)
                     && self.query_matches(&[&u.name, &u.package, &u.file, u.manager.as_str()])
             })
             .map(|(i, _)| i)
@@ -675,11 +657,18 @@ impl Model {
             self.mode = Mode::Browse;
             self.message = Some(if yes {
                 match self.apply() {
-                    Ok((edits, files)) => format!(
-                        "The Count wrote {edits} update{} into {files} file{}. Refresh lockfiles with your package manager.",
-                        plural(edits),
-                        plural(files)
-                    ),
+                    Ok((edits, files, skipped)) => {
+                        let mut message = format!(
+                            "The Count wrote {edits} update{} into {files} file{}.",
+                            plural(edits),
+                            plural(files)
+                        );
+                        if !skipped.is_empty() {
+                            message.push_str(&format!(" Left alone: {}.", skipped.join("; ")));
+                        }
+                        message.push_str(" Refresh lockfiles with your package manager.");
+                        message
+                    }
                     Err(error) => format!("The Count stopped: {error}"),
                 }
             } else {
@@ -707,8 +696,13 @@ impl Model {
             Action::NextTab => self.switch(1),
             Action::PreviousTab => self.switch(TABS.len() - 1),
             Action::JumpTab => {
-                if let KeyCode::Char(c @ '1'..='6') = key.code {
-                    self.show((c as usize) - ('1' as usize));
+                if let KeyCode::Char(c) = key.code
+                    && let Some(index) = c
+                        .to_digit(10)
+                        .map(|digit| digit as usize)
+                        .filter(|digit| (1..=TABS.len()).contains(digit))
+                {
+                    self.show(index - 1);
                 }
             }
             Action::Down => self.cursor = (self.cursor + 1).min(rows.saturating_sub(1)),
@@ -787,36 +781,35 @@ impl Model {
         (self.cursor, self.scroll) = self.places[index];
     }
 
-    /// Write the selected updates into the local directory's files, all or
-    /// none as far as the filesystem allows. An error says what was written.
-    fn apply(&mut self) -> Result<(usize, usize), String> {
+    /// Write the selected updates into the local directory's files. As in
+    /// `patchula apply`, the applicable subset is written and each skip is
+    /// reported; an error says what was written.
+    fn apply(&mut self) -> Result<(usize, usize, Vec<String>), String> {
         let Origin::Local(local) = &self.origin else {
             return Err("not a local directory; nothing was written".into());
         };
         let selected: Vec<usize> = (0..self.updates.len())
             .filter(|&i| self.updates[i].pick == Pick::Selected)
             .collect();
-        let plan = plan(
-            local,
-            &selected
-                .iter()
-                .map(|&i| &self.updates[i])
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|error| format!("{error}; nothing was written"))?;
-        if let Some((_, reason)) = plan.skipped.first() {
-            return Err(format!("{reason}; nothing was written"));
-        }
+        let chosen: Vec<&Update> = selected.iter().map(|&i| &self.updates[i]).collect();
+        let plan = plan(local, &chosen).map_err(|error| format!("{error}; nothing was written"))?;
         if let Err(error) = plan.write(&local.dir) {
             // Whatever landed is in the tree now, so the tree's view follows it.
             self.uncommitted = uncommitted(&local.dir);
             return Err(error.to_string());
         }
         self.uncommitted = uncommitted(&local.dir);
-        for &index in &selected {
-            self.updates[index].pick = Pick::Applied;
+        let (applied, skipped) = crate::plan::outcomes(&plan, &chosen);
+        let edits = applied.len();
+        let files = plan.files.len();
+        let skipped: Vec<String> = skipped
+            .iter()
+            .map(|(update, reason)| format!("{}: {reason}", update.name))
+            .collect();
+        for &position in &plan.applied {
+            self.updates[selected[position]].pick = Pick::Applied;
         }
-        Ok((selected.len(), plan.files.len()))
+        Ok((edits, files, skipped))
     }
     /// Run copier for the confirmed template, with the terminal handed over
     /// to it, and say what it changed.
@@ -852,13 +845,7 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 fn kind_style(kind: UpdateKind) -> Style {
-    Style::new().fg(match kind {
-        UpdateKind::Major => palette::ERROR,
-        UpdateKind::Minor => palette::WARNING,
-        UpdateKind::Patch => palette::SUCCESS,
-        UpdateKind::Digest | UpdateKind::Pin => palette::ACCENT_DIM,
-    }
-    .tui())
+    Style::new().fg(palette::kind_colour(kind).tui())
 }
 fn age(published: Option<&str>) -> String {
     let Some(published) = published else {
@@ -1774,7 +1761,7 @@ mod tests {
         assert!(text.contains("Count Patchula"), "{text}");
         assert!(text.contains("zod") && text.contains("4.1.0") && text.contains("hono"));
         press(&mut model, KeyCode::Char('t'));
-        assert_eq!(model.filter, Filter::Major);
+        assert_eq!(model.filter, Filter(Some(UpdateKind::Major)));
         assert_eq!(model.visible().len(), 1);
         press(&mut model, KeyCode::Char('t'));
         press(&mut model, KeyCode::Char('/'));
@@ -1798,8 +1785,8 @@ mod tests {
         assert!(snapshot(&model).contains("major   zod 3.22.0 -> 4.1.0  (package.json)"));
     }
 
-    #[test]
-    fn selected_updates_are_written_to_local_files() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn selected_updates_are_written_to_local_files() {
         let dir = tempfile::tempdir().unwrap();
         let manifest =
             "{\n  \"dependencies\": {\n    \"zod\": \"3.22.0\",\n    \"hono\": \"4.6.0\"\n  }\n}\n";
@@ -1879,8 +1866,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn template_notices_are_listed_and_copier_runs_only_after_a_confirmed_u() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn template_notices_are_listed_and_copier_runs_only_after_a_confirmed_u() {
         let mut report = report(&[("zod", "3.22.0", "4.1.0", "major")]);
         report.repositories[0].notices = serde_json::from_value(serde_json::json!([{
             "manager":"copier","path":".copier-answers.yml","line":1,"name":"gh:acme/template",
@@ -2003,8 +1990,8 @@ mod tests {
         text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    #[test]
-    fn every_key_in_the_table_does_what_the_bar_and_help_say() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_key_in_the_table_does_what_the_bar_and_help_say() {
         for binding in KEYS {
             let tabs: Vec<Tab> = match binding.tab {
                 Some(tab) => vec![tab],
@@ -2066,8 +2053,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_bar_says_why_apply_is_off() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_bar_says_why_apply_is_off() {
         let report = report(&[("zod", "3.22.0", "4.1.0", "major")]);
         let mut server = Model::new(&report, Origin::Server);
         let text = flat(&sized(&mut server, 80, 24));
@@ -2089,8 +2076,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn apply_confirm_and_write_through_the_screen() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn apply_confirm_and_write_through_the_screen() {
         for (width, height) in [(80, 24), (120, 40)] {
             let (dir, mut model) = local_model(MANIFEST);
             press(&mut model, KeyCode::Char(' '));

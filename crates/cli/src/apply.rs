@@ -112,7 +112,7 @@ pub async fn command(
         .filter(|u| {
             (managers.is_empty() || managers.contains(&u.manager))
                 && names.matches_any(&u.name, &u.package)
-                && (types.is_empty() || types.contains(&u.kind))
+                && (types.is_empty() || types.iter().any(|t| t.0 == u.kind))
         })
         .collect();
     let filtered = all.len() - chosen.len();
@@ -163,12 +163,7 @@ pub async fn command(
     } else {
         0
     };
-    let applied: Vec<&updates::Update> = plan.applied.iter().map(|&i| chosen[i]).collect();
-    let skipped: Vec<(&updates::Update, &str)> = plan
-        .skipped
-        .iter()
-        .map(|(i, reason)| (chosen[*i], reason.as_str()))
-        .collect();
+    let (applied, skipped) = plan::outcomes(&plan, &chosen);
     let diffs: Vec<(&String, String)> = plan
         .files
         .iter()
@@ -400,8 +395,8 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn templates_run_in_turn_and_need_a_terminal_or_defaults() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn templates_run_in_turn_and_need_a_terminal_or_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let tree = dir.path().join("tree");
         std::fs::create_dir_all(tree.join("b")).unwrap();

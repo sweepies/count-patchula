@@ -58,18 +58,23 @@ fn short(digest: &str) -> String {
         .collect()
 }
 
+/// The current declaration as the CLI shows it: the declared value, or the
+/// resolved version when the declaration has none.
+pub fn current(dep: &patchula_report::Dependency) -> String {
+    dep.current
+        .value
+        .clone()
+        .or_else(|| dep.current.version.clone())
+        .unwrap_or_default()
+}
+
 /// Every proposed update in the report, one per dependency and target.
 pub fn updates(report: &Report) -> Vec<Update> {
     let mut updates = Vec::new();
     for repo in &report.repositories {
         for file in &repo.package_files {
             for dep in &file.dependencies {
-                let current = dep
-                    .current
-                    .value
-                    .clone()
-                    .or_else(|| dep.current.version.clone())
-                    .unwrap_or_default();
+                let current = current(dep);
                 let metadata = dep.metadata.as_ref();
                 let starts: Vec<usize> = metadata
                     .map(|m| m.locations.iter().map(|l| l.start).collect())
