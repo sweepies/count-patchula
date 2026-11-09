@@ -108,7 +108,7 @@ impl<T: DeserializeOwned> GraphqlPage<T> {
 
 /// The `rel="next"` target of a REST page's Link headers, resolved against
 /// the page URL. Errors on malformed links or more than one next.
-pub(crate) fn next_link(response: &Response, url: &Url) -> Result<Option<Url>> {
+pub fn next_link(response: &Response, url: &Url) -> Result<Option<Url>> {
     let mut next = None;
     // Link may occur in several fields. Split only outside angle/quoted
     // strings so commas in URIs or extension parameters are preserved.

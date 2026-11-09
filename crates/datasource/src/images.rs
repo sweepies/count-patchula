@@ -6,7 +6,6 @@ use crate::docker::{MANIFEST, identity, validate_digest};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_words::SbomSource;
 use reqwest::Method;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 const SPDX: &str = "https://spdx.dev/Document";
@@ -89,7 +88,7 @@ fn compact_platform(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http:
     let config: Value = serde_json::from_slice(bytes).map_err(|_| Document)?;
     let text = |field: &str| config[field].as_str().map(str::to_owned);
     serde_json::to_vec(&Platform {
-        sha256: hex(bytes),
+        sha256: sha256_hex(bytes),
         os: text("os"),
         architecture: text("architecture"),
         variant: text("variant"),
@@ -106,15 +105,8 @@ fn platform_name(os: &str, architecture: &str, variant: Option<&str>) -> String 
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 fn verified(body: &[u8], digest: &str) -> Result<Value> {
-    if format!("sha256:{}", hex(body)) != digest {
+    if format!("sha256:{}", sha256_hex(body)) != digest {
         return Err(Error::Invalid);
     }
     Ok(serde_json::from_slice(body)?)
@@ -167,7 +159,7 @@ fn purl(text: &str) -> Option<Purl> {
 /// around one, or on its own.
 fn compact_sbom(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     use patchula_http::CacheError::Document;
-    let sha256 = hex(bytes);
+    let sha256 = sha256_hex(bytes);
     let mut value: Value = serde_json::from_slice(bytes).map_err(|_| Document)?;
     if let Some(payload) = value["payload"].as_str() {
         let decoded = STANDARD.decode(payload).map_err(|_| Document)?;
@@ -342,11 +334,7 @@ impl Client {
         };
         let mut candidates = vec![digest.to_owned()];
         if let Some(manifests) = index["manifests"].as_array() {
-            let Some(child) = manifests.iter().find(|m| {
-                m["platform"]["os"] == os
-                    && m["platform"]["architecture"] == architecture
-                    && variant.is_none_or(|v| m["platform"]["variant"] == v)
-            }) else {
+            let Some(child) = platform_manifest(manifests, os, architecture, variant) else {
                 let first = manifests
                     .iter()
                     .map(|m| &m["platform"])

@@ -69,6 +69,7 @@ impl Client {
     pub(crate) async fn forge_tags(&self, package: &str) -> Result<Catalog> {
         let forge = forge(package)?;
         let mut versions = Vec::new();
+        let mut complete = false;
         for page in 1..=PAGES {
             let url = page_url(&forge, page);
             let (size, derived) = match forge.kind {
@@ -83,8 +84,14 @@ impl Client {
             let full = page.len() == size;
             versions.extend(page);
             if !full {
+                complete = true;
                 break;
             }
+        }
+        // Every fetched page was full at the page cap, so older tags may
+        // exist; a partial catalog must not pass as complete.
+        if !complete {
+            return Err(Error::Invalid);
         }
         sort(&mut versions, Ecosystem::Loose);
         Ok(Catalog {

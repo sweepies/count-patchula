@@ -529,11 +529,7 @@ impl Client {
                 });
             }
             let manifests = manifest["manifests"].as_array().ok_or(Error::Invalid)?;
-            let child = manifests
-                .iter()
-                .find(|m| {
-                    m["platform"]["os"] == "linux" && m["platform"]["architecture"] == "amd64"
-                })
+            let child = platform_manifest(manifests, "linux", "amd64", None)
                 .or_else(|| {
                     manifests.iter().find(|m| {
                         m["platform"]["os"]
@@ -575,22 +571,13 @@ impl Client {
             let page: Page = serde_json::from_slice(&response.body)?;
             let before = tags.len();
             tags.extend(page.tags.unwrap_or_default());
-            let next = response
-                .headers
-                .get("link")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| {
-                    v.split(',')
-                        .find(|v| v.contains("rel=\"next\"") || v.contains("rel=next"))
-                })
-                .and_then(|v| v.split_once('<')?.1.split_once('>').map(|v| v.0));
+            let next = patchula_github::next_link(&response, &url)?;
             let Some(next) = next else {
                 break;
             };
             if tags.len() == before {
                 return Err(Error::Invalid);
             }
-            let next = url.join(next).map_err(|_| Error::Invalid)?;
             if next.origin() != origin
                 || next.path() != url.path()
                 || !next.username().is_empty()
@@ -648,21 +635,12 @@ impl Client {
             }
             Err(error) => return Err(error),
         };
-        use sha2::{Digest, Sha256};
         let digest = response
             .headers
             .get("docker-content-digest")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned)
-            .unwrap_or_else(|| {
-                format!(
-                    "sha256:{}",
-                    Sha256::digest(&response.body)
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect::<String>()
-                )
-            });
+            .unwrap_or_else(|| format!("sha256:{}", sha256_hex(&response.body)));
         if !digest
             .strip_prefix("sha256:")
             .is_some_and(|v| v.len() == 64 && v.bytes().all(|c| c.is_ascii_hexdigit()))

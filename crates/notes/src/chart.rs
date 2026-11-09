@@ -3,6 +3,9 @@
 //! annotation (<https://artifacthub.io/docs/topics/annotations/helm/>).
 use super::*;
 
+/// Chart metadata reads at once.
+const CHART_FAN_OUT: usize = 4;
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Change {
@@ -195,7 +198,7 @@ impl Client {
                 let versions: Vec<String> = range.iter().map(|(_, v)| v.clone()).collect();
                 let read = stream::iter(versions)
                     .map(|version| async move { self.sources.oci_chart(&id.name, &version).await })
-                    .buffered(4)
+                    .buffered(CHART_FAN_OUT)
                     .collect::<Vec<_>>()
                     .await;
                 read.into_iter()

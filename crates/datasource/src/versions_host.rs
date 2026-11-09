@@ -3,6 +3,9 @@ use super::upstream::{MirrorEntry, MirrorList, mirror_url};
 use super::*;
 use futures_util::{StreamExt, stream};
 
+/// Mirror documents fetched at once.
+const MIRROR_FAN_OUT: usize = 16;
+
 fn fallback(error: &patchula_http::CacheError) -> bool {
     matches!(
         error,
@@ -118,7 +121,7 @@ impl Client {
                 };
                 (package, result)
             })
-            .buffer_unordered(16)
+            .buffer_unordered(MIRROR_FAN_OUT)
             .collect()
             .await)
     }

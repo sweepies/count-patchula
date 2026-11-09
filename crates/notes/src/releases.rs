@@ -84,7 +84,7 @@ impl Client {
                 .release_bodies(&repo, &tags.into_iter().collect::<Vec<_>>())
                 .await;
         }))
-        .buffer_unordered(4)
+        .buffer_unordered(self.sources.github.concurrency())
         .collect::<Vec<_>>()
         .await;
     }

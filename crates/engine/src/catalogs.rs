@@ -4,6 +4,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use patchula_datasource::Catalog;
 use patchula_report::CatalogEvidence;
 
+/// Saved catalogs read at once while deciding what to refetch.
+const READ_FAN_OUT: usize = 4;
+
 #[derive(Serialize, Deserialize)]
 struct Saved {
     fetched_at: i64,
@@ -62,7 +65,7 @@ impl Engine {
                 };
                 Ok::<_, Error>((key, saved))
             })
-            .buffer_unordered(4)
+            .buffer_unordered(READ_FAN_OUT)
             .collect::<Vec<_>>()
             .await;
         for cached in cached {

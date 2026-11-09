@@ -521,6 +521,28 @@ pub fn truncate(text: &str, limit: usize) -> &str {
     }
     &text[..end]
 }
+/// Lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+/// The child manifest an image index offers for `os`/`architecture`/
+/// `variant`, when it has an exact platform match.
+fn platform_manifest<'a>(
+    manifests: &'a [Value],
+    os: &str,
+    architecture: &str,
+    variant: Option<&str>,
+) -> Option<&'a Value> {
+    manifests.iter().find(|m| {
+        m["platform"]["os"] == os
+            && m["platform"]["architecture"] == architecture
+            && variant.is_none_or(|v| m["platform"]["variant"] == v)
+    })
+}
 pub fn escape_go(package: &str) -> Result<String> {
     let mut out = String::with_capacity(package.len());
     for c in package.chars() {

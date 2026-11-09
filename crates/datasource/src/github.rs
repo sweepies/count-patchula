@@ -2,7 +2,6 @@ use super::*;
 use futures_util::{StreamExt, stream};
 use patchula_github::GraphqlPage;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 /// The newest releases a catalog refresh starts from.
@@ -304,10 +303,7 @@ impl Client {
             .iter()
             .map(|reference| (&reference["ref"], &reference["object"]["sha"]))
             .collect();
-        let fingerprint: String = Sha256::digest(serde_json::to_vec(&identity)?)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let fingerprint = sha256_hex(&serde_json::to_vec(&identity)?);
         let catalog_scope = TagCatalogScope {
             package: package.into(),
             fingerprint,

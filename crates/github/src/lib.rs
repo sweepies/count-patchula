@@ -8,7 +8,7 @@ mod governor;
 mod pagination;
 pub use credentials::{Credentials, Token};
 pub use governor::{PrimaryLimit, Stats};
-pub use pagination::GraphqlPage;
+pub use pagination::{GraphqlPage, next_link};
 pub use patchula_http::{Network, Response, Transport};
 
 use governor::Governor;
