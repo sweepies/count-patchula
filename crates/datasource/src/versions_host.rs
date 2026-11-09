@@ -13,11 +13,8 @@ fn fallback(error: &patchula_http::CacheError) -> bool {
             | patchula_http::CacheError::Transport(_)
     )
 }
-/// A mirror entry as the typed release the catalog stores. Prereleases
-/// stay in the catalog: lookup decides from the parsed version whether
-/// one is permitted, so dropping them here would make the catalog depend
-/// on which transport produced it.
-fn release(entry: &MirrorEntry) -> Release {
+/// A mirror tag as the typed release the catalog stores, with its commit.
+fn tag(entry: &MirrorEntry) -> Release {
     Release {
         version: entry.tag.clone(),
         published_at: entry.date.clone(),
@@ -78,7 +75,7 @@ impl Client {
                 .map(|tag| {
                     Version::from(Release {
                         published_at: dates.get(&tag.tag).cloned().flatten(),
-                        ..release(tag)
+                        ..self::tag(tag)
                     })
                 })
                 .collect()
@@ -86,7 +83,14 @@ impl Client {
             releases
                 .releases
                 .iter()
-                .map(|entry| Version::from(release(entry)))
+                .filter(|entry| super::github::release_counts(false, entry.prerelease))
+                .map(|entry| {
+                    Version::from(Release {
+                        version: entry.tag.clone(),
+                        published_at: entry.date.clone(),
+                        digest: None,
+                    })
+                })
                 .collect()
         };
         let mut catalog = Catalog {

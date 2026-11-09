@@ -12,6 +12,11 @@ enum Head<'a> {
     /// walk fetches its own first page.
     Newest(Value),
 }
+/// Whether a GitHub release enters a release catalog: drafts and releases
+/// GitHub marks as prereleases never do, whichever source listed them.
+pub(crate) fn release_counts(draft: bool, prerelease: bool) -> bool {
+    !draft && !prerelease
+}
 const RELEASES: &str = "query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){releases(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}";
 const GIT_OBJECT_FIELDS: &str = "oid __typename ... on Tag{tagger{date} target{__typename ... on Commit{oid} ... on Tag{target{__typename ... on Commit{oid}}}}}";
 pub type TagDigests = BTreeMap<(String, String), std::result::Result<String, Failure>>;
@@ -210,7 +215,10 @@ impl Client {
                 };
                 let mut releases = Vec::with_capacity(page.nodes.len());
                 for node in &page.nodes {
-                    if node["isDraft"].as_bool() == Some(true) {
+                    if !release_counts(
+                        node["isDraft"].as_bool() == Some(true),
+                        node["isPrerelease"].as_bool() == Some(true),
+                    ) {
                         continue;
                     }
                     releases.push(Release {
