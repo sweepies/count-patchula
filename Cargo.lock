@@ -2358,6 +2358,7 @@ dependencies = [
  "jsonc-parser",
  "patchula-config",
  "patchula-mise",
+ "patchula-report",
  "patchula-versioning",
  "patchula-words",
  "regex",
@@ -2534,6 +2535,7 @@ version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
+ "usage-argv",
 ]
 
 [[package]]

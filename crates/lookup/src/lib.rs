@@ -7,7 +7,7 @@ use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use patchula_config::{Config, Filter, Patterns, Policy, Rule};
 use patchula_datasource::{Catalog, Version};
 use patchula_manager::Dependency;
-use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy, Window};
+use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy};
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
 use patchula_words::{DependencyKind, Manager, ReleaseChannel, Source, Update, VersionPolicy};
 use regex::Regex;
@@ -93,30 +93,19 @@ impl Evaluator {
     /// Shared catalogs use the shortest active update-class wait. A zero-age
     /// rule keeps normal freshness even if another class waits longer.
     pub fn catalog_wait_hours(&self, dep: &Dependency) -> u32 {
-        [
-            Update::Major,
-            Update::Minor,
-            Update::Patch,
-            Update::Pin,
-            Update::Digest,
-        ]
-        .into_iter()
-        .filter_map(|kind| self.effective(dep, kind).ok())
-        .filter(|effective| effective.policy.active)
-        .map(|effective| effective.policy.wait_hours)
-        .min()
-        .unwrap_or(0)
+        Update::ALL
+            .iter()
+            .copied()
+            .filter_map(|kind| self.effective(dep, kind).ok())
+            .filter(|effective| effective.policy.active)
+            .map(|effective| effective.policy.wait_hours)
+            .min()
+            .unwrap_or(0)
     }
     /// Effective class exclusions, including digest policy, are report evidence.
     pub fn disabled_updates(&self, dep: &Dependency) -> Result<Vec<Update>> {
         let mut disabled = Vec::new();
-        for kind in [
-            Update::Major,
-            Update::Minor,
-            Update::Patch,
-            Update::Pin,
-            Update::Digest,
-        ] {
+        for kind in Update::ALL.iter().copied() {
             let effective = self.effective(dep, kind)?;
             if self.ignored(dep)
                 || !effective.policy.active
@@ -1282,14 +1271,7 @@ fn proposal(
             versions: Some(policy.versions),
             channel: Some(policy.channel),
             wait_hours: policy.wait_hours,
-            windows: policy
-                .windows
-                .iter()
-                .map(|w| Window {
-                    cron: w.cron.clone(),
-                    zone: w.zone.clone(),
-                })
-                .collect(),
+            windows: policy.windows.clone(),
             merge: policy.merge,
             labels: policy.labels.clone(),
             commit_prefix: policy.commit_prefix.clone(),

@@ -74,11 +74,7 @@ pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
     let recheck = match app.recheck {
         Some(recheck) => Some(recheck),
         None => env("PATCHULA_RECHECK")?
-            .map(|value| {
-                value
-                    .parse::<patchula_words::Recheck>()
-                    .map_err(|_| invalid("PATCHULA_RECHECK must be now or next-run"))
-            })
+            .map(|value| crate::parse_recheck(&value))
             .transpose()?,
     };
     patchula_server::serve(patchula_server::Options {

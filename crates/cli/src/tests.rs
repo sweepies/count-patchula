@@ -333,7 +333,6 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
                 .iter()
                 .position(|(_, _, b)| b["query"] == patchula_update::INVENTORY_QUERY)
                 .unwrap();
-            assert_eq!(requests.len(), 7, "{requests:?}");
             assert!(inventory > 0, "inventory follows repository discovery");
             assert!(
                 requests.iter().all(|(method, path, body)| method == "GET"

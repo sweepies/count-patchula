@@ -578,15 +578,7 @@ fn build(
             if !secure || !update.fixes.is_empty() {
                 prefixes.insert(policy.commit_prefix.clone());
             }
-            let windows: Vec<patchula_config::Window> = policy
-                .windows
-                .iter()
-                .map(|w| patchula_config::Window {
-                    cron: w.cron.clone(),
-                    zone: w.zone.clone(),
-                })
-                .collect();
-            if !patchula_config::due(&windows, since, now) {
+            if !patchula_config::due(&policy.windows, since, now) {
                 keep(&mut hold, Hold::Window);
             }
         }

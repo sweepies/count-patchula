@@ -407,11 +407,7 @@ pub struct Apply {
     #[usage(long, value_name = "PATTERN")]
     pub dependency: Vec<String>,
     /// Only updates of this type; repeat for more.
-    #[usage(
-        long = "type",
-        choices("major", "minor", "patch", "pin", "digest"),
-        value_name = "TYPE"
-    )]
+    #[usage(long = "type", value_enum, value_name = "TYPE")]
     pub update_type: Vec<patchula_words::Update>,
     /// Print the unified diff of what would be written, and write nothing.
     #[usage(long, conflicts = "--check")]

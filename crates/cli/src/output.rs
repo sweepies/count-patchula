@@ -31,6 +31,9 @@ pub enum Paint {
     Success,
     Warning,
     Error,
+    /// One of the palette's colours directly, for mappings like an update
+    /// kind's that [`crate::palette`] owns.
+    Colour(palette::Colour),
 }
 
 impl Style {
@@ -75,6 +78,7 @@ impl Style {
             Paint::Success => colour(palette::SUCCESS),
             Paint::Warning => colour(palette::WARNING),
             Paint::Error => colour(palette::ERROR),
+            Paint::Colour(c) => colour(c),
         };
         if self.color && !text.is_empty() {
             format!("\x1b[{code}m{text}\x1b[0m")
@@ -310,12 +314,7 @@ fn pull_request_paint(status: PullRequestStatus) -> Paint {
 }
 
 pub fn kind_paint(kind: UpdateKind) -> Paint {
-    match kind {
-        UpdateKind::Major => Paint::Error,
-        UpdateKind::Minor => Paint::Warning,
-        UpdateKind::Patch => Paint::Success,
-        UpdateKind::Digest | UpdateKind::Pin => Paint::AccentDim,
-    }
+    Paint::Colour(palette::kind_colour(kind))
 }
 
 fn severity_paint(severity: Severity) -> Paint {
@@ -552,12 +551,13 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
                 } else {
                     format!("{} ({})", advisory.id, cves.join(", "))
                 };
+                // Advisories are judged against the resolved version, so it
+                // leads; the declaration display is the fallback.
                 let current = dep
                     .current
                     .version
                     .clone()
-                    .or_else(|| dep.current.value.clone())
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| updates::current(dep));
                 let paint = advisory.severity.map_or(Paint::Dim, severity_paint);
                 vec![
                     (severity, paint),
@@ -619,7 +619,6 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
     warnings(out, style, indent, &repo.warnings);
 }
 
-/// Failed lookups, each with its message under it.
 pub fn failures(
     out: &mut String,
     style: &Style,
@@ -650,7 +649,6 @@ pub fn failures(
     }
 }
 
-/// Notices, each with its compare link under it.
 pub fn notices(
     out: &mut String,
     style: &Style,

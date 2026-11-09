@@ -577,6 +577,16 @@ fn settings(scan: &cli::Scan) -> Result<patchula_config::settings::Settings, (u8
     Ok(settings)
 }
 
+/// `PATCHULA_RECHECK`'s value: `now` or `next-run`.
+fn parse_recheck(value: &str) -> Result<patchula_words::Recheck, (u8, miette::Report)> {
+    value.parse().map_err(|_| {
+        (
+            2,
+            miette::miette!("PATCHULA_RECHECK must be now or next-run"),
+        )
+    })
+}
+
 /// The checkbox wording: `--recheck`, then for runs `PATCHULA_RECHECK` and the
 /// settings file; `next-run` otherwise.
 fn recheck(
@@ -587,12 +597,7 @@ fn recheck(
     Ok(match app.recheck {
         Some(recheck) => recheck,
         None if run => match std::env::var(RECHECK_VAR) {
-            Ok(value) => value.parse().map_err(|_| {
-                (
-                    2,
-                    miette::miette!("PATCHULA_RECHECK must be now or next-run"),
-                )
-            })?,
+            Ok(value) => parse_recheck(&value)?,
             Err(std::env::VarError::NotPresent) => {
                 settings.recheck.unwrap_or(patchula_words::Recheck::NextRun)
             }
@@ -651,7 +656,7 @@ fn remote_flags(
     options: &cli::Lookup,
     run: Option<&cli::Run>,
 ) -> Vec<(&'static str, bool)> {
-    vec![
+    [
         ("all-repos", options.all_repos),
         (
             "allow-lockfile-pending",
@@ -666,6 +671,9 @@ fn remote_flags(
         ("recheck", app.recheck.is_some()),
         ("settings", options.scan.settings.is_some()),
     ]
+    .into_iter()
+    .filter(|(flag, _)| cli::remote_policy(flag) == Some(cli::RemotePolicy::Local))
+    .collect()
 }
 
 /// Where a lookup, run or tui batch reads from.

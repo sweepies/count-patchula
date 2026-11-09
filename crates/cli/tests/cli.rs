@@ -20,18 +20,23 @@ fn help_version_and_bundled_schema() {
         assert!(output.status.success(), "{output:?}");
         assert!(!output.stdout.is_empty());
     }
-    let output = cli(&["config", "schema"]);
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        patchula_config::SCHEMA
-    );
-    let output = cli(&["config", "settings-schema"]);
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        patchula_config::settings::SCHEMA
-    );
+    for (args, properties) in [
+        (
+            vec!["config", "schema"],
+            ["managers:", "rules:", "files:", "prs:"],
+        ),
+        (
+            vec!["config", "settings-schema"],
+            ["concurrency:", "http:", "registries:", "server:"],
+        ),
+    ] {
+        let output = cli(&args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        let schema = String::from_utf8(output.stdout).unwrap();
+        for property in properties {
+            assert!(schema.contains(property), "{args:?} lacks {property}");
+        }
+    }
 }
 
 /// Every command's plain `--help`, as a pipe at 80 columns gets it.

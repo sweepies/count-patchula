@@ -350,6 +350,47 @@ fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
     assert_eq!(shown.repositories[0].warnings, ["a config warning"]);
 }
 
+#[test]
+fn withheld_classifies_every_metadata_field() {
+    let dependency = json!({"manager": "npm", "name": "left-pad", "package": "left-pad",
+        "current": {"value": "^1.0.0", "version": "1.0.0", "digest": "sha256:abc"},
+        "updates": [],
+        "metadata": {"source": "npm", "kinds": ["production"],
+            "locations": [{"start": 0, "end": 9, "line": 1, "column": 1, "pointer": "/a"}],
+            "credentialed": true,
+            "tagDigests": {"v1.0.0": "d".repeat(40)},
+            "heldBack": [{"version": "2.0.0", "updateType": "major",
+                "publishedAt": "2026-11-01T00:00:00Z", "eligibleAt": "2026-11-02T00:00:00Z"}],
+            "stale": {"npm": 1},
+            "lookup": {"evaluatedAt": "2026-10-01T00:00:00Z", "disabledUpdates": [], "rejected": []},
+            "resolution": {"kind": "lockfile", "version": "1.0.0"},
+            "advisories": [{"id": "GHSA-aaaa-bbbb-cccc", "url": "https://osv.dev/vulnerability/GHSA-aaaa-bbbb-cccc"}]}});
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 6, "repositories": [{
+        "repository": "acme/app", "status": "complete", "reason": null,
+        "packageFiles": [{"path": "package.json", "dependencies": [dependency]}]}]}))
+    .unwrap();
+    let shown = withheld(&report);
+    let dep = &shown.repositories[0].package_files[0].dependencies[0];
+    // What the declaration itself says stays.
+    assert_eq!(dep.current.value.as_deref(), Some("^1.0.0"));
+    assert_eq!(dep.current.digest.as_deref(), Some("sha256:abc"));
+    assert_eq!(dep.current.version, None);
+    let meta = dep.metadata.as_ref().unwrap();
+    assert_eq!(meta.source, patchula_words::Source::Npm);
+    assert_eq!(meta.kinds, [patchula_words::DependencyKind::Production]);
+    assert_eq!(meta.locations.len(), 1);
+    assert!(meta.credentialed);
+    // Everything a credentialed lookup could have found is gone.
+    assert!(meta.tag_digests.is_empty());
+    assert!(meta.held_back.is_empty());
+    assert!(meta.stale.is_empty());
+    assert!(meta.lookup.is_none());
+    assert!(meta.resolution.is_none());
+    assert!(meta.advisories.is_empty());
+    assert!(meta.image.is_none());
+    assert!(dep.updates.is_empty());
+}
+
 #[tokio::test]
 async fn only_a_private_repository_is_stored_without_what_credentials_found() {
     let chart = "https://acme.jfrog.io/artifactory/api/helm/charts|app";

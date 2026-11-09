@@ -144,7 +144,7 @@ pub async fn command(
         (String::new(), true)
     };
     // Conflicts are the planner's to report, the same skips the TUI shows.
-    chosen.sort_by_key(|u| u.kind.rank());
+    chosen.sort_by_key(|u| u.kind);
     chosen.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
     let plan = plan::plan(&local, &chosen).map_err(|e| (1, miette::miette!("{e}")))?;
     let writes = !options.dry_run && !options.check;
@@ -163,12 +163,7 @@ pub async fn command(
     } else {
         0
     };
-    let applied: Vec<&updates::Update> = plan.applied.iter().map(|&i| chosen[i]).collect();
-    let skipped: Vec<(&updates::Update, &str)> = plan
-        .skipped
-        .iter()
-        .map(|(i, reason)| (chosen[*i], reason.as_str()))
-        .collect();
+    let (applied, skipped) = plan::outcomes(&plan, &chosen);
     let diffs: Vec<(&String, String)> = plan
         .files
         .iter()
@@ -400,8 +395,8 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn templates_run_in_turn_and_need_a_terminal_or_defaults() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn templates_run_in_turn_and_need_a_terminal_or_defaults() {
         let dir = tempfile::tempdir().unwrap();
         let tree = dir.path().join("tree");
         std::fs::create_dir_all(tree.join("b")).unwrap();

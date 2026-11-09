@@ -72,6 +72,17 @@ impl Location {
         }
     }
 }
+impl From<Location> for patchula_report::Location {
+    fn from(location: Location) -> Self {
+        Self {
+            start: location.start,
+            end: location.end,
+            line: location.line,
+            column: location.column,
+            pointer: location.pointer,
+        }
+    }
+}
 /// How the value at `Dependency::location` is spelled, which the parser that
 /// extracted it knows: `edits` decodes and re-encodes it with this rather
 /// than inferring a syntax from the manager, file or pointer.

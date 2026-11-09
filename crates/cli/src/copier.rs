@@ -4,10 +4,9 @@
 //! lookups, runs, the server and `--remote` never reach it. Copier inherits
 //! the terminal so it can ask its own questions. The Count never passes
 //! `--trust` and never commits.
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use patchula_process::Executor as _;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Outcome {
@@ -17,19 +16,29 @@ pub struct Outcome {
     pub conflicts: Vec<String>,
 }
 
+/// Git in `dir`, through the same executor and timeout as the rest of the
+/// CLI: a hung git cannot stall copier forever. Callers run inside the
+/// binary's Tokio runtime, so the future is blocked on here.
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .map_err(|e| format!("copier needs git to check the working tree: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "copier needs a git checkout: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    let output = futures_executor::block_on(patchula_process::SystemExecutor.run(
+        patchula_process::CommandSpec {
+            program: "git".into(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: dir.to_owned(),
+            env: std::env::vars_os().collect(),
+            secrets: Vec::new(),
+            timeout: crate::GIT_TIMEOUT,
+            output_limit: 1 << 16,
+            complete_output: false,
+        },
+    ))
+    .map_err(|failure| match failure {
+        patchula_process::Failure::Exited { stderr, .. } => {
+            format!("copier needs a git checkout: {}", stderr.trim())
+        }
+        failure => format!("copier needs git to check the working tree: {failure}"),
+    })?;
+    Ok(String::from_utf8_lossy(&output).into_owned())
 }
 
 /// Paths `git status` reports in the checkout holding `dir`, relative to its
@@ -152,8 +161,8 @@ mod tests {
         (dir, fake.to_string_lossy().into_owned())
     }
 
-    #[test]
-    fn copier_runs_for_the_template_and_reports_touched_files_and_conflicts() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn copier_runs_for_the_template_and_reports_touched_files_and_conflicts() {
         let (dir, fake) = checkout(
             "printf '_commit: v1.6.0\\n' > api/.copier-answers.yml\nprintf '<<<<<<< before updating\\nold\\n=======\\nnew\\n>>>>>>> after updating\\n' > README.md\necho rejected > api/ci.yml.rej\nexit 0",
         );
@@ -179,8 +188,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn from_a_subdirectory_paths_and_conflicts_are_found_from_the_git_root() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn from_a_subdirectory_paths_and_conflicts_are_found_from_the_git_root() {
         let (dir, fake) = checkout(
             "printf '_commit: v1.6.0\n' > .copier-answers.yml
 printf '<<<<<<< before updating\n' > notes.md",
@@ -200,8 +209,8 @@ printf '<<<<<<< before updating\n' > notes.md",
         );
     }
 
-    #[test]
-    fn a_dirty_tree_is_refused_before_copier_runs() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dirty_tree_is_refused_before_copier_runs() {
         let (dir, fake) = checkout("exit 0");
         let tree = dir.path().join("tree");
         std::fs::write(tree.join("notes.txt"), "draft\n").unwrap();
@@ -210,8 +219,8 @@ printf '<<<<<<< before updating\n' > notes.md",
         assert!(!dir.path().join("args").exists());
     }
 
-    #[test]
-    fn a_failed_copier_says_how_to_trust_the_template_yourself() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_copier_says_how_to_trust_the_template_yourself() {
         let (dir, fake) =
             checkout("echo 'Template uses potentially unsafe feature: tasks.' >&2\nexit 1");
         let tree = dir.path().join("tree");
