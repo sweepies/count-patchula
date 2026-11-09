@@ -8,12 +8,14 @@ mod cleanup;
 pub mod dashboard;
 pub mod markers;
 mod receipts;
+mod settle;
 pub mod text;
 mod trailers;
 pub use cleanup::{cleanup, delete_owned, owned};
 pub use receipts::{
-    INVENTORY_QUERY, Inventory, restore_inventory, restore_unchanged, save_receipts,
+    INVENTORY_QUERY, Inventory, RestoreOutcome, restore_inventory, restore_unchanged, save_receipts,
 };
+pub use settle::{Settlement, settle};
 pub mod lockfiles;
 mod plan;
 mod write;

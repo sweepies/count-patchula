@@ -126,7 +126,17 @@ fn fallback(repository: &Repository, plan: &Plan, reason: &str) {
     tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         branch = %plan.action().branch, reason, "write receipt verification fallback");
 }
-fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> bool {
+/// What settling from verified receipts concluded for a repository's plans.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreOutcome {
+    /// Every plan settled and no owned branch is obsolete: nothing needs
+    /// writing, and the shared tail reconciles from this inventory alone.
+    Complete,
+    /// Some plan or branch still needs the full write path.
+    Partial,
+}
+
+fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> RestoreOutcome {
     for plan in plans
         .iter()
         .filter(|p| p.action().status == BranchStatus::Planned)
@@ -135,7 +145,7 @@ fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> bool {
     }
     tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         restored = 0, complete = false, reason, "write receipts restored");
-    false
+    RestoreOutcome::Partial
 }
 
 pub(crate) fn rest_pr(pr: &Value) -> Option<Value> {
@@ -153,7 +163,7 @@ pub(crate) fn rest_pr(pr: &Value) -> Option<Value> {
 
 /// One fresh paginated inventory replaces every per-branch verification when
 /// the head, intent and complete PR state still match a successful receipt.
-/// Returns true only when obsolete-head cleanup can also be skipped.
+/// `Complete` means obsolete-head cleanup can also be skipped.
 pub async fn restore_unchanged(
     client: &Client,
     cache: &Cache,
@@ -162,7 +172,7 @@ pub async fn restore_unchanged(
     plans: &mut [Plan],
     recheck: Recheck,
     server: Option<&str>,
-) -> Result<bool, String> {
+) -> Result<RestoreOutcome, String> {
     let inventory = Inventory::read(client, cache, repository, config).await?;
     restore_inventory(
         cache, repository, config, plans, recheck, server, &inventory,
@@ -182,6 +192,10 @@ pub struct Inventory {
     /// The default branch's recent check rollups and protection, for tooling
     /// warnings.
     pub default_branch: Value,
+    /// Branch names whose labels or associated pull requests did not fit in
+    /// the query's first page. Their PR view is incomplete, so the receipts
+    /// fast path must not settle from this inventory.
+    pub unsettled: BTreeSet<String>,
 }
 impl Inventory {
     pub fn pull_requests(&self, repo: &str) -> Vec<Value> {
@@ -279,6 +293,19 @@ impl Inventory {
                 result.merged_prs =
                     crate::automerge::load_history(cache, &repository.repository, &result.actor)
                         .await?;
+                // Labels and associated pull requests come back only to their
+                // first page; anything past it is invisible here, so the
+                // branch cannot settle from receipts.
+                for r in &result.refs {
+                    let prs = &r["associatedPullRequests"];
+                    let mut partial = prs["pageInfo"]["hasNextPage"].as_bool() != Some(false);
+                    for pr in prs["nodes"].as_array().into_iter().flatten() {
+                        partial |= pr["labels"]["pageInfo"]["hasNextPage"].as_bool() != Some(false);
+                    }
+                    if partial && let Some(name) = r["name"].as_str() {
+                        result.unsettled.insert(name.into());
+                    }
+                }
                 return Ok(result);
             }
             if result.refs.len() + result.issues.len() > 100_000 {
@@ -297,7 +324,7 @@ pub async fn restore_inventory(
     recheck: Recheck,
     server: Option<&str>,
     inventory: &Inventory,
-) -> Result<bool, String> {
+) -> Result<RestoreOutcome, String> {
     let receipts = cache
         .state::<Receipts>(&receipts_scope(&repository.repository, &config.prs.branch))
         .await
@@ -384,12 +411,17 @@ pub async fn restore_inventory(
         }
     }
     let complete = !obsolete
+        && inventory.unsettled.is_empty()
         && plans
             .iter()
             .all(|p| p.action().status != BranchStatus::Planned);
     tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
-        restored, complete, obsolete, "write receipts restored");
-    Ok(complete)
+        restored, complete, obsolete, unsettled = inventory.unsettled.len(), "write receipts restored");
+    Ok(if complete {
+        RestoreOutcome::Complete
+    } else {
+        RestoreOutcome::Partial
+    })
 }
 
 fn restore_write(

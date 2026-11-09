@@ -62,13 +62,15 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
 
 /// Inspect all heads, regardless of naming, and remove obsolete owned branches
 /// with a lease on the branch head, once the default branch is confirmed not to
-/// have moved since it was read. Dry runs deliberately perform no API requests.
+/// have moved since it was read. `actor` is the run's one viewer login, read
+/// with the inventory. Dry runs deliberately perform no API requests.
 pub async fn cleanup(
     client: &Client,
     repo: &str,
     base: &str,
     default_branch: &str,
     plans: &[Plan],
+    actor: &str,
     dry_run: bool,
 ) -> Result<Vec<BranchAction>, String> {
     if dry_run {
@@ -90,13 +92,6 @@ pub async fn cleanup(
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    let viewer = client
-        .graphql("query{viewer{login}}", json!({}))
-        .await
-        .map_err(|e| e.to_string())?;
-    let actor = viewer["viewer"]["login"]
-        .as_str()
-        .ok_or("missing viewer login")?;
     let metadata = client
         .get_fresh(&format!("repos/{repo}"))
         .await

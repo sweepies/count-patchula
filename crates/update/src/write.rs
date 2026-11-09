@@ -69,13 +69,15 @@ struct Base {
     tree_sha: String,
     entries: Vec<Value>,
     default_branch: String,
-    actor: tokio::sync::OnceCell<String>,
+    /// The run's one viewer login, read with the inventory.
+    actor: String,
 }
 async fn prepare(
     client: &Client,
     repo: &str,
     base_commit: &str,
     default_branch: &str,
+    actor: &str,
 ) -> Result<Base, Refusal> {
     let metadata = fresh(client, &format!("repos/{repo}")).await?;
     if field(&metadata, "default_branch")? != default_branch {
@@ -106,17 +108,19 @@ async fn prepare(
         node_id: field(&metadata, "node_id")?.into(),
         tree_sha,
         entries: tree["tree"].as_array().ok_or("missing Git tree")?.clone(),
-        actor: tokio::sync::OnceCell::new(),
+        actor: actor.into(),
     })
 }
 
 /// Shared base validation, bounded independent branch preparation and governed writes.
-/// Dry runs end at the pure planner and send no GitHub requests here.
+/// `actor` is the run's one viewer login, read with the inventory. Dry runs
+/// end at the pure planner and send no GitHub requests here.
 pub async fn apply_all(
     client: &Client,
     plans: &mut [Plan],
     snapshot: &Snapshot,
     default_branch: &str,
+    actor: &str,
     rebase: Rebase,
     dry_run: bool,
 ) {
@@ -140,6 +144,7 @@ pub async fn apply_all(
         &first.action().repository,
         &first.action().base_commit,
         default_branch,
+        actor,
     )
     .await;
     let pending: std::collections::BTreeSet<_> = plans
@@ -282,17 +287,7 @@ async fn apply_inner(
     plan.record_head(old.clone());
     let mut moved_base = false;
     if let Some(old) = &old {
-        let actor = base
-            .actor
-            .get_or_try_init(|| async {
-                let viewer = client
-                    .graphql("query{viewer{login}}", json!({}))
-                    .await
-                    .map_err(|e| e.to_string())?;
-                field(&viewer["viewer"], "login").map(str::to_owned)
-            })
-            .await?;
-        let actor = actor.as_str();
+        let actor = base.actor.as_str();
         let existing_tip = fresh(client, &format!("repos/{repo}/git/commits/{old}")).await?;
         let tip_message = existing_tip["message"].as_str().unwrap_or("");
         if trailers::base(tip_message).is_none() {
