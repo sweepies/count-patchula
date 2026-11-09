@@ -309,6 +309,16 @@ pub fn problem(path: &Path, source: &str, field: &str, message: &str) -> miette:
     })
 }
 
+/// A settings file's problem at `field`, its span highlighted when the file
+/// still reads. `None` — the schema's defaults — or an unreadable file gets
+/// the bare message.
+pub fn settings_problem(path: Option<&Path>, field: &str, message: &str) -> miette::Report {
+    match path.and_then(|path| std::fs::read_to_string(path).ok().map(|s| (path, s))) {
+        Some((path, source)) => problem(path, &source, field, message),
+        None => miette::miette!("{message}"),
+    }
+}
+
 mod matching;
 pub use matching::{Filter, Patterns};
 

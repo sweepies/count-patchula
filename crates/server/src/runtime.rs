@@ -54,9 +54,7 @@ pub struct Options {
 pub async fn serve(options: Options) -> miette::Result<()> {
     let settings = Settings::load(&options.settings)?;
     patchula_engine::settings::check(&settings).map_err(|(field, message)| {
-        std::fs::read_to_string(&options.settings)
-            .map(|source| patchula_config::problem(&options.settings, &source, field, message))
-            .unwrap_or_else(|_| miette::miette!("{message}"))
+        patchula_config::settings_problem(Some(&options.settings), field, message)
     })?;
     let settings = Reload::new(settings);
     serve_with_settings(options, settings)
@@ -588,6 +586,34 @@ impl Engines {
         Ok(slot)
     }
 }
+/// The installation's engine slot while a remote run holds it. A run ends
+/// three ways: it returns, it panics, or its future is dropped — the remote
+/// time limit cancels a hung run mid-await. Only a returned run leaves the
+/// engine in place: a panic or a dropped run may have left half-done state,
+/// so the slot is emptied however the guard drops.
+struct SlotGuard {
+    slot: tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>,
+    armed: bool,
+}
+impl SlotGuard {
+    fn engine(&mut self) -> Result<&mut Engine, &'static str> {
+        self.slot
+            .as_mut()
+            .map(|(_, engine)| engine)
+            .ok_or("missing batch engine")
+    }
+    /// The run returned; the engine it used is whole, so keep it.
+    fn finish(mut self) {
+        self.armed = false;
+    }
+}
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            *self.slot = None;
+        }
+    }
+}
 impl crate::remote::Runner for Engines {
     fn run<'a>(
         &'a self,
@@ -603,23 +629,20 @@ impl crate::remote::Runner for Engines {
             let (report, withheld) = {
                 // The installation's own lock, so a remote run never races its
                 // queued batches.
-                let mut slot = self.engine(installation, settings).await.map_err(|e| e.0)?;
-                let outcome = std::panic::AssertUnwindSafe(async {
-                    let (_, engine) = slot.as_mut().ok_or("missing batch engine")?;
-                    let options = patchula_engine::Options {
-                        repositories,
-                        ..patchula_engine::Options::default()
-                    };
-                    match mode {
-                        Mode::Lookup => engine.lookup(options).await,
-                        Mode::DryRun => engine.run(options, true, false).await,
-                        Mode::Run => engine.run(options, false, false).await,
-                    }
-                    .map_err(|_| "the run failed on the server")
-                })
-                .catch_unwind()
-                .await;
-                let report = discard_on_panic(&mut slot, outcome)?;
+                let slot = self.engine(installation, settings).await.map_err(|e| e.0)?;
+                let mut slot = SlotGuard { slot, armed: true };
+                let options = patchula_engine::Options {
+                    repositories,
+                    ..patchula_engine::Options::default()
+                };
+                let result = match mode {
+                    Mode::Lookup => slot.engine()?.lookup(options).await,
+                    Mode::DryRun => slot.engine()?.run(options, true, false).await,
+                    Mode::Run => slot.engine()?.run(options, false, false).await,
+                }
+                .map_err(|_| "the run failed on the server");
+                slot.finish();
+                let report = result?;
                 let withheld = crate::public::withheld(&report);
                 (report, withheld)
             };

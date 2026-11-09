@@ -174,6 +174,13 @@ mod tests {
             Ok(settings) => check(&settings).is_err(),
         }
     }
+    /// The field `check` names for a file that loads but breaks an
+    /// engine-side rule, so callers can point at it in the source.
+    fn field(path: &std::path::Path, body: &str) -> &'static str {
+        std::fs::write(path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
+        let settings = Settings::load(path).unwrap();
+        check(&settings).unwrap_err().0
+    }
 
     #[test]
     fn http_settings_are_validated_where_the_client_options_are_built() {
@@ -337,5 +344,74 @@ mod tests {
         ] {
             assert!(rejected(&path, &bad.replace("; ", "\n")), "{bad}");
         }
+    }
+
+    #[test]
+    fn check_names_the_field_each_rule_is_about() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.pkl");
+        // A registry prefix that is not an https URL prefix.
+        assert_eq!(
+            field(
+                &path,
+                r#"registries { ["http://acme.jfrog.io"] { auth = "bearer"; secret { env = "T" } } }"#
+            ),
+            "registries"
+        );
+        // Two keys that normalise to the same prefix.
+        assert_eq!(
+            field(
+                &path,
+                r#"registries { ["https://acme.jfrog.io"] { auth = "bearer"; secret { env = "T" } } ["https://acme.jfrog.io/"] { auth = "bearer"; secret { env = "U" } } }"#
+            ),
+            "registries"
+        );
+        // A mirror that is not an https URL prefix.
+        assert_eq!(
+            field(
+                &path,
+                r#"registries { ["https://nexus.acme.dev"] { mirrorOf = "http://registry.npmjs.org" } }"#
+            ),
+            "mirrorOf"
+        );
+        // Two entries mirroring the same public registry.
+        assert_eq!(
+            field(
+                &path,
+                r#"registries { ["https://nexus.acme.dev/a"] { mirrorOf = "https://registry.npmjs.org" } ["https://nexus.acme.dev/b"] { mirrorOf = "https://registry.npmjs.org/" } }"#
+            ),
+            "mirrorOf"
+        );
+        // A tools prefix an .npmrc key cannot carry.
+        assert_eq!(
+            field(
+                &path,
+                r#"registries { ["https://nexus.acme.dev/a=b"] { auth = "bearer"; secret { env = "T" }; tools = true } }"#
+            ),
+            "tools"
+        );
+        // A registry nested under a tools entry.
+        assert_eq!(
+            field(
+                &path,
+                r#"registries { ["https://nexus.acme.dev"] { auth = "bearer"; secret { env = "T" }; tools = true } ["https://nexus.acme.dev/npm-proxy"] { mirrorOf = "https://registry.npmjs.org" } }"#
+            ),
+            "tools"
+        );
+        // Host concurrency the HTTP client refuses.
+        assert_eq!(
+            field(
+                &path,
+                r#"http { hostConcurrency { ["API.github.com"] = 8 } }"#
+            ),
+            "http.hostConcurrency"
+        );
+        assert_eq!(
+            field(
+                &path,
+                r#"http { hostConcurrency { ["api.github.com"] = 0 } }"#
+            ),
+            "http.hostConcurrency"
+        );
     }
 }

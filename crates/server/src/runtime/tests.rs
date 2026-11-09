@@ -1575,3 +1575,64 @@ async fn webhooks_keep_the_public_repositories_current() {
         "a rename drops the old name"
     );
 }
+
+/// Hangs on every request, so a run can only end when its future is
+/// dropped — what the remote time limit does to a hung run.
+struct Hang {
+    started: Arc<tokio::sync::Notify>,
+}
+impl Transport for Hang {
+    fn send(&self, _request: reqwest::Request) -> patchula_http::Exchange<'_> {
+        Box::pin(async move {
+            self.started.notify_one();
+            std::future::pending().await
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_dropped_remote_run_discards_its_engine() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let transport: Arc<dyn Transport> = Arc::new(Hang {
+        started: started.clone(),
+    });
+    let runner = Engines {
+        app: lookup_app(transport.clone(), 1),
+        transport,
+        cache: Cache::open(":memory:", Default::default()).await.unwrap(),
+        engines: Mutex::new(BTreeMap::new()),
+        recheck: None,
+        bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
+    };
+    let settings = settings();
+    let mut run = crate::remote::Runner::run(
+        &runner,
+        1,
+        vec!["owner/repo".to_owned()],
+        crate::remote::Mode::Lookup,
+        "writer",
+        &settings,
+    );
+    tokio::select! {
+        result = run.as_mut() => panic!("the run finished: {result:?}"),
+        _ = started.notified() => {}
+    }
+    // The engine was built and the run holds its slot inside the lookup.
+    let slot = runner
+        .engines
+        .lock()
+        .await
+        .get(&1)
+        .cloned()
+        .expect("the run has no engine slot");
+    assert!(
+        slot.try_lock().is_err(),
+        "the run does not hold its engine slot"
+    );
+    // Dropping the run's future — the time limit's cancellation — empties
+    // the slot, so the next run never reuses a half-done engine.
+    drop(run);
+    assert!(slot.lock().await.is_none(), "a dropped run kept its engine");
+}

@@ -283,10 +283,9 @@ fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Re
             let settings =
                 patchula_config::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
             patchula_engine::settings::check(&settings).map_err(|(field, message)| {
-                let source = std::fs::read_to_string(&check.path).unwrap_or_default();
                 (
                     2,
-                    patchula_config::problem(&check.path, &source, field, message),
+                    patchula_config::settings_problem(Some(&check.path), field, message),
                 )
             })?;
             writeln!(
@@ -561,10 +560,21 @@ async fn remote_report(
 
 /// Operator settings: `--settings`, then `PATCHULA_SETTINGS`, then
 /// `patchula/settings.pkl` in the user config directory when it exists, else
-/// the schema's defaults.
+/// the schema's defaults. The full check runs here, before tokens, secrets
+/// or the cache are touched, and a failure points into the file.
 fn settings(scan: &cli::Scan) -> Result<patchula_config::settings::Settings, (u8, miette::Report)> {
-    patchula_config::settings::Settings::for_cli(scan.settings.as_deref(), user::settings_file())
-        .map_err(|e| (2, e))
+    let (path, settings) = patchula_config::settings::Settings::for_cli(
+        scan.settings.as_deref(),
+        user::settings_file(),
+    )
+    .map_err(|e| (2, e))?;
+    patchula_engine::settings::check(&settings).map_err(|(field, message)| {
+        (
+            2,
+            patchula_config::settings_problem(path.as_deref(), field, message),
+        )
+    })?;
+    Ok(settings)
 }
 
 /// The checkbox wording: `--recheck`, then for runs `PATCHULA_RECHECK` and the
@@ -1092,9 +1102,6 @@ async fn report(
         Source::Local(dir, config) => (Vec::new(), Some(dir), config.map(|config| *config)),
     };
     let settings = settings(scan)?;
-    // Reject a bad settings file before tokens, secrets or the cache are touched.
-    patchula_engine::settings::check(&settings)
-        .map_err(|(_, message)| (2, miette::miette!("{message}")))?;
     let concurrency = scan.concurrency.unwrap_or(settings.concurrency);
     let recheck = recheck(app, run.is_some(), &settings)?;
     let (credentials, failed) = patchula_engine::settings::credentials(&settings, None);

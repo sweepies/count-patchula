@@ -101,3 +101,23 @@ pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
     .map(|()| 0)
     .map_err(|e| (1, e))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_secret_file_keeps_non_utf8_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("key");
+        std::fs::write(&key, [0xff, 0xfe, b'\n']).unwrap();
+        assert_eq!(
+            secret(
+                Some(&key),
+                "PATCHULA_TEST_SERVER_KEY_FILE",
+                "PATCHULA_TEST_SERVER_KEY",
+            )
+            .unwrap(),
+            [0xff, 0xfe]
+        );
+    }
+}

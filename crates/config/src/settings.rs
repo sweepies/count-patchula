@@ -70,10 +70,21 @@ impl Secret {
     /// key file is bytes. Errors name where the secret should be, never what
     /// it is.
     pub fn read_bytes(&self) -> Result<Vec<u8>, String> {
+        self.read_bytes_with(|name| std::env::var_os(name))
+    }
+    /// `read_bytes` with the environment lookup injected, so tests never
+    /// touch the process environment.
+    fn read_bytes_with(
+        &self,
+        var: impl Fn(&str) -> Option<std::ffi::OsString>,
+    ) -> Result<Vec<u8>, String> {
         let value = match (&self.env, &self.file) {
-            (Some(name), None) => std::env::var_os(name)
-                .map(|value| os_bytes(&value))
-                .ok_or_else(|| format!("environment variable {name} is not set"))?,
+            (Some(name), None) => {
+                let value =
+                    var(name).ok_or_else(|| format!("environment variable {name} is not set"))?;
+                os_bytes(&value)
+                    .ok_or_else(|| format!("environment variable {name} is not valid Unicode"))?
+            }
             (None, Some(path)) => {
                 std::fs::read(path).map_err(|_| format!("cannot read {}", path.display()))?
             }
@@ -95,15 +106,16 @@ impl Secret {
     }
 }
 /// An environment variable's bytes. Unix keeps them as they are; elsewhere
-/// they arrive as text already.
+/// a variable is text, and one that is not valid Unicode is refused rather
+/// than silently altered into a different secret.
 #[cfg(unix)]
-fn os_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
+fn os_bytes(value: &std::ffi::OsStr) -> Option<Vec<u8>> {
     use std::os::unix::ffi::OsStrExt;
-    value.as_bytes().to_vec()
+    Some(value.as_bytes().to_vec())
 }
 #[cfg(not(unix))]
-fn os_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
-    value.to_string_lossy().into_owned().into_bytes()
+fn os_bytes(value: &std::ffi::OsStr) -> Option<Vec<u8>> {
+    value.to_str().map(|text| text.as_bytes().to_vec())
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -338,10 +350,15 @@ impl Settings {
     /// The settings for `lookup`, `run`, `apply` and `tui`: the file `flag` or
     /// `PATCHULA_SETTINGS` names, else `user` — the user's
     /// `patchula/settings.pkl` — when it exists, else the schema's defaults.
-    pub fn for_cli(flag: Option<&Path>, user: Option<PathBuf>) -> miette::Result<Self> {
+    /// The file's path comes back with the settings so a later check can
+    /// point into it; it is `None` for the defaults.
+    pub fn for_cli(
+        flag: Option<&Path>,
+        user: Option<PathBuf>,
+    ) -> miette::Result<(Option<PathBuf>, Self)> {
         match named(flag).or_else(|| user.filter(|path| path.is_file())) {
-            Some(path) => Self::load(&path),
-            None => Ok(Self::default()),
+            Some(path) => Self::load(&path).map(|settings| (Some(path), settings)),
+            None => Ok((None, Self::default())),
         }
     }
     /// The settings file `patchula serve` uses: the one `flag` or
@@ -572,5 +589,46 @@ mod tests {
         // Host-concurrency keys and limits are the HTTP client's rules;
         // patchula-engine's settings tests cover them.
         assert!(load("http { hostConcurrency { [\"API.github.com\"] = 8 } }").is_ok());
+    }
+    #[test]
+    fn secrets_strip_line_endings_reject_empty_and_keep_non_utf8_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("secret");
+        let file_secret = |bytes: &[u8]| {
+            std::fs::write(&file, bytes).unwrap();
+            Secret {
+                env: None,
+                file: Some(file.clone()),
+            }
+        };
+        for bytes in [&b"abc\r\n"[..], &b"abc\r\n\r\n"[..], &b"abc"[..]] {
+            let secret = file_secret(bytes);
+            assert_eq!(secret.read_bytes().unwrap(), b"abc", "{bytes:?}");
+            assert_eq!(secret.read().unwrap(), "abc", "{bytes:?}");
+        }
+        for bytes in [&b""[..], &b"\n"[..], &b"\r\n\r\n"[..]] {
+            assert!(file_secret(bytes).read_bytes().is_err(), "{bytes:?}");
+        }
+        // Non-UTF-8 is kept as bytes; the UTF-8 view refuses it.
+        let secret = file_secret(&[0xff, b'\n']);
+        assert_eq!(secret.read_bytes().unwrap(), [0xff]);
+        assert!(secret.read().is_err());
+        // Env values follow the same rule, with the lookup injected.
+        let env_secret = Secret {
+            env: Some("PATCHULA_TEST_SECRET".into()),
+            file: None,
+        };
+        let read =
+            |value: Option<std::ffi::OsString>| env_secret.read_bytes_with(|_| value.clone());
+        assert_eq!(read(Some("abc\r\n".into())).unwrap(), b"abc");
+        assert_eq!(read(Some("abc".into())).unwrap(), b"abc");
+        assert!(read(Some("\n".into())).is_err());
+        assert!(read(None).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let raw = std::ffi::OsString::from_vec(vec![0xff, b'\n']);
+            assert_eq!(read(Some(raw)).unwrap(), [0xff]);
+        }
     }
 }

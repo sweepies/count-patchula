@@ -31,7 +31,7 @@ impl Reload {
         let result = Settings::load(path).and_then(|settings| {
             patchula_engine::settings::check(&settings)
                 .map(|_| settings)
-                .map_err(|(_, message)| miette::miette!("{message}"))
+                .map_err(|(field, message)| miette::miette!("{field}: {message}"))
         });
         let mut state = self.0.write().expect("settings lock");
         match result {
@@ -42,9 +42,9 @@ impl Reload {
                 state.settings = settings;
                 state.valid = true;
             }
-            Err(_) => {
+            Err(error) => {
                 if state.valid {
-                    tracing::error!(target: "patchula_server", "settings rejected; keeping last good settings; run config check-settings for diagnostics");
+                    tracing::error!(target: "patchula_server", %error, "settings rejected; keeping last good settings; run config check-settings for diagnostics");
                 }
                 state.valid = false;
             }
