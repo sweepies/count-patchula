@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use patchula_cache::{Cache, Options as CacheOptions};
-use patchula_github::{Client, Error, GraphqlPage, Options};
+use patchula_github::{Client, Error, GraphqlPage, Options, blob_sha};
 use patchula_http::{Exchange, Response, Transport};
 use patchula_testkit::{Options as FixtureOptions, Replay};
 use serde_json::{Value, json};
@@ -276,19 +276,6 @@ async fn blobs_come_from_graphql_only_when_their_text_hashes_to_the_sha() {
     assert_eq!(transport.rest.load(Ordering::SeqCst), 2);
 }
 
-/// The Git blob SHA of `text`.
-fn git_sha(text: &str) -> String {
-    use sha1::Digest;
-    let mut digest = sha1::Sha1::new();
-    digest.update(format!("blob {}\0", text.len()));
-    digest.update(text.as_bytes());
-    digest
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 /// GitHub answering GraphQL blob batches by `mode`: texts, an errors payload,
 /// or a refused credential; REST always gives each blob.
 struct Batches {
@@ -355,7 +342,7 @@ async fn batches(
     let texts: std::collections::BTreeMap<_, _> = (0..count)
         .map(|n| {
             let text = format!("{n}\n");
-            (git_sha(&text), text)
+            (blob_sha(text.as_bytes()), text)
         })
         .collect();
     let shas = texts.keys().cloned().collect();
@@ -375,7 +362,7 @@ async fn blobs_past_fifty_take_one_graphql_query_per_fifty() {
     let (_directory, client, transport, shas) = batches("texts", 60).await;
     let blobs = client.blobs("acme/app", &shas).await.unwrap();
     assert_eq!(blobs.len(), 60);
-    assert_eq!(blobs[&git_sha("59\n")], b"59\n");
+    assert_eq!(blobs[&blob_sha(b"59\n")], b"59\n");
     assert_eq!(transport.graphql.load(Ordering::SeqCst), 2);
     assert_eq!(transport.rest.load(Ordering::SeqCst), 0);
 }

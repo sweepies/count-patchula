@@ -6,6 +6,7 @@ mod blobs;
 mod credentials;
 mod governor;
 mod pagination;
+pub use blobs::blob_sha;
 pub use credentials::{Credentials, Token};
 pub use governor::{PrimaryLimit, Stats};
 pub use pagination::{GraphqlPage, next_link};

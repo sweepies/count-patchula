@@ -289,8 +289,6 @@ fn html_files(body: &[u8]) -> std::result::Result<Vec<(String, bool)>, CacheErro
     }
     Ok(files)
 }
-/// A private index's simple page, as PEP 691 JSON or, failing that, PEP 503
-/// HTML, which carries no upload times.
 /// A private index's page, as PEP 691 JSON or PEP 503 HTML, read into one
 /// catalog per project its files name. A page whose files belong to another
 /// project gives the requested one none of their versions.
@@ -321,7 +319,6 @@ fn simple_any(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
 }
 const PYPI_INDEX_CATALOG: Derived<CacheError> = Derived::new("pypi-index-catalog", simple_any);
 
-/// PyPI's own page for one project.
 fn simple(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
     encode(&catalog_of(&simple_files(body)?))
 }

@@ -1,70 +1,11 @@
 //! Public source evidence. Normal execution is strictly offline replay.
 #![forbid(unsafe_code)]
-mod support;
 use patchula_cache::Cache;
 use patchula_datasource::Client;
-use patchula_http::{Exchange, Network, Response, Transport};
+use patchula_http::Network;
 use patchula_testkit::{Options, Redactor};
 use patchula_words::Source;
 use std::{path::Path, sync::Arc};
-
-/// Existing captures remain verbatim REST evidence. During offline replay,
-/// project their release fields into simulated GraphQL responses; other reads
-/// still use fail-closed cassette matching. Recording uses actual GraphQL.
-struct ReleaseReplay {
-    inner: Arc<dyn Transport>,
-    releases: std::collections::BTreeMap<String, serde_json::Value>,
-}
-impl Transport for ReleaseReplay {
-    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
-        if request.url().path() != "/graphql" {
-            return self.inner.send(request);
-        }
-        Box::pin(async move {
-            let request: serde_json::Value =
-                serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
-            let body = support::releases(&request, |repo, tag| {
-                let mut url = reqwest::Url::parse(&format!(
-                    "https://api.github.com/repos/{repo}/releases/tags/"
-                ))
-                .unwrap();
-                url.path_segments_mut().unwrap().pop_if_empty().push(tag);
-                self.releases.get(&url.to_string()).cloned()
-            });
-            Ok(Response {
-                status: reqwest::StatusCode::OK,
-                headers: Default::default(),
-                body: serde_json::to_vec(&body).unwrap(),
-                stale: None,
-            })
-        })
-    }
-}
-fn release_replay(inner: Arc<dyn Transport>, path: &Path, recording: bool) -> Arc<dyn Transport> {
-    if recording {
-        return inner;
-    }
-    let cassette: patchula_testkit::Cassette =
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    if cassette
-        .interactions
-        .iter()
-        .any(|entry| entry.request.url.ends_with("/graphql"))
-    {
-        // Refreshed cassettes replay real GraphQL without the REST projection.
-        return inner;
-    }
-    let mut releases = std::collections::BTreeMap::new();
-    for entry in cassette.interactions {
-        if entry.request.url.contains("/releases/tags/")
-            && entry.response.status == 200
-            && let patchula_testkit::Body::Json(body) = entry.response.body
-        {
-            releases.entry(entry.request.url).or_insert(body);
-        }
-    }
-    Arc::new(ReleaseReplay { inner, releases })
-}
 
 #[tokio::test]
 async fn public_note_sources_and_release_range() {
@@ -84,7 +25,6 @@ async fn public_note_sources_and_release_range() {
         || Ok(Arc::new(Network::new()?)),
     )
     .unwrap();
-    let transport = release_replay(transport, &path, recording);
     let dir = tempfile::tempdir().unwrap();
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await
@@ -97,9 +37,8 @@ async fn public_note_sources_and_release_range() {
     )
     .unwrap();
     let http = patchula_datasource::cached(cache.clone(), transport, 4).unwrap();
-    let client = patchula_notes::Client::new(
-        Client::new(github.clone(), http.clone(), cache).with_versions_host(false),
-    );
+    let client =
+        patchula_notes::Client::new(Client::new(github, http, cache).with_versions_host(false));
     for (source, package, version, repo) in [
         (Source::Npm, "@babel/code-frame", "7.27.1", "babel/babel"),
         (Source::Crates, "heck", "0.5.0", "withoutboats/heck"),
@@ -128,9 +67,7 @@ async fn public_note_sources_and_release_range() {
             assert!(found.image_version.is_some());
         }
     }
-    for run in 0..2 {
-        let before = github.stats().await.requests;
-        let started = std::time::Instant::now();
+    for _ in 0..2 {
         let notes = client
             .release_notes(
                 &patchula_config::PackageId::public(Source::Go, "github.com/google/uuid"),
@@ -156,12 +93,6 @@ async fn public_note_sources_and_release_range() {
         );
         let text = notes.render("github.com/google/uuid", 12_000);
         assert!(text.contains("1.6.0"));
-        println!(
-            "public notes run={run} elapsed={:?} github_requests={} public_requests={}",
-            started.elapsed(),
-            github.stats().await.requests - before,
-            http.stats().requests
-        );
     }
 }
 
@@ -180,52 +111,67 @@ async fn public_sandbox_note_ranges() {
             Source::Docker,
             "redis",
             "7.2.5-alpine",
-            vec!["7.4.11-alpine", "8.10.2-alpine"],
+            vec![
+                ("7.4.11-alpine", Some("7.4.11")),
+                ("8.10.2-alpine", Some("8.10.2")),
+            ],
             "redis",
         ),
         (
             Source::Docker,
             "nginx",
             "1.27.1-alpine",
-            vec!["1.31.7-alpine"],
+            vec![("1.31.7-alpine", Some("1.31.7"))],
             "nginx",
         ),
-        (Source::Docker, "postgres", "16.4", vec!["18.6"], "postgres"),
-        (Source::Npm, "hono", "4.6.0", vec!["4.13.13"], "hono"),
+        (
+            Source::Docker,
+            "postgres",
+            "16.4",
+            vec![("18.6", None)],
+            "postgres",
+        ),
+        (
+            Source::Npm,
+            "hono",
+            "4.6.0",
+            vec![("4.13.13", Some("4.13.13"))],
+            "hono",
+        ),
         (
             Source::Npm,
             "zod",
             "3.23.8",
-            vec!["3.25.76", "4.6.7"],
+            vec![("3.25.76", Some("3.25.76")), ("4.6.7", Some("4.6.7"))],
             "zod",
         ),
         (
             Source::Npm,
             "typescript",
             "5.6.2",
-            vec!["5.9.3", "7.0.2"],
+            vec![("5.9.3", None), ("7.0.2", None)],
             "typescript",
         ),
         (
             Source::Mise,
             "node",
             "22.9.0",
-            vec!["22.23.3", "26.12.0"],
+            vec![("22.23.3", Some("22.23.3")), ("26.12.0", Some("26.12.0"))],
             "node",
         ),
-        (Source::Mise, "go", "1.22", vec!["1.27.2"], "go"),
+        (Source::Mise, "go", "1.22", vec![("1.27.2", None)], "go"),
         (
             Source::GithubReleases,
             "jqlang/jq",
             "1.7.1",
-            vec!["1.8.2"],
+            vec![("1.8.2", Some("1.8.2"))],
             "jq",
         ),
         (
             Source::GithubTags,
             "actions/checkout",
             "v4.1.7",
-            vec!["v7.0.1"],
+            vec![("v7.0.1", Some("7.0.1"))],
             "checkout",
         ),
     ] {
@@ -239,7 +185,6 @@ async fn public_sandbox_note_ranges() {
             || Ok(Arc::new(Network::new()?)),
         )
         .unwrap();
-        let transport = release_replay(transport, &path, recording);
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
             .await
@@ -252,11 +197,9 @@ async fn public_sandbox_note_ranges() {
         )
         .unwrap();
         let http = patchula_datasource::cached(cache.clone(), transport, 4).unwrap();
-        let client = patchula_notes::Client::new(
-            Client::new(github.clone(), http.clone(), cache).with_versions_host(false),
-        );
-        for target in targets {
-            let started = std::time::Instant::now();
+        let client =
+            patchula_notes::Client::new(Client::new(github, http, cache).with_versions_host(false));
+        for (target, newest) in targets {
             let notes = client
                 .release_notes(
                     &patchula_config::PackageId::public(source, package),
@@ -266,23 +209,30 @@ async fn public_sandbox_note_ranges() {
                 .await
                 .unwrap();
             assert!(notes.source.is_some(), "{package} source");
+            assert_eq!(
+                notes.sections.first().map(|s| s.version.as_str()),
+                newest,
+                "{package} {current}..{target} newest section"
+            );
+            if newest.is_none() {
+                // No sections is a failure the notes must admit, not a
+                // silent pass: postgres's cassette predates the SGML
+                // adapter's directory walk, so its listing read misses.
+                assert!(
+                    notes.incomplete,
+                    "{package} {current}..{target}: empty notes must be incomplete"
+                );
+            }
             let text = notes.render(package, 12_000);
             assert!(text.len() <= 12_000);
-            println!(
-                "sandbox {package} {current}..{target}: source={} sections={} newest={} compare={} incomplete={} rendered={} elapsed={:?} github_requests={} public_requests={}",
-                notes.source.as_ref().unwrap().url,
-                notes.sections.len(),
-                notes
-                    .sections
-                    .first()
-                    .map_or("none", |s| s.version.as_str()),
-                notes.compare.as_deref().unwrap_or("none"),
-                notes.incomplete,
-                text.len(),
-                started.elapsed(),
-                github.stats().await.requests,
-                http.stats().requests
-            );
+            assert!(!text.trim().is_empty(), "{package} rendered notes");
+            if let Some(version) = newest {
+                assert!(
+                    text.lines()
+                        .any(|line| line.starts_with("#### ") && line.contains(version)),
+                    "{package} {current}..{target}: no heading for {version}\n{text}"
+                );
+            }
             if recording {
                 std::fs::write(
                     std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))

@@ -10,6 +10,13 @@ use std::{
 
 /// The mise package the Count pins, installed into its own tool store.
 pub const PACKAGE: &str = "aqua:jdx/mise";
+/// The literal arguments every spec starts with and the bootstrap argv is
+/// built from, defined once here for the code that builds and reads it.
+const NO_CONFIG: &str = "--no-config";
+const INSTALL: &str = "install";
+const EXEC: &str = "exec";
+const SEPARATOR: &str = "--";
+const PROGRAM: &str = "mise";
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(180);
 /// A slow host can take most of this to serve the mise archive once.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(1800);
@@ -53,6 +60,50 @@ pub struct Lookup {
 #[derive(Deserialize)]
 struct Tool {
     backend: String,
+}
+
+/// The pinned spec argument `version` installs or execs.
+fn pinned(version: &str) -> String {
+    format!("{PACKAGE}@{version}")
+}
+
+/// What the bootstrap mise's arguments ask it to do.
+pub enum Bootstrap<'a> {
+    /// `install <package>`: fetch the pinned mise into the tool store.
+    Install,
+    /// `exec <package> -- mise <args>`: the pinned binary's own arguments.
+    Exec(&'a [String]),
+    /// Anything `Lookup` never builds.
+    Other,
+}
+
+/// Read back the argv `Lookup` builds, so a replay matches the layout the
+/// builder defines instead of re-parsing it.
+pub fn bootstrap(args: &[String]) -> Bootstrap<'_> {
+    fn pinned_package(package: &str) -> bool {
+        package
+            .strip_prefix(PACKAGE)
+            .is_some_and(|rest| rest.starts_with('@') && rest.len() > 1)
+    }
+    match args {
+        [flag, command, package]
+            if flag.as_str() == NO_CONFIG
+                && command.as_str() == INSTALL
+                && pinned_package(package) =>
+        {
+            Bootstrap::Install
+        }
+        [flag, command, package, separator, program, rest @ ..]
+            if flag.as_str() == NO_CONFIG
+                && command.as_str() == EXEC
+                && pinned_package(package)
+                && separator.as_str() == SEPARATOR
+                && program.as_str() == PROGRAM =>
+        {
+            Bootstrap::Exec(rest)
+        }
+        _ => Bootstrap::Other,
+    }
 }
 
 impl Lookup {
@@ -99,7 +150,7 @@ impl Lookup {
         }
         CommandSpec {
             program: self.mise.clone(),
-            args: vec!["--no-config".into()],
+            args: vec![NO_CONFIG.into()],
             cwd: work.into(),
             env,
             secrets: token.map(str::to_owned).into_iter().collect(),
@@ -129,8 +180,7 @@ impl Lookup {
         self.installed
             .get_or_try_init(|| async {
                 self.run(token, true, |spec| {
-                    spec.args
-                        .extend(["install".into(), format!("{PACKAGE}@{}", self.version)]);
+                    spec.args.extend([INSTALL.into(), pinned(&self.version)]);
                     spec.timeout = INSTALL_TIMEOUT;
                     spec.output_limit = 1 << 16;
                 })
@@ -143,10 +193,10 @@ impl Lookup {
     /// The pinned mise, started through the bootstrap one with the tool store.
     fn exec(&self, spec: &mut CommandSpec, args: &[&str]) {
         spec.args.extend([
-            "exec".into(),
-            format!("{PACKAGE}@{}", self.version),
-            "--".into(),
-            "mise".into(),
+            EXEC.into(),
+            pinned(&self.version),
+            SEPARATOR.into(),
+            PROGRAM.into(),
         ]);
         spec.args.extend(args.iter().map(|a| (*a).to_owned()));
     }

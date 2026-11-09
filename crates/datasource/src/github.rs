@@ -250,7 +250,7 @@ impl Client {
             }
             self.cache.set_state(&scope, &fingerprint).await?;
         }
-        let mut catalog = Catalog {
+        Ok(Catalog {
             versions: self
                 .cache
                 .releases("github-releases", package)
@@ -259,16 +259,8 @@ impl Client {
                 .into_iter()
                 .map(Version::from)
                 .collect(),
-            dist_tags: BTreeMap::new(),
-        };
-        if package.eq_ignore_ascii_case("actions/node-versions") {
-            // Stable setup-node targets remain usable during a Node-index
-            // outage. An explicit LTS policy fails closed without this evidence.
-            if let Ok(lts) = self.node_lts().await {
-                catalog.dist_tags = lts;
-            }
-        }
-        Ok(catalog)
+            dist_tags: self.node_lts_tags(package).await,
+        })
     }
 
     async fn github_tags(&self, package: &str) -> Result<Catalog> {

@@ -143,6 +143,10 @@ const GO_DATED_RELEASES: usize = 20;
 /// evaluated against the dates in the listing, so a stored one never hides
 /// a release for longer than this.
 pub(crate) const FRESH_MS: i64 = 3_600_000;
+/// State stamped with when it was fetched, for the FRESH_MS reuse window.
+trait FetchedAt {
+    fn fetched_at(&self) -> i64;
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Catalog {
     pub versions: Vec<Version>,
@@ -230,6 +234,23 @@ impl Client {
         let mut client = self.clone();
         client.http = client.http.revalidating();
         client
+    }
+    /// The stored `S` while it is inside the FRESH_MS window and this run
+    /// does not revalidate; `None` sends the caller to fetch and `set_state`.
+    async fn fresh_state<S>(&self, scope: &S::Scope) -> Result<Option<S>>
+    where
+        S: State + FetchedAt + Send + 'static,
+    {
+        if self.http.is_revalidating() {
+            return Ok(None);
+        }
+        let Some(saved) = self.cache.state::<S>(scope).await? else {
+            return Ok(None);
+        };
+        let age = chrono::Utc::now()
+            .timestamp_millis()
+            .saturating_sub(saved.fetched_at());
+        Ok((0..FRESH_MS).contains(&age).then_some(saved))
     }
     pub fn new(github: patchula_github::Client, http: Cached, cache: Cache) -> Self {
         Self {
@@ -557,7 +578,6 @@ pub fn truncate(text: &str, limit: usize) -> &str {
     }
     &text[..end]
 }
-/// Lowercase hex SHA-256 of `bytes`.
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(bytes)
@@ -567,7 +587,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 /// The child manifest an image index offers for `os`/`architecture`/
 /// `variant`, when it has an exact platform match.
-fn platform_manifest<'a>(
+pub(crate) fn platform_manifest<'a>(
     manifests: &'a [Value],
     os: &str,
     architecture: &str,

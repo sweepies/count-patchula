@@ -11,6 +11,8 @@ struct Host {
     status: u16,
     empty: bool,
     lost: bool,
+    truncated_releases: bool,
+    truncated_tags: bool,
     requests: Mutex<Vec<(String, bool)>>,
     /// Both sources also list v3.0.0, which GitHub marks a prerelease.
     prerelease: bool,
@@ -39,7 +41,7 @@ impl Transport for Host {
                 }
                 json!({"data":{"r0":{"releases":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}).to_string()
             } else if path.ends_with("tags.json") {
-                json!({"tags":[{"tag":"v2.0.0","sha":"a".repeat(40),"date":"2099-01-01T00:00:00Z"}],"truncated":false}).to_string()
+                json!({"tags":[{"tag":"v2.0.0","sha":"a".repeat(40),"date":"2099-01-01T00:00:00Z"}],"truncated":self.truncated_tags}).to_string()
             } else {
                 assert_eq!(path, "/data/github/filosottile/age/releases.json");
                 let mut releases =
@@ -49,7 +51,7 @@ impl Transport for Host {
                         json!({"tag":"v3.0.0","date":"2026-02-01T00:00:00Z","prerelease":true}),
                     );
                 }
-                json!({"releases":if self.empty {json!([])} else {json!(releases)},"truncated":false}).to_string()
+                json!({"releases":if self.empty {json!([])} else {json!(releases)},"truncated":self.truncated_releases}).to_string()
             };
             Ok(Response {
                 status: reqwest::StatusCode::from_u16(if !github && self.status != 0 {
@@ -179,6 +181,44 @@ async fn mirror_answers_are_authoritative_but_transient_errors_can_use_github() 
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn truncated_mirror_documents_are_registry_errors() {
+    for (source, truncated_releases, truncated_tags, message) in [
+        (
+            Source::GithubReleases,
+            true,
+            false,
+            "mise-versions release catalog is truncated; full range unavailable",
+        ),
+        (
+            Source::GithubTags,
+            false,
+            true,
+            "mise-versions tag catalog is truncated; full range unavailable",
+        ),
+    ] {
+        let host = Arc::new(Host {
+            truncated_releases,
+            truncated_tags,
+            ..Default::default()
+        });
+        let error = client(host.clone(), memory().await)
+            .await
+            .lookup(&patchula_config::PackageId::public(
+                source,
+                "FiloSottile/age",
+            ))
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            matches!(error, patchula_datasource::Error::Registry(_)),
+            "{error}"
+        );
+        assert_eq!(error.to_string(), message);
+    }
 }
 
 #[tokio::test]

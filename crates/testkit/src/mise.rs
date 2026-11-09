@@ -54,8 +54,10 @@ pub struct Call {
 impl Call {
     /// The arguments after the pinned `mise`, when this is a lookup command.
     pub fn lookup(&self) -> Option<&[String]> {
-        let at = self.args.iter().position(|a| a == "--")?;
-        (self.args.get(at + 1).map(String::as_str) == Some("mise")).then(|| &self.args[at + 2..])
+        match patchula_mise::bootstrap(&self.args) {
+            patchula_mise::Bootstrap::Exec(args) => Some(args),
+            _ => None,
+        }
     }
 }
 
@@ -128,28 +130,27 @@ impl Executor for MiseReplay {
         Box::pin(async move {
             let call = snapshot(&spec);
             self.calls.lock().expect("calls lock").push(call.clone());
-            let Some(args) = call.lookup() else {
-                return if call.args.iter().any(|a| a == "install") {
-                    Ok(Vec::new())
-                } else {
-                    Err(Failure::Io(format!(
-                        "unexpected mise command {:?}",
-                        call.args
-                    )))
-                };
-            };
-            match self.runs.iter().find(|run| run.args == args) {
-                Some(Run {
-                    result: Outcome::Output(value),
-                    ..
-                }) => Ok(serde_json::to_vec(value).expect("JSON value serializes")),
-                Some(Run {
-                    result: Outcome::Failure(failure),
-                    ..
-                }) => Err(failure.clone()),
-                None => Err(Failure::Io(format!(
-                    "mise fixture has no run for `mise {}`; replay never runs mise",
-                    args.join(" ")
+            match patchula_mise::bootstrap(&call.args) {
+                patchula_mise::Bootstrap::Exec(args) => {
+                    match self.runs.iter().find(|run| run.args == args) {
+                        Some(Run {
+                            result: Outcome::Output(value),
+                            ..
+                        }) => Ok(serde_json::to_vec(value).expect("JSON value serializes")),
+                        Some(Run {
+                            result: Outcome::Failure(failure),
+                            ..
+                        }) => Err(failure.clone()),
+                        None => Err(Failure::Io(format!(
+                            "mise fixture has no run for `mise {}`; replay never runs mise",
+                            args.join(" ")
+                        ))),
+                    }
+                }
+                patchula_mise::Bootstrap::Install => Ok(Vec::new()),
+                patchula_mise::Bootstrap::Other => Err(Failure::Io(format!(
+                    "unexpected mise command {:?}",
+                    call.args
                 ))),
             }
         })

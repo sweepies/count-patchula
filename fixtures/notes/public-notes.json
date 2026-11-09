@@ -4453,161 +4453,47 @@
     },
     {
       "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/google/uuid/releases/tags/v1.6.0",
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
         "headers": {
           "accept": [
             "application/vnd.github+json"
+          ],
+          "content-type": [
+            "application/json"
           ],
           "x-github-api-version": [
             "2022-11-28"
           ]
         },
         "body": {
-          "format": "text",
-          "value": ""
+          "format": "json",
+          "value": {
+            "query": "query ReleaseNotes($owner:String!,$name:String!,$t0:String!){repository(owner:$owner,name:$name){r0:release(tagName:$t0){updatedAt body:description draft:isDraft prerelease:isPrerelease}}}",
+            "variables": {
+              "name": "uuid",
+              "owner": "google",
+              "t0": "v1.6.0"
+            }
+          }
         }
       },
       "response": {
         "status": 200,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "cache-control": [
-            "private, max-age=60, s-maxage=60"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 18:27:19 GMT"
-          ],
-          "etag": [
-            "W/\"85c1addcc244f9fe0edd8494a811a1615dd67c16dbec62f97e3ba229abf5a6c3\""
-          ],
-          "last-modified": [
-            "Tue, 23 Jan 2024 18:54:13 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            "repo"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "iad"
-          ],
-          "x-github-media-type": [
-            "github.v3; format=json"
-          ],
-          "x-github-request-id": [
-            "8E12:331582:1BE3876:5A520BC:6AD11B07"
-          ],
-          "x-oauth-client-id": [
-            "178c6fc778ccc68e1d6a"
-          ],
-          "x-oauth-scopes": [
-            "gist, read:org, repo, workflow"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4874"
-          ],
-          "x-ratelimit-reset": [
-            "1792091548"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "126"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
+        "headers": {},
         "body": {
           "format": "json",
           "value": {
-            "assets": [],
-            "assets_url": "https://api.github.com/repos/google/uuid/releases/138212780/assets",
-            "author": {
-              "avatar_url": "https://avatars.githubusercontent.com/in/40688?v=4",
-              "events_url": "https://api.github.com/users/release-please%5Bbot%5D/events%7B/privacy%7D",
-              "followers_url": "https://api.github.com/users/release-please%5Bbot%5D/followers",
-              "following_url": "https://api.github.com/users/release-please%5Bbot%5D/following%7B/other_user%7D",
-              "gists_url": "https://api.github.com/users/release-please%5Bbot%5D/gists%7B/gist_id%7D",
-              "gravatar_id": "",
-              "html_url": "https://github.com/apps/release-please",
-              "id": 55107282,
-              "login": "release-please[bot]",
-              "node_id": "MDM6Qm90NTUxMDcyODI=",
-              "organizations_url": "https://api.github.com/users/release-please%5Bbot%5D/orgs",
-              "received_events_url": "https://api.github.com/users/release-please%5Bbot%5D/received_events",
-              "repos_url": "https://api.github.com/users/release-please%5Bbot%5D/repos",
-              "site_admin": false,
-              "starred_url": "https://api.github.com/users/release-please%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
-              "subscriptions_url": "https://api.github.com/users/release-please%5Bbot%5D/subscriptions",
-              "type": "Bot",
-              "url": "https://api.github.com/users/release-please%5Bbot%5D",
-              "user_view_type": "public"
-            },
-            "body": "## [1.6.0](https://github.com/google/uuid/compare/v1.5.0...v1.6.0) (2024-01-16)\n\n\n### Features\n\n* add Max UUID constant ([#149](https://github.com/google/uuid/issues/149)) ([c58770e](https://github.com/google/uuid/commit/c58770eb495f55fe2ced6284f93c5158a62e53e3))\n\n\n### Bug Fixes\n\n* fix typo in version 7 uuid documentation ([#153](https://github.com/google/uuid/issues/153)) ([016b199](https://github.com/google/uuid/commit/016b199544692f745ffc8867b914129ecb47ef06))\n* Monotonicity in UUIDv7 ([#150](https://github.com/google/uuid/issues/150)) ([a2b2b32](https://github.com/google/uuid/commit/a2b2b32373ff0b1a312b7fdf6d38a977099698a6))",
-            "created_at": "2024-01-23T18:54:04Z",
-            "draft": false,
-            "html_url": "https://github.com/google/uuid/releases/tag/v1.6.0",
-            "id": 138212780,
-            "immutable": false,
-            "name": "v1.6.0",
-            "node_id": "RE_kwDOAxOpl84IPPWs",
-            "prerelease": false,
-            "published_at": "2024-01-23T18:54:13Z",
-            "reactions": {
-              "+1": 8,
-              "-1": 0,
-              "confused": 0,
-              "eyes": 0,
-              "heart": 0,
-              "hooray": 0,
-              "laugh": 0,
-              "rocket": 0,
-              "total_count": 8,
-              "url": "https://api.github.com/repos/google/uuid/releases/138212780/reactions"
-            },
-            "tag_name": "v1.6.0",
-            "tarball_url": "https://api.github.com/repos/google/uuid/tarball/v1.6.0",
-            "target_commitish": "0f11ee6918f41a04c201eceeadf612a377bc7fbc",
-            "updated_at": "2024-01-23T18:54:13Z",
-            "upload_url": "https://uploads.github.com/repos/google/uuid/releases/138212780/assets%7B?name%2Clabel%7D=",
-            "url": "https://api.github.com/repos/google/uuid/releases/138212780",
-            "zipball_url": "https://api.github.com/repos/google/uuid/zipball/v1.6.0"
+            "data": {
+              "repository": {
+                "r0": {
+                  "body": "## [1.6.0](https://github.com/google/uuid/compare/v1.5.0...v1.6.0) (2024-01-16)\n\n\n### Features\n\n* add Max UUID constant ([#149](https://github.com/google/uuid/issues/149)) ([c58770e](https://github.com/google/uuid/commit/c58770eb495f55fe2ced6284f93c5158a62e53e3))\n\n\n### Bug Fixes\n\n* fix typo in version 7 uuid documentation ([#153](https://github.com/google/uuid/issues/153)) ([016b199](https://github.com/google/uuid/commit/016b199544692f745ffc8867b914129ecb47ef06))\n* Monotonicity in UUIDv7 ([#150](https://github.com/google/uuid/issues/150)) ([a2b2b32](https://github.com/google/uuid/commit/a2b2b32373ff0b1a312b7fdf6d38a977099698a6))",
+                  "draft": false,
+                  "prerelease": false,
+                  "updatedAt": "2024-01-23T18:54:13Z"
+                }
+              }
+            }
           }
         }
       }
@@ -5313,264 +5199,6 @@
             "size": 1648,
             "url": "https://api.github.com/repos/google/uuid/git/blobs/7ec5ac7ea9090372537f98b6d4a206485b902248"
           }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://mise-versions.jdx.dev/data/github/google/uuid/releases.json",
-        "headers": {
-          "accept": [
-            "application/json"
-          ],
-          "if-none-match": [
-            "W/\"9fc585fba99a16b6e131686d9ac42c0d\""
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 304,
-        "headers": {
-          "alt-svc": [
-            "h3=\":443\"; ma=86400"
-          ],
-          "cache-control": [
-            "public, max-age=0, must-revalidate"
-          ],
-          "cf-cache-status": [
-            "HIT"
-          ],
-          "cf-ray": [
-            "a4b0e0989fe98e05-YVR"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 18:27:21 GMT"
-          ],
-          "etag": [
-            "\"9fc585fba99a16b6e131686d9ac42c0d\""
-          ],
-          "server": [
-            "cloudflare"
-          ],
-          "strict-transport-security": [
-            "max-age=2592000"
-          ],
-          "vary": [
-            "accept-encoding"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/google/uuid/releases/tags/v1.6.0",
-        "headers": {
-          "accept": [
-            "application/vnd.github+json"
-          ],
-          "if-modified-since": [
-            "Tue, 23 Jan 2024 18:54:13 GMT"
-          ],
-          "if-none-match": [
-            "W/\"85c1addcc244f9fe0edd8494a811a1615dd67c16dbec62f97e3ba229abf5a6c3\""
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 304,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "cache-control": [
-            "private, max-age=60, s-maxage=60"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 18:27:21 GMT"
-          ],
-          "etag": [
-            "\"85c1addcc244f9fe0edd8494a811a1615dd67c16dbec62f97e3ba229abf5a6c3\""
-          ],
-          "last-modified": [
-            "Tue, 23 Jan 2024 18:54:13 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "iad"
-          ],
-          "x-github-request-id": [
-            "8E12:331582:1BE47E9:5A5526B:6AD11B08"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4867"
-          ],
-          "x-ratelimit-reset": [
-            "1792091548"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "133"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/google/uuid/contents",
-        "headers": {
-          "accept": [
-            "application/vnd.github+json"
-          ],
-          "if-modified-since": [
-            "Wed, 14 Oct 2026 09:34:25 GMT"
-          ],
-          "if-none-match": [
-            "\"4417b29c0de3c38c3fe46ab172e42758d045b3fb\""
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 304,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "cache-control": [
-            "private, max-age=60, s-maxage=60"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "date": [
-            "Thu, 15 Oct 2026 18:27:22 GMT"
-          ],
-          "etag": [
-            "\"4417b29c0de3c38c3fe46ab172e42758d045b3fb\""
-          ],
-          "last-modified": [
-            "Wed, 14 Oct 2026 09:34:25 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept, Authorization, Cookie, X-GitHub-OTP, Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "iad"
-          ],
-          "x-github-request-id": [
-            "8E12:331582:1BE4C7E:5A56103:6AD11B09"
-          ],
-          "x-oauth-client-id": [
-            "178c6fc778ccc68e1d6a"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4866"
-          ],
-          "x-ratelimit-reset": [
-            "1792091548"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "134"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
         }
       }
     }

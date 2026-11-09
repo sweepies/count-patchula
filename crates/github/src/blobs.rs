@@ -30,7 +30,7 @@ fn object_id(sha: &str) -> bool {
 }
 
 /// The Git blob SHA of `content`.
-fn blob_sha(content: &[u8]) -> String {
+pub fn blob_sha(content: &[u8]) -> String {
     let mut digest = Sha1::new();
     digest.update(format!("blob {}\0", content.len()));
     digest.update(content);
@@ -79,6 +79,9 @@ impl Client {
                 (sha, None) => missing.push(sha),
             }
         }
+        // `buffer_unordered` finishes in any order; the batch query's
+        // variables must name its SHAs the same way every run.
+        missing.sort_unstable();
         if let Some((owner, name)) = repo.split_once('/') {
             // GraphQL refuses a whole query for one malformed object ID.
             let chunks: Vec<Vec<String>> = missing

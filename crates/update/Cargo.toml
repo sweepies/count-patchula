@@ -23,7 +23,6 @@ patchula-lookup = { path = "../lookup" }
 futures-util = "0.3"
 serde.workspace = true
 serde_json.workspace = true
-sha1 = "0.11"
 reqwest.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = "0.10"

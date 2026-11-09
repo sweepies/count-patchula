@@ -2467,15 +2467,14 @@ dependencies = [
 name = "patchula-testkit"
 version = "0.8.1"
 dependencies = [
- "base64 0.23.1",
  "patchula-http",
+ "patchula-mise",
  "patchula-process",
  "percent-encoding",
  "regex",
  "reqwest",
  "serde",
  "serde_json",
- "sha1",
  "sha2 0.11.1",
  "tempfile",
  "tokio",
@@ -2511,7 +2510,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "sha1",
  "tempfile",
  "tokio",
  "toml_edit",
