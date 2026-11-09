@@ -263,7 +263,7 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
             current[0].current = "1.1.0".into();
         }
         let work = Work {
-            report: repository("demo/app", Status::Complete, None),
+            report: crate::repo_report("demo/app", Status::Complete, None),
             config: Some(config.clone()),
             dependencies: current,
             locked: Vec::new(),

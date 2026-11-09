@@ -14,15 +14,24 @@ Repositories run concurrently behind one GitHub governor. On a cold scan, the
 default branch, commit and tree come from one GraphQL snapshot, and only the
 selected manager files and the config modules they need are fetched as blobs,
 in GraphQL batches (see [the GitHub client](/internals/github-client/#conditional-reads)).
-A truncated tree or an invalid selected file is an error for that repository.
+A truncated tree is an error for that repository, as is a selected file
+whose blob cannot be fetched or whose contents are not text — a
+registry-settings file excepted, which stays unreadable so its packages
+fail their lookups rather than using a public registry. A symlink is never
+read through: the entry stays in the extraction as unreadable rather than
+absent, and a symlinked settings file fails its packages' lookups the same
+way. Files the include chain names in later rounds that cannot be read are
+unreadable too. In a local checkout, files below a symlinked directory are
+omitted from the tree entirely.
 A repository without `patchula.pkl` at its root is skipped. A local `--config`
 applies to every selected repository and is evaluated before network access.
 
 Configs evaluate in isolation over the supplied files. Local `amends` and
 `import` targets are fetched, and the bundled `PatchulaConfig.pkl` is used
-when the repository does not vendor it. Remote imports and imports that escape the
-repository are rejected, and only literal import targets are supported.
-`config check` and local overrides use the same evaluator.
+when the repository does not vendor it. Remote and absolute imports, and
+imports that escape the repository, are rejected, and only literal import
+targets are supported. `config check` and local overrides use the same
+evaluator.
 
 An unchanged commit and config fingerprint reuses the previous extraction with
 no tree or blob calls, Pkl evaluation or scanning; the fingerprint's namespace

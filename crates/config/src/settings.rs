@@ -492,9 +492,12 @@ mod tests {
         }
     }
     #[test]
-    fn local_absolute_imports_bundled_schema_and_diagnostics() {
+    fn local_imports_bundled_schema_and_diagnostics() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.pkl");
+        // Absolute imports are refused: only modules inside the settings'
+        // own tree load, so an absolute `amends` fails where a relative one
+        // of the same file works.
         let parent = dir.path().join("parent.pkl");
         std::fs::write(
             &parent,
@@ -502,18 +505,16 @@ mod tests {
         )
         .unwrap();
         std::fs::write(&path, format!("amends \"{}\"\n", parent.display())).unwrap();
-        assert_eq!(Settings::load(&path).unwrap().concurrency, 3);
-        // An absolute schema path works both with a real file and bundled fallback.
+        assert!(Settings::load(&path).is_err());
+        std::fs::write(&path, "amends \"parent.pkl\"\nconcurrency = 4\n").unwrap();
+        assert_eq!(Settings::load(&path).unwrap().concurrency, 4);
+        // The schema resolves by name, vendored or bundled.
         let schema = dir.path().join("PatchulaSettings.pkl");
         for vendored in [false, true] {
             if vendored {
                 std::fs::write(&schema, SCHEMA).unwrap();
             }
-            std::fs::write(
-                &path,
-                format!("amends \"{}\"\nconcurrency = 4\n", schema.display()),
-            )
-            .unwrap();
+            std::fs::write(&path, "amends \"PatchulaSettings.pkl\"\nconcurrency = 4\n").unwrap();
             assert_eq!(Settings::load(&path).unwrap().concurrency, 4);
         }
         for body in [
