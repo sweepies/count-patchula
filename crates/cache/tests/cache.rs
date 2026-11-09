@@ -269,7 +269,7 @@ async fn migrates_previous_schema_without_discarding_http_or_release_data() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        10
+        11
     );
 }
 
@@ -419,4 +419,98 @@ async fn migration_retires_raw_registries_and_old_content_hashed_catalogs() {
             "{name}"
         );
     }
+}
+
+#[tokio::test]
+async fn migration_rebuilds_github_release_lists_stored_with_prereleases() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("cache.sqlite");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    // A cache the previous release wrote: schema 10, release lists that may
+    // still hold GitHub-flagged prereleases.
+    for migration in [
+        include_str!("../src/migrations/001.sql"),
+        include_str!("../src/migrations/002.sql"),
+        include_str!("../src/migrations/003.sql"),
+        include_str!("../src/migrations/004.sql"),
+        include_str!("../src/migrations/005.sql"),
+        include_str!("../src/migrations/006.sql"),
+        include_str!("../src/migrations/007.sql"),
+        include_str!("../src/migrations/008.sql"),
+        include_str!("../src/migrations/009.sql"),
+        include_str!("../src/migrations/010.sql"),
+    ] {
+        conn.execute_batch(migration).unwrap();
+    }
+    conn.execute(
+        "INSERT INTO releases(source,package,version,position) VALUES ('github-releases','owner/repo','1.0.0',0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO releases(source,package,version,position) VALUES ('go','example.org/mod','v1.0.0',0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO release_heads(source,package,newest) VALUES ('github-releases','owner/repo','1.0.0')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO release_heads(source,package,newest) VALUES ('go','example.org/mod','v1.0.0')",
+        [],
+    )
+    .unwrap();
+    for (namespace, scope) in [
+        (
+            "source-head@v1",
+            r#"{"source":"github-releases","package":"owner/repo"}"#,
+        ),
+        (
+            "source-head@v1",
+            r#"{"source":"other","package":"owner/repo"}"#,
+        ),
+        (
+            "tag-catalog@v1",
+            r#"{"source":"github-releases","package":"owner/repo"}"#,
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO state(namespace,scope,value) VALUES (?1,?2,X'00')",
+            rusqlite::params![namespace, scope],
+        )
+        .unwrap();
+    }
+    drop(conn);
+    let cache = cache(&directory).await;
+    let github = cache
+        .releases("github-releases", "owner/repo")
+        .await
+        .unwrap();
+    assert!(github.releases.is_empty() && github.newest.is_none());
+    assert_eq!(
+        cache
+            .releases("go", "example.org/mod")
+            .await
+            .unwrap()
+            .newest
+            .as_deref(),
+        Some("v1.0.0")
+    );
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let state: Vec<String> = conn
+        .prepare("SELECT namespace || ' ' || scope FROM state ORDER BY namespace, scope")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        state,
+        [
+            r#"source-head@v1 {"source":"other","package":"owner/repo"}"#,
+            r#"tag-catalog@v1 {"source":"github-releases","package":"owner/repo"}"#,
+        ]
+    );
 }
