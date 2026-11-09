@@ -129,8 +129,9 @@ fn fallback(repository: &Repository, plan: &Plan, reason: &str) {
 /// What settling from verified receipts concluded for a repository's plans.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RestoreOutcome {
-    /// Every plan settled and no owned branch is obsolete: nothing needs
-    /// writing, and the shared tail reconciles from this inventory alone.
+    /// Every plan settled, no owned branch is obsolete and no ref is
+    /// unsettled (see `Inventory::unsettled`): nothing needs writing, and the
+    /// shared tail reconciles from this inventory alone.
     Complete,
     /// Some plan or branch still needs the full write path.
     Partial,

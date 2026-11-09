@@ -3875,7 +3875,11 @@ async fn obsolete_prs_fetch_repository_metadata_once() {
         .iter()
         .filter(|(method, path)| method == "GET" && path == "/repos/demo/app/branches/main")
         .count();
-    assert_eq!(heads, 1, "{:?}", s.requests);
+    assert_eq!(
+        heads, 2,
+        "the head is re-read before each closure: {:?}",
+        s.requests
+    );
 }
 
 /// Labels or associated pull requests past their first page leave the

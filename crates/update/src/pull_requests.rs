@@ -306,11 +306,9 @@ impl Lifecycle {
             server: None,
         };
         let desired: BTreeSet<_> = plans.iter().map(|p| p.action().branch.as_str()).collect();
-        // The repository metadata and the default branch's head do not change
-        // between pulls, so each is fetched once for all obsolete PRs, on the
-        // first that needs it.
+        // The repository metadata does not change between pulls, so it is
+        // fetched once for all obsolete PRs, on the first that needs it.
         let mut meta = None;
-        let mut current = None;
         for pr in &mut state.prs {
             if repository.degraded()
                 || pr["state"] != "open"
@@ -368,15 +366,12 @@ impl Lifecycle {
             if meta["default_branch"] != default_branch {
                 return Err("default branch changed before PR closure; rerun".into());
             }
-            let head = match &current {
-                Some(head) => head,
-                None => current.insert(
-                    client
-                        .get_fresh(&format!("repos/{repo}/branches/{default_branch}"))
-                        .await
-                        .map_err(|e| e.to_string())?,
-                ),
-            };
+            // The default branch's head is a lease on each closure: a base
+            // that moved while earlier PRs closed must stop the next one.
+            let head = client
+                .get_fresh(&format!("repos/{repo}/branches/{default_branch}"))
+                .await
+                .map_err(|e| e.to_string())?;
             if head["commit"]["sha"] != base {
                 return Err("base moved before obsolete PR closure; rerun".into());
             }

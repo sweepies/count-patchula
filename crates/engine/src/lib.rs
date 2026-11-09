@@ -669,7 +669,7 @@ impl Engine {
             write.repository(work).await?;
         }
         write.record_runs(&mut work).await;
-        report.repositories = work.iter().map(|w| w.report.clone()).collect();
+        report.repositories = work.into_iter().map(|w| w.report).collect();
         let mut branches = write.branches;
         let pull_requests = write.pull_requests;
         branches.sort_by(|a, b| (&a.repository, &a.branch).cmp(&(&b.repository, &b.branch)));
