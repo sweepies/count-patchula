@@ -24,7 +24,7 @@ pub(super) fn extract(
                 Some(Value::Mapping(map)) => map
                     .iter()
                     .filter_map(|(k, v)| {
-                        let key = k.as_str()?.replace('~', "~0").replace('/', "~1");
+                        let key = pointer_token(k.as_str()?);
                         Some((format!("{pointer}/{key}"), v))
                     })
                     .collect(),
@@ -120,4 +120,36 @@ fn templated(image: &str, matrix: &[String]) -> Option<String> {
         Some(name) => format!("the image varies with the matrix variable {name}"),
         None => "the image contains a variable".into(),
     })
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        let stem = path
+            .strip_suffix(".yml")
+            .or_else(|| path.strip_suffix(".yaml"))
+            .unwrap_or_default();
+        stem == ".woodpecker"
+            || stem
+                .strip_prefix(".woodpecker/")
+                .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        _files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(|path, text, out| {
+                let result = extract(path, text, &mut out.skipped);
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

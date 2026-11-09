@@ -113,7 +113,7 @@ impl<'a> Scan<'a> {
                     let Some(key) = key.as_str() else {
                         continue;
                     };
-                    let p = format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
+                    let p = format!("{pointer}/{}", pointer_token(key));
                     if key == "image"
                         && let Some(image) = v.as_str()
                     {
@@ -354,4 +354,138 @@ pub(super) fn extract(
         }
     }
     Ok(scan.out)
+}
+
+/// The YAML documents, source spans and Flux repositories the family
+/// shares, parsed once for every selected file.
+pub(crate) struct Docs<'a> {
+    pub documents: BTreeMap<&'a str, Vec<Value>>,
+    pub locations: BTreeMap<&'a str, BTreeMap<String, Location>>,
+    pub repos: BTreeMap<(String, String), (String, bool)>,
+}
+
+/// Parse each file a YAML manager selects once, so the five managers share
+/// one parse. A file that does not parse (a template such as ERB-rendered
+/// YAML) is skipped with a warning. Warnings suppress branch cleanup, so the
+/// skipped file's open updates are never closed as obsolete.
+pub(crate) fn prepare<'a>(
+    scanner: &Scanner,
+    files: &'a Files,
+    warnings: &mut Vec<String>,
+) -> Docs<'a> {
+    let mut documents = BTreeMap::new();
+    let mut locations = BTreeMap::new();
+    for (path, text) in files
+        .iter()
+        .filter(|(path, _)| MANAGERS.iter().any(|m| scanner.selected(*m, path)))
+    {
+        let parsed = text
+            .read()
+            .map_err(|unread| unread.why().to_owned())
+            .and_then(|text| docs(text).and_then(|d| Ok((d, yaml_locations::parse(text)?))));
+        match parsed {
+            Ok((docs, spans)) => {
+                documents.insert(path.as_str(), docs);
+                locations.insert(path.as_str(), spans);
+            }
+            Err(e) => warnings.push(format!("{path}: skipped: {e}")),
+        }
+    }
+    let repos = repositories(&documents);
+    Docs {
+        documents,
+        locations,
+        repos,
+    }
+}
+
+/// One of the YAML family: compose files, Kubernetes manifests, kustomize,
+/// Flux and Helm values share the parsed documents.
+pub(crate) struct Descriptor {
+    pub(crate) manager: Manager,
+}
+
+/// The managers that read Kubernetes-style YAML documents, parsed once for
+/// all of them. Each has its descriptor in `DESCRIPTORS`, at the same index.
+pub(crate) const MANAGERS: [Manager; 5] = [
+    Manager::Compose,
+    Manager::Kubernetes,
+    Manager::Kustomize,
+    Manager::Flux,
+    Manager::HelmValues,
+];
+static DESCRIPTORS: [Descriptor; 5] = [
+    Descriptor {
+        manager: MANAGERS[0],
+    },
+    Descriptor {
+        manager: MANAGERS[1],
+    },
+    Descriptor {
+        manager: MANAGERS[2],
+    },
+    Descriptor {
+        manager: MANAGERS[3],
+    },
+    Descriptor {
+        manager: MANAGERS[4],
+    },
+];
+/// The descriptor of a YAML-family manager.
+pub(crate) fn descriptor(manager: Manager) -> &'static Descriptor {
+    let at = MANAGERS
+        .iter()
+        .position(|m| *m == manager)
+        .expect("a YAML-family manager");
+    &DESCRIPTORS[at]
+}
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        match self.manager {
+            Manager::Compose => {
+                (leaf.starts_with("docker-compose") || leaf.starts_with("compose"))
+                    && (leaf.ends_with(".yml") || leaf.ends_with(".yaml"))
+            }
+            Manager::Kubernetes | Manager::Flux => {
+                leaf.ends_with(".yaml") || leaf.ends_with(".yml")
+            }
+            Manager::Kustomize => matches!(
+                leaf,
+                "kustomization.yaml" | "kustomization.yml" | "Kustomization"
+            ),
+            Manager::HelmValues => {
+                (leaf.starts_with("values")
+                    || leaf.ends_with("values.yaml")
+                    || leaf.ends_with("values.yml"))
+                    && (leaf.ends_with(".yaml") || leaf.ends_with(".yml"))
+            }
+            _ => false,
+        }
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        _files: &'a Files,
+        shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        let yaml = shared.yaml.as_ref().expect("YAML documents prepared");
+        let manager = self.manager;
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                if let (Some(documents), Some(spans)) =
+                    (yaml.documents.get(path), yaml.locations.get(path))
+                {
+                    file_result(
+                        out,
+                        path,
+                        extract(manager, path, text, documents, spans, &yaml.repos),
+                    );
+                }
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

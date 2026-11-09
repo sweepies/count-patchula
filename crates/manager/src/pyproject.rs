@@ -285,18 +285,11 @@ pub(super) fn extract(
             );
         }
     }
-    for dep in discovery
-        .origins
-        .assign(&mut scan.out, &crate::pypi::PYPI, |dep| dep.package.clone())
-    {
-        skipped.push(Skipped {
-            manager: Manager::Pyproject,
-            file: dep.file,
-            line: Some(dep.location.line),
-            value: dep.name,
-            reason: NOT_FROM_AN_INDEX.into(),
-        });
-    }
+    skipped.extend(origins::skipped(
+        Manager::Pyproject,
+        discovery.origins.assign(&mut scan.out, &crate::pypi::PYPI),
+        NOT_FROM_AN_INDEX,
+    ));
     skipped.extend(scan.skipped);
     Ok(scan.out)
 }
@@ -341,4 +334,46 @@ fn toml_error(text: &str, error: &toml_edit::TomlError) -> String {
         .map_or(0, |before| before.matches('\n').count())
         + 1;
     format!("invalid TOML at line {line}: {}", error.message())
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            "pyproject.toml" | "uv.lock" | "poetry.lock" | ".python-version"
+        )
+    }
+    fn registry_file(&self, path: &str) -> bool {
+        python_settings(path)
+            || matches!(
+                path.rsplit('/').next().unwrap_or(path),
+                "uv.lock" | "poetry.lock"
+            )
+    }
+    /// The settings the pip and uv backends mise runs read.
+    fn backend_settings(&self, path: &str) -> bool {
+        matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            "pyproject.toml" | "uv.toml" | "pip.conf" | "pip.ini"
+        )
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = extract(path, text, files, &mut out.skipped);
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

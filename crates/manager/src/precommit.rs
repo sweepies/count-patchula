@@ -31,7 +31,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
             continue;
         };
         // Commit pins need their tag from a frozen comment; not yet supported.
-        if rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if commit_hash(rev) {
             continue;
         }
         let Some((source, package)) = identity(url) else {
@@ -60,4 +60,31 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
         });
     }
     Ok(out)
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            ".pre-commit-config.yaml" | ".pre-commit-config.yml"
+        )
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        _files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(|path, text, out| {
+                file_result(out, path, extract(path, text));
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

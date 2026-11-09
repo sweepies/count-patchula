@@ -109,3 +109,28 @@ pub(super) fn extract(
         registry: None,
     }])
 }
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        selected(path.rsplit('/').next().unwrap_or(path))
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        _files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(|path, text, out| {
+                let result = extract(path, text, &mut out.skipped);
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
+}

@@ -1228,3 +1228,59 @@ pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repo
     }
     out.any().then_some(out)
 }
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        selected(path)
+    }
+    fn registry_file(&self, path: &str) -> bool {
+        build_logic(path)
+    }
+    fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
+        let (included, applied) = wanted(files);
+        Some(Box::new(move |path| {
+            logic_source(path)
+                && included
+                    .iter()
+                    .any(|folder| path.starts_with(folder.as_str()))
+                || applied.iter().any(|script| script == path)
+        }))
+    }
+    fn prepare<'a>(
+        &self,
+        scanner: &'a Scanner,
+        files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(|path, text, out| {
+                file_result(out, path, extract(path, text));
+                Ok(())
+            })),
+            finish: Some(Box::new(move |out| {
+                out.dependencies.extend(gradle_vars::extract(files, |path| {
+                    scanner.selected(Manager::Gradle, path)
+                }));
+                let Some(repositories) = private_repositories(files) else {
+                    return Ok(());
+                };
+                out.warnings.extend(repositories.warnings.iter().cloned());
+                let Some(reason) = repositories.closed else {
+                    return Ok(());
+                };
+                for dep in out
+                    .dependencies
+                    .iter_mut()
+                    .filter(|dep| dep.manager == Manager::Gradle && dep.source == Source::Maven)
+                {
+                    dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+                }
+                Ok(())
+            })),
+        })
+    }
+}

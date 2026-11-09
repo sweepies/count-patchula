@@ -182,3 +182,34 @@ fn provider_package(package: &str) -> &str {
         .or_else(|| package.strip_prefix("registry.opentofu.org/"))
         .unwrap_or(package)
 }
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        leaf.ends_with(".tf") || matches!(leaf, ".terraform.lock.hcl" | ".terraform-version")
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        let documents = documents(files)?;
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = if path.ends_with(".terraform-version") {
+                    Ok(toolchains::terraform(path, text))
+                } else {
+                    extract(path, text, &documents)
+                };
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
+}

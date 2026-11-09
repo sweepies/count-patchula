@@ -31,7 +31,7 @@ const SERVER: &[&str] = &[
 const SHARED: &str = "the ref is shared through a YAML anchor, so no one project's tags apply";
 
 fn commit(reference: &str) -> bool {
-    reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit())
+    commit_hash(reference)
 }
 fn segment(part: &str) -> bool {
     !part.is_empty()
@@ -275,4 +275,34 @@ pub(super) fn extract(
         }
     }
     Ok(scan.out)
+}
+
+/// GitLab CI, and the includes variant that extracts only `include:`
+/// entries.
+pub(crate) struct Descriptor {
+    pub(crate) manager: Manager,
+}
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        let leaf = path.rsplit('/').next().unwrap_or(path);
+        leaf.ends_with(".gitlab-ci.yml") || leaf.ends_with(".gitlab-ci.yaml")
+    }
+    fn prepare<'a>(
+        &self,
+        scanner: &'a Scanner,
+        _files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        let manager = self.manager;
+        let host = scanner.config.gitlab.host.as_str();
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = extract(manager, path, text, host, &mut out.skipped);
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

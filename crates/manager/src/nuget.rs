@@ -126,15 +126,7 @@ fn msbuild(path: &str, text: &str) -> Vec<Dependency> {
 }
 
 fn jsonc(text: &str) -> Result<jsonc_parser::ast::Value<'_>, String> {
-    let options = jsonc_parser::ParseOptions {
-        allow_comments: true,
-        allow_trailing_commas: true,
-        ..Default::default()
-    };
-    jsonc_parser::parse_to_ast(text, &Default::default(), &options)
-        .map_err(|e| e.to_string())?
-        .value
-        .ok_or_else(|| "empty JSON".into())
+    crate::jsonc_ast_lenient(text)
 }
 /// The inner span of a JSON string without escapes.
 fn inner(text: &str, value: &jsonc_parser::ast::StringLit) -> Option<usize> {
@@ -746,7 +738,7 @@ impl Feeds {
             origins.declared.insert(dep.package.clone(), origin);
         }
         // Every NuGet package has an index origin, so none is dropped.
-        let dropped = origins.assign(deps, &NUGET_ORG, |dep| dep.package.clone());
+        let dropped = origins.assign(deps, &NUGET_ORG);
         debug_assert!(dropped.is_empty());
     }
 }
@@ -766,6 +758,41 @@ pub(crate) fn has_element(text: &str, name: &str) -> bool {
             .get(at + open.len())
             .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'>'))
     })
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &patchula_config::Config, path: &str) -> bool {
+        selected(path)
+    }
+    fn registry_file(&self, path: &str) -> bool {
+        config_file(path) || msbuild_file(path)
+    }
+    fn backend_settings(&self, path: &str) -> bool {
+        config_file(path)
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        _files: &'a Files,
+        shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        let feeds = shared.feeds.as_ref().expect("NuGet feeds prepared");
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = extract(path, text).map(|mut deps| {
+                    feeds.assign(&mut deps);
+                    deps
+                });
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }
 
 #[cfg(test)]

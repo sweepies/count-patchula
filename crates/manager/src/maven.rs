@@ -457,3 +457,53 @@ pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repo
     }
     out.any().then_some(out)
 }
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        path.rsplit('/').next() == Some("pom.xml")
+    }
+    fn registry_file(&self, path: &str) -> bool {
+        repository_file(path)
+    }
+    fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
+        let referenced: std::collections::BTreeSet<String> = referenced(files)
+            .into_iter()
+            .flat_map(|(_, targets, _)| targets)
+            .collect();
+        Some(Box::new(move |path| referenced.contains(path)))
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(|path, text, out| {
+                file_result(out, path, extract(path, text));
+                Ok(())
+            })),
+            finish: Some(Box::new(move |out| {
+                let Some(repositories) = private_repositories(files) else {
+                    return Ok(());
+                };
+                out.warnings.extend(repositories.warnings.iter().cloned());
+                let Some(reason) = repositories.closed else {
+                    return Ok(());
+                };
+                for dep in out
+                    .dependencies
+                    .iter_mut()
+                    .filter(|dep| dep.manager == Manager::Maven && dep.source == Source::Maven)
+                {
+                    dep.registry = origins::Named::Unusable(reason.clone()).recorded();
+                }
+                Ok(())
+            })),
+        })
+    }
+}

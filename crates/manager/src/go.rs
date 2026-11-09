@@ -17,12 +17,18 @@ pub(super) fn extract(
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
     let replacements = replacements(path, modules);
-    let require = Regex::new(
-        r#"^\s*(?:require\s+)?(?P<name>[^\s"`]+|"[^"]+"|`[^`]+`)\s+(?P<version>v\d[^\s]*)"#,
-    )
-    .map_err(|e| e.to_string())?;
-    let directive = Regex::new(r"^\s*(?P<kind>go|toolchain)\s+(?P<version>(?:go)?\d[^\s]*)")
-        .map_err(|e| e.to_string())?;
+    static REQUIRE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(
+            r#"^\s*(?:require\s+)?(?P<name>[^\s"`]+|"[^"]+"|`[^`]+`)\s+(?P<version>v\d[^\s]*)"#,
+        )
+        .expect("go.mod require pattern")
+    });
+    static DIRECTIVE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"^\s*(?P<kind>go|toolchain)\s+(?P<version>(?:go)?\d[^\s]*)")
+            .expect("go.mod directive pattern")
+    });
+    let require = &*REQUIRE;
+    let directive = &*DIRECTIVE;
     let mut out = Vec::new();
     let mut block = false;
     let mut offset = 0;
@@ -343,4 +349,40 @@ fn replacements(path: &str, modules: &Modules) -> Result<BTreeSet<String>, Strin
 /// Whether `path` is a Go workspace file.
 pub(crate) fn work_file(path: &str) -> bool {
     path.rsplit('/').next() == Some("go.work")
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        path.rsplit('/').next() == Some("go.mod")
+    }
+    fn registry_file(&self, path: &str) -> bool {
+        work_file(path)
+    }
+    fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
+        let wanted = workspace_modules(files);
+        (!wanted.is_empty()).then(move || {
+            Box::new(move |path: &str| wanted.iter().any(|module| module == path))
+                as crate::PathPredicate<'a>
+        })
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        let modules = modules(files);
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = extract(path, text, &modules, &mut out.skipped);
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

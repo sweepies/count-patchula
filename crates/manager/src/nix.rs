@@ -257,10 +257,7 @@ pub(super) fn extract(
                 text,
                 span.start() + 1,
                 span.end() - 1,
-                format!(
-                    "/nodes/{}/locked/{field}",
-                    node.replace('~', "~0").replace('/', "~1")
-                ),
+                format!("/nodes/{}/locked/{field}", pointer_token(node)),
             ),
             name: name.clone(),
             package: root_url(original).unwrap_or_else(|| current.clone()),
@@ -276,4 +273,32 @@ pub(super) fn extract(
         });
     }
     Ok(out)
+}
+
+pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
+
+pub(crate) struct Descriptor;
+
+impl crate::Ecosystem for Descriptor {
+    fn selected(&self, _config: &Config, path: &str) -> bool {
+        matches!(
+            path.rsplit('/').next().unwrap_or(path),
+            "flake.nix" | "flake.lock"
+        )
+    }
+    fn prepare<'a>(
+        &self,
+        _scanner: &'a Scanner,
+        files: &'a Files,
+        _shared: &'a Shared<'a>,
+    ) -> Result<Prepared<'a>, String> {
+        Ok(Prepared {
+            extract: Some(Box::new(move |path, text, out| {
+                let result = extract(path, text, files, &mut out.skipped);
+                file_result(out, path, result);
+                Ok(())
+            })),
+            finish: None,
+        })
+    }
 }

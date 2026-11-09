@@ -3,13 +3,6 @@
 //! channels such as `stable`, `nightly-…` or `latest` are not.
 use crate::*;
 
-fn numeric(version: &str) -> bool {
-    !version.is_empty()
-        && version
-            .split('.')
-            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-}
-
 fn pin(
     path: &str,
     text: &str,

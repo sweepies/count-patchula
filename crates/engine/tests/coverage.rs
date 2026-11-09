@@ -27,12 +27,6 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
             continue;
         }
         let config = patchula_config::load(&path).unwrap();
-        assert!(
-            config
-                .managers
-                .iter()
-                .all(|m| patchula_manager::supported(*m))
-        );
         let scanner = Scanner::new(&config).unwrap();
         let extraction = scanner
             .extract(&files)

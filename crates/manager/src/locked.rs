@@ -155,7 +155,7 @@ pub(crate) fn npm(
                     crate::read_text(files, path),
                     version.range.start,
                     version.range.end,
-                    format!("/packages/{}", key.replace('~', "~0").replace('/', "~1")),
+                    format!("/packages/{}", pointer_token(key)),
                 ),
             });
         }
@@ -265,7 +265,7 @@ fn read(files: &Files) -> Result<Aube, String> {
                             text,
                             start,
                             start + key.len(),
-                            format!("/packages/{}", key.replace('~', "~0").replace('/', "~1")),
+                            format!("/packages/{}", pointer_token(key)),
                         ),
                     ));
                 }
