@@ -401,7 +401,12 @@ impl Fences {
             let (quotes, rest) = unquote(line, usize::MAX);
             let (width, bytes) = indent(rest);
             let (list, rest) = match LIST_MARKER.find(&rest[bytes..]) {
-                Some(marker) => (Some(width + marker.end()), &rest[bytes + marker.end()..]),
+                // The content column counts the marker's padding in columns, a
+                // tab reaching the next tab stop, as GitHub does.
+                Some(marker) => (
+                    Some(column(width, marker.as_str())),
+                    &rest[bytes + marker.end()..],
+                ),
                 None => (None, rest),
             };
             let Some((ch, count, _)) = token(rest) else {
@@ -460,6 +465,15 @@ impl Fences {
     fn opens(line: &str) -> bool {
         Self::default().advance(line)
     }
+}
+
+/// The column after `text` written from column `start`, a tab reaching the
+/// next multiple of four.
+fn column(start: usize, text: &str) -> usize {
+    text.chars().fold(start, |column, c| match c {
+        '\t' => column + 4 - column % 4,
+        _ => column + 1,
+    })
 }
 
 /// The width of `text`'s leading spaces and tabs, a tab reaching the next

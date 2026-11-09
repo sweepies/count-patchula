@@ -2417,7 +2417,19 @@ async fn a_multi_platform_index_annotates_the_source_for_its_platforms() {
 /// content as far as four spaces would.
 #[test]
 fn a_closed_fence_stays_in_its_container_and_tabs_indent() {
-    for open in ["> ```\n> code", "- ```\n  code", "> - ```\n>   code"] {
+    // A tab after a list marker reaches column four, so the closer is indented
+    // four spaces, where GitHub reads the item's content.
+    for open in ["- \t```\n    code", "-\t```\n    code", "1.\t```\n    code"] {
+        let (kept, _) = fit(&format!("{open}\n"), 10_000);
+        assert!(kept.trim_end().ends_with("\n    ```"), "{open:?}: {kept:?}");
+    }
+    for open in [
+        "> ```\n> code",
+        "- ```\n  code",
+        "> - ```\n>   code",
+        "- \t```\n    code",
+        "1.\t```\n    code",
+    ] {
         let (kept, _) = fit(&format!("## 2.0.0\n<details>\n{open}\n"), 10_000);
         let versions: Vec<_> = parse_changelog(&format!("{kept}\n## 1.0.0\nOld\n"))
             .into_iter()
