@@ -33,13 +33,15 @@ fn alias<'a>(name: &'a str, value: &'a str) -> (&'a str, &'a str) {
 /// Whether `value` names a registry version rather than a local path,
 /// workspace member, patch, git or HTTP source. The `scheme:` check is the
 /// public verdict's local-source taxonomy, so the protocols it calls local
-/// are no registry versions here either; `npm:` stays, since it aliases one.
+/// are no registry versions here either; nor is `patch:`, whose version
+/// belongs to the locator it wraps. `npm:` stays, since it aliases one.
 fn registry(value: &str) -> bool {
     if value.starts_with(['$', '.', '/']) || value.contains("github:") {
         return false;
     }
     if let Some((scheme, _)) = value.split_once(':')
-        && crate::public::LOCAL_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str())
+        && (crate::public::LOCAL_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str())
+            || scheme.eq_ignore_ascii_case("patch"))
     {
         return false;
     }

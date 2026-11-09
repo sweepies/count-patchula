@@ -43,7 +43,8 @@ use jsonc_parser::ast::Value;
 const PUBLIC_HOSTS: &[&str] = &["github.com", "gitlab.com", "bitbucket.org", "codeberg.org"];
 
 /// The `scheme:` prefixes that name a local source — a path, a link, a
-/// workspace member, a patch — which fetches nothing. npm's specifier check
+/// workspace member — which fetches nothing. `patch:` is not one: it wraps
+/// another package's locator, which can fetch. npm's specifier check
 /// reads the same list, so a protocol one calls local the other does too.
 pub(crate) const LOCAL_SCHEMES: &[&str] = &[
     "file",
@@ -52,7 +53,6 @@ pub(crate) const LOCAL_SCHEMES: &[&str] = &[
     "portal",
     "path",
     "catalog",
-    "patch",
     "exec",
     "root",
     "virtual",
@@ -170,6 +170,27 @@ fn placeholder(userinfo: &str) -> bool {
     false
 }
 
+/// `value` with `%XX` escapes decoded; a malformed escape is kept as written.
+fn percent_decoded(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let Some(byte) = value
+                .get(i + 1..i + 3)
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            out.push(byte);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Whether `value`, a URL or specifier a manifest or lockfile names for a
 /// fetch, can only reach public content: the ecosystem's public registry
 /// or a well-known public host, or a local source that fetches nothing.
@@ -182,6 +203,16 @@ pub(crate) fn fetch_ok(value: &str, public: &Public) -> bool {
             .split(':')
             .next()
             .is_some_and(|host| PUBLIC_HOSTS.contains(&host));
+    }
+    // Yarn `patch:` wraps the patched package's own locator, percent-encoded
+    // before the `#` that names the patch file: check that locator. It may
+    // stand alone or as a locator's reference (`name@patch:…`).
+    if let Some(at) = value.find("patch:")
+        && (at == 0 || value[..at].ends_with('@') && !value[..at].contains("://"))
+    {
+        let wrapped = &value[at + "patch:".len()..];
+        let wrapped = wrapped.split('#').next().unwrap_or_default();
+        return fetch_ok(&percent_decoded(wrapped), public);
     }
     // Yarn locators `name@protocol:reference`: check the reference.
     let value = value
@@ -1203,6 +1234,18 @@ mod tests {
             ("file:../x", true),
             ("workspace:*", true),
             ("portal:../x", true),
+            // `patch:` is ruled on by the locator it wraps.
+            ("patch:lodash@npm%3A4.17.21#./patches/lodash.patch", true),
+            ("patch:a@1.0.0#./p.patch", true),
+            (
+                "lodash@patch:lodash@npm%3A4.17.21#~/.yarn/patches/l.patch::version=4.17.21&hash=abc",
+                true,
+            ),
+            ("patch:x@https%3A//npm.acme.dev/x.tgz#./x.patch", false),
+            (
+                "x@patch:x@https%3A//npm.acme.dev/x.tgz#./x.patch::hash=abc",
+                false,
+            ),
             ("sha512-deadbeef", true),
             ("1.2.3", true),
             // A user alone still authenticates: forges take a token as the
