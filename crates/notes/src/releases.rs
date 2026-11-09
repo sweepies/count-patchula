@@ -66,16 +66,17 @@ impl Client {
                 .filter_map(|release| {
                     let version =
                         tag_version(&release.tag, package, &repository).and_then(parsed)?;
-                    (in_range(&version, &old, &new)
-                        && (!release.prerelease || !new.0.pre.is_empty()))
-                    .then_some((version, release.tag))
+                    (in_range(&version, &old, &new) && !hidden_prerelease(release.prerelease, &new))
+                        .then_some((version, release.tag))
                 })
                 .collect();
             candidates.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
-            repos
-                .entry(repo.to_ascii_lowercase())
-                .or_default()
-                .extend(candidates.into_iter().take(32).map(|(_, tag)| tag));
+            repos.entry(repo.to_ascii_lowercase()).or_default().extend(
+                candidates
+                    .into_iter()
+                    .take(NOTES_SECTIONS)
+                    .map(|(_, tag)| tag),
+            );
         }
         use futures_util::{StreamExt, stream};
         stream::iter(repos.into_iter().map(|(repo, tags)| async move {

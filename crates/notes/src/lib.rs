@@ -28,7 +28,22 @@ use std::{
     sync::Arc,
 };
 type SharedSections = Arc<tokio::sync::Mutex<Option<Arc<Vec<Section>>>>>;
-type ChangelogCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedSections>>>;
+/// Parsed upstream blobs memoised per batch. Changelog files and adapter
+/// sections share the map; the key type keeps their formats distinct.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum MemoKey {
+    Changelog {
+        repo: String,
+        path: String,
+        sha: String,
+    },
+    Adapter {
+        repo: String,
+        path: String,
+        sha: String,
+    },
+}
+type ChangelogCache = Arc<tokio::sync::Mutex<BTreeMap<MemoKey, SharedSections>>>;
 type SharedRead = Arc<tokio::sync::Mutex<Option<std::result::Result<Vec<u8>, String>>>>;
 type ReadCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedRead>>>;
 
@@ -116,6 +131,15 @@ fn in_range(version: &Parsed, old: &Parsed, new: &Parsed) -> bool {
         && !Ecosystem::Loose.order(version, new).is_gt()
         && (version.0.pre.is_empty() || !new.0.pre.is_empty())
 }
+/// Upstream prereleases stay out of a stable target's notes; a prerelease
+/// target sees them.
+fn hidden_prerelease(upstream_prerelease: bool, target: &Parsed) -> bool {
+    upstream_prerelease && target.0.pre.is_empty()
+}
+/// A PR body renders at most this many upstream-text bytes per dependency.
+const NOTES_BYTES: usize = 12_000;
+/// ... and at most this many version sections.
+const NOTES_SECTIONS: usize = 32;
 /// The name a package's tags are namespaced by: a Helm chart's name rather
 /// than its repository's URL.
 fn tag_name(id: &PackageId) -> &str {
@@ -414,7 +438,11 @@ impl Client {
             .changelogs
             .lock()
             .await
-            .entry(format!("{repo}:{}:{}", file.path, file.sha))
+            .entry(MemoKey::Changelog {
+                repo: repo.into(),
+                path: file.path.clone(),
+                sha: file.sha.clone(),
+            })
             .or_default()
             .clone();
         let mut saved = shared.lock().await;
@@ -531,7 +559,7 @@ impl Client {
                     if Ecosystem::Loose.order(&version, &new).is_eq() {
                         new_tag = Some(release.tag.clone());
                     }
-                    if release.prerelease && new.0.pre.is_empty() {
+                    if hidden_prerelease(release.prerelease, &new) {
                         continue;
                     }
                     if !in_range(&version, &old, &new) {
@@ -542,7 +570,7 @@ impl Client {
                 candidates.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
                 let tags: Vec<_> = candidates
                     .iter()
-                    .take(32)
+                    .take(NOTES_SECTIONS)
                     .map(|(_, r)| r.tag.clone())
                     .collect();
                 let bodies = self.release_bodies(repo, &tags).await?;
@@ -550,13 +578,13 @@ impl Client {
                 for (index, (version, release)) in candidates.into_iter().enumerate() {
                     // A PR displays at most 12 KB per dependency. Avoid reading
                     // hundreds of older bodies that the renderer cannot include.
-                    if bytes >= 12_000 || index >= 32 {
+                    if bytes >= NOTES_BYTES || index >= NOTES_SECTIONS {
                         notes.incomplete = true;
                         break;
                     }
                     match &bodies[&release.tag] {
                         Ok(Some(body)) => {
-                            if body.draft || body.prerelease && new.0.pre.is_empty() {
+                            if body.draft || hidden_prerelease(body.prerelease, &new) {
                                 continue;
                             }
                             if let Some(body) = body.body.clone().filter(|b| !b.trim().is_empty()) {
@@ -598,7 +626,7 @@ impl Client {
         }
         // Changelogs fill versions with missing/empty releases. Discover once;
         // parse each immutable blob once, irrespective of version/heading count.
-        let tree = if notes.sections.iter().map(|s| s.body.len()).sum::<usize>() >= 12_000 {
+        let tree = if notes.sections.iter().map(|s| s.body.len()).sum::<usize>() >= NOTES_BYTES {
             None
         } else {
             Some(

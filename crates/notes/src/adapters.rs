@@ -213,7 +213,11 @@ impl Client {
             .changelogs
             .lock()
             .await
-            .entry(format!("adapter:{repo}:{path}:{sha}"))
+            .entry(MemoKey::Adapter {
+                repo: repo.into(),
+                path: path.into(),
+                sha: sha.into(),
+            })
             .or_default()
             .clone();
         let mut saved = shared.lock().await;
