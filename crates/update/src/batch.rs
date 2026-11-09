@@ -40,11 +40,6 @@ fn overlaps(item: &Item, targets: &[Change]) -> bool {
     })
 }
 
-/// The batch branch name for a configured prefix.
-pub fn branch_name(config: &Config) -> Result<String, String> {
-    crate::branch_name(&config.prs.branch, "batch", "batch")
-}
-
 /// Current items: the open batch PR's items without removed ones, plus every
 /// open update PR whose "Add to batch" box is ticked. A newly added update
 /// replaces an item for the same dependency, so its newer target wins.
@@ -112,7 +107,7 @@ pub fn apply(
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<BTreeSet<String>, String> {
-    let name = branch_name(config)?;
+    let name = crate::branch_name(&config.prs.branch, "batch")?;
     let items = items(prs, actor, &repository.repository, &name);
     let targets: Vec<_> = items.iter().flat_map(|i| i.targets.clone()).collect();
     let Some(mut plan) = crate::plan::batch_plan(
@@ -128,10 +123,13 @@ pub fn apply(
     else {
         return Ok(BTreeSet::new());
     };
-    if plans.iter().any(|p| p.action.branch == plan.action.branch) {
+    if plans
+        .iter()
+        .any(|p| p.action().branch == plan.action().branch)
+    {
         return Err(format!(
             "{} is reserved for the batch PR; rename the update group",
-            plan.action.branch
+            plan.action().branch
         ));
     }
     let items: Vec<_> = items
@@ -276,38 +274,23 @@ mod tests {
     fn group_plan(branch: &str, file: &str) -> Plan {
         let mut target = change("shared", "1.2.0");
         target.file = file.into();
-        Plan {
-            action: patchula_report::BranchAction {
-                repository: "o/r".into(),
-                branch: branch.into(),
-                base_commit: "base".into(),
-                status: patchula_report::BranchStatus::Planned,
-                reason: None,
-                message: "chore(deps): update shared to 1.2.0".into(),
-                previous_commit: None,
-                commit: None,
-                verified: None,
-                lockfile_pending: false,
-                files: Vec::new(),
-            },
-            contents: Default::default(),
-            identity: branch.into(),
-            fingerprint: String::new(),
-            changes: vec![target],
-            retry: false,
-            tree: None,
-            cached_pr: None,
-            input_fingerprint: String::new(),
-            lock_jobs: Vec::new(),
-            lockfiles_ready: true,
-            public_only: Default::default(),
-            deleted: Default::default(),
-            maintenance: false,
-            batch: None,
-            tooling: Vec::new(),
-            hold: None,
-            failure: None,
-        }
+        let mut plan = Plan::new(patchula_report::BranchAction {
+            repository: "o/r".into(),
+            branch: branch.into(),
+            base_commit: "base".into(),
+            status: patchula_report::BranchStatus::Planned,
+            reason: None,
+            message: "chore(deps): update shared to 1.2.0".into(),
+            previous_commit: None,
+            commit: None,
+            verified: None,
+            lockfile_pending: false,
+            files: Vec::new(),
+        });
+        plan.identity = branch.into();
+        plan.changes = vec![target];
+        plan.lockfiles_ready = true;
+        plan
     }
 
     /// A tick lifts only a hold a tick may lift: a plan outside its window
@@ -324,14 +307,14 @@ mod tests {
                 plan.hold(hold);
             }
             plan.lift();
-            assert_eq!(plan.action.status, patchula_report::BranchStatus::Skipped);
-            assert_eq!(plan.action.reason.as_deref(), Some("digest unavailable"));
+            assert_eq!(plan.action().status, patchula_report::BranchStatus::Skipped);
+            assert_eq!(plan.action().reason.as_deref(), Some("digest unavailable"));
         }
         let mut plan = group_plan("patchula/x", "package.json");
         plan.hold(Hold::Window);
         plan.lift();
-        assert_eq!(plan.action.status, patchula_report::BranchStatus::Planned);
-        assert_eq!(plan.action.reason, None);
+        assert_eq!(plan.action().status, patchula_report::BranchStatus::Planned);
+        assert_eq!(plan.action().reason, None);
     }
 
     /// One group per service, each bumping a shared dependency to the same
@@ -355,7 +338,7 @@ mod tests {
             .map(|(p, n)| {
                 pr(
                     n,
-                    &p.action.branch,
+                    &p.action().branch,
                     update_body(&update_key(p), &p.changes, true),
                 )
             })

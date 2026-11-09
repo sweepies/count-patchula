@@ -149,7 +149,7 @@ impl Controls {
                 .collect();
             if !permits.is_empty() {
                 self.branch_permits
-                    .insert(plan.action.branch.clone(), permits);
+                    .insert(plan.action().branch.clone(), permits);
             }
             let age_click = plan.changes.iter().any(|c| {
                 dependencies
@@ -180,13 +180,13 @@ impl Controls {
             }
             if (self.create.contains(&key)
                 || self.recreate.contains(&key)
-                || self.branches.contains(&plan.action.branch))
+                || self.branches.contains(&plan.action().branch))
                 && plan.held(&crate::plan::Hold::Window)
             {
                 plan.lift();
             }
             if self.recheck
-                || self.branches.contains(&plan.action.branch)
+                || self.branches.contains(&plan.action().branch)
                 || self.create.contains(&key)
                 || self.recreate.contains(&key)
             {
@@ -363,7 +363,7 @@ pub fn render(
         p["state"] == "open"
             && !plans
                 .iter()
-                .any(|plan| p["head"]["ref"] == plan.action.branch)
+                .any(|plan| p["head"]["ref"] == plan.action().branch)
     }) {
         if let Some(number) = pr["number"].as_u64() {
             sections
@@ -379,12 +379,12 @@ pub fn render(
         }
     }
     for plan in plans {
-        if plan.action.status == patchula_report::BranchStatus::Merged {
+        if plan.action().status == patchula_report::BranchStatus::Merged {
             continue;
         }
         let open = prs
             .iter()
-            .find(|p| p["state"] == "open" && p["head"]["ref"] == plan.action.branch);
+            .find(|p| p["state"] == "open" && p["head"]["ref"] == plan.action().branch);
         if let Some(pr) = open {
             let kinds: BTreeSet<_> = plan.changes.iter().map(|c| c.kind.as_str()).collect();
             let kind = if plan.maintenance {
@@ -424,21 +424,14 @@ pub fn render(
                         Action::Recreate(update_key(plan)),
                     ),
                 ));
-        } else if let Some(reason) = &plan.action.reason {
-            let row = if plan
-                .hold
-                .as_ref()
-                .is_some_and(crate::plan::Hold::overridable)
-            {
+        } else if let Some(reason) = &plan.action().reason {
+            let row = if plan.overridable() {
                 checkbox(
                     &format!("Create it now anyway: {} ({})", titled(plan), safe(reason)),
                     Action::Create(update_key(plan)),
                 )
             } else {
-                let failure = plan
-                    .failure
-                    .clone()
-                    .unwrap_or_else(|| text::failure(reason));
+                let failure = plan.failure().expect("every reason keeps its failure");
                 let mut row = format!("- {}: {}\n", titled(plan), escape(&failure.summary));
                 if let Some(detail) = &failure.detail {
                     row.push_str(&details(detail, "  "));
@@ -860,7 +853,7 @@ fn details(output: &str, indent: &str) -> String {
 
 /// A plan's title, with the names of its packages as code.
 fn titled(plan: &Plan) -> String {
-    let message = plan.action.message.as_str();
+    let message = plan.action().message.as_str();
     let mut names: Vec<_> = plan.changes.iter().map(|c| c.package.as_str()).collect();
     names.sort_by_key(|n| std::cmp::Reverse(n.len()));
     names.dedup();
@@ -939,13 +932,13 @@ fn fix_status(
                     .as_ref()
                     .is_some_and(|items| items.iter().any(|item| item.origin == key))
             })
-            .and_then(|plan| open(&plan.action.branch))
+            .and_then(|plan| open(&plan.action().branch))
     };
     let number = matching.iter().find_map(|plan| {
         if plan.held(&crate::plan::Hold::Batched) {
             batch(&crate::pull_requests::update_key(plan))
         } else {
-            open(&plan.action.branch)
+            open(&plan.action().branch)
         }
     });
     // Closed only when no matching plan is still on its way to a PR.

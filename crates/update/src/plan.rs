@@ -41,7 +41,7 @@ fn plan_fingerprint(
 }
 #[derive(Debug)]
 pub struct Plan {
-    pub action: BranchAction,
+    action: BranchAction,
     pub contents: BTreeMap<String, String>,
     pub identity: String,
     pub fingerprint: String,
@@ -61,13 +61,14 @@ pub struct Plan {
     pub batch: Option<Vec<crate::batch::Item>>,
     /// Tooling warnings shown on this PR.
     pub tooling: Vec<crate::tooling::Callout>,
-    /// Why the plan is not written this run, if it is held; set only
-    /// through [`Plan::hold`], which keeps the report's status and reason
-    /// in step.
-    pub hold: Option<Hold>,
-    /// A lockfile tool's failure kept structured for the dashboard, set by
-    /// lockfile generation beside `action.reason`.
-    pub failure: Option<crate::text::Failure>,
+    /// Why the plan is not written this run, if it is held; private so the
+    /// status and reason it implies can only change through the named
+    /// transitions on [`Plan`].
+    hold: Option<Hold>,
+    /// The dashboard's rendering of `action.reason`, kept in step with it
+    /// by every transition: the report reads the reason, the dashboard
+    /// this typed form, so the two cannot disagree.
+    failure: Option<crate::text::Failure>,
 }
 
 /// Why a plan is not written this run. A plan has at most one: when several
@@ -137,6 +138,47 @@ impl Hold {
     }
 }
 impl Plan {
+    /// A plan for `action`'s branch, with no edits or results yet.
+    pub fn new(action: BranchAction) -> Self {
+        Self {
+            failure: action.reason.as_deref().map(crate::text::failure),
+            action,
+            contents: BTreeMap::new(),
+            identity: String::new(),
+            fingerprint: String::new(),
+            changes: Vec::new(),
+            retry: false,
+            tree: None,
+            cached_pr: None,
+            input_fingerprint: String::new(),
+            lock_jobs: Vec::new(),
+            lockfiles_ready: false,
+            public_only: BTreeMap::new(),
+            deleted: BTreeSet::new(),
+            maintenance: false,
+            batch: None,
+            tooling: Vec::new(),
+            hold: None,
+        }
+    }
+    /// The branch action the report carries.
+    pub fn action(&self) -> &BranchAction {
+        &self.action
+    }
+    /// The branch action, once the plan's work is done and the report reads it.
+    pub fn into_action(self) -> BranchAction {
+        self.action
+    }
+    /// The dashboard's rendering of `action.reason`; every transition keeps
+    /// it in step, so it is present exactly when the reason is.
+    pub fn failure(&self) -> Option<&crate::text::Failure> {
+        self.failure.as_ref()
+    }
+    /// `action.reason` and its dashboard `failure`, always set together.
+    fn set_reason(&mut self, reason: Option<String>) {
+        self.failure = reason.as_deref().map(crate::text::failure);
+        self.action.reason = reason;
+    }
     /// Hold the plan, unless a stronger hold already does; of equals, the
     /// later wins, as in [`keep`].
     pub fn hold(&mut self, hold: Hold) {
@@ -148,12 +190,16 @@ impl Plan {
             return;
         }
         self.action.status = BranchStatus::Skipped;
-        self.action.reason = Some(hold.text().to_owned());
+        self.set_reason(Some(hold.text().to_owned()));
         self.hold = Some(hold);
     }
     /// Whether `hold` is what holds the plan.
     pub fn held(&self, hold: &Hold) -> bool {
         self.hold.as_ref() == Some(hold)
+    }
+    /// Whether a dashboard tick to create the update anyway lifts the hold.
+    pub fn overridable(&self) -> bool {
+        self.hold.as_ref().is_some_and(Hold::overridable)
     }
     /// Release a hold a dashboard tick may lift; a plan held for any other
     /// reason stays held.
@@ -161,8 +207,124 @@ impl Plan {
         if self.hold.as_ref().is_some_and(Hold::overridable) {
             self.hold = None;
             self.action.status = BranchStatus::Planned;
-            self.action.reason = None;
+            self.set_reason(None);
         }
+    }
+    /// An open PR on the branch is not the Count's to reconcile.
+    pub(crate) fn protect(&mut self, reason: impl Into<String>) {
+        self.action.status = BranchStatus::Protected;
+        self.set_reason(Some(reason.into()));
+    }
+    /// The write failed; an errored plan names no commit.
+    pub fn error(&mut self, reason: impl Into<String>) {
+        self.action.status = BranchStatus::Error;
+        self.action.commit = None;
+        self.set_reason(Some(reason.into()));
+    }
+    /// The default branch moved before the write; a rerun retries it.
+    pub(crate) fn stale(&mut self, reason: impl Into<String>) {
+        self.action.status = BranchStatus::Stale;
+        self.set_reason(Some(reason.into()));
+    }
+    /// Lockfile generation failed; the report keeps the reason and the
+    /// dashboard the typed failure, both from the same error.
+    pub fn lockfiles_failed(&mut self, error: crate::lockfiles::Error) {
+        self.action.status = BranchStatus::Error;
+        let reason = format!("lockfile generation failed: {error}");
+        self.action.reason = Some(reason.clone());
+        self.failure = Some(match error {
+            crate::lockfiles::Error::Tool(tool) => crate::text::tool_failure(
+                &format!("lockfile generation failed: {}", tool.context),
+                &tool.failure,
+            ),
+            crate::lockfiles::Error::Text(_) => crate::text::failure(&reason),
+        });
+    }
+    /// GitHub's verdict on the commit's signature.
+    pub(crate) fn set_verified(&mut self, verified: Option<bool>) {
+        self.action.verified = verified;
+    }
+    /// The update branch's head observed before the write.
+    pub(crate) fn record_head(&mut self, previous: Option<String>) {
+        self.action.previous_commit = previous;
+    }
+    /// The plan's commit is on its branch with `status`.
+    pub(crate) fn committed(&mut self, commit: String, status: BranchStatus) {
+        self.action.commit = Some(commit);
+        self.action.status = status;
+        if self.action.lockfile_pending {
+            self.set_reason(Some(
+                "lockfile pending: manifest-only test branch; regenerate before merging".into(),
+            ));
+        }
+    }
+    /// The update branch already holds exactly this plan's tree.
+    pub fn unchanged(&mut self, commit: String, tree: String) {
+        self.action.status = BranchStatus::Unchanged;
+        self.action.previous_commit = Some(commit.clone());
+        self.action.commit = Some(commit);
+        self.action.verified = Some(true);
+        self.tree = Some(tree);
+    }
+    /// A verified write receipt proves the branch is already at the plan.
+    pub(crate) fn restored(
+        &mut self,
+        commit: &str,
+        tree: &str,
+        fingerprint: &str,
+        files: Vec<patchula_report::FileAction>,
+        pr: serde_json::Value,
+    ) {
+        self.action.status = BranchStatus::Unchanged;
+        self.action.previous_commit = Some(commit.into());
+        self.action.commit = Some(commit.into());
+        self.action.verified = Some(true);
+        self.tree = Some(tree.into());
+        self.cached_pr = Some(pr);
+        self.fingerprint = fingerprint.into();
+        self.action.files = files;
+        self.lockfiles_ready = true;
+    }
+    /// Lockfile generation produced these files for the plan.
+    pub(crate) fn lockfiles_generated(
+        &mut self,
+        contents: BTreeMap<String, String>,
+        deleted: BTreeSet<String>,
+        files: Vec<patchula_report::FileAction>,
+    ) {
+        self.contents = contents;
+        self.deleted = deleted;
+        self.action.files = files;
+        self.lockfiles_ready = true;
+        self.fingerprint = hash(
+            serde_json::to_string(&(&self.contents, &self.deleted, &self.action.message))
+                .unwrap()
+                .as_bytes(),
+        );
+    }
+    /// The pull request merged.
+    pub(crate) fn merged(&mut self) {
+        self.action.status = BranchStatus::Merged;
+    }
+    /// The branch the plan publishes to.
+    pub fn rename_branch(&mut self, branch: String) {
+        self.action.branch = branch;
+    }
+    /// The extraction commit the plan's edits and write apply to.
+    pub fn retarget_base(&mut self, base_commit: String) {
+        self.action.base_commit = base_commit;
+    }
+    /// The commit message the write uses.
+    pub fn set_message(&mut self, message: String) {
+        self.action.message = message;
+    }
+    /// Whether the write is a manifest-only lockfile-pending test branch.
+    pub fn set_lockfile_pending(&mut self, pending: bool) {
+        self.action.lockfile_pending = pending;
+    }
+    /// A file the plan changes, as the planner records it.
+    pub fn add_file(&mut self, file: patchula_report::FileAction) {
+        self.action.files.push(file);
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -229,7 +391,7 @@ pub fn blob_sha(content: &str) -> String {
         .collect()
 }
 /// Readable branch labels; repository planning resolves manager collisions.
-pub fn branch_name(prefix: &str, label: &str, _identity: &str) -> Result<String, String> {
+pub fn branch_name(prefix: &str, label: &str) -> Result<String, String> {
     let name = format!("{prefix}{}", label.to_ascii_lowercase());
     if name.len() > 240
         || name.starts_with('/')
@@ -337,7 +499,7 @@ pub fn plan(
                 managers.into_iter().collect::<Vec<_>>().join("-")
             );
         }
-        let branch = branch_name(&config.prs.branch, &label, &identity)?;
+        let branch = branch_name(&config.prs.branch, &label)?;
         if !names.insert(branch.clone()) {
             return Err(
                 "branch name collision after manager disambiguation; set explicit groups".into(),
@@ -604,8 +766,8 @@ fn build(
         maintenance: false,
         batch: None,
         tooling: Vec::new(),
+        failure: hold.as_ref().map(|hold| crate::text::failure(hold.text())),
         hold,
-        failure: None,
     })
 }
 
@@ -963,7 +1125,7 @@ pub fn batch_plan(
             advisories: &[],
         })
         .collect();
-    let branch = branch_name(&config.prs.branch, "batch", "batch")?;
+    let branch = branch_name(&config.prs.branch, "batch")?;
     let mut plan = build(
         repo,
         config,
@@ -980,16 +1142,16 @@ pub fn batch_plan(
     for change in &mut plan.changes {
         change.merge = config.prs.batch_merge;
     }
-    plan.action.message = format!(
+    plan.set_message(format!(
         "{} batch of {} update{}",
         config.defaults.commit_prefix,
         plan.changes.len(),
         if plan.changes.len() == 1 { "" } else { "s" }
-    );
+    ));
     plan.fingerprint = plan_fingerprint(
         &plan.contents,
-        &plan.action.message,
-        plan.action.lockfile_pending,
+        &plan.action().message,
+        plan.action().lockfile_pending,
         &plan.lock_jobs,
     );
     plan.input_fingerprint.clone_from(&plan.fingerprint);

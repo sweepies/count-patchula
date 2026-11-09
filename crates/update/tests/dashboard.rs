@@ -524,38 +524,23 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
 #[test]
 fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
     let plan = |package: &str, hold: patchula_update::Hold| {
-        let mut plan = patchula_update::Plan {
-            action: patchula_report::BranchAction {
-                repository: "demo/app".into(),
-                branch: format!("patchula/{package}"),
-                base_commit: "a".repeat(40),
-                status: patchula_report::BranchStatus::Planned,
-                reason: None,
-                message: format!("chore(deps): update {package} to 2.0.0"),
-                previous_commit: None,
-                commit: None,
-                verified: None,
-                lockfile_pending: false,
-                files: Vec::new(),
-            },
-            contents: Default::default(),
-            identity: package.into(),
-            fingerprint: package.into(),
-            changes: Vec::new(),
-            retry: false,
-            tree: None,
-            cached_pr: None,
-            input_fingerprint: package.into(),
-            lock_jobs: Vec::new(),
-            lockfiles_ready: true,
-            public_only: Default::default(),
-            deleted: Default::default(),
-            maintenance: false,
-            batch: None,
-            tooling: Vec::new(),
-            hold: None,
-            failure: None,
-        };
+        let mut plan = patchula_update::Plan::new(patchula_report::BranchAction {
+            repository: "demo/app".into(),
+            branch: format!("patchula/{package}"),
+            base_commit: "a".repeat(40),
+            status: patchula_report::BranchStatus::Planned,
+            reason: None,
+            message: format!("chore(deps): update {package} to 2.0.0"),
+            previous_commit: None,
+            commit: None,
+            verified: None,
+            lockfile_pending: false,
+            files: Vec::new(),
+        });
+        plan.identity = package.into();
+        plan.fingerprint = package.into();
+        plan.input_fingerprint = package.into();
+        plan.lockfiles_ready = true;
         plan.hold(hold);
         plan
     };

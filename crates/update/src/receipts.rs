@@ -124,12 +124,12 @@ pub(crate) fn actor_login(actor: &Value) -> Option<String> {
 }
 fn fallback(repository: &Repository, plan: &Plan, reason: &str) {
     tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
-        branch = %plan.action.branch, reason, "write receipt verification fallback");
+        branch = %plan.action().branch, reason, "write receipt verification fallback");
 }
 fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> bool {
     for plan in plans
         .iter()
-        .filter(|p| p.action.status == BranchStatus::Planned)
+        .filter(|p| p.action().status == BranchStatus::Planned)
     {
         fallback(repository, plan, reason);
     }
@@ -304,7 +304,7 @@ pub async fn restore_inventory(
         .map_err(|e| e.to_string())?;
     let pending = plans
         .iter()
-        .any(|p| p.action.status == BranchStatus::Planned);
+        .any(|p| p.action().status == BranchStatus::Planned);
     let receipts = match receipts {
         None if pending => return Ok(not_restored(repository, plans, "missing-receipt")),
         Some(receipts) => receipts,
@@ -313,14 +313,14 @@ pub async fn restore_inventory(
     if (receipts.writes.is_empty() && receipts.closed.is_empty() || receipts.closed.len() > 100)
         && plans
             .iter()
-            .any(|p| p.action.status == BranchStatus::Planned)
+            .any(|p| p.action().status == BranchStatus::Planned)
     {
         return Ok(not_restored(repository, plans, "unusable-receipts"));
     }
     let actor = inventory.actor.as_str();
     let refs = &inventory.refs;
     let closed = &inventory.closed;
-    let desired: BTreeSet<_> = plans.iter().map(|p| p.action.branch.as_str()).collect();
+    let desired: BTreeSet<_> = plans.iter().map(|p| p.action().branch.as_str()).collect();
     let obsolete = refs.iter().any(|r| {
         let name = r["name"].as_str().unwrap_or("");
         Some(name) != repository.default_branch.as_deref()
@@ -337,11 +337,11 @@ pub async fn restore_inventory(
     let mut restored = 0;
     for plan in plans
         .iter_mut()
-        .filter(|p| p.action.status == BranchStatus::Planned)
+        .filter(|p| p.action().status == BranchStatus::Planned)
     {
         let result = if plan.retry {
             Err("checkbox-recheck")
-        } else if let Some(receipt) = receipts.closed.get(&plan.action.branch) {
+        } else if let Some(receipt) = receipts.closed.get(&plan.action().branch) {
             if receipt.actor != actor {
                 Err("actor-mismatch")
             } else if receipt.intent != intent(plan, config, recheck, server) {
@@ -378,7 +378,7 @@ pub async fn restore_inventory(
             Ok(()) => {
                 restored += 1;
                 tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
-                    branch = %plan.action.branch, "write receipt restored");
+                    branch = %plan.action().branch, "write receipt restored");
             }
             Err(reason) => fallback(repository, plan, reason),
         }
@@ -386,7 +386,7 @@ pub async fn restore_inventory(
     let complete = !obsolete
         && plans
             .iter()
-            .all(|p| p.action.status != BranchStatus::Planned);
+            .all(|p| p.action().status != BranchStatus::Planned);
     tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         restored, complete, obsolete, "write receipts restored");
     Ok(complete)
@@ -403,7 +403,7 @@ fn restore_write(
 ) -> Result<(), &'static str> {
     let receipt = receipts
         .writes
-        .get(&plan.action.branch)
+        .get(&plan.action().branch)
         .ok_or("missing-receipt")?;
     if receipt.actor != actor {
         return Err("actor-mismatch");
@@ -413,7 +413,7 @@ fn restore_write(
     }
     let r = refs
         .iter()
-        .find(|r| r["name"] == plan.action.branch)
+        .find(|r| r["name"] == plan.action().branch)
         .ok_or("missing-head")?;
     if r["target"]["oid"] != receipt.commit {
         return Err("head-oid-changed");
@@ -436,20 +436,18 @@ fn restore_write(
     if pr["head"]["sha"] != receipt.commit || pr_state(&pr) != receipt.pr {
         return Err("pr-state-changed");
     }
-    if receipt.base != plan.action.base_commit
+    if receipt.base != plan.action().base_commit
         && (config.prs.rebase != Rebase::Conflicts || !plan.lock_jobs.is_empty())
     {
         return Err("base-changed");
     }
-    plan.action.status = BranchStatus::Unchanged;
-    plan.action.previous_commit = Some(receipt.commit.clone());
-    plan.action.commit = Some(receipt.commit.clone());
-    plan.action.verified = Some(true);
-    plan.tree = Some(receipt.tree.clone());
-    plan.cached_pr = Some(pr);
-    plan.fingerprint.clone_from(&receipt.fingerprint);
-    plan.action.files.clone_from(&receipt.files);
-    plan.lockfiles_ready = true;
+    plan.restored(
+        &receipt.commit,
+        &receipt.tree,
+        &receipt.fingerprint,
+        receipt.files.clone(),
+        pr,
+    );
     Ok(())
 }
 
@@ -471,9 +469,9 @@ pub(crate) async fn save_merge_states(
         let Some(pr) = &plan.cached_pr else {
             continue;
         };
-        if plan.action.status == BranchStatus::Merged {
-            receipts.writes.remove(&plan.action.branch);
-        } else if let Some(receipt) = receipts.writes.get_mut(&plan.action.branch) {
+        if plan.action().status == BranchStatus::Merged {
+            receipts.writes.remove(&plan.action().branch);
+        } else if let Some(receipt) = receipts.writes.get_mut(&plan.action().branch) {
             receipt.pr = pr_state(pr);
         }
     }
@@ -501,7 +499,7 @@ pub async fn save_receipts(
                 continue;
             };
             receipts.closed.insert(
-                plan.action.branch.clone(),
+                plan.action().branch.clone(),
                 ClosedReceipt {
                     actor: actor.into(),
                     intent: intent(plan, config, lifecycle.recheck, lifecycle.server.as_deref()),
@@ -510,14 +508,14 @@ pub async fn save_receipts(
             );
         }
         if !matches!(
-            plan.action.status,
+            plan.action().status,
             BranchStatus::Created
                 | BranchStatus::Updated
                 | BranchStatus::Rebased
                 | BranchStatus::Unchanged
-        ) || plan.action.verified != Some(true)
+        ) || plan.action().verified != Some(true)
             || !lifecycle.actions.iter().any(|a| {
-                a.branch == plan.action.branch
+                a.branch == plan.action().branch
                     && matches!(
                         a.status,
                         patchula_report::PullRequestStatus::Created
@@ -528,14 +526,14 @@ pub async fn save_receipts(
         {
             continue;
         }
-        let (Some(commit), Some(tree)) = (&plan.action.commit, &plan.tree) else {
+        let (Some(commit), Some(tree)) = (&plan.action().commit, &plan.tree) else {
             continue;
         };
         let Some(pr) = plan.cached_pr.as_ref().or_else(|| {
             lifecycle
                 .prs
                 .iter()
-                .find(|pr| pr["state"] == "open" && pr["head"]["ref"] == plan.action.branch)
+                .find(|pr| pr["state"] == "open" && pr["head"]["ref"] == plan.action().branch)
         }) else {
             continue;
         };
@@ -548,16 +546,16 @@ pub async fn save_receipts(
             continue;
         }
         receipts.writes.insert(
-            plan.action.branch.clone(),
+            plan.action().branch.clone(),
             Receipt {
                 actor: actor.into(),
                 commit: commit.clone(),
                 tree: tree.clone(),
-                base: plan.action.base_commit.clone(),
+                base: plan.action().base_commit.clone(),
                 intent: intent(plan, config, lifecycle.recheck, lifecycle.server.as_deref()),
                 pr: pr_state(pr),
                 fingerprint: plan.fingerprint.clone(),
-                files: plan.action.files.clone(),
+                files: plan.action().files.clone(),
             },
         );
     }

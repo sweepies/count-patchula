@@ -697,13 +697,13 @@ impl Engine {
                             plans
                                 .iter()
                                 .filter(|p| {
-                                    !merge_actions.iter().any(|a| a.branch == p.action.branch)
+                                    !merge_actions.iter().any(|a| a.branch == p.action().branch)
                                 })
                                 .filter_map(|p| {
                                     p.cached_pr.as_ref().map(|pr| {
                                         patchula_report::PullRequestAction {
                                             repository: repo.repository.clone(),
-                                            branch: p.action.branch.clone(),
+                                            branch: p.action().branch.clone(),
                                             number: pr["number"].as_u64(),
                                             url: pr["html_url"].as_str().map(str::to_owned),
                                             status: patchula_report::PullRequestStatus::Unchanged,
@@ -713,7 +713,7 @@ impl Engine {
                                 }),
                         );
                         pull_requests.extend(merge_actions);
-                        branches.extend(plans.into_iter().map(|p| p.action));
+                        branches.extend(plans.into_iter().map(|p| p.into_action()));
                         continue;
                     }
                     Ok(false) => {}
@@ -727,10 +727,10 @@ impl Engine {
                 pull_requests.extend(
                     plans
                         .iter()
-                        .filter(|p| p.action.status == patchula_report::BranchStatus::Planned)
+                        .filter(|p| p.action().status == patchula_report::BranchStatus::Planned)
                         .map(|p| patchula_report::PullRequestAction {
                             repository: repo.repository.clone(),
-                            branch: p.action.branch.clone(),
+                            branch: p.action().branch.clone(),
                             number: None,
                             url: None,
                             status: patchula_report::PullRequestStatus::Planned,
@@ -783,13 +783,11 @@ impl Engine {
                         .await;
                 } else {
                     for plan in &mut plans {
-                        if plan.action.status == patchula_report::BranchStatus::Planned
+                        if plan.action().status == patchula_report::BranchStatus::Planned
                             && !plan.lockfiles_ready
                         {
-                            plan.action.status = patchula_report::BranchStatus::Error;
-                            plan.action.reason = Some(
-                                "lockfile generation requires a disk cache or an injected runner"
-                                    .into(),
+                            plan.error(
+                                "lockfile generation requires a disk cache or an injected runner",
                             );
                         }
                     }
@@ -902,7 +900,7 @@ impl Engine {
             }
             for plan in &plans {
                 if matches!(
-                    plan.action.status,
+                    plan.action().status,
                     patchula_report::BranchStatus::Error | patchula_report::BranchStatus::Protected
                 ) {
                     fail(
@@ -911,7 +909,7 @@ impl Engine {
                     );
                 }
             }
-            branches.extend(plans.into_iter().map(|p| p.action));
+            branches.extend(plans.into_iter().map(|p| p.into_action()));
         }
         // Every repository that finished cleanly, including ones settled from
         // their write receipts, has taken this run's schedule turn.

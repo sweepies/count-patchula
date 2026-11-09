@@ -18,7 +18,7 @@ pub mod lockfiles;
 mod plan;
 mod write;
 pub use plan::{Blob, Change, Hold, Plan, Snapshot, blob_sha, branch_name, plan, unified};
-pub use write::{REF_UPDATE, apply, apply_all, needs_requeue};
+pub use write::{REF_UPDATE, apply_all, needs_requeue};
 
 pub mod pull_requests;
 pub mod tooling;
