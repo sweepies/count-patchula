@@ -22,6 +22,14 @@ pub(crate) fn recheck_timing(recheck: Recheck) -> &'static str {
         Recheck::NextRun => "on the next run",
     }
 }
+/// How `recheck` enters the body and receipt hashes. Open PR bodies carry
+/// hashes over these spellings, so changing them rewrites every open PR body.
+pub(crate) fn recheck_hashed(recheck: Recheck) -> &'static str {
+    match recheck {
+        Recheck::Now => "Now",
+        Recheck::NextRun => "NextRun",
+    }
+}
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Marker {
@@ -969,7 +977,7 @@ impl Lifecycle {
             "notes-render-v6",
             &text,
             ranges,
-            self.recheck,
+            recheck_hashed(self.recheck),
             self.branch_permits.get(&plan.action.branch),
         );
         // Only an advertised server joins the hash, so bodies written without

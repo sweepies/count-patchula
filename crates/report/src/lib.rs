@@ -188,7 +188,7 @@ pub struct Skipped {
     pub reason: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LookupFailure {
     pub manager: Manager,
@@ -371,7 +371,7 @@ pub struct Resolution {
     pub kind: ResolutionKind,
     pub version: String,
 }
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HeldBack {
     pub version: String,
@@ -424,7 +424,7 @@ pub struct Current {
     pub digest: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Update {
     /// The new declaration. `None` with a `new_version` is a lockfile-only
@@ -535,7 +535,7 @@ pub struct ImageAdvisory {
     pub platforms: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdatePolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -801,6 +801,39 @@ pub fn normalize_dependencies(dependencies: Vec<Dependency>) -> Vec<Dependency> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failures_sort_by_the_text_of_their_words() {
+        let failure = |manager, datasource| LookupFailure {
+            manager,
+            path: "p".into(),
+            name: "n".into(),
+            package: "x".into(),
+            datasource,
+            kind: LookupErrorKind::Network,
+            message: "m".into(),
+        };
+        // Npm is declared before Bun and Cargo; the report lists by word.
+        let mut failures = vec![
+            failure(Manager::Npm, Source::Npm),
+            failure(Manager::Cargo, Source::Crates),
+            failure(Manager::Bun, Source::Npm),
+            failure(Manager::Bun, Source::GithubTags),
+        ];
+        failures.sort();
+        let order: Vec<_> = failures
+            .iter()
+            .map(|f| (f.manager.as_str(), f.datasource.as_str()))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                ("bun", "github-tags"),
+                ("bun", "npm"),
+                ("cargo", "crates"),
+                ("npm", "npm")
+            ]
+        );
+    }
     /// Version 6 gave branches and pull requests their own statuses: a status
     /// only the other one has is not a report.
     #[test]
@@ -894,3 +927,53 @@ mod tests {
         parse(&value).unwrap();
     }
 }
+
+// These records sorted on string fields before their words were typed, and
+// reports, CLI output and the dashboard list them in that order. They keep
+// sorting by the word's text, not by the enum's declaration order.
+macro_rules! ordered_by {
+    ($name:ident, |$v:ident| $key:expr) => {
+        impl Ord for $name {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                let key = |$v: &Self| $key;
+                key(self).cmp(&key(other))
+            }
+        }
+        impl PartialOrd for $name {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+    };
+}
+ordered_by!(LookupFailure, |f| (
+    f.manager.as_str(),
+    &f.path,
+    &f.name,
+    &f.package,
+    f.datasource.as_str(),
+    f.kind,
+    &f.message,
+));
+ordered_by!(HeldBack, |h| (
+    &h.version,
+    &h.versions,
+    h.count,
+    h.update_type.as_str(),
+    &h.published_at,
+    &h.eligible_at,
+    &h.target_eligible_at,
+));
+ordered_by!(Update, |u| (
+    (&u.new_value, &u.new_version, &u.new_digest),
+    u.update_type.as_str(),
+    (&u.group, &u.policy, &u.release_age, &u.fixes, &u.image),
+));
+ordered_by!(UpdatePolicy, |p| (
+    (
+        p.versions.map(VersionPolicy::as_str),
+        p.channel.map(ReleaseChannel::as_str)
+    ),
+    (p.wait_hours, &p.windows, p.merge, &p.labels),
+    (&p.commit_prefix, p.release_notes, &p.body_notes),
+));
