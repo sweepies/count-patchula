@@ -618,9 +618,9 @@ impl Client {
         let mut stale = self.stale_registry.lock().await;
         let entries = stale.entry(format!("{host}/{path}")).or_default();
         if let Some(time) = stale_at {
-            entries.insert(StaleKey::Catalog, time);
+            entries.insert(StaleKey::CATALOG, time);
         } else {
-            entries.remove(&StaleKey::Catalog);
+            entries.remove(&StaleKey::CATALOG);
         }
         Ok(catalog)
     }

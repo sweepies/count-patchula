@@ -156,12 +156,11 @@ pub fn apply(
             plan.action.branch
         ));
     }
-    let pending: Vec<_> = plan.changes.iter().collect();
     let items: Vec<_> = items
         .into_iter()
         .filter(|i| {
             i.targets.iter().any(|t| {
-                pending
+                plan.changes
                     .iter()
                     .any(|c| c.touches(&t.file, t.source, &t.package, t.registry.as_deref()))
             })

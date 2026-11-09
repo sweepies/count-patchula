@@ -221,7 +221,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
         digest
     );
     let stale = sources.registry_stale("docker.io/library/spec").await;
-    assert_eq!(stale[&StaleKey::Catalog], fetched);
+    assert_eq!(stale[&StaleKey::CATALOG], fetched);
     assert!(stale.contains_key(&StaleKey::digest("1.0")));
     assert_eq!(
         cache.http_get(&key).await.unwrap().unwrap().fetched_at,
@@ -361,7 +361,7 @@ async fn a_fresh_catalog_clears_stale_provenance_after_a_short_limit() {
         sources
             .registry_stale("ghcr.io/spec/image")
             .await
-            .contains_key(&StaleKey::Catalog)
+            .contains_key(&StaleKey::CATALOG)
     );
     sources
         .lookup(&patchula_config::PackageId::public(

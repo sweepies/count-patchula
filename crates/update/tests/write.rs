@@ -16,7 +16,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// The metadata a real report always carries for an extracted dependency.
+/// Report metadata for an extracted dependency: its source as the engine
+/// records it, and nothing else these tests read.
 fn metadata(dep: &patchula_manager::Dependency) -> DependencyMetadata {
     DependencyMetadata {
         tag_digests: Default::default(),

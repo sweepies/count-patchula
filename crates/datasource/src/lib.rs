@@ -143,29 +143,35 @@ pub const NPM_REGISTRY: &str = "https://registry.npmjs.org";
 
 /// A cached registry read a rate limit made stale: the package's whole tag
 /// catalog, or one tag's manifest.
+/// Built only through [`StaleKey::CATALOG`] and [`StaleKey::digest`], so a
+/// digest key always holds the normalized tag.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum StaleKey {
+pub struct StaleKey(Stale);
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Stale {
     /// The package's tag catalog.
     Catalog,
     /// One tag's manifest, by the reference it was requested with.
     Digest(String),
 }
 impl StaleKey {
+    /// The package's tag catalog.
+    pub const CATALOG: Self = Self(Stale::Catalog);
     /// The key a tag's manifest read is recorded under. OCI tags cannot hold
     /// `+`, which a catalog of OCI versions writes as `_`.
     pub fn digest(tag: &str) -> Self {
-        Self::Digest(tag.replace('+', "_"))
+        Self(Stale::Digest(tag.replace('+', "_")))
     }
     /// Whether this key is the manifest `reference` was read through.
     pub fn is_manifest_of(&self, reference: &str) -> bool {
-        matches!(self, Self::Digest(tag) if *tag == reference.replace('+', "_"))
+        matches!(&self.0, Stale::Digest(tag) if *tag == reference.replace('+', "_"))
     }
 }
 impl std::fmt::Display for StaleKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Catalog => f.write_str("catalog"),
-            Self::Digest(tag) => write!(f, "digest:{tag}"),
+        match &self.0 {
+            Stale::Catalog => f.write_str("catalog"),
+            Stale::Digest(tag) => write!(f, "digest:{tag}"),
         }
     }
 }

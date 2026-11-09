@@ -21,7 +21,6 @@ use patchula_words::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -938,12 +937,12 @@ impl Engine {
         let override_config = options.config.as_ref();
         // Hints overlap mutable digest reads with the repository head read.
         // Catalogs wait for current policy, age-cache and checkbox decisions.
-        let inputs_hash = hash(&serde_json::to_vec(&(
+        let inputs_hash = patchula_manager::hash(&serde_json::to_vec(&(
             &options.config,
             &overrides,
             self.versions_host_override,
         ))?);
-        let schema_hash = hash(patchula_config::SCHEMA.as_bytes());
+        let schema_hash = patchula_manager::hash(patchula_config::SCHEMA.as_bytes());
         let credential_scope = self.github.credential_scope().to_owned();
         let mut hint = LookupHint::default();
         for repo in &repos {
@@ -1989,7 +1988,7 @@ impl Engine {
                     if matches!(dep.source, Source::Docker | Source::Oci) {
                         let mut stale = self.sources.registry_stale(&dep.package).await;
                         stale.retain(|key, _| {
-                            *key == patchula_datasource::StaleKey::Catalog
+                            *key == patchula_datasource::StaleKey::CATALOG
                                 || key.is_manifest_of(&dep.current)
                                 || proposals.iter().any(|p| {
                                     p.new_version
@@ -2568,7 +2567,7 @@ impl Engine {
         report.skipped = skipped(&extraction.skipped);
         // Plans are based on a commit; a directory's stands in as a hash of
         // its selected files, stable until they change.
-        report.commit = Some(hash(&serde_json::to_vec(
+        report.commit = Some(patchula_manager::hash(&serde_json::to_vec(
             &blobs
                 .iter()
                 .map(|(path, blob)| (path, &blob.sha))
@@ -2616,7 +2615,7 @@ impl Engine {
             let scope = RepoConfigScope {
                 repository: repo.into(),
                 commit: commit.clone(),
-                schema_hash: hash(patchula_config::SCHEMA.as_bytes()),
+                schema_hash: patchula_manager::hash(patchula_config::SCHEMA.as_bytes()),
             };
             if let Some(saved) = self.cache.state::<RepoConfig>(&scope).await? {
                 saved.0
@@ -2650,7 +2649,7 @@ impl Engine {
                 controls: patchula_update::dashboard::Controls::default(),
             });
         };
-        let config_hash = hash(&serde_json::to_vec(&config)?);
+        let config_hash = patchula_manager::hash(&serde_json::to_vec(&config)?);
         let scope = ExtractionScope {
             repository: repo.into(),
             commit,
@@ -2805,7 +2804,7 @@ impl Engine {
             // key carries the version as well as the namespace.
             let files_scope = FilesScope {
                 repository: repo.into(),
-                files_hash: hash(&serde_json::to_vec(&files)?),
+                files_hash: patchula_manager::hash(&serde_json::to_vec(&files)?),
                 config_hash: config_hash.clone(),
             };
             let mut extraction =
@@ -2922,10 +2921,10 @@ impl Engine {
         // on another commit reuse it.
         let scope = ConfigFilesScope {
             repository: repo.into(),
-            files_hash: hash(&serde_json::to_vec(&(&path, &files))?),
+            files_hash: patchula_manager::hash(&serde_json::to_vec(&(&path, &files))?),
             // PER_BUILD covers the decoding and validation the schema text
             // does not.
-            schema_hash: hash(patchula_config::SCHEMA.as_bytes()),
+            schema_hash: patchula_manager::hash(patchula_config::SCHEMA.as_bytes()),
         };
         if let Some(saved) = self.cache.state::<EvaluatedConfig>(&scope).await? {
             return Ok(saved.0);
@@ -2948,12 +2947,6 @@ fn lockfile_concurrency() -> usize {
     std::thread::available_parallelism().map_or(1, |cores| cores.get().min(4))
 }
 
-fn hash(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
 /// Mark a repository failed. The first failure of a run names the reason;
 /// later ones add nothing, so the cause is never replaced by a consequence.
 fn fail(repo: &mut patchula_report::Repository, reason: impl Into<String>) {
