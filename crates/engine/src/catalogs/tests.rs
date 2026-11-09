@@ -265,16 +265,17 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
         let work = Work {
             report: crate::repo_report("demo/app", Status::Complete, None),
             config: Some(config.clone()),
-            dependencies: current,
+            dependencies: current.into_iter().map(Dep::new).collect(),
             locked: Vec::new(),
+            evaluator: None,
             snapshot: Default::default(),
             inventory: None,
             controls,
         };
-        let forced = engine.forced_catalog_keys(&[work]).await.unwrap();
-        assert!(forced.contains(&engine.catalog_key(&dependencies[0], Some(&config))));
+        let retried = engine.retried(&work).await.unwrap();
+        assert!(retried[0]);
         assert_eq!(
-            forced.len(),
+            retried.iter().filter(|retried| **retried).count(),
             if matches!(mode, "repository" | "unknown" | "changed-pr") {
                 2
             } else {

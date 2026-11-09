@@ -100,10 +100,7 @@ pub async fn view<S: Source>(
     // than it will take, when delivery stays unknown. Only a config
     // that can merge on its own and hasn't silenced the warning pays
     // for those reads.
-    let merges = config.defaults.merge
-        || config.security.apply.merge == Some(true)
-        || config.rules.iter().any(|r| r.apply.merge == Some(true));
-    let delivery = merges
+    let delivery = config.may_merge()
         && !config
             .warnings
             .quiet
@@ -440,4 +437,72 @@ fn walk(dir: &Path) -> std::io::Result<Vec<String>> {
         }
     }
     Ok(listed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// A source that answers every asked entry with fixed bytes.
+    struct Fixed(BTreeMap<String, Vec<u8>>);
+    impl Source for Fixed {
+        async fn read(&mut self, entries: &[Entry]) -> Contents {
+            Ok(entries
+                .iter()
+                .map(|entry| {
+                    self.0
+                        .get(&entry.path)
+                        .cloned()
+                        .ok_or_else(|| format!("no {}", entry.path))
+                })
+                .collect())
+        }
+    }
+    fn entry(path: &str) -> Entry {
+        Entry {
+            path: path.into(),
+            sha: Some(path.into()),
+            mode: "100644".into(),
+        }
+    }
+    fn config(pkl: &str) -> Config {
+        patchula_config::load_files(
+            "/repo/patchula.pkl",
+            BTreeMap::from([("/repo/patchula.pkl".into(), pkl.into())]),
+        )
+        .unwrap()
+    }
+    /// The delivery warning reads YAML manifests only when the config has a
+    /// merge path; the batch PR's merge counts. Emptying `rules` drops the
+    /// built-in merging rule and `managers` the YAML-selecting ones, leaving
+    /// `batchMerge` as the only merge path.
+    #[tokio::test]
+    async fn batch_merge_reads_delivery_manifests() {
+        let mut source = Fixed(BTreeMap::from([(
+            "deploy/app.yaml".into(),
+            b"apiVersion: v1\n".to_vec(),
+        )]));
+        for (pkl, read) in [
+            (
+                "amends \"PatchulaConfig.pkl\"\nrules = new Listing {}\nmanagers = new Listing { \"bundler\" }\nprs { batchMerge = true }\n",
+                true,
+            ),
+            (
+                "amends \"PatchulaConfig.pkl\"\nrules = new Listing {}\nmanagers = new Listing { \"bundler\" }\n",
+                false,
+            ),
+        ] {
+            let config = config(pkl);
+            assert_eq!(config.may_merge(), read, "may_merge {pkl}");
+            let scanner = Scanner::new(&config).unwrap();
+            let listing = Listing {
+                entries: vec![entry("deploy/app.yaml"), entry("src/main.rs")],
+                hidden: Vec::new(),
+            };
+            let view = view(&mut source, listing, &scanner, &config).await.unwrap();
+            assert_eq!(view.blobs.contains_key("deploy/app.yaml"), read, "{pkl}");
+            assert!(!view.blobs.contains_key("src/main.rs"));
+        }
+    }
 }
