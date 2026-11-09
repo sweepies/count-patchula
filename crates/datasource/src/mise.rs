@@ -16,6 +16,11 @@ struct Listing {
     fetched_at: i64,
     releases: Vec<Release>,
 }
+impl FetchedAt for Listing {
+    fn fetched_at(&self) -> i64 {
+        self.fetched_at
+    }
+}
 impl State for Listing {
     const NAMESPACE: &'static str = "mise-ls-remote";
     const VERSION: u32 = 1;
@@ -25,6 +30,8 @@ impl State for Listing {
 /// What mise lists for a tool installed from a Git ref, with or without a
 /// `#tag=`, `#branch=` or `#rev=` fragment.
 const GIT_REF: &str = "HEAD";
+/// The GitHub repository whose LTS line nodejs.org, not its releases, names.
+const NODE_VERSIONS: &str = "actions/node-versions";
 
 fn is_node(tool: &str) -> bool {
     matches!(tool, "node" | "core:node")
@@ -71,10 +78,7 @@ impl Client {
         let lookup = self.mise_lookup()?;
         let scope = self.mise_scope(lookup, tool, prefix);
         let now = chrono::Utc::now().timestamp_millis();
-        if !self.http.is_revalidating()
-            && let Some(saved) = self.cache.state::<Listing>(&scope).await?
-            && (0..FRESH_MS).contains(&now.saturating_sub(saved.fetched_at))
-        {
+        if let Some(saved) = self.fresh_state::<Listing>(&scope).await? {
             return Ok(saved.releases);
         }
         let token = self.mise_token().await;
@@ -132,6 +136,18 @@ impl Client {
             versions,
             dist_tags,
         })
+    }
+    /// The `lts` dist-tag `actions/node-versions` catalogs carry. Its
+    /// releases are GitHub releases, which mise does not list, so the
+    /// evidence is nodejs.org's. A failed read leaves the catalog without
+    /// it: stable setup-node targets remain usable during a Node-index
+    /// outage, and an explicit LTS policy fails closed without this
+    /// evidence.
+    pub(super) async fn node_lts_tags(&self, package: &str) -> BTreeMap<String, String> {
+        if !package.eq_ignore_ascii_case(NODE_VERSIONS) {
+            return BTreeMap::new();
+        }
+        self.node_lts().await.unwrap_or_default()
     }
     /// The LTS evidence nodejs.org publishes, for `actions/node-versions`: its
     /// releases are GitHub releases, so mise does not list them.

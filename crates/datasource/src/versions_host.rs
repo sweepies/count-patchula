@@ -3,7 +3,6 @@ use super::upstream::{MirrorEntry, MirrorList, mirror_url};
 use super::*;
 use futures_util::{StreamExt, stream};
 
-/// Mirror documents fetched at once.
 const MIRROR_FAN_OUT: usize = 16;
 
 fn fallback(error: &patchula_http::CacheError) -> bool {
@@ -50,7 +49,7 @@ impl Client {
             return Ok(None);
         };
         if releases.truncated {
-            return Err(Error::Notes(
+            return Err(Error::Registry(
                 "mise-versions release catalog is truncated; full range unavailable".into(),
             ));
         }
@@ -64,7 +63,7 @@ impl Client {
                 return Ok(None);
             };
             if tags.truncated {
-                return Err(Error::Notes(
+                return Err(Error::Registry(
                     "mise-versions tag catalog is truncated; full range unavailable".into(),
                 ));
             }
@@ -93,16 +92,10 @@ impl Client {
                 })
                 .collect()
         };
-        let mut catalog = Catalog {
+        Ok(Some(Catalog {
             versions,
-            dist_tags: BTreeMap::new(),
-        };
-        if package.eq_ignore_ascii_case("actions/node-versions")
-            && let Ok(lts) = self.node_lts().await
-        {
-            catalog.dist_tags = lts;
-        }
-        Ok(Some(catalog))
+            dist_tags: self.node_lts_tags(package).await,
+        }))
     }
     pub(super) async fn mirror_release_catalogs(
         &self,

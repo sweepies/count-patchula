@@ -25,6 +25,11 @@ struct Resolved {
     revision: String,
     last_modified: Option<i64>,
 }
+impl FetchedAt for Resolved {
+    fn fetched_at(&self) -> i64 {
+        self.fetched_at
+    }
+}
 impl State for Resolved {
     const NAMESPACE: &'static str = "nix-prefetch";
     const VERSION: u32 = 1;
@@ -47,16 +52,7 @@ impl Client {
             credential_scope: self.github.credential_scope().into(),
         };
         let now = chrono::Utc::now().timestamp_millis();
-        let saved = match self.cache.state::<Resolved>(&scope).await? {
-            Some(saved)
-                if !self.http.is_revalidating()
-                    && (0..FRESH_MS).contains(&now.saturating_sub(saved.fetched_at)) =>
-            {
-                Some(saved)
-            }
-            _ => None,
-        };
-        let resolved = match saved {
+        let resolved = match self.fresh_state::<Resolved>(&scope).await? {
             Some(saved) => saved,
             None => {
                 let token = self.mise_token().await;
