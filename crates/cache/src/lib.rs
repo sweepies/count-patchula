@@ -31,7 +31,7 @@ pub enum Error {
     Worker,
     #[error("cache URL must be absolute HTTP(S) without credentials")]
     Url,
-    #[error("cache schema {0} is newer than supported schema 10")]
+    #[error("cache schema {0} is newer than supported schema {max}", max = store::MIGRATIONS.len())]
     FutureSchema(i64),
     #[error("cache integrity check failed")]
     Corrupt,
