@@ -1,7 +1,7 @@
 //! The dashboard built from the data of the Count's first live run on his own
 //! repository: grouped, readable, and never mentioning anyone.
 use patchula_report::{BranchAction, BranchStatus, Repository};
-use patchula_update::{Change, Plan, dashboard};
+use patchula_update::{Change, Plan, dashboard, identity};
 use patchula_words::{Recheck, Severity};
 use serde_json::{Value, json};
 
@@ -444,7 +444,7 @@ fn one_retry_box_covers_every_file_that_declares_the_failing_package() {
     ] {
         assert!(boxes[0].contains(&format!("`{file}`")), "{}", boxes[0]);
     }
-    assert!(boxes[0].contains(&dashboard::retry_key("cargo", "patchula-cache", "crates")));
+    assert!(boxes[0].contains(&identity::retry_key("cargo", "patchula-cache", "crates")));
 }
 
 #[test]

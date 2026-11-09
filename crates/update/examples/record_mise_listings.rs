@@ -1,7 +1,7 @@
 //! Records what the pinned `mise ls-remote --json` prints for a representative
 //! set of tools. Replay tests elsewhere read `fixtures/mise/listings.json`.
 //! Recording needs the network and a `mise` on PATH:
-//! `PATCHULA_RECORD=1 mise run fixtures:record-mise`.
+//! `mise run fixtures:record-mise`.
 use patchula_mise::Query;
 use patchula_process::SystemExecutor;
 use patchula_testkit::MiseRecorder;
@@ -31,11 +31,8 @@ const LISTINGS: &[&[&str]] = &[
 ];
 const BACKENDS: &[&str] = &["prettier"];
 
-#[tokio::test]
-async fn record_mise_listings() {
-    if !patchula_testkit::recording() {
-        return;
-    }
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mise/listings.json");
     let cache = tempfile::tempdir().unwrap();
     let probe = Runner::new(cache.path().join("cache.sqlite"), "");

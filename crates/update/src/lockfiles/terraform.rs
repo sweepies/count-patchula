@@ -7,12 +7,14 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["terraform"],
     versions: true,
     install: Install::Plain,
+    refresh: Refresh::Locks(&[Manager::Terraform]),
+    output: Output::Default,
 };
 
 impl Runner {
     /// Regenerate the directory's provider lockfile.
-    pub(super) async fn terraform_lock(&self, context: node::NodeContext<'_>) -> Result<(), Error> {
-        let node::NodeContext {
+    pub(super) async fn terraform_lock(&self, context: context::Context<'_>) -> Result<(), Error> {
+        let context::Context {
             driver,
             root,
             directory,
@@ -27,8 +29,9 @@ impl Runner {
         self.held_tool(
             driver,
             Invocation {
-                tools: vec![("terraform".into(), node::version(versions, "terraform")?)],
-                bin: "terraform".into(),
+                descriptor: &DESCRIPTOR,
+                tools: vec![("terraform".into(), context::version(versions, "terraform")?)],
+                bin: caches::Bin::Terraform,
                 cwd: None,
                 env,
                 credentials: credentials::scopes(entries.iter().copied()),

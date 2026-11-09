@@ -24,20 +24,43 @@ pub struct Blob {
     pub mode: String,
     pub content: String,
 }
+/// What a plan fingerprint hashes, by lifecycle stage. A built plan's
+/// fingerprint covers its contents, message, pending flag and lock jobs; once the
+/// tools generate, it covers the generated contents, deleted set and
+/// message instead, so the two never collide.
+enum Stage<'a> {
+    /// `build` and `batch_plan`, before the tools run.
+    Built {
+        contents: &'a BTreeMap<String, String>,
+        message: &'a str,
+        lockfile_pending: bool,
+        lock_jobs: &'a [crate::lockfiles::Job],
+    },
+    /// `lockfiles_generated`, after the tools rewrote the plan.
+    Generated {
+        contents: &'a BTreeMap<String, String>,
+        deleted: &'a BTreeSet<String>,
+        message: &'a str,
+    },
+}
 /// The plan fingerprint: the exact bytes the commit's `Patchula-Plan`
-/// trailer and the write receipts hash. `lock_jobs` may be the building
-/// `BTreeSet` or the plan's sorted `Vec`; both serialize the same array.
-fn plan_fingerprint(
-    contents: &BTreeMap<String, String>,
-    message: &str,
-    lockfile_pending: bool,
-    lock_jobs: &impl Serialize,
-) -> String {
-    hash(
-        serde_json::to_string(&(contents, message, lockfile_pending, lock_jobs))
-            .expect("serializable plan")
-            .as_bytes(),
-    )
+/// trailer and the write receipts hash.
+fn fingerprint(stage: Stage<'_>) -> String {
+    let json = match stage {
+        Stage::Built {
+            contents,
+            message,
+            lockfile_pending,
+            lock_jobs,
+        } => serde_json::to_string(&(contents, message, lockfile_pending, lock_jobs)),
+        Stage::Generated {
+            contents,
+            deleted,
+            message,
+        } => serde_json::to_string(&(contents, deleted, message)),
+    }
+    .expect("serializable plan");
+    hash(json.as_bytes())
 }
 #[derive(Debug)]
 pub struct Plan {
@@ -296,17 +319,15 @@ impl Plan {
         self.deleted = deleted;
         self.action.files = files;
         self.lockfiles_ready = true;
-        self.fingerprint = hash(
-            serde_json::to_string(&(&self.contents, &self.deleted, &self.action.message))
-                .unwrap()
-                .as_bytes(),
-        );
+        self.fingerprint = fingerprint(Stage::Generated {
+            contents: &self.contents,
+            deleted: &self.deleted,
+            message: &self.action.message,
+        });
     }
-    /// The pull request merged.
     pub(crate) fn merged(&mut self) {
         self.action.status = BranchStatus::Merged;
     }
-    /// The branch the plan publishes to.
     pub fn rename_branch(&mut self, branch: String) {
         self.action.branch = branch;
     }
@@ -379,6 +400,13 @@ impl Change {
             && update.new_digest == self.digest
             && update.update_type == self.kind
     }
+    /// Whether the target moves the lock alone: it carries no manifest value
+    /// or digest. This is a property of the recorded target,
+    /// not of the update that produced it — a batch target deserialized
+    /// from a marker answers the same way.
+    pub fn lock_only(&self) -> bool {
+        self.value.is_none() && self.digest.is_none()
+    }
 }
 pub fn blob_sha(content: &str) -> String {
     let mut digest = sha1::Sha1::new();
@@ -439,7 +467,7 @@ pub fn plan(
     let mut groups = BTreeMap::<String, (String, Vec<Item<'_>>)>::new();
     for file in &repo.package_files {
         for reported in &file.dependencies {
-            let declared = crate::dashboard::declaration(&file.path, reported);
+            let declared = crate::identity::declaration(&file.path, reported);
             for update in &reported.updates {
                 for dep in dependencies
                     .iter()
@@ -521,11 +549,14 @@ pub fn plan(
     Ok(plans)
 }
 
-/// An update that changes a lockfile and no manifest: a package recorded only
-/// in a lockfile, which its tool alone can move (a transitive package, or a
-/// flake input that nix relocks), or a release a direct dependency's declared
-/// range already allows, which has no `newValue`.
-fn lock_only(dep: &Dependency, update: &Update) -> bool {
+/// Whether the update writes no manifest edit: a package recorded only in a
+/// lockfile, which its tool alone can move (a transitive package, or a flake
+/// input that nix relocks), or a release a direct dependency's declared
+/// range already allows, which has no `newValue`. This is decided from the
+/// declaration and the update; `Change::lock_only` answers a different
+/// question about the recorded target, and `Job::exact_version` about what
+/// the tool must be told — the three cannot merge.
+fn no_manifest_edit(dep: &Dependency, update: &Update) -> bool {
     dep.kind == patchula_words::DependencyKind::Transitive
         || dep.manager == patchula_words::Manager::Nix
         || (update.new_value.is_none() && update.new_version.is_some())
@@ -602,7 +633,7 @@ fn build(
                 .unwrap_or(value)
         ));
         // A lockfile-only package changes through its lockfile tool alone.
-        if lock_only(dep, update) {
+        if no_manifest_edit(dep, update) {
             continue;
         }
         let Some(blob) = snapshot.files.get(&dep.file) else {
@@ -658,7 +689,9 @@ fn build(
             Err(error) => keep(&mut hold, Hold::Blocked(format!("{path}: {error}"))),
         }
     }
-    let lockfile_only = items.iter().all(|item| lock_only(item.dep, item.update));
+    let lockfile_only = items
+        .iter()
+        .all(|item| no_manifest_edit(item.dep, item.update));
     if lockfile_only && lock_jobs.iter().any(|job| job.target().is_none()) {
         keep(
             &mut hold,
@@ -682,7 +715,13 @@ fn build(
             )),
         );
     }
-    let fingerprint = plan_fingerprint(&contents, &message, pending.is_some(), &lock_jobs);
+    let lock_jobs: Vec<_> = lock_jobs.into_iter().collect();
+    let fingerprint = fingerprint(Stage::Built {
+        contents: &contents,
+        message: &message,
+        lockfile_pending: pending.is_some(),
+        lock_jobs: &lock_jobs,
+    });
     let action = BranchAction {
         repository: repo.repository.clone(),
         branch,
@@ -752,7 +791,7 @@ fn build(
         cached_pr: None,
         input_fingerprint: fingerprint.clone(),
         lockfiles_ready: lock_jobs.is_empty(),
-        lock_jobs: lock_jobs.into_iter().collect(),
+        lock_jobs,
         public_only: snapshot.public_only.clone(),
         deleted: BTreeSet::new(),
         maintenance: false,
@@ -859,8 +898,7 @@ fn superseded(dep: &Dependency, target: &Change) -> bool {
     // The locked version is what is installed; a ranged declaration such as
     // `^2.0.0` names no single version, so the declared value only counts when
     // it is one. A lockfile-only target is measured against the lock alone.
-    let lock_only = target.value.is_none() && target.digest.is_none();
-    let declared = (!lock_only).then_some(dep.current.as_str());
+    let declared = (!target.lock_only()).then_some(dep.current.as_str());
     dep.resolved
         .as_deref()
         .into_iter()
@@ -1076,7 +1114,7 @@ pub fn batch_plan(
                 continue;
             }
             // A lockfile-only target is complete once the lock holds its version.
-            let applied = if target.value.is_none() && target.digest.is_none() {
+            let applied = if target.lock_only() {
                 target.version.as_deref().is_none_or(|v| {
                     dep.resolved
                         .as_deref()
@@ -1140,12 +1178,12 @@ pub fn batch_plan(
         plan.changes.len(),
         if plan.changes.len() == 1 { "" } else { "s" }
     ));
-    plan.fingerprint = plan_fingerprint(
-        &plan.contents,
-        &plan.action().message,
-        plan.action().lockfile_pending,
-        &plan.lock_jobs,
-    );
+    plan.fingerprint = fingerprint(Stage::Built {
+        contents: &plan.contents,
+        message: &plan.action().message,
+        lockfile_pending: plan.action().lockfile_pending,
+        lock_jobs: &plan.lock_jobs,
+    });
     plan.input_fingerprint.clone_from(&plan.fingerprint);
     Ok(Some(plan))
 }
@@ -1449,6 +1487,37 @@ mod frozen_bytes {
         assert_eq!(
             serde_json::to_string(&changes).unwrap(),
             r#"[{"source":"npm","package":"lodash","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]},{"source":"npm","package":"lodash","registry":"${NPM_REGISTRY}","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]},{"source":"npm","package":"lodash","registry":"ambiguous: https://a.acme.dev, https://b.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]},{"source":"npm","package":"lodash","registry":"https://npm.acme.dev","file":"package.json","current":"1.0.0","current_version":null,"value":"1.2.0","version":"1.2.0","digest":null,"kind":"minor","merge":false,"labels":[],"release_notes":true,"body_notes":[]}]"#
+        );
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_bytes {
+    //! The fingerprint recipes reach the `Patchula-Plan:` trailer and the
+    //! write receipts, so the bytes each stage hashes are pinned.
+    use super::*;
+
+    #[test]
+    fn built_and_generated_stages_hash_their_own_tuples() {
+        let contents = BTreeMap::from([("package.json".to_owned(), "new".to_owned())]);
+        let built = fingerprint(Stage::Built {
+            contents: &contents,
+            message: "chore: update fixture",
+            lockfile_pending: false,
+            lock_jobs: &[],
+        });
+        assert_eq!(
+            built,
+            "3153cdda200d582ce0b46c6394ad36430b088494005a55f13f487acc6d8f1015"
+        );
+        let generated = fingerprint(Stage::Generated {
+            contents: &contents,
+            deleted: &BTreeSet::from(["old.lock".to_owned()]),
+            message: "chore: update fixture",
+        });
+        assert_eq!(
+            generated,
+            "72d5ad8b8b7bc5c1bdee3e8a6066640f444bad0ce916624f6ec4db729761fb7a"
         );
     }
 }

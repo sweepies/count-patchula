@@ -177,10 +177,11 @@ pub(crate) fn section_line<'a>(body: &'a str, prefix: &str, cap: usize) -> Optio
     (lines.next().is_none() && json.len() <= cap).then_some(json)
 }
 
-/// The payload between `prefix` and the ` -->` ending `line`, at most `cap`
-/// bytes — the action marker's place at the end of a tick box.
+/// The payload between the last `prefix` and the ` -->` ending `line`, at
+/// most `cap` bytes — a marker's place at the end of a tick box. He writes
+/// the marker last, so text before it, even a copy of the prefix, is not it.
 pub(crate) fn line_end<'a>(line: &'a str, prefix: &str, cap: usize) -> Option<&'a str> {
-    let (_, rest) = line.split_once(prefix)?;
+    let (_, rest) = line.rsplit_once(prefix)?;
     rest.strip_suffix(" -->").filter(|p| p.len() <= cap)
 }
 
@@ -257,7 +258,7 @@ pub(crate) fn ticked_lines(text: &str) -> Vec<&str> {
 }
 
 /// `text` cut to at most `len` bytes on a char boundary.
-pub(crate) fn cut(text: &str, len: usize) -> &str {
+pub(crate) fn cut_bytes(text: &str, len: usize) -> &str {
     if text.len() <= len {
         return text;
     }
@@ -273,11 +274,11 @@ pub(crate) fn cut(text: &str, len: usize) -> &str {
 /// section first, then what follows it.
 pub(crate) fn truncate_marked(body: &str, limit: usize) -> String {
     let Some((before, section, after)) = regions(body) else {
-        return cut(body, limit).to_owned();
+        return cut_bytes(body, limit).to_owned();
     };
     let room = limit.saturating_sub(section.len());
-    let before = cut(before, room);
-    let after = cut(after, room - before.len());
+    let before = cut_bytes(before, room);
+    let after = cut_bytes(after, room - before.len());
     format!("{before}{section}{after}")
 }
 
@@ -441,6 +442,12 @@ mod tests {
         assert_eq!(line_end(&format!("{line} trailing"), ACTION, 256), None);
         assert_eq!(line_end(line, ACTION, 8), None);
         assert_eq!(line_end("- [x] plain", ACTION, 256), None);
+        // A copy of the prefix earlier in the line's text is not the marker.
+        let edited = format!("- [x] about {ACTION} things {}", &line[14..]);
+        assert_eq!(
+            line_end(&edited, ACTION, 256),
+            Some("{\"action\":\"recheck\",\"target\":\"abc\"}")
+        );
     }
 
     #[test]
@@ -503,8 +510,8 @@ mod tests {
 
     #[test]
     fn cut_and_truncate_marked_never_sever_his_markers() {
-        assert_eq!(cut("héllo", 3), "hé");
-        assert_eq!(cut("abc", 10), "abc");
+        assert_eq!(cut_bytes("héllo", 3), "hé");
+        assert_eq!(cut_bytes("abc", 10), "abc");
         let text = body(" foreign tail");
         // Tight enough to cut the foreign text, generous enough for his
         // section: the markers come through whole and the result fits.

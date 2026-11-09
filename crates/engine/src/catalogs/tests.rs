@@ -213,7 +213,7 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
     let engine = engine(cache, registry.clone(), "offline");
     let config = config();
     let dependencies = dependencies(&config);
-    let first = patchula_update::dashboard::extracted_key(&dependencies[0]);
+    let first = patchula_update::identity::extracted_key(&dependencies[0]);
     let mapping = Controls {
         branches: BTreeMap::from([(
             "patchula/fixture-2.x".into(),
@@ -240,7 +240,7 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
             "retry" => {
                 controls
                     .retry
-                    .insert(patchula_update::dashboard::extracted_retry_key(
+                    .insert(patchula_update::identity::extracted_retry_key(
                         &dependencies[0],
                     ));
             }
@@ -263,14 +263,12 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
             current[0].current = "1.1.0".into();
         }
         let work = Work {
-            report: crate::repo_report("demo/app", Status::Complete, None),
-            config: Some(config.clone()),
             dependencies: current.into_iter().map(Dep::new).collect(),
-            locked: Vec::new(),
-            evaluator: None,
-            snapshot: Default::default(),
-            inventory: None,
             controls,
+            ..Work::empty(
+                crate::repo_report("demo/app", Status::Complete, None),
+                Some(config.clone()),
+            )
         };
         let retried = engine.retried(&work).await.unwrap();
         assert!(retried[0]);

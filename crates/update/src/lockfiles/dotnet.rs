@@ -7,6 +7,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["dotnet"],
     versions: true,
     install: Install::Plain,
+    refresh: Refresh::Locks(&[Manager::Nuget]),
+    output: Output::Default,
 };
 
 /// The SDK the nearest `global.json` at or above the restore directory asks
@@ -147,10 +149,10 @@ pub(super) fn restore_env(invariant: Option<String>) -> Vec<(String, String)> {
 impl Runner {
     pub(super) async fn dotnet_restore(
         &self,
-        context: node::NodeContext<'_>,
+        context: context::Context<'_>,
         edited: bool,
     ) -> Result<(), Error> {
-        let node::NodeContext {
+        let context::Context {
             driver,
             root,
             baseline,
@@ -194,12 +196,13 @@ impl Runner {
         let (credentials, entries) = credentials;
         let mut env = restore_env(std::env::var(INVARIANT).ok());
         env.extend(credentials);
-        let pinned = node::version(versions, "dotnet")?;
+        let pinned = context::version(versions, "dotnet")?;
         self.held_tool(
             driver,
             Invocation {
+                descriptor: &DESCRIPTOR,
                 tools: vec![("dotnet".into(), sdk(baseline, root, directory, &pinned))],
-                bin: "dotnet".into(),
+                bin: caches::Bin::Dotnet,
                 cwd: Some(cwd.clone()),
                 env,
                 credentials: credentials::scopes(entries.iter().copied()),

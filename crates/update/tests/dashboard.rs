@@ -1,5 +1,5 @@
 use patchula_report::Repository;
-use patchula_update::{Inventory, dashboard, markers::DASHBOARD as MARKER};
+use patchula_update::{Inventory, dashboard, identity, markers::DASHBOARD as MARKER};
 use patchula_words::Recheck;
 use serde_json::json;
 
@@ -83,9 +83,9 @@ fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
         .unwrap();
     let snapshot = text
         .replace(repo_target, "REPOSITORY")
-        .replace(&dashboard::retry_key("npm", "fixture", "npm"), "RETRY")
+        .replace(&identity::retry_key("npm", "fixture", "npm"), "RETRY")
         .replace(
-            &dashboard::held_key("package.json", dep, "2.0.0", "major"),
+            &identity::held_key("package.json", dep, "2.0.0", "major"),
             "HELD_UPDATE",
         );
     assert_eq!(snapshot, include_str!("snapshots/dashboard.md"));
@@ -96,8 +96,8 @@ fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
     let mut other = dep.clone();
     other.current.value = Some("1.1.0".into());
     assert_ne!(
-        dashboard::dependency_key("package.json", dep),
-        dashboard::dependency_key("package.json", &other)
+        identity::dependency_key("package.json", dep),
+        identity::dependency_key("package.json", &other)
     );
 }
 #[test]

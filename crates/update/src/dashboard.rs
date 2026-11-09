@@ -1,13 +1,15 @@
 //! A deterministic issue, discovered by ownership and marker rather than title.
 use crate::{
-    Inventory, Plan, markers,
+    Inventory, Plan,
+    identity::{extracted_key, held_key, held_target, retry_key},
+    markers,
     text::{self, code},
     update_key,
 };
 use patchula_cache::{Cache, State};
 use patchula_config::{Config, Registry};
 use patchula_github::Client;
-use patchula_manager::{Declaration, hash};
+use patchula_manager::hash;
 use patchula_report::{Dependency, Repository};
 use patchula_words::{Recheck, Severity, ToolingDetail, ToolingRule};
 use serde::{Deserialize, Serialize};
@@ -30,48 +32,6 @@ pub enum Action {
     Recreate(String),
     Retry(String),
 }
-/// The declaration a report dependency describes.
-pub(crate) fn declaration<'a>(file: &'a str, dep: &'a Dependency) -> Declaration<'a> {
-    Declaration {
-        file,
-        manager: dep.manager,
-        name: &dep.name,
-        package: &dep.package,
-        source: dep.metadata.as_ref().map(|m| m.source),
-        current: dep.current.value.as_deref(),
-        digest: dep.current.digest.as_deref(),
-        registry: dep.registry.as_deref(),
-    }
-}
-pub fn dependency_key(file: &str, dep: &Dependency) -> String {
-    declaration(file, dep).key()
-}
-pub fn extracted_key(dep: &patchula_manager::Dependency) -> String {
-    dep.declaration().key()
-}
-/// The key of a retry box: one package from one source, whichever files
-/// declare it. A lookup is shared by all of them.
-pub fn retry_key(manager: &str, package: &str, source: &str) -> String {
-    hash(
-        serde_json::to_string(&("retry", manager, package, source))
-            .expect("retry identity")
-            .as_bytes(),
-    )
-}
-pub fn extracted_retry_key(dep: &patchula_manager::Dependency) -> String {
-    retry_key(dep.manager.as_str(), &dep.package, dep.source.as_str())
-}
-pub fn held_target(dependency: &str, version: &str, kind: &str) -> String {
-    hash(
-        serde_json::to_string(&(dependency, version, kind))
-            .expect("held identity")
-            .as_bytes(),
-    )
-}
-pub fn held_key(file: &str, dep: &Dependency, version: &str, kind: &str) -> String {
-    held_target(&dependency_key(file, dep), version, kind)
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct Controls {
     pub recheck: bool,
@@ -220,9 +180,10 @@ impl Controls {
         for pr in inventory.pull_requests(repo) {
             result
                 .age_permits
-                .extend(pr_permits(pr["body"].as_str().unwrap_or("")));
+                .extend(pr_permits(crate::pull_requests::body(&pr)));
+            let fields = crate::pull_requests::Pr::read(&pr);
             if (result.recheck || crate::pull_requests::checked(&pr))
-                && let Some(branch) = pr["head"]["ref"].as_str()
+                && let Some(branch) = fields.head.branch.as_deref()
             {
                 result.branches.insert(branch.into());
             }
@@ -255,19 +216,15 @@ struct Permits {
     actor: String,
     targets: BTreeSet<String>,
 }
-#[derive(Serialize)]
-struct RepositoryScope {
-    repository: String,
-}
-fn repository_scope(repo: &str) -> RepositoryScope {
-    RepositoryScope {
+fn repository_scope(repo: &str) -> patchula_cache::RepositoryScope {
+    patchula_cache::RepositoryScope {
         repository: repo.into(),
     }
 }
 impl State for Permits {
     const NAMESPACE: &'static str = "dashboard-age-permits";
     const VERSION: u32 = 1;
-    type Scope = RepositoryScope;
+    type Scope = patchula_cache::RepositoryScope;
 }
 pub async fn load_permits(
     cache: &Cache,
@@ -346,26 +303,31 @@ pub fn render(
     server: Option<&str>,
 ) -> String {
     // Keep the numeric PR identity separate from the rendered Markdown.
+    let fields: Vec<_> = prs.iter().map(crate::pull_requests::Pr::read).collect();
     let mut sections = BTreeMap::<String, BTreeSet<(Option<u64>, String)>>::new();
-    for pr in prs.iter().filter(|p| !p["merged_at"].is_null()) {
-        if let Some(number) = pr["number"].as_u64() {
+    for (pr, fields) in prs
+        .iter()
+        .zip(&fields)
+        .filter(|(_, fields)| fields.merged_at.is_some())
+    {
+        if let Some(number) = fields.number {
             sections.entry("Merged".into()).or_default().insert((
                 Some(number),
                 format!(
                     "- #{number}: {} — {}\n",
-                    safe(pr["title"].as_str().unwrap_or("Update dependencies")),
+                    safe(fields.title.as_deref().unwrap_or("Update dependencies")),
                     safe(crate::pull_requests::merge_note(pr).unwrap_or("merged"),)
                 ),
             ));
         }
     }
-    for pr in prs.iter().filter(|p| {
-        p["state"] == "open"
+    for (_, fields) in prs.iter().zip(&fields).filter(|(_, fields)| {
+        fields.state.as_deref() == Some("open")
             && !plans
                 .iter()
-                .any(|plan| p["head"]["ref"] == plan.action().branch)
+                .any(|plan| fields.head.branch.as_deref() == Some(plan.action().branch.as_str()))
     }) {
-        if let Some(number) = pr["number"].as_u64() {
+        if let Some(number) = fields.number {
             sections
                 .entry("Open PRs: other".into())
                 .or_default()
@@ -373,7 +335,7 @@ pub fn render(
                     Some(number),
                     format!(
                         "- #{number}: {}\n",
-                        safe(pr["title"].as_str().unwrap_or("Update dependencies"))
+                        safe(fields.title.as_deref().unwrap_or("Update dependencies"))
                     ),
                 ));
         }
@@ -382,17 +344,18 @@ pub fn render(
         if plan.action().status == patchula_report::BranchStatus::Merged {
             continue;
         }
-        let open = prs
-            .iter()
-            .find(|p| p["state"] == "open" && p["head"]["ref"] == plan.action().branch);
-        if let Some(pr) = open {
+        let open = prs.iter().zip(&fields).find(|(_, fields)| {
+            fields.state.as_deref() == Some("open")
+                && fields.head.branch.as_deref() == Some(plan.action().branch.as_str())
+        });
+        if let Some((pr, fields)) = open {
             let kinds: BTreeSet<_> = plan.changes.iter().map(|c| c.kind.as_str()).collect();
             let kind = if plan.maintenance {
                 "maintenance".into()
             } else {
                 kinds.into_iter().collect::<Vec<_>>().join(", ")
             };
-            if let Some(number) = pr["number"].as_u64() {
+            if let Some(number) = fields.number {
                 sections
                     .entry(format!("Open PRs: {kind}"))
                     .or_default()
@@ -670,14 +633,15 @@ pub fn render(
     for warning in &repo.tooling {
         let open: Vec<_> = prs
             .iter()
-            .filter(|p| {
-                p["state"] == "open"
+            .zip(&fields)
+            .filter(|(_, fields)| {
+                fields.state.as_deref() == Some("open")
                     && warning
                         .branches
                         .iter()
-                        .any(|b| p["head"]["ref"] == b.as_str())
+                        .any(|b| fields.head.branch.as_deref() == Some(b.as_str()))
             })
-            .filter_map(|p| p["number"].as_u64())
+            .filter_map(|(_, fields)| fields.number)
             .map(|n| format!("#{n}"))
             .collect();
         let open = if open.is_empty() {
@@ -918,10 +882,13 @@ fn fix_status(
             })
         })
         .collect();
+    let prs: Vec<_> = prs.iter().map(crate::pull_requests::Pr::read).collect();
     let open = |branch: &str| {
         prs.iter()
-            .find(|p| p["state"] == "open" && p["head"]["ref"] == branch)
-            .and_then(|p| p["number"].as_u64())
+            .find(|p| {
+                p.state.as_deref() == Some("open") && p.head.branch.as_deref() == Some(branch)
+            })
+            .and_then(|p| p.number)
     };
     // A batched update is fixed by the batch PR, if that PR carries it.
     let batch = |key: &str| {
@@ -1173,7 +1140,7 @@ struct Receipt {
 impl State for Receipt {
     const NAMESPACE: &'static str = "dashboard-receipt";
     const VERSION: u32 = 1;
-    type Scope = RepositoryScope;
+    type Scope = patchula_cache::RepositoryScope;
 }
 /// The dashboard issue the Count last wrote in `repo`.
 pub async fn issue_number(cache: &Cache, repo: &str) -> Option<u64> {

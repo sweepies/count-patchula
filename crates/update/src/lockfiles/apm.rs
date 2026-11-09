@@ -8,11 +8,13 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["apm"],
     versions: true,
     install: Install::Plain,
+    refresh: Refresh::LocksBesideManifest(&[Manager::Apm]),
+    output: Output::Default,
 };
 
 impl Runner {
-    pub(super) async fn apm_lock(&self, context: node::NodeContext<'_>) -> Result<(), Error> {
-        let node::NodeContext {
+    pub(super) async fn apm_lock(&self, context: context::Context<'_>) -> Result<(), Error> {
+        let context::Context {
             driver,
             root,
             baseline,
@@ -21,7 +23,7 @@ impl Runner {
             maintenance,
             ..
         } = context;
-        let lock = node::join(directory, "apm.lock.yaml");
+        let lock = context::join(directory, "apm.lock.yaml");
         let mut args = vec!["lock".to_string()];
         if maintenance {
             args.push("--update".into());
@@ -29,8 +31,9 @@ impl Runner {
         self.tool(
             driver,
             Invocation {
-                tools: vec![("apm".into(), node::version(versions, "apm")?)],
-                bin: "apm".into(),
+                descriptor: &DESCRIPTOR,
+                tools: vec![("apm".into(), context::version(versions, "apm")?)],
+                bin: caches::Bin::Apm,
                 cwd: Some(root.join(directory)),
                 // APM clones each package from its own local bare cache.
                 env: vec![("GIT_ALLOW_PROTOCOL".into(), "https:file".into())],

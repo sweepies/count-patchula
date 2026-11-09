@@ -2,7 +2,7 @@
 //! and caches, so their bytes are pinned.
 use patchula_manager::{Dependency as ManagerDependency, EditForm, Location, Syntax};
 use patchula_report::{Current, Dependency as ReportDependency, DependencyMetadata};
-use patchula_update::{Change, dashboard};
+use patchula_update::{Change, identity};
 use patchula_words::{DependencyKind, Manager, Scheme, Source, Update as UpdateKind};
 
 fn manager_dep() -> ManagerDependency {
@@ -68,12 +68,12 @@ fn report_dep() -> ReportDependency {
 fn declaration_keys_are_pinned() {
     // The extracted declaration key.
     assert_eq!(
-        dashboard::extracted_key(&manager_dep()),
+        identity::extracted_key(&manager_dep()),
         "63a8aa75b4cc2953dd4f164828b593805d2f64027462bdd9992114a82e933848"
     );
     // A report dependency's key agrees with the extracted one.
     assert_eq!(
-        dashboard::dependency_key("package.json", &report_dep()),
+        identity::dependency_key("package.json", &report_dep()),
         "63a8aa75b4cc2953dd4f164828b593805d2f64027462bdd9992114a82e933848"
     );
     // Without metadata or registry the source serializes as "" and the
@@ -83,7 +83,7 @@ fn declaration_keys_are_pinned() {
     bare.registry = None;
     bare.current.digest = None;
     assert_eq!(
-        dashboard::dependency_key("package.json", &bare),
+        identity::dependency_key("package.json", &bare),
         "64bfbf366d3203fb54f4d58e01fac573cd41ed9305e24b60b4bccaaadd9a30bb"
     );
     let mut nulls = report_dep();
@@ -94,7 +94,7 @@ fn declaration_keys_are_pinned() {
         m.source = Source::Docker;
     }
     assert_eq!(
-        dashboard::dependency_key("docker/Dockerfile", &nulls),
+        identity::dependency_key("docker/Dockerfile", &nulls),
         "8bbfa97ceba0da6194dc72904d7c7610d8536c9b5be0d376d11a74a949570ac6"
     );
 }
@@ -102,15 +102,15 @@ fn declaration_keys_are_pinned() {
 #[test]
 fn retry_and_held_keys_are_pinned() {
     assert_eq!(
-        dashboard::extracted_retry_key(&manager_dep()),
+        identity::extracted_retry_key(&manager_dep()),
         "90eec713fdec474f9685dff45cf737fff80ce0b91d4b0a087b152c10127b5a47"
     );
     assert_eq!(
-        dashboard::retry_key("npm", "fixture", "npm"),
+        identity::retry_key("npm", "fixture", "npm"),
         "90eec713fdec474f9685dff45cf737fff80ce0b91d4b0a087b152c10127b5a47"
     );
     assert_eq!(
-        dashboard::held_key("package.json", &report_dep(), "3.0.0", "major"),
+        identity::held_key("package.json", &report_dep(), "3.0.0", "major"),
         "b643054ae12cf7c521c98883810258c7406e5d4c1d4bdcc09d94cd7ac5e48d1e"
     );
 }

@@ -8,6 +8,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &[],
     versions: true,
     install: Install::Plain,
+    refresh: Refresh::Never,
+    output: Output::Default,
 };
 
 const HOSTS: [&str; 2] = ["services.gradle.org", "downloads.gradle.org"];
@@ -55,10 +57,7 @@ impl Runner {
         }
         Err("too many Gradle checksum redirects".into())
     }
-    pub(super) async fn gradle_wrapper(
-        &self,
-        context: node::NodeContext<'_>,
-    ) -> Result<(), String> {
+    pub(super) async fn gradle_wrapper(&self, context: context::Context<'_>) -> Result<(), String> {
         let path = context
             .root
             .join(context.directory)

@@ -6,6 +6,7 @@ pub mod batch;
 mod body;
 mod cleanup;
 pub mod dashboard;
+pub mod identity;
 pub mod markers;
 mod receipts;
 mod settle;

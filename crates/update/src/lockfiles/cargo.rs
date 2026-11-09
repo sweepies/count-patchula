@@ -8,6 +8,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["rust"],
     versions: true,
     install: Install::None,
+    refresh: Refresh::Locks(&[Manager::Cargo]),
+    output: Output::Default,
 };
 
 /// What a Cargo run is given: its registry environment, the credential
@@ -51,11 +53,11 @@ impl Runner {
     /// Regenerate every Cargo.lock committed in one directory.
     pub(super) async fn cargo_locks(
         &self,
-        context: node::NodeContext<'_>,
+        context: context::Context<'_>,
         jobs: &[&Job],
         cargo_configs: &BTreeMap<String, String>,
     ) -> Result<(), Error> {
-        let node::NodeContext {
+        let context::Context {
             driver,
             root,
             directory,
@@ -71,16 +73,13 @@ impl Runner {
         // name, from the environment.
         let registries: Vec<_> = cargo_configs
             .iter()
-            .filter(|(path, _)| {
-                let owner = directory_of_cargo_config(path);
-                owner == directory || under(directory, owner)
-            })
+            .filter(|(path, _)| within(directory, directory_of_cargo_config(path)))
             .map(|(_, text)| credentials::cargo_registries(text))
             .collect();
         let (env, entries) = self.cargo_env(&registries);
         let credentials = credentials::scopes(entries.iter().copied());
         let secrets = credentials::secrets(entries.iter().copied());
-        let rust = node::version(versions, "rust")?;
+        let rust = context::version(versions, "rust")?;
         for job in jobs {
             self.cargo_update(
                 driver,
@@ -120,8 +119,9 @@ impl Runner {
             self.held_tool(
                 driver,
                 Invocation {
+                    descriptor: &DESCRIPTOR,
                     tools: vec![("rust".into(), rust.into())],
-                    bin: "cargo".into(),
+                    bin: caches::Bin::Cargo,
                     cwd: None,
                     env: env.to_vec(),
                     credentials: credentials.to_vec(),

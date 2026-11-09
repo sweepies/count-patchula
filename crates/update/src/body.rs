@@ -29,7 +29,7 @@ impl Body {
     /// Append `text`, cut to `room(cap)` on a char boundary.
     pub(crate) fn push(&mut self, text: &str, cap: usize) {
         self.text
-            .push_str(crate::markers::cut(text, self.room(cap)));
+            .push_str(crate::markers::cut_bytes(text, self.room(cap)));
     }
     /// The text so far; the caller appends the reserved markers.
     pub(crate) fn text(&self) -> &str {

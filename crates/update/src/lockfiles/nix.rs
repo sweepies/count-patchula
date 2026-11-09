@@ -11,6 +11,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &[],
     versions: false,
     install: Install::Nix,
+    refresh: Refresh::LocksBesideManifest(&[Manager::Nix]),
+    output: Output::Complete,
 };
 
 /// The static nix the Count runs: Hydra's `buildStatic` binary of this
@@ -149,8 +151,9 @@ impl Runner {
         self.tool(
             driver,
             Invocation {
+                descriptor: &DESCRIPTOR,
                 tools,
-                bin: "nix".into(),
+                bin: caches::Bin::Nix,
                 cwd,
                 env: vec![
                     ("NIX_CONF_DIR".into(), path(&conf)),
@@ -177,10 +180,10 @@ impl Runner {
     /// Count refuses to fetch.
     pub(super) async fn flake_lock(
         &self,
-        context: node::NodeContext<'_>,
+        context: context::Context<'_>,
         jobs: &[&Job],
     ) -> Result<(), Error> {
-        let node::NodeContext {
+        let context::Context {
             driver,
             root,
             baseline,
@@ -188,7 +191,7 @@ impl Runner {
             maintenance,
             ..
         } = context;
-        let lock = node::join(directory, "flake.lock");
+        let lock = context::join(directory, "flake.lock");
         let before: Value = serde_json::from_str(
             &baseline
                 .get(&lock)
@@ -249,7 +252,7 @@ impl Runner {
             )
             .await?;
         let declared: Value = serde_json::from_slice(&declared)
-            .map_err(|e| format!("{}: {e}", node::join(directory, "flake.nix")))?;
+            .map_err(|e| format!("{}: {e}", context::join(directory, "flake.nix")))?;
         for (name, input) in declared.as_object().into_iter().flatten() {
             // An input the lock already refuses is left alone above, as long
             // as flake.nix still points it at the same place.
@@ -264,7 +267,7 @@ impl Runner {
             if !unchanged && let Some(reason) = declared_refusal(input, directory, root) {
                 return Err(format!(
                     "{}: input {name}: {reason}",
-                    node::join(directory, "flake.nix")
+                    context::join(directory, "flake.nix")
                 )
                 .into());
             }

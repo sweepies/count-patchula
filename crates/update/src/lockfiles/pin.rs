@@ -15,7 +15,7 @@ pub(super) struct Pinned {
 }
 
 impl Pinned {
-    /// Pin every lock-only job's package to its target in the `manager`
+    /// Pin every exact-version job's package to its target in the `manager`
     /// manifests under `directory`. With no such jobs nothing is written.
     pub(super) fn apply(
         root: &Path,
@@ -26,7 +26,7 @@ impl Pinned {
     ) -> Result<Self, String> {
         let targets: BTreeMap<_, _> = jobs
             .iter()
-            .filter(|j| j.lock_only)
+            .filter(|j| j.exact_version)
             .filter_map(|j| Some((j.package()?, (j.current(), j.target()?))))
             .collect();
         let mut pinned = Self::none(root);

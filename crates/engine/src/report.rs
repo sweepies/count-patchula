@@ -7,32 +7,11 @@ use std::sync::Mutex;
 /// What report assembly reads for every dependency of a repository.
 #[derive(Clone, Copy)]
 struct ReportCtx<'a> {
-    /// The repository's policy evaluator.
     eval: Option<&'a Evaluator>,
-    /// The repository's config.
     config: Option<&'a Config>,
-    /// Everything the fetch stages produced.
     lookups: &'a Lookups,
-    /// Packages whose reads carried credentials.
     sent: &'a Mutex<BTreeSet<Sent>>,
-    /// The batch's timestamp.
     now: DateTime<Utc>,
-}
-
-/// The SBOM side of one image digest on `platforms`.
-fn image_side(
-    sboms: &ImageSboms,
-    package: &str,
-    digest: &str,
-    platforms: &[String],
-) -> patchula_lookup::images::Side {
-    platforms
-        .iter()
-        .filter_map(|platform| {
-            let key = (package.to_owned(), digest.to_owned(), platform.clone());
-            Some((platform.clone(), sboms.get(&key)?.clone()))
-        })
-        .collect()
 }
 
 impl Engine {

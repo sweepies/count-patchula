@@ -8,6 +8,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["go"],
     versions: true,
     install: Install::Plain,
+    refresh: Refresh::Manifests(&[Manager::Go]),
+    output: Output::Default,
 };
 
 /// The Go to run: the newest of the pin and the edited `go.mod`'s `go` and
@@ -43,10 +45,10 @@ impl Runner {
     /// moves with `go get`, then the module graph is tidied or downloaded.
     pub(super) async fn go_locks(
         &self,
-        context: node::NodeContext<'_>,
+        context: context::Context<'_>,
         jobs: &[&Job],
     ) -> Result<(), Error> {
-        let node::NodeContext {
+        let context::Context {
             driver,
             root,
             directory,
@@ -55,14 +57,14 @@ impl Runner {
             ..
         } = context;
         let cwd = root.join(directory);
-        let go = go_version(&cwd, &node::version(versions, "go")?)?;
+        let go = go_version(&cwd, &context::version(versions, "go")?)?;
         // Credentials for Go and Git in `~/.netrc`, gone when Go
         // finishes, and their hosts private to Go.
         let (netrc, hosts, entries) = self.netrc();
         let credentials = credentials::scopes(entries.iter().copied());
         let secrets = credentials::secrets(entries.iter().copied());
         let held = !hosts.is_empty();
-        let mut _netrc = node::Private::default();
+        let mut _netrc = context::Private::default();
         let mut env = Vec::new();
         if held {
             let home = driver.join("home");
@@ -123,8 +125,9 @@ impl Runner {
                     .held_tool(
                         driver,
                         Invocation {
+                            descriptor: &DESCRIPTOR,
                             tools: vec![("go".into(), go.clone())],
-                            bin: "go".into(),
+                            bin: caches::Bin::Go,
                             cwd: None,
                             env: run_env,
                             credentials: credentials.clone(),
