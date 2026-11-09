@@ -732,10 +732,17 @@ impl Scanner {
                 }
             }
         }
-        for manager in FINISH_ORDER {
-            if let Some((_, eco)) = prepared.iter_mut().find(|(m, _)| *m == *manager)
-                && let Some(finish) = eco.finish.as_mut()
-            {
+        // The ordered finishing steps first, then any other ecosystem's in
+        // extraction order, so a finisher is never skipped for want of a
+        // place in `FINISH_ORDER`.
+        prepared.sort_by_key(|(manager, _)| {
+            FINISH_ORDER
+                .iter()
+                .position(|m| m == manager)
+                .unwrap_or(FINISH_ORDER.len())
+        });
+        for (_, eco) in &mut prepared {
+            if let Some(finish) = eco.finish.as_mut() {
                 finish(&mut result)?;
             }
         }
@@ -828,6 +835,21 @@ fn requirements_name(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extraction_names_every_manager_once() {
+        let mut order = super::EXTRACT_ORDER.to_vec();
+        order.sort();
+        order.dedup();
+        assert_eq!(
+            order.len(),
+            super::EXTRACT_ORDER.len(),
+            "a manager is listed twice"
+        );
+        let mut all = super::Manager::ALL.to_vec();
+        all.sort();
+        assert_eq!(order, all, "every manager has a place in EXTRACT_ORDER");
+    }
+
     /// No user, password or token survives redaction, whatever characters
     /// it holds. The secrets use letters no recorded value contains, so any
     /// leaked part of one shows.
