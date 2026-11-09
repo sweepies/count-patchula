@@ -3,11 +3,11 @@ title: "JSON report"
 description: "The JSON report printed by patchula lookup --json and patchula run --json: repositories, dependencies, updates and lookup failures."
 ---
 `patchula lookup --json` and `patchula run --json` print one report for the
-whole batch. This page describes schema version 5.
+whole batch. This page describes schema version 6.
 
 ```json
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "repositories": [{
     "repository": "owner/repo",
     "status": "complete",
@@ -31,7 +31,10 @@ whole batch. This page describes schema version 5.
 ```
 
 Readers should reject any other `schemaVersion`. Unknown fields are rejected
-too, so a new field means a new version. Version 5 added a dependency's
+too, so a new field means a new version. Version 6 split branch and pull
+request statuses, added the `stale` branch status and limited an image
+`state` to the ones in [security](/guide/security/), with the `actions`
+object at its own version 2; version 5 added a dependency's
 `registry`; version 4 added the `reason` of a notice that is not a template
 update; version 3 added an image rebuild's `image` check.
 
@@ -130,7 +133,7 @@ when this list is not empty.
 
 ```json
 "actions": {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "dryRun": true,
   "branches": [{
     "repository": "owner/repo",
@@ -156,13 +159,16 @@ when this list is not empty.
 }
 ```
 
-Branch and pull request statuses are `planned`, `created`, `updated`,
-`rebased`, `unchanged`, `closed`, `merged`, `deleted`, `skipped`, `protected`
-and `error`. A dry run never reports a write (`created`, `updated`, `rebased`,
-`closed`, `merged` or `deleted`) and has no `commit`. A published branch has
-its `commit` and `verified: true`.
+A branch's status is one of `planned`, `created`, `updated`, `rebased`,
+`unchanged`, `merged`, `deleted`, `skipped`, `stale`, `protected` and `error`.
+`stale` means the default branch changed or moved after the Count read it, so
+nothing was written; the server runs the repository again. A pull request's
+status is one of `planned`, `created`, `updated`, `unchanged`, `closed`,
+`merged`, `skipped`, `protected` and `error`. A dry run never reports a write
+(`created`, `updated`, `rebased`, `closed`, `merged` or `deleted`) and has no
+`commit`. A published branch has its `commit` and `verified: true`.
 
-`skipped`, `protected` and `error` always carry a `reason`. A `protected` or
+`skipped`, `stale`, `protected` and `error` always carry a `reason`. A `protected` or
 `error` action makes its repository an `error`, and the CLI exits with 1.
 
 `blobSha` is the Git blob SHA of the new file, and `diff` is a unified diff

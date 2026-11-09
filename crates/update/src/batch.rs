@@ -299,7 +299,7 @@ mod tests {
                 repository: "o/r".into(),
                 branch: branch.into(),
                 base_commit: "base".into(),
-                status: patchula_report::ActionStatus::Planned,
+                status: patchula_report::BranchStatus::Planned,
                 reason: None,
                 message: "chore(deps): update shared to 1.2.0".into(),
                 previous_commit: None,
@@ -341,13 +341,13 @@ mod tests {
                 plan.hold(hold);
             }
             plan.lift();
-            assert_eq!(plan.action.status, patchula_report::ActionStatus::Skipped);
+            assert_eq!(plan.action.status, patchula_report::BranchStatus::Skipped);
             assert_eq!(plan.action.reason.as_deref(), Some("digest unavailable"));
         }
         let mut plan = group_plan("patchula/x", "package.json");
         plan.hold(Hold::Window);
         plan.lift();
-        assert_eq!(plan.action.status, patchula_report::ActionStatus::Planned);
+        assert_eq!(plan.action.status, patchula_report::BranchStatus::Planned);
         assert_eq!(plan.action.reason, None);
     }
 

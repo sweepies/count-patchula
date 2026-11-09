@@ -4,7 +4,7 @@
 //! else it is plain text, one item per line, for grep and logs, with only the
 //! summary wrapped, at 80 columns.
 use crate::{cli, palette, tui};
-use patchula_report::{ActionStatus, Report, Repository, Status};
+use patchula_report::{BranchStatus, PullRequestStatus, Report, Repository, Status};
 use std::fmt::Write;
 
 /// The width the summary wraps to when the stream is not a terminal.
@@ -283,16 +283,28 @@ impl Counts {
     }
 }
 
-fn status_paint(status: ActionStatus) -> Paint {
+fn status_paint(status: BranchStatus) -> Paint {
     match status {
-        ActionStatus::Created
-        | ActionStatus::Updated
-        | ActionStatus::Rebased
-        | ActionStatus::Merged => Paint::Success,
-        ActionStatus::Planned => Paint::AccentDim,
-        ActionStatus::Skipped | ActionStatus::Protected => Paint::Warning,
-        ActionStatus::Error => Paint::Error,
-        ActionStatus::Unchanged | ActionStatus::Deleted | ActionStatus::Closed => Paint::Dim,
+        BranchStatus::Created
+        | BranchStatus::Updated
+        | BranchStatus::Rebased
+        | BranchStatus::Merged => Paint::Success,
+        BranchStatus::Planned => Paint::AccentDim,
+        BranchStatus::Skipped | BranchStatus::Stale | BranchStatus::Protected => Paint::Warning,
+        BranchStatus::Error => Paint::Error,
+        BranchStatus::Unchanged | BranchStatus::Deleted => Paint::Dim,
+    }
+}
+
+fn pull_request_paint(status: PullRequestStatus) -> Paint {
+    match status {
+        PullRequestStatus::Created | PullRequestStatus::Updated | PullRequestStatus::Merged => {
+            Paint::Success
+        }
+        PullRequestStatus::Planned => Paint::AccentDim,
+        PullRequestStatus::Skipped | PullRequestStatus::Protected => Paint::Warning,
+        PullRequestStatus::Error => Paint::Error,
+        PullRequestStatus::Unchanged | PullRequestStatus::Closed => Paint::Dim,
     }
 }
 
@@ -492,7 +504,7 @@ fn actions_section(
             .iter()
             .map(|pr| {
                 vec![
-                    (word(&pr.status), status_paint(pr.status)),
+                    (word(&pr.status), pull_request_paint(pr.status)),
                     (
                         pr.number.map(|n| format!("#{n}")).unwrap_or_default(),
                         Paint::Plain,

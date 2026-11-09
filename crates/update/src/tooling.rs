@@ -709,7 +709,7 @@ mod tests {
                 repository: "demo/app".into(),
                 branch: branch.into(),
                 base_commit: "base".into(),
-                status: patchula_report::ActionStatus::Planned,
+                status: patchula_report::BranchStatus::Planned,
                 reason: None,
                 message: "chore(deps): update".into(),
                 previous_commit: None,

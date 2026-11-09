@@ -5,7 +5,7 @@ use patchula_github::Client;
 use patchula_http::{Exchange, Response, Transport};
 use patchula_manager::{Files, Scanner, word};
 use patchula_report::{
-    ActionStatus, Current, Dependency as ReportDependency, PackageFile, Repository, Status, Update,
+    BranchStatus, Current, Dependency as ReportDependency, PackageFile, Repository, Status, Update,
 };
 use patchula_update::{Blob, Plan, Snapshot, apply, blob_sha, branch_name, plan};
 use serde_json::{Value, json};
@@ -571,7 +571,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
     .await;
     assert_eq!(
         first.action.status,
-        ActionStatus::Created,
+        BranchStatus::Created,
         "{:?}",
         first.action
     );
@@ -589,7 +589,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
     .await;
     assert_eq!(
         second.action.status,
-        ActionStatus::Updated,
+        BranchStatus::Updated,
         "{:?}",
         second.action
     );
@@ -607,7 +607,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
     .await;
     assert_eq!(
         repeat.action.status,
-        ActionStatus::Unchanged,
+        BranchStatus::Unchanged,
         "{:?}",
         repeat.action
     );
@@ -658,7 +658,7 @@ async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
         }
         assert_eq!(
             repeat.action.status,
-            ActionStatus::Unchanged,
+            BranchStatus::Unchanged,
             "{:?}",
             repeat.action
         );
@@ -714,7 +714,7 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
             false,
         )
         .await;
-        assert_eq!(repeat.action.status, ActionStatus::Updated);
+        assert_eq!(repeat.action.status, BranchStatus::Updated);
         let state = server.0.lock().unwrap();
         let entries = state.trees[repeat.tree.as_ref().unwrap()]
             .as_array()
@@ -743,7 +743,7 @@ async fn dry_run_plans_diffs_and_never_sends_mutations() {
     .await;
     assert_eq!(
         plan.action.status,
-        ActionStatus::Planned,
+        BranchStatus::Planned,
         "{:?}",
         plan.action
     );
@@ -783,9 +783,9 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
         assert_eq!(
             next.action.status,
             if mode == Rebase::Behind {
-                ActionStatus::Rebased
+                BranchStatus::Rebased
             } else {
-                ActionStatus::Unchanged
+                BranchStatus::Unchanged
             },
             "{:?}",
             next.action
@@ -818,7 +818,7 @@ async fn human_commit_is_protected_even_with_copied_patchula_markers() {
     apply(&github, &mut next, &snapshot, "main", Rebase::Behind, false).await;
     assert_eq!(
         next.action.status,
-        ActionStatus::Protected,
+        BranchStatus::Protected,
         "{:?}",
         next.action
     );
@@ -857,7 +857,7 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
         apply(&github, &mut next, &snapshot, "main", Rebase::Behind, false).await;
         assert_eq!(
             next.action.status,
-            ActionStatus::Protected,
+            BranchStatus::Protected,
             "{:?}",
             next.action
         );
@@ -919,7 +919,7 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
     .await;
     assert_eq!(
         next.action.status,
-        ActionStatus::Rebased,
+        BranchStatus::Rebased,
         "{:?}",
         next.action
     );
@@ -961,9 +961,9 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
         assert_eq!(
             plan.action.status,
             if case == 2 {
-                ActionStatus::Skipped
+                BranchStatus::Stale
             } else {
-                ActionStatus::Error
+                BranchStatus::Error
             },
             "case={case}: {:?}",
             plan.action
@@ -1066,7 +1066,7 @@ fn grouped_files_and_prefixes_are_stable_when_occurrence_order_changes() {
     .unwrap()
     .pop()
     .unwrap();
-    assert_eq!(first.action.status, ActionStatus::Planned);
+    assert_eq!(first.action.status, BranchStatus::Planned);
     assert_eq!(first.action.files.len(), 2);
     assert!(first.action.branch.starts_with("deps/major-node-runtime"));
     assert!(first.action.message.starts_with("build(deps):"));
@@ -1145,9 +1145,9 @@ fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
         assert_eq!(
             p.action.status,
             if allow {
-                ActionStatus::Planned
+                BranchStatus::Planned
             } else {
-                ActionStatus::Skipped
+                BranchStatus::Skipped
             }
         );
         assert!(!p.action.files.is_empty());
@@ -1284,7 +1284,7 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
             .pop()
             .unwrap();
             assert!(!p.action.lockfile_pending, "{lock}");
-            assert_eq!(p.action.status, ActionStatus::Planned, "{lock}");
+            assert_eq!(p.action.status, BranchStatus::Planned, "{lock}");
             assert_eq!(p.lock_jobs.len(), 1, "{lock}");
             assert_eq!(
                 p.lock_jobs[0].ecosystem,
@@ -1340,7 +1340,7 @@ fn consolidates_minor_patch_digest_pins_and_keeps_only_latest_major() {
         .find(|p| p.action.branch.ends_with("20.x"))
         .unwrap();
     assert!(nonmajor.contents["mise.toml"].contains("20.9.0"));
-    assert_eq!(nonmajor.action.status, ActionStatus::Planned);
+    assert_eq!(nonmajor.action.status, BranchStatus::Planned);
 }
 
 #[tokio::test(start_paused = true)]
@@ -1373,7 +1373,7 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
         .unwrap();
     assert_eq!(actions.len(), 1);
     assert_eq!(actions[0].branch, old);
-    assert_eq!(actions[0].status, ActionStatus::Deleted);
+    assert_eq!(actions[0].status, BranchStatus::Deleted);
     let s = server.0.lock().unwrap();
     assert_eq!(
         s.refs[&format!("refs/heads/{old}")],
@@ -1503,7 +1503,7 @@ async fn shared_base_write_trace_and_request_budget() {
     assert!(
         plans
             .iter()
-            .all(|p| p.action.status == ActionStatus::Created)
+            .all(|p| p.action.status == BranchStatus::Created)
     );
     let state = server.0.lock().unwrap();
     for (method, path) in &state.requests {
@@ -1582,7 +1582,7 @@ async fn forced_batch_recheck_has_no_mutations_and_one_shared_viewer_read() {
     assert!(
         repeat
             .iter()
-            .all(|p| p.action.status == ActionStatus::Unchanged)
+            .all(|p| p.action.status == BranchStatus::Unchanged)
     );
     let state = server.0.lock().unwrap();
     assert!(state.writes.is_empty());
@@ -1810,7 +1810,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             "{case}"
         );
         assert_eq!(
-            next.action.status == ActionStatus::Unchanged,
+            next.action.status == BranchStatus::Unchanged,
             matches!(
                 case,
                 "same"
@@ -1895,7 +1895,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             false,
         )
         .await;
-        assert_eq!(next.action.status, ActionStatus::Rebased);
+        assert_eq!(next.action.status, BranchStatus::Rebased);
         server.0.lock().unwrap().requests.clear();
         if case == "closed-while-waiting" {
             server.0.lock().unwrap().close_after_reads = Some(1);
@@ -1913,12 +1913,16 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             .count();
         match case {
             "lag" => {
-                assert_ne!(result.status, ActionStatus::Error, "{result:?}");
+                assert_ne!(
+                    result.status,
+                    patchula_report::PullRequestStatus::Error,
+                    "{result:?}"
+                );
                 assert_eq!(reads, 3);
                 assert!(started.elapsed() >= std::time::Duration::from_millis(300));
             }
             "timeout" => {
-                assert_eq!(result.status, ActionStatus::Error);
+                assert_eq!(result.status, patchula_report::PullRequestStatus::Error);
                 assert_eq!(reads, 7);
                 assert!(
                     result
@@ -1930,7 +1934,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
                 assert!(!result.reason.as_deref().unwrap().contains("moved"));
             }
             "foreign" => {
-                assert_eq!(result.status, ActionStatus::Error);
+                assert_eq!(result.status, patchula_report::PullRequestStatus::Error);
                 assert_eq!(reads, 1);
                 assert!(
                     result
@@ -1941,7 +1945,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
                 );
             }
             _ => {
-                assert_eq!(result.status, ActionStatus::Skipped);
+                assert_eq!(result.status, patchula_report::PullRequestStatus::Skipped);
                 assert_eq!(result.number, Some(1));
                 assert!(
                     result
@@ -1974,9 +1978,9 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
     let (closed, _) = make_plan("22.0.0");
     let (live, _) = make_plan("24.0.0");
     let (mut failed, _) = make_plan("26.0.0");
-    failed.action.status = ActionStatus::Error;
+    failed.action.status = BranchStatus::Error;
     let (mut skipped, _) = make_plan("28.0.0");
-    skipped.action.status = ActionStatus::Skipped;
+    skipped.action.status = BranchStatus::Skipped;
     skipped.action.reason = Some("unrelated policy skip".into());
     let mut plans = vec![closed, live, failed, skipped];
     let mut lifecycle = patchula_update::Lifecycle::prepare(
@@ -1989,7 +1993,7 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
     )
     .await
     .unwrap();
-    assert_eq!(plans[0].action.status, ActionStatus::Skipped);
+    assert_eq!(plans[0].action.status, BranchStatus::Skipped);
     patchula_update::apply_all(
         &github,
         &mut plans,
@@ -2006,7 +2010,7 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
         branch: "unrelated".into(),
         number: None,
         url: None,
-        status: ActionStatus::Error,
+        status: patchula_report::PullRequestStatus::Error,
         reason: Some("unrelated publication failure".into()),
     });
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
@@ -2071,7 +2075,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
         )
         .await
         .unwrap();
-        assert_eq!(next.action.status, ActionStatus::Skipped);
+        assert_eq!(next.action.status, BranchStatus::Skipped);
         patchula_update::save_receipts(&cache, &repo, &config, &[next], &lifecycle)
             .await
             .unwrap();
@@ -2103,7 +2107,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
         .unwrap();
         assert_eq!(all, case == "same", "{case}");
         assert_eq!(
-            warm.action.status == ActionStatus::Skipped,
+            warm.action.status == BranchStatus::Skipped,
             case == "same",
             "{case}"
         );
@@ -2130,7 +2134,10 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
         &snapshot,
     )
     .await;
-    assert_eq!(actions[0].status, ActionStatus::Created);
+    assert_eq!(
+        actions[0].status,
+        patchula_report::PullRequestStatus::Created
+    );
     {
         let state = server.0.lock().unwrap();
         let pr = &state.prs[&1];
@@ -2154,7 +2161,10 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
         &snapshot,
     )
     .await;
-    assert_eq!(actions[0].status, ActionStatus::Unchanged);
+    assert_eq!(
+        actions[0].status,
+        patchula_report::PullRequestStatus::Unchanged
+    );
     assert_eq!(server.0.lock().unwrap().writes.len(), count);
     {
         let mut s = server.0.lock().unwrap();
@@ -2179,8 +2189,11 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     )
     .await;
     assert!(retry.retry);
-    assert_eq!(retry.action.status, ActionStatus::Unchanged);
-    assert_eq!(actions[0].status, ActionStatus::Updated);
+    assert_eq!(retry.action.status, BranchStatus::Unchanged);
+    assert_eq!(
+        actions[0].status,
+        patchula_report::PullRequestStatus::Updated
+    );
     let (mut next, _) = make_plan("22.1.0");
     next.changes[0].labels = vec!["new-policy".into()];
     pr_cycle(
@@ -2241,7 +2254,7 @@ async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_
         &snapshot,
     )
     .await;
-    assert_eq!(repeat.action.status, ActionStatus::Skipped);
+    assert_eq!(repeat.action.status, BranchStatus::Skipped);
     assert!(repeat.action.reason.unwrap().contains("manually closed"));
     assert_eq!(server.0.lock().unwrap().writes.len(), count);
     let (mut next, _) = make_plan("22.1.0");
@@ -2253,7 +2266,10 @@ async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_
         &snapshot,
     )
     .await;
-    assert_eq!(actions[0].status, ActionStatus::Created);
+    assert_eq!(
+        actions[0].status,
+        patchula_report::PullRequestStatus::Created
+    );
     assert_eq!(server.0.lock().unwrap().prs.len(), 3);
 }
 
@@ -2275,7 +2291,9 @@ async fn security_updates_skip_the_concurrent_and_hourly_limits() {
     let mut plans = vec![p, security];
     let actions = pr_cycle(&github, &repo, &config, &mut plans, &snapshot).await;
     assert!(
-        actions.iter().all(|a| a.status == ActionStatus::Created),
+        actions
+            .iter()
+            .all(|a| a.status == patchula_report::PullRequestStatus::Created),
         "{actions:?}"
     );
 }
@@ -2290,7 +2308,7 @@ async fn concurrent_and_hourly_limits_include_closed_creates_and_null_is_unlimit
     let github = client(server.clone()).await;
     let mut plans = vec![p, other];
     pr_cycle(&github, &repo, &config, &mut plans, &snapshot).await;
-    assert_eq!(plans[1].action.status, ActionStatus::Skipped);
+    assert_eq!(plans[1].action.status, BranchStatus::Skipped);
     assert!(
         plans[1]
             .action
@@ -2311,7 +2329,7 @@ async fn concurrent_and_hourly_limits_include_closed_creates_and_null_is_unlimit
         &snapshot,
     )
     .await;
-    assert_eq!(other.action.status, ActionStatus::Skipped);
+    assert_eq!(other.action.status, BranchStatus::Skipped);
     assert!(other.action.reason.as_ref().unwrap().contains("perHour"));
     config.prs.per_hour = None;
     (other, _) = make_plan("24.0.0");
@@ -2323,7 +2341,10 @@ async fn concurrent_and_hourly_limits_include_closed_creates_and_null_is_unlimit
         &snapshot,
     )
     .await;
-    assert_eq!(actions[0].status, ActionStatus::Created);
+    assert_eq!(
+        actions[0].status,
+        patchula_report::PullRequestStatus::Created
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -2370,11 +2391,11 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
         assert_eq!(
             state.actions[0].status,
             if human {
-                ActionStatus::Protected
+                patchula_report::PullRequestStatus::Protected
             } else if case == "closed-by-owner" {
-                ActionStatus::Skipped
+                patchula_report::PullRequestStatus::Skipped
             } else {
-                ActionStatus::Closed
+                patchula_report::PullRequestStatus::Closed
             }
         );
         let cleanup = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
@@ -2595,9 +2616,9 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
             assert_eq!(
                 actions[0].status,
                 if changed || origin == "pr" {
-                    ActionStatus::Updated
+                    patchula_report::PullRequestStatus::Updated
                 } else {
-                    ActionStatus::Unchanged
+                    patchula_report::PullRequestStatus::Unchanged
                 }
             );
             let body = s.prs[&1]["body"].as_str().unwrap();
@@ -2691,7 +2712,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
             .count(),
         "unchanged body inputs reuse notes even without receipt restoration"
     );
-    repeat.action.status = ActionStatus::Unchanged;
+    repeat.action.status = BranchStatus::Unchanged;
     repeat.changes.iter_mut().for_each(|c| {
         c.release_notes = false;
         c.body_notes = vec!["huge 🦀 <!-- patchula:fake -->".repeat(5000)];
@@ -2722,7 +2743,10 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
         &snapshot,
     )
     .await;
-    assert_eq!(actions[0].status, ActionStatus::Created);
+    assert_eq!(
+        actions[0].status,
+        patchula_report::PullRequestStatus::Created
+    );
     {
         let s = server.0.lock().unwrap();
         assert!(s.writes.iter().any(|(_, b)| {
@@ -2764,7 +2788,7 @@ async fn uncertain_pr_creation_is_reconciled_next_run_and_never_blindly_retried(
         &snapshot,
     )
     .await;
-    assert_eq!(actions[0].status, ActionStatus::Error);
+    assert_eq!(actions[0].status, patchula_report::PullRequestStatus::Error);
     assert_eq!(server.0.lock().unwrap().prs.len(), 1);
     let (mut repeat, _) = make_plan("22.0.0");
     let actions = pr_cycle(
@@ -2775,7 +2799,10 @@ async fn uncertain_pr_creation_is_reconciled_next_run_and_never_blindly_retried(
         &snapshot,
     )
     .await;
-    assert_eq!(actions[0].status, ActionStatus::Unchanged);
+    assert_eq!(
+        actions[0].status,
+        patchula_report::PullRequestStatus::Unchanged
+    );
     assert_eq!(server.0.lock().unwrap().prs.len(), 1);
 }
 
@@ -2956,7 +2983,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
     .unwrap();
     let names: BTreeSet<_> = plans
         .iter()
-        .filter(|p| p.action.status == ActionStatus::Planned)
+        .filter(|p| p.action.status == BranchStatus::Planned)
         .map(|p| p.action.branch.as_str())
         .collect();
     assert_eq!(
@@ -2992,7 +3019,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
     assert_eq!(
         plans
             .iter()
-            .filter(|p| p.action.status == ActionStatus::Skipped)
+            .filter(|p| p.action.status == BranchStatus::Skipped)
             .count(),
         0
     );
@@ -3052,7 +3079,7 @@ async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
     assert!(
         plans
             .iter()
-            .all(|p| p.action.status == ActionStatus::Error && p.action.commit.is_none())
+            .all(|p| p.action.status == BranchStatus::Error && p.action.commit.is_none())
     );
     let state = server.0.lock().unwrap();
     assert_eq!(state.refs.len(), 1);
@@ -3086,7 +3113,7 @@ async fn single_branch_ref_failure_names_githubs_reason() {
     server.0.lock().unwrap().race = true;
     let github = client(server.clone()).await;
     apply(&github, &mut p, &snapshot, "main", Rebase::Behind, false).await;
-    assert_eq!(p.action.status, ActionStatus::Error);
+    assert_eq!(p.action.status, BranchStatus::Error);
     assert!(
         p.action
             .reason
@@ -3133,7 +3160,7 @@ async fn no_ref_update_names_the_default_branch() {
         false,
     )
     .await;
-    assert_eq!(single.action.status, ActionStatus::Created);
+    assert_eq!(single.action.status, BranchStatus::Created);
     let names = ref_update_names(&server);
     assert_eq!(
         names,
@@ -3157,7 +3184,7 @@ async fn no_ref_update_names_the_default_branch() {
     assert!(
         plans
             .iter()
-            .all(|p| p.action.status == ActionStatus::Created)
+            .all(|p| p.action.status == BranchStatus::Created)
     );
     let names = ref_update_names(&server);
     assert_eq!(names.len(), 1);
@@ -3178,7 +3205,7 @@ async fn no_ref_update_names_the_default_branch() {
     let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
         .await
         .unwrap();
-    assert!(actions.iter().any(|a| a.status == ActionStatus::Deleted));
+    assert!(actions.iter().any(|a| a.status == BranchStatus::Deleted));
     let names = ref_update_names(&server);
     assert!(names.len() > before);
     assert!(names.iter().flatten().all(|n| n != "refs/heads/main"));
@@ -3199,7 +3226,7 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         false,
     )
     .await;
-    assert_eq!(plans[0].action.status, ActionStatus::Created);
+    assert_eq!(plans[0].action.status, BranchStatus::Created);
     {
         let mut s = server.0.lock().unwrap();
         let sha = s.refs[&format!("refs/heads/{}", plans[0].action.branch)].clone();
@@ -3256,7 +3283,7 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
     let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
         .await
         .unwrap();
-    assert!(actions.iter().any(|a| a.status == ActionStatus::Deleted));
+    assert!(actions.iter().any(|a| a.status == BranchStatus::Deleted));
 }
 
 #[tokio::test(start_paused = true)]
@@ -3294,7 +3321,7 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     apply(&github, &mut p, &snapshot, "main", Rebase::Behind, false).await;
-    assert_eq!(p.action.status, ActionStatus::Created, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Created, "{:?}", p.action);
     let s = server.0.lock().unwrap();
     let commit = &s.commits[p.action.commit.as_ref().unwrap()];
     let tree = s.trees[commit["tree"]["sha"].as_str().unwrap()]
@@ -3342,8 +3369,11 @@ async fn owned_readable_branch_and_pr_can_follow_a_changed_track_identity() {
         &snapshot,
     )
     .await;
-    assert_eq!(next.action.status, ActionStatus::Updated);
-    assert_eq!(actions[0].status, ActionStatus::Updated);
+    assert_eq!(next.action.status, BranchStatus::Updated);
+    assert_eq!(
+        actions[0].status,
+        patchula_report::PullRequestStatus::Updated
+    );
     assert!(
         server.0.lock().unwrap().prs[&1]["body"]
             .as_str()
@@ -3406,11 +3436,14 @@ async fn merged_pr_branch_can_be_reused_for_the_next_update_on_its_major_line() 
     let actions = pr_cycle(&github, &repo, &config, &mut plans, &snapshot).await;
     assert_eq!(
         plans[0].action.status,
-        ActionStatus::Rebased,
+        BranchStatus::Rebased,
         "{:?}",
         plans[0].action
     );
-    assert_eq!(actions[0].status, ActionStatus::Created);
+    assert_eq!(
+        actions[0].status,
+        patchula_report::PullRequestStatus::Created
+    );
     assert_eq!(server.0.lock().unwrap().prs.len(), 2);
 }
 
@@ -3548,7 +3581,7 @@ fn reference_data_pins_get_their_own_branch() {
         plans
             .iter()
             .filter(|p| p.action.branch.contains("psl"))
-            .all(|p| p.action.status == ActionStatus::Planned),
+            .all(|p| p.action.status == BranchStatus::Planned),
         "both psl branches are planned, not skipped as overlapping"
     );
 }
@@ -3632,7 +3665,7 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
         false,
     )
     .await;
-    assert_eq!(first.action.status, ActionStatus::Created);
+    assert_eq!(first.action.status, BranchStatus::Created);
     {
         let mut s = server.0.lock().unwrap();
         let sha = s.refs[&format!("refs/heads/{}", first.action.branch)].clone();
@@ -3657,7 +3690,7 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
     .await;
     assert_eq!(
         second.action.status,
-        ActionStatus::Protected,
+        BranchStatus::Protected,
         "{:?}",
         second.action
     );

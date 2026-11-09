@@ -56,7 +56,7 @@ async fn an_alpine_rebuild_fixes_what_osv_lists_for_the_older_digest() {
         .collect();
     let listing = client.advisory_listing(&queries).await.unwrap();
     let check = compare((OLD, &sides[0]), (NEW, &sides[1]), &listing).unwrap();
-    assert_eq!(check.state, "checked");
+    assert_eq!(check.state, patchula_report::ImageState::Checked);
     assert_eq!(check.platforms, ["linux/amd64"]);
     let ids: std::collections::BTreeSet<_> = check.fixed.iter().map(|f| f.id.as_str()).collect();
     assert_eq!(ids.len(), 29, "{ids:?}");
@@ -131,7 +131,11 @@ async fn registries_publish_sboms_in_each_known_way() {
                 Some((SbomSource::Attestation, true, false, None)),
                 None
             ),
-            ("quay.io/argoproj/argocd", None, Some("no-sbom".to_owned())),
+            (
+                "quay.io/argoproj/argocd",
+                None,
+                Some(patchula_report::ImageState::NoSbom)
+            ),
         ]
     );
 }

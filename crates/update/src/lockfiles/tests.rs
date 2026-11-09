@@ -270,7 +270,7 @@ async fn real_apm_relocks_offline() {
     assert!(
         matches!(
             p.action.status,
-            ActionStatus::Planned | ActionStatus::Skipped
+            BranchStatus::Planned | BranchStatus::Skipped
         ),
         "{:?}",
         p.action
@@ -322,7 +322,7 @@ async fn apm_locks_use_the_lock_only_command() {
             "{calls:?}"
         );
         if error {
-            assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+            assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
             assert!(
                 p.action
                     .reason
@@ -334,7 +334,7 @@ async fn apm_locks_use_the_lock_only_command() {
             );
             continue;
         }
-        assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+        assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
         assert_eq!(p.contents["apm.lock.yaml"], "fixture deterministic lock\n");
         assert!(
             p.contents
@@ -453,7 +453,7 @@ async fn a_credentialed_tool_failure_shows_no_output() {
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     let reason = p.action.reason.unwrap();
     assert!(reason.contains("held registry credentials"), "{reason}");
     assert!(!reason.contains("fixture resolution failure"), "{reason}");
@@ -575,13 +575,13 @@ async fn committed_registry_credentials_stop_the_run_before_any_tool() {
             .iter()
             .any(|args| args.iter().any(|a| a == "bun"));
         if refused {
-            assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+            assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
             let reason = p.action.reason.clone().unwrap();
             assert!(reason.contains(".npmrc"), "{reason}");
             assert!(!reason.contains("abc123"), "{reason}");
             assert!(!ran_bun);
         } else {
-            assert_ne!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+            assert_ne!(p.action.status, BranchStatus::Error, "{:?}", p.action);
             assert!(ran_bun);
         }
     }
@@ -603,7 +603,7 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
             .reason
@@ -678,7 +678,7 @@ async fn all_tools_are_targeted_scrubbed_and_versions_are_read_without_loading_r
     go.current = Some("v1.0.0".into());
     go.target = Some("v1.1.0".into());
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.lockfiles_ready);
     assert_eq!(p.action.files.len(), 5);
     let aube = default_spec("aube");
@@ -757,7 +757,7 @@ async fn node_lockfiles_use_aube_yarn_and_bun_by_lockfile_format() {
         .unwrap();
     p.maintenance = false;
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     let calls = executor.calls.lock().unwrap();
     let commands = recorded(&calls);
     assert!(
@@ -812,7 +812,7 @@ async fn the_npm_engine_setting_restores_native_npm_for_npm_locks() {
         .unwrap();
     p.maintenance = false;
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     let calls = executor.calls.lock().unwrap();
     let commands = recorded(&calls);
     assert!(
@@ -917,7 +917,7 @@ async fn an_unchanged_lockfile_after_a_manifest_edit_fails_the_branch() {
         "{\"dependencies\":{\"fixture\":\"2.0.0\"}}\n".into(),
     );
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
             .reason
@@ -958,7 +958,7 @@ async fn a_manifest_edit_outside_the_dependencies_leaves_the_lock_alone() {
         "{\"description\":\"second\",\"dependencies\":{\"fixture\":\"1.0.0\"}}\n".into(),
     );
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.lockfiles_ready);
 }
 
@@ -989,7 +989,7 @@ async fn aube_lock_yaml_is_regenerated_in_place_beside_other_lockfiles() {
         runner.prepare(&mut p, &mut snapshot, &config).await;
         assert_eq!(
             p.action.status,
-            ActionStatus::Planned,
+            BranchStatus::Planned,
             "{locks:?}: {:?}",
             p.action
         );
@@ -1026,7 +1026,7 @@ async fn aube_lock_yaml_creation_fails_the_branch() {
         .unwrap();
     p.maintenance = false;
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
             .reason
@@ -1059,7 +1059,7 @@ async fn maintenance_refreshes_node_lockfiles_within_the_manifest_ranges() {
         .unwrap();
     assert!(p.maintenance);
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     let calls = executor.calls.lock().unwrap();
     let commands = recorded(&calls);
     assert!(
@@ -1136,7 +1136,7 @@ async fn real_tools_produce_deterministic_lockfiles_from_local_offline_fixtures(
             let mut p=maintenance(&repo(),&config,&snapshot,None,monday()).unwrap().unwrap();
             assert!(p.lock_jobs.iter().all(|j|j.ecosystem==ecosystem));
             runner.prepare(&mut p,&mut snapshot,&config).await;
-            assert!(matches!(p.action.status,ActionStatus::Planned|ActionStatus::Skipped),"{ecosystem:?}: {:?}",p.action);
+            assert!(matches!(p.action.status,BranchStatus::Planned|BranchStatus::Skipped),"{ecosystem:?}: {:?}",p.action);
             assert!(p.lockfiles_ready);
             assert!(p.contents.contains_key(lock) || ecosystem==Ecosystem::Go);
             outputs.push((p.contents,p.deleted));
@@ -1206,7 +1206,7 @@ async fn real_aube_rewrites_pnpm_npm_and_yarn_classic_locks_in_place() {
         assert!(
             matches!(
                 p.action.status,
-                ActionStatus::Planned | ActionStatus::Skipped
+                BranchStatus::Planned | BranchStatus::Skipped
             ),
             "{leaf} via {tool}: {:?}",
             p.action
@@ -1257,7 +1257,7 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
         manifest.replace("file:./local", "file:./local/"),
     );
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.contents["aube-lock.yaml"].contains("local-fixture"));
     // The result is aube's lockfile, and nothing else appeared beside it.
     assert!(!p.contents.contains_key("pnpm-lock.yaml"));
@@ -1305,7 +1305,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
         .unwrap()
         .unwrap();
     assert_eq!(p.action.branch, "patchula/lock-file-maintenance");
-    assert_eq!(p.action.status, ActionStatus::Planned);
+    assert_eq!(p.action.status, BranchStatus::Planned);
     let outside = maintenance(
         &repo,
         &config,
@@ -1315,7 +1315,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
     )
     .unwrap()
     .unwrap();
-    assert_eq!(outside.action.status, ActionStatus::Skipped);
+    assert_eq!(outside.action.status, BranchStatus::Skipped);
     let cache = patchula_cache::Cache::open(":memory:", Default::default())
         .await
         .unwrap();
@@ -1331,7 +1331,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
         defer_completed_refresh(&cache, &mut p, &config, now)
             .await
             .unwrap();
-        assert_eq!(p.action.status, ActionStatus::Skipped);
+        assert_eq!(p.action.status, BranchStatus::Skipped);
     }
     config.lockfiles.wait_hours = 0;
     let mut next = maintenance(
@@ -1351,7 +1351,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
     )
     .await
     .unwrap();
-    assert_eq!(next.action.status, ActionStatus::Planned);
+    assert_eq!(next.action.status, BranchStatus::Planned);
 }
 
 #[tokio::test]
@@ -1469,7 +1469,7 @@ async fn real_git_cache_is_reused_and_fetches_new_bases_incrementally_offline() 
             .unwrap()
             .unwrap();
         runner.prepare(&mut p, &mut snapshot, &config).await;
-        assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+        assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
         assert!(p.contents["Cargo.lock"].contains(version));
     }
     let calls = executor.calls.lock().unwrap();
@@ -1569,7 +1569,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
         runner.prepare(&mut p, &mut snapshot, &config).await;
         assert_eq!(
             p.action.status,
-            ActionStatus::Planned,
+            BranchStatus::Planned,
             "{ecosystem:?}: {:?}",
             p.action
         );
@@ -1851,7 +1851,7 @@ async fn cargo_gets_credentialed_registries_from_the_environment() {
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_ne!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_ne!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     let envs = executor.envs.lock().unwrap();
     assert!(!envs.is_empty());
     for env in envs.iter() {
@@ -1923,7 +1923,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
         image: None,
     });
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     let lock = &p.contents["Cargo.lock"];
     assert!(lock.contains("version = \"0.22.1\""), "{lock}");
     assert!(lock.contains("version = \"0.23.0\""), "{lock}");
@@ -2100,7 +2100,7 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
             });
             runner.prepare(&mut p, &mut snapshot, &config).await;
             if fault.is_empty() {
-                assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+                assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
                 assert!(p.lockfiles_ready);
                 assert_eq!(p.action.files.len(), 2);
                 assert!(p.contents["mise.lock"].contains("version = \"24.0.0\""));
@@ -2108,7 +2108,7 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
             } else {
                 assert_eq!(
                     p.action.status,
-                    ActionStatus::Error,
+                    BranchStatus::Error,
                     "{manifest} {fault}: {:?}",
                     p.action
                 );
@@ -2178,7 +2178,7 @@ async fn mise_lock_updates_a_tool_that_records_no_platforms() {
             diff: String::new(),
         });
         runner.prepare(&mut p, &mut snapshot, &config).await;
-        assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+        assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
         assert!(p.contents["mise.lock"].contains("version = \"24.0.0\""));
         let calls = executor.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
@@ -2275,7 +2275,7 @@ async fn mise_lock_ignores_configuration_below_the_lockfile() {
         diff: String::new(),
     });
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert_eq!(
         *spy.configs.lock().unwrap(),
         ["[tools]\nnode = '24.0.0'\n".to_string()]
@@ -2334,7 +2334,7 @@ async fn mise_lock_in_a_subdirectory_reads_the_configuration_beside_it() {
         diff: String::new(),
     });
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.contents["services/api/mise.lock"].contains("version = \"24.0.0\""));
 }
 
@@ -2434,7 +2434,7 @@ async fn mise_lock_records_every_request_a_multi_version_declaration_makes() {
             if omit {
                 assert_eq!(
                     p.action.status,
-                    ActionStatus::Error,
+                    BranchStatus::Error,
                     "{declaration}: {:?}",
                     p.action
                 );
@@ -2450,7 +2450,7 @@ async fn mise_lock_records_every_request_a_multi_version_declaration_makes() {
             } else {
                 assert_eq!(
                     p.action.status,
-                    ActionStatus::Planned,
+                    BranchStatus::Planned,
                     "{declaration}: {:?}",
                     p.action
                 );
@@ -2687,7 +2687,7 @@ async fn an_unchanged_lockfile_after_a_catalog_edit_fails_the_branch() {
         "catalog:\n  fixture: 2.0.0\n".into(),
     );
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
             .reason
@@ -2724,7 +2724,7 @@ async fn real_yarn_berry_uses_a_sanitised_yarnrc_and_restores_it() {
         .unwrap();
     p.maintenance = false;
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(
         p.contents["yarn.lock"].contains("local-fixture"),
         "{}",
@@ -2838,7 +2838,7 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
         lock_only: false,
     }];
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
             .reason
@@ -2890,7 +2890,7 @@ async fn real_uv_and_poetry_regenerate_python_locks() {
         runner.prepare(&mut p, &mut snapshot, &config).await;
         assert_eq!(
             p.action.status,
-            ActionStatus::Planned,
+            BranchStatus::Planned,
             "{lock}: {:?}",
             p.action
         );
@@ -3262,7 +3262,7 @@ async fn real_dotnet_restore_regenerates_packages_lock_json() {
         lock_only: false,
     }];
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(
         p.contents["app/packages.lock.json"].contains("net9.0"),
         "{}",
@@ -3297,7 +3297,7 @@ async fn real_bundler_relocks_offline() {
     assert!(
         matches!(
             p.action.status,
-            ActionStatus::Planned | ActionStatus::Skipped
+            BranchStatus::Planned | BranchStatus::Skipped
         ),
         "{:?}",
         p.action
@@ -3397,7 +3397,7 @@ async fn static_php_requires_an_exact_version() {
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
             .reason
@@ -3430,7 +3430,7 @@ async fn real_composer_relocks_offline() {
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(
         p.contents["composer.lock"].contains("content-hash"),
         "{}",
@@ -3536,7 +3536,7 @@ fn a_vulnerable_transitive_crate_moves_through_its_lockfile_alone() {
     let plan = &plans[0];
     assert_eq!(
         plan.action.status,
-        ActionStatus::Planned,
+        BranchStatus::Planned,
         "{:?}",
         plan.action
     );
@@ -3881,7 +3881,7 @@ async fn real_cargo_moves_a_locked_package_without_a_manifest_change() {
     .unwrap();
     let p = &mut plans[0];
     runner.prepare(p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(!p.contents.contains_key("Cargo.toml"));
     assert!(
         p.contents["Cargo.lock"].contains("version = \"1.0.1\""),
@@ -4015,7 +4015,7 @@ async fn flake_inputs_move_through_nix_with_a_private_store() {
     let files = flake(true);
     let executor = nix_fake(&files, flake_lock(true).replace(NIXPKGS, MOVED));
     let (p, temp) = flake_update(executor.clone(), &files).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.contents["dev/flake.lock"].contains(MOVED));
     assert!(!p.contents.contains_key("dev/flake.nix"));
     assert_eq!(p.action.branch, "patchula/nix-dev--nixpkgs");
@@ -4108,7 +4108,7 @@ async fn flake_maintenance_skips_refused_inputs() {
             [(Ecosystem::Nix, "dev")]
         );
         runner.prepare(&mut p, &mut snapshot, &config).await;
-        assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+        assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
         let calls = executor.calls.lock().unwrap();
         let (_, command) = invocation(&calls[1].0).unwrap();
         let tail: Vec<&str> = command[7..].iter().map(String::as_str).collect();
@@ -4135,7 +4135,7 @@ async fn flake_locks_that_escape_or_do_not_move_fail() {
         ),
     ] {
         let (p, _temp) = flake_update(nix_fake(&files, lock), &files).await;
-        assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+        assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
         assert!(
             p.action.reason.as_deref().unwrap().contains(reason),
             "{:?}",
@@ -4221,7 +4221,7 @@ async fn real_nix_relocks_a_flake_offline() {
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     let lock: serde_json::Value = serde_json::from_str(&p.contents["flake.lock"]).unwrap();
     assert_eq!(lock["nodes"]["root"]["inputs"]["sub"], "sub");
     assert_eq!(lock["nodes"]["sub"]["locked"]["path"], "./sub");
@@ -4290,7 +4290,7 @@ async fn flake_nix_inputs_are_checked_before_nix_fetches() {
             calls: Mutex::new(Vec::new()),
         });
         let (p, _temp) = flake_update(executor.clone(), &files).await;
-        assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+        assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
         assert!(
             p.action.reason.as_deref().unwrap().contains(reason),
             "{:?}",
@@ -4329,7 +4329,7 @@ async fn real_nix_refuses_a_declared_http_input_before_fetching() {
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
             .reason
@@ -4644,7 +4644,7 @@ fn an_in_range_release_moves_a_direct_crate_through_its_lockfile_alone() {
     );
     assert_eq!(
         plan.action.status,
-        ActionStatus::Planned,
+        BranchStatus::Planned,
         "{:?}",
         plan.action
     );
@@ -4787,7 +4787,7 @@ fn an_in_range_release_is_a_lock_only_plan_for_bundler_composer_and_pyproject() 
         }
         assert_eq!(
             plan.action.status,
-            ActionStatus::Planned,
+            BranchStatus::Planned,
             "{manager}: {:?}",
             plan.action
         );
@@ -4932,7 +4932,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
             }];
             runner.prepare(&mut p, &mut snapshot, &config).await;
             if !fresh {
-                assert_eq!(p.action.status, ActionStatus::Error, "{manager}");
+                assert_eq!(p.action.status, BranchStatus::Error, "{manager}");
                 assert!(
                     p.action
                         .reason
@@ -4948,7 +4948,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
             }
             assert_eq!(
                 p.action.status,
-                ActionStatus::Planned,
+                BranchStatus::Planned,
                 "{index} {manager}: {:?}",
                 p.action
             );
@@ -5076,7 +5076,7 @@ fn a_branch_with_a_security_fix_takes_its_commit_prefix() {
         assert_eq!(plans.len(), 1);
         assert_eq!(
             plans[0].action.status,
-            ActionStatus::Planned,
+            BranchStatus::Planned,
             "{:?}",
             plans[0].action
         );
@@ -5313,7 +5313,7 @@ async fn mise_lock_follows_the_tools_tasks_install() {
         });
     }
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert!(p.contents["mise.lock"].contains("version = \"24.0.0\""));
     let configs = spy.configs.lock().unwrap();
     assert_eq!(configs.len(), 1);
@@ -5415,7 +5415,7 @@ async fn mise_lock_follows_task_files_found_by_path_glob_or_directory() {
         let (p, action) = lock_task_file_tool(config, include, task_file, lock).await;
         assert_eq!(
             action.status,
-            ActionStatus::Planned,
+            BranchStatus::Planned,
             "{config} includes {include}: {action:?}"
         );
         assert!(
@@ -5474,7 +5474,7 @@ async fn mise_lock_refuses_a_task_that_declares_a_tool_with_other_options() {
         diff: String::new(),
     });
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     assert!(
         p.action
             .reason
@@ -5544,7 +5544,7 @@ async fn mise_lock_compares_task_options_as_values_not_text() {
     let old = "[tools]\nnode = { version = '22.0.0', os = ['linux','macos'] }\n[tasks.lint]\ntools = { node = { os = [ \"linux\", \"macos\" ], version = \"22.0.0\" } }\n";
     let (p, configs) =
         lock_node_declared_twice(old, include_str!("fixtures/mise.lock").into()).await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert_eq!(configs.len(), 1);
 }
 
@@ -5559,7 +5559,7 @@ async fn mise_lock_requests_every_version_of_a_declaration_with_options() {
         format!("{}\n{second}", include_str!("fixtures/mise.lock")),
     )
     .await;
-    assert_eq!(p.action.status, ActionStatus::Planned, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Planned, "{:?}", p.action);
     assert_eq!(configs.len(), 1);
     let config: toml_edit::Document<String> = configs[0].parse().unwrap();
     let node = config["tools"]["node"].as_array().unwrap();
@@ -6232,7 +6232,7 @@ async fn go_fetches_only_through_the_proxy_in_the_public_partition() {
     assert!(
         matches!(
             p.action.status,
-            ActionStatus::Planned | ActionStatus::Skipped
+            BranchStatus::Planned | BranchStatus::Skipped
         ),
         "{:?}",
         p.action
@@ -6261,7 +6261,7 @@ async fn go_fetches_only_through_the_proxy_in_the_public_partition() {
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut failed, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     let root = temp.path().join("cache/tool-caches");
     let envs = go_envs(&executor);
     assert!(envs.len() >= 2, "{envs:?}");
@@ -6362,7 +6362,7 @@ async fn a_repository_that_commits_credentials_runs_no_tool() {
         .unwrap()
         .unwrap();
     runner.prepare(&mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action.status, ActionStatus::Error, "{:?}", p.action);
+    assert_eq!(p.action.status, BranchStatus::Error, "{:?}", p.action);
     let reason = p.action.reason.unwrap();
     assert!(
         reason.contains(".npmrc holds a credential in repository config"),

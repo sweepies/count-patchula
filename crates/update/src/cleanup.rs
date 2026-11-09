@@ -1,6 +1,6 @@
 use crate::{Plan, REF_UPDATE};
 use patchula_github::Client;
-use patchula_report::{ActionStatus, BranchAction};
+use patchula_report::{BranchAction, BranchStatus};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
@@ -132,7 +132,7 @@ pub async fn cleanup(
             repository: repo.into(),
             branch: name.into(),
             base_commit: base.into(),
-            status: ActionStatus::Deleted,
+            status: BranchStatus::Deleted,
             reason: Some("obsolete patchula update".into()),
             message: String::new(),
             previous_commit: Some(head.into()),

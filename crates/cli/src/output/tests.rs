@@ -111,7 +111,7 @@ fn a_run_lists_branches_and_pull_requests_per_repository() {
         "schemaVersion": 1,
         "repositories": [broken, repository("acme/web")],
         "actions": {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "dryRun": true,
             "branches": [
                 {"repository": "acme/web", "branch": "patchula/npm-lodash-4.x", "baseCommit": "abc",

@@ -123,8 +123,16 @@ pub async fn report(
         match value["status"].as_str() {
             Some("running") => continue,
             Some("complete") => {
-                return serde_json::from_value(value["report"].clone())
-                    .map_err(|_| fail("the server returned a report this CLI cannot read"));
+                // Through the version check and validation, like any report.
+                let report = serde_json::to_vec(&value["report"])
+                    .map_err(|_| fail("the server returned a report this CLI cannot read"))?;
+                return patchula_report::Report::from_json(&report).map_err(|error| match error {
+                    patchula_report::Error::Version(version) => fail(format!(
+                        "{server} sends report schema {version}; this CLI reads {}. Use the same release on both",
+                        patchula_report::SCHEMA_VERSION
+                    )),
+                    error => fail(format!("{server}: the server returned a report this CLI cannot read: {error}")),
+                });
             }
             Some("failed") => {
                 return Err(fail(format!(

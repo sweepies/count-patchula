@@ -4,7 +4,7 @@ use chrono::{DateTime, Duration, Utc};
 use patchula_cache::{Cache, ExtractionKey};
 use patchula_config::Config;
 use patchula_github::{Client, GraphqlPage};
-use patchula_report::{ActionStatus, PullRequestAction, Repository};
+use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus, Repository};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -53,7 +53,7 @@ async fn save_history(
 ) -> Result<(), String> {
     let merged: Vec<_> = plans
         .iter()
-        .filter(|p| p.action.status == ActionStatus::Merged)
+        .filter(|p| p.action.status == BranchStatus::Merged)
         .filter_map(|p| p.cached_pr.clone())
         .collect();
     if merged.is_empty() {
@@ -281,10 +281,10 @@ async fn one(
     inventory: &Inventory,
     repo: &Repository,
     pr: &mut Value,
-) -> Result<(ActionStatus, String), String> {
+) -> Result<(PullRequestStatus, String), String> {
     if pr["base"]["ref"].as_str() != repo.default_branch.as_deref() {
         return Ok((
-            ActionStatus::Protected,
+            PullRequestStatus::Protected,
             "auto-merge blocked: PR no longer targets the default branch".into(),
         ));
     }
@@ -303,7 +303,10 @@ async fn one(
             pr["auto_merge"] = json!({"enabled":true});
         }
         if !pr["auto_merge"].is_null() {
-            return Ok((ActionStatus::Unchanged, "native auto-merge enabled".into()));
+            return Ok((
+                PullRequestStatus::Unchanged,
+                "native auto-merge enabled".into(),
+            ));
         }
     }
     let number = pr["number"].as_u64().ok_or("missing PR number")?;
@@ -312,7 +315,7 @@ async fn one(
     let fresh = client.get_fresh(&path).await.map_err(|e| e.to_string())?;
     if !same_head(&fresh, pr, &inventory.actor, &repo.repository) {
         return Ok((
-            ActionStatus::Protected,
+            PullRequestStatus::Protected,
             "auto-merge blocked: ownership or receipt head changed".into(),
         ));
     }
@@ -321,13 +324,13 @@ async fn one(
         || fresh["mergeable_state"] != "clean"
     {
         return Ok((
-            ActionStatus::Skipped,
+            PullRequestStatus::Skipped,
             "auto-merge waiting: GitHub mergeability/protection is not clean".into(),
         ));
     }
     if !green(client, &repo.repository, head).await? {
         return Ok((
-            ActionStatus::Skipped,
+            PullRequestStatus::Skipped,
             "auto-merge waiting: at least one check is required and all checks/statuses must pass"
                 .into(),
         ));
@@ -341,7 +344,7 @@ async fn one(
         || fresh["mergeable_state"] != "clean"
     {
         return Ok((
-            ActionStatus::Protected,
+            PullRequestStatus::Protected,
             "auto-merge blocked: PR changed during check inspection".into(),
         ));
     }
@@ -354,7 +357,7 @@ async fn one(
         .map_err(|e| e.to_string())?;
     if result["merged"].as_bool() != Some(true) {
         return Ok((
-            ActionStatus::Skipped,
+            PullRequestStatus::Skipped,
             "auto-merge refused by GitHub; retry on a later run".into(),
         ));
     }
@@ -383,7 +386,7 @@ async fn one(
     pr["state"] = json!("closed");
     // The cached PR keeps GitHub's shape: merged_at is when it merged.
     pr["merged_at"] = json!(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    Ok((ActionStatus::Merged, reason))
+    Ok((PullRequestStatus::Merged, reason))
 }
 
 /// Only `cached_pr` restored from a prior verified receipt is eligible. A newly
@@ -399,7 +402,7 @@ pub async fn reconcile(
 ) -> Vec<PullRequestAction> {
     let mut actions = Vec::new();
     for plan in plans.iter_mut() {
-        if !requested(plan, config) || plan.action.status != ActionStatus::Unchanged {
+        if !requested(plan, config) || plan.action.status != BranchStatus::Unchanged {
             continue;
         }
         let Some(pr) = &mut plan.cached_pr else {
@@ -410,15 +413,15 @@ pub async fn reconcile(
         let allowed = policy_allows(repo, plan, now);
         let pr = plan.cached_pr.as_mut().expect("restored receipt");
         let (status, reason) = if !allowed {
-            (ActionStatus::Skipped, "auto-merge waiting: release age, schedule or lookup evidence does not permit merging".into())
+            (PullRequestStatus::Skipped, "auto-merge waiting: release age, schedule or lookup evidence does not permit merging".into())
         } else {
             one(client, inventory, repo, pr)
                 .await
-                .unwrap_or_else(|e| (ActionStatus::Error, format!("auto-merge: {e}")))
+                .unwrap_or_else(|e| (PullRequestStatus::Error, format!("auto-merge: {e}")))
         };
         pr["patchula_merge"] = json!(reason);
-        if status == ActionStatus::Merged {
-            plan.action.status = ActionStatus::Merged;
+        if status == PullRequestStatus::Merged {
+            plan.action.status = BranchStatus::Merged;
         }
         actions.push(PullRequestAction {
             repository: repo.repository.clone(),
@@ -441,7 +444,7 @@ pub async fn reconcile(
     }
     if let Err(error) = save_history(cache, &repo.repository, inventory, plans).await {
         for action in &mut actions {
-            if action.status == ActionStatus::Merged {
+            if action.status == PullRequestStatus::Merged {
                 action
                     .reason
                     .get_or_insert_default()

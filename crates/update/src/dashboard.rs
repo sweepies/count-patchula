@@ -404,7 +404,7 @@ pub fn render(
         }
     }
     for plan in plans {
-        if plan.action.status == patchula_report::ActionStatus::Merged {
+        if plan.action.status == patchula_report::BranchStatus::Merged {
             continue;
         }
         let open = prs
@@ -523,7 +523,7 @@ pub fn render(
                     .updates
                     .iter()
                     .filter_map(|u| u.image.as_ref())
-                    .find(|check| check.state == "previous-unavailable");
+                    .find(|check| check.state == patchula_report::ImageState::PreviousUnavailable);
                 for check in metadata.image.iter().chain(previous) {
                     let row = match &check.silenced {
                         Some(reason) => (
@@ -1172,21 +1172,22 @@ const IMAGES_SILENCED: &str = "Images the Count can't vouch for: silenced";
 
 /// Why the Count can't vouch for an image, as a dashboard line.
 fn image_gap(check: &patchula_report::ImageCheck) -> String {
-    match check.state.as_str() {
-        "no-sbom" => "no SBOM published".into(),
-        "sbom-without-os" => format!(
+    use patchula_report::ImageState;
+    match check.state {
+        ImageState::NoSbom => "no SBOM published".into(),
+        ImageState::SbomWithoutOs => format!(
             "its SBOM (made by {}) lists no OS packages",
             safe(check.detail.as_deref().unwrap_or("an unknown tool"))
         ),
-        "os-not-covered" => match &check.os {
+        ImageState::OsNotCovered => match &check.os {
             Some(os) => format!("{}, which OSV.dev doesn't cover", safe(os)),
             None => "its OS isn't one OSV.dev covers".into(),
         },
-        "previous-unavailable" => {
+        ImageState::PreviousUnavailable => {
             "the previous image is gone from its registry, so the open update can't be compared"
                 .into()
         }
-        state => safe(state),
+        state => safe(state.word()),
     }
 }
 

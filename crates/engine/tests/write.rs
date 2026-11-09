@@ -3,7 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_cache::Cache;
 use patchula_engine::{Engine, Options};
 use patchula_http::{Exchange, Response, Transport};
-use patchula_report::{ActionStatus, Report, Status};
+use patchula_report::{BranchStatus, Report, Status};
 use patchula_update::blob_sha;
 use serde_json::{Value, json};
 use std::{
@@ -94,7 +94,7 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
     let repeated = server.run_at(options(), false, false, now).await.unwrap();
     assert_eq!(
         repeated.actions.unwrap().branches[0].status,
-        ActionStatus::Unchanged
+        BranchStatus::Unchanged
     );
     assert!(server_fake.writes.lock().unwrap().is_empty());
     assert!(credentials.0.load(std::sync::atomic::Ordering::Relaxed) > 2);
@@ -515,14 +515,14 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
         let first = run().await.unwrap();
         assert_eq!(
             first.actions.as_ref().unwrap().branches[0].status,
-            ActionStatus::Created
+            BranchStatus::Created
         );
         if closed {
             fake.prs.lock().unwrap()[0]["state"] = json!("closed");
             let verified = run().await.unwrap();
             assert_eq!(
                 verified.actions.as_ref().unwrap().branches[0].status,
-                ActionStatus::Skipped
+                BranchStatus::Skipped
             );
         }
         // Reopen the persistent cache with a new engine: no process-local proof.
@@ -555,9 +555,9 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
         assert_eq!(
             report.actions.as_ref().unwrap().branches[0].status,
             if closed {
-                ActionStatus::Skipped
+                BranchStatus::Skipped
             } else {
-                ActionStatus::Unchanged
+                BranchStatus::Unchanged
             }
         );
         let requests = fake.requests.lock().unwrap();
@@ -697,7 +697,7 @@ async fn owner_closure_during_publication_keeps_repository_successful() {
     let report = run().await.unwrap();
     assert_eq!(report.repositories[0].status, Status::Complete);
     let pr = &report.actions.as_ref().unwrap().pull_requests[0];
-    assert_eq!(pr.status, ActionStatus::Skipped);
+    assert_eq!(pr.status, patchula_report::PullRequestStatus::Skipped);
     assert!(pr.reason.as_deref().unwrap().contains("closed-by-owner"));
 }
 #[tokio::test(start_paused = true)]
@@ -733,7 +733,10 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
             );
             Report::from_json(&serde_json::to_vec(&report).unwrap()).unwrap();
             let actions = report.actions.as_ref().unwrap();
-            assert_eq!(actions.schema_version, 1);
+            assert_eq!(
+                actions.schema_version,
+                patchula_report::ACTIONS_SCHEMA_VERSION
+            );
             assert_eq!(actions.dry_run, dry_run);
             assert_eq!(actions.branches.len(), 1, "{actions:?}");
             let action = &actions.branches[0];
@@ -741,14 +744,14 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
             assert_eq!(
                 action.status,
                 if lock && !allow {
-                    ActionStatus::Skipped
+                    BranchStatus::Skipped
                 } else if dry_run {
-                    ActionStatus::Planned
+                    BranchStatus::Planned
                 } else {
                     if repeat == 0 {
-                        ActionStatus::Created
+                        BranchStatus::Created
                     } else {
-                        ActionStatus::Unchanged
+                        BranchStatus::Unchanged
                     }
                 },
                 "{action:?}"
@@ -867,7 +870,7 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
             actions
                 .pull_requests
                 .iter()
-                .any(|a| a.status == ActionStatus::Error),
+                .any(|a| a.status == patchula_report::PullRequestStatus::Error),
             refusal == "dirty",
             "{refusal}: {actions:?}"
         );
@@ -876,7 +879,7 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
         }
         assert_eq!(
             actions.branches[0].status,
-            ActionStatus::Created,
+            BranchStatus::Created,
             "{refusal}"
         );
         let enables = fake
@@ -919,11 +922,15 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
             .unwrap();
         let actions = &report.actions.as_ref().unwrap().pull_requests;
         assert!(
-            actions.iter().all(|a| a.status != ActionStatus::Error),
+            actions
+                .iter()
+                .all(|a| a.status != patchula_report::PullRequestStatus::Error),
             "{refusal}: {actions:?}"
         );
         assert_eq!(
-            actions.iter().any(|a| a.status == ActionStatus::Merged),
+            actions
+                .iter()
+                .any(|a| a.status == patchula_report::PullRequestStatus::Merged),
             merges,
             "{refusal}/{state}/{checks}: {actions:?}"
         );
@@ -972,7 +979,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
         let first = checkbox_run(&engine, &config, now).await;
         assert_eq!(
             first.actions.unwrap().branches[0].status,
-            ActionStatus::Created
+            BranchStatus::Created
         );
         assert!(
             !fake
@@ -1032,7 +1039,9 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
         );
         let actions = &report.actions.as_ref().unwrap().pull_requests;
         assert_eq!(
-            actions.iter().any(|a| a.status == ActionStatus::Merged),
+            actions
+                .iter()
+                .any(|a| a.status == patchula_report::PullRequestStatus::Merged),
             merges,
             "{case}: {report:?}"
         );
@@ -1273,7 +1282,7 @@ async fn manual_create_age_and_schedule_permits_do_not_authorize_fallback_mergin
                     .unwrap()
                     .pull_requests
                     .iter()
-                    .any(|a| a.status == ActionStatus::Merged)
+                    .any(|a| a.status == patchula_report::PullRequestStatus::Merged)
             );
         }
     }
@@ -1512,7 +1521,7 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
     let created = checkbox_run(&engine, &config, now).await;
     assert_eq!(
         created.actions.as_ref().unwrap().branches[0].status,
-        ActionStatus::Created
+        BranchStatus::Created
     );
     assert_unticked(&fake);
     drop(engine);
@@ -1538,7 +1547,7 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
     let steady = checkbox_run(&engine, &config, now).await;
     assert_eq!(
         steady.actions.unwrap().branches[0].status,
-        ActionStatus::Unchanged
+        BranchStatus::Unchanged
     );
     assert!(fake.writes.lock().unwrap().is_empty());
 }
@@ -1580,7 +1589,7 @@ async fn dashboard_create_click_bypasses_concurrent_hourly_and_schedule_holds() 
                 .unwrap()
                 .branches
                 .iter()
-                .any(|b| b.status == ActionStatus::Skipped),
+                .any(|b| b.status == BranchStatus::Skipped),
             "{reason}: {first:?}"
         );
         tick_dashboard(&fake, "create");
@@ -1590,7 +1599,7 @@ async fn dashboard_create_click_bypasses_concurrent_hourly_and_schedule_holds() 
                 .unwrap()
                 .branches
                 .iter()
-                .all(|b| matches!(b.status, ActionStatus::Created | ActionStatus::Unchanged)),
+                .all(|b| matches!(b.status, BranchStatus::Created | BranchStatus::Unchanged)),
             "{reason}"
         );
         assert_unticked(&fake);
@@ -1701,7 +1710,7 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                         .branches
                         .iter()
                         .any(|b| &b.branch == branch
-                            && matches!(b.status, ActionStatus::Unchanged | ActionStatus::Skipped)),
+                            && matches!(b.status, BranchStatus::Unchanged | BranchStatus::Skipped)),
                     "{origin}: {report:?}"
                 );
             }
@@ -1749,7 +1758,7 @@ async fn dashboard_recreate_click_opens_a_new_pr_and_does_not_repeat_the_old_own
     let next = checkbox_run(&engine, &config, now).await;
     assert_eq!(
         next.actions.unwrap().branches[0].status,
-        ActionStatus::Unchanged
+        BranchStatus::Unchanged
     );
 }
 
@@ -1896,7 +1905,7 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
         .unwrap();
     assert_eq!(report.repositories[0].status, Status::Error, "{report:?}");
     let branch = &report.actions.unwrap().branches[0];
-    assert_eq!(branch.status, ActionStatus::Error);
+    assert_eq!(branch.status, BranchStatus::Error);
     assert!(
         branch
             .reason

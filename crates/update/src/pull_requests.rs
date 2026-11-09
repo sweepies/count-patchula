@@ -2,7 +2,7 @@ use crate::{Plan, plan::hash};
 use chrono::{DateTime, Duration, Utc};
 use patchula_config::{Config, PackageId};
 use patchula_github::Client;
-use patchula_report::{ActionStatus, PullRequestAction};
+use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -129,7 +129,7 @@ fn action(
     repo: &str,
     name: &str,
     pr: Option<&Value>,
-    status: ActionStatus,
+    status: PullRequestStatus,
     reason: Option<String>,
 ) -> PullRequestAction {
     PullRequestAction {
@@ -365,7 +365,7 @@ impl Lifecycle {
                     repo,
                     &name,
                     Some(pr),
-                    ActionStatus::Protected,
+                    PullRequestStatus::Protected,
                     Some("obsolete PR branch has unowned history; left untouched".into()),
                 ));
                 continue;
@@ -384,7 +384,7 @@ impl Lifecycle {
                     repo,
                     &name,
                     Some(&fresh),
-                    ActionStatus::Skipped,
+                    PullRequestStatus::Skipped,
                     Some("closed-by-owner: PR closed during this run; left closed".into()),
                 ));
                 *pr = fresh;
@@ -428,7 +428,7 @@ impl Lifecycle {
                 repo,
                 &name,
                 Some(pr),
-                ActionStatus::Closed,
+                PullRequestStatus::Closed,
                 Some("superseded or already satisfied update".into()),
             ));
         }
@@ -449,7 +449,7 @@ impl Lifecycle {
             .count() as u32;
         for plan in plans
             .iter_mut()
-            .filter(|p| p.action.status == ActionStatus::Planned)
+            .filter(|p| p.action.status == BranchStatus::Planned)
         {
             let name = &plan.action.branch;
             let existing: Vec<_> = state
@@ -458,7 +458,7 @@ impl Lifecycle {
                 .filter(|p| p["state"] == "open" && branch(p) == name && same_repo(p, repo))
                 .collect();
             if existing.len() > 1 || existing.first().is_some_and(|p| !owned_pr(p, actor, repo)) {
-                plan.action.status = ActionStatus::Protected;
+                plan.action.status = BranchStatus::Protected;
                 plan.action.reason = Some("unowned or ambiguous open PR for branch".into());
                 continue;
             }
@@ -523,10 +523,10 @@ impl Lifecycle {
             p.cached_pr.is_none()
                 && matches!(
                     p.action.status,
-                    ActionStatus::Created
-                        | ActionStatus::Updated
-                        | ActionStatus::Rebased
-                        | ActionStatus::Unchanged
+                    BranchStatus::Created
+                        | BranchStatus::Updated
+                        | BranchStatus::Rebased
+                        | BranchStatus::Unchanged
                 )
         }) {
             let existing = self.prs.iter().find(|p| {
@@ -569,17 +569,17 @@ impl Lifecycle {
                     &self.repo,
                     &plan.action.branch,
                     Some(pr),
-                    ActionStatus::Unchanged,
+                    PullRequestStatus::Unchanged,
                     None,
                 ));
                 continue;
             }
             if !matches!(
                 plan.action.status,
-                ActionStatus::Created
-                    | ActionStatus::Updated
-                    | ActionStatus::Rebased
-                    | ActionStatus::Unchanged
+                BranchStatus::Created
+                    | BranchStatus::Updated
+                    | BranchStatus::Rebased
+                    | BranchStatus::Unchanged
             ) {
                 continue;
             }
@@ -588,7 +588,7 @@ impl Lifecycle {
                     &self.repo,
                     &plan.action.branch,
                     None,
-                    ActionStatus::Error,
+                    PullRequestStatus::Error,
                     Some(error),
                 ));
             }
@@ -603,10 +603,10 @@ impl Lifecycle {
         };
         if !matches!(
             plan.action.status,
-            ActionStatus::Created
-                | ActionStatus::Updated
-                | ActionStatus::Rebased
-                | ActionStatus::Unchanged
+            BranchStatus::Created
+                | BranchStatus::Updated
+                | BranchStatus::Rebased
+                | BranchStatus::Unchanged
         ) {
             return Ok(());
         }
@@ -663,7 +663,7 @@ impl Lifecycle {
                 &self.repo,
                 branch(&closed),
                 Some(&closed),
-                ActionStatus::Closed,
+                PullRequestStatus::Closed,
                 Some(reason),
             ));
             if let Some(old) = self.prs.iter_mut().find(|p| p["number"] == target) {
@@ -746,7 +746,7 @@ impl Lifecycle {
                         &self.repo,
                         &plan.action.branch,
                         Some(&fresh),
-                        ActionStatus::Skipped,
+                        PullRequestStatus::Skipped,
                         Some("closed-by-owner: PR closed during this run; left closed".into()),
                     ));
                     if let Some(old) = self.prs.iter_mut().find(|p| p["number"] == number) {
@@ -777,7 +777,7 @@ impl Lifecycle {
                 && body_hash(body(&fresh)) == body_hash(&text)
                 && fresh["base"]["ref"] == self.base
             {
-                (fresh, ActionStatus::Unchanged)
+                (fresh, PullRequestStatus::Unchanged)
             } else {
                 let updated = client
                     .patch(
@@ -786,11 +786,11 @@ impl Lifecycle {
                     )
                     .await
                     .map_err(|e| e.to_string())?;
-                (updated, ActionStatus::Updated)
+                (updated, PullRequestStatus::Updated)
             }
         } else {
             let created = client.post(&path,json!({"title":title,"body":text,"head":plan.action.branch,"base":self.base,"maintainer_can_modify":false})).await.map_err(|e|e.to_string())?;
-            (created, ActionStatus::Created)
+            (created, PullRequestStatus::Created)
         };
         let number = pr["number"].as_u64().ok_or("missing created PR number")?;
         let labels: BTreeSet<_> = plan
@@ -1211,19 +1211,20 @@ fn image_section(changes: &[crate::Change]) -> String {
             .split_once('@')
             .map(|(_, digest)| digest.chars().take(14).collect::<String>())
             .unwrap_or_default();
-        let warning = match check.state.as_str() {
-            "no-sbom" => format!(
+        use patchula_report::ImageState;
+        let warning = match check.state {
+            ImageState::NoSbom => format!(
                 "{image} publishes no SBOM for this image, and the Count doesn't open up image layers to look for himself. Treat it as an ordinary rebuild, or ask the publisher to attach an SBOM."
             ),
-            "previous-unavailable" => format!(
+            ImageState::PreviousUnavailable => format!(
                 "The previous {image} image (`{}…`) is no longer available from its registry, so he has nothing to compare the new one against. Some registries, quay.io among them, delete an image once its tag moves on.",
                 cell(&previous)
             ),
-            "sbom-without-os" => format!(
+            ImageState::SbomWithoutOs => format!(
                 "The SBOM for {image} lists no OS packages, and it was made by {}, which doesn't look for them. The image may have none, or the SBOM may leave them out.",
                 code(check.detail.as_deref().unwrap_or("an unknown tool"))
             ),
-            "os-not-covered" => format!(
+            ImageState::OsNotCovered => format!(
                 "{image} is built on {}, and OSV.dev has no advisories for it.",
                 cell(check.os.as_deref().unwrap_or("an OS"))
             ),
@@ -1235,11 +1236,11 @@ fn image_section(changes: &[crate::Change]) -> String {
             }
             continue;
         }
-        let note = match check.state.as_str() {
-            "no-os-packages" => format!(
+        let note = match check.state {
+            ImageState::NoOsPackages => format!(
                 "According to its SBOM, {image} has no OS packages, so there is nothing at the OS level for a rebuild to fix."
             ),
-            "unreadable" => format!(
+            ImageState::Unreadable => format!(
                 "The Count couldn't read {image}'s SBOM on this run ({}). He'll try again on the next run.",
                 cell(check.detail.as_deref().unwrap_or("no answer"))
             ),
@@ -1251,7 +1252,7 @@ fn image_section(changes: &[crate::Change]) -> String {
         if !note.is_empty() {
             notes.insert(note);
         }
-        if check.state == "partial-sources" {
+        if check.state == ImageState::PartialSources {
             notes.insert(format!(
                 "{image}'s SBOM doesn't say which source package its {} OS packages come from, so the Count checked them under their own names. Advisories filed under a different source name may be missing.",
                 check.packages
@@ -1517,7 +1518,7 @@ mod image_tests {
     }
     fn state(state: &str) -> ImageCheck {
         ImageCheck {
-            state: state.into(),
+            state: serde_json::from_value(serde_json::json!(state)).unwrap(),
             ..ImageCheck::default()
         }
     }

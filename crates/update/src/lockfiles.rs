@@ -23,7 +23,7 @@ use futures_util::StreamExt;
 use patchula_config::{Config, Manager, NpmEngine, Source};
 use patchula_manager::Dependency;
 use patchula_process::{Executor, SystemExecutor};
-use patchula_report::{ActionStatus, BranchAction, FileAction, Repository, Update};
+use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -497,9 +497,9 @@ pub fn maintenance(
             branch: crate::branch_name(&config.prs.branch, "lock-file-maintenance", "maintenance")?,
             base_commit: repository.commit.clone().ok_or("missing base")?,
             status: if due {
-                ActionStatus::Planned
+                BranchStatus::Planned
             } else {
-                ActionStatus::Skipped
+                BranchStatus::Skipped
             },
             reason: (!due).then(|| crate::plan::Hold::MaintenanceWindow.text().to_owned()),
             message: format!("{} lock file maintenance", config.defaults.commit_prefix),
@@ -542,7 +542,7 @@ pub async fn defer_completed_refresh(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), String> {
     use chrono::Datelike;
-    if !plan.maintenance || plan.action.status != ActionStatus::Planned {
+    if !plan.maintenance || plan.action.status != BranchStatus::Planned {
         return Ok(());
     }
     if let Some(bytes) = cache
@@ -570,7 +570,9 @@ pub async fn record_refresh(
                 a.branch == plan.action.branch
                     && matches!(
                         a.status,
-                        ActionStatus::Created | ActionStatus::Updated | ActionStatus::Unchanged
+                        patchula_report::PullRequestStatus::Created
+                            | patchula_report::PullRequestStatus::Updated
+                            | patchula_report::PullRequestStatus::Unchanged
                     )
             })
         {
@@ -746,13 +748,13 @@ impl Runner {
     }
     /// One plan's lockfiles, and the base blobs of the files they change.
     async fn prepare_plan(&self, plan: &mut Plan, config: &Config) -> BTreeMap<String, Blob> {
-        if plan.action.status != ActionStatus::Planned || plan.lockfiles_ready {
+        if plan.action.status != BranchStatus::Planned || plan.lockfiles_ready {
             return BTreeMap::new();
         }
         match self.generate(plan, config).await {
             Ok(added) => added,
             Err(error) => {
-                plan.action.status = ActionStatus::Error;
+                plan.action.status = BranchStatus::Error;
                 plan.action.reason = Some(format!("lockfile generation failed: {error}"));
                 BTreeMap::new()
             }

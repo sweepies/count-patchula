@@ -3,7 +3,7 @@ use crate::{Lifecycle, Plan, Recheck, plan::hash};
 use patchula_cache::{Cache, ExtractionKey};
 use patchula_config::{Config, Rebase};
 use patchula_github::{Client, GraphqlPage};
-use patchula_report::{ActionStatus, Repository};
+use patchula_report::{BranchStatus, Repository};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -118,7 +118,7 @@ fn fallback(repository: &Repository, plan: &Plan, reason: &str) {
 fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> bool {
     for plan in plans
         .iter()
-        .filter(|p| p.action.status == ActionStatus::Planned)
+        .filter(|p| p.action.status == BranchStatus::Planned)
     {
         fallback(repository, plan, reason);
     }
@@ -294,7 +294,7 @@ pub async fn restore_inventory(
         .map_err(|e| e.to_string())?;
     let pending = plans
         .iter()
-        .any(|p| p.action.status == ActionStatus::Planned);
+        .any(|p| p.action.status == BranchStatus::Planned);
     let receipts = match bytes {
         None if pending => return Ok(not_restored(repository, plans, "missing-receipt")),
         Some(bytes) => match serde_json::from_slice::<Receipts>(&bytes) {
@@ -307,7 +307,7 @@ pub async fn restore_inventory(
     if (receipts.writes.is_empty() && receipts.closed.is_empty() || receipts.closed.len() > 100)
         && plans
             .iter()
-            .any(|p| p.action.status == ActionStatus::Planned)
+            .any(|p| p.action.status == BranchStatus::Planned)
     {
         return Ok(not_restored(repository, plans, "unusable-receipts"));
     }
@@ -331,7 +331,7 @@ pub async fn restore_inventory(
     let mut restored = 0;
     for plan in plans
         .iter_mut()
-        .filter(|p| p.action.status == ActionStatus::Planned)
+        .filter(|p| p.action.status == BranchStatus::Planned)
     {
         let result = if plan.retry {
             Err("checkbox-recheck")
@@ -369,7 +369,7 @@ pub async fn restore_inventory(
     let complete = !obsolete
         && plans
             .iter()
-            .all(|p| p.action.status != ActionStatus::Planned);
+            .all(|p| p.action.status != BranchStatus::Planned);
     tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         restored, complete, obsolete, "write receipts restored");
     Ok(complete)
@@ -424,7 +424,7 @@ fn restore_write(
     {
         return Err("base-changed");
     }
-    plan.action.status = ActionStatus::Unchanged;
+    plan.action.status = BranchStatus::Unchanged;
     plan.action.previous_commit = Some(receipt.commit.clone());
     plan.action.commit = Some(receipt.commit.clone());
     plan.action.verified = Some(true);
@@ -455,7 +455,7 @@ pub(crate) async fn save_merge_states(
         let Some(pr) = &plan.cached_pr else {
             continue;
         };
-        if plan.action.status == ActionStatus::Merged {
+        if plan.action.status == BranchStatus::Merged {
             receipts.writes.remove(&plan.action.branch);
         } else if let Some(receipt) = receipts.writes.get_mut(&plan.action.branch) {
             receipt.pr = pr_state(pr);
@@ -498,16 +498,18 @@ pub async fn save_receipts(
         }
         if !matches!(
             plan.action.status,
-            ActionStatus::Created
-                | ActionStatus::Updated
-                | ActionStatus::Rebased
-                | ActionStatus::Unchanged
+            BranchStatus::Created
+                | BranchStatus::Updated
+                | BranchStatus::Rebased
+                | BranchStatus::Unchanged
         ) || plan.action.verified != Some(true)
             || !lifecycle.actions.iter().any(|a| {
                 a.branch == plan.action.branch
                     && matches!(
                         a.status,
-                        ActionStatus::Created | ActionStatus::Updated | ActionStatus::Unchanged
+                        patchula_report::PullRequestStatus::Created
+                            | patchula_report::PullRequestStatus::Updated
+                            | patchula_report::PullRequestStatus::Unchanged
                     )
             })
         {
