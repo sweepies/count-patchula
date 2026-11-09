@@ -541,8 +541,6 @@ fn project_redirect(
     }
 }
 
-/// Options on a tool's own entry beyond its version and platforms, such as
-/// install arguments or an API URL, which can change where it comes from.
 /// Options on the tool's entry, in any of `configs` or its own file,
 /// beyond its version and platforms, such as install arguments or an API
 /// URL, which can change where it comes from.

@@ -250,15 +250,12 @@ fn module_path(text: &str) -> Option<&str> {
 
 /// What a parsed `go.work` says.
 struct Workspace {
-    /// The modules it replaces.
     replaced: BTreeSet<String>,
-    /// The folders it uses.
     uses: Vec<String>,
 }
 
 /// What a parsed `go.mod` says.
 struct Module {
-    /// The modules it replaces.
     replaced: BTreeSet<String>,
     /// The module path it declares.
     path: Option<String>,

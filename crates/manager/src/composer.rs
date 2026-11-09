@@ -248,7 +248,6 @@ fn manifest(path: &str, text: &str) -> Result<Manifest, Named> {
 
 /// What `composer.lock` records.
 struct Lock {
-    /// Where each package comes from.
     recorded: BTreeMap<String, Origin>,
     /// Whether it holds a Composer plugin, which can add repositories.
     plugins: bool,
