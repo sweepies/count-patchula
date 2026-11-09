@@ -123,7 +123,7 @@ pub fn updates(report: &Report) -> Vec<Update> {
                             .collect(),
                         starts: starts.clone(),
                         transitive: metadata.is_some_and(|m| {
-                            m.kinds.iter().any(|k| *k == DependencyKind::Transitive)
+                            m.kinds.contains(&DependencyKind::Transitive)
                         }),
                         locked: metadata
                             .and_then(|m| m.resolution.as_ref())
