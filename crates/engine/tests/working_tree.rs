@@ -288,7 +288,15 @@ async fn a_deleted_tracked_file_is_absent_not_unreadable() {
     git(root, &["init", "-q"]);
     write(root, ".npmrc", "@acme:registry=https://npm.acme.dev\n");
     write(root, "package.json", MANIFEST);
-    git(root, &["add", "."]);
+    // Forced, so a global exclude cannot leave it untracked.
+    git(root, &["add", "-f", ".npmrc", "package.json"]);
+    let tracked = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", ".npmrc"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&tracked.stdout).trim(), ".npmrc");
     std::fs::remove_file(root.join(".npmrc")).unwrap();
     let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
     let view = view(root, &config, &scanner).await;
