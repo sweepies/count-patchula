@@ -12,7 +12,9 @@ pub(super) fn documents(files: &Files) -> Result<BTreeMap<&str, Body>, String> {
         .map(|(p, t)| {
             Ok((
                 p.as_str(),
-                t.parse()
+                t.read()
+                    .map_err(|_| format!("{p}: the Count could not read it"))?
+                    .parse()
                     .map_err(|e: hcl_edit::parser::Error| format!("{p}: {e}"))?,
             ))
         })

@@ -1,6 +1,19 @@
 use patchula_config::{Config, Manager};
-use patchula_manager::{Edit, Files, Scanner, apply, edits};
+use patchula_manager::{Edit, Scanner, apply, edits};
 
+/// Files from paths and texts the Count read.
+#[allow(dead_code)]
+fn read_files<const N: usize>(entries: [(String, String); N]) -> patchula_manager::Files {
+    entries
+        .into_iter()
+        .map(|(path, text)| (path, text.into()))
+        .collect()
+}
+/// The text of a file the test gave as read.
+#[allow(dead_code)]
+fn read<'a>(files: &'a patchula_manager::Files, path: &str) -> &'a str {
+    files[path].read().expect("read in the test")
+}
 fn config(manager: Manager) -> Config {
     static CONFIG: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
     let mut config = CONFIG
@@ -21,7 +34,7 @@ fn config(manager: Manager) -> Config {
 fn replace(manager: Manager, path: &str, text: &str, value: &str, digest: Option<&str>) -> String {
     let dependencies = Scanner::new(&config(manager))
         .unwrap()
-        .extract(&Files::from([(path.into(), text.into())]))
+        .extract(&read_files([(path.into(), text.into())]))
         .unwrap()
         .dependencies;
     assert!(!dependencies.is_empty());
@@ -171,7 +184,7 @@ fn overlapping_invalid_and_expanded_locations_refuse_edits() {
     let text = "ARG BASE=node:1.0-alpine\nFROM ${BASE}\n";
     let deps = Scanner::new(&config(Manager::Dockerfile))
         .unwrap()
-        .extract(&Files::from([("Dockerfile".into(), text.into())]))
+        .extract(&read_files([("Dockerfile".into(), text.into())]))
         .unwrap()
         .dependencies;
     assert!(edits(&deps[0], text, "2.0-alpine", None).is_err());
@@ -345,7 +358,7 @@ fn composer_constraints_are_replaced_in_place() {
 }
 #[test]
 fn gradle_variable_versions_are_edited_at_their_definition() {
-    let files = Files::from([
+    let files = read_files([
         (
             "build.gradle".into(),
             "dependencies {\n    implementation \"io.swagger.core.v3:swagger-core:$swaggerVersion\"\n    implementation \"com.fasterxml.jackson.core:jackson-databind:$versions.jackson\"\n}\n".into(),
@@ -360,7 +373,7 @@ fn gradle_variable_versions_are_edited_at_their_definition() {
         .dependencies;
     assert_eq!(deps.len(), 2);
     for (dep, value) in deps.iter().zip(["2.21.0", "2.2.60"]) {
-        let text = &files[&dep.file];
+        let text = &read(&files, &dep.file);
         let changed = apply(text, edits(dep, text, value, None).unwrap()).unwrap();
         assert_eq!(changed, text.replace(&dep.current, value), "{}", dep.file);
         assert!(edits(dep, text, "1.0\"; evil", None).is_err());
@@ -372,7 +385,7 @@ fn terraform_versions_are_replaced_inside_their_quotes() {
     let text = "terraform {\n  required_version = \">= 1.5.7\"\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \">= 6.59\"\n    }\n  }\n}\nmodule \"vpc\" {\n  source  = \"terraform-aws-modules/vpc/aws\"\n  version = \"5.0.0\"\n}\n";
     let deps = Scanner::new(&config(Manager::Terraform))
         .unwrap()
-        .extract(&Files::from([("versions.tf".into(), text.into())]))
+        .extract(&read_files([("versions.tf".into(), text.into())]))
         .unwrap()
         .dependencies;
     let aws = deps.iter().find(|d| d.name == "aws").unwrap();
@@ -471,7 +484,7 @@ fn copier_commit_is_never_edited() {
     let text = "_commit: v1.4.0\n_src_path: gh:acme/template\n";
     let dependencies = Scanner::new(&config(Manager::Copier))
         .unwrap()
-        .extract(&Files::from([(".copier-answers.yml".into(), text.into())]))
+        .extract(&read_files([(".copier-answers.yml".into(), text.into())]))
         .unwrap()
         .dependencies;
     assert_eq!(dependencies.len(), 1);

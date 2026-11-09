@@ -2073,7 +2073,7 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
             let config = config();
             let dep = patchula_manager::Scanner::new(&config)
                 .unwrap()
-                .extract(&files)
+                .extract(&patchula_manager::all_read(&files))
                 .unwrap()
                 .dependencies
                 .into_iter()
@@ -2153,7 +2153,7 @@ async fn mise_lock_updates_a_tool_that_records_no_platforms() {
         let config = config();
         let dep = patchula_manager::Scanner::new(&config)
             .unwrap()
-            .extract(&files)
+            .extract(&patchula_manager::all_read(&files))
             .unwrap()
             .dependencies
             .into_iter()
@@ -2239,7 +2239,7 @@ async fn mise_lock_ignores_configuration_below_the_lockfile() {
     let config = config();
     let found = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies;
     let update = Update {
@@ -2306,7 +2306,7 @@ async fn mise_lock_in_a_subdirectory_reads_the_configuration_beside_it() {
     let config = config();
     let dep = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies
         .into_iter()
@@ -2406,7 +2406,7 @@ async fn mise_lock_records_every_request_a_multi_version_declaration_makes() {
             let config = config();
             let dep = patchula_manager::Scanner::new(&config)
                 .unwrap()
-                .extract(&files)
+                .extract(&patchula_manager::all_read(&files))
                 .unwrap()
                 .dependencies
                 .into_iter()
@@ -2466,7 +2466,7 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
     let mut config = config();
     let dep = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies
         .remove(0);
@@ -3504,7 +3504,7 @@ fn a_vulnerable_transitive_crate_moves_through_its_lockfile_alone() {
     let config = config();
     let extraction = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap();
     assert!(extraction.dependencies.is_empty());
     let dependencies: Vec<_> = extraction.locked.iter().map(|l| l.dependency()).collect();
@@ -3810,7 +3810,7 @@ fn a_python_lockfile_nothing_regenerates_holds_the_update() {
         }
         let dep = patchula_manager::Scanner::new(&config())
             .unwrap()
-            .extract(&files)
+            .extract(&patchula_manager::all_read(&files))
             .unwrap()
             .dependencies
             .remove(0);
@@ -3979,7 +3979,7 @@ async fn flake_update(
     let config = config();
     let extraction = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(files)
+        .extract(&patchula_manager::all_read(files))
         .unwrap();
     let mut repository = repo();
     repository.package_files = serde_json::from_value(serde_json::json!([{
@@ -4366,7 +4366,7 @@ fn flake_branches_keep_the_directory_apart_from_the_input() {
     let config = config();
     let extraction = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap();
     let entry = |path: &str, name: &str| {
         serde_json::json!({
@@ -4584,7 +4584,7 @@ fn lock_only_plan(
     let config = config();
     let extraction = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(files)
+        .extract(&patchula_manager::all_read(files))
         .unwrap();
     let dep = extraction
         .dependencies
@@ -4822,7 +4822,7 @@ fn a_lock_only_update_without_a_committed_lockfile_plans_nothing_to_do() {
     let config = config();
     let extraction = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap();
     assert_eq!(extraction.dependencies[0].locked(), None);
     let update = patchula_report::Update {
@@ -4876,7 +4876,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
         let config = config();
         let extracted = patchula_manager::Scanner::new(&config)
             .unwrap()
-            .extract(&files)
+            .extract(&patchula_manager::all_read(&files))
             .unwrap()
             .dependencies;
         let dep = extracted.iter().find(|d| d.package == package).unwrap();
@@ -5025,7 +5025,7 @@ fn a_branch_with_a_security_fix_takes_its_commit_prefix() {
     let config = config();
     let extraction = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap();
     let update = |prefix: &str, fixes: serde_json::Value| {
         serde_json::json!({"newValue": "=1.40.0", "newVersion": "1.40.0", "newDigest": null,
@@ -5125,7 +5125,7 @@ fn a_batched_lock_only_target_is_complete_once_the_lock_holds_the_release() {
     let config = config();
     let dependencies = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies;
     assert_eq!(
@@ -5162,7 +5162,7 @@ fn a_lock_only_cargo_update_without_a_committed_lock_has_no_job() {
     let config = config();
     let dependencies = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies;
     let update = |value: Option<&str>| patchula_report::Update {
@@ -5208,7 +5208,7 @@ fn a_batch_moves_every_declaration_of_a_dependency_in_a_file() {
     let config = config();
     let dependencies = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies
         .into_iter()
@@ -5285,7 +5285,7 @@ async fn mise_lock_follows_the_tools_tasks_install() {
     let config = config();
     let dep = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies
         .into_iter()
@@ -5354,7 +5354,7 @@ async fn lock_task_file_tool(
     }];
     let dep = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies
         .into_iter()
@@ -5449,7 +5449,7 @@ async fn mise_lock_refuses_a_task_that_declares_a_tool_with_other_options() {
     let config = config();
     let dep = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies
         .into_iter()
@@ -5508,7 +5508,7 @@ async fn lock_node_declared_twice(old: &str, lock: String) -> (Plan, Vec<String>
     let config = config();
     let dep = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies
         .into_iter()
@@ -5594,7 +5594,7 @@ fn a_batch_drops_a_target_older_than_the_current_version() {
     let config = config();
     let dependencies = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies;
     let source = serde_json::to_value(dependencies[0].source).unwrap();
@@ -5656,7 +5656,7 @@ fn a_batch_measures_targets_against_the_locked_release() {
     let config = config();
     let dependencies = patchula_manager::Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies;
     assert_eq!(dependencies[0].resolved.as_deref(), Some("1.40.0"));
@@ -6067,7 +6067,7 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
     let verdicts = |files: &BTreeMap<String, String>| {
         patchula_manager::Scanner::new(&config())
             .unwrap()
-            .extract(files)
+            .extract(&patchula_manager::all_read(files))
             .unwrap()
             .public_only
     };

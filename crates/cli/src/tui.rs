@@ -1153,7 +1153,13 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
             continue;
         }
         let value = update.value.as_deref().unwrap_or(&update.current);
-        let text = &files[&update.file];
+        let text = match files[&update.file].read() {
+            Ok(text) => text,
+            Err(unread) => {
+                skipped.push((index, format!("{}: {}", update.file, unread.why())));
+                continue;
+            }
+        };
         let mut found = Vec::new();
         let mut failed = None;
         for dep in &targets {
@@ -1189,10 +1195,12 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
     }
     let mut changed = BTreeMap::new();
     for (file, edits) in edits {
-        let old = &files[&file];
+        let old = files[&file]
+            .read()
+            .map_err(|unread| format!("{file}: {}", unread.why()))?;
         let new = patchula_manager::apply(old, edits)?;
-        if &new != old {
-            changed.insert(file, (old.clone(), new));
+        if new != old {
+            changed.insert(file, (old.to_owned(), new));
         }
     }
     skipped.sort();

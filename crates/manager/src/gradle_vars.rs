@@ -246,7 +246,16 @@ pub(super) fn extract(files: &Files, selected: impl Fn(&str) -> bool) -> Vec<Dep
     let mut definitions = Vec::new();
     let mut uses = Vec::new();
     let mut masked = BTreeMap::new();
+    // An unread script or properties file may define or redefine any name,
+    // so no definition can be trusted to be the only one.
+    let mut read = Vec::new();
     for (path, text) in files.iter().filter(|(p, _)| selected(p)) {
+        match text.read() {
+            Ok(text) => read.push((path, text)),
+            Err(_) => return Vec::new(),
+        }
+    }
+    for (path, text) in read {
         let leaf = path.rsplit('/').next().unwrap_or(path);
         if leaf == "gradle.properties" {
             properties(path, text, &mut definitions);
@@ -296,7 +305,9 @@ pub(super) fn extract(files: &Files, selected: impl Fn(&str) -> bool) -> Vec<Dep
         if !super::gradle::literal(&definition.value) || !claimed.insert(reference.name.clone()) {
             continue;
         }
-        let text = &files[&definition.file];
+        let Ok(text) = files[&definition.file].read() else {
+            continue;
+        };
         out.push(super::gradle::maven(
             &definition.file,
             text,

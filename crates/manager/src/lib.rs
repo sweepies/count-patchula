@@ -222,7 +222,45 @@ pub(crate) fn gitea_host(host: &str) -> bool {
         && (matches!(host, "codeberg.org" | "gitea.com")
             || labels().any(|l| matches!(l, "gitea" | "forgejo")))
 }
-pub type Files = BTreeMap<String, String>;
+/// The files extraction reads, by path, each with its text or the reason it
+/// has none.
+pub type Files = BTreeMap<String, Text>;
+
+/// A file as the Count holds it: its text, or why the Count has none. An
+/// unread file is not an absent one: it may say anything, so whatever it
+/// could steer must fail rather than fall back to a default.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum Text {
+    Read(String),
+    Unread(Unread),
+}
+impl Text {
+    /// The file's text, or why there is none. The only way to the text, so
+    /// every reader decides what an unread file means for it.
+    pub fn read(&self) -> Result<&str, Unread> {
+        match self {
+            Self::Read(text) => Ok(text),
+            Self::Unread(unread) => Err(*unread),
+        }
+    }
+}
+/// Files that were all read, as extraction takes them.
+pub fn all_read(files: &BTreeMap<String, String>) -> Files {
+    files
+        .iter()
+        .map(|(path, text)| (path.clone(), Text::Read(text.clone())))
+        .collect()
+}
+impl From<String> for Text {
+    fn from(text: String) -> Self {
+        Self::Read(text)
+    }
+}
+impl From<&str> for Text {
+    fn from(text: &str) -> Self {
+        Self::Read(text.to_owned())
+    }
+}
 pub fn supported(manager: Manager) -> bool {
     match manager {
         Manager::Npm
@@ -613,7 +651,13 @@ impl Scanner {
             .iter()
             .filter(|(path, _)| yaml_managers.iter().any(|m| self.selected(*m, path)))
         {
-            match yaml::docs(text).and_then(|d| Ok((d, yaml_locations::parse(text)?))) {
+            let parsed = text
+                .read()
+                .map_err(|unread| unread.why().to_owned())
+                .and_then(|text| {
+                    yaml::docs(text).and_then(|d| Ok((d, yaml_locations::parse(text)?)))
+                });
+            match parsed {
                 Ok((docs, spans)) => {
                     documents.insert(path.as_str(), docs);
                     locations.insert(path.as_str(), spans);
@@ -640,6 +684,19 @@ impl Scanner {
             Manager::Bun
         };
         for (path, text) in files {
+            // An unread file says nothing a manager can extract; whatever it
+            // could steer is failed by the readers that consult it.
+            let text = match text.read() {
+                Ok(text) => text,
+                Err(unread) => {
+                    if self.config.managers.iter().any(|m| self.selected(*m, path)) {
+                        result
+                            .warnings
+                            .push(format!("{path}: skipped: {}", unread.why()));
+                    }
+                    continue;
+                }
+            };
             let extraction = if self.selected(node, path) && path.ends_with("package.json") {
                 npm::extract(path, text, node, &locks).map(|mut deps| {
                     npm::assign_registries(&mut deps, &npmrcs);
@@ -1022,11 +1079,17 @@ pub fn linked_settings(path: &str) -> Option<String> {
     }
 }
 
-/// Why a file in [`Files`] holds no text the Count read. Such a file stands in
-/// as text no TOML or YAML mapping parser accepts, so it is unreadable rather
-/// than absent. Every check for one goes through [`Unread::of`], so no reader
-/// can recognise one reason and miss another.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The text of a file that was read, as one a document was parsed from must
+/// be; empty for any other.
+pub(crate) fn read_text<'a>(files: &'a Files, path: &str) -> &'a str {
+    files
+        .get(path)
+        .and_then(|text| text.read().ok())
+        .unwrap_or("")
+}
+
+/// Why a file in [`Files`] holds no text the Count read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum Unread {
     /// The read failed.
     Failed,
@@ -1034,21 +1097,11 @@ pub enum Unread {
     TooDeep,
 }
 impl Unread {
-    const FAILED: &str = "= the Count could not read this file\n";
-    const TOO_DEEP: &str = "= the Count did not read this file: include chain too deep\n";
-    /// The text that stands in for the file.
-    pub fn text(self) -> &'static str {
+    /// Why, in a few words, for a warning that skips the file.
+    pub fn why(self) -> &'static str {
         match self {
-            Self::Failed => Self::FAILED,
-            Self::TooDeep => Self::TOO_DEEP,
-        }
-    }
-    /// Why `text` is a stand-in, or `None` for text the Count read.
-    pub fn of(text: &str) -> Option<Self> {
-        match text {
-            Self::FAILED => Some(Self::Failed),
-            Self::TOO_DEEP => Some(Self::TooDeep),
-            _ => None,
+            Self::Failed => "the Count could not read it",
+            Self::TooDeep => "the include chain was too deep to reach it",
         }
     }
     /// Why lookups that depend on the file at `path` fail.

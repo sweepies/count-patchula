@@ -1,5 +1,19 @@
 use patchula_config::{DependencyKind, Manager, Source};
 use patchula_manager::{Files, Scanner};
+
+/// Files from paths and texts the Count read.
+#[allow(dead_code)]
+fn read_files<const N: usize>(entries: [(String, String); N]) -> patchula_manager::Files {
+    entries
+        .into_iter()
+        .map(|(path, text)| (path, text.into()))
+        .collect()
+}
+/// The text of a file the test gave as read.
+#[allow(dead_code)]
+fn read<'a>(files: &'a patchula_manager::Files, path: &str) -> &'a str {
+    files[path].read().expect("read in the test")
+}
 fn extract(files: &Files) -> Vec<patchula_manager::Dependency> {
     let config = patchula_config::load(std::path::Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -9,7 +23,7 @@ fn extract(files: &Files) -> Vec<patchula_manager::Dependency> {
     let result = Scanner::new(&config).unwrap().extract(files).unwrap();
     assert!(result.warnings.is_empty());
     for dep in &result.dependencies {
-        let text = &files[&dep.file];
+        let text = read(files, &dep.file);
         assert!(dep.location.start < dep.location.end);
         assert!(
             text.is_char_boundary(dep.location.start) && text.is_char_boundary(dep.location.end)
@@ -20,7 +34,7 @@ fn extract(files: &Files) -> Vec<patchula_manager::Dependency> {
 }
 #[test]
 fn cargo_workspaces_targets_renames_and_lock_resolution() {
-    let files = Files::from([
+    let files = read_files([
         (
             "Cargo.toml".into(),
             r#"[package]
@@ -78,12 +92,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     assert!(
         deps.iter()
             .filter(|d| d.file == "Cargo.toml")
-            .all(|d| files[&d.file][d.location.start..d.location.end].contains(&d.current))
+            .all(|d| read(&files, &d.file)[d.location.start..d.location.end].contains(&d.current))
     );
 }
 #[test]
 fn dockerfile_continuations_skip_empty_and_comment_lines() {
-    let files = Files::from([(
+    let files = read_files([(
         "Dockerfile".into(),
         "FROM \\\n\n  # the base\n  nginx:1.26-bookworm\nRUN true\n".into(),
     )]);
@@ -96,7 +110,7 @@ fn dockerfile_continuations_skip_empty_and_comment_lines() {
 }
 #[test]
 fn dockerfile_args_multistage_platform_and_compose() {
-    let files=Files::from([
+    let files=read_files([
         ("Dockerfile".into(),"ARG ALPINE_VERSION=3.20\nFROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS build\nFROM build AS copied\nFROM \\\n  nginx:1.26-bookworm\nFROM scratch\n".into()),
         ("compose.yaml".into(),"services:\n  db:\n    image: 'postgres:16.3-alpine@sha256:abc'\n  build:\n    build: .\n".into()),
     ]);
@@ -117,7 +131,7 @@ fn dockerfile_args_multistage_platform_and_compose() {
 }
 #[test]
 fn go_directives_requires_and_python_markers() {
-    let files=Files::from([
+    let files=read_files([
         ("go.mod".into(),"module example.org/m\ngo 1.24.0\ntoolchain go1.24.2\nrequire (\n example.org/lib v1.2.3 // indirect\n)\nrequire example.org/other/v2 v2.4.0\nreplace example.org/lib => ../local\n".into()),
         ("pyproject.toml".into(),"[project]\nname = \"spec\"\ndependencies = [\"requests[security]==2.31.0 ; python_version >= '3.8'\", \"Django>=4.2,<5\", \"six==1.16.0\"]\n".into()),
     ]);
@@ -140,7 +154,7 @@ fn go_directives_requires_and_python_markers() {
 }
 #[test]
 fn terraform_providers_modules_and_lockfile() {
-    let files=Files::from([
+    let files=read_files([
         ("main.tf".into(),r#"terraform {
   required_providers {
     aws = {
@@ -177,12 +191,12 @@ module "local" {
     );
     assert!(
         deps.iter()
-            .all(|d| files[&d.file][d.location.start..d.location.end].contains(&d.current))
+            .all(|d| read(&files, &d.file)[d.location.start..d.location.end].contains(&d.current))
     );
 }
 #[test]
 fn kubernetes_kustomize_flux_and_values_locations() {
-    let files=Files::from([
+    let files=read_files([
         ("apps/demo/deploy.yaml".into(),"apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n      initContainers:\n        - name: init\n          image: busybox:1.36\n      containers:\n        - name: app\n          image: ghcr.io/example/app:1.2.3\n---\napiVersion: v1\nkind: ConfigMap\ndata:\n  image: fake:1\n".into()),
         ("kustomization.yaml".into(),"apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nimages:\n  - name: nginx\n    newName: library/nginx\n    newTag: 1.26-alpine\nhelmCharts:\n  - name: podinfo\n    repo: https://stefanprodan.github.io/podinfo\n    version: 6.7.1\n".into()),
         ("apps/demo/source.yaml".into(),"apiVersion: source.toolkit.fluxcd.io/v1\nkind: HelmRepository\nmetadata:\n  name: podinfo\n  namespace: demo\nspec:\n  url: https://stefanprodan.github.io/podinfo\n".into()),
@@ -204,7 +218,7 @@ fn kubernetes_kustomize_flux_and_values_locations() {
 #[test]
 fn yaml_locations_follow_paths_with_identical_values_flow_maps_and_unicode() {
     let text = "# café 🦀\napiVersion: apps/v1\nkind: Deployment\nmetadata: {annotations: {image: 'nginx:1.26'}}\nspec: {template: {spec: {containers: [{name: app, image: 'nginx:1.26'}]}}}\n";
-    let files = Files::from([("deploy.yaml".into(), text.into())]);
+    let files = read_files([("deploy.yaml".into(), text.into())]);
     let deps = extract(&files);
     // Kubernetes images only belong to workload specs.
     let spec = deps
@@ -220,7 +234,7 @@ fn yaml_locations_follow_paths_with_identical_values_flow_maps_and_unicode() {
 
 #[test]
 fn flux_chart_refs_still_extract_embedded_image_pins() {
-    let files=Files::from([("apps/demo/release.yaml".into(),"apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nspec:\n  chartRef: {kind: OCIRepository, name: app}\n  values:\n    image: {repository: ghcr.io/example/app, tag: 1.2.3}\n".into())]);
+    let files=read_files([("apps/demo/release.yaml".into(),"apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nspec:\n  chartRef: {kind: OCIRepository, name: app}\n  values:\n    image: {repository: ghcr.io/example/app, tag: 1.2.3}\n".into())]);
     let deps = extract(&files);
     assert_eq!(deps.len(), 1);
     assert_eq!(deps[0].manager, Manager::Flux);
@@ -229,7 +243,7 @@ fn flux_chart_refs_still_extract_embedded_image_pins() {
 
 #[test]
 fn go_pseudo_versions_retain_observed_identity() {
-    let deps = extract(&Files::from([
+    let deps = extract(&read_files([
         ("go.mod".into(), "module example.org/demo\nrequire example.org/lib v0.0.0-20240102030405-abcdef123456\nrequire example.org/plain v1.2.3\n".into()),
     ]));
     assert_eq!(
@@ -251,7 +265,7 @@ fn go_pseudo_versions_retain_observed_identity() {
 
 #[test]
 fn terraform_opentofu_locks_and_runtime_constraints_use_the_same_identity() {
-    let files = Files::from([
+    let files = read_files([
         ("infra/versions.tf".into(), "terraform {\n required_version = \">= 1.8.0\"\n required_providers {\n widget = { source = \"example/widget\", version = \"~> 2.0\" }\n }\n}\n".into()),
         ("infra/.terraform.lock.hcl".into(), "provider \"registry.opentofu.org/example/widget\" {\n version = \"2.7.1\"\n}\n".into()),
     ]);
@@ -265,14 +279,14 @@ fn terraform_opentofu_locks_and_runtime_constraints_use_the_same_identity() {
     assert_eq!(runtime.current, ">= 1.8.0");
     assert_eq!(runtime.source, Source::GithubReleases);
     assert_eq!(
-        &files[&runtime.file][runtime.location.start..runtime.location.end],
+        &read(&files, &runtime.file)[runtime.location.start..runtime.location.end],
         "\">= 1.8.0\""
     );
 }
 
 #[test]
 fn mise_git_tag_pins_are_read_without_the_selector_prefix() {
-    let deps = extract(&Files::from([(
+    let deps = extract(&read_files([(
         "mise.toml".into(),
         "[tools]\n\"cargo:https://github.com/example/tool\" = \"tag:v0.3.1\"\n".into(),
     )]));
@@ -288,7 +302,7 @@ fn mise_git_tag_pins_are_read_without_the_selector_prefix() {
 #[test]
 fn setup_inputs_have_their_own_editable_locations() {
     let text = "jobs:\n  check:\n    steps:\n      - uses: actions/setup-node@v4\n        with: {node-version: '20'}\n      - uses: golangci/golangci-lint-action@v6\n        with:\n          version: v2.3\n      - uses: actions/setup-go@v5\n        with:\n          go-version-file: go.mod\n      - uses: actions/setup-node@v4\n        with:\n          node-version: ${{ matrix.node }}\n";
-    let deps = extract(&Files::from([(
+    let deps = extract(&read_files([(
         ".github/workflows/ci.yml".into(),
         text.into(),
     )]));
@@ -312,7 +326,7 @@ fn setup_inputs_have_their_own_editable_locations() {
 #[test]
 fn setup_bun_inputs_are_npm_tools_with_concrete_locations() {
     let text = "jobs:\n  check:\n    steps:\n      - uses: oven-sh/setup-bun@v2\n        with:\n          bun-version: latest\n      - uses: oven-sh/setup-bun@v2\n        with:\n          bun-version: '1.2.3'\n      - uses: oven-sh/setup-bun@v2\n        with:\n          bun-version: ${{ matrix.bun }}\n";
-    let deps = extract(&Files::from([(
+    let deps = extract(&read_files([(
         ".github/workflows/ci.yml".into(),
         text.into(),
     )]));
@@ -334,7 +348,7 @@ fn setup_bun_inputs_are_npm_tools_with_concrete_locations() {
 #[test]
 fn generated_flux_bundle_and_configmap_image_variables_are_concrete_dependencies() {
     let text = "# This manifest was generated by flux. DO NOT EDIT.\n# Flux Version: v2.3.4\napiVersion: v1\nkind: ConfigMap\ndata:\n  CONTROLLER_IMAGE: example/controller:1.2.3\n  NOT_AN_IMAGE: ''\n  image: arbitrary:1\n";
-    let deps = extract(&Files::from([(
+    let deps = extract(&read_files([(
         "clusters/demo/bundle.yaml".into(),
         text.into(),
     )]));
@@ -379,7 +393,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     };
     let manifest = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n[dependencies]\nshared = \">=0.21\"\ndependent = \"2\"\n";
     for (edge, expected) in [("shared 0.21.7", "0.21.7"), ("shared 0.22.1", "0.22.1")] {
-        let files = Files::from([
+        let files = read_files([
             ("Cargo.toml".into(), manifest.into()),
             ("Cargo.lock".into(), lock(edge)),
         ]);
@@ -389,7 +403,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         assert_eq!(shared.locked(), Some(expected));
     }
     // A manifest the lock does not know has no locked version at all.
-    let files = Files::from([
+    let files = read_files([
         (
             "Cargo.toml".into(),
             manifest.replace("name = \"app\"", "name = \"other\""),
@@ -410,7 +424,7 @@ const REGISTRY: &str = "registry+https://github.com/rust-lang/crates.io-index";
 /// edge to another `shared` is not the workspace's.
 #[test]
 fn a_virtual_workspace_reads_the_edges_of_its_members_only() {
-    let files = Files::from([
+    let files = read_files([
         (
             "Cargo.toml".into(),
             "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\nexclude = [\"crates/old\"]\n\n[workspace.dependencies]\nshared = \">=0.21\"\n".into(),
@@ -493,7 +507,7 @@ dependencies = [
 /// makes a package at `crates/Cargo.toml` a member.
 #[test]
 fn a_trailing_double_star_member_glob_includes_its_own_directory() {
-    let files = Files::from([
+    let files = read_files([
         (
             "Cargo.toml".into(),
             "[workspace]\nmembers = [\"crates/**\"]\n\n[workspace.dependencies]\nshared = \">=0.21\"\n".into(),
@@ -580,7 +594,7 @@ source = "{git}"
         )
     };
     let resolved = |edges: &str, manifest: &str| {
-        let files = Files::from([
+        let files = read_files([
             ("Cargo.toml".into(), manifest.into()),
             ("Cargo.lock".into(), lock(edges)),
         ]);
@@ -622,7 +636,7 @@ source = "{git}"
 fn a_hostile_members_glob_does_not_stall_extraction() {
     let hostile = "*a".repeat(60) + "*b";
     let directory = "a".repeat(200);
-    let files = Files::from([
+    let files = read_files([
         (
             "Cargo.toml".into(),
             format!(
@@ -667,7 +681,7 @@ fn a_workspace_root_with_a_package_counts_it_without_any_member_manifest() {
         "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"shared\"]\n\n[[package]]\nname = \"shared\"\nversion = \"0.21.7\"\nsource = \"{REGISTRY}\"\n"
     );
     let resolved = |manifest: &str| {
-        let files = Files::from([
+        let files = read_files([
             ("Cargo.toml".into(), manifest.into()),
             ("Cargo.lock".into(), lock.clone()),
         ]);
@@ -694,7 +708,7 @@ fn a_workspace_root_with_a_package_counts_it_without_any_member_manifest() {
 /// with a warning rather than read in part.
 #[test]
 fn gradle_comments_are_found_by_the_one_lexer() {
-    let files = Files::from([(
+    let files = read_files([(
         "build.gradle".into(),
         "def url = \"${ \"//\" }host\"; dependencies { implementation 'org.acme:lib:1.2.3' }\n// implementation 'org.acme:old:0.1.0'\n".into(),
     )]);
@@ -704,7 +718,7 @@ fn gradle_comments_are_found_by_the_one_lexer() {
         ["org.acme:lib"],
         "{deps:?}"
     );
-    let files = Files::from([(
+    let files = read_files([(
         "build.gradle".into(),
         "dependencies { implementation 'org.acme:lib:1.2.3' }\ndef broken = \"never ends\n".into(),
     )]);
@@ -738,7 +752,7 @@ fn gradle_lexing_is_bounded_and_reads_keyword_slashies() {
     let scanner = Scanner::new(&config).unwrap();
     let read = |text: String| {
         scanner
-            .extract(&Files::from([("build.gradle".into(), text)]))
+            .extract(&read_files([("build.gradle".into(), text)]))
             .unwrap()
     };
     let deep = read(format!("def s = {}\n", "\"${".repeat(30_000)));
@@ -773,7 +787,7 @@ fn dockerfiles_are_read_the_way_docker_reads_them() {
         "# escape=`\nFROM `\n  nginx:1.26\n",
         "FROM nginx:1.26\nRUN <<EOT\nFROM alpine:3.20\nEOT\nCOPY <<-EOF /x\n\tFROM busybox:1\n\tEOF\n",
     ] {
-        let deps = extract(&Files::from([("Dockerfile".into(), text.into())]));
+        let deps = extract(&read_files([("Dockerfile".into(), text.into())]));
         assert_eq!(
             deps.iter()
                 .map(|d| (d.package.as_str(), d.current.as_str()))

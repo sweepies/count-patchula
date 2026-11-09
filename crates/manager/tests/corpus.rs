@@ -5,6 +5,10 @@
 use patchula_manager::{Files, Scanner};
 use std::path::Path;
 
+fn read<'a>(files: &'a Files, path: &str) -> &'a str {
+    files[path].read().expect("read in the test")
+}
+
 fn walk(root: &Path, dir: &Path, scanner: &Scanner, files: &mut Files, all: &mut Vec<String>) {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
@@ -25,7 +29,7 @@ fn walk(root: &Path, dir: &Path, scanner: &Scanner, files: &mut Files, all: &mut
         if scanner.needs(&relative)
             && let Ok(text) = std::fs::read_to_string(&path)
         {
-            files.insert(relative.clone(), text);
+            files.insert(relative.clone(), text.into());
         }
         all.push(relative);
     }
@@ -46,7 +50,7 @@ fn corpus_extraction_matches_its_snapshot() {
         }
         for path in more {
             let text = std::fs::read_to_string(root.join(&path)).unwrap();
-            files.insert(path, text);
+            files.insert(path, text.into());
         }
     }
     let extraction = scanner.extract(&files).unwrap();
@@ -77,9 +81,12 @@ fn corpus_extraction_matches_its_snapshot() {
     // Every declaration must be editable in place: rewriting it to its own
     // current value exercises the edit path without registry data.
     for dep in &extraction.dependencies {
-        if let Err(error) =
-            patchula_manager::edits(dep, &files[&dep.file], &dep.current, dep.digest.as_deref())
-        {
+        if let Err(error) = patchula_manager::edits(
+            dep,
+            read(&files, &dep.file),
+            &dep.current,
+            dep.digest.as_deref(),
+        ) {
             lines.push(format!("edit-error\t{}\t{}\t{error}", dep.file, dep.name));
         }
     }

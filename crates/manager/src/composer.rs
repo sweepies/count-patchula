@@ -20,7 +20,7 @@ fn platform(name: &str) -> bool {
         || matches!(name, "composer-plugin-api" | "composer-runtime-api")
 }
 
-fn locked(lock: Option<&String>) -> BTreeMap<String, String> {
+fn locked(lock: Option<&str>) -> BTreeMap<String, String> {
     let Some(value) = lock.and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok()) else {
         return BTreeMap::new();
     };
@@ -68,8 +68,10 @@ pub(super) fn extract(
         }
         Err(unread) => origins.uncertain.push(unread),
     }
-    let lock_versions = locked(lock_text);
-    match lock_text.map(|l| lock(l)) {
+    let lock_versions = locked(lock_text.and_then(|l| l.read().ok()));
+    // An unread lock reads as one the Count cannot parse: lookups it could
+    // steer fail.
+    match lock_text.map(|l| l.read().ok().and_then(lock)) {
         None => {}
         Some(Some(Lock { recorded, plugins })) => {
             origins.locks.push(recorded);

@@ -22,11 +22,11 @@ pub(crate) fn parsed<'a>(manifests: &'a Files, files: &'a Files) -> Parsed<'a> {
             .filter(|(p, _)| p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock"))
             // One the Count could not read fails its crates' lookups
             // instead; see `replaced`.
-            .filter(|(_, t)| crate::Unread::of(t.as_str()).is_none())
+            .filter_map(|(p, t)| Some((p, t.read().ok()?)))
             .map(|(p, t)| {
                 (
                     p.as_str(),
-                    Document::parse(t.as_str()).map_err(|e| format!("{p}: {e}")),
+                    Document::parse(t).map_err(|e| format!("{p}: {e}")),
                 )
             })
             .collect(),
@@ -36,9 +36,9 @@ pub(crate) fn parsed<'a>(manifests: &'a Files, files: &'a Files) -> Parsed<'a> {
             .map(|(p, t)| {
                 (
                     p.as_str(),
-                    (crate::Unread::of(t.as_str()).is_none())
-                        .then(|| t.parse::<toml_edit::DocumentMut>().ok())
-                        .flatten()
+                    t.read()
+                        .ok()
+                        .and_then(|t| t.parse::<toml_edit::DocumentMut>().ok())
                         .ok_or(()),
                 )
             })

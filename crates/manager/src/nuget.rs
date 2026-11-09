@@ -566,7 +566,10 @@ impl Feeds {
             } else if configs.contains_key(&dir) {
                 Err(format!("several NuGet config files beside {path}"))
             } else {
-                config(text).map_err(|()| format!("{path}, which the Count cannot read"))
+                text.read()
+                    .map_err(|_| ())
+                    .and_then(config)
+                    .map_err(|()| format!("{path}, which the Count cannot read"))
             };
             if !matches!(configs.get(&dir), Some(Err(_))) {
                 configs.insert(dir, read);
@@ -598,7 +601,7 @@ impl Feeds {
             .iter()
             .find(|(path, text)| {
                 msbuild_file(path)
-                    && (crate::Unread::of(text.as_str()).is_some() || {
+                    && text.read().map_or(true, |text| {
                         let text = decoded(text).to_ascii_lowercase();
                         RESTORE_OVERRIDES
                             .iter()
@@ -810,13 +813,14 @@ mod tests {
                 "Directory.Build.props".to_owned(),
                 format!(
                     "<Project><PropertyGroup><{property}>x</{property}></PropertyGroup></Project>"
-                ),
+                )
+                .into(),
             )]);
             assert!(Feeds::new(&files).overridden.is_some(), "{property}");
         }
         let files = Files::from([(
             "build/publish.pubxml".to_owned(),
-            crate::Unread::Failed.text().to_owned(),
+            crate::Text::Unread(crate::Unread::Failed),
         )]);
         assert!(Feeds::new(&files).overridden.is_some());
     }

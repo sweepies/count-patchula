@@ -78,12 +78,13 @@ pub fn included_files<'a>(
 /// mise reads a task file as tasks only: a top-level `[tools]` there is a task
 /// named `tools`, not the tool section a config has.
 pub(super) fn task_files<'a>(
-    files: impl Iterator<Item = (&'a String, &'a String)>,
+    files: impl Iterator<Item = (&'a String, &'a crate::Text)>,
     all: &Files,
 ) -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
     for (path, text) in files.filter(|(path, _)| !path.ends_with(".tool-versions")) {
-        let Ok(doc) = Document::parse(text.as_str()) else {
+        // An unread config is skipped and its own lookups fail.
+        let Some(Ok(doc)) = text.read().ok().map(Document::parse) else {
             continue;
         };
         let includes = doc
@@ -478,11 +479,12 @@ fn project_redirect(
         dir.starts_with(folder) || folder.starts_with(dir)
     };
     let leaf = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
-    let unreadable = |text: &str| crate::Unread::of(text).is_some();
-    let found = |test: &dyn Fn(&str, &str) -> bool, what: &str| {
+    // A test sees `Err` for a file the Count did not read, which may say
+    // anything.
+    let found = |test: &dyn Fn(&str, Result<&str, crate::Unread>) -> bool, what: &str| {
         files
             .iter()
-            .find(|(path, text)| related(path) && test(path, text))
+            .find(|(path, text)| related(path) && test(path, text.read()))
             .map(|(path, _)| format!("the {what} {path} may name"))
     };
     match kind {
@@ -492,19 +494,19 @@ fn project_redirect(
             // registry counts.
             &|path, text| {
                 matches!(leaf(path).as_str(), ".npmrc" | ".yarnrc.yml")
-                    && (unreadable(text) || text.to_ascii_lowercase().contains("registry"))
+                    && text.map_or(true, |text| text.to_ascii_lowercase().contains("registry"))
             },
             "npm registry",
         ),
         "pypi" | "pipx" => found(
             &|path, text| match leaf(path).as_str() {
-                "uv.toml" => unreadable(text) || crate::pypi::settings::uv_private_index(text),
+                "uv.toml" => text.map_or(true, crate::pypi::settings::uv_private_index),
                 // pip's config parser accepts more than the Count could
                 // check safely (`--` key prefixes, lone `\r`, Unicode case
                 // folding, options that pull in requirement files), so any
                 // pip configuration counts.
                 "pip.conf" | "pip.ini" => true,
-                "pyproject.toml" => unreadable(text) || crate::pypi::settings::private_index(text),
+                "pyproject.toml" => text.map_or(true, crate::pypi::settings::private_index),
                 _ => false,
             },
             "Python index",
@@ -518,7 +520,7 @@ fn project_redirect(
             found(
                 &|path, text| {
                     crate::cargo::config_file(path)
-                        && (unreadable(text) || crate::cargo::nonpublic_registry(text))
+                        && text.map_or(true, crate::cargo::nonpublic_registry)
                 },
                 "Cargo registry",
             )
@@ -558,7 +560,7 @@ fn tool_options(dep: &Dependency, configs: &[&str], files: &Files) -> Option<Str
     for file in configs.iter().copied().chain([dep.file.as_str()]) {
         let Some(doc) = files
             .get(file)
-            .and_then(|t| Document::parse(t.as_str()).ok())
+            .and_then(|t| Document::parse(t.read().ok()?).ok())
         else {
             continue;
         };
@@ -619,9 +621,10 @@ pub(crate) fn redirected(
         }
         related.push(*config);
         let text = files.get(*config)?;
-        let Some(redirected) = (crate::Unread::of(text.as_str()).is_none())
-            .then(|| redirected_backends(config, text))
-            .flatten()
+        let Some(redirected) = text
+            .read()
+            .ok()
+            .and_then(|text| redirected_backends(config, text))
         else {
             return Some(format!("{config}, which the Count cannot read"));
         };

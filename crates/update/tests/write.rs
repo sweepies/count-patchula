@@ -1047,7 +1047,7 @@ fn grouped_files_and_prefixes_are_stable_when_occurrence_order_changes() {
     let files = snapshot
         .files
         .iter()
-        .map(|(p, b)| (p.clone(), b.content.clone()))
+        .map(|(p, b)| (p.clone(), b.content.clone().into()))
         .collect();
     let mut deps = Scanner::new(&config)
         .unwrap()
@@ -1164,13 +1164,13 @@ fn a_zero_x_crates_in_range_release_yields_to_its_next_minor() {
     let lock = "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"hcl-edit\"]\n\n[[package]]\nname = \"hcl-edit\"\nversion = \"0.9.7\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
     let mut config = config;
     config.managers = vec![Manager::Cargo];
-    let files = Files::from([
+    let files = BTreeMap::<String, String>::from([
         ("Cargo.toml".into(), manifest.into()),
         ("Cargo.lock".into(), lock.into()),
     ]);
     let deps = Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies;
     let d = &deps[0];
@@ -1184,7 +1184,7 @@ fn a_zero_x_crates_in_range_release_yields_to_its_next_minor() {
                 Blob {
                     sha: blob_sha(content),
                     mode: "100644".into(),
-                    content: content.clone(),
+                    content: content.to_owned(),
                 },
             )
         })
@@ -2848,7 +2848,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
         Manager::Mise,
         Manager::Npm,
     ];
-    let files = Files::from([
+    let files = BTreeMap::<String, String>::from([
         (
             ".github/workflows/ci.yml".into(),
             format!(
@@ -2876,7 +2876,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
     ]);
     let deps = Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies;
     let mut snapshot = Snapshot {
@@ -3412,7 +3412,10 @@ async fn merged_pr_branch_can_be_reused_for_the_next_update_on_its_major_line() 
     blob.sha = blob_sha(&blob.content);
     let deps = Scanner::new(&config)
         .unwrap()
-        .extract(&Files::from([("mise.toml".into(), blob.content.clone())]))
+        .extract(&patchula_manager::all_read(&BTreeMap::from([(
+            "mise.toml".into(),
+            blob.content.clone(),
+        )])))
         .unwrap()
         .dependencies;
     repo.commit = Some("base2".into());
@@ -3478,13 +3481,13 @@ async fn titles_name_versions_and_branches_skip_registry_urls() {
 fn reference_data_pins_get_their_own_branch() {
     let (mut config, mut repo, ..) = setup("22.0.0", false);
     config.managers = vec![Manager::Npm];
-    let files = Files::from([(
+    let files = BTreeMap::<String, String>::from([(
         "package.json".to_string(),
         "{\"dependencies\":{\"prettier\":\"^3.3.0\",\"psl\":\"^1.9.0\"}}\n".to_string(),
     )]);
     let deps = Scanner::new(&config)
         .unwrap()
-        .extract(&files)
+        .extract(&patchula_manager::all_read(&files))
         .unwrap()
         .dependencies;
     let mut snapshot = Snapshot {

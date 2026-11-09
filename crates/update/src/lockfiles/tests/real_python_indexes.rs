@@ -21,7 +21,7 @@
 //! project configures.
 use super::{config, default_spec};
 use patchula_config::Manager;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -347,7 +347,7 @@ fn real_python_index_choices_match_uv_and_poetry() {
     let mut compared = 0;
     for (number, case) in cases.iter().enumerate() {
         for package in PACKAGES {
-            let files: patchula_manager::Files = case
+            let files: BTreeMap<String, String> = case
                 .files
                 .iter()
                 .map(|(path, text)| (path.clone(), only(path, text, package, &base)))
@@ -367,8 +367,13 @@ fn real_python_index_choices_match_uv_and_poetry() {
                     files.insert(lock.to_owned(), text);
                 }
             }
-            let Some(expected) = expected(&scanner, &files, &case.project, package, &case.name)
-            else {
+            let Some(expected) = expected(
+                &scanner,
+                &patchula_manager::all_read(&files),
+                &case.project,
+                package,
+                &case.name,
+            ) else {
                 continue;
             };
             compared += 1;

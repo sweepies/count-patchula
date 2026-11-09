@@ -621,6 +621,11 @@ pub(crate) fn wanted(files: &Files) -> (Vec<String>, Vec<String>) {
     let mut builds = Vec::new();
     let mut scripts = Vec::new();
     for (path, text) in files.iter().filter(|(path, _)| logic_source(path)) {
+        // An unread script names nothing more to read; `private_repositories`
+        // fails its lookups.
+        let Ok(text) = text.read() else {
+            continue;
+        };
         let Some((code, strings)) = code(path, text) else {
             continue;
         };
@@ -1137,11 +1142,13 @@ pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repo
         .collect();
     let mut seen: BTreeSet<&str> = queue.iter().copied().collect();
     while let Some(path) = queue.pop() {
-        let text = &files[path];
-        if let Some(unread) = crate::Unread::of(text) {
-            out.close(unread.reason(path));
-            return Some(out);
-        }
+        let text = match files[path].read() {
+            Ok(text) => text,
+            Err(unread) => {
+                out.close(unread.reason(path));
+                return Some(out);
+            }
+        };
         let unread = || format!("build logic in {path} the Count cannot read");
         let Some((code, strings)) = code(path, text) else {
             out.close(unread());

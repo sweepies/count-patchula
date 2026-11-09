@@ -26,7 +26,13 @@ pub(super) fn locks(files: &Files) -> Result<BTreeMap<&str, Value<'_>>, String> 
     files
         .iter()
         .filter(|(path, _)| path.ends_with("package-lock.json") || path.ends_with("bun.lock"))
-        .map(|(path, text)| Ok((path.as_str(), ast(text, path.ends_with("bun.lock"))?)))
+        .map(|(path, text)| {
+            // An unread lock is no lock at all: extraction fails.
+            let text = text
+                .read()
+                .map_err(|_| format!("{path}: the Count could not read this lockfile"))?;
+            Ok((path.as_str(), ast(text, path.ends_with("bun.lock"))?))
+        })
         .collect()
 }
 fn escape(name: &str) -> String {
@@ -460,6 +466,9 @@ pub(super) fn env_registry_warnings(files: &crate::Files) -> Vec<String> {
     let mut out = Vec::new();
     for (path, text) in files {
         let leaf = path.rsplit('/').next().unwrap_or(path);
+        let Ok(text) = text.read() else {
+            continue;
+        };
         let npmrc = match leaf {
             ".npmrc" => npmrc(text),
             ".yarnrc.yml" => yarnrc(text),
@@ -555,13 +564,12 @@ pub(super) fn npmrcs(files: &crate::Files) -> BTreeMap<&str, Npmrc> {
                 None if path == leaf => "",
                 _ => continue,
             };
-            let read = if crate::Unread::of(text).is_some() {
-                Npmrc {
+            let read = match text.read() {
+                Ok(text) => parse(text),
+                Err(_) => Npmrc {
                     unread: true,
                     ..Npmrc::default()
-                }
-            } else {
-                parse(text)
+                },
             };
             if !read.names_any() {
                 continue;
