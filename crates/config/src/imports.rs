@@ -12,12 +12,16 @@ use std::path::{Component, Path, PathBuf};
 /// text, or `None` when there is none: the schema module's own text stands
 /// in for a missing `schema_name` file, and any other missing module
 /// fails.
-pub fn import_files(
+pub async fn import_files<F, Fut>(
     entry: &str,
     schema_name: &str,
     schema: &str,
-    read: &mut dyn FnMut(&str) -> Result<Option<String>, String>,
-) -> Result<BTreeMap<String, String>, String> {
+    read: &mut F,
+) -> Result<BTreeMap<String, String>, String>
+where
+    F: FnMut(&str) -> Fut + Send,
+    Fut: std::future::Future<Output = Result<Option<String>, String>> + Send,
+{
     let imports = regex::Regex::new(r#"(?:amends|extends|import\*?)\s*\(?\s*"([^"]+)""#)
         .expect("import regex");
     let mut files = BTreeMap::new();
@@ -30,7 +34,7 @@ pub fn import_files(
         if visited.len() > 100 {
             return Err("config import budget exceeded".into());
         }
-        let text = match read(&path)? {
+        let text = match read(&path).await? {
             Some(text) => text,
             None if Path::new(&path)
                 .file_name()
@@ -152,8 +156,20 @@ mod tests {
 
     fn read(
         files: &BTreeMap<String, String>,
-    ) -> impl FnMut(&str) -> Result<Option<String>, String> + '_ {
-        move |path| Ok(files.get(path).cloned())
+    ) -> impl FnMut(&str) -> std::future::Ready<Result<Option<String>, String>> + '_ {
+        move |path| std::future::ready(Ok(files.get(path).cloned()))
+    }
+
+    fn walk(
+        entry: &str,
+        files: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, String>, String> {
+        futures_executor::block_on(import_files(
+            entry,
+            "PatchulaConfig.pkl",
+            "schema",
+            &mut read(files),
+        ))
     }
 
     #[test]
@@ -162,13 +178,7 @@ mod tests {
             "patchula.pkl".to_owned(),
             "amends \"PatchulaConfig.pkl\"\n// import \"https://example.com/remote.pkl\"\n/* extends \"/abs.pkl\" */\n".to_owned(),
         )]);
-        let modules = import_files(
-            "patchula.pkl",
-            "PatchulaConfig.pkl",
-            "schema",
-            &mut read(&files),
-        )
-        .unwrap();
+        let modules = walk("patchula.pkl", &files).unwrap();
         assert_eq!(
             modules.keys().map(String::as_str).collect::<Vec<_>>(),
             ["PatchulaConfig.pkl", "patchula.pkl"]
@@ -187,13 +197,7 @@ mod tests {
                 "patchula.pkl".to_owned(),
                 format!("amends \"PatchulaConfig.pkl\"\nimport \"{target}\"\n"),
             )]);
-            let error = import_files(
-                "patchula.pkl",
-                "PatchulaConfig.pkl",
-                "schema",
-                &mut read(&files),
-            )
-            .unwrap_err();
+            let error = walk("patchula.pkl", &files).unwrap_err();
             assert_eq!(
                 error, "config imports must be local modules; remote imports are disabled",
                 "{target}"
@@ -209,13 +213,7 @@ mod tests {
             let next = format!("mod{}.pkl", index + 1);
             files.insert(format!("mod{index}.pkl"), format!("import \"{next}\"\n"));
         }
-        let error = import_files(
-            "mod0.pkl",
-            "PatchulaConfig.pkl",
-            "schema",
-            &mut read(&files),
-        )
-        .unwrap_err();
+        let error = walk("mod0.pkl", &files).unwrap_err();
         assert_eq!(error, "config import budget exceeded");
     }
 
@@ -235,13 +233,7 @@ mod tests {
                 "amends \"PatchulaConfig.pkl\"\n".to_owned(),
             ),
         ]);
-        let modules = import_files(
-            "patchula.pkl",
-            "PatchulaConfig.pkl",
-            "schema",
-            &mut read(&files),
-        )
-        .unwrap();
+        let modules = walk("patchula.pkl", &files).unwrap();
         assert_eq!(
             modules.keys().map(String::as_str).collect::<Vec<_>>(),
             [
@@ -258,13 +250,7 @@ mod tests {
             "patchula.pkl".to_owned(),
             "amends \"PatchulaConfig.pkl\"\nimport \"../escape.pkl\"\n".to_owned(),
         )]);
-        let error = import_files(
-            "patchula.pkl",
-            "PatchulaConfig.pkl",
-            "schema",
-            &mut read(&files),
-        )
-        .unwrap_err();
+        let error = walk("patchula.pkl", &files).unwrap_err();
         assert_eq!(error, "config import escapes repository");
     }
 }

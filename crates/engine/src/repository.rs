@@ -5,7 +5,7 @@
 //! hands extraction the files, the path inventory, the unsupported list,
 //! the snapshot blobs and the warnings. GitHub and a local checkout differ
 //! only in where the listing and the blob contents come from: `view` is
-//! handed both.
+//! handed a [`Listing`] and a [`Source`].
 use crate::{Error, Result};
 use patchula_config::Config;
 use patchula_manager::{
@@ -59,13 +59,21 @@ pub struct View {
     pub refusal: Option<String>,
 }
 
-/// Read `listing` for `scanner` and `config`. `read` returns the content
-/// of each entry it is given, one result per entry in order: an outer
-/// error fails the whole read, an inner one is that entry's own failure.
-/// It is only ever given non-symlink entries; a `120000` entry is
-/// unreadable without a read, as is one behind a symlink.
-pub fn view(
-    read: &mut dyn FnMut(&[Entry]) -> Contents,
+/// Where a view's blob contents come from.
+pub trait Source {
+    /// The contents of `entries`, one result per entry in order: an outer
+    /// error fails the whole read, an inner one is that entry's own
+    /// failure. Only ever given non-symlink entries.
+    fn read<'a>(
+        &'a mut self,
+        entries: &'a [Entry],
+    ) -> impl std::future::Future<Output = Contents> + Send + 'a;
+}
+
+/// Read `listing` for `scanner` and `config` through `source`, awaiting it
+/// once per selection and once per round of the include chain.
+pub async fn view<S: Source>(
+    source: &mut S,
     listing: Listing,
     scanner: &Scanner,
     config: &Config,
@@ -123,7 +131,7 @@ pub fn view(
             wanted.push(entry.clone());
         }
     }
-    let contents = read(&wanted)?;
+    let contents = source.read(&wanted).await?;
     for (entry, content) in wanted.iter().zip(contents) {
         place(entry, content, true, &mut files, &mut blobs)?;
     }
@@ -146,7 +154,7 @@ pub fn view(
                 }
             }
         }
-        let contents = read(&wanted)?;
+        let contents = source.read(&wanted).await?;
         for (entry, content) in wanted.iter().zip(contents) {
             place(entry, content, false, &mut files, &mut blobs)?;
         }
@@ -236,59 +244,6 @@ fn place(
     Ok(())
 }
 
-/// The walk's result once its thread finishes, `None` when it died.
-pub(crate) type Walked<T, E> =
-    std::pin::Pin<Box<dyn std::future::Future<Output = Option<std::result::Result<T, E>>> + Send>>;
-
-/// A repository-reading walk running on its own thread — `spawn_blocking`
-/// would keep a paused test clock from firing the timers the answering
-/// side awaits — with its blob reads requested over `requests` and
-/// answered through `answers`; `done` resolves with the walk's result.
-pub(crate) struct Walk<Req, Ans, T, E> {
-    /// Each batch of entries the walk wants contents for.
-    pub requests: tokio::sync::mpsc::UnboundedReceiver<Req>,
-    /// Where the walk's read waits for each batch's answer.
-    pub answers: std::sync::mpsc::Sender<std::result::Result<Ans, String>>,
-    /// The walk's result, or `None` when its thread died.
-    pub done: Walked<T, E>,
-}
-
-/// Start `walk` on its own thread; see [`Walk`]. `read` sends each request
-/// and waits for its answer, failing only when the answering side is gone.
-pub(crate) fn blocking_walk<Req, Ans, T, E>(
-    walk: impl FnOnce(
-        &mut dyn FnMut(Req) -> std::result::Result<Ans, String>,
-    ) -> std::result::Result<T, E>
-    + Send
-    + 'static,
-) -> Walk<Req, Ans, T, E>
-where
-    Req: Send + 'static,
-    Ans: Send + 'static,
-    T: Send + 'static,
-    E: Send + 'static,
-{
-    let (requests, incoming) = tokio::sync::mpsc::unbounded_channel::<Req>();
-    let (answers, replies) = std::sync::mpsc::channel::<std::result::Result<Ans, String>>();
-    let (done, walked) = tokio::sync::oneshot::channel::<std::result::Result<T, E>>();
-    std::thread::spawn(move || {
-        let mut read = move |request: Req| -> std::result::Result<Ans, String> {
-            requests
-                .send(request)
-                .map_err(|_| "repository reader closed".to_owned())?;
-            replies
-                .recv()
-                .map_err(|_| "repository reader closed".to_owned())?
-        };
-        let _ = done.send(walk(&mut read));
-    });
-    Walk {
-        requests: incoming,
-        answers,
-        done: Box::pin(async move { walked.await.ok() }),
-    }
-}
-
 /// `dir`'s listing as a push would carry it: what `git ls-files` lists as
 /// tracked or untracked but not ignored, so `.gitignore`,
 /// `.git/info/exclude` and the global excludes apply, or the whole tree
@@ -352,22 +307,28 @@ fn local_mode(_: &std::fs::Metadata) -> String {
     "100644".into()
 }
 
+/// The local working tree's blob source: files are read synchronously
+/// inside the async read, which only the CLI's local path uses.
+struct Local<'a> {
+    dir: &'a Path,
+}
+
+impl Source for Local<'_> {
+    async fn read(&mut self, entries: &[Entry]) -> Contents {
+        Ok(entries
+            .iter()
+            .map(|entry| {
+                std::fs::read(self.dir.join(&entry.path)).map_err(|error| error.to_string())
+            })
+            .collect())
+    }
+}
+
 /// The local directory's view: its listing, with blob reads from disk.
-pub fn local_view(dir: &Path, scanner: &Scanner, config: &Config) -> Result<View> {
+pub async fn local_view(dir: &Path, scanner: &Scanner, config: &Config) -> Result<View> {
     let listing = list_local(dir)?;
-    view(
-        &mut |entries: &[Entry]| -> Contents {
-            Ok(entries
-                .iter()
-                .map(|entry| {
-                    std::fs::read(dir.join(&entry.path)).map_err(|error| error.to_string())
-                })
-                .collect())
-        },
-        listing,
-        scanner,
-        config,
-    )
+    let mut source = Local { dir };
+    view(&mut source, listing, scanner, config).await
 }
 
 /// The files Git would carry from this directory, relative to it, or none

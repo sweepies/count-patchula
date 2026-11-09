@@ -25,6 +25,7 @@ globset = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = "0.10"
 cron = "0.17"
+futures-executor = "0.3"
 
 [dev-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

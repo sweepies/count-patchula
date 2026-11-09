@@ -187,17 +187,16 @@ pub fn evaluate_local(
     // missing schema must be a real module, so Pkl retains nested class defaults.
     let absolute = std::path::absolute(path).into_diagnostic()?;
     let entry = absolute.to_string_lossy().into_owned();
+    // The module reads are synchronous filesystem reads, so the walk's
+    // future completes in one poll and needs no runtime.
     let files =
-        import_files(
-            &entry,
-            schema_name,
-            schema,
-            &mut |module| match std::fs::read_to_string(module) {
+        futures_executor::block_on(import_files(&entry, schema_name, schema, &mut |module| {
+            std::future::ready(match std::fs::read_to_string(module) {
                 Ok(text) => Ok(Some(text)),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(error) => Err(format!("cannot read config module {module}: {error}")),
-            },
-        )
+            })
+        }))
         .map_err(|error| miette::miette!("{error}"))?;
     virtual_files::evaluate_modules(&entry, files, true)
 }

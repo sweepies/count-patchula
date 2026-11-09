@@ -2440,9 +2440,8 @@ impl Engine {
         Ok(serde_json::from_value(value["tree"].clone())?)
     }
     /// The repository view for `entries`: the shared selection-and-reading
-    /// engine, its blob reads answered by GitHub batches. The view runs on
-    /// a blocking thread; each round's entries go to the async side over a
-    /// channel and their contents come back the same way.
+    /// engine, its blob reads answered by GitHub batches — one `blobs`
+    /// call per selection and per round of the include chain.
     async fn repository_view(
         &self,
         repo: &str,
@@ -2462,48 +2461,11 @@ impl Engine {
             hidden: Vec::new(),
         };
         let scanner = Scanner::new(config).map_err(Error::Invalid)?;
-        let config = config.clone();
-        let walk = repository::blocking_walk(move |read| {
-            repository::view(
-                &mut |entries: &[repository::Entry]| read(entries.to_vec()).map_err(Error::Invalid),
-                listing,
-                &scanner,
-                &config,
-            )
-        });
-        let mut requests = walk.requests;
-        let answers = walk.answers;
-        let pump = async {
-            while let Some(entries) = requests.recv().await {
-                let shas: Vec<String> = entries
-                    .iter()
-                    .filter_map(|entry| entry.sha.clone())
-                    .collect();
-                let answer = match self.github.blobs(repo, &shas).await {
-                    Ok(contents) => {
-                        let mut out = Vec::with_capacity(entries.len());
-                        let mut missing = false;
-                        for entry in &entries {
-                            match contents.get(entry.sha.as_deref().unwrap_or_default()) {
-                                Some(bytes) => out.push(Ok(bytes.clone())),
-                                None => missing = true,
-                            }
-                        }
-                        if missing {
-                            Err("blob missing from the batch".to_owned())
-                        } else {
-                            Ok(out)
-                        }
-                    }
-                    Err(error) => Err(error.to_string()),
-                };
-                if answers.send(answer).is_err() {
-                    break;
-                }
-            }
+        let mut source = Remote {
+            client: &self.github,
+            repo,
         };
-        let (view, ()) = tokio::join!(walk.done, pump);
-        view.ok_or_else(|| Error::Invalid("repository reader failed".into()))?
+        repository::view(&mut source, listing, &scanner, config).await
     }
     async fn file(&self, repo: &str, sha: &str) -> Result<String> {
         String::from_utf8(self.blob(repo, sha).await?)
@@ -2621,35 +2583,15 @@ impl Engine {
             }
         };
         let scanner = Scanner::new(&config).map_err(Error::Invalid)?;
-        let dir = dir.to_owned();
-        let read_config = config.clone();
-        let (paths, blobs, refusal, extraction) = tokio::task::spawn_blocking(move || {
-            let view = repository::local_view(&dir, &scanner, &read_config)
-                .map_err(|error| error.to_string())?;
-            let repository::View {
-                paths,
-                files,
-                blobs,
-                unsupported,
-                warnings,
-                refusal,
-            } = view;
-            if refusal.is_some() {
-                return Ok((
-                    paths,
-                    BTreeMap::new(),
-                    refusal,
-                    patchula_manager::Extraction::default(),
-                ));
-            }
-            let mut extraction = scanner.extract(&files).map_err(|error| error.to_string())?;
-            extraction.skipped.extend(unsupported);
-            extraction.warnings.extend(warnings);
-            Ok((paths, blobs, None, extraction))
-        })
-        .await
-        .map_err(|e| Error::Invalid(e.to_string()))?
-        .map_err(Error::Invalid)?;
+        let view = repository::local_view(dir, &scanner, &config).await?;
+        let repository::View {
+            paths,
+            files,
+            blobs,
+            unsupported,
+            warnings,
+            refusal,
+        } = view;
         if let Some(reason) = refusal {
             return Ok(Work {
                 report: repo_report(repo, Status::Error, Some(reason)),
@@ -2661,6 +2603,12 @@ impl Engine {
                 controls: patchula_update::dashboard::Controls::default(),
             });
         }
+        let mut extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
+            .await
+            .map_err(|e| Error::Invalid(e.to_string()))?
+            .map_err(Error::Invalid)?;
+        extraction.skipped.extend(unsupported);
+        extraction.warnings.extend(warnings);
         let mut report = repo_report(repo, Status::Complete, None);
         report.warnings = extraction.warnings;
         report.skipped = skipped(&extraction.skipped);
@@ -2839,43 +2787,34 @@ impl Engine {
     }
     async fn config(&self, repo: &str, path: &str, entries: &[Entry]) -> Result<Config> {
         // The config's local-module closure is the config crate's walk; the
-        // module texts it asks for come from the tree's blobs, so the walk
-        // runs on a blocking thread while this side answers over channels.
+        // module texts it asks for come from the tree's blobs.
         let shas: BTreeMap<String, String> = entries
             .iter()
             .filter(|entry| entry.kind == "blob")
             .map(|entry| (entry.path.clone(), entry.sha.clone()))
             .collect();
-        let entry = path.to_owned();
-        let walk = repository::blocking_walk(move |read| {
-            patchula_config::import_files(
-                &entry,
-                patchula_config::SCHEMA_NAME,
-                patchula_config::SCHEMA,
-                &mut |module: &str| read(module.to_owned()),
-            )
-        });
-        let mut requests = walk.requests;
-        let answers = walk.answers;
-        let pump = async {
-            while let Some(module) = requests.recv().await {
-                let answer = match shas.get(&module) {
+        let mut read = |module: &str| {
+            let module = module.to_owned();
+            let shas = &shas;
+            async move {
+                match shas.get(&module) {
                     Some(sha) => self
                         .file(repo, sha)
                         .await
                         .map(Some)
-                        .map_err(|e| e.to_string()),
+                        .map_err(|error| error.to_string()),
                     None => Ok(None),
-                };
-                if answers.send(answer).is_err() {
-                    break;
                 }
             }
         };
-        let (modules, ()) = tokio::join!(walk.done, pump);
-        let modules = modules
-            .ok_or_else(|| Error::Invalid("config reader failed".into()))?
-            .map_err(Error::Invalid)?;
+        let modules = patchula_config::import_files(
+            path,
+            patchula_config::SCHEMA_NAME,
+            patchula_config::SCHEMA,
+            &mut read,
+        )
+        .await
+        .map_err(Error::Invalid)?;
         let files: BTreeMap<String, String> = modules
             .into_iter()
             .map(|(path, text)| (format!("/repo/{path}"), text))
@@ -2910,6 +2849,34 @@ impl Engine {
         let saved = EvaluatedConfig(config);
         self.cache.set_state(&scope, &saved).await?;
         Ok(saved.0)
+    }
+}
+/// The remote side of a repository view: each read is one `blobs` batch
+/// over the round's entries, answered in their order.
+struct Remote<'a> {
+    client: &'a Github,
+    repo: &'a str,
+}
+
+impl repository::Source for Remote<'_> {
+    async fn read(&mut self, entries: &[repository::Entry]) -> repository::Contents {
+        let shas: Vec<String> = entries
+            .iter()
+            .filter_map(|entry| entry.sha.clone())
+            .collect();
+        let contents = self.client.blobs(self.repo, &shas).await?;
+        let mut out = Vec::with_capacity(entries.len());
+        let mut missing = false;
+        for entry in entries {
+            match contents.get(entry.sha.as_deref().unwrap_or_default()) {
+                Some(bytes) => out.push(Ok(bytes.clone())),
+                None => missing = true,
+            }
+        }
+        if missing {
+            return Err(Error::Invalid("blob missing from the batch".into()));
+        }
+        Ok(out)
     }
 }
 /// How many of a repository's branches regenerate their lockfiles at once:

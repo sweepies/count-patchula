@@ -35,12 +35,12 @@ fn scanner(pkl: &str) -> (Config, Scanner) {
     (config, scanner)
 }
 
-fn view(root: &Path, config: &Config, scanner: &Scanner) -> View {
-    local_view(root, scanner, config).unwrap()
+async fn view(root: &Path, config: &Config, scanner: &Scanner) -> View {
+    local_view(root, scanner, config).await.unwrap()
 }
 
-#[test]
-fn ignored_directories_are_not_read_even_when_the_config_does_not_exclude_them() {
+#[tokio::test]
+async fn ignored_directories_are_not_read_even_when_the_config_does_not_exclude_them() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-q"]);
@@ -56,7 +56,7 @@ fn ignored_directories_are_not_read_even_when_the_config_does_not_exclude_them()
     git(root, &["add", "-f", "forced/package.json"]);
     // The config excludes nothing, so only Git keeps the ignored files out.
     let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\nexclude = new Listing {}\n");
-    let view = view(root, &config, &scanner);
+    let view = view(root, &config, &scanner).await;
     assert_eq!(
         view.files.keys().map(String::as_str).collect::<Vec<_>>(),
         [
@@ -75,8 +75,8 @@ fn ignored_directories_are_not_read_even_when_the_config_does_not_exclude_them()
     assert!(view.paths.contains(".gitignore"));
 }
 
-#[test]
-fn a_directory_outside_git_is_walked_and_the_default_excludes_apply() {
+#[tokio::test]
+async fn a_directory_outside_git_is_walked_and_the_default_excludes_apply() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     write(root, "package.json", MANIFEST);
@@ -85,7 +85,7 @@ fn a_directory_outside_git_is_walked_and_the_default_excludes_apply() {
     write(root, "tests/app/package.json", MANIFEST);
     write(root, ".git/package.json", MANIFEST);
     let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
-    let view = view(root, &config, &scanner);
+    let view = view(root, &config, &scanner).await;
     assert_eq!(
         view.files.keys().map(String::as_str).collect::<Vec<_>>(),
         ["package.json"]
@@ -94,15 +94,15 @@ fn a_directory_outside_git_is_walked_and_the_default_excludes_apply() {
     assert!(!view.paths.iter().any(|path| path.starts_with(".git/")));
 }
 
-#[test]
-fn a_negated_exclude_reads_a_default_excluded_directory_again() {
+#[tokio::test]
+async fn a_negated_exclude_reads_a_default_excluded_directory_again() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     write(root, "examples/app/package.json", MANIFEST);
     write(root, "examples/other/package.json", MANIFEST);
     let (config, scanner) =
         scanner("amends \"PatchulaConfig.pkl\"\nexclude { \"!examples/app/**\" }\n");
-    let view = view(root, &config, &scanner);
+    let view = view(root, &config, &scanner).await;
     assert_eq!(
         view.files.keys().map(String::as_str).collect::<Vec<_>>(),
         ["examples/app/package.json"]
@@ -110,8 +110,8 @@ fn a_negated_exclude_reads_a_default_excluded_directory_again() {
 }
 
 #[cfg(unix)]
-#[test]
-fn a_tracked_file_below_a_symlinked_directory_is_not_read() {
+#[tokio::test]
+async fn a_tracked_file_below_a_symlinked_directory_is_not_read() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("checkout");
     let outside = dir.path().join("outside");
@@ -122,7 +122,7 @@ fn a_tracked_file_below_a_symlinked_directory_is_not_read() {
     std::fs::remove_dir_all(root.join("app")).unwrap();
     std::os::unix::fs::symlink(&outside, root.join("app")).unwrap();
     let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
-    let view = view(&root, &config, &scanner);
+    let view = view(&root, &config, &scanner).await;
     assert!(view.files.is_empty(), "{:?}", view.files);
     assert!(!view.paths.contains("app/package.json"));
 }
@@ -131,8 +131,8 @@ fn a_tracked_file_below_a_symlinked_directory_is_not_read() {
 /// read as unreadable, never as absent: its packages' lookups fail rather than
 /// go to the public registry.
 #[cfg(unix)]
-#[test]
-fn a_symlinked_settings_file_is_unreadable_not_absent() {
+#[tokio::test]
+async fn a_symlinked_settings_file_is_unreadable_not_absent() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("checkout");
     git(dir.path(), &["init", "-q", "checkout"]);
@@ -172,7 +172,7 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
     );
     std::os::unix::fs::symlink("../config/bundle-dir", root.join("app/.bundle")).unwrap();
     let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
-    let view = view(&root, &config, &scanner);
+    let view = view(&root, &config, &scanner).await;
     let files = &view.files;
     assert_eq!(
         files.get("uv.toml"),
@@ -219,8 +219,8 @@ fn a_symlinked_settings_file_is_unreadable_not_absent() {
 /// The same on a local checkout: the link is unreadable, never its target,
 /// with the warning GitHub's scan gives.
 #[cfg(unix)]
-#[test]
-fn a_symlinked_manifest_is_unreadable() {
+#[tokio::test]
+async fn a_symlinked_manifest_is_unreadable() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-q"]);
@@ -228,7 +228,7 @@ fn a_symlinked_manifest_is_unreadable() {
     std::os::unix::fs::symlink("base/package.json", root.join("package.json")).unwrap();
     let (config, scanner) =
         scanner("amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\n");
-    let view = view(root, &config, &scanner);
+    let view = view(root, &config, &scanner).await;
     assert_eq!(
         view.files.get("package.json"),
         Some(&patchula_manager::Text::Unread(
@@ -248,8 +248,8 @@ fn a_symlinked_manifest_is_unreadable() {
 
 /// The sources of a build Gradle settings include are read in a second
 /// pass, since only the settings say where it is.
-#[test]
-fn the_sources_of_an_included_gradle_build_are_read() {
+#[tokio::test]
+async fn the_sources_of_an_included_gradle_build_are_read() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("checkout");
     git(dir.path(), &["init", "-q", "checkout"]);
@@ -270,7 +270,7 @@ fn the_sources_of_an_included_gradle_build_are_read() {
     );
     write(&root, "app/src/main/kotlin/App.kt", "fun main() {}\n");
     let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
-    let view = view(&root, &config, &scanner);
+    let view = view(&root, &config, &scanner).await;
     assert!(
         view.files
             .contains_key("tools/logic/src/main/kotlin/Repos.kt")
@@ -280,8 +280,8 @@ fn the_sources_of_an_included_gradle_build_are_read() {
 
 /// A selected file that is not UTF-8 refuses the local read, the same way
 /// GitHub extraction refuses the repository, rather than being dropped.
-#[test]
-fn a_selected_non_utf8_file_refuses_the_read() {
+#[tokio::test]
+async fn a_selected_non_utf8_file_refuses_the_read() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-q"]);
@@ -290,7 +290,7 @@ fn a_selected_non_utf8_file_refuses_the_read() {
     std::fs::write(root.join("app/package.json"), b"{\"x\":\xff}").unwrap();
     git(root, &["add", "."]);
     let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
-    let Err(error) = local_view(root, &scanner, &config) else {
+    let Err(error) = local_view(root, &scanner, &config).await else {
         panic!("the read succeeded")
     };
     assert_eq!(error.to_string(), "selected file is not UTF-8");
