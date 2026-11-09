@@ -19,6 +19,7 @@ use crate::{Blob, Plan, Snapshot, blob_sha, plan::unified};
 use futures_util::StreamExt;
 use patchula_cache::State;
 use patchula_config::{Config, NpmEngine};
+use patchula_manager::roles::{lock_names, manifest_names};
 use patchula_manager::{Dependency, hash};
 use patchula_process::{Executor, Failure, SystemExecutor};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
@@ -55,6 +56,20 @@ pub struct Job {
     /// The manifest is not edited, so the tool must be told the exact version.
     pub lock_only: bool,
 }
+/// The managers whose files an update ecosystem's tools read, for the
+/// file-role facts in `patchula_manager::roles`.
+fn steers_managers(ecosystem: Ecosystem) -> &'static [Manager] {
+    match ecosystem {
+        Ecosystem::Node => &[Manager::Npm, Manager::Bun],
+        Ecosystem::Python => &[Manager::Pyproject],
+        Ecosystem::Ruby => &[Manager::Bundler],
+        Ecosystem::Php => &[Manager::Composer],
+        Ecosystem::Cargo => &[Manager::Cargo],
+        Ecosystem::Dotnet => &[Manager::Nuget],
+        _ => &[],
+    }
+}
+
 /// Whether `path`, materialized for a run of `ecosystem`, could steer
 /// what its tools fetch: a manifest, lockfile or settings file of the
 /// ecosystem, anywhere in the snapshot. A sibling project reached
@@ -63,65 +78,9 @@ pub struct Job {
 /// run as much as one inside its directory, so the directory does not
 /// bound it.
 fn steers(ecosystem: Ecosystem, path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    match ecosystem {
-        Ecosystem::Node => matches!(
-            leaf,
-            "package.json"
-                | ".npmrc"
-                | ".yarnrc.yml"
-                | "pnpm-workspace.yaml"
-                | "package-lock.json"
-                | "npm-shrinkwrap.json"
-                | "aube-lock.yaml"
-                | "pnpm-lock.yaml"
-                | "yarn.lock"
-                | "bun.lock"
-        ),
-        Ecosystem::Python => matches!(
-            leaf,
-            "pyproject.toml"
-                | "uv.toml"
-                | "poetry.toml"
-                | "pdm.toml"
-                | "pixi.toml"
-                | "hatch.toml"
-                | "uv.lock"
-                | "poetry.lock"
-        ),
-        // The repository's `.bundle/config` never steers a run: Bundler's
-        // environment overrides it. A `.gemspec` steers nothing a verdict
-        // can prove either — it is arbitrary Ruby, so it has no verdict
-        // and a run that can read one fails closed.
-        Ecosystem::Ruby => matches!(leaf, "Gemfile" | "Gemfile.lock") || leaf.ends_with(".gemspec"),
-        Ecosystem::Php => matches!(leaf, "composer.json" | "composer.lock"),
-        Ecosystem::Cargo => matches!(leaf, "Cargo.toml" | "Cargo.lock"),
-        Ecosystem::Dotnet => {
-            leaf.eq_ignore_ascii_case("nuget.config")
-                || matches!(
-                    leaf,
-                    "packages.lock.json"
-                        | "Directory.Packages.props"
-                        | "Directory.Build.props"
-                        | "Directory.Build.targets"
-                        | "global.json"
-                        | "dotnet-tools.json"
-                )
-                || [
-                    ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".props", ".targets",
-                ]
-                .iter()
-                .any(|extension| leaf.ends_with(extension))
-        }
-        // Go needs no verdicts: in the `public` partition it runs with
-        // `GOPROXY=https://proxy.golang.org` — no `direct`, which could
-        // fetch anonymously from a host only the server's network
-        // reaches — so a fetch is public by construction, and a run that
-        // fails there is retried in the installation partition with Go's
-        // environment as it was.
-        Ecosystem::Go => true,
-        _ => false,
-    }
+    steers_managers(ecosystem)
+        .iter()
+        .any(|manager| patchula_manager::roles::eco_roles(*manager, path).steers)
 }
 
 /// Whether a run for `ecosystem` can fetch only from the ecosystem's
@@ -163,6 +122,14 @@ fn nearest<'a>(file: &'a str, paths: &BTreeSet<String>, names: &[&str]) -> Optio
         dir = directory(dir);
     }
 }
+/// The Node ecosystem's supported lockfile names, from the managers' roles.
+fn node_locks() -> Vec<&'static str> {
+    [Manager::Npm, Manager::Bun]
+        .iter()
+        .flat_map(|manager| lock_names(*manager).supported.iter().copied())
+        .collect()
+}
+
 /// The paths under `dir`, which sort together.
 fn subtree<'a>(paths: &'a BTreeSet<String>, dir: &'a str) -> impl Iterator<Item = &'a String> {
     let prefix = if dir.is_empty() {
@@ -188,7 +155,11 @@ pub(crate) fn job(
                 .included_by
                 .as_deref()
                 .map_or_else(|| directory(&dep.file), directory);
-            if !snapshot.paths.contains(&node::join(root, "mise.lock")) {
+            if !patchula_manager::roles::lock_names(Manager::Mise)
+                .supported
+                .iter()
+                .any(|lock| snapshot.paths.contains(&node::join(root, lock)))
+            {
                 return Ok(None);
             }
             return Ok(Some(Job {
@@ -210,22 +181,23 @@ pub(crate) fn job(
             return Ok(None);
         }
         Manager::Npm | Manager::Bun => {
-            let Some(root) = nearest(
-                &dep.file,
-                &snapshot.paths,
-                &[
-                    "package-lock.json",
-                    "npm-shrinkwrap.json",
-                    "aube-lock.yaml",
-                    "bun.lock",
-                    "bun.lockb",
-                    "pnpm-lock.yaml",
-                    "yarn.lock",
-                ],
-            ) else {
+            let locks: Vec<&str> = [Manager::Npm, Manager::Bun]
+                .iter()
+                .flat_map(|manager| {
+                    let names = patchula_manager::roles::lock_names(*manager);
+                    names.supported.iter().chain(names.unsupported.iter())
+                })
+                .copied()
+                .collect();
+            let Some(root) = nearest(&dep.file, &snapshot.paths, &locks) else {
                 return Ok(None);
             };
-            if snapshot.paths.contains(&node::join(root, "bun.lockb")) {
+            if [Manager::Npm, Manager::Bun].iter().any(|manager| {
+                patchula_manager::roles::lock_names(*manager)
+                    .unsupported
+                    .iter()
+                    .any(|lock| snapshot.paths.contains(&node::join(root, lock)))
+            }) {
                 return Err("unsupported lockfile format".into());
             }
             (Ecosystem::Node, root)
@@ -245,8 +217,13 @@ pub(crate) fn job(
         // apm.lock.yaml sits beside its apm.yml; APM reads no other name.
         Manager::Apm => {
             let root = directory(&dep.file);
-            if !dep.file.ends_with("apm.yml")
-                || !snapshot.paths.contains(&node::join(root, "apm.lock.yaml"))
+            if !patchula_manager::roles::manifest_names(Manager::Apm)
+                .iter()
+                .any(|name| dep.file.ends_with(name))
+                || !patchula_manager::roles::lock_names(Manager::Apm)
+                    .supported
+                    .iter()
+                    .any(|lock| snapshot.paths.contains(&node::join(root, lock)))
             {
                 return Ok(None);
             }
@@ -256,13 +233,21 @@ pub(crate) fn job(
             return Ok(None);
         }
         Manager::Bundler => {
-            let Some(root) = nearest(&dep.file, &snapshot.paths, &["Gemfile.lock"]) else {
+            let Some(root) = nearest(
+                &dep.file,
+                &snapshot.paths,
+                lock_names(Manager::Bundler).supported,
+            ) else {
                 return Ok(None);
             };
             (Ecosystem::Ruby, root)
         }
         Manager::Composer => {
-            let Some(root) = nearest(&dep.file, &snapshot.paths, &["composer.lock"]) else {
+            let Some(root) = nearest(
+                &dep.file,
+                &snapshot.paths,
+                lock_names(Manager::Composer).supported,
+            ) else {
                 return Ok(None);
             };
             (Ecosystem::Php, root)
@@ -284,8 +269,11 @@ pub(crate) fn job(
             let dir = directory(&dep.file);
             let locked = dep.kind != patchula_words::DependencyKind::Toolchain
                 && !dep.file.ends_with("dotnet-tools.json")
-                && subtree(&snapshot.paths, dir)
-                    .any(|p| p.rsplit('/').next() == Some("packages.lock.json"));
+                && subtree(&snapshot.paths, dir).any(|p| {
+                    patchula_manager::roles::lock_names(Manager::Nuget)
+                        .supported
+                        .contains(&p.rsplit('/').next().unwrap_or(p))
+                });
             if !locked {
                 return Ok(None);
             }
@@ -315,7 +303,13 @@ pub(crate) fn job(
         // Gradle dependency locking writes per-configuration lockfiles that
         // need the build itself to regenerate; hold such updates.
         Manager::Gradle => {
-            if nearest(&dep.file, &snapshot.paths, &["gradle.lockfile"]).is_some() {
+            if nearest(
+                &dep.file,
+                &snapshot.paths,
+                lock_names(Manager::Gradle).unsupported,
+            )
+            .is_some()
+            {
                 return Err("unsupported lockfile format: gradle.lockfile".into());
             }
             return Ok(None);
@@ -330,7 +324,11 @@ pub(crate) fn job(
             return Ok(None);
         }
         Manager::Cargo => {
-            let lock = nearest(&dep.file, &snapshot.paths, &["Cargo.lock"]);
+            let lock = nearest(
+                &dep.file,
+                &snapshot.paths,
+                lock_names(Manager::Cargo).supported,
+            );
             // A release the declaration already allows changes the lock and
             // nothing else; with no committed lock there is nothing to change,
             // and cargo would publish one it generated.
@@ -350,13 +348,15 @@ pub(crate) fn job(
             // too; leaving one stale would publish a manifest that disagrees
             // with it. The closest lockfile governs the project, so one above a
             // supported lock does not hold it.
-            let supported = nearest(&dep.file, &snapshot.paths, &python::LOCKS);
-            if let Some(lock) = nearest(&dep.file, &snapshot.paths, &python::UNSUPPORTED_LOCKS)
+            let names = lock_names(Manager::Pyproject);
+            let supported = nearest(&dep.file, &snapshot.paths, names.supported);
+            if let Some(lock) = nearest(&dep.file, &snapshot.paths, names.unsupported)
                 .filter(|lock| supported.is_none_or(|root| lock.len() >= root.len()))
             {
                 return Err(format!(
                     "unsupported lockfile format: {}",
-                    python::UNSUPPORTED_LOCKS
+                    names
+                        .unsupported
                         .iter()
                         .find(|leaf| snapshot.paths.contains(&node::join(lock, leaf)))
                         .unwrap_or(&"lockfile")
@@ -411,46 +411,58 @@ pub fn maintenance(
     let mut jobs = BTreeSet::new();
     for path in &snapshot.paths {
         let leaf = path.rsplit('/').next().unwrap();
+        let locks = |manager: Manager| lock_names(manager).supported.contains(&leaf);
         let ecosystem = match leaf {
-            "package-lock.json"
-            | "npm-shrinkwrap.json"
-            | "aube-lock.yaml"
-            | "bun.lock"
-            | "pnpm-lock.yaml"
-            | "yarn.lock"
-                if config
+            _ if [Manager::Npm, Manager::Bun]
+                .iter()
+                .any(|manager| locks(*manager))
+                && config
                     .managers
                     .iter()
                     .any(|m| matches!(m, Manager::Npm | Manager::Bun)) =>
             {
                 Ecosystem::Node
             }
-            "Cargo.lock" if config.managers.contains(&Manager::Cargo) => Ecosystem::Cargo,
-            "uv.lock" | "poetry.lock" if config.managers.contains(&Manager::Pyproject) => {
+            _ if locks(Manager::Cargo) && config.managers.contains(&Manager::Cargo) => {
+                Ecosystem::Cargo
+            }
+            _ if locks(Manager::Pyproject) && config.managers.contains(&Manager::Pyproject) => {
                 Ecosystem::Python
             }
-            "packages.lock.json" if config.managers.contains(&Manager::Nuget) => Ecosystem::Dotnet,
-            "Gemfile.lock" if config.managers.contains(&Manager::Bundler) => Ecosystem::Ruby,
-            "composer.lock" if config.managers.contains(&Manager::Composer) => Ecosystem::Php,
-            "flake.lock"
-                if config.managers.contains(&Manager::Nix)
-                    && snapshot
-                        .paths
-                        .contains(&node::join(directory(path), "flake.nix")) =>
+            _ if locks(Manager::Nuget) && config.managers.contains(&Manager::Nuget) => {
+                Ecosystem::Dotnet
+            }
+            _ if locks(Manager::Bundler) && config.managers.contains(&Manager::Bundler) => {
+                Ecosystem::Ruby
+            }
+            _ if locks(Manager::Composer) && config.managers.contains(&Manager::Composer) => {
+                Ecosystem::Php
+            }
+            _ if locks(Manager::Nix)
+                && config.managers.contains(&Manager::Nix)
+                && manifest_names(Manager::Nix)
+                    .iter()
+                    .any(|name| snapshot.paths.contains(&node::join(directory(path), name))) =>
             {
                 Ecosystem::Nix
             }
-            "apm.lock.yaml"
-                if config.managers.contains(&Manager::Apm)
-                    && snapshot
-                        .paths
-                        .contains(&node::join(directory(path), "apm.yml")) =>
+            _ if locks(Manager::Apm)
+                && config.managers.contains(&Manager::Apm)
+                && manifest_names(Manager::Apm)
+                    .iter()
+                    .any(|name| snapshot.paths.contains(&node::join(directory(path), name))) =>
             {
                 Ecosystem::Apm
             }
-            "mise.lock" if config.managers.contains(&Manager::Mise) => Ecosystem::Mise,
-            "go.mod" if config.managers.contains(&Manager::Go) => Ecosystem::Go,
-            ".terraform.lock.hcl" if config.managers.contains(&Manager::Terraform) => {
+            _ if locks(Manager::Mise) && config.managers.contains(&Manager::Mise) => {
+                Ecosystem::Mise
+            }
+            _ if manifest_names(Manager::Go).contains(&leaf)
+                && config.managers.contains(&Manager::Go) =>
+            {
+                Ecosystem::Go
+            }
+            _ if locks(Manager::Terraform) && config.managers.contains(&Manager::Terraform) => {
                 Ecosystem::Terraform
             }
             _ => continue,
@@ -1473,7 +1485,7 @@ fn validate_targets(
     for change in &plan.changes {
         let leaf = change.file.rsplit('/').next().unwrap_or("");
         // A lockfile-only change must have moved the lock to its exact target.
-        if leaf == "Cargo.lock" {
+        if lock_names(Manager::Cargo).supported.contains(&leaf) {
             let lock = files
                 .get(&change.file)
                 .and_then(|text| toml_edit::Document::parse(text.as_str()).ok());
@@ -1502,16 +1514,17 @@ fn validate_targets(
             }
             continue;
         }
-        if !matches!(
-            leaf,
-            "package.json"
-                | "Cargo.toml"
-                | "go.mod"
-                | "pyproject.toml"
-                | "Gemfile"
-                | "composer.json"
-        ) && !change.file.ends_with(".tf")
-        {
+        let manifest = [
+            Manager::Npm,
+            Manager::Cargo,
+            Manager::Go,
+            Manager::Pyproject,
+            Manager::Bundler,
+            Manager::Composer,
+        ]
+        .iter()
+        .any(|manager| manifest_names(*manager).contains(&leaf));
+        if !manifest && !change.file.ends_with(".tf") {
             continue;
         }
         // A lockfile-only change leaves the declaration as it was, so the lock
@@ -1534,15 +1547,11 @@ fn validate_targets(
         // pnpm and Yarn locks are not read back (aube-lock.yaml is), so the unchanged-lockfile rule
         // checks them instead. Every lock this runner reads must prove the target.
         let unread = matches!(dep.manager, Manager::Npm | Manager::Bun)
-            && nearest(&change.file, &paths, &node::LOCKS).is_some_and(|dir| {
-                ![
-                    "package-lock.json",
-                    "npm-shrinkwrap.json",
-                    "bun.lock",
-                    "aube-lock.yaml",
-                ]
-                .iter()
-                .any(|leaf| paths.contains(&node::join(dir, leaf)))
+            && nearest(&change.file, &paths, &node_locks()).is_some_and(|dir| {
+                ![Manager::Npm, Manager::Bun]
+                    .iter()
+                    .flat_map(|manager| lock_names(*manager).readable.iter().copied())
+                    .any(|leaf| paths.contains(&node::join(dir, leaf)))
             });
         if !unread
             && (matches!(
@@ -1710,76 +1719,16 @@ fn go_version(cwd: &Path, pinned: &str) -> Result<String, String> {
 fn tool_defaults() -> Result<toml_edit::Document<&'static str>, String> {
     toml_edit::Document::parse(include_str!("lockfiles/defaults.toml")).map_err(|e| e.to_string())
 }
-/// Manifest and lockfile leaf names a tool may modify: `writable`, minus the
-/// `*.tf` extension.
-const WRITABLE_LEAVES: &[&str] = &[
-    "package.json",
-    "package-lock.json",
-    "npm-shrinkwrap.json",
-    "aube-lock.yaml",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-    "bun.lock",
-    "Cargo.toml",
-    "Cargo.lock",
-    "go.mod",
-    "go.sum",
-    ".terraform.lock.hcl",
-    "mise.lock",
-    "pyproject.toml",
-    "gradle-wrapper.properties",
-    "packages.lock.json",
-    "Gemfile",
-    "Gemfile.lock",
-    "Directory.Packages.props",
-    "Directory.Build.props",
-    "dotnet-tools.json",
-    "global.json",
-    "uv.lock",
-    "poetry.lock",
-    "composer.json",
-    "composer.lock",
-    "flake.lock",
-    "apm.lock.yaml",
-];
-/// Leaf names tools read but never modify.
-const READ_LEAVES: &[&str] = &[
-    "mise.toml",
-    ".mise.toml",
-    ".tool-versions",
-    "go.work",
-    "go.work.sum",
-    "pnpm-workspace.yaml",
-    ".yarnrc.yml",
-    ".npmrc",
-    ".python-version",
-    "uv.toml",
-    "poetry.toml",
-    "flake.nix",
-    "apm.yml",
-    "Directory.Build.targets",
-];
-/// Extensions of files tools read (and `*.tf`, which they may modify).
-const READ_EXTENSIONS: &[&str] = &[
-    ".tf", ".go", ".rs", ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".gemspec",
-];
-fn writable(path: &str) -> bool {
-    WRITABLE_LEAVES.contains(&path.rsplit('/').next().unwrap_or(path)) || path.ends_with(".tf")
-}
-fn materialized(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    writable(path)
-        || READ_LEAVES.contains(&leaf)
-        || READ_EXTENSIONS
-            .iter()
-            .any(|extension| path.ends_with(extension))
-        || leaf.eq_ignore_ascii_case("nuget.config")
-}
 /// A Cargo configuration file, read only for its `registries`.
 fn cargo_config(path: &str) -> bool {
-    [".cargo/config.toml", ".cargo/config"]
-        .iter()
-        .any(|leaf| path == *leaf || path.ends_with(&format!("/{leaf}")))
+    patchula_manager::roles::cargo_config(path)
+}
+fn writable(path: &str) -> bool {
+    patchula_manager::roles::roles(path).writable
+}
+fn materialized(path: &str) -> bool {
+    let roles = patchula_manager::roles::roles(path);
+    roles.writable || roles.read
 }
 /// The directory whose `.cargo` holds `path`, a Cargo configuration file.
 fn directory_of_cargo_config(path: &str) -> &str {
