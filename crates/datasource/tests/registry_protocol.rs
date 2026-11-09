@@ -135,6 +135,12 @@ async fn rate_limit_and_foreign_pagination_are_explicit() {
             ),
             "invalid package",
         ),
+        // A malformed Link header is an invalid payload, not a GitHub
+        // pagination failure.
+        (
+            response(200, r#"{"tags":["1.0"]}"#, &[("link", "not a link header")]),
+            "invalid package",
+        ),
     ] {
         let steps = Arc::new(Steps(Mutex::new(VecDeque::from([(
             "https://ghcr.io/v2/spec/image/tags/list?n=1000".into(),

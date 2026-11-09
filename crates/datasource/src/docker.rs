@@ -571,7 +571,9 @@ impl Client {
             let page: Page = serde_json::from_slice(&response.body)?;
             let before = tags.len();
             tags.extend(page.tags.unwrap_or_default());
-            let next = patchula_github::next_link(&response, &url)?;
+            // A malformed registry Link header is an invalid payload, not a
+            // GitHub pagination failure.
+            let next = patchula_github::next_link(&response, &url).map_err(|_| Error::Invalid)?;
             let Some(next) = next else {
                 break;
             };
