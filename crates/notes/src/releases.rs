@@ -94,16 +94,13 @@ impl Client {
         tags: &[String],
     ) -> Result<BTreeMap<String, BodyResult>> {
         let repo = repo.to_ascii_lowercase();
-        let shared: RepoBodies = if self.note_reads.is_some() {
-            self.release_bodies
-                .lock()
-                .await
-                .entry(repo.clone())
-                .or_default()
-                .clone()
-        } else {
-            Default::default()
-        };
+        let shared: RepoBodies = self
+            .release_bodies
+            .lock()
+            .await
+            .entry(repo.clone())
+            .or_default()
+            .clone();
         let mut bodies = shared.lock().await;
         let missing: Vec<_> = tags
             .iter()
@@ -136,6 +133,7 @@ impl Client {
         let mut cached = BTreeMap::new();
         for tag in tags {
             if let Some(saved) = self
+                .sources
                 .cache
                 .state::<SavedRelease>(&release_scope(repo, tag))
                 .await?
@@ -170,7 +168,7 @@ impl Client {
             let query = format!(
                 "query ReleaseNotes({declarations}){{repository(owner:$owner,name:$name){{{fields}}}}}"
             );
-            let data = self.github.graphql(&query, variables).await?;
+            let data = self.sources.github.graphql(&query, variables).await?;
             let repository = data["repository"]
                 .as_object()
                 .ok_or_else(|| Error::Notes("missing upstream repository".into()))?;
@@ -207,7 +205,8 @@ impl Client {
                     updated_at: updated_at.into(),
                     release: release.clone(),
                 };
-                self.cache
+                self.sources
+                    .cache
                     .set_state(&release_scope(repo, &tag), &saved)
                     .await?;
                 result.insert(tag, Ok(Some(release)));

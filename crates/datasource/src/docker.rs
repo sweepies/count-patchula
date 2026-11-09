@@ -42,7 +42,7 @@ fn compact_config(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::C
     serde_json::to_vec(&serde_json::json!({
         "org.opencontainers.image.source": labels["org.opencontainers.image.source"],
         "org.opencontainers.image.version": labels["org.opencontainers.image.version"],
-        "chart": notes::ChartNotes::from_metadata(&value),
+        "chart": upstream::ChartNotes::from_metadata(&value),
     }))
     .map_err(|_| patchula_http::CacheError::Document)
 }
@@ -59,7 +59,7 @@ struct ImageConfig {
     chart: bool,
 }
 impl ImageConfig {
-    fn chart_notes(&self) -> notes::ChartNotes {
+    fn chart_notes(&self) -> upstream::ChartNotes {
         serde_json::from_value(self.config["chart"].clone()).unwrap_or_default()
     }
 }
@@ -419,16 +419,16 @@ impl Client {
         }
     }
 
-    pub(super) async fn image_source(
+    pub async fn image_source(
         &self,
         package: &str,
         version: &str,
-    ) -> Result<Option<notes::Repository>> {
+    ) -> Result<Option<upstream::Repository>> {
         let (host, path) = identity(package)?;
         let fallback = (host == "registry-1.docker.io")
             .then(|| {
                 path.strip_prefix("library/")
-                    .and_then(|name| notes::mapped("docker-official", name))
+                    .and_then(|name| upstream::mapped("docker-official", name))
             })
             .flatten();
         let image = match self.image_config(&host, &path, version).await {
@@ -443,8 +443,8 @@ impl Client {
                 image
                     .annotated_source
                     .as_deref()
-                    .and_then(notes::Repository::from_url)
-                    .map(notes::Repository::chart_sourced)
+                    .and_then(upstream::Repository::from_url)
+                    .map(upstream::Repository::chart_sourced)
             }));
         }
         let labels = &image.config;
@@ -452,13 +452,13 @@ impl Client {
         // project's; the table of official images comes first.
         let mut source = labels["org.opencontainers.image.source"]
             .as_str()
-            .and_then(notes::Repository::from_url)
+            .and_then(upstream::Repository::from_url)
             .or(fallback)
             .or_else(|| {
                 image
                     .annotated_source
                     .as_deref()
-                    .and_then(notes::Repository::from_url)
+                    .and_then(upstream::Repository::from_url)
             });
         if let Some(source) = &mut source {
             source.image_version = labels["org.opencontainers.image.version"]
@@ -470,11 +470,11 @@ impl Client {
 
     /// A Helm chart version's notes metadata, or `None` when the artifact at
     /// that tag is not a Helm chart.
-    pub(super) async fn oci_chart(
+    pub async fn oci_chart(
         &self,
         package: &str,
         version: &str,
-    ) -> Result<Option<notes::ChartNotes>> {
+    ) -> Result<Option<upstream::ChartNotes>> {
         let (host, path) = identity(package)?;
         let image = self.image_config(&host, &path, version).await?;
         Ok(image.chart.then(|| image.chart_notes()))

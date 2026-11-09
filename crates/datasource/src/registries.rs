@@ -47,10 +47,10 @@ const TERRAFORM_CATALOG: Derived<CacheError> = Derived::new("terraform-catalog",
 /// One chart from a Helm repository index: its versions, and what release
 /// notes read from each version's metadata.
 #[derive(Default, Serialize, Deserialize)]
-pub(crate) struct HelmChart {
+pub struct HelmChart {
     pub catalog: Catalog,
     #[serde(default)]
-    pub notes: BTreeMap<String, notes::ChartNotes>,
+    pub notes: BTreeMap<String, upstream::ChartNotes>,
 }
 fn helm(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
     #[derive(Deserialize)]
@@ -78,14 +78,14 @@ fn helm(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
                     .sources
                     .as_ref()
                     .and_then(serde_yaml_ng::Value::as_sequence);
-                let notes = notes::ChartNotes::new(
+                let notes = upstream::ChartNotes::new(
                     sources
                         .into_iter()
                         .flatten()
                         .filter_map(serde_yaml_ng::Value::as_str),
                     v.annotations
                         .as_ref()
-                        .and_then(|a| a.get(notes::CHANGES))
+                        .and_then(|a| a.get(upstream::CHANGES))
                         .and_then(serde_yaml_ng::Value::as_str),
                 );
                 if !notes.is_empty() {
@@ -143,7 +143,7 @@ impl Client {
         Ok(self.helm_chart(package).await?.catalog)
     }
     /// One chart from a Helm repository's index; `package` is `repository|chart`.
-    pub(super) async fn helm_chart(&self, package: &str) -> Result<HelmChart> {
+    pub async fn helm_chart(&self, package: &str) -> Result<HelmChart> {
         let (repo, chart) = package.rsplit_once('|').ok_or(Error::Invalid)?;
         if chart.is_empty()
             || !chart

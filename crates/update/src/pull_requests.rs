@@ -213,7 +213,7 @@ pub struct Lifecycle {
     base: String,
     pub(crate) prs: Vec<Value>,
     pub actions: Vec<PullRequestAction>,
-    notes: BTreeMap<(PackageId, String, String), patchula_datasource::notes::Notes>,
+    notes: BTreeMap<(PackageId, String, String), patchula_notes::Notes>,
     pub(crate) recheck: Recheck,
     merge_settings: Option<crate::automerge::Settings>,
     maintenance_policy: patchula_config::Policy,
@@ -493,18 +493,17 @@ impl Lifecycle {
     }
 
     pub async fn publish(&mut self, client: &Client, plans: &mut [Plan]) {
-        let sources = patchula_datasource::Client::new(
+        let sources = patchula_notes::Client::new(patchula_datasource::Client::new(
             client.clone(),
             client.public_http(patchula_datasource::http_options().rules),
             client.cache(),
-        )
-        .notes_batch();
+        ));
         self.publish_with_sources(client, &sources, plans).await;
     }
     pub async fn publish_with_sources(
         &mut self,
         client: &Client,
-        sources: &patchula_datasource::Client,
+        sources: &patchula_notes::Client,
         plans: &mut [Plan],
     ) {
         let mut ranges = BTreeSet::new();
@@ -689,7 +688,7 @@ impl Lifecycle {
     async fn publish_one(
         &mut self,
         client: &Client,
-        sources: &patchula_datasource::Client,
+        sources: &patchula_notes::Client,
         plan: &Plan,
     ) -> Result<(), String> {
         if self.reserved(plan) > BODY_LIMIT {
@@ -1047,7 +1046,7 @@ impl Lifecycle {
     }
     async fn render(
         &mut self,
-        sources: &patchula_datasource::Client,
+        sources: &patchula_notes::Client,
         plan: &Plan,
         existing: Option<&Value>,
     ) -> String {
@@ -1107,7 +1106,7 @@ impl Lifecycle {
         let mut visible = notes.into_text();
         if let Some(marker) = &permit {
             // Keep policy evidence with the PR even if its local cache is lost.
-            visible = patchula_datasource::notes::fit(
+            visible = patchula_notes::fit(
                 &visible,
                 BODY_LIMIT.saturating_sub(marker.len() + controls.len() + 1_000),
             )

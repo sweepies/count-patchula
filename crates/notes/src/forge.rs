@@ -1,7 +1,7 @@
 //! Release notes from GitLab and Gitea/Forgejo upstreams, through their public
 //! APIs: releases, tags and a root changelog file. Requests are unauthenticated.
 use super::*;
-use source::{Forge, ForgeKind};
+use crate::{Forge, ForgeKind};
 
 #[derive(Serialize, Deserialize)]
 struct Release {
@@ -154,7 +154,12 @@ impl Client {
     ) -> Result<T> {
         let bytes = self
             .note_read(url, async {
-                Ok(self.http.get_derived(url, accept, &derived).await?.body)
+                Ok(self
+                    .sources
+                    .http
+                    .get_derived(url, accept, &derived)
+                    .await?
+                    .body)
             })
             .await?;
         Ok(serde_json::from_slice(&bytes)?)

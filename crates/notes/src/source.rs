@@ -1,167 +1,6 @@
 use super::*;
 use std::{collections::BTreeMap, sync::LazyLock};
 
-static UPSTREAMS: LazyLock<BTreeMap<String, BTreeMap<String, String>>> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../upstreams.json")).expect("upstream map")
-});
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Repository {
-    pub url: String,
-    pub github: Option<String>,
-    /// A GitLab or Gitea/Forgejo upstream; GitHub upstreams use `github`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub forge: Option<Forge>,
-    pub directory: Option<String>,
-    pub image_version: Option<String>,
-    /// Read from a Helm chart's `sources`, which may name the packaged
-    /// application's repository rather than the chart's.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub chart_sources: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ForgeKind {
-    Gitlab,
-    /// Gitea and Forgejo (including Codeberg) share one API.
-    Gitea,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Forge {
-    pub kind: ForgeKind,
-    pub host: String,
-    /// `group/subgroup/project` on GitLab, `owner/repo` on Gitea.
-    pub path: String,
-}
-impl Forge {
-    /// Recognise a forge from its host. Unknown self-hosted instances stay
-    /// unsupported rather than being probed.
-    fn detect(host: &str, segments: &[&str]) -> Option<Self> {
-        let kind = if host == "gitlab.com" || host.split('.').any(|l| l == "gitlab") {
-            ForgeKind::Gitlab
-        } else if matches!(host, "codeberg.org" | "gitea.com")
-            || host.split('.').any(|l| matches!(l, "gitea" | "forgejo"))
-        {
-            ForgeKind::Gitea
-        } else {
-            return None;
-        };
-        // GitLab paths may nest groups; `-` starts a project sub-route.
-        let mut parts: Vec<_> = segments
-            .iter()
-            .take_while(|s| **s != "-")
-            .copied()
-            .collect();
-        if kind == ForgeKind::Gitea {
-            parts.truncate(2);
-        }
-        if let Some(last) = parts.last_mut() {
-            *last = last.trim_end_matches(".git");
-        }
-        let valid = |p: &&str| {
-            !p.is_empty()
-                && p.len() <= 100
-                && !matches!(*p, "." | "..")
-                && p.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-        };
-        (parts.len() >= 2 && parts.iter().all(valid)).then(|| Self {
-            kind,
-            host: host.to_ascii_lowercase(),
-            path: parts.join("/"),
-        })
-    }
-    pub fn web(&self) -> String {
-        format!("https://{}/{}", self.host, self.path)
-    }
-}
-
-impl Repository {
-    pub(crate) fn chart_sourced(self) -> Self {
-        Self {
-            chart_sources: true,
-            ..self
-        }
-    }
-    pub fn from_url(raw: &str) -> Option<Self> {
-        let raw = raw.trim().trim_start_matches("git+");
-        let raw = if let Some(path) = raw.strip_prefix("git@github.com:") {
-            format!("https://github.com/{path}")
-        } else if let Some((host, path)) = raw
-            .strip_prefix("git@")
-            .and_then(|rest| rest.split_once(':'))
-            .filter(|(host, _)| !host.contains('/'))
-        {
-            format!("https://{host}/{path}")
-        } else if let Some(path) = raw.strip_prefix("github:") {
-            format!("https://github.com/{path}")
-        } else if !raw.contains("://") && raw.split('/').count() == 2 {
-            format!("https://github.com/{raw}")
-        } else {
-            raw.to_owned()
-        };
-        let mut url = reqwest::Url::parse(&raw).ok()?;
-        url.set_query(None);
-        url.set_fragment(None);
-        if (!url.username().is_empty() && !(url.scheme() == "ssh" && url.username() == "git"))
-            || url.password().is_some()
-        {
-            return None;
-        }
-        if url.host_str() == Some("github.com") {
-            let segments: Vec<_> = url.path_segments()?.collect();
-            let parts = &segments[..segments.len().min(2)];
-            if parts.len() != 2
-                || parts.iter().any(|p| {
-                    p.is_empty()
-                        || p.len() > 100
-                        || !p
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-                        || matches!(*p, "." | "..")
-                })
-            {
-                return None;
-            }
-            let repo = format!("{}/{}", parts[0], parts[1].trim_end_matches(".git"));
-            // `/tree/<ref>/<directory>` names a package inside the repository.
-            let directory = match segments.get(2..) {
-                Some(["tree", _, rest @ ..]) => directory(rest.join("/").trim_end_matches('/')),
-                _ => None,
-            };
-            Some(Self {
-                url: format!("https://github.com/{repo}"),
-                github: Some(repo),
-                directory,
-                ..Self::default()
-            })
-        } else if matches!(url.scheme(), "https" | "http" | "git" | "ssh") {
-            let segments: Vec<_> = url.path_segments().into_iter().flatten().collect();
-            let forge = url
-                .host_str()
-                .and_then(|host| Forge::detect(host, &segments));
-            Some(Self {
-                url: forge.as_ref().map_or_else(|| url.to_string(), Forge::web),
-                forge,
-                ..Self::default()
-            })
-        } else {
-            None
-        }
-    }
-}
-
-fn directory(raw: &str) -> Option<String> {
-    (!raw.is_empty()
-        && !raw.starts_with('/')
-        && raw.split('/').all(|s| !matches!(s, "" | "." | ".."))
-        && raw
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/._-@".contains(&b)))
-    .then(|| raw.into())
-}
-
 fn metadata(value: &Value) -> Option<Repository> {
     let repository = &value["repository"];
     let raw = repository.as_str().or_else(|| repository["url"].as_str());
@@ -230,10 +69,6 @@ fn compact_pypi(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::Cac
 const NOTES_SOURCE_PYPI: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("notes-source-pypi", compact_pypi);
 
-pub(crate) fn mapped(group: &str, name: &str) -> Option<Repository> {
-    Repository::from_url(UPSTREAMS.get(group)?.get(name)?)
-}
-
 pub(super) fn vanity(html: &str, package: &str) -> Option<(String, Repository)> {
     static META: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r"(?is)<meta\s+([^>]+)>").unwrap());
@@ -273,7 +108,7 @@ impl Client {
         if let Some(source) = mapped("mise-core", tool.trim_start_matches("core:")) {
             return Ok(Some(source));
         }
-        let releases = self.mise_releases(tool, None).await?;
+        let releases = self.sources.mise_releases(tool, None).await?;
         let url = |release: &patchula_mise::Release| release.release_url.clone();
         if let Some(source) = releases
             .iter()
@@ -284,8 +119,12 @@ impl Client {
         {
             return Ok(Some(source));
         }
-        let token = self.mise_token().await;
-        let backend = self.mise_lookup()?.backend(tool, token.as_deref()).await?;
+        let token = self.sources.mise_token().await;
+        let backend = self
+            .sources
+            .mise_lookup()?
+            .backend(tool, token.as_deref())
+            .await?;
         let (source, package) = match backend.split_once(':') {
             Some(("npm", package)) => (Source::Npm, package),
             Some(("pypi", package)) => (Source::Pypi, package),
@@ -345,6 +184,7 @@ impl Client {
                     )));
                 }
                 let response = self
+                    .sources
                     .http
                     .get(&format!("https://{package}?go-get=1"), "text/html")
                     .await?;
@@ -355,6 +195,7 @@ impl Client {
                     && prefix != package
                 {
                     let response = self
+                        .sources
                         .http
                         .get(&format!("https://{prefix}?go-get=1"), "text/html")
                         .await?;
@@ -371,7 +212,8 @@ impl Client {
                 return Ok(found.map(|(_, source)| source));
             }
             Source::Npm => {
-                self.http
+                self.sources
+                    .http
                     .get_derived(
                         &format!(
                             "https://registry.npmjs.org/{}/{}",
@@ -384,7 +226,8 @@ impl Client {
                     .await?
             }
             Source::Crates => {
-                self.http
+                self.sources
+                    .http
                     .get_derived(
                         &format!("https://crates.io/api/v1/crates/{package}"),
                         "application/json",
@@ -393,7 +236,8 @@ impl Client {
                     .await?
             }
             Source::Pypi => {
-                self.http
+                self.sources
+                    .http
                     .get_derived(
                         &format!("https://pypi.org/pypi/{package}/json"),
                         "application/json",
@@ -401,9 +245,11 @@ impl Client {
                     )
                     .await?
             }
-            Source::Docker | Source::Oci => return self.image_source(package, version).await,
+            Source::Docker | Source::Oci => {
+                return self.sources.image_source(package, version).await;
+            }
             Source::Helm => {
-                let chart = self.helm_chart(package).await?;
+                let chart = self.sources.helm_chart(package).await?;
                 return Ok(chart.notes.get(version).and_then(ChartNotes::repository));
             }
             _ => return Ok(None),

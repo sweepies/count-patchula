@@ -1502,7 +1502,9 @@ async fn escaped_npm_names_are_refused_and_mirrored_reads_count_as_credentialed(
 async fn a_package_from_its_own_registry_has_no_public_release_notes() {
     let dir = tempfile::tempdir().unwrap();
     // No request is expected: the fake transport panics on any.
-    let client = auth_client(Arc::new(AuthSteps(Mutex::new(VecDeque::new()))), dir.path()).await;
+    let client = patchula_notes::Client::new(
+        auth_client(Arc::new(AuthSteps(Mutex::new(VecDeque::new()))), dir.path()).await,
+    );
     let private = patchula_config::PackageId::new(
         Source::Npm,
         Some("https://npm.acme.dev".into()),

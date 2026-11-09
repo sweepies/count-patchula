@@ -12,10 +12,11 @@ mod maven;
 mod mise;
 mod nix;
 pub use nix::Flakes;
-pub mod notes;
 mod nuget;
 mod packagist;
 mod registries;
+pub mod upstream;
+pub use registries::HelmChart;
 mod rubygems;
 mod rules;
 use patchula_cache::{Cache, Release, State};
@@ -187,13 +188,10 @@ fn npm_url(registry: Option<&str>, package: &str) -> String {
 
 #[derive(Clone)]
 pub struct Client {
-    pub(crate) github: patchula_github::Client,
-    pub(crate) http: Cached,
-    pub(crate) cache: Cache,
+    pub github: patchula_github::Client,
+    pub http: Cached,
+    pub cache: Cache,
     tokens: docker::Tokens,
-    changelogs: notes::ChangelogCache,
-    note_reads: Option<notes::ReadCache>,
-    release_bodies: notes::BodyCache,
     use_versions_host: bool,
     mise: Option<std::sync::Arc<patchula_mise::Lookup>>,
     nix: Option<std::sync::Arc<dyn Flakes>>,
@@ -211,9 +209,6 @@ impl Client {
             http,
             cache,
             tokens: Default::default(),
-            changelogs: Default::default(),
-            note_reads: None,
-            release_bodies: Default::default(),
             use_versions_host: true,
             mise: None,
             nix: None,
@@ -516,6 +511,15 @@ fn sort(versions: &mut Vec<Version>, scheme: Ecosystem) {
         _ => std::cmp::Ordering::Equal,
     });
     versions.extend(parsed.into_iter().map(|(_, v)| v));
+}
+/// The longest prefix of `text` within `limit` bytes that ends on a char
+/// boundary.
+pub fn truncate(text: &str, limit: usize) -> &str {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 pub fn escape_go(package: &str) -> Result<String> {
     let mut out = String::with_capacity(package.len());

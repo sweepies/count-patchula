@@ -1,0 +1,33 @@
+[package]
+name = "patchula-notes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = "0.23"
+futures-util = "0.3"
+patchula-cache = { path = "../cache" }
+patchula-config = { path = "../config" }
+patchula-datasource = { path = "../datasource" }
+patchula-http = { path = "../http" }
+patchula-mise = { path = "../mise" }
+patchula-versioning = { path = "../versioning" }
+patchula-words = { path = "../words" }
+regex = "1.13.1"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng = "0.10.0"
+tokio.workspace = true
+
+[dev-dependencies]
+patchula-github = { path = "../github" }
+patchula-testkit = { path = "../testkit" }
+tempfile = "3.27.0"

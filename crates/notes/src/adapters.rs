@@ -185,6 +185,7 @@ impl Client {
         let bytes = self
             .note_read(&path, async {
                 Ok(self
+                    .sources
                     .github
                     .get_derived(&path, &NOTES_ADAPTER_LISTING)
                     .await?
@@ -219,17 +220,19 @@ impl Client {
         if let Some(sections) = &*saved {
             return Ok(sections.iter().cloned().collect());
         }
-        let sections = if let Some(entry) = self.cache.state::<AdapterSections>(&scope).await? {
-            entry.0
-        } else {
-            let response = self
-                .github
-                .get_derived(&format!("repos/{repo}/git/blobs/{sha}"), &derived)
-                .await?;
-            let entry = AdapterSections(serde_json::from_slice(&response.body)?);
-            self.cache.set_state(&scope, &entry).await?;
-            entry.0
-        };
+        let sections =
+            if let Some(entry) = self.sources.cache.state::<AdapterSections>(&scope).await? {
+                entry.0
+            } else {
+                let response = self
+                    .sources
+                    .github
+                    .get_derived(&format!("repos/{repo}/git/blobs/{sha}"), &derived)
+                    .await?;
+                let entry = AdapterSections(serde_json::from_slice(&response.body)?);
+                self.sources.cache.set_state(&scope, &entry).await?;
+                entry.0
+            };
         let sections = Arc::new(sections);
         *saved = Some(sections.clone());
         Ok(sections.iter().cloned().collect())

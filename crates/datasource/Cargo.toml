@@ -31,6 +31,7 @@ tokio.workspace = true
 futures-util = "0.3"
 
 [dev-dependencies]
+patchula-notes = { path = "../notes" }
 patchula-process = { path = "../process" }
 patchula-testkit = { path = "../testkit" }
 tempfile = "3.27.0"

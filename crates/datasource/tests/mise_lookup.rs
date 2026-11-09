@@ -282,7 +282,7 @@ async fn asdf_and_vfox_tools_are_refused_before_mise_starts() {
             "{tool}: {error}"
         );
         assert!(
-            source
+            patchula_notes::Client::new(source.clone())
                 .source_repository(
                     &patchula_config::PackageId::public(Source::Mise, tool),
                     "1.0.0"
@@ -307,7 +307,8 @@ async fn a_client_without_the_tool_store_cannot_look_up_mise_tools() {
 async fn release_notes_find_their_repository_from_the_release_url() {
     let replay = replay();
     let source = client(Some(&replay), memory().await, "a-token");
-    let jq = source
+    let notes = patchula_notes::Client::new(source.clone());
+    let jq = notes
         .source_repository(
             &patchula_config::PackageId::public(Source::Mise, "jq"),
             "1.8.2",
@@ -316,7 +317,7 @@ async fn release_notes_find_their_repository_from_the_release_url() {
         .unwrap()
         .unwrap();
     assert_eq!(jq.github.as_deref(), Some("jqlang/jq"));
-    let hk = source
+    let hk = notes
         .source_repository(
             &patchula_config::PackageId::public(Source::Mise, "packslip:jdx/hk"),
             "2.8.0",
@@ -328,7 +329,7 @@ async fn release_notes_find_their_repository_from_the_release_url() {
     // Core tools keep their fixed upstream and need no listing.
     let before = replay.lookups().len();
     for (tool, repo) in [("node", "nodejs/node"), ("core:node", "nodejs/node")] {
-        let found = source
+        let found = notes
             .source_repository(
                 &patchula_config::PackageId::public(Source::Mise, tool),
                 "26.12.1",
@@ -344,7 +345,7 @@ async fn release_notes_find_their_repository_from_the_release_url() {
 #[tokio::test]
 async fn release_notes_follow_an_npm_backend_when_the_listing_has_no_release_url() {
     let replay = replay();
-    let found = client(Some(&replay), memory().await, "a-token")
+    let found = patchula_notes::Client::new(client(Some(&replay), memory().await, "a-token"))
         .source_repository(
             &patchula_config::PackageId::public(Source::Mise, "prettier"),
             "3.9.10",

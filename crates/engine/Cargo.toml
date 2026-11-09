@@ -16,6 +16,7 @@ patchula-http = { path = "../http" }
 patchula-github = { path = "../github" }
 patchula-manager = { path = "../manager" }
 patchula-datasource = { path = "../datasource" }
+patchula-notes = { path = "../notes" }
 patchula-lookup = { path = "../lookup" }
 patchula-report = { path = "../report" }
 patchula-update = { path = "../update" }

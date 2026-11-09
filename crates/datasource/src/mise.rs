@@ -44,11 +44,11 @@ impl Client {
         self.mise = Some(lookup);
         self
     }
-    pub(crate) fn mise_lookup(&self) -> Result<&Arc<Lookup>> {
+    pub fn mise_lookup(&self) -> Result<&Arc<Lookup>> {
         self.mise.as_ref().ok_or(Error::NoMise)
     }
     /// Only a token for github.com is passed to mise.
-    pub(crate) async fn mise_token(&self) -> Option<String> {
+    pub async fn mise_token(&self) -> Option<String> {
         if self.github.versions_host_eligible() {
             self.github.token().await.ok()
         } else {
@@ -66,11 +66,7 @@ impl Client {
     }
     /// One tool's listing, from the store while fresh and from mise otherwise.
     /// A manual retry skips the stored listing.
-    pub(crate) async fn mise_releases(
-        &self,
-        tool: &str,
-        prefix: Option<&str>,
-    ) -> Result<Vec<Release>> {
+    pub async fn mise_releases(&self, tool: &str, prefix: Option<&str>) -> Result<Vec<Release>> {
         patchula_mise::check(tool)?;
         let lookup = self.mise_lookup()?;
         let scope = self.mise_scope(lookup, tool, prefix);
