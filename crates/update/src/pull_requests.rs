@@ -262,6 +262,8 @@ impl Lifecycle {
     }
     /// Authoritative inventory includes closed history and all pages. No cached
     /// decisions can suppress a newly closed PR or permit an over-budget create.
+    /// `actor` is the run's one viewer login, read with the inventory.
+    #[allow(clippy::too_many_arguments)]
     pub async fn prepare_with_controls(
         client: &Client,
         repository: &patchula_report::Repository,
@@ -270,6 +272,7 @@ impl Lifecycle {
         now: DateTime<Utc>,
         recheck: Recheck,
         controls: &crate::dashboard::Controls,
+        actor: &str,
     ) -> Result<Self, String> {
         let repo = repository.repository.as_str();
         let base = repository
@@ -287,13 +290,6 @@ impl Lifecycle {
             )
             .await
             .map_err(|e| e.to_string())?;
-        let viewer = client
-            .graphql("query{viewer{login}}", json!({}))
-            .await
-            .map_err(|e| e.to_string())?;
-        let actor = viewer["viewer"]["login"]
-            .as_str()
-            .ok_or("missing viewer login")?;
         let mut state = Self {
             repo: repo.into(),
             actor: actor.into(),
@@ -370,11 +366,13 @@ impl Lifecycle {
             if meta["default_branch"] != default_branch {
                 return Err("default branch changed before PR closure; rerun".into());
             }
-            let current = client
+            // The default branch's head is a lease on each closure: a base
+            // that moved while earlier PRs closed must stop the next one.
+            let head = client
                 .get_fresh(&format!("repos/{repo}/branches/{default_branch}"))
                 .await
                 .map_err(|e| e.to_string())?;
-            if current["commit"]["sha"] != base {
+            if head["commit"]["sha"] != base {
                 return Err("base moved before obsolete PR closure; rerun".into());
             }
             let mut text = markers::truncate_marked(body(&fresh), FOREIGN_LIMIT - 100);

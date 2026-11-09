@@ -642,6 +642,7 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
         std::slice::from_mut(&mut p),
         &snapshot,
         "main",
+        "patchula[bot]",
         patchula_config::Rebase::Behind,
         false,
     )

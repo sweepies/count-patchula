@@ -73,6 +73,8 @@ struct State {
     pr_head_override: Option<String>,
     close_on_read: bool,
     close_after_reads: Option<usize>,
+    label_next_page: Option<u64>,
+    pr_next_page: Option<String>,
     release_note_body: Option<String>,
     release_queries: Vec<Value>,
 }
@@ -116,6 +118,8 @@ impl Transport for Fake {
             .push((request.method().to_string(), path.clone()));
         let reply = if path == "/graphql" {
             if body["query"] == patchula_update::INVENTORY_QUERY {
+                let label_next = state.label_next_page;
+                let pr_next = state.pr_next_page.clone();
                 let nodes: Vec<_> = state.refs.iter().map(|(name, oid)| {
                     let name = name.strip_prefix("refs/heads/").unwrap();
                     let commit = &state.commits[oid];
@@ -123,12 +127,12 @@ impl Transport for Fake {
                         "number":p["number"],"id":p["node_id"],"url":p["html_url"],"title":p["title"],"body":p["body"],
                         "headRefName":p["head"]["ref"],"headRefOid":p["head"]["sha"],"baseRefName":p["base"]["ref"],"author":graphql_author(p),
                         "headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},"baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]},
-                        "labels":{"nodes":p["labels"],"pageInfo":{"hasNextPage":false}},"autoMergeRequest":p["auto_merge"]
+                        "labels":{"nodes":p["labels"],"pageInfo":{"hasNextPage":label_next == p["number"].as_u64()}},"autoMergeRequest":p["auto_merge"]
                     })).collect();
                     json!({"name":name,"target":{"oid":oid,"tree":{"oid":commit["tree"]["sha"]},"message":commit["message"],
                         "author":{"user":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("patchula[bot]")}},
                         "committer":{"user":{"login":"web-flow"}},"signature":{"isValid":!state.unsigned}},
-                        "associatedPullRequests":{"nodes":prs,"pageInfo":{"hasNextPage":false}}})
+                        "associatedPullRequests":{"nodes":prs,"pageInfo":{"hasNextPage":pr_next.as_deref() == Some(name)}}})
                 }).collect();
                 let offset = body["variables"]["cursor"]
                     .as_str()
@@ -601,6 +605,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
         std::slice::from_mut(&mut first),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -619,6 +624,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
         std::slice::from_mut(&mut second),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -637,6 +643,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
         std::slice::from_mut(&mut repeat),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -660,6 +667,7 @@ async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
         std::slice::from_mut(&mut first),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -675,6 +683,7 @@ async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
         std::slice::from_mut(&mut repeat),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -703,6 +712,7 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
             std::slice::from_mut(&mut first),
             &snapshot,
             "main",
+            "patchula[bot]",
             Rebase::Behind,
             false,
         )
@@ -732,6 +742,7 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
             std::slice::from_mut(&mut repeat),
             &snapshot,
             "main",
+            "patchula[bot]",
             Rebase::Behind,
             false,
         )
@@ -759,6 +770,7 @@ async fn dry_run_plans_diffs_and_never_sends_mutations() {
         std::slice::from_mut(&mut plan),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         true,
     )
@@ -793,6 +805,7 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
             std::slice::from_mut(&mut first),
             &snapshot,
             "main",
+            "patchula[bot]",
             mode,
             false,
         )
@@ -814,6 +827,7 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
             std::slice::from_mut(&mut next),
             &snapshot,
             "main",
+            "patchula[bot]",
             mode,
             false,
         )
@@ -840,6 +854,7 @@ async fn human_commit_is_protected_even_with_copied_patchula_markers() {
         std::slice::from_mut(&mut first),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -858,6 +873,7 @@ async fn human_commit_is_protected_even_with_copied_patchula_markers() {
         std::slice::from_mut(&mut next),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -882,6 +898,7 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
             std::slice::from_mut(&mut first),
             &snapshot,
             "main",
+            "patchula[bot]",
             Rebase::Behind,
             false,
         )
@@ -905,6 +922,7 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
             std::slice::from_mut(&mut next),
             &snapshot,
             "main",
+            "patchula[bot]",
             Rebase::Behind,
             false,
         )
@@ -929,6 +947,7 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
         std::slice::from_mut(&mut first),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Conflicts,
         false,
     )
@@ -967,6 +986,7 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
         std::slice::from_mut(&mut next),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Conflicts,
         false,
     )
@@ -1008,6 +1028,7 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
             std::slice::from_mut(&mut plan),
             &snapshot,
             "main",
+            "patchula[bot]",
             Rebase::Behind,
             false,
         )
@@ -1054,6 +1075,7 @@ async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
         &mut plans,
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -1407,6 +1429,7 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
         std::slice::from_mut(&mut p),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -1430,9 +1453,17 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
         s.refs
             .insert("refs/heads/patchula/human".into(), "human".into());
     }
-    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[p], false)
-        .await
-        .unwrap();
+    let actions = patchula_update::cleanup(
+        &github,
+        "demo/app",
+        "base",
+        "main",
+        &[p],
+        "patchula[bot]",
+        false,
+    )
+    .await
+    .unwrap();
     assert_eq!(actions.len(), 1);
     assert_eq!(actions[0].branch, old);
     assert_eq!(actions[0].status, BranchStatus::Deleted);
@@ -1545,7 +1576,16 @@ async fn shared_base_write_trace_and_request_budget() {
         })
         .collect();
     let started = tokio::time::Instant::now();
-    patchula_update::apply_all(&github, &mut plans, &snapshot, "main", Rebase::Behind, true).await;
+    patchula_update::apply_all(
+        &github,
+        &mut plans,
+        &snapshot,
+        "main",
+        "patchula[bot]",
+        Rebase::Behind,
+        true,
+    )
+    .await;
     assert_eq!(github.stats().await.requests, 0);
     eprintln!(
         "dry-run: {} requests, simulated elapsed {:?}",
@@ -1558,6 +1598,7 @@ async fn shared_base_write_trace_and_request_budget() {
         &mut plans,
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -1601,7 +1642,7 @@ async fn shared_base_write_trace_and_request_budget() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn forced_batch_recheck_has_no_mutations_and_one_shared_viewer_read() {
+async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
     let (_, snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
     server.0.lock().unwrap().latency = std::time::Duration::from_millis(150);
@@ -1621,6 +1662,7 @@ async fn forced_batch_recheck_has_no_mutations_and_one_shared_viewer_read() {
         &mut plans(),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -1637,6 +1679,7 @@ async fn forced_batch_recheck_has_no_mutations_and_one_shared_viewer_read() {
         &mut repeat,
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -1648,15 +1691,16 @@ async fn forced_batch_recheck_has_no_mutations_and_one_shared_viewer_read() {
     );
     let state = server.0.lock().unwrap();
     assert!(state.writes.is_empty());
+    // The actor comes with the run's inventory, so no viewer query is sent.
     assert_eq!(
         state
             .requests
             .iter()
             .filter(|(_, path)| path == "/graphql")
             .count(),
-        1
+        0
     );
-    assert_eq!(state.requests.len(), 4 + 1 + 17 * 4);
+    assert_eq!(state.requests.len(), 4 + 17 * 4);
     eprintln!(
         "forced 17-branch recheck: {} reads, 0 mutations, {:?} simulated at 150ms/request",
         state.requests.len(),
@@ -1685,10 +1729,20 @@ async fn pr_cycle(
         chrono::Utc::now(),
         patchula_words::Recheck::NextRun,
         &Default::default(),
+        "patchula[bot]",
     )
     .await
     .unwrap();
-    patchula_update::apply_all(client, plans, snapshot, "main", Rebase::Behind, false).await;
+    patchula_update::apply_all(
+        client,
+        plans,
+        snapshot,
+        "main",
+        "patchula[bot]",
+        Rebase::Behind,
+        false,
+    )
+    .await;
     state.publish(client, plans).await;
     state.actions
 }
@@ -1763,6 +1817,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             chrono::Utc::now(),
             Default::default(),
             &Default::default(),
+            "patchula[bot]",
         )
         .await
         .unwrap();
@@ -1771,6 +1826,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             std::slice::from_mut(&mut p),
             &snapshot,
             "main",
+            "patchula[bot]",
             config.prs.rebase,
             false,
         )
@@ -1857,7 +1913,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             );
         }
         assert_eq!(
-            all,
+            all == patchula_update::RestoreOutcome::Complete,
             matches!(
                 case,
                 "same"
@@ -1940,6 +1996,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             chrono::Utc::now(),
             Default::default(),
             &Default::default(),
+            "patchula[bot]",
         )
         .await
         .unwrap();
@@ -1954,6 +2011,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             std::slice::from_mut(&mut next),
             &snapshot,
             "main",
+            "patchula[bot]",
             Rebase::Behind,
             false,
         )
@@ -2055,6 +2113,7 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
         chrono::Utc::now(),
         Default::default(),
         &Default::default(),
+        "patchula[bot]",
     )
     .await
     .unwrap();
@@ -2064,6 +2123,7 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
         &mut plans,
         &snapshot,
         "main",
+        "patchula[bot]",
         config.prs.rebase,
         false,
     )
@@ -2137,6 +2197,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
             chrono::Utc::now(),
             Default::default(),
             &Default::default(),
+            "patchula[bot]",
         )
         .await
         .unwrap();
@@ -2170,7 +2231,11 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
         )
         .await
         .unwrap();
-        assert_eq!(all, case == "same", "{case}");
+        assert_eq!(
+            all == patchula_update::RestoreOutcome::Complete,
+            case == "same",
+            "{case}"
+        );
         assert_eq!(
             warm.action().status == BranchStatus::Skipped,
             case == "same",
@@ -2458,6 +2523,7 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
             chrono::Utc::now(),
             Default::default(),
             &Default::default(),
+            "patchula[bot]",
         )
         .await
         .unwrap();
@@ -2471,9 +2537,17 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
                 patchula_report::PullRequestStatus::Closed
             }
         );
-        let cleanup = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
-            .await
-            .unwrap();
+        let cleanup = patchula_update::cleanup(
+            &github,
+            "demo/app",
+            "base",
+            "main",
+            &[],
+            "patchula[bot]",
+            false,
+        )
+        .await
+        .unwrap();
         assert_eq!(cleanup.len(), usize::from(!human));
         let s = server.0.lock().unwrap();
         assert_eq!(s.prs[&1]["state"], if human { "open" } else { "closed" });
@@ -2725,6 +2799,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         chrono::Utc::now(),
         patchula_words::Recheck::Now,
         &Default::default(),
+        "patchula[bot]",
     )
     .await
     .unwrap();
@@ -2733,6 +2808,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         std::slice::from_mut(&mut p),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -2916,6 +2992,7 @@ async fn lookup_warnings_defer_obsolete_pr_closure() {
         chrono::Utc::now(),
         Default::default(),
         &Default::default(),
+        "patchula[bot]",
     )
     .await
     .unwrap();
@@ -3159,6 +3236,7 @@ async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
         &mut plans,
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -3204,6 +3282,7 @@ async fn single_branch_ref_failure_names_githubs_reason() {
         std::slice::from_mut(&mut p),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -3251,6 +3330,7 @@ async fn no_ref_update_names_the_default_branch() {
         std::slice::from_mut(&mut single),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -3272,6 +3352,7 @@ async fn no_ref_update_names_the_default_branch() {
         &mut plans,
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -3297,9 +3378,17 @@ async fn no_ref_update_names_the_default_branch() {
             "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ));
     }
-    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
-        .await
-        .unwrap();
+    let actions = patchula_update::cleanup(
+        &github,
+        "demo/app",
+        "base",
+        "main",
+        &[],
+        "patchula[bot]",
+        false,
+    )
+    .await
+    .unwrap();
     assert!(actions.iter().any(|a| a.status == BranchStatus::Deleted));
     let names = ref_update_names(&server);
     assert!(names.len() > before);
@@ -3317,6 +3406,7 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         &mut plans,
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -3336,9 +3426,17 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         );
     }
     let before = ref_update_names(&server).len();
-    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
-        .await
-        .unwrap();
+    let actions = patchula_update::cleanup(
+        &github,
+        "demo/app",
+        "base",
+        "main",
+        &[],
+        "patchula[bot]",
+        false,
+    )
+    .await
+    .unwrap();
     assert!(actions.is_empty());
     assert_eq!(ref_update_names(&server).len(), before);
     // A recorded base GitHub cannot compare marks a branch that is not the
@@ -3359,9 +3457,17 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         .unwrap()
         .refs
         .insert("refs/heads/main".into(), "base".into());
-    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
-        .await
-        .unwrap();
+    let actions = patchula_update::cleanup(
+        &github,
+        "demo/app",
+        "base",
+        "main",
+        &[],
+        "patchula[bot]",
+        false,
+    )
+    .await
+    .unwrap();
     assert!(actions.is_empty());
     assert_eq!(ref_update_names(&server).len(), before);
     retag(
@@ -3375,9 +3481,17 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         .unwrap()
         .refs
         .insert("refs/heads/main".into(), "base".into());
-    let actions = patchula_update::cleanup(&github, "demo/app", "base", "main", &[], false)
-        .await
-        .unwrap();
+    let actions = patchula_update::cleanup(
+        &github,
+        "demo/app",
+        "base",
+        "main",
+        &[],
+        "patchula[bot]",
+        false,
+    )
+    .await
+    .unwrap();
     assert!(actions.iter().any(|a| a.status == BranchStatus::Deleted));
 }
 
@@ -3420,6 +3534,7 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
         std::slice::from_mut(&mut p),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -3692,8 +3807,8 @@ fn reference_data_pins_get_their_own_branch() {
     );
 }
 
-/// Closing several obsolete PRs fetches the repository's metadata once,
-/// not once per pull.
+/// Closing several obsolete PRs fetches the repository's metadata and the
+/// default branch's head once each, not once per pull.
 #[tokio::test(start_paused = true)]
 async fn obsolete_prs_fetch_repository_metadata_once() {
     let (config, repo) = pr_config();
@@ -3743,6 +3858,7 @@ async fn obsolete_prs_fetch_repository_metadata_once() {
         chrono::Utc::now(),
         Default::default(),
         &Default::default(),
+        "patchula[bot]",
     )
     .await
     .unwrap();
@@ -3754,6 +3870,108 @@ async fn obsolete_prs_fetch_repository_metadata_once() {
         .filter(|(method, path)| method == "GET" && path == "/repos/demo/app")
         .count();
     assert_eq!(metas, 1, "{:?}", s.requests);
+    let heads = s
+        .requests
+        .iter()
+        .filter(|(method, path)| method == "GET" && path == "/repos/demo/app/branches/main")
+        .count();
+    assert_eq!(
+        heads, 2,
+        "the head is re-read before each closure: {:?}",
+        s.requests
+    );
+}
+
+/// Labels or associated pull requests past their first page leave the
+/// inventory's PR view incomplete, so verified receipts cannot settle the
+/// repository: it takes the full write path instead.
+#[tokio::test(start_paused = true)]
+async fn paginated_inventory_connections_close_the_receipts_fast_path() {
+    for paginated in ["labels", "pull-requests"] {
+        let (mut config, repo) = pr_config();
+        config.prs.rebase = Rebase::Behind;
+        let (mut p, snapshot) = make_plan("22.0.0");
+        let server = fake(&snapshot);
+        let github = client(server.clone()).await;
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(
+            &github,
+            &repo,
+            std::slice::from_mut(&mut p),
+            &config,
+            chrono::Utc::now(),
+            Default::default(),
+            &Default::default(),
+            "patchula[bot]",
+        )
+        .await
+        .unwrap();
+        patchula_update::apply_all(
+            &github,
+            std::slice::from_mut(&mut p),
+            &snapshot,
+            "main",
+            "patchula[bot]",
+            config.prs.rebase,
+            false,
+        )
+        .await;
+        lifecycle
+            .publish(&github, std::slice::from_mut(&mut p))
+            .await;
+        patchula_update::save_receipts(
+            &cache,
+            &repo,
+            &config,
+            std::slice::from_ref(&p),
+            &lifecycle,
+        )
+        .await
+        .unwrap();
+        {
+            let mut s = server.0.lock().unwrap();
+            let mut other = s.prs.get(&1).unwrap().clone();
+            other["number"] = json!(2);
+            other["node_id"] = json!("PR_other");
+            other["html_url"] = json!("https://github.com/demo/app/pull/2");
+            other["head"]["ref"] = json!("patchula/other-two");
+            other["head"]["sha"] = json!("other");
+            other["title"] = json!("unrelated work");
+            s.prs.insert(2, other);
+            s.commits.insert(
+                "other".into(),
+                json!({
+                    "sha":"other",
+                    "tree":{"sha":"base-tree"},
+                    "message":"human work",
+                    "actor":"human"
+                }),
+            );
+            s.refs
+                .insert("refs/heads/patchula/other-two".into(), "other".into());
+            match paginated {
+                "labels" => s.label_next_page = Some(2),
+                _ => s.pr_next_page = Some("patchula/other-two".into()),
+            }
+        }
+        let (mut next, _) = make_plan("22.0.0");
+        let outcome = patchula_update::restore_unchanged(
+            &github,
+            &cache,
+            &repo,
+            &config,
+            std::slice::from_mut(&mut next),
+            Default::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            patchula_update::RestoreOutcome::Partial,
+            "{paginated}"
+        );
+    }
 }
 
 /// A branch whose tip records a base GitHub cannot compare is left alone as
@@ -3768,6 +3986,7 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
         std::slice::from_mut(&mut first),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )
@@ -3791,6 +4010,7 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
         std::slice::from_mut(&mut second),
         &snapshot,
         "main",
+        "patchula[bot]",
         Rebase::Behind,
         false,
     )

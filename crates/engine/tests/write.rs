@@ -1748,7 +1748,7 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             request_counts[0], request_counts[1],
             "{origin}: unrelated branches added requests"
         );
-        assert_eq!(request_counts[0], if origin == "retry" { 4 } else { 16 });
+        assert_eq!(request_counts[0], if origin == "retry" { 4 } else { 15 });
     }
 }
 
@@ -2232,5 +2232,52 @@ async fn a_credential_in_a_ci_workflow_is_not_refused() {
         report.repositories[0].status,
         Status::Complete,
         "{report:?}"
+    );
+}
+
+/// The write path reads the viewer login once, inside the run's inventory;
+/// lifecycle preparation, cleanup and branch publication reuse it.
+#[tokio::test(start_paused = true)]
+async fn the_write_path_reads_the_viewer_login_once() {
+    let fake = Arc::new(Fake::new(false));
+    let directory = tempfile::tempdir().unwrap();
+    let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let run = || {
+        engine.run(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+    };
+    run().await.unwrap();
+    *fake.catalog.lock().unwrap() =
+        json!({"dist-tags":{"latest":"2.1.0"},"versions":{"1.0.0":{},"2.0.0":{},"2.1.0":{}}});
+    fake.requests.lock().unwrap().clear();
+    run().await.unwrap();
+    let requests = fake.requests.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|(_, _, body)| body["query"] == "query{viewer{login}}")
+            .count(),
+        0,
+        "{requests:?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|(_, path, body)| path == "/graphql"
+                && body["query"] == patchula_update::INVENTORY_QUERY)
+            .count(),
+        1,
+        "{requests:?}"
     );
 }
