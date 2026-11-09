@@ -1,4 +1,4 @@
-use crate::origins::Named;
+use crate::origins::{Named, Origin, Origins};
 use crate::*;
 use jsonc_parser::{
     ast::{Object, Value},
@@ -545,13 +545,10 @@ pub(super) fn npmrcs(files: &crate::Files) -> BTreeMap<&str, Npmrc> {
     found
 }
 
-/// The registry for `package` in `file`: the nearest setting for its scope at
-/// or above the file, else the nearest `registry=` there.
-pub(super) fn registry_for(
-    file: &str,
-    package: &str,
-    npmrcs: &BTreeMap<&str, Npmrc>,
-) -> Option<Registry> {
+/// The registry `package` in `file` names: the nearest setting for its
+/// scope at or above the file, else the nearest `registry=` there, else the
+/// public registry.
+fn named_for(file: &str, package: &str, npmrcs: &BTreeMap<&str, Npmrc>) -> Named {
     let mut directories = Vec::new();
     let mut directory = file.rsplit_once('/').map_or("", |(d, _)| d);
     loop {
@@ -565,42 +562,59 @@ pub(super) fn registry_for(
     // A settings file the Count did not read may set this package's registry,
     // so its lookup fails rather than guessing past it.
     if settings.iter().any(|s| s.unread) {
-        return Named::Unusable("(an npm settings file the Count could not read)".into())
-            .registry();
+        return Named::Unusable("(an npm settings file the Count could not read)".into());
     }
     let scope = package
         .split_once('/')
         .map(|(scope, _)| scope)
         .filter(|scope| scope.starts_with('@'));
-    let named = scope
+    scope
         .and_then(|scope| settings.iter().find_map(|s| s.scopes.get(scope)))
-        .or_else(|| settings.iter().find_map(|s| s.default.as_ref()))?;
-    named.registry()
+        .or_else(|| settings.iter().find_map(|s| s.default.as_ref()))
+        .cloned()
+        .unwrap_or(Named::Public)
 }
 
-/// Look each npm dependency up in the registry its `.npmrc` or `.yarnrc.yml`
-/// names. `packageManager` stays on the public registry, since Corepack does
-/// not read them.
-pub(super) fn assign_registries(deps: &mut [Dependency], npmrcs: &BTreeMap<&str, Npmrc>) {
-    for dep in deps
-        .iter_mut()
-        .filter(|dep| dep.source == Source::Npm && dep.location.pointer != "/packageManager")
-    {
-        dep.registry = registry_for(&dep.file, &dep.package, npmrcs);
-    }
-}
-
-/// The same for packages only a lockfile records, so their advisories are
-/// not read for the public package of their name.
-pub(super) fn assign_locked_registries(
+/// Give each npm-source dependency and each npm or bun locked package the
+/// registry its `.npmrc` or `.yarnrc.yml` names, through the shared
+/// `Origins`. `packageManager` stays on the public registry, since Corepack
+/// does not read them.
+pub(super) fn assign_registries(
+    deps: &mut Vec<Dependency>,
     locked: &mut [crate::locked::Locked],
     npmrcs: &BTreeMap<&str, Npmrc>,
 ) {
+    if npmrcs.is_empty() {
+        return;
+    }
+    let mut origins = Origins::default();
+    for (file, package) in deps
+        .iter()
+        .filter(|dep| dep.source == Source::Npm && dep.location.pointer != "/packageManager")
+        .map(|dep| (dep.file.as_str(), dep.package.as_str()))
+        .chain(
+            locked
+                .iter()
+                .filter(|entry| matches!(entry.manager, Manager::Npm | Manager::Bun))
+                .map(|entry| (entry.file.as_str(), entry.package.as_str())),
+        )
+    {
+        origins
+            .local
+            .entry(file.to_owned())
+            .or_default()
+            .insert(
+                package.to_owned(),
+                Origin::Index(named_for(file, package, npmrcs)),
+            );
+    }
+    let dropped = origins.assign(deps, &NPM);
+    debug_assert!(dropped.is_empty());
     for entry in locked
         .iter_mut()
         .filter(|entry| matches!(entry.manager, Manager::Npm | Manager::Bun))
     {
-        entry.registry = registry_for(&entry.file, &entry.package, npmrcs);
+        entry.registry = origins.recorded(&entry.file, &entry.package, &NPM);
     }
 }
 
@@ -665,15 +679,9 @@ impl crate::Ecosystem for Descriptor {
         Ok(Prepared {
             extract: Some(Box::new(move |path, text, out| {
                 let result = if path.ends_with("package.json") {
-                    extract(path, text, manager, extract_locks.as_ref()).map(|mut deps| {
-                        assign_registries(&mut deps, npmrcs);
-                        deps
-                    })
+                    extract(path, text, manager, extract_locks.as_ref())
                 } else if path.ends_with("pnpm-workspace.yaml") || path.ends_with(".yarnrc.yml") {
-                    catalogs(path, text, manager).map(|mut deps| {
-                        assign_registries(&mut deps, npmrcs);
-                        deps
-                    })
+                    catalogs(path, text, manager)
                 } else if path.ends_with(".nvmrc") || path.ends_with(".node-version") {
                     Ok(node_version(path, text, manager))
                 } else {
@@ -691,7 +699,7 @@ impl crate::Ecosystem for Descriptor {
                     out.locked
                         .extend(locked::npm(files, finish_locks.as_ref(), &out.dependencies));
                 }
-                assign_locked_registries(&mut out.locked, npmrcs);
+                assign_registries(&mut out.dependencies, &mut out.locked, npmrcs);
                 Ok(())
             })),
         })
