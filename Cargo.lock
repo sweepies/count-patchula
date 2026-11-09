@@ -2264,7 +2264,6 @@ dependencies = [
  "patchula-update",
  "patchula-versioning",
  "patchula-words",
- "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -2319,16 +2318,21 @@ version = "0.8.1"
 dependencies = [
  "chrono",
  "nodejs-semver",
+ "patchula-cache",
  "patchula-config",
  "patchula-datasource",
+ "patchula-github",
+ "patchula-http",
  "patchula-manager",
  "patchula-report",
+ "patchula-testkit",
  "patchula-versioning",
  "patchula-words",
  "regex",
  "semver",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

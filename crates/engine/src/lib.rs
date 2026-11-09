@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 mod catalogs;
 mod overrides;
+pub mod repository;
 pub mod settings;
 
 use futures_util::{StreamExt, stream};
@@ -11,14 +12,13 @@ use patchula_datasource::{Client as Sources, Failure};
 use patchula_github::{Client as Github, Options as GithubOptions};
 use patchula_http::{Cached, MAX_CONCURRENCY, PhaseTrace, Transport};
 use patchula_lookup::{Evaluation, Evaluator};
-use patchula_manager::{Dependency, Extraction, Files, Scanner};
+use patchula_manager::{Dependency, Extraction, Scanner};
 use patchula_report::{
     Current, Dependency as ReportDependency, LookupFailure, PackageFile, Report, Repository,
     SCHEMA_VERSION, Status,
 };
 use patchula_words::{
-    DependencyKind, LookupErrorKind, Manager, Recheck, ResolutionKind, Source, ToolingRule,
-    Update as UpdateKind,
+    DependencyKind, LookupErrorKind, Manager, Recheck, ResolutionKind, Source, Update as UpdateKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1051,7 +1051,7 @@ impl Engine {
                     let mut work = match scanned {
                         Ok(work) => work,
                         Err(error) => Work {
-                            report: repository(&repo, Status::Error, Some(error.to_string())),
+                            report: repo_report(&repo, Status::Error, Some(error.to_string())),
                             config: None,
                             dependencies: Vec::new(),
                             locked: Vec::new(),
@@ -2439,49 +2439,71 @@ impl Engine {
         }
         Ok(serde_json::from_value(value["tree"].clone())?)
     }
-    /// The blobs of `entries`. One that is not text is none when it is a
-    /// settings file, or when `guarded`, as is a symlink then: unreadable
-    /// rather than absent, as in `read_tree`. Any other selected file must
-    /// be text.
-    async fn blobs(
+    /// The repository view for `entries`: the shared selection-and-reading
+    /// engine, its blob reads answered by GitHub batches. The view runs on
+    /// a blocking thread; each round's entries go to the async side over a
+    /// channel and their contents come back the same way.
+    async fn repository_view(
         &self,
         repo: &str,
         entries: Vec<Entry>,
-        guarded: bool,
-    ) -> Result<Vec<(String, Option<patchula_update::Blob>)>> {
-        let shas: Vec<String> = entries
-            .iter()
-            .filter(|entry| !(guarded && entry.mode == "120000"))
-            .map(|entry| entry.sha.clone())
-            .collect();
-        let contents = self.github.blobs(repo, &shas).await?;
-        entries
-            .into_iter()
-            .map(|entry| {
-                if guarded && entry.mode == "120000" {
-                    return Ok((entry.path, None));
-                }
-                let bytes = contents
-                    .get(&entry.sha)
-                    .cloned()
-                    .ok_or_else(|| Error::Invalid("blob missing from the batch".into()))?;
-                let content = match String::from_utf8(bytes) {
-                    Ok(content) => content,
-                    Err(_) if guarded || patchula_manager::registry_settings(&entry.path) => {
-                        return Ok((entry.path, None));
+        config: &Config,
+    ) -> Result<repository::View> {
+        let listing = repository::Listing {
+            entries: entries
+                .into_iter()
+                .filter(|entry| entry.kind == "blob")
+                .map(|entry| repository::Entry {
+                    path: entry.path,
+                    sha: Some(entry.sha),
+                    mode: entry.mode,
+                })
+                .collect(),
+            hidden: Vec::new(),
+        };
+        let scanner = Scanner::new(config).map_err(Error::Invalid)?;
+        let config = config.clone();
+        let walk = repository::blocking_walk(move |read| {
+            repository::view(
+                &mut |entries: &[repository::Entry]| read(entries.to_vec()).map_err(Error::Invalid),
+                listing,
+                &scanner,
+                &config,
+            )
+        });
+        let mut requests = walk.requests;
+        let answers = walk.answers;
+        let pump = async {
+            while let Some(entries) = requests.recv().await {
+                let shas: Vec<String> = entries
+                    .iter()
+                    .filter_map(|entry| entry.sha.clone())
+                    .collect();
+                let answer = match self.github.blobs(repo, &shas).await {
+                    Ok(contents) => {
+                        let mut out = Vec::with_capacity(entries.len());
+                        let mut missing = false;
+                        for entry in &entries {
+                            match contents.get(entry.sha.as_deref().unwrap_or_default()) {
+                                Some(bytes) => out.push(Ok(bytes.clone())),
+                                None => missing = true,
+                            }
+                        }
+                        if missing {
+                            Err("blob missing from the batch".to_owned())
+                        } else {
+                            Ok(out)
+                        }
                     }
-                    Err(_) => return Err(Error::Invalid("selected file is not UTF-8".into())),
+                    Err(error) => Err(error.to_string()),
                 };
-                Ok((
-                    entry.path,
-                    Some(patchula_update::Blob {
-                        sha: entry.sha,
-                        mode: entry.mode,
-                        content,
-                    }),
-                ))
-            })
-            .collect()
+                if answers.send(answer).is_err() {
+                    break;
+                }
+            }
+        };
+        let (view, ()) = tokio::join!(walk.done, pump);
+        view.ok_or_else(|| Error::Invalid("repository reader failed".into()))?
     }
     async fn file(&self, repo: &str, sha: &str) -> Result<String> {
         String::from_utf8(self.blob(repo, sha).await?)
@@ -2556,7 +2578,7 @@ impl Engine {
         self.cache
             .set_state(&hint_scope, &BranchHint(branch.clone()))
             .await?;
-        let mut report = repository(repo, Status::Complete, None);
+        let mut report = repo_report(repo, Status::Complete, None);
         report.default_branch = Some(branch);
         report.commit = Some(commit.clone());
         self.extract(repo, override_config, report, commit, &tree_sha)
@@ -2582,7 +2604,7 @@ impl Engine {
                     .map_err(Error::Invalid)?,
                     None => {
                         return Ok(Work {
-                            report: repository(
+                            report: repo_report(
                                 repo,
                                 Status::Skipped,
                                 Some("no patchula.pkl: the Count visits only repositories that invite him; add one to opt in".into()),
@@ -2600,62 +2622,37 @@ impl Engine {
         };
         let scanner = Scanner::new(&config).map_err(Error::Invalid)?;
         let dir = dir.to_owned();
+        let read_config = config.clone();
         let (paths, blobs, refusal, extraction) = tokio::task::spawn_blocking(move || {
-            let (paths, files, deep) = read_tree(&dir, &scanner)?;
-            // The same refusal the API scan applies to committed credentials.
-            if let Some((path, kind)) = files
-                .iter()
-                .filter(|(path, _)| scanner.credential_checked(path))
-                .find_map(|(path, text)| {
-                    patchula_manager::committed_credentials(path, text.read().ok()?)
-                        .map(|kind| (path.clone(), kind))
-                })
-            {
-                return std::io::Result::Ok((
+            let view = repository::local_view(&dir, &scanner, &read_config)
+                .map_err(|error| error.to_string())?;
+            let repository::View {
+                paths,
+                files,
+                blobs,
+                unsupported,
+                warnings,
+                refusal,
+            } = view;
+            if refusal.is_some() {
+                return Ok((
                     paths,
                     BTreeMap::new(),
-                    Some((path, kind)),
+                    refusal,
                     patchula_manager::Extraction::default(),
                 ));
             }
-            // Only files that were read have a blob; an unread one has nothing
-            // to write back.
-            let blobs: BTreeMap<String, patchula_update::Blob> = files
-                .iter()
-                .filter_map(|(path, text)| Some((path, text.read().ok()?)))
-                .map(|(path, content)| {
-                    (
-                        path.clone(),
-                        patchula_update::Blob {
-                            sha: patchula_update::blob_sha(content),
-                            mode: "100644".into(),
-                            content: content.to_owned(),
-                        },
-                    )
-                })
-                .collect();
-            let mut extraction = scanner.extract(&files).map_err(std::io::Error::other)?;
-            extraction
-                .skipped
-                .extend(scanner.unsupported(paths.iter().map(String::as_str)));
-            for path in &deep {
-                extraction.warnings.push(format!(
-                    "include chain deeper than {} rounds starting at {path}; the remaining files were not read",
-                    patchula_manager::MORE_ROUNDS
-                ));
-            }
-            std::io::Result::Ok((paths, blobs, None, extraction))
+            let mut extraction = scanner.extract(&files).map_err(|error| error.to_string())?;
+            extraction.skipped.extend(unsupported);
+            extraction.warnings.extend(warnings);
+            Ok((paths, blobs, None, extraction))
         })
         .await
         .map_err(|e| Error::Invalid(e.to_string()))?
-        .map_err(|e| Error::Invalid(e.to_string()))?;
-        if let Some((path, kind)) = refusal {
+        .map_err(Error::Invalid)?;
+        if let Some(reason) = refusal {
             return Ok(Work {
-                report: repository(
-                    repo,
-                    Status::Error,
-                    Some(patchula_manager::credential_reason(&path, &kind)),
-                ),
+                report: repo_report(repo, Status::Error, Some(reason)),
                 config: Some(config),
                 dependencies: Vec::new(),
                 locked: Vec::new(),
@@ -2664,7 +2661,7 @@ impl Engine {
                 controls: patchula_update::dashboard::Controls::default(),
             });
         }
-        let mut report = repository(repo, Status::Complete, None);
+        let mut report = repo_report(repo, Status::Complete, None);
         report.warnings = extraction.warnings;
         report.skipped = skipped(&extraction.skipped);
         // Plans are based on a commit; a directory's stands in as a hash of
@@ -2769,125 +2766,18 @@ impl Engine {
             } else {
                 self.tree(repo, tree_sha).await?
             };
-            let paths: BTreeSet<String> = entries
-                .iter()
-                .filter(|e| e.kind == "blob")
-                .map(|e| e.path.clone())
-                .collect();
-            // Flux and Argo CD manifests are YAML anywhere in the tree, so the
-            // delivery warning reads every YAML file, unless the tree has more
-            // than it will take, when delivery stays unknown. Only a config
-            // that can merge on its own and hasn't silenced the warning pays
-            // for those reads.
-            let merges = config.defaults.merge
-                || config.security.apply.merge == Some(true)
-                || config.rules.iter().any(|r| r.apply.merge == Some(true));
-            let delivery = merges
-                && !config
-                    .warnings
-                    .quiet
-                    .contains_key(ToolingRule::SecurityMergeWithoutDelivery.as_str());
-            let manifests = entries
-                .iter()
-                .filter(|e| {
-                    e.kind == "blob"
-                        && patchula_update::tooling::manifest(&e.path)
-                        && !scanner.needs(&e.path)
-                })
-                .count();
-            let read_manifests = delivery && manifests <= patchula_update::tooling::MANIFEST_LIMIT;
-            // A settings file the tree links to, or one inside a linked
-            // `.bundle`, is unreadable rather than absent or read as the
-            // link's target.
-            let linked: Vec<String> = entries
-                .iter()
-                .filter(|e| e.mode == "120000")
-                .filter_map(|e| patchula_manager::linked_settings(&e.path))
-                .filter(|settings| scanner.needs(settings))
-                .collect();
-            let (selected, rest): (Vec<_>, Vec<_>) = entries.into_iter().partition(|entry| {
-                entry.kind == "blob"
-                    && (scanner.needs(&entry.path)
-                        || patchula_update::tooling::reads(&entry.path)
-                        || (read_manifests && patchula_update::tooling::manifest(&entry.path)))
-            });
-            let mut files = Files::new();
-            let mut blobs = BTreeMap::<String, patchula_update::Blob>::new();
-            let read = self.blobs(repo, selected, false).await?;
-            for (path, blob) in read {
-                match blob {
-                    Some(blob) => {
-                        files.insert(path.clone(), blob.content.clone().into());
-                        blobs.insert(path, blob);
-                    }
-                    None => {
-                        files.insert(
-                            path,
-                            patchula_manager::Text::Unread(patchula_manager::Unread::Failed),
-                        );
-                    }
-                }
-            }
-            for settings in linked {
-                files.insert(
-                    settings,
-                    patchula_manager::Text::Unread(patchula_manager::Unread::Failed),
-                );
-            }
-            // What the files read so far name, such as the sources of a
-            // Gradle build the settings include, until they name nothing new.
-            let mut rest: Vec<_> = rest.into_iter().filter(|e| e.kind == "blob").collect();
-            for _ in 0..patchula_manager::MORE_ROUNDS {
-                let more: BTreeSet<String> = scanner
-                    .more(&files, rest.iter().map(|entry| entry.path.as_str()))
-                    .into_iter()
-                    .collect();
-                if more.is_empty() {
-                    break;
-                }
-                let (wanted, left): (Vec<_>, Vec<_>) = rest
-                    .into_iter()
-                    .partition(|entry| more.contains(&entry.path));
-                rest = left;
-                for (path, blob) in self.blobs(repo, wanted, true).await? {
-                    match blob {
-                        Some(blob) => {
-                            files.insert(path.clone(), blob.content.clone().into());
-                            blobs.insert(path, blob);
-                        }
-                        None => {
-                            files.insert(
-                                path,
-                                patchula_manager::Text::Unread(patchula_manager::Unread::Failed),
-                            );
-                        }
-                    }
-                }
-            }
-            // What the chain still names when the rounds run out: marked
-            // unreadable, so its lookups fail saying why rather than "a
-            // build or script names, which the Count does not read".
-            let deep: Vec<String> =
-                scanner.more(&files, rest.iter().map(|entry| entry.path.as_str()));
-            for path in &deep {
-                files.insert(
-                    path.clone(),
-                    patchula_manager::Text::Unread(patchula_manager::Unread::TooDeep),
-                );
-            }
-            // A repository that commits its own registry credentials is
-            // refused: its lockfile tools would fetch what they buy into
-            // the shared public cache partition.
-            if let Some((path, kind)) = files
-                .iter()
-                .filter(|(path, _)| scanner.credential_checked(path))
-                .find_map(|(path, text)| {
-                    patchula_manager::committed_credentials(path, text.read().ok()?)
-                        .map(|kind| (path.clone(), kind))
-                })
-            {
+            let view = self.repository_view(repo, entries, &config).await?;
+            let repository::View {
+                paths,
+                files,
+                blobs,
+                unsupported,
+                warnings,
+                refusal,
+            } = view;
+            if let Some(reason) = refusal {
                 report.status = Status::Error;
-                report.reason = Some(patchula_manager::credential_reason(&path, &kind));
+                report.reason = Some(reason);
                 return Ok(Work {
                     report,
                     config: Some(config),
@@ -2898,7 +2788,6 @@ impl Engine {
                     controls: patchula_update::dashboard::Controls::default(),
                 });
             }
-            let unsupported = scanner.unsupported(paths.iter().map(String::as_str));
             // Extraction is a function of the config and the files it reads,
             // so a commit that leaves those as they were, whatever else it
             // changes, reuses the earlier result without scanning.
@@ -2923,18 +2812,7 @@ impl Engine {
                     saved.0
                 };
             extraction.skipped.extend(unsupported);
-            for path in &deep {
-                extraction.warnings.push(format!(
-                    "include chain deeper than {} rounds starting at {path}; the remaining files were not read",
-                    patchula_manager::MORE_ROUNDS
-                ));
-            }
-            if delivery && manifests > patchula_update::tooling::MANIFEST_LIMIT {
-                extraction.warnings.push(format!(
-                    "delivery unknown: more than {} YAML files",
-                    patchula_update::tooling::MANIFEST_LIMIT
-                ));
-            }
+            extraction.warnings.extend(warnings);
             let public_only = extraction.public_only.clone();
             let cached = CachedExtraction {
                 extraction,
@@ -2960,56 +2838,48 @@ impl Engine {
         })
     }
     async fn config(&self, repo: &str, path: &str, entries: &[Entry]) -> Result<Config> {
-        let imports = regex::Regex::new(r#"(?:amends|extends|import\*?)\s*\(?\s*"([^"]+)""#)
-            .expect("import regex");
-        let mut files = BTreeMap::new();
-        let mut pending = vec![path.to_owned()];
-        let mut visited = BTreeSet::new();
-        while let Some(path) = pending.pop() {
-            if !visited.insert(path.clone()) {
-                continue;
-            }
-            if visited.len() > 100 {
-                return Err(Error::Invalid("config import budget exceeded".into()));
-            }
-            let text =
-                if let Some(entry) = entries.iter().find(|e| e.path == path && e.kind == "blob") {
-                    self.file(repo, &entry.sha).await?
-                } else if path.rsplit('/').next() == Some(patchula_config::SCHEMA_NAME) {
-                    patchula_config::SCHEMA.into()
-                } else {
-                    return Err(Error::Invalid(format!(
-                        "missing local config module {path}"
-                    )));
+        // The config's local-module closure is the config crate's walk; the
+        // module texts it asks for come from the tree's blobs, so the walk
+        // runs on a blocking thread while this side answers over channels.
+        let shas: BTreeMap<String, String> = entries
+            .iter()
+            .filter(|entry| entry.kind == "blob")
+            .map(|entry| (entry.path.clone(), entry.sha.clone()))
+            .collect();
+        let entry = path.to_owned();
+        let walk = repository::blocking_walk(move |read| {
+            patchula_config::import_files(
+                &entry,
+                patchula_config::SCHEMA_NAME,
+                patchula_config::SCHEMA,
+                &mut |module: &str| read(module.to_owned()),
+            )
+        });
+        let mut requests = walk.requests;
+        let answers = walk.answers;
+        let pump = async {
+            while let Some(module) = requests.recv().await {
+                let answer = match shas.get(&module) {
+                    Some(sha) => self
+                        .file(repo, sha)
+                        .await
+                        .map(Some)
+                        .map_err(|e| e.to_string()),
+                    None => Ok(None),
                 };
-            for captures in imports.captures_iter(&text) {
-                let relative = &captures[1];
-                if relative.contains(':') || relative.starts_with('/') {
-                    return Err(Error::Invalid(
-                        "repository config imports must be relative local modules".into(),
-                    ));
+                if answers.send(answer).is_err() {
+                    break;
                 }
-                let parent = std::path::Path::new(&path)
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new(""));
-                let mut normalized = std::path::PathBuf::new();
-                for component in parent.join(relative).components() {
-                    match component {
-                        std::path::Component::ParentDir => {
-                            if !normalized.pop() {
-                                return Err(Error::Invalid(
-                                    "config import escapes repository".into(),
-                                ));
-                            }
-                        }
-                        std::path::Component::CurDir => {}
-                        part => normalized.push(part.as_os_str()),
-                    }
-                }
-                pending.push(normalized.to_string_lossy().into_owned());
             }
-            files.insert(format!("/repo/{path}"), text);
-        }
+        };
+        let (modules, ()) = tokio::join!(walk.done, pump);
+        let modules = modules
+            .ok_or_else(|| Error::Invalid("config reader failed".into()))?
+            .map_err(Error::Invalid)?;
+        let files: BTreeMap<String, String> = modules
+            .into_iter()
+            .map(|(path, text)| (format!("/repo/{path}"), text))
+            .collect();
         for (path, text) in &files {
             let path = path.strip_prefix("/repo/").unwrap_or(path);
             if let Some(kind) = patchula_manager::committed_credentials(path, text) {
@@ -3077,192 +2947,6 @@ fn validate_repo(repo: &str) -> Result<()> {
     }
     Ok(())
 }
-/// Every file a push of this working tree would carry, and the contents of
-/// the files the scanner reads: what `git ls-files` lists as tracked or
-/// untracked but not ignored, so `.gitignore`, `.git/info/exclude` and the
-/// global excludes apply. A directory outside Git is walked whole, skipping
-/// `.git`. Non-UTF-8 files cannot hold an editable declaration, so they are
-/// left out.
-/// The paths found, the files read, and the paths the include chain still
-/// named when the read rounds ran out: read for extraction from a local
-/// checkout, what GitHub extraction reads through the API.
-pub fn read_tree(
-    dir: &std::path::Path,
-    scanner: &Scanner,
-) -> std::io::Result<(BTreeSet<String>, Files, Vec<String>)> {
-    let listed = match git_files(dir)? {
-        Some(listed) => listed,
-        None => walk(dir)?,
-    };
-    let mut paths = BTreeSet::new();
-    let mut files = Files::new();
-    let mut links = Vec::new();
-    for relative in listed {
-        let path = dir.join(&relative);
-        // Deleted tracked files, symlinks and submodules are not files here,
-        // and a file below a symlinked directory would be read, and written,
-        // outside the tree.
-        let below_symlink = std::path::Path::new(&relative)
-            .ancestors()
-            .skip(1)
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .any(|parent| {
-                std::fs::symlink_metadata(dir.join(parent)).is_ok_and(|meta| meta.is_symlink())
-            });
-        let regular = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
-        if below_symlink || !regular {
-            links.push(relative.clone());
-            // A settings file behind a symlink could name a registry: kept as
-            // unreadable, its packages' lookups fail rather than fall back to
-            // the public registry.
-            if let Some(settings) = patchula_manager::linked_settings(&relative)
-                && scanner.needs(&settings)
-                // The link's target exists: a settings file, or a folder
-                // whose settings the Count then cannot read.
-                && std::fs::metadata(dir.join(&relative)).is_ok()
-            {
-                files.insert(
-                    settings,
-                    patchula_manager::Text::Unread(patchula_manager::Unread::Failed),
-                );
-            }
-            continue;
-        }
-        if scanner.needs(&relative) {
-            match std::fs::read(&path).map(String::from_utf8) {
-                Ok(Ok(content)) => {
-                    files.insert(relative.clone(), content.into());
-                }
-                // One that cannot be read, or is not text, is unreadable
-                // the same way.
-                _ if patchula_manager::registry_settings(&relative) => {
-                    files.insert(
-                        relative.clone(),
-                        patchula_manager::Text::Unread(patchula_manager::Unread::Failed),
-                    );
-                }
-                // As on GitHub, any other selected file that is not UTF-8
-                // refuses the repository rather than being dropped. A
-                // file that cannot be read refuses it with its own cause.
-                Ok(Err(_)) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "selected file is not UTF-8",
-                    ));
-                }
-                Err(error) => {
-                    return Err(std::io::Error::new(
-                        error.kind(),
-                        format!("cannot read {relative}: {error}"),
-                    ));
-                }
-            }
-        }
-        paths.insert(relative);
-    }
-    // What the files read so far name, such as the sources of a Gradle
-    // build the settings include, until they name nothing new; any that
-    // cannot be read are unreadable.
-    for _ in 0..patchula_manager::MORE_ROUNDS {
-        let more = scanner.more(&files, paths.iter().chain(&links).map(String::as_str));
-        if more.is_empty() {
-            break;
-        }
-        for relative in more {
-            let path = dir.join(&relative);
-            let content = if links.contains(&relative) {
-                None
-            } else {
-                std::fs::read(&path)
-                    .ok()
-                    .and_then(|bytes| String::from_utf8(bytes).ok())
-            };
-            files.insert(
-                relative,
-                content.map_or(
-                    patchula_manager::Text::Unread(patchula_manager::Unread::Failed),
-                    patchula_manager::Text::Read,
-                ),
-            );
-        }
-    }
-    // What the chain still names when the rounds run out is unreadable the
-    // same way, so its lookups fail saying why.
-    let deep = scanner.more(&files, paths.iter().chain(&links).map(String::as_str));
-    for path in &deep {
-        files.insert(
-            path.clone(),
-            patchula_manager::Text::Unread(patchula_manager::Unread::TooDeep),
-        );
-    }
-    Ok((paths, files, deep))
-}
-
-/// The files Git would carry from this directory, relative to it, or none
-/// when it is not in a Git work tree or Git is not installed.
-fn git_files(dir: &std::path::Path) -> std::io::Result<Option<Vec<String>>> {
-    let output = match std::process::Command::new("git")
-        .env("LC_ALL", "C")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("not a git repository") {
-            return Ok(None);
-        }
-        return Err(std::io::Error::other(format!(
-            "git ls-files failed: {}",
-            stderr.trim()
-        )));
-    }
-    Ok(Some(
-        output
-            .stdout
-            .split(|byte| *byte == 0)
-            .filter(|path| !path.is_empty())
-            .map(|path| String::from_utf8_lossy(path).into_owned())
-            .collect(),
-    ))
-}
-
-/// Every file below a directory outside Git, skipping `.git`.
-fn walk(dir: &std::path::Path) -> std::io::Result<Vec<String>> {
-    let mut listed = Vec::new();
-    let mut pending = vec![dir.to_owned()];
-    while let Some(next) = pending.pop() {
-        for entry in std::fs::read_dir(&next)? {
-            let entry = entry?;
-            let path = entry.path();
-            if entry.file_type()?.is_dir() {
-                if entry.file_name() != ".git" {
-                    pending.push(path);
-                }
-                continue;
-            }
-            listed.push(
-                path.strip_prefix(dir)
-                    .expect("walked below the root")
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-            );
-        }
-    }
-    Ok(listed)
-}
-
 /// A local directory reports as `local/<directory name>`.
 fn local_name(dir: &std::path::Path) -> String {
     let name = dir
@@ -3283,7 +2967,7 @@ fn lookup_failure(dep: &Dependency, failure: &Failure, message: String) -> Looku
         message,
     }
 }
-fn repository(repo: &str, status: Status, reason: Option<String>) -> Repository {
+fn repo_report(repo: &str, status: Status, reason: Option<String>) -> Repository {
     Repository {
         repository: repo.into(),
         status,

@@ -167,8 +167,9 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
     // Declarations are found again from the tree as it is now, every file the
     // lookup read included, so an edit can only land where the same
     // dependency still is.
-    let (_, files, _) =
-        patchula_engine::read_tree(&local.dir, &scanner).map_err(|e| format!("{e}"))?;
+    let view = patchula_engine::repository::local_view(&local.dir, &scanner, &local.config)
+        .map_err(|e| format!("{e}"))?;
+    let files = view.files;
     let dependencies = scanner.extract(&files)?.dependencies;
     let mut skipped = Vec::new();
     let mut claimed = BTreeMap::<(&str, usize), &Update>::new();

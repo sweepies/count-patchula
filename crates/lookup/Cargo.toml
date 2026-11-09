@@ -25,3 +25,8 @@ semver = "1.0.28"
 [dev-dependencies]
 serde_json.workspace = true
 tempfile = "3"
+tokio.workspace = true
+patchula-cache = { path = "../cache" }
+patchula-github = { path = "../github" }
+patchula-http = { path = "../http" }
+patchula-testkit = { path = "../testkit" }

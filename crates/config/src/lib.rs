@@ -1,6 +1,8 @@
 //! Strict, local Pkl configuration evaluation and discovery.
 #![forbid(unsafe_code)]
 
+mod imports;
+pub use imports::import_files;
 mod model;
 mod package;
 pub mod settings;
@@ -184,45 +186,20 @@ pub fn evaluate_local(
     // Evaluate exactly like API-supplied repository modules. In particular a
     // missing schema must be a real module, so Pkl retains nested class defaults.
     let absolute = std::path::absolute(path).into_diagnostic()?;
-    let mut files = std::collections::BTreeMap::new();
-    let mut pending = vec![absolute.clone()];
-    let imports = regex::Regex::new(r#"(?:amends|extends|import\*?)\s*\(?\s*"([^"]+)""#)
-        .expect("import regex");
-    while let Some(module) = pending.pop() {
-        let module = virtual_files::normalize(&module, true).map_err(miette::Report::new)?;
-        let virtual_path = module.to_string_lossy().into_owned();
-        if files.contains_key(&virtual_path) {
-            continue;
-        }
-        if files.len() >= 100 {
-            return Err(miette::miette!("config import budget exceeded"));
-        }
-        let text = match std::fs::read_to_string(&module) {
-            Ok(text) => text,
-            Err(error)
-                if error.kind() == std::io::ErrorKind::NotFound
-                    && module.file_name().is_some_and(|name| name == schema_name) =>
-            {
-                schema.into()
-            }
-            Err(error) => {
-                return Err(error)
-                    .into_diagnostic()
-                    .wrap_err_with(|| format!("cannot read config module {}", module.display()));
-            }
-        };
-        for captures in imports.captures_iter(&text) {
-            let relative = &captures[1];
-            if relative.contains(':') {
-                return Err(miette::miette!(
-                    "config imports must be local modules; remote imports are disabled"
-                ));
-            }
-            pending.push(module.parent().expect("absolute file").join(relative));
-        }
-        files.insert(virtual_path, text);
-    }
-    virtual_files::evaluate_modules(&absolute.to_string_lossy(), files, true)
+    let entry = absolute.to_string_lossy().into_owned();
+    let files =
+        import_files(
+            &entry,
+            schema_name,
+            schema,
+            &mut |module| match std::fs::read_to_string(module) {
+                Ok(text) => Ok(Some(text)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(format!("cannot read config module {module}: {error}")),
+            },
+        )
+        .map_err(|error| miette::miette!("{error}"))?;
+    virtual_files::evaluate_modules(&entry, files, true)
 }
 
 /// An evaluation error that points at no source, such as Pkl's type check of a

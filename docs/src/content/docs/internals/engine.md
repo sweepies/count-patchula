@@ -15,14 +15,18 @@ default branch, commit and tree come from one GraphQL snapshot, and only the
 selected manager files and the config modules they need are fetched as blobs,
 in GraphQL batches (see [the GitHub client](/internals/github-client/#conditional-reads)).
 A truncated tree or an invalid selected file is an error for that repository.
+A file the scan cannot read, such as a symlink on GitHub or in a local
+checkout, stays in the extraction as unreadable rather than absent, so its
+packages fail their lookups instead of falling back to public registries.
 A repository without `patchula.pkl` at its root is skipped. A local `--config`
 applies to every selected repository and is evaluated before network access.
 
 Configs evaluate in isolation over the supplied files. Local `amends` and
 `import` targets are fetched, and the bundled `PatchulaConfig.pkl` is used
-when the repository does not vendor it. Remote imports and imports that escape the
-repository are rejected, and only literal import targets are supported.
-`config check` and local overrides use the same evaluator.
+when the repository does not vendor it. Remote and absolute imports, and
+imports that escape the repository, are rejected, and only literal import
+targets are supported. `config check` and local overrides use the same
+evaluator.
 
 An unchanged commit and config fingerprint reuses the previous extraction with
 no tree or blob calls, Pkl evaluation or scanning; the fingerprint's namespace

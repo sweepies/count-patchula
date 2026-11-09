@@ -1262,8 +1262,9 @@ impl Unread {
             Self::TooDeep => "the include chain was too deep to reach it",
         }
     }
-    /// Why lookups that depend on the file at `path` fail.
-    pub(crate) fn reason(self, path: &str) -> String {
+    /// Why lookups that depend on the file at `path` fail, and the warning
+    /// a scan that reached its read rounds without it gives.
+    pub fn reason(self, path: &str) -> String {
         match self {
             Self::Failed => format!("{path}, which the Count cannot read"),
             Self::TooDeep => format!(
