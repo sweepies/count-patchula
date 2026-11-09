@@ -366,17 +366,17 @@ impl Client {
         if !response.status.is_success() {
             return Err(patchula_http::CacheError::Status(response.status.as_u16()).into());
         }
-        let reference = if let Some((_, tag)) = url.split_once("/manifests/") {
-            format!("digest:{tag}")
+        let key = if let Some((_, tag)) = url.split_once("/manifests/") {
+            StaleKey::digest(tag)
         } else {
             return Ok(response);
         };
         let mut stale = self.stale_registry.lock().await;
         let entries = stale.entry(format!("{host}/{path}")).or_default();
         if let Some(provenance) = response.stale {
-            entries.insert(reference, provenance.fetched_at);
+            entries.insert(key, provenance.fetched_at);
         } else {
-            entries.remove(&reference);
+            entries.remove(&key);
         }
         Ok(response)
     }
@@ -618,9 +618,9 @@ impl Client {
         let mut stale = self.stale_registry.lock().await;
         let entries = stale.entry(format!("{host}/{path}")).or_default();
         if let Some(time) = stale_at {
-            entries.insert("catalog".into(), time);
+            entries.insert(StaleKey::CATALOG, time);
         } else {
-            entries.remove("catalog");
+            entries.remove(&StaleKey::CATALOG);
         }
         Ok(catalog)
     }

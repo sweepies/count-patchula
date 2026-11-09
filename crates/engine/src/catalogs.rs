@@ -236,9 +236,12 @@ impl Engine {
                             repo.dependencies
                                 .iter()
                                 .filter(move |dep| {
-                                    dep.file == change.file
-                                        && dep.package == change.package
-                                        && dep.source == change.source
+                                    change.touches(
+                                        &dep.file,
+                                        dep.source,
+                                        &dep.package,
+                                        dep.registry.as_deref(),
+                                    )
                                 })
                                 .map(patchula_update::dashboard::extracted_key)
                         })

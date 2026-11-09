@@ -48,6 +48,7 @@ mod yaml_locations;
 use patchula_config::{Config, PackageId, Patterns};
 use patchula_words::{DependencyKind, Manager, Scheme, Source};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +148,79 @@ impl Dependency {
         }
         kinds
     }
+    /// The declaration this dependency is, for identity keys and comparisons.
+    pub fn declaration(&self) -> Declaration<'_> {
+        Declaration {
+            file: &self.file,
+            manager: self.manager,
+            name: &self.name,
+            package: &self.package,
+            source: Some(self.source),
+            current: Some(self.current.as_str()),
+            digest: self.digest.as_deref(),
+            registry: self.registry.as_deref(),
+        }
+    }
+}
+/// A dependency declaration's identity: the fields that say which declared
+/// package a report entry or a change belongs to, borrowed from whichever
+/// type holds them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Declaration<'a> {
+    pub file: &'a str,
+    pub manager: Manager,
+    pub name: &'a str,
+    pub package: &'a str,
+    /// The datasource the package is looked up in; `None` when a report
+    /// entry carries no metadata.
+    pub source: Option<Source>,
+    /// The declared value; `None` when a report entry has none.
+    pub current: Option<&'a str>,
+    pub digest: Option<&'a str>,
+    /// The registry the package is looked up in, when it is not the public one.
+    pub registry: Option<&'a str>,
+}
+impl Declaration<'_> {
+    /// The declaration's key: the JSON of its fields, hashed. A missing
+    /// source or registry serializes as `""`/absent exactly as the report
+    /// and extracted recipes always wrote it.
+    pub fn key(&self) -> String {
+        let mut parts = serde_json::json!([
+            self.file,
+            self.manager,
+            self.name,
+            self.package,
+            self.source.map_or("", Source::as_str),
+            self.current,
+            self.digest,
+        ]);
+        if let Some(registry) = self.registry
+            && let Some(parts) = parts.as_array_mut()
+        {
+            parts.push(registry.into());
+        }
+        hash(parts.to_string().as_bytes())
+    }
+    /// Whether `other` names the same extracted dependency. The datasource is
+    /// left out: a report entry's metadata may not state one, and the report
+    /// join has never compared it.
+    pub fn equivalent(&self, other: &Self) -> bool {
+        self.file == other.file
+            && self.manager == other.manager
+            && self.name == other.name
+            && self.package == other.package
+            && self.current == other.current
+            && self.digest == other.digest
+            && self.registry == other.registry
+    }
+}
+/// The lowercase hex SHA-256 of `bytes`: what declaration keys, plan
+/// fingerprints and receipt hashes are made with.
+pub fn hash(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Extraction {

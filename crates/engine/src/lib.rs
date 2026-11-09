@@ -21,7 +21,6 @@ use patchula_words::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -234,6 +233,25 @@ fn file_mode() -> String {
 type LookupKey = (bool, PackageId);
 /// An image digest to resolve: the image and its reference.
 type DigestKey = (String, String);
+/// A package whose digest, image or SBOM read carried credentials, so the
+/// report can mark what was found private.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Sent {
+    /// A git ref's commit, read through `Sources::digest`.
+    Git(String),
+    /// A container image's tag digest, manifest config or SBOM.
+    Image(String),
+}
+impl Sent {
+    /// The key `dep`'s credentialed reads are recorded and checked under.
+    fn of(dep: &Dependency) -> Self {
+        if matches!(dep.source, Source::Docker | Source::Oci) {
+            Self::Image(dep.package.clone())
+        } else {
+            Self::Git(dep.package.clone())
+        }
+    }
+}
 type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, Failure>>;
 pub const REPOSITORY_HEAD_QUERY: &str = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){isPrivate defaultBranchRef{name target{... on Commit{oid tree{oid}}}}}}";
 #[derive(Default, Serialize, Deserialize)]
@@ -892,7 +910,7 @@ impl Engine {
         let sources = self.sources.clone();
         // Packages any of whose digest, image or SBOM reads carried
         // credentials, as their catalogs' lookups record too.
-        let sent = std::sync::Mutex::new(BTreeSet::<String>::new());
+        let sent = std::sync::Mutex::new(BTreeSet::<Sent>::new());
         let sent = &sent;
         let total = Instant::now();
         let _total_span = PhaseTrace::new("total");
@@ -919,12 +937,12 @@ impl Engine {
         let override_config = options.config.as_ref();
         // Hints overlap mutable digest reads with the repository head read.
         // Catalogs wait for current policy, age-cache and checkbox decisions.
-        let inputs_hash = hash(&serde_json::to_vec(&(
+        let inputs_hash = patchula_manager::hash(&serde_json::to_vec(&(
             &options.config,
             &overrides,
             self.versions_host_override,
         ))?);
-        let schema_hash = hash(patchula_config::SCHEMA.as_bytes());
+        let schema_hash = patchula_manager::hash(patchula_config::SCHEMA.as_bytes());
         let credential_scope = self.github.credential_scope().to_owned();
         let mut hint = LookupHint::default();
         for repo in &repos {
@@ -1464,7 +1482,7 @@ impl Engine {
                 if credentialed {
                     sent.lock()
                         .expect("sent packages")
-                        .insert(format!("image:{package}"));
+                        .insert(Sent::Image(package.clone()));
                 }
                 let result = result.map_err(Failure::from);
                 self.progress.advance(1);
@@ -1541,7 +1559,7 @@ impl Engine {
                     if credentialed {
                         sent.lock()
                             .expect("sent packages")
-                            .insert(format!("image:{package}"));
+                            .insert(Sent::Image(package.clone()));
                     }
                     let result = result.map_err(|e| e.to_string());
                     ((package, digest, platform), result)
@@ -1966,23 +1984,25 @@ impl Engine {
                     proposals.clear();
                     held_back.clear();
                 }
-                let stale = if matches!(dep.source, Source::Docker | Source::Oci) {
-                    let mut stale = self.sources.registry_stale(&dep.package).await;
-                    stale.retain(|key, _| {
-                        key == "catalog"
-                            || key.strip_prefix("digest:").is_some_and(|tag| {
-                                tag == dep.current.replace('+', "_")
-                                    || proposals.iter().any(|p| {
-                                        p.new_version
-                                            .as_ref()
-                                            .is_some_and(|v| v.replace('+', "_") == tag)
-                                    })
-                            })
-                    });
-                    stale
-                } else {
-                    BTreeMap::new()
-                };
+                let stale: BTreeMap<String, i64> =
+                    if matches!(dep.source, Source::Docker | Source::Oci) {
+                        let mut stale = self.sources.registry_stale(&dep.package).await;
+                        stale.retain(|key, _| {
+                            *key == patchula_datasource::StaleKey::CATALOG
+                                || key.is_manifest_of(&dep.current)
+                                || proposals.iter().any(|p| {
+                                    p.new_version
+                                        .as_ref()
+                                        .is_some_and(|v| key.is_manifest_of(v))
+                                })
+                        });
+                        stale
+                            .into_iter()
+                            .map(|(key, at)| (key.to_string(), at))
+                            .collect()
+                    } else {
+                        BTreeMap::new()
+                    };
                 if !stale.is_empty() {
                     repo.report.warnings.push(format!(
                         "{}: stale cached registry lookup after rate limiting ({})",
@@ -2100,15 +2120,7 @@ impl Engine {
                         image: current_image,
                         credentialed: credentialed
                             .contains(&self.catalog_key(dep, repo.config.as_ref()))
-                            || sent.lock().expect("sent packages").contains(&format!(
-                                "{}:{}",
-                                if matches!(dep.source, Source::Docker | Source::Oci) {
-                                    "image"
-                                } else {
-                                    "git"
-                                },
-                                dep.package
-                            )),
+                            || sent.lock().expect("sent packages").contains(&Sent::of(dep)),
                     }),
                 };
                 files.entry(dep.file.clone()).or_default().push(value);
@@ -2166,7 +2178,7 @@ impl Engine {
         &self,
         keys: BTreeSet<(String, String)>,
         counted: bool,
-        sent: &std::sync::Mutex<BTreeSet<String>>,
+        sent: &std::sync::Mutex<BTreeSet<Sent>>,
     ) -> BTreeMap<(String, String), std::result::Result<String, Failure>> {
         stream::iter(keys)
             .map(|(package, reference)| async move {
@@ -2176,7 +2188,7 @@ impl Engine {
                 if credentialed {
                     sent.lock()
                         .expect("sent packages")
-                        .insert(format!("git:{package}"));
+                        .insert(Sent::Git(package.clone()));
                 }
                 let result = result.map_err(Failure::from);
                 if counted {
@@ -2555,7 +2567,7 @@ impl Engine {
         report.skipped = skipped(&extraction.skipped);
         // Plans are based on a commit; a directory's stands in as a hash of
         // its selected files, stable until they change.
-        report.commit = Some(hash(&serde_json::to_vec(
+        report.commit = Some(patchula_manager::hash(&serde_json::to_vec(
             &blobs
                 .iter()
                 .map(|(path, blob)| (path, &blob.sha))
@@ -2603,7 +2615,7 @@ impl Engine {
             let scope = RepoConfigScope {
                 repository: repo.into(),
                 commit: commit.clone(),
-                schema_hash: hash(patchula_config::SCHEMA.as_bytes()),
+                schema_hash: patchula_manager::hash(patchula_config::SCHEMA.as_bytes()),
             };
             if let Some(saved) = self.cache.state::<RepoConfig>(&scope).await? {
                 saved.0
@@ -2637,7 +2649,7 @@ impl Engine {
                 controls: patchula_update::dashboard::Controls::default(),
             });
         };
-        let config_hash = hash(&serde_json::to_vec(&config)?);
+        let config_hash = patchula_manager::hash(&serde_json::to_vec(&config)?);
         let scope = ExtractionScope {
             repository: repo.into(),
             commit,
@@ -2792,7 +2804,7 @@ impl Engine {
             // key carries the version as well as the namespace.
             let files_scope = FilesScope {
                 repository: repo.into(),
-                files_hash: hash(&serde_json::to_vec(&files)?),
+                files_hash: patchula_manager::hash(&serde_json::to_vec(&files)?),
                 config_hash: config_hash.clone(),
             };
             let mut extraction =
@@ -2909,10 +2921,10 @@ impl Engine {
         // on another commit reuse it.
         let scope = ConfigFilesScope {
             repository: repo.into(),
-            files_hash: hash(&serde_json::to_vec(&(&path, &files))?),
+            files_hash: patchula_manager::hash(&serde_json::to_vec(&(&path, &files))?),
             // PER_BUILD covers the decoding and validation the schema text
             // does not.
-            schema_hash: hash(patchula_config::SCHEMA.as_bytes()),
+            schema_hash: patchula_manager::hash(patchula_config::SCHEMA.as_bytes()),
         };
         if let Some(saved) = self.cache.state::<EvaluatedConfig>(&scope).await? {
             return Ok(saved.0);
@@ -2935,12 +2947,6 @@ fn lockfile_concurrency() -> usize {
     std::thread::available_parallelism().map_or(1, |cores| cores.get().min(4))
 }
 
-fn hash(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
 /// Mark a repository failed. The first failure of a run names the reason;
 /// later ones add nothing, so the cause is never replaced by a consequence.
 fn fail(repo: &mut patchula_report::Repository, reason: impl Into<String>) {

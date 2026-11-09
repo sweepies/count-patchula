@@ -764,8 +764,8 @@ fn route(path: &str) -> Option<(&'static str, Vec<u8>)> {
             let (file, wheel, metadata) = wheel(project);
             let page = format!(
                 "<!DOCTYPE html><html><body><a href=\"/{index}/files/{file}#sha256={}\" data-dist-info-metadata=\"sha256={metadata}\" data-core-metadata=\"sha256={metadata}\">{file}</a></body></html>",
-                crate::plan::hash(&wheel),
-                metadata = crate::plan::hash(&metadata),
+                patchula_manager::hash(&wheel),
+                metadata = patchula_manager::hash(&metadata),
             );
             Some(("text/html", page.into_bytes()))
         }

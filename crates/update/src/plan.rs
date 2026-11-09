@@ -1,9 +1,9 @@
 use patchula_config::{Config, PackageId};
-use patchula_manager::{Dependency, Edit};
+use patchula_manager::{Dependency, Edit, hash};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
 use patchula_words::{Source, Update as UpdateKind};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha1::Digest;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -180,12 +180,28 @@ impl Change {
     pub fn id(&self) -> PackageId {
         PackageId::new(self.source, self.registry.clone(), &self.package)
     }
-}
-pub(crate) fn hash(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    /// Whether the change updates this declaration: same file, source,
+    /// package and registry. The registry counts — same-named packages from
+    /// different registries are different declarations.
+    pub fn touches(
+        &self,
+        file: &str,
+        source: Source,
+        package: &str,
+        registry: Option<&str>,
+    ) -> bool {
+        self.file == file
+            && self.source == source
+            && self.package == package
+            && self.registry.as_deref() == registry
+    }
+    /// Whether `update` proposes exactly this change's target.
+    pub fn same_target(&self, update: &Update) -> bool {
+        update.new_value == self.value
+            && update.new_version == self.version
+            && update.new_digest == self.digest
+            && update.update_type == self.kind
+    }
 }
 pub fn blob_sha(content: &str) -> String {
     let mut digest = sha1::Sha1::new();
@@ -246,16 +262,12 @@ pub fn plan(
     let mut groups = BTreeMap::<String, (String, Vec<Item<'_>>)>::new();
     for file in &repo.package_files {
         for reported in &file.dependencies {
+            let declared = crate::dashboard::declaration(&file.path, reported);
             for update in &reported.updates {
-                for dep in dependencies.iter().filter(|d| {
-                    d.file == file.path
-                        && d.manager == reported.manager
-                        && d.name == reported.name
-                        && d.package == reported.package
-                        && reported.current.value.as_deref() == Some(&d.current)
-                        && d.digest == reported.current.digest
-                        && d.registry == reported.registry
-                }) {
+                for dep in dependencies
+                    .iter()
+                    .filter(|d| declared.equivalent(&d.declaration()))
+                {
                     // One best proposal per occurrence and track avoids overlapping edits.
                     let track = |u: &Update| match u.update_type {
                         UpdateKind::Pin => "pin",
@@ -878,9 +890,7 @@ pub fn batch_plan(
     for target in targets {
         let candidates: Vec<_> = dependencies
             .iter()
-            .filter(|d| {
-                d.file == target.file && d.package == target.package && d.source == target.source
-            })
+            .filter(|d| target.touches(&d.file, d.source, &d.package, d.registry.as_deref()))
             .collect();
         let current = |d: &Dependency| {
             format!(

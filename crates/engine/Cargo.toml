@@ -28,9 +28,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 futures-util = "0.3"
 regex = "1"
-sha2 = "0.11.1"
 base64 = "0.23"
 [dev-dependencies]
+sha2 = "0.11.1"
 tokio = { workspace = true, features = ["test-util"] }
 patchula-process = { path = "../process" }
 patchula-testkit = { path = "../testkit" }

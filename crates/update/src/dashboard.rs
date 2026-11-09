@@ -1,13 +1,13 @@
 //! A deterministic issue, discovered by ownership and marker rather than title.
 use crate::{
     Inventory, Plan,
-    plan::hash,
     text::{self, code},
     update_key,
 };
 use patchula_cache::{Cache, State};
 use patchula_config::Config;
 use patchula_github::Client;
+use patchula_manager::{Declaration, hash};
 use patchula_report::{Dependency, Repository};
 use patchula_words::{Recheck, ToolingDetail, ToolingRule};
 use serde::{Deserialize, Serialize};
@@ -31,44 +31,24 @@ pub enum Action {
     Recreate(String),
     Retry(String),
 }
-pub fn dependency_key(file: &str, dep: &Dependency) -> String {
-    identity(
-        serde_json::json!([
-            file,
-            &dep.manager,
-            &dep.name,
-            &dep.package,
-            dep.metadata
-                .as_ref()
-                .map(|m| m.source.as_str())
-                .unwrap_or(""),
-            &dep.current.value,
-            &dep.current.digest,
-        ]),
-        dep.registry.as_deref(),
-    )
-}
-/// A dependency's key, with its registry when it has its own, so keys of
-/// packages from the public registry stay as they were.
-fn identity(mut parts: serde_json::Value, registry: Option<&str>) -> String {
-    if let (Some(registry), Some(parts)) = (registry, parts.as_array_mut()) {
-        parts.push(registry.into());
+/// The declaration a report dependency describes.
+pub(crate) fn declaration<'a>(file: &'a str, dep: &'a Dependency) -> Declaration<'a> {
+    Declaration {
+        file,
+        manager: dep.manager,
+        name: &dep.name,
+        package: &dep.package,
+        source: dep.metadata.as_ref().map(|m| m.source),
+        current: dep.current.value.as_deref(),
+        digest: dep.current.digest.as_deref(),
+        registry: dep.registry.as_deref(),
     }
-    hash(parts.to_string().as_bytes())
+}
+pub fn dependency_key(file: &str, dep: &Dependency) -> String {
+    declaration(file, dep).key()
 }
 pub fn extracted_key(dep: &patchula_manager::Dependency) -> String {
-    identity(
-        serde_json::json!([
-            &dep.file,
-            dep.manager,
-            &dep.name,
-            &dep.package,
-            dep.source,
-            Some(&dep.current),
-            &dep.digest,
-        ]),
-        dep.registry.as_deref(),
-    )
+    dep.declaration().key()
 }
 /// The key of a retry box: one package from one source, whichever files
 /// declare it. A lookup is shared by all of them.
@@ -157,9 +137,7 @@ impl Controls {
                 .flat_map(|c| {
                     dependencies
                         .iter()
-                        .filter(|d| {
-                            d.file == c.file && d.package == c.package && d.source == c.source
-                        })
+                        .filter(|d| c.touches(&d.file, d.source, &d.package, d.registry.as_deref()))
                         .filter_map(|d| {
                             c.version
                                 .as_deref()
@@ -176,7 +154,7 @@ impl Controls {
             let age_click = plan.changes.iter().any(|c| {
                 dependencies
                     .iter()
-                    .filter(|d| d.file == c.file && d.package == c.package && d.source == c.source)
+                    .filter(|d| c.touches(&d.file, d.source, &d.package, d.registry.as_deref()))
                     .any(|d| {
                         c.version
                             .as_deref()
@@ -943,9 +921,7 @@ fn fix_status(
         .iter()
         .filter(|plan| {
             plan.changes.iter().any(|c| {
-                c.file == file
-                    && c.package == dep.package
-                    && c.source == metadata.source
+                c.touches(file, metadata.source, &dep.package, dep.registry.as_deref())
                     && ((update.new_version.is_some() && c.version == update.new_version)
                         || (update.new_value.is_some() && c.value == update.new_value))
             })

@@ -1,7 +1,8 @@
-use crate::{Plan, plan::hash};
+use crate::Plan;
 use chrono::{DateTime, Duration, Utc};
 use patchula_config::{Config, PackageId};
 use patchula_github::Client;
+use patchula_manager::hash;
 use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus};
 use patchula_words::{Recheck, ToolingDetail, ToolingRule, Update as UpdateKind};
 use serde::{Deserialize, Serialize};
