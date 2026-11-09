@@ -33,6 +33,19 @@ pub(crate) fn validate_digest(digest: &str) -> Result<()> {
         Err(Error::Invalid)
     }
 }
+/// A tag or digest reference: nonempty, and only characters a registry
+/// path segment carries.
+fn validate_tag(tag: &str) -> Result<()> {
+    if !tag.is_empty()
+        && tag
+            .bytes()
+            .all(|v| v.is_ascii_alphanumeric() || b"._-+:".contains(&v))
+    {
+        Ok(())
+    } else {
+        Err(Error::Invalid)
+    }
+}
 /// What release notes read from a config blob: an image's source and version
 /// labels, and a Helm chart's `sources` and Artifact Hub changes.
 fn compact_config(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
@@ -69,6 +82,28 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+fn catalog(tags: Vec<String>) -> Catalog {
+    Catalog {
+        versions: tags
+            .into_iter()
+            .map(|version| Version {
+                version,
+                published_at: None,
+                digest: None,
+                deprecated: false,
+                yanked: false,
+            })
+            .collect(),
+        dist_tags: BTreeMap::new(),
+    }
+}
+/// An OCI catalog is semver tags: the `_` a tag cannot write as `+` reads
+/// back as build metadata, and versions order as npm's do.
+fn oci_catalog(tags: Vec<String>) -> Catalog {
+    let mut catalog = catalog(tags.into_iter().map(|tag| tag.replace('_', "+")).collect());
+    sort(&mut catalog.versions, Ecosystem::Npm);
+    catalog
 }
 fn token_key(host: &str, path: &str) -> Result<HttpKey> {
     Ok(HttpKey::new(
@@ -481,16 +516,10 @@ impl Client {
     }
 
     async fn image_config(&self, host: &str, path: &str, version: &str) -> Result<ImageConfig> {
-        if version.is_empty()
-            || !version
-                .bytes()
-                .all(|v| v.is_ascii_alphanumeric() || b"._-+:".contains(&v))
-        {
-            return Err(Error::Invalid);
-        }
+        validate_tag(version)?;
         // OCI tags cannot hold `+`: `helm push` writes build metadata as `_`,
         // which a catalog of OCI versions reads back as `+`.
-        let mut reference = version.replace('+', "_");
+        let mut reference = oci_tag(version);
         // An index may carry the annotation for all its platforms; a
         // platform's own manifest overrides it.
         let mut annotated_source = None;
@@ -544,7 +573,9 @@ impl Client {
         Err(Error::Invalid)
     }
 
-    pub(super) async fn docker(&self, package: &str) -> Result<Catalog> {
+    /// The image's tags, with the catalog-stale bookkeeping a rate-limited
+    /// `tags/list` leaves behind.
+    async fn tags(&self, package: &str) -> Result<Vec<String>> {
         let (host, path) = identity(package)?;
         let mut url = Url::parse(&format!("https://{host}/v2/{path}/tags/list?n=1000"))
             .map_err(|_| Error::Invalid)?;
@@ -590,20 +621,6 @@ impl Client {
             url = next;
         }
         // Lexical pages cannot stop at a known tag: new tags may appear anywhere.
-        let mut catalog = Catalog {
-            versions: tags
-                .into_iter()
-                .map(|version| Version {
-                    version,
-                    published_at: None,
-                    digest: None,
-                    deprecated: false,
-                    yanked: false,
-                })
-                .collect(),
-            dist_tags: BTreeMap::new(),
-        };
-        sort(&mut catalog.versions, Ecosystem::Docker);
         let mut stale = self.stale_registry.lock().await;
         let entries = stale.entry(format!("{host}/{path}")).or_default();
         if let Some(time) = stale_at {
@@ -611,19 +628,23 @@ impl Client {
         } else {
             entries.remove(&StaleKey::CATALOG);
         }
+        Ok(tags.into_iter().collect())
+    }
+
+    pub(super) async fn docker(&self, package: &str) -> Result<Catalog> {
+        let mut catalog = catalog(self.tags(package).await?);
+        sort(&mut catalog.versions, Ecosystem::Docker);
         Ok(catalog)
+    }
+
+    pub(super) async fn oci(&self, package: &str) -> Result<Catalog> {
+        Ok(oci_catalog(self.tags(package).await?))
     }
 
     /// Retain the multi-arch index digest, never a child platform digest.
     pub async fn registry_digest(&self, package: &str, tag: &str) -> Result<String> {
-        if tag.is_empty()
-            || !tag
-                .bytes()
-                .all(|v| v.is_ascii_alphanumeric() || b"._-+:".contains(&v))
-        {
-            return Err(Error::Invalid);
-        }
-        let tag = tag.replace('+', "_");
+        validate_tag(tag)?;
+        let tag = oci_tag(tag);
         let (host, path) = identity(package)?;
         let url = format!("https://{host}/v2/{path}/manifests/{tag}");
         let response = match self
@@ -643,18 +664,27 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned)
             .unwrap_or_else(|| format!("sha256:{}", sha256_hex(&response.body)));
-        if !digest
-            .strip_prefix("sha256:")
-            .is_some_and(|v| v.len() == 64 && v.bytes().all(|c| c.is_ascii_hexdigit()))
-        {
-            return Err(Error::Invalid);
-        }
+        validate_digest(&digest)?;
         Ok(digest)
     }
 }
 
 #[cfg(test)]
 mod identity_tests {
+    #[test]
+    fn oci_orders_semver_tags_where_docker_cannot_parse_them() {
+        // `10.0.0_a` is the catalog form of `10.0.0+a`: Docker's parser
+        // rejects the `_` suffix and sorts it last, while npm reads the
+        // `+` as build metadata and keeps semver order.
+        let mut docker = super::catalog(vec!["10.0.0_a".into(), "2.0.0".into()]);
+        crate::sort(&mut docker.versions, patchula_versioning::Ecosystem::Docker);
+        assert_eq!(docker.versions[0].version, "2.0.0");
+        assert_eq!(docker.versions[1].version, "10.0.0_a");
+        let oci = super::oci_catalog(vec!["10.0.0_a".into(), "2.0.0".into()]);
+        assert_eq!(oci.versions[0].version, "10.0.0+a");
+        assert_eq!(oci.versions[1].version, "2.0.0");
+    }
+
     #[test]
     fn docker_hub_names_resolve_to_one_identity() {
         for name in [
