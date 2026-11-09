@@ -115,9 +115,9 @@ pub fn entry(response: &Response, now: i64) -> HttpEntry {
 }
 
 /// Whether the response may be stored under its key. A client sends a fixed
-/// set of request headers, so a `Vary` on one the key holds, one it never
-/// sends, or `Accept-Encoding` (bodies are stored decoded) selects the same
-/// response every time. `no-store`, `Vary: *` and `Vary: User-Agent` (the
+/// set of request headers, so a `Vary` on a header the key holds, on a header
+/// the client never sends, or on `Accept-Encoding` (bodies are stored decoded)
+/// selects the same response every time. `no-store`, `Vary: *` and `Vary: User-Agent` (the
 /// agent names this build) are uncacheable, and so is a `Vary` on
 /// authorization unless `authorization_in_key`: the key's credential scope
 /// names whoever authorized the request.
