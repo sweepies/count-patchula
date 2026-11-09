@@ -228,3 +228,33 @@ impl ChartNotes {
             .map(Repository::chart_sourced)
     }
 }
+
+/// The public mise-versions mirror of GitHub release and tag lists.
+pub const MIRROR_URL: &str = "https://mise-versions.jdx.dev/data";
+/// The mirror's document for one repository's `releases` or `tags` list.
+pub fn mirror_url(repository: &str, kind: &str) -> String {
+    format!(
+        "{MIRROR_URL}/github/{}/{kind}.json",
+        repository.to_ascii_lowercase()
+    )
+}
+/// One mirror document: a repository's release and tag entries.
+#[derive(Default, Serialize, Deserialize)]
+pub struct MirrorList {
+    #[serde(default)]
+    pub releases: Vec<MirrorEntry>,
+    #[serde(default)]
+    pub tags: Vec<MirrorEntry>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MirrorEntry {
+    pub tag: String,
+    #[serde(default)]
+    pub date: Option<String>,
+    #[serde(default)]
+    pub sha: Option<String>,
+    #[serde(default)]
+    pub prerelease: bool,
+}

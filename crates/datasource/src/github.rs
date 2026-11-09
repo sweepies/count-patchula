@@ -254,7 +254,7 @@ impl Client {
                 .collect(),
             dist_tags: BTreeMap::new(),
         };
-        if package == "actions/node-versions" {
+        if package.eq_ignore_ascii_case("actions/node-versions") {
             // Stable setup-node targets remain usable during a Node-index
             // outage. An explicit LTS policy fails closed without this evidence.
             if let Ok(lts) = self.node_lts().await {

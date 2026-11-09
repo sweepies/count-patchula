@@ -16,7 +16,7 @@ use markdown::demote_headings;
 pub use markdown::{Links, fit, inert, sanitise};
 use patchula_cache::State;
 use patchula_config::PackageId;
-use patchula_datasource::upstream::{ChartNotes, directory, mapped};
+use patchula_datasource::upstream::{ChartNotes, MirrorList, directory, mapped, mirror_url};
 pub use patchula_datasource::upstream::{Forge, ForgeKind, Repository};
 use patchula_datasource::{Error, Result, truncate};
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
@@ -63,21 +63,6 @@ impl State for ParsedChangelog {
     type Scope = ChangelogScope;
 }
 
-#[derive(Default, Serialize, Deserialize)]
-struct MirrorList {
-    #[serde(default)]
-    releases: Vec<MirrorVersion>,
-    #[serde(default)]
-    tags: Vec<MirrorVersion>,
-    #[serde(default)]
-    truncated: bool,
-}
-#[derive(Serialize, Deserialize)]
-struct MirrorVersion {
-    tag: String,
-    #[serde(default)]
-    prerelease: bool,
-}
 fn compact_mirror(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let list: MirrorList =
         serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
@@ -470,10 +455,7 @@ impl Client {
         Ok(sections)
     }
     async fn notes_list(&self, repo: &str, kind: &str) -> Result<MirrorList> {
-        let url = format!(
-            "https://mise-versions.jdx.dev/data/github/{}/{kind}.json",
-            repo.to_ascii_lowercase()
-        );
+        let url = mirror_url(repo, kind);
         let bytes = self
             .note_read(&url, async {
                 Ok(self
