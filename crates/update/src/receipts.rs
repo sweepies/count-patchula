@@ -162,25 +162,48 @@ pub(crate) fn rest_pr(pr: &Value) -> Option<Value> {
     )
 }
 
-/// One fresh paginated inventory replaces every per-branch verification when
-/// the head, intent and complete PR state still match a successful receipt.
-/// `Complete` means obsolete-head cleanup can also be skipped.
-pub async fn restore_unchanged(
-    client: &Client,
-    cache: &Cache,
-    repository: &Repository,
-    config: &Config,
-    plans: &mut [Plan],
-    recheck: Recheck,
-    server: Option<&str>,
-) -> Result<RestoreOutcome, String> {
-    let inventory = Inventory::read(client, cache, repository, config).await?;
-    restore_inventory(
-        cache, repository, config, plans, recheck, server, &inventory,
-    )
-    .await
+/// One recent commit on the default branch.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DefaultCommit {
+    /// Whether it reported a `statusCheckRollup`.
+    pub rollup: bool,
 }
-
+/// The default branch's head as `INVENTORY_QUERY` returns it: the fields
+/// the freshness check and tooling evidence read, decoded beside the query
+/// so its shape lives in one place.
+#[derive(Debug, Default)]
+pub struct DefaultBranch {
+    /// `defaultBranchRef.name`.
+    pub name: Option<String>,
+    /// `defaultBranchRef.target.oid`.
+    pub oid: Option<String>,
+    /// `target.history.nodes`, `None` when the query did not return a list,
+    /// so absent and empty stay distinct as the raw read had them.
+    pub history: Option<Vec<DefaultCommit>>,
+    /// `rules`, as returned: tooling decides what its nodes prove.
+    pub rules: Value,
+    /// `refUpdateRule`, as returned.
+    pub ref_update_rule: Value,
+}
+impl DefaultBranch {
+    /// Decode the query's `defaultBranchRef` node.
+    fn read(head: &Value) -> Self {
+        Self {
+            name: head["name"].as_str().map(str::to_owned),
+            oid: head["target"]["oid"].as_str().map(str::to_owned),
+            history: head["target"]["history"]["nodes"].as_array().map(|nodes| {
+                nodes
+                    .iter()
+                    .map(|node| DefaultCommit {
+                        rollup: !node["statusCheckRollup"].is_null(),
+                    })
+                    .collect()
+            }),
+            rules: head["rules"].clone(),
+            ref_update_rule: head["refUpdateRule"].clone(),
+        }
+    }
+}
 /// Fresh control and branch state shared by lookup, dashboard and write receipts.
 #[derive(Default, Debug)]
 pub struct Inventory {
@@ -192,7 +215,7 @@ pub struct Inventory {
     pub merged_prs: Vec<Value>,
     /// The default branch's recent check rollups and protection, for tooling
     /// warnings.
-    pub default_branch: Value,
+    pub default_branch: DefaultBranch,
     /// Branch names whose labels or associated pull requests did not fit in
     /// the query's first page. Their PR view is incomplete, so the receipts
     /// fast path must not settle from this inventory.
@@ -242,9 +265,9 @@ impl Inventory {
             let data = client.graphql(INVENTORY_QUERY, json!({"owner":owner,"name":name,
                 "prefix":"refs/heads/","closed":closed_ids,"cursor":cursor,"issueCursor":issue_cursor}))
                 .await.map_err(|e| e.to_string())?;
-            let head = &data["repository"]["defaultBranchRef"];
-            if head["name"].as_str() != repository.default_branch.as_deref()
-                || head["target"]["oid"].as_str() != repository.commit.as_deref()
+            let branch = DefaultBranch::read(&data["repository"]["defaultBranchRef"]);
+            if branch.name.as_deref() != repository.default_branch.as_deref()
+                || branch.oid.as_deref() != repository.commit.as_deref()
             {
                 return Err("default branch changed since extraction; rerun".into());
             }
@@ -256,7 +279,7 @@ impl Inventory {
             }
             result.actor = actor.into();
             result.merge_settings = crate::automerge::Settings::from_graphql(&data["repository"]);
-            result.default_branch.clone_from(head);
+            result.default_branch = branch;
             result.closed = data["nodes"]
                 .as_array()
                 .cloned()

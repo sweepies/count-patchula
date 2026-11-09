@@ -12,6 +12,7 @@ pub use mise::included_files;
 mod cargo;
 mod composer;
 mod credentials;
+pub use cargo::crates_io;
 pub use credentials::{CredentialCheck, committed_credentials, credential_reason};
 pub use roles::{credential_check, credential_scope, linked_settings, registry_settings};
 mod custom;

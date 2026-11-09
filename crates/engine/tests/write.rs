@@ -1131,7 +1131,11 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
                 patchula_update::Inventory::read(&github, &cache, &report.repositories[0], &config)
                     .await
                     .unwrap();
-            let prs = patchula_update::automerge::dashboard_prs(&inventory, "demo/sandbox", &[]);
+            let prs = patchula_update::automerge::dashboard_history(
+                &inventory,
+                inventory.pull_requests("demo/sandbox"),
+                &[],
+            );
             let next_dashboard = patchula_update::dashboard::render(
                 &report.repositories[0],
                 &[],

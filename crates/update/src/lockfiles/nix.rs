@@ -11,6 +11,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &[],
     versions: false,
     install: Install::Nix,
+    proof: Proof::None,
+    run: Run::Direct,
     refresh: Refresh::LocksBesideManifest(&[Manager::Nix]),
     output: Output::Complete,
 };

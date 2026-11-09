@@ -8,6 +8,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &[],
     versions: true,
     install: Install::Plain,
+    proof: Proof::None,
+    run: Run::Direct,
     refresh: Refresh::Never,
     output: Output::Default,
 };

@@ -8,6 +8,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["go"],
     versions: true,
     install: Install::Plain,
+    proof: Proof::Declared,
+    run: Run::Direct,
     refresh: Refresh::Manifests(&[Manager::Go]),
     output: Output::Default,
 };

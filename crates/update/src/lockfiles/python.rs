@@ -6,6 +6,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["python", "uv", "poetry"],
     versions: true,
     install: Install::Plain,
+    proof: Proof::DeclaredAndResolved,
+    run: Run::Direct,
     refresh: Refresh::Locks(&[Manager::Pyproject]),
     output: Output::Default,
 };

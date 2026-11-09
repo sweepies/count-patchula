@@ -71,6 +71,29 @@ impl Refresh {
     }
 }
 
+/// How the pinned tools run the ecosystem's binary once `mise exec` has
+/// them installed.
+#[derive(Clone, Copy)]
+pub(super) enum Run {
+    /// The binary itself: `mise exec -- tools -- bin args`.
+    Direct,
+    /// Through rustup: the named tool's pin is the toolchain,
+    /// `rustup run <version> bin`, with the run's own Cargo home.
+    Rustup(&'static str),
+}
+
+/// How far `validate_targets` proves this ecosystem moved a requested
+/// target from the regenerated files.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Proof {
+    /// The files are trusted as the tool wrote them.
+    None,
+    /// The manifest must still declare the requested value.
+    Declared,
+    /// The manifest declares it and the lock records it resolved.
+    DeclaredAndResolved,
+}
+
 /// How much of a run's output the executor keeps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Output {
@@ -95,6 +118,10 @@ pub(super) struct Tool {
     pub versions: bool,
     /// How its pinned tools become mise install specs.
     pub install: Install,
+    /// How its binary runs under the pinned tools.
+    pub run: Run,
+    /// How far `validate_targets` proves its targets from regenerated files.
+    pub proof: Proof,
     /// How maintenance discovers its work; `job()` does not consult this —
     /// extraction already applied `config.managers` to the dependencies it
     /// reports, while maintenance sees raw paths.
@@ -143,6 +170,28 @@ impl Tool {
             // clearly.
             Install::Nix => super::nix::tools().unwrap_or_default(),
         }
+    }
+}
+
+/// The ecosystem `manager`'s lockfile work runs through, or `None` for a
+/// manager whose changes never produce a lockfile job. `job()`'s dispatch
+/// and `validate_targets`' proof lists both read this one mapping, so
+/// re-scoping a manager's edit semantics updates validation automatically.
+pub(super) fn ecosystem(manager: Manager) -> Option<Ecosystem> {
+    match manager {
+        Manager::Mise => Some(Ecosystem::Mise),
+        Manager::Npm | Manager::Bun => Some(Ecosystem::Node),
+        Manager::Apm => Some(Ecosystem::Apm),
+        Manager::Bundler => Some(Ecosystem::Ruby),
+        Manager::Composer => Some(Ecosystem::Php),
+        Manager::Nix => Some(Ecosystem::Nix),
+        Manager::Nuget => Some(Ecosystem::Dotnet),
+        Manager::Gradle => Some(Ecosystem::GradleWrapper),
+        Manager::Cargo => Some(Ecosystem::Cargo),
+        Manager::Go => Some(Ecosystem::Go),
+        Manager::Pyproject => Some(Ecosystem::Python),
+        Manager::Terraform => Some(Ecosystem::Terraform),
+        _ => None,
     }
 }
 

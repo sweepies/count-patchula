@@ -7,6 +7,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["dotnet"],
     versions: true,
     install: Install::Plain,
+    proof: Proof::None,
+    run: Run::Direct,
     refresh: Refresh::Locks(&[Manager::Nuget]),
     output: Output::Default,
 };

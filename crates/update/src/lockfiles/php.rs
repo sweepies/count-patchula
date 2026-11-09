@@ -9,6 +9,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["php", "composer"],
     versions: true,
     install: Install::Php,
+    proof: Proof::DeclaredAndResolved,
+    run: Run::Direct,
     refresh: Refresh::Locks(&[Manager::Composer]),
     output: Output::Default,
 };

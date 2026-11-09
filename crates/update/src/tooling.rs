@@ -8,7 +8,6 @@ use patchula_config::Config;
 use patchula_report::ToolingWarning;
 use patchula_words::{ToolingDetail, ToolingRule};
 use serde::Serialize;
-use serde_json::Value;
 use serde_yaml_ng::{Mapping, Value as Yaml};
 use std::collections::BTreeMap;
 
@@ -320,23 +319,24 @@ impl Evidence {
             Ok((ci, delivery)) => (Some(ci), delivery),
             Err(()) => (None, None),
         };
-        let head = &inventory.default_branch;
-        let branch_checks = head["target"]["history"]["nodes"]
-            .as_array()
-            .map(|commits| commits.iter().any(|c| !c["statusCheckRollup"].is_null()));
+        let branch = &inventory.default_branch;
+        let branch_checks = branch
+            .history
+            .as_ref()
+            .map(|commits| commits.iter().any(|c| c.rollup));
         Self {
             ci,
             branch_checks,
             native: inventory.merge_settings.native,
-            required: required(head),
+            required: required(branch),
             delivery,
         }
     }
 }
 
 /// Required checks and reviews from active rulesets and classic protection.
-fn required(head: &Value) -> Option<Required> {
-    let rules = &head["rules"];
+fn required(branch: &crate::receipts::DefaultBranch) -> Option<Required> {
+    let rules = &branch.rules;
     let nodes = rules["nodes"].as_array()?;
     let mut result = Required {
         checks: nodes.iter().any(|r| {
@@ -352,7 +352,7 @@ fn required(head: &Value) -> Option<Required> {
                     .is_some_and(|n| n > 0)
         }),
     };
-    let classic = &head["refUpdateRule"];
+    let classic = &branch.ref_update_rule;
     result.checks |= classic["requiredStatusCheckContexts"]
         .as_array()
         .is_some_and(|c| !c.is_empty());
@@ -506,7 +506,7 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn snapshot(files: &[(&str, &str)]) -> Snapshot {
         Snapshot {
@@ -654,12 +654,22 @@ mod tests {
 
     #[test]
     fn required_checks_come_from_rulesets_or_classic_protection() {
-        let head = |nodes: Value, more: bool, classic: Value| json!({"rules": {"nodes": nodes, "pageInfo": {"hasNextPage": more}}, "refUpdateRule": classic});
+        let head = |nodes: Value, more: bool, classic: Value| crate::receipts::DefaultBranch {
+            rules: json!({"nodes": nodes, "pageInfo": {"hasNextPage": more}}),
+            ref_update_rule: classic,
+            ..Default::default()
+        };
         let none = Required {
             checks: false,
             reviews: false,
         };
-        assert_eq!(required(&json!({"rules": null})), None);
+        assert_eq!(
+            required(&crate::receipts::DefaultBranch {
+                rules: Value::Null,
+                ..Default::default()
+            }),
+            None
+        );
         assert_eq!(
             required(&head(json!([{"type":"DELETION"}]), false, Value::Null)),
             Some(none)
@@ -909,11 +919,12 @@ mod tests {
     #[test]
     fn checks_and_protection_come_from_the_inventory() {
         let inventory = Inventory {
-            default_branch: json!({
-                "target": {"history": {"nodes": [{"statusCheckRollup": null}]}},
-                "rules": {"nodes": [], "pageInfo": {"hasNextPage": false}},
-                "refUpdateRule": null
-            }),
+            default_branch: crate::receipts::DefaultBranch {
+                history: Some(vec![crate::receipts::DefaultCommit { rollup: false }]),
+                rules: json!({"nodes": [], "pageInfo": {"hasNextPage": false}}),
+                ref_update_rule: Value::Null,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let evidence = Evidence::read(&snapshot(&[]), "main", &inventory);

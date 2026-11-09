@@ -66,10 +66,11 @@ async fn save_history(
     }
     let mut prs = inventory.merged_prs.clone();
     for pr in merged {
-        prs.retain(|p| p["number"] != pr["number"]);
+        let number = crate::pull_requests::Pr::read(&pr).number;
+        prs.retain(|p| crate::pull_requests::Pr::read(p).number != number);
         prs.push(pr);
     }
-    prs.sort_by_key(|p| p["number"].as_u64());
+    prs.sort_by_key(|p| crate::pull_requests::Pr::read(p).number);
     if prs.len() > 20 {
         prs.drain(..prs.len() - 20);
     }
@@ -216,15 +217,17 @@ async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, String> 
         }))
 }
 fn same_head(pr: &Value, proof: &Value, actor: &str, repo: &str) -> bool {
+    let fields = crate::pull_requests::Pr::read(pr);
+    let proof_fields = crate::pull_requests::Pr::read(proof);
     owned_pr(pr, actor, repo)
-        && pr["state"] == "open"
-        && pr["merged_at"].is_null()
+        && fields.state.as_deref() == Some("open")
+        && fields.merged_at.is_none()
         && pr["node_id"] == proof["node_id"]
-        && pr["head"]["sha"] == proof["head"]["sha"]
-        && pr["head"]["ref"] == proof["head"]["ref"]
+        && fields.head.sha == proof_fields.head.sha
+        && fields.head.branch == proof_fields.head.branch
         && pr["base"]["ref"] == proof["base"]["ref"]
-        && crate::pull_requests::body_hash(pr["body"].as_str().unwrap_or(""))
-            == crate::pull_requests::body_hash(proof["body"].as_str().unwrap_or(""))
+        && crate::pull_requests::body_hash(fields.body.as_deref().unwrap_or(""))
+            == crate::pull_requests::body_hash(proof_fields.body.as_deref().unwrap_or(""))
 }
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Native {
@@ -279,6 +282,12 @@ async fn one(
     repo: &Repository,
     pr: &mut Value,
 ) -> Result<(PullRequestStatus, String), String> {
+    let fields = crate::pull_requests::Pr::read(pr);
+    let head_oid = fields
+        .head
+        .sha
+        .as_ref()
+        .map_or(Value::Null, |sha| json!(sha));
     if pr["base"]["ref"].as_str() != repo.default_branch.as_deref() {
         return Ok((
             PullRequestStatus::Protected,
@@ -294,8 +303,7 @@ async fn one(
     // it falls through to the Count's own merge, behind the same gate.
     if settings.native {
         if pr["auto_merge"].is_null()
-            && enable_native(client, &pr["node_id"], method, &pr["head"]["sha"]).await?
-                == Native::Enabled
+            && enable_native(client, &pr["node_id"], method, &head_oid).await? == Native::Enabled
         {
             pr["auto_merge"] = json!({"enabled":true});
         }
@@ -306,8 +314,8 @@ async fn one(
             ));
         }
     }
-    let number = pr["number"].as_u64().ok_or("missing PR number")?;
-    let head = pr["head"]["sha"].as_str().ok_or("missing receipt head")?;
+    let number = fields.number.ok_or("missing PR number")?;
+    let head = fields.head.sha.as_deref().ok_or("missing receipt head")?;
     let path = format!("repos/{}/pulls/{number}", repo.repository);
     let fresh = client.get_fresh(&path).await.map_err(|e| e.to_string())?;
     if !same_head(&fresh, pr, &inventory.actor, &repo.repository) {
@@ -370,7 +378,7 @@ async fn one(
                 repo.default_branch
                     .as_deref()
                     .ok_or("missing default branch")?,
-                pr["head"]["ref"].as_str().ok_or("missing head branch")?,
+                fields.head.branch.as_deref().ok_or("missing head branch")?,
                 head,
             )
             .await
@@ -423,10 +431,11 @@ pub async fn reconcile(
         if status == PullRequestStatus::Merged {
             plan.merged();
         }
+        let proof_fields = crate::pull_requests::Pr::read(&proof);
         actions.push(PullRequestAction {
             repository: repo.repository.clone(),
             branch: plan.action().branch.clone(),
-            number: proof["number"].as_u64(),
+            number: proof_fields.number,
             url: proof["html_url"].as_str().map(str::to_owned),
             status,
             reason: Some(reason),
@@ -455,21 +464,29 @@ pub async fn reconcile(
     actions
 }
 
-pub fn dashboard_prs(inventory: &Inventory, repo: &str, plans: &[Plan]) -> Vec<Value> {
-    dashboard_history(inventory, inventory.pull_requests(repo), plans)
-}
 pub fn dashboard_history(inventory: &Inventory, mut prs: Vec<Value>, plans: &[Plan]) -> Vec<Value> {
     // Untracked historical/native merges are not presented as fallback outcomes.
-    prs.retain(|p| p["merged_at"].is_null() || crate::pull_requests::merge_note(p).is_some());
+    prs.retain(|p| {
+        crate::pull_requests::Pr::read(p).merged_at.is_none()
+            || crate::pull_requests::merge_note(p).is_some()
+    });
     for pr in &inventory.merged_prs {
-        if !prs.iter().any(|p| p["number"] == pr["number"]) {
+        let number = crate::pull_requests::Pr::read(pr).number;
+        if !prs
+            .iter()
+            .any(|p| crate::pull_requests::Pr::read(p).number == number)
+        {
             prs.push(pr.clone());
         }
     }
     for pr in plans.iter().filter_map(|p| p.cached_pr.as_ref()) {
-        if let Some(old) = prs.iter_mut().find(|p| p["number"] == pr["number"]) {
+        let fields = crate::pull_requests::Pr::read(pr);
+        if let Some(old) = prs
+            .iter_mut()
+            .find(|p| crate::pull_requests::Pr::read(p).number == fields.number)
+        {
             old.clone_from(pr);
-        } else if !pr["merged_at"].is_null() {
+        } else if fields.merged_at.is_some() {
             prs.push(pr.clone());
         }
     }

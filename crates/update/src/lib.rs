@@ -14,7 +14,8 @@ pub mod text;
 mod trailers;
 pub use cleanup::{cleanup, delete_owned, owned};
 pub use receipts::{
-    INVENTORY_QUERY, Inventory, RestoreOutcome, restore_inventory, restore_unchanged, save_receipts,
+    DefaultBranch, DefaultCommit, INVENTORY_QUERY, Inventory, RestoreOutcome, restore_inventory,
+    save_receipts,
 };
 pub use settle::{Settlement, settle};
 pub mod lockfiles;

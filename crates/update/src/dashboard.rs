@@ -161,7 +161,8 @@ impl Controls {
     ) -> Result<Self, String> {
         let mut result = Self::default();
         if dashboard_enabled && let Some(issue) = issue(inventory)? {
-            for action in checked_actions(issue["body"].as_str().unwrap_or("")) {
+            let fields = crate::pull_requests::Pr::read(issue);
+            for action in checked_actions(fields.body.as_deref().unwrap_or("")) {
                 match action {
                     Action::Recheck(t) if t == hash(repo.as_bytes()) => result.recheck = true,
                     Action::Recheck(_) => {}
@@ -284,7 +285,10 @@ fn checkbox(label: &str, action: Action) -> String {
 pub fn issue(inventory: &Inventory) -> Result<Option<&Value>, String> {
     let mut issues = inventory.issues.iter().filter(|i| {
         crate::receipts::actor_login(&i["author"]).as_deref() == Some(&inventory.actor)
-            && i["body"].as_str().is_some_and(markers::dashboard)
+            && crate::pull_requests::Pr::read(i)
+                .body
+                .as_deref()
+                .is_some_and(markers::dashboard)
     });
     let result = issues.next();
     if issues.next().is_some() {
@@ -1162,8 +1166,8 @@ pub async fn reconcile(
     let path = format!("repos/{}/issues", repo.repository);
     if !config.prs.dashboard {
         if let Some(existing) = existing {
-            let number = existing["number"]
-                .as_u64()
+            let number = crate::pull_requests::Pr::read(existing)
+                .number
                 .ok_or("missing dashboard number")?;
             client
                 .patch(&format!("{path}/{number}"), json!({"state":"closed"}))
@@ -1182,16 +1186,14 @@ pub async fn reconcile(
         .await
         .map_err(|e| e.to_string())?;
     let number = if let Some(existing) = existing {
-        let number = existing["number"]
-            .as_u64()
-            .ok_or("missing dashboard number")?;
+        let fields = crate::pull_requests::Pr::read(existing);
+        let number = fields.number.ok_or("missing dashboard number")?;
+        let current = fields.body.as_deref().unwrap_or("");
         let unchanged = previous
             .as_ref()
             .is_some_and(|r| r.number == number && r.actor == inventory.actor && r.hash == digest)
-            && crate::pull_requests::body_hash(existing["body"].as_str().unwrap_or("")) == digest;
-        if !unchanged
-            && crate::pull_requests::body_hash(existing["body"].as_str().unwrap_or("")) != digest
-        {
+            && crate::pull_requests::body_hash(current) == digest;
+        if !unchanged && crate::pull_requests::body_hash(current) != digest {
             client
                 .patch(&format!("{path}/{number}"), json!({"body":body}))
                 .await
@@ -1199,12 +1201,14 @@ pub async fn reconcile(
         }
         number
     } else {
-        client
-            .post(&path, json!({"title":TITLE,"body":body}))
-            .await
-            .map_err(|e| e.to_string())?["number"]
-            .as_u64()
-            .ok_or("missing created dashboard number")?
+        crate::pull_requests::Pr::read(
+            &client
+                .post(&path, json!({"title":TITLE,"body":body}))
+                .await
+                .map_err(|e| e.to_string())?,
+        )
+        .number
+        .ok_or("missing created dashboard number")?
     };
     cache
         .set_state(
