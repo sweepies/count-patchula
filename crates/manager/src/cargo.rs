@@ -586,7 +586,7 @@ impl crate::Ecosystem for Descriptor {
         )
     }
     fn registry_file(&self, path: &str) -> bool {
-        config_file(path)
+        crate::roles::eco_roles(Manager::Cargo, path).registry
     }
     fn backend_settings(&self, path: &str) -> bool {
         config_file(path)

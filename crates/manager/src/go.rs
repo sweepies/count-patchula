@@ -360,7 +360,7 @@ impl crate::Ecosystem for Descriptor {
         path.rsplit('/').next() == Some("go.mod")
     }
     fn registry_file(&self, path: &str) -> bool {
-        work_file(path)
+        crate::roles::eco_roles(Manager::Go, path).registry
     }
     fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
         let wanted = workspace_modules(files);

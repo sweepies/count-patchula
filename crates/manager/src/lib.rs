@@ -12,9 +12,8 @@ pub use mise::included_files;
 mod cargo;
 mod composer;
 mod credentials;
-pub use credentials::{
-    CredentialCheck, committed_credentials, credential_check, credential_reason, credential_scope,
-};
+pub use credentials::{CredentialCheck, committed_credentials, credential_reason};
+pub use roles::{credential_check, credential_scope, linked_settings, registry_settings};
 mod custom;
 mod devcontainer;
 mod gitlabci;
@@ -39,6 +38,7 @@ mod npm;
 mod nuget;
 mod precommit;
 mod pyproject;
+pub mod roles;
 mod terraform;
 mod toolchains;
 mod woodpecker;
@@ -822,10 +822,20 @@ mod tests {
     #[test]
     fn file_classification_is_pinned() {
         use super::CredentialCheck;
+        type Row = (
+            &'static str,
+            bool,
+            bool,
+            Option<&'static str>,
+            bool,
+            CredentialCheck,
+            bool,
+            &'static str,
+        );
         /// (path, needs, registry_settings, linked_settings, credential_scope,
         /// credential_check, public verdict, registry_file managers)
         #[rustfmt::skip]
-        const TABLE: &[(&str, bool, bool, Option<&str>, bool, CredentialCheck, bool, &str)] = &[
+        const TABLE: &[Row] = &[
             ("package.json", true, false, None, false, CredentialCheck::Scan, true, ""),
             ("sub/dir/package.json", true, false, None, false, CredentialCheck::Scan, true, ""),
             ("package-lock.json", true, false, None, false, CredentialCheck::Scan, true, ""),
@@ -1213,29 +1223,6 @@ pub mod known {
     };
 }
 
-/// A file that can say where packages come from: Python settings,
-/// Bundler's settings, a NuGet config, an MSBuild file that can set
-/// restore sources, or Maven or Gradle build files that can add
-/// repositories. One the Count cannot read, such as a symlink or a file
-/// that is not text, must reach the scanner as unreadable, since leaving it
-/// out would make its packages the public registry's.
-pub fn registry_settings(path: &str) -> bool {
-    python_settings(path)
-        || bundle_config(path)
-        || nuget::config_file(path)
-        || nuget::msbuild_file(path)
-        || maven::repository_file(path)
-        || gradle::build_logic(path)
-        || cargo::config_file(path)
-        || path.rsplit('/').next() == Some("Cargo.toml")
-        || go::work_file(path)
-        || mise::config_file(path)
-        || matches!(
-            path.rsplit('/').next().unwrap_or(path),
-            ".npmrc" | ".yarnrc.yml" | "pip.conf" | "pip.ini"
-        )
-}
-
 /// A file that can name a Python package index.
 pub(crate) fn python_settings(path: &str) -> bool {
     let leaf = path.rsplit('/').next().unwrap_or(path);
@@ -1248,24 +1235,6 @@ pub(crate) fn python_settings(path: &str) -> bool {
 /// Bundler's settings for a project.
 pub(crate) fn bundle_config(path: &str) -> bool {
     path == ".bundle/config" || path.ends_with("/.bundle/config")
-}
-
-/// The settings file a symlink at `path` could stand for: the path itself
-/// when it is a settings file, or one inside a linked folder the tools
-/// follow: `.bundle` for Bundler, `.mvn` for Maven, and Gradle's build-logic
-/// folders, whose contents the Count then cannot read.
-pub fn linked_settings(path: &str) -> Option<String> {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    if registry_settings(path) {
-        return Some(path.to_owned());
-    }
-    match leaf {
-        ".bundle" => Some(format!("{path}/config")),
-        ".mvn" => Some(format!("{path}/maven.config")),
-        ".cargo" => Some(format!("{path}/config.toml")),
-        _ if gradle::logic_folder(path) => Some(format!("{path}/build.gradle.kts")),
-        _ => None,
-    }
 }
 
 /// The text of a file that was read, as one a document was parsed from must

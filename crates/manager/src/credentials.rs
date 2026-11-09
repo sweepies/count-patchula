@@ -15,29 +15,8 @@
 //!
 //! Everything returned names what was found, never the value.
 
-/// Whether `path` can hold a committed credential [`committed_credentials`]
-/// knows: a registry settings file or a manifest that names registry URLs.
-pub fn credential_scope(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    crate::nuget::config_file(path)
-        || crate::cargo::config_file(path)
-        || matches!(
-            leaf,
-            ".npmrc"
-                | "pnpm-workspace.yaml"
-                | ".yarnrc.yml"
-                | "composer.json"
-                | "poetry.toml"
-                | "pyproject.toml"
-                | "uv.toml"
-                | "pip.conf"
-                | "pip.ini"
-                | "Gemfile"
-        )
-}
-
 /// Whether a file's text is checked for committed credentials.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CredentialCheck {
     Scan,
     /// Its format can hold nothing but names, versions and hashes.
@@ -45,74 +24,15 @@ pub enum CredentialCheck {
     /// Nobody decided, so it is scanned. Every file type the lockfile runner
     /// materializes must have a decision, which a test in `patchula-update`
     /// walks the materialized list to enforce.
+    #[default]
     Undecided,
-}
-
-/// Whether `path`'s text is checked for committed credentials.
-pub fn credential_check(path: &str) -> CredentialCheck {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    match leaf {
-        "go.sum"
-        | "go.work.sum"
-        | ".terraform.lock.hcl"
-        | "packages.lock.json"
-        | ".python-version"
-        | ".tool-versions" => CredentialCheck::Skip,
-        "package.json"
-        | "package-lock.json"
-        | "npm-shrinkwrap.json"
-        | "aube-lock.yaml"
-        | "pnpm-lock.yaml"
-        | "yarn.lock"
-        | "bun.lock"
-        | "Cargo.toml"
-        | "Cargo.lock"
-        | "go.mod"
-        | "go.work"
-        | "mise.lock"
-        | "mise.toml"
-        | ".mise.toml"
-        | "pyproject.toml"
-        | "gradle-wrapper.properties"
-        | "Gemfile"
-        | "Gemfile.lock"
-        | "Directory.Packages.props"
-        | "Directory.Build.props"
-        | "Directory.Build.targets"
-        | "dotnet-tools.json"
-        | "global.json"
-        | "uv.lock"
-        | "poetry.lock"
-        | "composer.json"
-        | "composer.lock"
-        | "flake.lock"
-        | "flake.nix"
-        | "apm.lock.yaml"
-        | "apm.yml"
-        | "pnpm-workspace.yaml"
-        | ".yarnrc.yml"
-        | ".npmrc"
-        | "uv.toml"
-        | "poetry.toml" => CredentialCheck::Scan,
-        _ if leaf.eq_ignore_ascii_case("nuget.config")
-            || crate::cargo::config_file(path)
-            || [
-                ".tf", ".go", ".rs", ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".gemspec",
-            ]
-            .iter()
-            .any(|extension| path.ends_with(extension)) =>
-        {
-            CredentialCheck::Scan
-        }
-        _ => CredentialCheck::Undecided,
-    }
 }
 
 /// Why `text` committed at `path` refuses the repository, if it does: the
 /// kind of credential found, such as "a `_authToken` in .npmrc" or "a
 /// password in a registry URL". Never the credential itself.
 pub fn committed_credentials(path: &str, text: &str) -> Option<String> {
-    if credential_check(path) == CredentialCheck::Skip {
+    if crate::roles::credential_check(path) == CredentialCheck::Skip {
         return None;
     }
     keyed(path, text)
@@ -575,6 +495,7 @@ fn literal(value: &serde_yaml_ng::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::roles::credential_scope;
 
     fn refused(path: &str, text: &str) -> Option<String> {
         committed_credentials(path, text)

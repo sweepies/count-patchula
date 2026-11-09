@@ -769,8 +769,7 @@ impl crate::Ecosystem for Descriptor {
         )
     }
     fn registry_file(&self, path: &str) -> bool {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
-        crate::bundle_config(path) || leaf == "Gemfile.lock"
+        crate::roles::eco_roles(Manager::Bundler, path).registry
     }
     fn prepare<'a>(
         &self,

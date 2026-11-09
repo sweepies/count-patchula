@@ -660,10 +660,7 @@ impl crate::Ecosystem for Descriptor {
         )
     }
     fn registry_file(&self, path: &str) -> bool {
-        matches!(
-            path.rsplit('/').next().unwrap_or(path),
-            ".npmrc" | ".yarnrc.yml"
-        )
+        crate::roles::eco_roles(self.manager, path).registry
     }
     fn backend_settings(&self, path: &str) -> bool {
         self.registry_file(path)
