@@ -471,7 +471,7 @@ impl Engine {
                 continue;
             }
             let inventory = work.inventory;
-            let since = self.last_run(&repo.repository).await;
+            let since = self.last_run(&repo.repository).await?;
             let plans = patchula_update::plan(
                 repo,
                 &config,
@@ -836,12 +836,15 @@ impl Engine {
     }
     /// When this repository last completed a real run. Schedule windows are
     /// due when one of their times falls between that run and this one.
-    pub(crate) async fn last_run(&self, repo: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub(crate) async fn last_run(
+        &self,
+        repo: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
         let scope = RepositoryScope {
             repository: repo.into(),
         };
-        let run = self.cache.state::<LastRun>(&scope).await.ok().flatten()?;
-        chrono::DateTime::from_timestamp(run.0, 0)
+        let run = self.cache.state::<LastRun>(&scope).await?;
+        Ok(run.and_then(|run| chrono::DateTime::from_timestamp(run.0, 0)))
     }
     async fn record_run(&self, repo: &str, now: chrono::DateTime<chrono::Utc>) -> Result<()> {
         let scope = RepositoryScope {

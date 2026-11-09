@@ -175,10 +175,13 @@ pub trait State: serde::Serialize + serde::de::DeserializeOwned {
 
 /// The `namespace` column of a state row: the shape's name and version, plus
 /// this build's version when the value depends on the build's code.
+/// The release whose code wrote a `PER_BUILD` value.
+pub(crate) const BUILD: &str = env!("CARGO_PKG_VERSION");
+
 fn state_namespace<T: State>() -> String {
     let namespace = format!("{}@v{}", T::NAMESPACE, T::VERSION);
     if T::PER_BUILD {
-        format!("{namespace}+{}", env!("CARGO_PKG_VERSION"))
+        format!("{namespace}+{BUILD}")
     } else {
         namespace
     }
@@ -487,7 +490,7 @@ impl Cache {
     }
 
     /// Keep `value` for `scope`, replacing any earlier value.
-    pub async fn set_state<T: State + Sync>(&self, scope: &T::Scope, value: &T) -> Result<()> {
+    pub async fn set_state<T: State>(&self, scope: &T::Scope, value: &T) -> Result<()> {
         let namespace = state_namespace::<T>();
         let scope = serde_json::to_string(scope)?;
         let value = serde_json::to_vec(value)?;
@@ -519,6 +522,57 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn opening_drops_per_build_state_from_other_releases() {
+        #[derive(Serialize, Deserialize)]
+        struct Parsed(u32);
+        #[derive(Serialize)]
+        struct Scope {
+            key: String,
+        }
+        impl State for Parsed {
+            const NAMESPACE: &'static str = "test-parsed";
+            const VERSION: u32 = 1;
+            const PER_BUILD: bool = true;
+            type Scope = Scope;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let scope = Scope { key: "k".into() };
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        cache.set_state(&scope, &Parsed(1)).await.unwrap();
+        cache
+            .call(|store| {
+                store.conn.execute(
+                    "INSERT INTO state(namespace, scope, value) VALUES ('test-parsed@v1+0.0.1', '{}', '1'), ('plain@v1', '{}', '1')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        drop(cache);
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        assert_eq!(
+            cache.state::<Parsed>(&scope).await.unwrap().map(|p| p.0),
+            Some(1)
+        );
+        let namespaces = cache
+            .read(|store| {
+                let mut statement = store
+                    .conn
+                    .prepare("SELECT namespace FROM state ORDER BY namespace")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+                Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            namespaces,
+            ["plain@v1".to_string(), format!("test-parsed@v1+{BUILD}")]
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn commands_opening_a_new_cache_together_all_succeed() {

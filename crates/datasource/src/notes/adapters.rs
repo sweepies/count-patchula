@@ -18,6 +18,7 @@ struct AdapterScope {
 impl State for AdapterSections {
     const NAMESPACE: &'static str = "notes-adapter";
     const VERSION: u32 = 1;
+    const PER_BUILD: bool = true;
     type Scope = AdapterScope;
 }
 

@@ -35,6 +35,7 @@ struct ChangelogScope {
 impl State for ParsedChangelog {
     const NAMESPACE: &'static str = "changelog";
     const VERSION: u32 = 1;
+    const PER_BUILD: bool = true;
     type Scope = ChangelogScope;
 }
 

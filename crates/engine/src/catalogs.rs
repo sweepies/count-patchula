@@ -218,7 +218,7 @@ impl Engine {
                 continue;
             }
             let mut controls = Controls::default();
-            let since = self.last_run(&repo.report.repository).await;
+            let since = self.last_run(&repo.report.repository).await?;
             if let Ok(plans) = patchula_update::plan(
                 &repo.report,
                 config,

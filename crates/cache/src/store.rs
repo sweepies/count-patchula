@@ -57,6 +57,12 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
     for migration in MIGRATIONS.iter().skip(version.max(0) as usize) {
         transaction.execute_batch(migration)?;
     }
+    // Per-build state from another release can never be read again.
+    transaction.execute(
+        "DELETE FROM state WHERE instr(namespace, '+') > 0 \
+         AND substr(namespace, instr(namespace, '+') + 1) != ?1",
+        [crate::BUILD],
+    )?;
     transaction.commit()?;
     Ok(conn)
 }

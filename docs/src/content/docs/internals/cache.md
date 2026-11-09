@@ -75,12 +75,15 @@ inserted version to `merge_release_page` as `after`, which tells a refresh
 prefix apart from initial pagination. The newest item is also kept in
 `release_heads`.
 
-All other cross-run data lives in `state`: one row per value, keyed by a
+Typed values the Count keeps between runs (hints, extractions, catalog views,
+receipts and the like) live in `state`; the server queue, installations and
+repositories keep their own tables. A state row is one value, keyed by a
 namespace and a canonical-JSON scope. A `State` implementation names its
 `NAMESPACE` and `VERSION`, forming `name@v{VERSION}`, and declares the `Scope` struct
 whose named fields say what the entry is about. A value that depends on this
 build's decoding or extraction code sets `PER_BUILD`, and the build version
 joins the namespace, so a release never reads another release's entries.
+Opening the cache deletes per-build rows written by any other version.
 Values are JSON. A stored value that fails to decode is a miss, logged at
 debug level; database errors remain errors. Each call site owns its value and
 scope types, so a change to a stored shape bumps `VERSION` or `NAMESPACE`
