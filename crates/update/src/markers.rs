@@ -177,10 +177,11 @@ pub(crate) fn section_line<'a>(body: &'a str, prefix: &str, cap: usize) -> Optio
     (lines.next().is_none() && json.len() <= cap).then_some(json)
 }
 
-/// The payload between `prefix` and the ` -->` ending `line`, at most `cap`
-/// bytes — the action marker's place at the end of a tick box.
+/// The payload between the last `prefix` and the ` -->` ending `line`, at
+/// most `cap` bytes — a marker's place at the end of a tick box. He writes
+/// the marker last, so text before it, even a copy of the prefix, is not it.
 pub(crate) fn line_end<'a>(line: &'a str, prefix: &str, cap: usize) -> Option<&'a str> {
-    let (_, rest) = line.split_once(prefix)?;
+    let (_, rest) = line.rsplit_once(prefix)?;
     rest.strip_suffix(" -->").filter(|p| p.len() <= cap)
 }
 
@@ -441,6 +442,12 @@ mod tests {
         assert_eq!(line_end(&format!("{line} trailing"), ACTION, 256), None);
         assert_eq!(line_end(line, ACTION, 8), None);
         assert_eq!(line_end("- [x] plain", ACTION, 256), None);
+        // A copy of the prefix earlier in the line's text is not the marker.
+        let edited = format!("- [x] about {ACTION} things {}", &line[14..]);
+        assert_eq!(
+            line_end(&edited, ACTION, 256),
+            Some("{\"action\":\"recheck\",\"target\":\"abc\"}")
+        );
     }
 
     #[test]

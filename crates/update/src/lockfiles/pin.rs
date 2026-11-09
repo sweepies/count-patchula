@@ -15,7 +15,7 @@ pub(super) struct Pinned {
 }
 
 impl Pinned {
-    /// Pin every lock-only job's package to its target in the `manager`
+    /// Pin every exact-version job's package to its target in the `manager`
     /// manifests under `directory`. With no such jobs nothing is written.
     pub(super) fn apply(
         root: &Path,

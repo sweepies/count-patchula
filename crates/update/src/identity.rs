@@ -1,6 +1,6 @@
 //! Dependency identity: the key recipes every persisted record — plans,
-//! dashboard rows, cache bookkeeping — shares. They hash `Declaration`,
-//! so they change with it, not with any one consumer.
+//! dashboard rows, cache bookkeeping — shares, kept together so they change
+//! with the identity, not with any one consumer.
 use patchula_manager::{Declaration, hash};
 use patchula_report::Dependency;
 

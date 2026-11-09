@@ -25,7 +25,7 @@ pub struct Blob {
     pub content: String,
 }
 /// What a plan fingerprint hashes, by lifecycle stage. A built plan's
-/// covers its contents, message, pending flag and lock jobs; once the
+/// fingerprint covers its contents, message, pending flag and lock jobs; once the
 /// tools generate, it covers the generated contents, deleted set and
 /// message instead, so the two never collide.
 enum Stage<'a> {
@@ -400,8 +400,8 @@ impl Change {
             && update.new_digest == self.digest
             && update.update_type == self.kind
     }
-    /// Whether the target moves the lock alone: it carries a version but no
-    /// manifest value or digest. This is a property of the recorded target,
+    /// Whether the target moves the lock alone: it carries no manifest value
+    /// or digest. This is a property of the recorded target,
     /// not of the update that produced it — a batch target deserialized
     /// from a marker answers the same way.
     pub fn lock_only(&self) -> bool {

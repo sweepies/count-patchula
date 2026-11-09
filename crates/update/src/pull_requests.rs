@@ -149,8 +149,8 @@ pub(crate) struct PrHead {
 impl Pr {
     pub(crate) fn read(pr: &Value) -> Self {
         fn field<T: serde::de::DeserializeOwned>(pr: &Value, key: &str) -> Option<T> {
-            serde_json::from_value::<Option<T>>(pr.get(key).cloned().unwrap_or(Value::Null))
-                .ok()
+            pr.get(key)
+                .and_then(|value| Option::<T>::deserialize(value).ok())
                 .flatten()
         }
         Self {

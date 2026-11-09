@@ -60,7 +60,9 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
     if let Some((pr, _)) = batch {
         let removed: BTreeSet<_> = markers::ticked_lines(pull_requests::body(pr))
             .into_iter()
-            .filter_map(|line| markers::line_end(line, markers::REMOVE, 256).map(str::to_owned))
+            .filter_map(|line| {
+                markers::line_end(line, markers::REMOVE, usize::MAX).map(str::to_owned)
+            })
             .collect();
         items.retain(|item| !removed.contains(&item.origin));
     }
