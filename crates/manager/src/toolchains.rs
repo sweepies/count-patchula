@@ -15,6 +15,7 @@ fn pin(
         manager,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), format!("/{tool}")),
+        form: EditForm::Scalar(Syntax::Bare),
         name: tool.into(),
         package: tool.into(),
         kind: DependencyKind::Toolchain,

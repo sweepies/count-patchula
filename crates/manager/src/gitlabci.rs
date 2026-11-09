@@ -79,9 +79,15 @@ impl Scan<'_> {
             );
             return;
         }
-        if let Some(dep) =
-            images::dependency(Manager::Gitlabci, self.path, self.text, image, location)
-        {
+        if let Some(dep) = images::dependency(
+            Manager::Gitlabci,
+            self.path,
+            self.text,
+            image,
+            location,
+            Syntax::YamlName,
+            None,
+        ) {
             self.out.push(dep);
         }
     }
@@ -156,6 +162,7 @@ impl Scan<'_> {
             manager: Manager::Gitlabci,
             file: self.path.into(),
             location: Location::new(self.text, start, end, pointer.into()),
+            form: EditForm::Scalar(Syntax::YamlName),
             name: format!("{server}/{path}"),
             package: format!("{server}/{project}"),
             kind: DependencyKind::ReusableWorkflow,
@@ -205,6 +212,7 @@ impl Scan<'_> {
             manager: Manager::GitlabciInclude,
             file: self.path.into(),
             location,
+            form: EditForm::Scalar(Syntax::YamlName),
             name: project.into(),
             package: format!("{host}/{project}"),
             kind: DependencyKind::ReusableWorkflow,

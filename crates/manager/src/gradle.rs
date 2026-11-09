@@ -25,6 +25,7 @@ pub(super) fn maven(
         manager: Manager::Gradle,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), pointer),
+        form: EditForm::Scalar(Syntax::Gradle),
         name: split_package(&package)
             .map_or(package.as_str(), |(_, c)| c)
             .to_string(),
@@ -247,6 +248,7 @@ fn wrapper(path: &str, text: &str) -> Vec<Dependency> {
             version.end(),
             "/distributionUrl".into(),
         ),
+        form: EditForm::Scalar(Syntax::Gradle),
         name: "gradle".into(),
         package: "gradle".into(),
         kind: DependencyKind::Toolchain,

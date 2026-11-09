@@ -319,6 +319,7 @@ fn walk(
                     manager: Manager::Cargo,
                     file: path.into(),
                     location: Location::new(text, span.start, span.end, format!("{next}/{name}")),
+                    form: EditForm::Scalar(Syntax::Toml),
                     name: name.into(),
                     package: package.into(),
                     kind: match key {

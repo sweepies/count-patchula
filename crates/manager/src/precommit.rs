@@ -46,6 +46,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
             manager: Manager::PreCommit,
             file: path.into(),
             location,
+            form: EditForm::Scalar(Syntax::Yaml),
             name: package.clone(),
             package,
             kind: DependencyKind::Tool,

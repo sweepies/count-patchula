@@ -72,6 +72,58 @@ impl Location {
         }
     }
 }
+/// How the value at `Dependency::location` is spelled, which the parser that
+/// extracted it knows: `edits` decodes and re-encodes it with this rather
+/// than inferring a syntax from the manager, file or pointer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EditForm {
+    /// A scalar in `syntax`.
+    Scalar(Syntax),
+    /// A container image reference. `digest_pointer` is the pointer of the
+    /// sibling field holding the image digest when the tag is edited on its
+    /// own; `comment` keeps a trailing ` #` comment inside the located
+    /// range.
+    Image {
+        syntax: Syntax,
+        digest_pointer: Option<String>,
+        comment: bool,
+    },
+}
+impl EditForm {
+    /// The syntax the located value is spelled in.
+    pub fn syntax(&self) -> Syntax {
+        match self {
+            Self::Scalar(syntax) => *syntax,
+            Self::Image { syntax, .. } => *syntax,
+        }
+    }
+}
+/// The syntax a located value is spelled in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Syntax {
+    /// Raw text; a replacement holding whitespace is refused.
+    Bare,
+    /// Raw text a custom extractor captured; a replacement may hold
+    /// whitespace.
+    Text,
+    /// A span inside a quoted string; a replacement holding a quote,
+    /// backslash or whitespace is refused.
+    InnerToken,
+    /// A span inside a quoted string where spaces are allowed; a
+    /// replacement holding a quote or backslash is refused.
+    Inner,
+    /// A Gradle version: `[A-Za-z0-9._-+]` only.
+    Gradle,
+    /// A JSON string literal, quotes included in the location.
+    Json,
+    /// A YAML scalar, quotes included when the file quotes it.
+    Yaml,
+    /// A YAML scalar holding a tag name or ref: a plain number stays text
+    /// rather than decoding as a float.
+    YamlName,
+    /// A TOML string literal, quotes included in the location.
+    Toml,
+}
 /// Packages that ship reference data rather than code: CA root bundles, the
 /// time zone database and the public suffix list. They are only useful while
 /// current, so besides its own kind each is also `reference-data`, which the
@@ -98,6 +150,9 @@ pub struct Dependency {
     pub manager: Manager,
     pub file: String,
     pub location: Location,
+    /// How the value at `location` is spelled, set by the parser that
+    /// extracted it.
+    pub form: EditForm,
     pub name: String,
     pub package: String,
     pub kind: DependencyKind,

@@ -116,6 +116,7 @@ pub(super) fn extract(
                     end - 1,
                     format!("/{field}/{}", pointer_token(name)),
                 ),
+                form: EditForm::Scalar(Syntax::Inner),
                 name: name.into(),
                 package: name.to_ascii_lowercase(),
                 kind,

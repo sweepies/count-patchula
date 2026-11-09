@@ -1,12 +1,16 @@
 use crate::*;
 use regex::Regex;
 
+/// `digest_pointer` is the pointer of the sibling field holding the image
+/// digest when the located value is the tag alone.
 pub(super) fn dependency(
     manager: Manager,
     path: &str,
     _text: &str,
     image: &str,
     location: Location,
+    syntax: Syntax,
+    digest_pointer: Option<String>,
 ) -> Option<Dependency> {
     let image = image.trim_matches(['\'', '"']);
     if image.contains(['$', ' ', '{']) || image == "scratch" {
@@ -26,6 +30,11 @@ pub(super) fn dependency(
         manager,
         file: path.into(),
         location,
+        form: EditForm::Image {
+            syntax,
+            digest_pointer,
+            comment: false,
+        },
         name: package.into(),
         package: package.into(),
         kind: DependencyKind::ContainerImage,
@@ -157,8 +166,15 @@ pub(super) fn dockerfile(path: &str, text: &str) -> Result<Vec<Dependency>, Stri
                         )
                     },
                 );
-                if let Some(dep) = dependency(Manager::Dockerfile, path, text, &expanded, location)
-                {
+                if let Some(dep) = dependency(
+                    Manager::Dockerfile,
+                    path,
+                    text,
+                    &expanded,
+                    location,
+                    Syntax::Bare,
+                    None,
+                ) {
                     out.push(dep);
                 }
             }

@@ -16,6 +16,8 @@ pub struct Locked {
     /// public one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<Registry>,
+    /// The syntax the located version text is spelled in.
+    pub syntax: Syntax,
 }
 impl Locked {
     /// The package as a `transitive` dependency of its lockfile.
@@ -24,6 +26,7 @@ impl Locked {
             manager: self.manager,
             file: self.file.clone(),
             location: self.location.clone(),
+            form: EditForm::Scalar(self.syntax),
             name: self.package.clone(),
             package: self.package.clone(),
             kind: DependencyKind::Transitive,
@@ -96,6 +99,7 @@ pub(crate) fn cargo(
                 file: (*path).into(),
                 package: name.into(),
                 version: text.into(),
+                syntax: Syntax::Toml,
                 location: Location::new(
                     crate::read_text(files, path),
                     span.start,
@@ -151,6 +155,7 @@ pub(crate) fn npm(
                 file: (*path).into(),
                 package: name.into(),
                 version: version.value.to_string(),
+                syntax: Syntax::Bare,
                 location: Location::new(
                     crate::read_text(files, path),
                     version.range.start,
@@ -310,6 +315,7 @@ pub(crate) fn aube(
             file,
             package,
             version,
+            syntax: Syntax::Yaml,
             location,
         });
     }

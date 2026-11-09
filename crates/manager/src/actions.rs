@@ -202,6 +202,7 @@ fn setup_input(
         manager: Manager::GithubActions,
         file: path.into(),
         location,
+        form: EditForm::Scalar(Syntax::Yaml),
         name: name.into(),
         package: package.into(),
         kind: DependencyKind::Tool,
@@ -332,6 +333,15 @@ fn add(
         manager: Manager::GithubActions,
         file: path.into(),
         location: Location::new(text, located.0, located.1, pointer.into()),
+        form: if image {
+            EditForm::Image {
+                syntax: Syntax::Yaml,
+                digest_pointer: None,
+                comment: true,
+            }
+        } else {
+            EditForm::Scalar(Syntax::Yaml)
+        },
         name,
         package,
         kind: if image {
@@ -469,6 +479,7 @@ fn runners(
         manager: Manager::GithubActions,
         file: path.into(),
         location: Location::new(text, start, start + label.len(), pointer.into()),
+        form: EditForm::Scalar(Syntax::Yaml),
         name: package.clone(),
         package,
         kind: DependencyKind::Runner,

@@ -1167,7 +1167,7 @@ mod frozen_bytes {
     //! every package encoding (plain, `registry|name`, helm `repo|name`,
     //! gradle plugin portal) must keep producing them.
     use super::*;
-    use patchula_manager::{Dependency, Location};
+    use patchula_manager::{Dependency, EditForm, Location, Syntax};
     use patchula_words::{DependencyKind, Manager, Scheme};
 
     fn dep(registry: Option<&str>, package: &str) -> Dependency {
@@ -1181,6 +1181,7 @@ mod frozen_bytes {
                 column: 1,
                 pointer: "/dependencies/lodash".into(),
             },
+            form: EditForm::Scalar(Syntax::Json),
             name: "lodash".into(),
             package: package.into(),
             kind: DependencyKind::Production,

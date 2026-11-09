@@ -251,6 +251,11 @@ impl Reader<'_> {
                 end,
                 format!("{prefix}/tools/{}", pointer_token(name)),
             ),
+            form: if self.path.ends_with(".tool-versions") {
+                EditForm::Scalar(Syntax::Bare)
+            } else {
+                EditForm::Scalar(Syntax::Toml)
+            },
             name: name.into(),
             package: name.into(),
             kind: DependencyKind::Tool,

@@ -25,6 +25,8 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                 text,
                 &image.value,
                 Location::new(text, start, end, "/image".into()),
+                Syntax::Bare,
+                None,
             )
         {
             out.push(dep);
@@ -55,6 +57,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                     start + tag.len(),
                     format!("/features/{}/tag", pointer_token(key)),
                 ),
+                form: EditForm::Scalar(Syntax::Bare),
                 name: reference.into(),
                 package: reference.into(),
                 // A feature key holds a tag only, so features are never

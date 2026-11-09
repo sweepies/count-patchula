@@ -126,6 +126,7 @@ pub(super) fn extract(
             manager,
             file: path.into(),
             location: Location::new(text, pm.start(), pm.end(), "/packageManager".into()),
+            form: EditForm::Scalar(Syntax::Json),
             name: name.into(),
             package: if name == "bun" { "oven-sh/bun" } else { name }.into(),
             kind: DependencyKind::Tool,
@@ -151,6 +152,7 @@ pub(super) fn extract(
             manager,
             file: path.into(),
             location: Location::new(text, version.start(), version.end(), "/engines/node".into()),
+            form: EditForm::Scalar(Syntax::Json),
             name: "node".into(),
             package: "node".into(),
             kind: DependencyKind::Toolchain,
@@ -203,6 +205,7 @@ fn collect(
                 manager,
                 file: path.into(),
                 location: Location::new(text, value.start(), value.end(), ptr),
+                form: EditForm::Scalar(Syntax::Json),
                 name: if nested {
                     override_name.into()
                 } else {
@@ -333,6 +336,7 @@ pub(super) fn catalogs(
                 manager,
                 file: path.into(),
                 location,
+                form: EditForm::Scalar(Syntax::Yaml),
                 name: name.into(),
                 package: package.into(),
                 kind: DependencyKind::Production,
@@ -369,6 +373,7 @@ pub(super) fn node_version(path: &str, text: &str, manager: Manager) -> Vec<Depe
         manager,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), "/node".into()),
+        form: EditForm::Scalar(Syntax::Bare),
         name: "node".into(),
         package: "node".into(),
         kind: DependencyKind::Toolchain,
