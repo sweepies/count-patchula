@@ -1,7 +1,9 @@
 //! Batch lookup and branch-writing engine shared by CLI and future server callers.
 #![forbid(unsafe_code)]
 mod catalogs;
+mod lookup;
 mod overrides;
+mod report;
 pub mod repository;
 pub mod settings;
 
@@ -114,6 +116,9 @@ pub struct Engine {
     versions_host_override: Option<bool>,
     /// Whether repositories' `security.advisories` setting may query OSV.dev.
     advisories: bool,
+    /// Whether the GitHub identity is an installation's, which discovers
+    /// repositories through `installation/repositories` rather than `user/repos`.
+    installation: bool,
     /// The server URL hidden in PRs and the dashboard for the CLI to find.
     advertised_server: Option<String>,
     progress: Arc<dyn Progress>,
@@ -121,13 +126,98 @@ pub struct Engine {
 struct Work {
     report: Repository,
     config: Option<Config>,
-    dependencies: Vec<Dependency>,
+    /// Extracted dependencies, each with what it needs and what policy proposed.
+    dependencies: Vec<Dep>,
     /// Lockfile packages no manifest declares, for advisory checks.
     locked: Vec<patchula_manager::Locked>,
+    /// The repository's policy evaluator, once its config is known.
+    evaluator: Option<Evaluator>,
     snapshot: patchula_update::Snapshot,
     inventory: Option<patchula_update::Inventory>,
     controls: patchula_update::dashboard::Controls,
 }
+/// One extracted dependency plus what the lookup stages made of it.
+struct Dep {
+    /// The dependency as extraction reported it.
+    dependency: Dependency,
+    /// What the batch fetches and checks for it.
+    needs: Needs,
+    /// Policy's proposals for it.
+    evaluation: Evaluation,
+}
+impl Dep {
+    fn new(dependency: Dependency) -> Self {
+        Self {
+            dependency,
+            needs: Needs::default(),
+            evaluation: Evaluation::default(),
+        }
+    }
+}
+impl std::ops::Deref for Dep {
+    type Target = Dependency;
+    fn deref(&self) -> &Dependency {
+        &self.dependency
+    }
+}
+/// What the batch fetches and checks for one dependency, decided once its
+/// evaluator exists and read by every later stage rather than re-derived.
+#[derive(Default)]
+struct Needs {
+    /// The catalog key its versions or forge tags are read under; kept even
+    /// when it initiates no fetch, since another dependency may share it.
+    catalog_key: Option<LookupKey>,
+    /// Its versions are looked up; a forge catalog alone does not count.
+    versions: bool,
+    /// Its forge-action tag catalog feeds digest pins.
+    forge: bool,
+    /// The youngest catalog reuse its wait allows, in hours.
+    wait_hours: u32,
+    /// The OSV query its advisories are read under; whether they are fetched
+    /// is the repository's settings' decision, not the query's.
+    advisory: Option<patchula_datasource::AdvisoryQuery>,
+    /// A GithubTags ref whose current commit digest is read up front.
+    current_ref: Option<DigestKey>,
+    /// Whether a digest proposal for it would pass policy.
+    digest_policy: bool,
+    /// Whether policy ignores it.
+    ignored: bool,
+    /// Whether it is a container image dependency.
+    image: bool,
+    /// Whether its pinned digest's SBOMs are read and compared.
+    sboms: bool,
+    /// Whether a manual retry revalidates every fetch it makes.
+    revalidate: bool,
+}
+/// Everything the fetch stages produced, read by digest resolution and
+/// report assembly.
+#[derive(Default)]
+struct Lookups {
+    /// The batch's catalogs, keyed by versions-host flag and package.
+    catalogs: Catalogs,
+    /// When each catalog was fetched, and whether it was reused.
+    evidence: catalogs::Evidence,
+    /// Catalog keys whose lookups carried credentials.
+    credentialed: BTreeSet<LookupKey>,
+    /// Git ref digests read so far: hints, current refs, proposals.
+    digests: BTreeMap<DigestKey, std::result::Result<String, Failure>>,
+    /// OSV advisories per query.
+    advisories:
+        BTreeMap<patchula_datasource::AdvisoryQuery, Vec<Arc<patchula_datasource::Advisory>>>,
+    /// Container image tag digests.
+    image_digests: BTreeMap<DigestKey, std::result::Result<String, Failure>>,
+    /// SBOM reads keyed by image, digest and platform.
+    image_sboms: ImageSboms,
+    /// The OSV listing image advisories were judged against.
+    image_listing: patchula_datasource::AdvisoryListing,
+    /// The OSV records image advisories were judged by.
+    image_found: patchula_lookup::images::Found,
+    /// Why the image advisory read failed, when it did.
+    osv_failure: Option<String>,
+}
+/// SBOM reads keyed by image, digest and platform.
+type ImageSboms =
+    BTreeMap<(String, String, String), std::result::Result<patchula_datasource::ImageSbom, String>>;
 #[derive(Serialize, Deserialize)]
 struct CachedExtraction {
     extraction: Extraction,
@@ -293,14 +383,16 @@ impl Engine {
                 .with_credentials(credentials)
                 .with_registries(&tool_registries)
         });
-        Self::build(
+        let mut engine = Self::build(
             github,
             cache,
             concurrency,
             transport,
             http_options,
             lockfiles,
-        )
+        )?;
+        engine.installation = true;
+        Ok(engine)
     }
     /// Settings change only between batches; warm clients and receipts stay intact.
     pub fn set_batch_options(&mut self, concurrency: usize, recheck: Recheck) -> Result<()> {
@@ -392,6 +484,7 @@ impl Engine {
             recheck: Recheck::default(),
             versions_host_override: None,
             advisories: false,
+            installation: false,
             advertised_server: None,
             progress: Arc::new(()),
         };
@@ -494,8 +587,9 @@ impl Engine {
             transport,
             http_options,
             lockfiles,
-        )?
-        .with_recheck(recheck);
+        )?;
+        engine.installation = matches!(auth, Auth::Credentials(_));
+        let mut engine = engine.with_recheck(recheck);
         engine.advisories = true;
         engine.lockfile_cache_gib = settings.lockfiles.cache_gib;
         Ok(engine)
@@ -569,24 +663,30 @@ impl Engine {
         let mut branches = Vec::new();
         let mut pull_requests = Vec::new();
         let note_sources = patchula_notes::Client::new(self.sources.clone());
-        for mut work in work {
+        // `lookup_work_at` returns one `Work` per report repository, in order.
+        assert_eq!(report.repositories.len(), work.len(), "lookup repositories");
+        for (repo, mut work) in report.repositories.iter_mut().zip(work) {
+            assert_eq!(
+                repo.repository, work.report.repository,
+                "lookup repository order"
+            );
             let Some(config) = work.config else {
                 continue;
             };
-            let repo = report
-                .repositories
-                .iter_mut()
-                .find(|r| r.repository == work.report.repository)
-                .expect("lookup repository");
             if repo.status != Status::Complete {
                 continue;
             }
             let inventory = work.inventory;
+            let dependencies: Vec<Dependency> = work
+                .dependencies
+                .iter()
+                .map(|dep| dep.dependency.clone())
+                .collect();
             let since = self.last_run(&repo.repository).await?;
             let plans = patchula_update::plan(
                 repo,
                 &config,
-                &work.dependencies,
+                &dependencies,
                 &work.snapshot,
                 allow_lockfile_pending,
                 since,
@@ -614,13 +714,13 @@ impl Engine {
                 plans.push(maintenance);
             }
             if !dry_run {
-                work.controls.apply(&mut plans, &work.dependencies);
+                work.controls.apply(&mut plans, &dependencies);
                 let open = inventory.as_ref().expect("write inventory");
                 match patchula_update::batch::apply(
                     &mut plans,
                     repo,
                     &config,
-                    &work.dependencies,
+                    &dependencies,
                     &work.snapshot,
                     &open.pull_requests(&repo.repository),
                     &open.actor,
@@ -980,8 +1080,6 @@ impl Engine {
                 "a local directory is read alone; name no repositories with it".into(),
             ));
         }
-        let local = options.local.clone();
-        let sources = self.sources.clone();
         // Packages any of whose digest, image or SBOM reads carried
         // credentials, as their catalogs' lookups record too.
         let sent = std::sync::Mutex::new(BTreeSet::<Sent>::new());
@@ -993,1250 +1091,42 @@ impl Engine {
         let before_hits = self.extraction_hits.load(Ordering::Relaxed);
         let started = Instant::now();
         let phase = PhaseTrace::new("discovery");
-        let repos = if let Some(dir) = &local {
-            vec![local_name(dir)]
-        } else if options.repositories.is_empty() {
-            self.progress.stage(Stage::Discovery, 0);
-            self.repositories().await?
-        } else {
-            options.repositories
-        };
-        let repos: BTreeSet<_> = repos.into_iter().collect();
-        for repo in &repos {
-            validate_repo(repo)?;
-        }
-        let overrides = overrides::load(options.config_dir.as_deref(), &repos)?;
-        let discovery = micros(started);
+        let discovery = self.discover(&options).await?;
+        let discovery_time = micros(started);
         drop(phase);
-        let override_config = options.config.as_ref();
-        // Hints overlap mutable digest reads with the repository head read.
-        // Catalogs wait for current policy, age-cache and checkbox decisions.
-        let inputs_hash = patchula_manager::hash(&serde_json::to_vec(&(
-            &options.config,
-            &overrides,
-            self.versions_host_override,
-        ))?);
-        let schema_hash = patchula_manager::hash(patchula_config::SCHEMA.as_bytes());
-        let credential_scope = self.github.credential_scope().to_owned();
-        let mut hint = LookupHint::default();
-        for repo in &repos {
-            let scope = LookupHintScope {
-                repository: repo.clone(),
-                inputs_hash: inputs_hash.clone(),
-                schema_hash: schema_hash.clone(),
-                credential_scope: credential_scope.clone(),
-            };
-            if let Some(known) = self.cache.state::<LookupHint>(&scope).await? {
-                hint.catalogs.extend(known.catalogs);
-                hint.digests.extend(known.digests);
-            }
-        }
-        self.progress.stage(Stage::Extraction, repos.len());
-        let scans = async {
-            let started = Instant::now();
-            let _phase = PhaseTrace::new("extraction");
-            let overrides = &overrides;
-            let local = local.as_deref();
-            let work: Vec<_> = stream::iter(repos)
-                .map(|repo| async move {
-                    let scanned = match local {
-                        Some(dir) => self.scan_local(dir, &repo, override_config).await,
-                        None => {
-                            self.scan(&repo, overrides.get(&repo).or(override_config))
-                                .await
-                        }
-                    };
-                    let mut work = match scanned {
-                        Ok(work) => work,
-                        Err(error) => Work {
-                            report: repo_report(&repo, Status::Error, Some(error.to_string())),
-                            config: None,
-                            dependencies: Vec::new(),
-                            locked: Vec::new(),
-                            snapshot: patchula_update::Snapshot::default(),
-                            inventory: None,
-                            controls: patchula_update::dashboard::Controls::default(),
-                        },
-                    };
-                    if read_controls
-                        && work.report.status == Status::Complete
-                        && let Some(config) = &work.config
-                    {
-                        match patchula_update::Inventory::read(
-                            &self.github,
-                            &self.cache,
-                            &work.report,
-                            config,
-                        )
-                        .await
-                        {
-                            Ok(inventory) => {
-                                match patchula_update::dashboard::Controls::read(
-                                    &inventory,
-                                    &repo,
-                                    config.prs.dashboard,
-                                ) {
-                                    Ok(mut controls) => {
-                                        controls.age_permits.extend(
-                                            patchula_update::dashboard::load_permits(
-                                                &self.cache,
-                                                &repo,
-                                                &inventory.actor,
-                                            )
-                                            .await
-                                            .map_err(Error::Invalid)?,
-                                        );
-                                        work.controls = controls;
-                                        work.inventory = Some(inventory);
-                                    }
-                                    Err(error) => {
-                                        work.report.status = Status::Error;
-                                        work.report.reason = Some(error);
-                                    }
-                                }
-                            }
-                            Err(error) => {
-                                work.report.status = Status::Error;
-                                work.report.reason = Some(error);
-                            }
-                        }
-                    }
-                    self.progress.advance(1);
-                    Ok::<_, Error>(work)
-                })
-                .buffer_unordered(self.concurrency)
-                .collect()
-                .await;
-            (
-                work.into_iter().collect::<Result<Vec<_>>>(),
-                micros(started),
-            )
-        };
-        let prefetch = async {
-            let started = Instant::now();
-            let _phase = PhaseTrace::new("lookup.prefetch");
-            let result = tokio::join!(
-                async { Catalogs::new() },
-                self.digests(hint.digests, false, sent)
-            );
-            (result, micros(started))
-        };
-        let ((work, extraction_time), ((mut catalogs, mut digests), prefetch_time)) =
-            tokio::join!(scans, prefetch);
-        let mut work = work?;
+        let scanned = self
+            .scan_all(&discovery, &options, read_controls, sent)
+            .await?;
+        let mut work = scanned.work;
         work.sort_by(|a, b| a.report.repository.cmp(&b.report.repository));
+        let mut lookups = Lookups {
+            digests: scanned.digests,
+            ..Default::default()
+        };
         let phase = PhaseTrace::new("lookup");
         let started = Instant::now();
-        let mut keys = BTreeSet::new();
-        let mut waits = BTreeMap::<LookupKey, u32>::new();
-        // Catalog reads wait for authoritative policy and checkbox state. Only
-        // digest hints are speculative, so a warm cache hit sends no list read.
-        let retry_keys = self.forced_catalog_keys(&work).await?;
-        let fresh_sources = sources.revalidating();
-        // Digest retries use the same scoped HTTP client later in the batch.
-        let evaluators: Vec<_> = work
-            .iter()
-            .map(|repo| {
-                repo.config
-                    .as_ref()
-                    .map(Evaluator::new)
-                    .transpose()
-                    .map_err(Error::Invalid)
-            })
-            .collect::<Result<_>>()?;
-        for (repo, eval) in work.iter().zip(&evaluators) {
-            if let Some(eval) = eval {
-                for dep in &repo.dependencies {
-                    if eval.needs_lookup(dep) || eval.needs_forge_catalog(dep) {
-                        let key = self.catalog_key(dep, repo.config.as_ref());
-                        keys.insert(key.clone());
-                        let hours = eval.catalog_wait_hours(dep);
-                        waits
-                            .entry(key)
-                            .and_modify(|wait| *wait = (*wait).min(hours))
-                            .or_insert(hours);
-                    }
-                }
-            }
-        }
-        // One lookup per source/package over the entire batch, even across
-        // schemes and extractor-specific tag filters. Keep raw catalogs shared.
-        let mut current_refs = BTreeSet::new();
-        for (repo, eval) in work.iter().zip(&evaluators) {
-            if let Some(eval) = eval {
-                for dep in &repo.dependencies {
-                    if dep.tagged_action()
-                        && dep.source == Source::GithubTags
-                        && !(dep.digest.is_some() && dep.resolved.is_none())
-                        && eval.digest_policy_applies(dep)
-                        && !eval.needs_lookup(dep)
-                    {
-                        current_refs.insert((
-                            dep.package.clone(),
-                            dep.resolved.as_deref().unwrap_or(&dep.current).to_owned(),
-                        ));
-                    }
-                }
-            }
-        }
-        // Replace per-repository hints only after successful extraction.
-        for (repo, eval) in work.iter().zip(&evaluators) {
-            if repo.report.status == Status::Complete
-                && let Some(eval) = eval
-            {
-                let catalogs = repo
-                    .dependencies
-                    .iter()
-                    .filter(|dep| eval.needs_lookup(dep) || eval.needs_forge_catalog(dep))
-                    .map(|dep| self.catalog_key(dep, repo.config.as_ref()))
-                    .collect();
-                let digests = current_refs
-                    .iter()
-                    .filter(|(package, _)| {
-                        repo.dependencies.iter().any(|dep| &dep.package == package)
-                    })
-                    .cloned()
-                    .collect();
-                let scope = LookupHintScope {
-                    repository: repo.report.repository.clone(),
-                    inputs_hash: inputs_hash.clone(),
-                    schema_hash: schema_hash.clone(),
-                    credential_scope: credential_scope.clone(),
-                };
-                self.cache
-                    .set_state(&scope, &LookupHint { catalogs, digests })
-                    .await?;
-            }
-        }
-        // Hints may refer to dependencies removed by the new commit/config.
-        catalogs.retain(|key, _| keys.contains(key));
-        keys.retain(|key| !catalogs.contains_key(key));
-        current_refs.retain(|key| !digests.contains_key(key));
-        // Revalidate current action refs alongside source heads. These network
-        // reads used to serialize behind all catalogs inside the policy phase.
-        let mut advisory_queries = BTreeSet::new();
-        for (repo, eval) in work.iter().zip(&evaluators) {
-            if let (Some(eval), Some(config)) = (eval, &repo.config)
-                && self.advisories
-                && config.security.advisories
-            {
-                advisory_queries.extend(
-                    repo.dependencies
-                        .iter()
-                        .cloned()
-                        .chain(repo.locked.iter().map(patchula_manager::Locked::dependency))
-                        .filter(|dep| !eval.ignored(dep))
-                        .filter_map(|dep| patchula_lookup::advisory_query(&dep)),
-                );
-            }
-        }
-        self.progress
-            .stage(Stage::Lookup, keys.len() + current_refs.len());
-        let (remaining, refs, advisories) = tokio::join!(
-            self.age_catalogs(keys, &waits, &retry_keys, &sources, now),
-            self.digests(current_refs, true, sent),
-            async {
-                if advisory_queries.is_empty() {
-                    Ok(BTreeMap::new())
-                } else {
-                    self.sources.advisories(&advisory_queries).await
-                }
-            }
-        );
-        let advisories = advisories.unwrap_or_else(|error| {
-            for (repo, eval) in work.iter_mut().zip(&evaluators) {
-                if eval.as_ref().is_some_and(|eval| {
-                    repo.dependencies.iter().any(|dep| {
-                        !eval.ignored(dep)
-                            && patchula_lookup::advisory_query(dep)
-                                .is_some_and(|q| advisory_queries.contains(&q))
-                    })
-                }) {
-                    repo.report
-                        .warnings
-                        .push(format!("advisory lookup on OSV.dev failed: {error}"));
-                }
-            }
-            BTreeMap::new()
-        });
-        let (mut remaining, mut catalog_evidence, mut credentialed) = remaining?;
-        // A lockfile-only package joins the dependencies once it is vulnerable.
-        for (repo, eval) in work.iter_mut().zip(&evaluators) {
-            if eval.is_some() {
-                let vulnerable: Vec<_> = repo
-                    .locked
-                    .iter()
-                    .map(patchula_manager::Locked::dependency)
-                    .filter(|dep| {
-                        patchula_lookup::advisory_query(dep)
-                            .and_then(|q| advisories.get(&q))
-                            .is_some_and(|found| !found.is_empty())
-                    })
-                    .collect();
-                repo.dependencies.extend(vulnerable);
-            }
-        }
-        // A vulnerable dependency's fix may be newer than a catalog reused
-        // under its release-age wait, so those catalogs are read again. So is a
-        // forge action's: its tags may have moved, and their commits are its pins.
-        let mut vulnerable = BTreeSet::new();
-        for (repo, eval) in work.iter().zip(&evaluators) {
-            if let Some(eval) = eval {
-                for dep in &repo.dependencies {
-                    let key = self.catalog_key(dep, repo.config.as_ref());
-                    let reused = catalog_evidence.get(&key).is_some_and(|e| e.reused);
-                    if reused
-                        && (eval.needs_forge_catalog(dep)
-                            || (eval.needs_lookup(dep)
-                                && patchula_lookup::advisory_query(dep)
-                                    .and_then(|q| advisories.get(&q))
-                                    .is_some_and(|found| !found.is_empty())))
-                    {
-                        vulnerable.insert(key);
-                    }
-                }
-            }
-        }
-        if !vulnerable.is_empty() {
-            self.progress.stage(Stage::Lookup, vulnerable.len());
-            let (fresh, evidence, sent_catalogs) = self
-                .age_catalogs(
-                    vulnerable,
-                    &BTreeMap::new(),
-                    &BTreeSet::new(),
-                    &sources,
-                    now,
-                )
-                .await?;
-            remaining.extend(fresh);
-            catalog_evidence.extend(evidence);
-            credentialed.extend(sent_catalogs);
-        }
-        catalogs.extend(remaining);
-        digests.extend(refs);
-        let lookup_time = prefetch_time + micros(started);
+        let plan = self.plan_lookups(&mut work, &discovery).await?;
+        self.fetch_lookups(&plan, &mut work, &mut lookups, now, sent)
+            .await?;
+        let lookup_time = scanned.prefetch + micros(started);
         drop(phase);
-        let started = Instant::now();
         let phase = PhaseTrace::new("policy.evaluate");
-        let mut proposals: Vec<Vec<Evaluation>> = Vec::with_capacity(work.len());
-        // Per repository, the targets held back this run, or `None` when a
-        // lookup failed and the set may be missing some: saved age permits
-        // are pruned to these, so a permit lasts while its version is held.
-        let mut held_targets: Vec<Option<BTreeSet<String>>> = Vec::with_capacity(work.len());
-        let mut digest_keys = BTreeSet::new();
-        let mut image_keys = BTreeSet::new();
-        for (repo, eval) in work.iter_mut().zip(&evaluators) {
-            let mut deps = Vec::with_capacity(repo.dependencies.len());
-            let mut held = Some(BTreeSet::new());
-            for dep in &repo.dependencies {
-                let mut evaluation = Evaluation::default();
-                if let Some(eval) = eval
-                    && !eval.ignored(dep)
-                {
-                    let found = patchula_lookup::advisory_query(dep)
-                        .and_then(|query| advisories.get(&query).map(|found| (query, found)));
-                    let found = found
-                        .as_ref()
-                        .map(|(query, found)| (query, found.as_slice()));
-                    match catalogs.get(&self.catalog_key(dep, repo.config.as_ref())) {
-                        Some(Ok(catalog)) => {
-                            match eval.evaluate_with(dep, catalog, now, &BTreeSet::new(), found) {
-                                Ok(p) => {
-                                    let dep_key = patchula_update::dashboard::extracted_key(dep);
-                                    if let Some(held) = &mut held {
-                                        held.extend(p.held_back.iter().flat_map(|h| {
-                                            h.versions
-                                                .iter()
-                                                .chain(std::iter::once(&h.version))
-                                                .map(|v| {
-                                                    patchula_update::dashboard::held_target(
-                                                        &dep_key,
-                                                        v,
-                                                        h.update_type.as_str(),
-                                                    )
-                                                })
-                                        }));
-                                    }
-                                    let overrides: BTreeSet<_> = p
-                                        .held_back
-                                        .iter()
-                                        .flat_map(|h| {
-                                            h.versions
-                                                .iter()
-                                                .chain(std::iter::once(&h.version))
-                                                .map(|v| (v.clone(), h.update_type.to_string()))
-                                        })
-                                        .filter(|(v, k)| {
-                                            let target = patchula_update::dashboard::held_target(
-                                                &dep_key, v, k,
-                                            );
-                                            repo.controls.create.contains(&target)
-                                                || repo.controls.age_permits.contains(&target)
-                                        })
-                                        .collect();
-                                    if overrides.is_empty() {
-                                        evaluation = p;
-                                    } else {
-                                        match eval
-                                            .evaluate_with(dep, catalog, now, &overrides, found)
-                                        {
-                                            Ok(p) => {
-                                                for (v, k) in overrides {
-                                                    repo.controls.age_permits.insert(
-                                                        patchula_update::dashboard::held_target(
-                                                            &dep_key, &v, &k,
-                                                        ),
-                                                    );
-                                                }
-                                                evaluation = p;
-                                            }
-                                            Err(e) => {
-                                                held = None;
-                                                repo.report
-                                                    .warnings
-                                                    .push(format!("{}: {e}", dep.name));
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    held = None;
-                                    repo.report.warnings.push(format!("{}: {e}", dep.name));
-                                }
-                            }
-                        }
-                        Some(Err(error)) => {
-                            held = None;
-                            repo.report.lookup_failures.push(lookup_failure(
-                                dep,
-                                error,
-                                error.message.clone(),
-                            ));
-                        }
-                        // A dependency that needs no lookup holds nothing back.
-                        None => {}
-                    }
-                    if matches!(dep.source, Source::Docker | Source::Oci) {
-                        for proposal in &evaluation.updates {
-                            if eval.needs_digest(dep, proposal)
-                                && let Some(tag) = &proposal.new_version
-                            {
-                                image_keys.insert((dep.package.clone(), tag.clone()));
-                            }
-                        }
-                        if eval.digest_policy_applies(dep) {
-                            image_keys.insert((dep.package.clone(), dep.current.clone()));
-                        }
-                    }
-                    if dep.tagged_action() {
-                        for proposal in &evaluation.updates {
-                            if eval.needs_digest(dep, proposal)
-                                && let Some(reference) = proposal
-                                    .new_version
-                                    .as_deref()
-                                    .or(proposal.new_value.as_deref())
-                            {
-                                digest_keys.insert((dep.package.clone(), reference.to_owned()));
-                            }
-                        }
-                        if dep.digest.is_some() && dep.resolved.is_none() {
-                            repo.report.warnings.push(format!(
-                                "{}: SHA pin has no version comment; replacement tag is unknown",
-                                dep.name
-                            ));
-                        } else if dep.source == Source::GithubTags || eval.needs_forge_catalog(dep)
-                        {
-                            // A forge resolves only tags, which its catalog
-                            // already carries; branch refs stay unpinned.
-                            let reference = dep.resolved.as_deref().unwrap_or(&dep.current);
-                            if eval.digest_policy_applies(dep) {
-                                digest_keys.insert((dep.package.clone(), reference.to_owned()));
-                            }
-                        }
-                    }
-                }
-                deps.push(evaluation);
-            }
-            proposals.push(deps);
-            held_targets.push(held);
-        }
-        let proposal_cpu_time = micros(started);
-        for (repo, held) in work.iter().zip(&held_targets) {
-            if let Some(inventory) = &repo.inventory {
-                let permits = match held {
-                    Some(held) => repo
-                        .controls
-                        .age_permits
-                        .intersection(held)
-                        .cloned()
-                        .collect(),
-                    None => repo.controls.age_permits.clone(),
-                };
-                patchula_update::dashboard::save_permits(
-                    &self.cache,
-                    &repo.report.repository,
-                    &inventory.actor,
-                    permits,
-                )
-                .await
-                .map_err(Error::Invalid)?;
-            }
-        }
+        let (eval_keys, proposal_cpu_time) =
+            self.evaluate_lookups(&mut work, &lookups, now).await?;
         drop(phase);
-        // The revalidated complete tag namespace already carries peeled target
-        // commits. Reuse those for both current and proposed action tags instead
-        // of adding a serial /commits/{tag} round trip after policy evaluation.
-        for (package, reference) in &digest_keys {
-            if let Some(Ok(catalog)) = catalogs.iter().find_map(|(key, result)| {
-                (key.1.name == *package
-                    && (key.1.source == Source::ForgeTags
-                        || (key.1.source == Source::GithubTags
-                            && catalog_evidence.get(key).is_none_or(|e| !e.reused))))
-                .then_some(result)
-            }) && let Some(digest) = catalog
-                .versions
-                .iter()
-                .find(|version| &version.version == reference)
-                .and_then(|version| version.digest.as_ref())
-            {
-                digests.insert((package.clone(), reference.clone()), Ok(digest.clone()));
-            }
-        }
-        digest_keys.retain(|key| !digests.contains_key(key));
-        // Forge refs resolve only through their tag catalog. A ref missing
-        // from it is not sent to GitHub.
-        digest_keys.retain(|(package, reference)| {
-            let Some(result) = catalogs.iter().find_map(|(key, result)| {
-                (key.1.source == Source::ForgeTags && key.1.name == *package).then_some(result)
-            }) else {
-                return true;
-            };
-            if result.is_ok() {
-                digests.insert(
-                    (package.clone(), reference.clone()),
-                    Err(Failure {
-                        kind: LookupErrorKind::NotFound,
-                        message: format!("tag {reference} not found"),
-                    }),
-                );
-            }
-            false
-        });
         let started = Instant::now();
         let phase = PhaseTrace::new("digest");
-        self.progress
-            .stage(Stage::Digests, digest_keys.len() + image_keys.len());
-        // Mutable tags, other refs and image digests are independent, so they
-        // resolve side by side rather than in three waves.
-        let (mutable_tags, digest_keys): (BTreeSet<_>, BTreeSet<_>) =
-            digest_keys.into_iter().partition(|(package, _)| {
-                catalog_evidence.iter().any(|(key, e)| {
-                    key.1.source == Source::GithubTags && key.1.name == *package && e.reused
-                })
-            });
-        let tags = async {
-            let found = self.sources.fresh_tag_digests(&mutable_tags).await;
-            self.progress.advance(mutable_tags.len());
-            found
-        };
-        let refs = self.digests(digest_keys, true, sent);
-        let retry_keys = &retry_keys;
-        let fresh_sources = &fresh_sources;
-        let images = stream::iter(image_keys)
-            .map(|(package, tag)| async move {
-                let sources = if retry_keys.iter().any(|(_, id)| {
-                    matches!(id.source, Source::Docker | Source::Oci) && id.name == package
-                }) {
-                    fresh_sources
-                } else {
-                    &self.sources
-                };
-                let (result, credentialed) =
-                    patchula_http::tracked(Box::pin(sources.registry_digest(&package, &tag))).await;
-                if credentialed {
-                    sent.lock()
-                        .expect("sent packages")
-                        .insert(Sent::Image(package.clone()));
-                }
-                let result = result.map_err(Failure::from);
-                self.progress.advance(1);
-                ((package, tag), result)
-            })
-            .buffer_unordered(100)
-            .collect::<BTreeMap<_, _>>();
-        let (tags, refs, image_digests) = futures_util::future::join3(tags, refs, images).await;
-        digests.extend(tags);
-        digests.extend(refs);
+        self.resolve_digests(eval_keys, &mut lookups, sent).await?;
         let digest_time = micros(started);
         drop(phase);
         let started = Instant::now();
         let phase = PhaseTrace::new("image");
-        let images_on = |config: &patchula_config::Config| {
-            self.advisories && config.security.advisories && config.security.images
-        };
-        // Every pinned image's current digest is read, so the dashboard shows a
-        // gap before the first rebuild; OSV is asked only about replacements.
-        let mut image_reads = BTreeSet::new();
-        let mut image_pairs = BTreeSet::new();
-        let mut image_deps = Vec::new();
-        for ((repo, eval), deps) in work.iter().zip(&evaluators).zip(&proposals) {
-            let (Some(eval), Some(config)) = (eval, &repo.config) else {
-                continue;
-            };
-            if !images_on(config) {
-                continue;
-            }
-            for (dep, evaluation) in repo.dependencies.iter().zip(deps) {
-                let Some(old) = dep.digest.as_ref() else {
-                    continue;
-                };
-                if !matches!(dep.source, Source::Docker | Source::Oci) || eval.ignored(dep) {
-                    continue;
-                }
-                let current = image_digests
-                    .get(&(dep.package.clone(), dep.current.clone()))
-                    .and_then(|r| r.as_ref().ok())
-                    .filter(|new| eval.digest_proposal(dep, new).is_ok_and(|p| p.is_some()));
-                let tagged = evaluation
-                    .updates
-                    .iter()
-                    .filter(|p| eval.needs_digest(dep, p))
-                    .filter_map(|p| p.new_version.clone())
-                    .filter_map(|tag| image_digests.get(&(dep.package.clone(), tag)))
-                    .filter_map(|r| r.as_ref().ok());
-                let mut digests = vec![old.clone()];
-                for new in current.into_iter().chain(tagged).filter(|new| *new != old) {
-                    image_pairs.insert((dep.package.clone(), old.clone()));
-                    image_pairs.insert((dep.package.clone(), new.clone()));
-                    digests.push(new.clone());
-                }
-                for digest in &digests {
-                    for platform in &config.security.image_platforms {
-                        image_reads.insert((dep.package.clone(), digest.clone(), platform.clone()));
-                    }
-                }
-                image_deps.push((
-                    dep.package.clone(),
-                    digests,
-                    &config.security.image_platforms,
-                    BTreeSet::new(),
-                ));
-            }
-        }
-        let read_sboms = |reads: BTreeSet<(String, String, String)>| {
-            stream::iter(reads)
-                .map(|(package, digest, platform)| async move {
-                    let (result, credentialed) = patchula_http::tracked(Box::pin(
-                        self.sources.image_sbom(&package, &digest, &platform),
-                    ))
-                    .await;
-                    if credentialed {
-                        sent.lock()
-                            .expect("sent packages")
-                            .insert(Sent::Image(package.clone()));
-                    }
-                    let result = result.map_err(|e| e.to_string());
-                    ((package, digest, platform), result)
-                })
-                .buffer_unordered(16)
-                .collect::<BTreeMap<_, _>>()
-        };
-        let mut image_sboms = read_sboms(image_reads).await;
-        // An image with none of the configured platforms is read for the first
-        // platform its index lists, on every digest of the dependency.
-        let mut fallback_reads = BTreeSet::new();
-        for (package, digests, configured, listed) in &mut image_deps {
-            for digest in digests.iter() {
-                let side = configured
-                    .iter()
-                    .filter_map(|platform| {
-                        let key = (package.clone(), digest.clone(), platform.clone());
-                        Some((platform.clone(), image_sboms.get(&key)?.clone()))
-                    })
-                    .collect();
-                let Some(platform) = patchula_lookup::images::fallback(&side) else {
-                    continue;
-                };
-                for digest in digests.iter() {
-                    let key = (package.clone(), digest.clone(), platform.clone());
-                    if !image_sboms.contains_key(&key) {
-                        fallback_reads.insert(key);
-                    }
-                }
-                listed.insert(platform);
-            }
-        }
-        image_sboms.extend(read_sboms(fallback_reads).await);
-        let image_side = |package: &str, digest: &str, platforms: &[String]| {
-            platforms
-                .iter()
-                .filter_map(|platform| {
-                    let key = (package.to_owned(), digest.to_owned(), platform.clone());
-                    Some((platform.clone(), image_sboms.get(&key)?.clone()))
-                })
-                .collect::<patchula_lookup::images::Side>()
-        };
-        let image_queries: BTreeSet<_> = image_sboms
-            .iter()
-            .filter(|((package, digest, _), _)| {
-                image_pairs.contains(&(package.clone(), digest.clone()))
-            })
-            .filter_map(|(_, result)| match result {
-                Ok(patchula_datasource::ImageSbom::Found(sbom)) => Some(sbom.queries()),
-                _ => None,
-            })
-            .flatten()
-            .collect();
-        // Only an advisory one side of a replacement has and the other lacks
-        // can be fixed or brought in, so only those records are read.
-        let listed_ids = |listing: &patchula_datasource::AdvisoryListing,
-                          package: &str,
-                          digest: &str,
-                          platform: &str| {
-            let key = (package.to_owned(), digest.to_owned(), platform.to_owned());
-            match image_sboms.get(&key) {
-                Some(Ok(patchula_datasource::ImageSbom::Found(sbom))) => sbom
-                    .queries()
-                    .iter()
-                    .filter_map(|q| listing.get(q))
-                    .flatten()
-                    .map(|(id, _)| id.clone())
-                    .collect(),
-                _ => BTreeSet::new(),
-            }
-        };
-        // Each replacement is judged on its own repository's platforms.
-        let replacements: Vec<(String, String, String, BTreeSet<String>)> = image_deps
-            .iter()
-            .flat_map(|(package, digests, configured, listed)| {
-                let (old, news) = digests.split_first().expect("a dependency's own digest");
-                let platforms: BTreeSet<String> =
-                    configured.iter().chain(listed).cloned().collect();
-                news.iter()
-                    .map(|new| (package.clone(), old.clone(), new.clone(), platforms.clone()))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        // Which advisories a rebuild leaves behind comes from the IDs alone, but
-        // only a record read in full marks it a security fix. The most severe
-        // few it fixes or brings in are read; when every fix read is
-        // withdrawn, the next ones are read in rank order until one isn't.
-        let read = async {
-            let listing = self.sources.advisory_listing(&image_queries).await?;
-            let mut fixes = Vec::new();
-            let mut wanted = BTreeSet::new();
-            for (package, old, new, platforms) in &replacements {
-                let (mut fixed, mut introduced) = (BTreeSet::new(), BTreeSet::new());
-                for platform in platforms {
-                    let before = listed_ids(&listing, package, old, platform);
-                    let after = listed_ids(&listing, package, new, platform);
-                    fixed.extend(before.difference(&after).cloned());
-                    introduced.extend(after.difference(&before).cloned());
-                }
-                let ranked = |ids: &BTreeSet<String>| -> Vec<String> {
-                    patchula_lookup::images::most_severe(ids.iter().map(String::as_str))
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect()
-                };
-                wanted.extend(
-                    ranked(&introduced)
-                        .into_iter()
-                        .take(patchula_lookup::images::SHOWN),
-                );
-                fixes.push(ranked(&fixed));
-            }
-            let mut found = patchula_lookup::images::Found::new();
-            let mut fetched = BTreeSet::<String>::new();
-            let mut verified = BTreeSet::<String>::new();
-            loop {
-                for ranked in &fixes {
-                    if ranked.iter().any(|id| verified.contains(id)) {
-                        continue;
-                    }
-                    wanted.extend(
-                        ranked
-                            .iter()
-                            .filter(|id| !fetched.contains(*id))
-                            .take(patchula_lookup::images::SHOWN)
-                            .cloned(),
-                    );
-                }
-                let batch: BTreeSet<String> = wanted.difference(&fetched).cloned().collect();
-                if batch.is_empty() {
-                    break;
-                }
-                let records = self
-                    .sources
-                    .advisory_records(&listing, |id| batch.contains(id))
-                    .await?;
-                for (query, advisories) in records {
-                    verified.extend(advisories.iter().map(|a| a.id.clone()));
-                    found.entry(query).or_default().extend(advisories);
-                }
-                fetched.extend(batch);
-            }
-            let mut listing = listing;
-            for ids in listing.values_mut() {
-                ids.retain(|(id, _)| !fetched.contains(id) || verified.contains(id));
-            }
-            Ok::<_, patchula_datasource::Error>((listing, found))
-        };
-        let ((image_listing, image_found), osv_failure) = if image_queries.is_empty() {
-            (Default::default(), None)
-        } else {
-            match read.await {
-                Ok(read) => (read, None),
-                Err(error) => (Default::default(), Some(format!("OSV.dev failed: {error}"))),
-            }
-        };
+        self.read_images(&work, &mut lookups, sent).await?;
         let image_time = micros(started);
         drop(phase);
         let started = Instant::now();
         let _phase = PhaseTrace::new("policy.report");
-        for ((repo, eval), dep_proposals) in work.iter_mut().zip(&evaluators).zip(proposals) {
-            let mut files: BTreeMap<String, Vec<ReportDependency>> = BTreeMap::new();
-            for (dep, evaluation) in repo.dependencies.iter().zip(dep_proposals) {
-                let mut proposals = evaluation.updates;
-                if let Some(eval) = eval
-                    && matches!(dep.source, Source::Docker | Source::Oci)
-                    && !eval.ignored(dep)
-                {
-                    for proposal in &mut proposals {
-                        if eval.needs_digest(dep, proposal)
-                            && let Some(tag) = &proposal.new_version
-                        {
-                            match image_digests.get(&(dep.package.clone(), tag.clone())) {
-                                Some(Ok(digest)) => proposal.new_digest = Some(digest.clone()),
-                                Some(Err(e)) => repo.report.lookup_failures.push(lookup_failure(
-                                    dep,
-                                    e,
-                                    format!("digest of {tag}: {e}"),
-                                )),
-                                None => {}
-                            }
-                        }
-                    }
-                    if let Some(result) =
-                        image_digests.get(&(dep.package.clone(), dep.current.clone()))
-                    {
-                        match result {
-                            Ok(digest) => match eval.digest_proposal(dep, digest) {
-                                Ok(Some(p)) => proposals.push(p),
-                                Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
-                                Ok(None) => {}
-                            },
-                            Err(e) => repo.report.lookup_failures.push(lookup_failure(
-                                dep,
-                                e,
-                                format!("digest of {}: {e}", dep.current),
-                            )),
-                        }
-                    }
-                }
-                if let Some(eval) = eval
-                    && dep.tagged_action()
-                    && !eval.ignored(dep)
-                {
-                    for proposal in &mut proposals {
-                        if eval.needs_digest(dep, proposal)
-                            && let Some(reference) = proposal
-                                .new_version
-                                .as_deref()
-                                .or(proposal.new_value.as_deref())
-                        {
-                            match digests.get(&(dep.package.clone(), reference.to_owned())) {
-                                Some(Ok(sha)) => proposal.new_digest = Some(sha.clone()),
-                                Some(Err(e)) => {
-                                    proposal.new_digest = None;
-                                    repo.report.lookup_failures.push(lookup_failure(
-                                        dep,
-                                        e,
-                                        format!("cannot pin {reference} to a digest: {e}"),
-                                    ));
-                                }
-                                None => {}
-                            }
-                        }
-                    }
-                    let reference = dep.resolved.as_deref().unwrap_or(&dep.current);
-                    if let Some(result) = digests.get(&(dep.package.clone(), reference.to_owned()))
-                    {
-                        match result {
-                            Ok(sha) => match eval.digest_proposal_with_catalog(
-                                dep,
-                                sha,
-                                catalogs
-                                    .get(&self.catalog_key(dep, repo.config.as_ref()))
-                                    .and_then(|c| c.as_ref().ok()),
-                            ) {
-                                Ok(Some(proposal)) => proposals.push(proposal),
-                                Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
-                                Ok(None) => {}
-                            },
-                            Err(e) => repo.report.lookup_failures.push(lookup_failure(
-                                dep,
-                                e,
-                                format!("cannot resolve the digest of {reference}: {e}"),
-                            )),
-                        }
-                    }
-                }
-                let mut image_advisories = Vec::new();
-                let mut current_image = None;
-                if let (Some(eval), Some(config), Some(old)) = (eval, &repo.config, &dep.digest)
-                    && images_on(config)
-                    && matches!(dep.source, Source::Docker | Source::Oci)
-                    && !eval.ignored(dep)
-                {
-                    let configured = &config.security.image_platforms;
-                    let mut platforms = configured.clone();
-                    let digests = std::iter::once(old)
-                        .chain(proposals.iter().filter_map(|p| p.new_digest.as_ref()));
-                    for digest in digests {
-                        let side = image_side(&dep.package, digest, configured);
-                        if let Some(platform) = patchula_lookup::images::fallback(&side)
-                            && !platforms.contains(&platform)
-                        {
-                            platforms.push(platform);
-                        }
-                    }
-                    let platforms = &platforms;
-                    let before = image_side(&dep.package, old, platforms);
-                    let silenced = config
-                        .security
-                        .quiet_images
-                        .iter()
-                        .find(|(pattern, _)| {
-                            patchula_config::Patterns::compile(std::slice::from_ref(*pattern))
-                                .is_ok_and(|p| p.matches_any(&dep.package, &dep.name))
-                        })
-                        .map(|(_, reason)| reason.clone());
-                    let silence = |mut check: patchula_report::ImageCheck| {
-                        if check.state.warns() {
-                            check.silenced.clone_from(&silenced);
-                        }
-                        check
-                    };
-                    for proposal in &mut proposals {
-                        let Some(new) = proposal.new_digest.clone().filter(|new| new != old) else {
-                            continue;
-                        };
-                        let after = image_side(&dep.package, &new, platforms);
-                        let Some(mut check) = patchula_lookup::images::compare(
-                            (old, &before),
-                            (&new, &after),
-                            &image_listing,
-                        ) else {
-                            continue;
-                        };
-                        if let Some(failure) = &osv_failure
-                            && matches!(
-                                check.state,
-                                patchula_report::ImageState::Checked
-                                    | patchula_report::ImageState::PartialSources
-                            )
-                        {
-                            check.state = patchula_report::ImageState::Unreadable;
-                            check.detail = Some(failure.clone());
-                        }
-                        let (verified, introduced) =
-                            patchula_lookup::images::advisories(&check, &image_found);
-                        if check.state != patchula_report::ImageState::Unreadable
-                            && !verified.is_empty()
-                        {
-                            let secured = match eval.secure(dep, proposal) {
-                                Ok(secured) => secured,
-                                Err(e) => {
-                                    repo.report.warnings.push(format!("{}: {e}", dep.name));
-                                    false
-                                }
-                            };
-                            if secured {
-                                proposal.fixes = check.fixed.iter().map(|f| f.id.clone()).collect();
-                                proposal.fixes.dedup();
-                                let label = &config.security.label;
-                                if let Some(policy) = &mut proposal.policy
-                                    && !label.is_empty()
-                                    && !policy.labels.contains(label)
-                                {
-                                    policy.labels.push(label.clone());
-                                }
-                            }
-                            image_advisories.extend(verified);
-                        }
-                        if check.state != patchula_report::ImageState::Unreadable {
-                            check.introduced_details = introduced;
-                        }
-                        proposal.image = Some(silence(check));
-                    }
-                    current_image = patchula_lookup::images::image_state(&before).map(silence);
-                }
-                image_advisories.sort();
-                image_advisories.dedup();
-                let advisory = patchula_lookup::advisory_query(dep)
-                    .and_then(|query| advisories.get(&query).map(|found| (query, found)))
-                    .filter(|(_, found)| !found.is_empty());
-                if let (Some(eval), Some((query, found))) = (eval, &advisory) {
-                    match eval.transitive_fix(dep, (query, found)) {
-                        Ok(Some(fix)) => proposals.push(fix),
-                        Err(e) => repo.report.warnings.push(format!("{}: {e}", dep.name)),
-                        Ok(None) => {}
-                    }
-                }
-                if let Some((query, found)) = &advisory {
-                    let label = repo
-                        .config
-                        .as_ref()
-                        .map(|c| c.security.label.as_str())
-                        .unwrap_or_default();
-                    for proposal in &mut proposals {
-                        let Some(target) = proposal
-                            .new_version
-                            .as_ref()
-                            .or(proposal.new_value.as_ref())
-                        else {
-                            continue;
-                        };
-                        proposal.fixes = patchula_lookup::fixes(dep, query, found, target);
-                        if let Some(policy) = &mut proposal.policy
-                            && !proposal.fixes.is_empty()
-                            && !label.is_empty()
-                            && !policy.labels.iter().any(|l| l == label)
-                        {
-                            policy.labels.push(label.into());
-                        }
-                    }
-                }
-                proposals.sort();
-                proposals.dedup();
-                let mut held_back = evaluation.held_back;
-                // The lookup worked; only the declaration cannot be rewritten to allow
-                // the release, so it is a notice rather than a failure.
-                for missed in evaluation.not_proposed {
-                    repo.report.notices.push(patchula_report::Notice {
-                        manager: dep.manager,
-                        path: dep.file.clone(),
-                        line: Some(dep.location.line),
-                        name: dep.name.clone(),
-                        package: dep.package.clone(),
-                        current: dep.current.clone(),
-                        compare_url: dep.resolved.as_deref().and_then(|resolved| {
-                            patchula_notes::compare_url(
-                                dep.source,
-                                &dep.package,
-                                resolved,
-                                &missed.version,
-                            )
-                        }),
-                        available: missed.version,
-                        reason: Some(missed.reason),
-                    });
-                }
-                if dep.manager == Manager::Copier {
-                    // Only copier update applies a template: report the
-                    // newest eligible tag and propose nothing to edit.
-                    let rank = |kind: UpdateKind| match kind {
-                        UpdateKind::Major => 0,
-                        UpdateKind::Minor => 1,
-                        UpdateKind::Patch => 2,
-                        UpdateKind::Digest | UpdateKind::Pin => 3,
-                    };
-                    if let Some(available) = proposals
-                        .iter()
-                        .min_by_key(|p| rank(p.update_type))
-                        .and_then(|p| p.new_version.clone())
-                    {
-                        repo.report.notices.push(patchula_report::Notice {
-                            manager: dep.manager,
-                            path: dep.file.clone(),
-                            line: Some(dep.location.line),
-                            name: dep.name.clone(),
-                            package: dep.package.clone(),
-                            current: dep.current.clone(),
-                            compare_url: patchula_notes::compare_url(
-                                dep.source,
-                                &dep.package,
-                                &dep.current,
-                                &available,
-                            ),
-                            available,
-                            reason: None,
-                        });
-                    }
-                    proposals.clear();
-                    held_back.clear();
-                }
-                let stale: BTreeMap<String, i64> =
-                    if matches!(dep.source, Source::Docker | Source::Oci) {
-                        let mut stale = self.sources.registry_stale(&dep.package).await;
-                        stale.retain(|key, _| {
-                            *key == patchula_datasource::StaleKey::CATALOG
-                                || key.is_manifest_of(&dep.current)
-                                || proposals.iter().any(|p| {
-                                    p.new_version
-                                        .as_ref()
-                                        .is_some_and(|v| key.is_manifest_of(v))
-                                })
-                        });
-                        stale
-                            .into_iter()
-                            .map(|(key, at)| (key.to_string(), at))
-                            .collect()
-                    } else {
-                        BTreeMap::new()
-                    };
-                if !stale.is_empty() {
-                    repo.report.warnings.push(format!(
-                        "{}: stale cached registry lookup after rate limiting ({})",
-                        dep.name,
-                        stale.keys().cloned().collect::<Vec<_>>().join(", ")
-                    ));
-                }
-                let catalog = catalogs
-                    .get(&self.catalog_key(dep, repo.config.as_ref()))
-                    .and_then(|c| c.as_ref().ok());
-                if dep.tagged_action() && catalog.is_some_and(|c| c.versions.is_empty()) {
-                    repo.report.warnings.push(format!(
-                        "{}: registry returned an empty tag catalog; version lookup is unavailable",
-                        dep.name
-                    ));
-                }
-                let resolved = catalog.and_then(|c| {
-                    eval.as_ref()
-                        .and_then(|eval| eval.resolved_current_version(dep, c).ok().flatten())
-                });
-                let resolution = resolved.as_ref().or(dep.resolved.as_ref()).map(|version| {
-                    let kind = if dep.tagged_action() {
-                        if dep.digest.is_some() {
-                            ResolutionKind::PinnedCommit
-                        } else {
-                            ResolutionKind::FloatingRef
-                        }
-                    } else if matches!(dep.manager, Manager::Npm | Manager::Cargo)
-                        && !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                        && dep.resolved.is_some()
-                    {
-                        ResolutionKind::Lockfile
-                    } else if resolved.is_some() && matches!(dep.kind, DependencyKind::Tool) {
-                        ResolutionKind::ReleaseLine
-                    } else if resolved.is_some() && dep.kind == DependencyKind::Toolchain {
-                        ResolutionKind::SupportedRange
-                    } else {
-                        ResolutionKind::Declared
-                    };
-                    patchula_report::Resolution {
-                        kind,
-                        version: version.clone(),
-                    }
-                });
-                let proposals_refs: BTreeSet<_> = proposals
-                    .iter()
-                    .filter_map(|p| p.new_value.clone())
-                    .collect();
-                let value = ReportDependency {
-                    manager: dep.manager,
-                    name: dep.name.clone(),
-                    occurrence: None,
-                    package: dep.package.clone(),
-                    registry: dep.registry.as_ref().map(|r| r.recorded().to_owned()),
-                    current: Current {
-                        value: Some(dep.current.clone()),
-                        version: catalogs
-                            .get(&self.catalog_key(dep, repo.config.as_ref()))
-                            .and_then(|c| c.as_ref().ok())
-                            .and_then(|c| {
-                                eval.as_ref().and_then(|eval| {
-                                    eval.resolved_current_version(dep, c).ok().flatten()
-                                })
-                            })
-                            .or_else(|| dep.resolved.clone())
-                            .or_else(|| {
-                                let scheme =
-                                    patchula_versioning::Ecosystem::of(dep.scheme, dep.source);
-                                (dep.kind != patchula_words::DependencyKind::Runner)
-                                    .then(|| {
-                                        patchula_versioning::Versioning::parse(
-                                            &scheme,
-                                            &dep.current,
-                                        )
-                                        .ok()
-                                    })
-                                    .flatten()
-                                    .map(|v| v.0.to_string())
-                            }),
-                        digest: dep.digest.clone(),
-                    },
-                    updates: proposals,
-                    metadata: Some(patchula_report::DependencyMetadata {
-                        tag_digests: if dep.tagged_action() {
-                            catalog
-                                .into_iter()
-                                .flat_map(|c| &c.versions)
-                                .filter(|v| proposals_refs.contains(&v.version))
-                                .filter_map(|v| {
-                                    v.digest
-                                        .as_ref()
-                                        .map(|digest| (v.version.clone(), digest.clone()))
-                                })
-                                .collect()
-                        } else {
-                            BTreeMap::new()
-                        },
-                        source: dep.source,
-                        kinds: dep.kinds(),
-                        locations: vec![patchula_report::Location {
-                            start: dep.location.start,
-                            end: dep.location.end,
-                            line: dep.location.line,
-                            column: dep.location.column,
-                            pointer: dep.location.pointer.clone(),
-                        }],
-                        held_back,
-                        stale,
-                        lookup: eval.as_ref().and_then(|eval| {
-                            match eval.lookup_evidence(dep, catalog, now) {
-                                Ok(mut evidence) => {
-                                    evidence.catalog = catalog_evidence
-                                        .get(&self.catalog_key(dep, repo.config.as_ref()))
-                                        .cloned();
-                                    Some(evidence)
-                                }
-                                Err(e) => {
-                                    repo.report.warnings.push(format!("{}: {e}", dep.name));
-                                    None
-                                }
-                            }
-                        }),
-                        resolution,
-                        advisories: advisory
-                            .map(|(query, found)| {
-                                patchula_lookup::report_advisories(dep, &query, found)
-                            })
-                            .unwrap_or_default()
-                            .into_iter()
-                            .chain(image_advisories)
-                            .collect(),
-                        image: current_image,
-                        credentialed: credentialed
-                            .contains(&self.catalog_key(dep, repo.config.as_ref()))
-                            || sent.lock().expect("sent packages").contains(&Sent::of(dep)),
-                    }),
-                };
-                files.entry(dep.file.clone()).or_default().push(value);
-            }
-            repo.report.package_files = files
-                .into_iter()
-                .map(|(path, dependencies)| PackageFile {
-                    path,
-                    dependencies: patchula_report::normalize_dependencies(dependencies),
-                })
-                .collect();
-            repo.report.warnings.sort();
-            repo.report.warnings.dedup();
-            repo.report.lookup_failures.sort();
-            repo.report.lookup_failures.dedup();
-        }
+        self.assemble_reports(&mut work, &lookups, sent, now).await;
         self.save_catalog_controls(&work, now).await?;
         let policy_time = proposal_cpu_time + micros(started);
         let after_g = self.github.stats().await;
@@ -2254,12 +1144,12 @@ impl Engine {
                     - before_h.not_modified,
                 cache_hits: after_h.cache_hits - before_h.cache_hits + after_g.not_modified
                     - before_g.not_modified
-                    + catalog_evidence.values().filter(|e| e.reused).count() as u64,
+                    + lookups.evidence.values().filter(|e| e.reused).count() as u64,
                 extraction_hits: self.extraction_hits.load(Ordering::Relaxed) - before_hits,
-                lookups: catalogs.len() as u64,
+                lookups: lookups.catalogs.len() as u64,
                 phase_micros: BTreeMap::from([
-                    ("discovery".into(), discovery),
-                    ("extraction".into(), extraction_time),
+                    ("discovery".into(), discovery_time),
+                    ("extraction".into(), scanned.extraction),
                     ("lookup".into(), lookup_time),
                     ("policy".into(), policy_time),
                     ("digest".into(), digest_time),
@@ -2271,35 +1161,6 @@ impl Engine {
         report.validate()?;
         Ok((report, work))
     }
-    /// Each key's digest; `counted` advances the current progress stage per key.
-    /// The digests for `keys`, adding to `sent` each package whose read
-    /// carried credentials.
-    async fn digests(
-        &self,
-        keys: BTreeSet<(String, String)>,
-        counted: bool,
-        sent: &std::sync::Mutex<BTreeSet<Sent>>,
-    ) -> BTreeMap<(String, String), std::result::Result<String, Failure>> {
-        stream::iter(keys)
-            .map(|(package, reference)| async move {
-                let (result, credentialed) =
-                    patchula_http::tracked(Box::pin(self.sources.digest(&package, &reference)))
-                        .await;
-                if credentialed {
-                    sent.lock()
-                        .expect("sent packages")
-                        .insert(Sent::Git(package.clone()));
-                }
-                let result = result.map_err(Failure::from);
-                if counted {
-                    self.progress.advance(1);
-                }
-                ((package, reference), result)
-            })
-            .buffer_unordered(100)
-            .collect()
-            .await
-    }
 
     /// The catalogs for `keys`, and the keys whose lookups carried
     /// credentials.
@@ -2308,6 +1169,14 @@ impl Engine {
         keys: BTreeSet<LookupKey>,
         sources: &Sources,
     ) -> (Catalogs, BTreeSet<LookupKey>) {
+        /// Packages one release-catalog batch asks for.
+        const RELEASES_PER_BATCH: usize = 16;
+        /// Concurrent release-catalog batch reads.
+        const RELEASES_FAN_OUT: usize = 16;
+        /// Concurrent per-package lookups inside a failed batch.
+        const FALLBACK_FAN_OUT: usize = 16;
+        /// Independent catalog lookups run this many at once.
+        const LOOKUP_FAN_OUT: usize = 100;
         let (releases, others): (Vec<_>, Vec<_>) = keys
             .into_iter()
             .partition(|(_, id)| id.source == Source::GithubReleases && id.is_public());
@@ -2318,7 +1187,11 @@ impl Engine {
                 .filter(|(host, _)| *host == enabled)
                 .map(|(_, id)| id.name.clone())
                 .collect();
-            groups.extend(packages.chunks(16).map(|chunk| (enabled, chunk.to_vec())));
+            groups.extend(
+                packages
+                    .chunks(RELEASES_PER_BATCH)
+                    .map(|chunk| (enabled, chunk.to_vec())),
+            );
         }
         let batched = stream::iter(groups)
             .map(|(enabled, packages)| async move {
@@ -2347,7 +1220,7 @@ impl Engine {
                                     let result = Self::lookup_key(sources, &key).await;
                                     (key, result)
                                 })
-                                .buffer_unordered(16)
+                                .buffer_unordered(FALLBACK_FAN_OUT)
                                 .collect()
                                 .await
                         }
@@ -2355,7 +1228,7 @@ impl Engine {
                 self.progress.advance(count);
                 catalogs
             })
-            .buffer_unordered(16)
+            .buffer_unordered(RELEASES_FAN_OUT)
             .collect::<Vec<_>>();
         let others = stream::iter(others)
             .map(|key| async move {
@@ -2363,7 +1236,7 @@ impl Engine {
                 self.progress.advance(1);
                 (key, result)
             })
-            .buffer_unordered(100)
+            .buffer_unordered(LOOKUP_FAN_OUT)
             .collect::<Vec<_>>();
         let (groups, others) = tokio::join!(batched, others);
         let mut results = Catalogs::new();
@@ -2377,51 +1250,33 @@ impl Engine {
         (results, credentialed)
     }
     async fn repositories(&self) -> Result<Vec<String>> {
-        match self
-            .github
-            .rest_pages::<Value>("user/repos?per_page=100", |_| false)
-            .await
-        {
-            Ok(repos) => repos
-                .iter()
-                .map(|v| {
-                    v["full_name"]
-                        .as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| Error::Invalid("invalid repository listing".into()))
-                })
-                .collect(),
-            Err(patchula_github::Error::Status(401 | 403)) => {
-                let mut repos = Vec::new();
-                for page in 1..=1000 {
-                    let value = self
-                        .json(&format!(
-                            "installation/repositories?per_page=100&page={page}"
-                        ))
-                        .await?;
-                    let entries = value["repositories"].as_array().ok_or_else(|| {
-                        Error::Invalid("invalid installation repository listing".into())
-                    })?;
-                    for entry in entries {
-                        repos.push(
-                            entry["full_name"]
-                                .as_str()
-                                .ok_or_else(|| {
-                                    Error::Invalid("invalid installation repository".into())
-                                })?
-                                .into(),
-                        );
-                    }
-                    if entries.len() < 100 {
-                        return Ok(repos);
-                    }
-                }
-                Err(Error::Invalid(
-                    "installation repository page budget exceeded".into(),
-                ))
-            }
-            Err(e) => Err(e.into()),
-        }
+        let repos = if self.installation {
+            self.github
+                .rest_pages_envelope(
+                    "installation/repositories?per_page=100",
+                    |body| {
+                        body["repositories"]
+                            .as_array()
+                            .cloned()
+                            .ok_or(patchula_github::Error::Json)
+                    },
+                    |page| page.len() < 100,
+                )
+                .await?
+        } else {
+            self.github
+                .rest_pages::<Value>("user/repos?per_page=100", |_| false)
+                .await?
+        };
+        repos
+            .iter()
+            .map(|v| {
+                v["full_name"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| Error::Invalid("invalid repository listing".into()))
+            })
+            .collect()
     }
     async fn json(&self, path: &str) -> Result<Value> {
         Ok(serde_json::from_slice(&self.github.get(path).await?.body)?)
@@ -2572,6 +1427,7 @@ impl Engine {
                             config: None,
                             dependencies: Vec::new(),
                             locked: Vec::new(),
+                            evaluator: None,
                             snapshot: patchula_update::Snapshot::default(),
                             inventory: None,
                             controls: patchula_update::dashboard::Controls::default(),
@@ -2605,6 +1461,7 @@ impl Engine {
                 config: Some(config),
                 dependencies: Vec::new(),
                 locked: Vec::new(),
+                evaluator: None,
                 snapshot: patchula_update::Snapshot::default(),
                 inventory: None,
                 controls: patchula_update::dashboard::Controls::default(),
@@ -2631,8 +1488,9 @@ impl Engine {
         Ok(Work {
             report,
             config: Some(config),
-            dependencies: extraction.dependencies,
+            dependencies: extraction.dependencies.into_iter().map(Dep::new).collect(),
             locked: extraction.locked,
+            evaluator: None,
             snapshot: patchula_update::Snapshot {
                 paths,
                 files: blobs,
@@ -2698,6 +1556,7 @@ impl Engine {
                 config: None,
                 dependencies: Vec::new(),
                 locked: Vec::new(),
+                evaluator: None,
                 snapshot: patchula_update::Snapshot::default(),
                 inventory: None,
                 controls: patchula_update::dashboard::Controls::default(),
@@ -2738,6 +1597,7 @@ impl Engine {
                     config: Some(config),
                     dependencies: Vec::new(),
                     locked: Vec::new(),
+                    evaluator: None,
                     snapshot: patchula_update::Snapshot::default(),
                     inventory: None,
                     controls: patchula_update::dashboard::Controls::default(),
@@ -2785,8 +1645,14 @@ impl Engine {
         Ok(Work {
             report,
             config: Some(config),
-            dependencies: cached.extraction.dependencies,
+            dependencies: cached
+                .extraction
+                .dependencies
+                .into_iter()
+                .map(Dep::new)
+                .collect(),
             locked: cached.extraction.locked,
+            evaluator: None,
             snapshot: cached.snapshot,
             inventory: None,
             controls: patchula_update::dashboard::Controls::default(),

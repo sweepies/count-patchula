@@ -307,31 +307,73 @@ async fn enterprise_api_url_drives_graphql_and_warm_branch_heads() {
     replay.assert_finished().unwrap();
 }
 
+struct OfflineCredentials;
+impl patchula_github::Credentials for OfflineCredentials {
+    fn scope(&self) -> &str {
+        "offline-installation"
+    }
+    fn token(&self) -> patchula_github::Token<'_> {
+        Box::pin(async { Ok("offline-token".to_owned()) })
+    }
+}
+
 #[tokio::test]
-async fn installation_tokens_use_installation_repository_listing() {
+async fn installation_credentials_use_installation_repository_listing() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("installation.json");
     let cassette = Cassette {
         schema_version: 1,
         provenance: "Simulated from GitHub installation repository API specification".into(),
-        interactions: vec![
-            get(
-                "user/repos?per_page=100",
-                json!({"message":"Resource not accessible by integration"}),
-                403,
-                None,
-                None,
-                false,
-            ),
-            get(
-                "installation/repositories?per_page=100&page=1",
-                json!({"repositories":[],"total_count":0}),
-                200,
-                None,
-                None,
-                false,
-            ),
-        ],
+        interactions: vec![get(
+            "installation/repositories?per_page=100",
+            json!({"repositories":[],"total_count":0}),
+            200,
+            None,
+            None,
+            false,
+        )],
+    };
+    patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_credentials(
+        Arc::new(OfflineCredentials),
+        cache,
+        4,
+        replay.clone(),
+        Default::default(),
+        Default::default(),
+    )
+    .unwrap()
+    .with_versions_host(false);
+    assert!(
+        engine
+            .lookup(Options::default())
+            .await
+            .unwrap()
+            .repositories
+            .is_empty()
+    );
+    replay.assert_finished().unwrap();
+}
+
+#[tokio::test]
+async fn user_token_forbidden_repository_listing_surfaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("forbidden.json");
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from GitHub user repository API specification".into(),
+        interactions: vec![get(
+            "user/repos?per_page=100",
+            json!({"message":"Resource not accessible by integration"}),
+            403,
+            None,
+            None,
+            false,
+        )],
     };
     patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
     let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
@@ -341,14 +383,7 @@ async fn installation_tokens_use_installation_repository_listing() {
     let engine = Engine::with_transport("offline", cache, 4, replay.clone())
         .unwrap()
         .with_versions_host(false);
-    assert!(
-        engine
-            .lookup(Options::default())
-            .await
-            .unwrap()
-            .repositories
-            .is_empty()
-    );
+    assert!(engine.lookup(Options::default()).await.is_err());
     replay.assert_finished().unwrap();
 }
 

@@ -152,63 +152,62 @@ impl Engine {
             credential_scope: self.github.credential_scope().into(),
         }
     }
-    pub(super) async fn forced_catalog_keys(&self, work: &[Work]) -> Result<BTreeSet<LookupKey>> {
-        let mut forced = BTreeSet::new();
-        for repo in work {
-            let controls = &repo.controls;
-            let mut dependencies = BTreeSet::new();
-            let mut all = controls.recheck;
-            if !controls.branches.is_empty()
-                || !controls.create.is_empty()
-                || !controls.recreate.is_empty()
-            {
-                let saved = self
-                    .cache
-                    .state::<Controls>(&self.catalog_controls_scope(&repo.report.repository))
-                    .await?;
-                if let Some(saved) = saved {
-                    for (name, entries) in controls
-                        .branches
-                        .iter()
-                        .map(|name| (name, &saved.branches))
-                        .chain(
-                            controls
-                                .create
+    /// Whether each dependency is under a manual retry this run: the
+    /// dashboard controls' retry box, a recheck, or a create/recreate whose
+    /// saved controls name it. Parallel to `repo.dependencies`.
+    pub(super) async fn retried(&self, repo: &Work) -> Result<Vec<bool>> {
+        let controls = &repo.controls;
+        let mut dependencies = BTreeSet::new();
+        let mut all = controls.recheck;
+        if !controls.branches.is_empty()
+            || !controls.create.is_empty()
+            || !controls.recreate.is_empty()
+        {
+            let saved = self
+                .cache
+                .state::<Controls>(&self.catalog_controls_scope(&repo.report.repository))
+                .await?;
+            if let Some(saved) = saved {
+                for (name, entries) in controls
+                    .branches
+                    .iter()
+                    .map(|name| (name, &saved.branches))
+                    .chain(
+                        controls
+                            .create
+                            .iter()
+                            .chain(&controls.recreate)
+                            .map(|name| (name, &saved.targets)),
+                    )
+                {
+                    if let Some(keys) = entries.get(name) {
+                        if keys.iter().any(|key| {
+                            !repo
+                                .dependencies
                                 .iter()
-                                .chain(&controls.recreate)
-                                .map(|name| (name, &saved.targets)),
-                        )
-                    {
-                        if let Some(keys) = entries.get(name) {
-                            if keys.iter().any(|key| {
-                                !repo.dependencies.iter().any(|dep| {
-                                    patchula_update::dashboard::extracted_key(dep) == *key
-                                })
-                            }) {
-                                all = true;
-                            }
-                            dependencies.extend(keys.iter().cloned());
-                        } else {
+                                .any(|dep| patchula_update::dashboard::extracted_key(dep) == *key)
+                        }) {
                             all = true;
                         }
+                        dependencies.extend(keys.iter().cloned());
+                    } else {
+                        all = true;
                     }
-                } else {
-                    all = true;
                 }
+            } else {
+                all = true;
             }
-            for dep in &repo.dependencies {
-                // A retry box covers the package in every file that declares it.
-                if all
-                    || dependencies.contains(&patchula_update::dashboard::extracted_key(dep))
+        }
+        Ok(repo
+            .dependencies
+            .iter()
+            .map(|dep| {
+                all || dependencies.contains(&patchula_update::dashboard::extracted_key(dep))
                     || controls
                         .retry
                         .contains(&patchula_update::dashboard::extracted_retry_key(dep))
-                {
-                    forced.insert(self.catalog_key(dep, repo.config.as_ref()));
-                }
-            }
-        }
-        Ok(forced)
+            })
+            .collect())
     }
     pub(super) async fn save_catalog_controls(
         &self,
@@ -222,10 +221,15 @@ impl Engine {
             }
             let mut controls = Controls::default();
             let since = self.last_run(&repo.report.repository).await?;
+            let dependencies: Vec<Dependency> = repo
+                .dependencies
+                .iter()
+                .map(|dep| dep.dependency.clone())
+                .collect();
             if let Ok(plans) = patchula_update::plan(
                 &repo.report,
                 config,
-                &repo.dependencies,
+                &dependencies,
                 &repo.snapshot,
                 false,
                 since,
@@ -246,7 +250,7 @@ impl Engine {
                                         dep.registry.as_ref().map(|r| r.recorded()),
                                     )
                                 })
-                                .map(patchula_update::dashboard::extracted_key)
+                                .map(|dep| patchula_update::dashboard::extracted_key(dep))
                         })
                         .collect();
                     controls

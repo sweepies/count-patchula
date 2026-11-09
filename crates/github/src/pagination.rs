@@ -19,6 +19,39 @@ impl Client {
         path: &str,
         mut stop: impl FnMut(&[T]) -> bool,
     ) -> Result<Vec<T>> {
+        self.rest_pages_with(path, |response| {
+            let page: Vec<T> = serde_json::from_slice(&response.body).map_err(|_| Error::Json)?;
+            let done = stop(&page);
+            Ok((page, done))
+        })
+        .await
+    }
+
+    /// `rest_pages` for an endpoint whose page wraps its array in an object,
+    /// such as `installation/repositories`' `{"repositories": [...]}`:
+    /// `entries` pulls one page's items out of the decoded body.
+    pub async fn rest_pages_envelope<T>(
+        &self,
+        path: &str,
+        mut entries: impl FnMut(&Value) -> Result<Vec<T>>,
+        mut stop: impl FnMut(&[T]) -> bool,
+    ) -> Result<Vec<T>> {
+        self.rest_pages_with(path, |response| {
+            let body: Value = serde_json::from_slice(&response.body).map_err(|_| Error::Json)?;
+            let page = entries(&body)?;
+            let done = stop(&page);
+            Ok((page, done))
+        })
+        .await
+    }
+
+    /// The page loop `rest_pages` and `rest_pages_envelope` share: `page`
+    /// decodes one response into its items and says whether to stop.
+    async fn rest_pages_with<T>(
+        &self,
+        path: &str,
+        mut page: impl FnMut(&Response) -> Result<(Vec<T>, bool)>,
+    ) -> Result<Vec<T>> {
         let mut next = Some(self.url(path)?);
         let mut visited = HashSet::new();
         let mut result = Vec::new();
@@ -30,9 +63,8 @@ impl Client {
                 return Err(Error::Pagination);
             }
             let response = self.get(url.as_str()).await?;
-            let page: Vec<T> = serde_json::from_slice(&response.body).map_err(|_| Error::Json)?;
-            let done = stop(&page);
-            result.extend(page);
+            let (entries, done) = page(&response)?;
+            result.extend(entries);
             if done {
                 return Ok(result);
             }
