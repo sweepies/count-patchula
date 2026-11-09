@@ -368,15 +368,16 @@ impl Lifecycle {
             if meta["default_branch"] != default_branch {
                 return Err("default branch changed before PR closure; rerun".into());
             }
-            if current.is_none() {
-                current = Some(
+            let head = match &current {
+                Some(head) => head,
+                None => current.insert(
                     client
                         .get_fresh(&format!("repos/{repo}/branches/{default_branch}"))
                         .await
                         .map_err(|e| e.to_string())?,
-                );
-            }
-            if current.as_ref().unwrap()["commit"]["sha"] != base {
+                ),
+            };
+            if head["commit"]["sha"] != base {
                 return Err("base moved before obsolete PR closure; rerun".into());
             }
             let mut text = markers::truncate_marked(body(&fresh), FOREIGN_LIMIT - 100);
