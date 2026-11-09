@@ -1,7 +1,31 @@
 #![forbid(unsafe_code)]
 
-use patchula_cache::{Cache, ExtractionKey, HttpEntry, HttpKey, Options, Release};
+use patchula_cache::{Cache, HttpEntry, HttpKey, Options, Release, State};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Item {
+    dependencies: Vec<String>,
+}
+#[derive(Clone, Debug, Serialize)]
+struct ItemScope {
+    repo: String,
+    commit: String,
+    config_hash: String,
+}
+impl State for Item {
+    const NAMESPACE: &'static str = "test-item";
+    const VERSION: u32 = 1;
+    type Scope = ItemScope;
+}
+fn item_scope(repo: &str) -> ItemScope {
+    ItemScope {
+        repo: repo.into(),
+        commit: "commit".into(),
+        config_hash: "config".into(),
+    }
+}
 
 fn key(name: &str) -> HttpKey {
     HttpKey::new(
@@ -78,24 +102,17 @@ async fn concurrent_readers_and_writers_share_persistent_wal() {
             let entry = entry(format!("body-{index}").into_bytes());
             cache.http_put(&key, &entry).await.unwrap();
             assert_eq!(cache.http_get(&key).await.unwrap(), Some(entry));
-            let extraction = ExtractionKey {
-                repo: format!("owner/repo-{index}"),
-                default_branch_commit: "commit".into(),
-                config_hash: "config".into(),
+            let scope = item_scope(&format!("owner/repo-{index}"));
+            let item = Item {
+                dependencies: vec![format!("dep-{index}")],
             };
-            cache
-                .extraction_put(&extraction, b"{\"dependencies\":[]}")
-                .await
-                .unwrap();
-            assert_eq!(
-                cache.extraction_get(&extraction).await.unwrap().unwrap(),
-                b"{\"dependencies\":[]}"
-            );
-            let changed = ExtractionKey {
+            cache.set_state(&scope, &item).await.unwrap();
+            assert_eq!(cache.state::<Item>(&scope).await.unwrap(), Some(item));
+            let changed = ItemScope {
                 config_hash: "changed".into(),
-                ..extraction
+                ..scope
             };
-            assert!(cache.extraction_get(&changed).await.unwrap().is_none());
+            assert!(cache.state::<Item>(&changed).await.unwrap().is_none());
         }));
     }
     for task in tasks {
@@ -252,7 +269,7 @@ async fn migrates_previous_schema_without_discarding_http_or_release_data() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
 }
 
@@ -389,9 +406,17 @@ async fn migration_retires_raw_registries_and_old_content_hashed_catalogs() {
             .unwrap(),
         1
     );
-    assert_eq!(
-        conn.query_row("SELECT repo FROM extraction", [], |r| r.get::<_, String>(0))
+    // Migration 010 replaces the extraction table with typed state.
+    for (name, expected) in [("extraction", 0), ("state", 1)] {
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [name],
+                |r| r.get::<_, i64>(0),
+            )
             .unwrap(),
-        "owner/repo"
-    );
+            expected,
+            "{name}"
+        );
+    }
 }

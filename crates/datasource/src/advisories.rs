@@ -2,7 +2,7 @@
 //! records kept in the cache until OSV reports them modified.
 use crate::{Client, Error, Result};
 use futures_util::{StreamExt, stream};
-use patchula_cache::ExtractionKey;
+use patchula_cache::State;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -172,6 +172,15 @@ struct Stored {
     modified: String,
     advisory: Option<Advisory>,
 }
+#[derive(Serialize)]
+struct AdvisoryScope {
+    id: String,
+}
+impl State for Stored {
+    const NAMESPACE: &'static str = "osv-advisory";
+    const VERSION: u32 = 1;
+    type Scope = AdvisoryScope;
+}
 
 impl Client {
     /// Advisories affecting each queried version, without withdrawn ones.
@@ -295,13 +304,8 @@ impl Client {
         {
             return Err(Error::Invalid);
         }
-        let key = ExtractionKey {
-            repo: format!("osv:{id}"),
-            default_branch_commit: String::new(),
-            config_hash: "osv-advisory-v1".into(),
-        };
-        if let Some(bytes) = self.cache.extraction_get(&key).await?
-            && let Ok(stored) = serde_json::from_slice::<Stored>(&bytes)
+        let scope = AdvisoryScope { id: id.into() };
+        if let Some(stored) = self.cache.state::<Stored>(&scope).await?
             && stored.modified == modified
         {
             return Ok(stored.advisory.map(Arc::new));
@@ -315,9 +319,7 @@ impl Client {
             modified: modified.into(),
             advisory: record.withdrawn.is_none().then(|| Advisory::from(record)),
         };
-        self.cache
-            .extraction_put(&key, &serde_json::to_vec(&stored)?)
-            .await?;
+        self.cache.set_state(&scope, &stored).await?;
         Ok(stored.advisory.map(Arc::new))
     }
 }

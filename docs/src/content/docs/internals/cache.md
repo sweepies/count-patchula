@@ -1,6 +1,6 @@
 ---
 title: "SQLite cache"
-description: "How the SQLite cache is laid out: HTTP entries, releases and extractions, registry tokens, host limits and freshness floors."
+description: "How the SQLite cache is laid out: HTTP entries, releases and state, registry tokens, host limits and freshness floors."
 ---
 `patchula-cache` uses rusqlite 0.41 with bundled SQLite, so the system
 SQLite's version and features never matter. HTTP bodies are stored with Zstd
@@ -64,17 +64,30 @@ representation version, so raw and derived namespaces never share validators.
 The default 256 MiB budget counts compressed HTTP body bytes. An access clock
 approximates LRU and evicts whole HTTP rows, validators included, until the
 cache fits, also on open after the budget is lowered. Release lists and
-extraction data are outside the budget, so it does not cap the file size.
+state values are outside the budget, so it does not cap the file size.
 
-## Releases and extractions
+## Releases and state
 
 Release order is the upstream's newest-first order, never inferred from semver
 or dates. `merge_releases` starts at the head and stops at the first item
 already stored. Later pages of the same scan pass the previous page's last
 inserted version to `merge_release_page` as `after`, which tells a refresh
 prefix apart from initial pagination. The newest item is also kept in
-`release_heads`. Extraction keys include the repository, the default-branch
-commit and the resolved config hash.
+`release_heads`.
+
+Typed values the Count keeps between runs (hints, extractions, catalog views,
+receipts and the like) live in `state`; the server queue, installations and
+repositories keep their own tables. A state row is one value, keyed by a
+namespace and a canonical-JSON scope. A `State` implementation names its
+`NAMESPACE` and `VERSION`, forming `name@v{VERSION}`, and declares the `Scope` struct
+whose named fields say what the entry is about. A value that depends on this
+build's decoding or extraction code sets `PER_BUILD`, and the build version
+joins the namespace, so a release never reads another release's entries.
+Opening the cache deletes per-build rows written by any other version.
+Values are JSON. A stored value that fails to decode is a miss, logged at
+debug level; database errors remain errors. Each call site owns its value and
+scope types, so a change to a stored shape bumps `VERSION` or `NAMESPACE`
+rather than silently reusing entries written for the old one.
 
 ## Schema and corruption
 
@@ -168,8 +181,9 @@ checks against the pull quota.
 
 ## Write receipts
 
-A successful branch and PR reconciliation stores a receipt per branch in the
-extraction cache: the commit and tree OIDs, the base, the planned update and
+A successful branch and PR reconciliation stores a `verified-write-receipts`
+state entry per repository and branch prefix: the commit and tree OIDs, the
+base, the planned update and
 the canonical PR state (a line-ending-normalised body hash, labels and the
 auto-merge flag), never credentials. Warm runs read a fresh GraphQL inventory
 of heads and open PRs, and an exact match skips history, tree and PR reads.
@@ -180,8 +194,9 @@ branch.
 
 ## Catalog views and release age
 
-Successful catalog views are stored apart from HTTP bodies, scoped to the
-credential and source mode. A dependency with a positive effective `waitHours`
+Successful catalog views are stored as `catalog` state, scoped to the
+package, whether the versions host may stand in and the credential scope. A
+dependency with a positive effective `waitHours`
 reuses a catalog younger than `clamp(waitHours - 1, 1, 24)` hours, 23 hours
 for the default 24-hour wait. Zero keeps the usual HTTP freshness. Dependencies
 sharing a catalog use the shortest wait among them. A release that must wait a
@@ -197,8 +212,8 @@ GraphQL reads resolve the refs currently needed without revalidating the lists.
 
 ## mise listings
 
-What `mise ls-remote --json` printed is stored in the extraction table, since
-it has no validators. The key holds the tool (and a version prefix such as
+What `mise ls-remote --json` printed is stored as `mise-ls-remote` state, since
+it has no validators. The scope holds the tool (and a version prefix such as
 `lts`), the credential scope, whether mise may read the mise-versions mirror
 and the pinned mise version. A listing younger than an hour is reused without
 starting mise. A manual retry replaces it, and only successful lookups are

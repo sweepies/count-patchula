@@ -1,4 +1,19 @@
-use crate::{Error, ExtractionKey, HttpEntry, Options, Release, ReleaseList, Result};
+use crate::{Error, HttpEntry, Options, Release, ReleaseList, Result};
+
+/// Each migration sets `user_version` to its own number; a cache at version
+/// N runs the ones after it.
+pub(crate) const MIGRATIONS: [&str; 10] = [
+    include_str!("migrations/001.sql"),
+    include_str!("migrations/002.sql"),
+    include_str!("migrations/003.sql"),
+    include_str!("migrations/004.sql"),
+    include_str!("migrations/005.sql"),
+    include_str!("migrations/006.sql"),
+    include_str!("migrations/007.sql"),
+    include_str!("migrations/008.sql"),
+    include_str!("migrations/009.sql"),
+    include_str!("migrations/010.sql"),
+];
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::{
     collections::HashSet,
@@ -36,36 +51,18 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
     // cache together migrate it once.
     let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version > 9 {
+    if version > MIGRATIONS.len() as i64 {
         return Err(Error::FutureSchema(version));
     }
-    if version < 1 {
-        transaction.execute_batch(include_str!("migrations/001.sql"))?;
+    for migration in MIGRATIONS.iter().skip(version.max(0) as usize) {
+        transaction.execute_batch(migration)?;
     }
-    if version < 2 {
-        transaction.execute_batch(include_str!("migrations/002.sql"))?;
-    }
-    if version < 3 {
-        transaction.execute_batch(include_str!("migrations/003.sql"))?;
-    }
-    if version < 4 {
-        transaction.execute_batch(include_str!("migrations/004.sql"))?;
-    }
-    if version < 5 {
-        transaction.execute_batch(include_str!("migrations/005.sql"))?;
-    }
-    if version < 6 {
-        transaction.execute_batch(include_str!("migrations/006.sql"))?;
-    }
-    if version < 7 {
-        transaction.execute_batch(include_str!("migrations/007.sql"))?;
-    }
-    if version < 8 {
-        transaction.execute_batch(include_str!("migrations/008.sql"))?;
-    }
-    if version < 9 {
-        transaction.execute_batch(include_str!("migrations/009.sql"))?;
-    }
+    // Per-build state from another release can never be read again.
+    transaction.execute(
+        "DELETE FROM state WHERE instr(namespace, '+') > 0 \
+         AND substr(namespace, instr(namespace, '+') + 1) != ?1",
+        [crate::BUILD],
+    )?;
     transaction.commit()?;
     Ok(conn)
 }
@@ -285,10 +282,6 @@ impl Store {
         }
         tx.commit()?;
         Ok(reached_known)
-    }
-
-    pub fn extraction_get(&self, key: &ExtractionKey) -> Result<Option<Vec<u8>>> {
-        Ok(self.conn.query_row("SELECT result FROM extraction WHERE repo=?1 AND branch_commit=?2 AND config_hash=?3", params![key.repo,key.default_branch_commit,key.config_hash], |row| row.get(0)).optional()?)
     }
 }
 

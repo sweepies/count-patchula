@@ -2,10 +2,24 @@ use super::*;
 use crate::settings::Settings;
 use axum::body::Body;
 use axum::http::HeaderMap;
-use patchula_cache::{ExtractionKey, Options as CacheOptions, queue::Work};
+use patchula_cache::{Options as CacheOptions, queue::Work};
 use patchula_http::Transport;
 use std::sync::Arc;
 use tower::ServiceExt;
+
+/// The dashboard receipt patchula_update stores, written through the same
+/// namespace and scope.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DashboardReceipt(Value);
+#[derive(serde::Serialize)]
+struct DashboardScope {
+    repository: String,
+}
+impl patchula_cache::State for DashboardReceipt {
+    const NAMESPACE: &'static str = "dashboard-receipt";
+    const VERSION: u32 = 1;
+    type Scope = DashboardScope;
+}
 
 fn owned(number: u64, branch: &str) -> Value {
     let marker = json!({"version": 1, "identity": "a".repeat(64), "update": "b".repeat(64)});
@@ -152,13 +166,13 @@ async fn get(router: &Router, path: &str) -> (StatusCode, Option<HeaderValue>, V
 #[tokio::test]
 async fn anyone_reads_what_the_last_run_left_of_public_repositories() {
     let cache = recorded().await;
-    let dashboard = ExtractionKey {
-        repo: "acme/app".into(),
-        default_branch_commit: String::default(),
-        config_hash: "dashboard-receipt-v1".into(),
-    };
     cache
-        .extraction_put(&dashboard, br#"{"number":7,"actor":"patchula","hash":"h"}"#)
+        .set_state(
+            &DashboardScope {
+                repository: "acme/app".into(),
+            },
+            &DashboardReceipt(json!({"number":7,"actor":"patchula","hash":"h"})),
+        )
         .await
         .unwrap();
     let client = Client::with_transport(

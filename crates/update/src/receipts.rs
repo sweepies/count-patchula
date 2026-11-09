@@ -1,6 +1,6 @@
 //! Receipts are proof of previously verified writes, never proof from a marker alone.
 use crate::{Lifecycle, Plan, plan::hash};
-use patchula_cache::{Cache, ExtractionKey};
+use patchula_cache::{Cache, State};
 use patchula_config::{Config, Rebase};
 use patchula_github::{Client, GraphqlPage};
 use patchula_report::{BranchStatus, Repository};
@@ -59,11 +59,20 @@ struct ClosedReceipt {
     intent: String,
     pr: Value,
 }
-fn key(repo: &str, prefix: &str) -> ExtractionKey {
-    ExtractionKey {
-        repo: repo.into(),
-        default_branch_commit: prefix.into(),
-        config_hash: "verified-write-receipts-v3".into(),
+#[derive(Serialize)]
+struct ReceiptsScope {
+    repository: String,
+    branch_prefix: String,
+}
+impl State for Receipts {
+    const NAMESPACE: &'static str = "verified-write-receipts";
+    const VERSION: u32 = 1;
+    type Scope = ReceiptsScope;
+}
+fn receipts_scope(repo: &str, prefix: &str) -> ReceiptsScope {
+    ReceiptsScope {
+        repository: repo.into(),
+        branch_prefix: prefix.into(),
     }
 }
 /// `server` is the advertised URL, which the PR body carries. Only a server
@@ -194,10 +203,9 @@ impl Inventory {
         config: &Config,
     ) -> Result<Self, String> {
         let receipts = cache
-            .extraction_get(&key(&repository.repository, &config.prs.branch))
+            .state::<Receipts>(&receipts_scope(&repository.repository, &config.prs.branch))
             .await
             .map_err(|e| e.to_string())?
-            .and_then(|b| serde_json::from_slice::<Receipts>(&b).ok())
             .unwrap_or_default();
         let closed_ids: Vec<_> = receipts
             .closed
@@ -289,20 +297,16 @@ pub async fn restore_inventory(
     server: Option<&str>,
     inventory: &Inventory,
 ) -> Result<bool, String> {
-    let bytes = cache
-        .extraction_get(&key(&repository.repository, &config.prs.branch))
+    let receipts = cache
+        .state::<Receipts>(&receipts_scope(&repository.repository, &config.prs.branch))
         .await
         .map_err(|e| e.to_string())?;
     let pending = plans
         .iter()
         .any(|p| p.action.status == BranchStatus::Planned);
-    let receipts = match bytes {
+    let receipts = match receipts {
         None if pending => return Ok(not_restored(repository, plans, "missing-receipt")),
-        Some(bytes) => match serde_json::from_slice::<Receipts>(&bytes) {
-            Ok(receipts) => receipts,
-            Err(_) if pending => return Ok(not_restored(repository, plans, "invalid-receipts")),
-            Err(_) => Receipts::default(),
-        },
+        Some(receipts) => receipts,
         None => Receipts::default(),
     };
     if (receipts.writes.is_empty() && receipts.closed.is_empty() || receipts.closed.len() > 100)
@@ -443,15 +447,14 @@ pub(crate) async fn save_merge_states(
     config: &Config,
     plans: &[Plan],
 ) -> Result<(), String> {
-    let key = key(&repository.repository, &config.prs.branch);
-    let Some(bytes) = cache
-        .extraction_get(&key)
+    let scope = receipts_scope(&repository.repository, &config.prs.branch);
+    let Some(mut receipts) = cache
+        .state::<Receipts>(&scope)
         .await
         .map_err(|e| e.to_string())?
     else {
         return Ok(());
     };
-    let mut receipts: Receipts = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     for plan in plans {
         let Some(pr) = &plan.cached_pr else {
             continue;
@@ -463,10 +466,7 @@ pub(crate) async fn save_merge_states(
         }
     }
     cache
-        .extraction_put(
-            &key,
-            &serde_json::to_vec(&receipts).map_err(|e| e.to_string())?,
-        )
+        .set_state(&scope, &receipts)
         .await
         .map_err(|e| e.to_string())
 }
@@ -550,9 +550,9 @@ pub async fn save_receipts(
         );
     }
     cache
-        .extraction_put(
-            &key(&repository.repository, &config.prs.branch),
-            &serde_json::to_vec(&receipts).map_err(|e| e.to_string())?,
+        .set_state(
+            &receipts_scope(&repository.repository, &config.prs.branch),
+            &receipts,
         )
         .await
         .map_err(|e| e.to_string())?;

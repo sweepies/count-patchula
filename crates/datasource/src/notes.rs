@@ -13,7 +13,6 @@ pub use chart::{CHANGES, ChartNotes, render_changes};
 use forge::{compare_link, releases_url};
 use markdown::demote_headings;
 pub use markdown::{Links, fit, inert, sanitise};
-use patchula_cache::ExtractionKey;
 use patchula_versioning::Parsed;
 pub(crate) use releases::BodyCache;
 pub(crate) use source::mapped;
@@ -23,6 +22,22 @@ type SharedSections = Arc<tokio::sync::Mutex<Option<Arc<Vec<Section>>>>>;
 pub(crate) type ChangelogCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedSections>>>;
 type SharedRead = Arc<tokio::sync::Mutex<Option<std::result::Result<Vec<u8>, String>>>>;
 pub(crate) type ReadCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedRead>>>;
+
+/// The parsed sections of one immutable changelog blob.
+#[derive(Serialize, Deserialize)]
+struct ParsedChangelog(Vec<Section>);
+#[derive(Serialize)]
+struct ChangelogScope {
+    repository: String,
+    path: String,
+    blob_sha: String,
+}
+impl State for ParsedChangelog {
+    const NAMESPACE: &'static str = "changelog";
+    const VERSION: u32 = 1;
+    const PER_BUILD: bool = true;
+    type Scope = ChangelogScope;
+}
 
 #[derive(Default, Serialize, Deserialize)]
 struct MirrorList {
@@ -364,10 +379,10 @@ impl Client {
         repo: &str,
         file: &changelog::File,
     ) -> Result<Arc<Vec<Section>>> {
-        let key = ExtractionKey {
-            repo: format!("changelog:{repo}:{}", file.path),
-            default_branch_commit: file.sha.clone(),
-            config_hash: "parsed-changelog-v1".into(),
+        let scope = ChangelogScope {
+            repository: repo.into(),
+            path: file.path.clone(),
+            blob_sha: file.sha.clone(),
         };
         let shared = self
             .changelogs
@@ -380,8 +395,8 @@ impl Client {
         if let Some(sections) = &*saved {
             return Ok(sections.clone());
         }
-        let bytes = if let Some(bytes) = self.cache.extraction_get(&key).await? {
-            bytes
+        let sections = if let Some(entry) = self.cache.state::<ParsedChangelog>(&scope).await? {
+            entry.0
         } else {
             let response = self
                 .github
@@ -391,10 +406,11 @@ impl Client {
                     changelog::compact_blob,
                 )
                 .await?;
-            self.cache.extraction_put(&key, &response.body).await?;
-            response.body
+            let entry = ParsedChangelog(serde_json::from_slice(&response.body)?);
+            self.cache.set_state(&scope, &entry).await?;
+            entry.0
         };
-        let sections = Arc::new(serde_json::from_slice::<Vec<Section>>(&bytes)?);
+        let sections = Arc::new(sections);
         *saved = Some(sections.clone());
         Ok(sections)
     }

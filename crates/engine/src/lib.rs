@@ -4,7 +4,7 @@ mod catalogs;
 mod overrides;
 
 use futures_util::{StreamExt, stream};
-use patchula_cache::{Cache, ExtractionKey};
+use patchula_cache::{Cache, State};
 use patchula_config::{Config, PackageId};
 use patchula_datasource::{Client as Sources, Failure};
 use patchula_github::{Client as Github, Options as GithubOptions};
@@ -122,6 +122,100 @@ struct Work {
 struct CachedExtraction {
     extraction: Extraction,
     snapshot: patchula_update::Snapshot,
+}
+/// When a repository last completed a real run, in Unix seconds.
+#[derive(Serialize, Deserialize)]
+struct LastRun(i64);
+/// The default branch name a repository's head hint remembers.
+#[derive(Serialize, Deserialize)]
+struct BranchHint(String);
+/// The config a commit's patchula.pkl evaluates to, when it has one.
+#[derive(Serialize, Deserialize)]
+struct RepoConfig(Option<Config>);
+/// What the files a commit's config reads extract to.
+#[derive(Serialize, Deserialize)]
+struct FileExtraction(Extraction);
+/// The config evaluated from a commit's config files.
+#[derive(Serialize, Deserialize)]
+struct EvaluatedConfig(Config);
+#[derive(Serialize)]
+struct RepositoryScope {
+    repository: String,
+}
+#[derive(Serialize)]
+struct CredentialScope {
+    repository: String,
+    credential_scope: String,
+}
+#[derive(Serialize)]
+struct LookupHintScope {
+    repository: String,
+    inputs_hash: String,
+    schema_hash: String,
+    credential_scope: String,
+}
+#[derive(Serialize)]
+struct RepoConfigScope {
+    repository: String,
+    commit: String,
+    schema_hash: String,
+}
+#[derive(Serialize)]
+struct ExtractionScope {
+    repository: String,
+    commit: String,
+    config_hash: String,
+}
+#[derive(Serialize)]
+struct FilesScope {
+    repository: String,
+    files_hash: String,
+    config_hash: String,
+}
+#[derive(Serialize)]
+struct ConfigFilesScope {
+    repository: String,
+    files_hash: String,
+    schema_hash: String,
+}
+impl State for LastRun {
+    const NAMESPACE: &'static str = "last-run";
+    const VERSION: u32 = 1;
+    type Scope = RepositoryScope;
+}
+impl State for LookupHint {
+    const NAMESPACE: &'static str = "lookup-hint";
+    const VERSION: u32 = 1;
+    type Scope = LookupHintScope;
+}
+impl State for BranchHint {
+    const NAMESPACE: &'static str = "branch-hint";
+    const VERSION: u32 = 1;
+    type Scope = CredentialScope;
+}
+impl State for RepoConfig {
+    const NAMESPACE: &'static str = "config";
+    const VERSION: u32 = 1;
+    const PER_BUILD: bool = true;
+    type Scope = RepoConfigScope;
+}
+impl State for CachedExtraction {
+    const NAMESPACE: &'static str = "extract";
+    const VERSION: u32 = 1;
+    const PER_BUILD: bool = true;
+    type Scope = ExtractionScope;
+}
+impl State for FileExtraction {
+    const NAMESPACE: &'static str = "files";
+    const VERSION: u32 = 1;
+    const PER_BUILD: bool = true;
+    type Scope = FilesScope;
+}
+impl State for EvaluatedConfig {
+    const NAMESPACE: &'static str = "config-files";
+    const VERSION: u32 = 1;
+    const PER_BUILD: bool = true;
+    type Scope = ConfigFilesScope;
 }
 #[derive(Clone, Deserialize)]
 struct Entry {
@@ -377,7 +471,7 @@ impl Engine {
                 continue;
             }
             let inventory = work.inventory;
-            let since = self.last_run(&repo.repository).await;
+            let since = self.last_run(&repo.repository).await?;
             let plans = patchula_update::plan(
                 repo,
                 &config,
@@ -742,19 +836,22 @@ impl Engine {
     }
     /// When this repository last completed a real run. Schedule windows are
     /// due when one of their times falls between that run and this one.
-    pub(crate) async fn last_run(&self, repo: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-        let bytes = self
-            .cache
-            .extraction_get(&last_run_key(repo))
-            .await
-            .ok()??;
-        let seconds: i64 = serde_json::from_slice(&bytes).ok()?;
-        chrono::DateTime::from_timestamp(seconds, 0)
+    pub(crate) async fn last_run(
+        &self,
+        repo: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        let scope = RepositoryScope {
+            repository: repo.into(),
+        };
+        let run = self.cache.state::<LastRun>(&scope).await?;
+        Ok(run.and_then(|run| chrono::DateTime::from_timestamp(run.0, 0)))
     }
     async fn record_run(&self, repo: &str, now: chrono::DateTime<chrono::Utc>) -> Result<()> {
-        let bytes = serde_json::to_vec(&now.timestamp())?;
+        let scope = RepositoryScope {
+            repository: repo.into(),
+        };
         self.cache
-            .extraction_put(&last_run_key(repo), &bytes)
+            .set_state(&scope, &LastRun(now.timestamp()))
             .await?;
         Ok(())
     }
@@ -805,25 +902,22 @@ impl Engine {
         let override_config = options.config.as_ref();
         // Hints overlap mutable digest reads with the repository head read.
         // Catalogs wait for current policy, age-cache and checkbox decisions.
-        let hint_hash = format!(
-            "lookup-hint-v4:{}:{}:{}",
-            hash(&serde_json::to_vec(&(
-                &options.config,
-                &overrides,
-                self.versions_host_override
-            ))?),
-            hash(patchula_config::SCHEMA.as_bytes()),
-            self.github.credential_scope()
-        );
+        let inputs_hash = hash(&serde_json::to_vec(&(
+            &options.config,
+            &overrides,
+            self.versions_host_override,
+        ))?);
+        let schema_hash = hash(patchula_config::SCHEMA.as_bytes());
+        let credential_scope = self.github.credential_scope().to_owned();
         let mut hint = LookupHint::default();
         for repo in &repos {
-            let key = ExtractionKey {
-                repo: format!("lookup-hint:{repo}"),
-                default_branch_commit: String::new(),
-                config_hash: hint_hash.clone(),
+            let scope = LookupHintScope {
+                repository: repo.clone(),
+                inputs_hash: inputs_hash.clone(),
+                schema_hash: schema_hash.clone(),
+                credential_scope: credential_scope.clone(),
             };
-            if let Some(bytes) = self.cache.extraction_get(&key).await? {
-                let known: LookupHint = serde_json::from_slice(&bytes)?;
+            if let Some(known) = self.cache.state::<LookupHint>(&scope).await? {
                 hint.catalogs.extend(known.catalogs);
                 hint.digests.extend(known.digests);
             }
@@ -994,16 +1088,14 @@ impl Engine {
                     })
                     .cloned()
                     .collect();
-                let key = ExtractionKey {
-                    repo: format!("lookup-hint:{}", repo.report.repository),
-                    default_branch_commit: String::new(),
-                    config_hash: hint_hash.clone(),
+                let scope = LookupHintScope {
+                    repository: repo.report.repository.clone(),
+                    inputs_hash: inputs_hash.clone(),
+                    schema_hash: schema_hash.clone(),
+                    credential_scope: credential_scope.clone(),
                 };
                 self.cache
-                    .extraction_put(
-                        &key,
-                        &serde_json::to_vec(&LookupHint { catalogs, digests })?,
-                    )
+                    .set_state(&scope, &LookupHint { catalogs, digests })
                     .await?;
             }
         }
@@ -2272,16 +2364,15 @@ impl Engine {
             .ok_or_else(|| Error::Invalid("blob missing from the batch".into()))
     }
     async fn scan(&self, repo: &str, override_config: Option<&Config>) -> Result<Work> {
-        let hint_key = ExtractionKey {
-            repo: format!("branch-hint:{repo}"),
-            default_branch_commit: self.github.credential_scope().into(),
-            config_hash: "branch-v2".into(),
+        let hint_scope = CredentialScope {
+            repository: repo.into(),
+            credential_scope: self.github.credential_scope().into(),
         };
         let hint = self
             .cache
-            .extraction_get(&hint_key)
+            .state::<BranchHint>(&hint_scope)
             .await?
-            .and_then(|bytes| String::from_utf8(bytes).ok());
+            .map(|hint| hint.0);
         let (branch, commit, tree_sha) = if let Some(hint) = hint {
             // Conditional REST heads are faster than GraphQL snapshots on the
             // measured warm path. Revalidate metadata and the hinted branch in
@@ -2332,7 +2423,7 @@ impl Engine {
             (branch, commit, tree)
         };
         self.cache
-            .extraction_put(&hint_key, branch.as_bytes())
+            .set_state(&hint_scope, &BranchHint(branch.clone()))
             .await?;
         let mut report = repository(repo, Status::Complete, None);
         report.default_branch = Some(branch);
@@ -2490,14 +2581,13 @@ impl Engine {
         let config = if let Some(config) = override_config {
             Some(config.clone())
         } else {
-            let key = ExtractionKey {
-                repo: format!("config:{repo}"),
-                default_branch_commit: commit.clone(),
-                // v2: only patchula.pkl at the root is discovered.
-                config_hash: format!("v2:{}", hash(patchula_config::SCHEMA.as_bytes())),
+            let scope = RepoConfigScope {
+                repository: repo.into(),
+                commit: commit.clone(),
+                schema_hash: hash(patchula_config::SCHEMA.as_bytes()),
             };
-            if let Some(bytes) = self.cache.extraction_get(&key).await? {
-                serde_json::from_slice(&bytes)?
+            if let Some(saved) = self.cache.state::<RepoConfig>(&scope).await? {
+                saved.0
             } else {
                 let entries = self.tree(repo, tree_sha).await?;
                 let path = Some(patchula_config::CONFIG_PATH).filter(|p| {
@@ -2505,16 +2595,14 @@ impl Engine {
                         .iter()
                         .any(|entry| entry.path == *p && entry.kind == "blob")
                 });
-                let config = if let Some(path) = path {
+                let saved = RepoConfig(if let Some(path) = path {
                     Some(self.config(repo, path, &entries).await?)
                 } else {
                     None
-                };
-                self.cache
-                    .extraction_put(&key, &serde_json::to_vec(&config)?)
-                    .await?;
+                });
+                self.cache.set_state(&scope, &saved).await?;
                 tree = Some(entries);
-                config
+                saved.0
             }
         };
         let Some(config) = config else {
@@ -2531,14 +2619,16 @@ impl Engine {
             });
         };
         let config_hash = hash(&serde_json::to_vec(&config)?);
-        let key = ExtractionKey {
-            repo: repo.into(),
-            default_branch_commit: commit,
-            config_hash: format!("{EXTRACTION}:{config_hash}"),
+        let scope = ExtractionScope {
+            repository: repo.into(),
+            commit,
+            config_hash: config_hash.clone(),
         };
-        let cached: CachedExtraction = if let Some(bytes) = self.cache.extraction_get(&key).await? {
+        let cached: CachedExtraction = if let Some(cached) =
+            self.cache.state::<CachedExtraction>(&scope).await?
+        {
             self.extraction_hits.fetch_add(1, Ordering::Relaxed);
-            serde_json::from_slice(&bytes)?
+            cached
         } else {
             let scanner = Scanner::new(&config).map_err(Error::Invalid)?;
             let entries = if let Some(tree) = tree {
@@ -2681,24 +2771,24 @@ impl Engine {
             // changes, reuses the earlier result without scanning.
             // Unlike a commit, the same files recur across releases, so the
             // key carries the version as well as the namespace.
-            let content = ExtractionKey {
-                repo: format!("files:{repo}"),
-                default_branch_commit: hash(&serde_json::to_vec(&files)?),
-                config_hash: format!("{EXTRACTION}:{}:{config_hash}", env!("CARGO_PKG_VERSION")),
+            let files_scope = FilesScope {
+                repository: repo.into(),
+                files_hash: hash(&serde_json::to_vec(&files)?),
+                config_hash: config_hash.clone(),
             };
-            let mut extraction = if let Some(bytes) = self.cache.extraction_get(&content).await? {
-                self.extraction_hits.fetch_add(1, Ordering::Relaxed);
-                serde_json::from_slice(&bytes)?
-            } else {
-                let extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
-                    .await
-                    .map_err(|e| Error::Invalid(e.to_string()))?
-                    .map_err(Error::Invalid)?;
-                self.cache
-                    .extraction_put(&content, &serde_json::to_vec(&extraction)?)
-                    .await?;
-                extraction
-            };
+            let mut extraction =
+                if let Some(saved) = self.cache.state::<FileExtraction>(&files_scope).await? {
+                    self.extraction_hits.fetch_add(1, Ordering::Relaxed);
+                    saved.0
+                } else {
+                    let extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
+                        .await
+                        .map_err(|e| Error::Invalid(e.to_string()))?
+                        .map_err(Error::Invalid)?;
+                    let saved = FileExtraction(extraction);
+                    self.cache.set_state(&files_scope, &saved).await?;
+                    saved.0
+                };
             extraction.skipped.extend(unsupported);
             for path in &deep {
                 extraction.warnings.push(format!(
@@ -2721,9 +2811,7 @@ impl Engine {
                     public_only,
                 },
             };
-            self.cache
-                .extraction_put(&key, &serde_json::to_vec(&cached)?)
-                .await?;
+            self.cache.set_state(&scope, &cached).await?;
             cached
         };
         report.warnings = cached.extraction.warnings;
@@ -2800,19 +2888,15 @@ impl Engine {
         let path = format!("/repo/{path}");
         // Evaluation is a function of the modules read, so the same modules
         // on another commit reuse it.
-        let key = ExtractionKey {
-            repo: format!("config-files:{repo}"),
-            default_branch_commit: hash(&serde_json::to_vec(&(&path, &files))?),
-            // The version covers decoding and validation the schema text
+        let scope = ConfigFilesScope {
+            repository: repo.into(),
+            files_hash: hash(&serde_json::to_vec(&(&path, &files))?),
+            // PER_BUILD covers the decoding and validation the schema text
             // does not.
-            config_hash: format!(
-                "v2:{}:{}",
-                env!("CARGO_PKG_VERSION"),
-                hash(patchula_config::SCHEMA.as_bytes())
-            ),
+            schema_hash: hash(patchula_config::SCHEMA.as_bytes()),
         };
-        if let Some(bytes) = self.cache.extraction_get(&key).await? {
-            return Ok(serde_json::from_slice(&bytes)?);
+        if let Some(saved) = self.cache.state::<EvaluatedConfig>(&scope).await? {
+            return Ok(saved.0);
         }
         let config = tokio::task::spawn_blocking(move || {
             patchula_config::load_files(&path, files).map_err(|e| e.to_string())
@@ -2820,17 +2904,9 @@ impl Engine {
         .await
         .map_err(|e| Error::Invalid(e.to_string()))?
         .map_err(Error::Invalid)?;
-        self.cache
-            .extraction_put(&key, &serde_json::to_vec(&config)?)
-            .await?;
-        Ok(config)
-    }
-}
-fn last_run_key(repo: &str) -> ExtractionKey {
-    ExtractionKey {
-        repo: format!("last-run:{repo}"),
-        default_branch_commit: String::default(),
-        config_hash: "last-run-v1".into(),
+        let saved = EvaluatedConfig(config);
+        self.cache.set_state(&scope, &saved).await?;
+        Ok(saved.0)
     }
 }
 /// How many of a repository's branches regenerate their lockfiles at once:
@@ -2839,10 +2915,6 @@ fn last_run_key(repo: &str) -> ExtractionKey {
 fn lockfile_concurrency() -> usize {
     std::thread::available_parallelism().map_or(1, |cores| cores.get().min(4))
 }
-
-/// The namespace of extraction cache entries, changed whenever extraction
-/// semantics do.
-const EXTRACTION: &str = "extract-v28";
 
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)

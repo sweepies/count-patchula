@@ -5,6 +5,23 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 /// The cached representation of one parsed upstream document.
 type Derive = fn(&[u8]) -> std::result::Result<Vec<u8>, serde_json::Error>;
 
+/// The parsed sections of one immutable upstream document.
+#[derive(Serialize, Deserialize)]
+struct AdapterSections(Vec<Section>);
+#[derive(Serialize)]
+struct AdapterScope {
+    repository: String,
+    path: String,
+    blob_sha: String,
+    representation: String,
+}
+impl State for AdapterSections {
+    const NAMESPACE: &'static str = "notes-adapter";
+    const VERSION: u32 = 1;
+    const PER_BUILD: bool = true;
+    type Scope = AdapterScope;
+}
+
 /// Upstreams whose release notes are published outside GitHub releases.
 #[derive(Clone, Copy)]
 pub(super) enum Adapter {
@@ -187,13 +204,14 @@ impl Client {
         repo: &str,
         path: &str,
         sha: &str,
-        config_hash: &'static str,
+        representation: &'static str,
         derive: Derive,
     ) -> Result<Vec<Section>> {
-        let key = ExtractionKey {
-            repo: format!("notes-adapter:{repo}:{path}"),
-            default_branch_commit: sha.to_string(),
-            config_hash: config_hash.to_string(),
+        let scope = AdapterScope {
+            repository: repo.into(),
+            path: path.into(),
+            blob_sha: sha.into(),
+            representation: representation.into(),
         };
         let shared = self
             .changelogs
@@ -206,21 +224,22 @@ impl Client {
         if let Some(sections) = &*saved {
             return Ok(sections.iter().cloned().collect());
         }
-        let bytes = if let Some(bytes) = self.cache.extraction_get(&key).await? {
-            bytes
+        let sections = if let Some(entry) = self.cache.state::<AdapterSections>(&scope).await? {
+            entry.0
         } else {
             let response = self
                 .github
                 .get_derived(
                     &format!("repos/{repo}/git/blobs/{sha}"),
-                    config_hash,
+                    representation,
                     derive,
                 )
                 .await?;
-            self.cache.extraction_put(&key, &response.body).await?;
-            response.body
+            let entry = AdapterSections(serde_json::from_slice(&response.body)?);
+            self.cache.set_state(&scope, &entry).await?;
+            entry.0
         };
-        let sections = Arc::new(serde_json::from_slice::<Vec<Section>>(&bytes)?);
+        let sections = Arc::new(sections);
         *saved = Some(sections.clone());
         Ok(sections.iter().cloned().collect())
     }

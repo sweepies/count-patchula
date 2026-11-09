@@ -15,6 +15,21 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// The write receipts patchula_update stores, read through the same
+/// namespace and scope.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Receipts(Value);
+#[derive(serde::Serialize)]
+struct ReceiptsScope {
+    repository: String,
+    branch_prefix: String,
+}
+impl patchula_cache::State for Receipts {
+    const NAMESPACE: &'static str = "verified-write-receipts";
+    const VERSION: u32 = 1;
+    type Scope = ReceiptsScope;
+}
+
 #[derive(Default)]
 struct State {
     base: String,
@@ -2018,16 +2033,15 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
     patchula_update::save_receipts(&cache, &repo, &config, &plans, &lifecycle)
         .await
         .unwrap();
-    let bytes = cache
-        .extraction_get(&patchula_cache::ExtractionKey {
-            repo: repo.repository.clone(),
-            default_branch_commit: config.prs.branch.clone(),
-            config_hash: "verified-write-receipts-v3".into(),
+    let receipts = cache
+        .state::<Receipts>(&ReceiptsScope {
+            repository: repo.repository.clone(),
+            branch_prefix: config.prs.branch.clone(),
         })
         .await
         .unwrap()
-        .unwrap();
-    let receipts: Value = serde_json::from_slice(&bytes).unwrap();
+        .unwrap()
+        .0;
     assert_eq!(
         receipts["writes"]
             .as_object()

@@ -20,11 +20,20 @@ struct SavedRelease {
     updated_at: String,
     release: ReleaseBody,
 }
-fn release_key(repo: &str, tag: &str) -> ExtractionKey {
-    ExtractionKey {
-        repo: format!("release-notes:{}", repo.to_ascii_lowercase()),
-        default_branch_commit: tag.into(),
-        config_hash: "release-body-updated-at-v1".into(),
+#[derive(Serialize)]
+struct ReleaseNotesScope {
+    repository: String,
+    tag: String,
+}
+impl State for SavedRelease {
+    const NAMESPACE: &'static str = "release-notes";
+    const VERSION: u32 = 1;
+    type Scope = ReleaseNotesScope;
+}
+fn release_scope(repo: &str, tag: &str) -> ReleaseNotesScope {
+    ReleaseNotesScope {
+        repository: repo.to_ascii_lowercase(),
+        tag: tag.into(),
     }
 }
 impl Client {
@@ -126,8 +135,10 @@ impl Client {
     ) -> Result<BTreeMap<String, BodyResult>> {
         let mut cached = BTreeMap::new();
         for tag in tags {
-            if let Some(bytes) = self.cache.extraction_get(&release_key(repo, tag)).await?
-                && let Ok(saved) = serde_json::from_slice::<SavedRelease>(&bytes)
+            if let Some(saved) = self
+                .cache
+                .state::<SavedRelease>(&release_scope(repo, tag))
+                .await?
             {
                 cached.insert(tag.clone(), saved);
             }
@@ -197,7 +208,7 @@ impl Client {
                     release: release.clone(),
                 };
                 self.cache
-                    .extraction_put(&release_key(repo, &tag), &serde_json::to_vec(&saved)?)
+                    .set_state(&release_scope(repo, &tag), &saved)
                     .await?;
                 result.insert(tag, Ok(Some(release)));
             }

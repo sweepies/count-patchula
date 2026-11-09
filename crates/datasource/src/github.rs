@@ -1,6 +1,5 @@
 use super::*;
 use futures_util::{StreamExt, stream};
-use patchula_cache::ExtractionKey;
 use patchula_github::GraphqlPage;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -27,6 +26,47 @@ struct ReleaseHead {
 }
 fn compact_release_head(body: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&serde_json::from_slice::<Vec<ReleaseHead>>(body)?)
+}
+
+/// The newest release's identity on a release source; a change refetches
+/// history. `None` records a source with no releases.
+#[derive(Serialize, Deserialize)]
+struct SourceHead(Option<Value>);
+#[derive(Serialize)]
+struct SourceHeadScope {
+    source: String,
+    package: String,
+}
+impl State for SourceHead {
+    const NAMESPACE: &'static str = "source-head";
+    const VERSION: u32 = 1;
+    type Scope = SourceHeadScope;
+}
+/// The version catalog one tag-namespace fingerprint resolves to.
+#[derive(Serialize, Deserialize)]
+struct TagCatalog(Catalog);
+#[derive(Serialize)]
+struct TagCatalogScope {
+    package: String,
+    fingerprint: String,
+}
+impl State for TagCatalog {
+    const NAMESPACE: &'static str = "tag-catalog";
+    const VERSION: u32 = 1;
+    type Scope = TagCatalogScope;
+}
+/// The resolved target of one immutable tag object.
+#[derive(Serialize, Deserialize)]
+struct TagObject(Version);
+#[derive(Clone, Serialize)]
+struct TagObjectScope {
+    package: String,
+    object_sha: String,
+}
+impl State for TagObject {
+    const NAMESPACE: &'static str = "tag-object";
+    const VERSION: u32 = 1;
+    type Scope = TagObjectScope;
 }
 
 impl Client {
@@ -72,14 +112,13 @@ impl Client {
                 .split_once('/')
                 .filter(|(o, n)| !o.is_empty() && !n.is_empty() && !n.contains('/'))
                 .ok_or(Error::Invalid)?;
-            let key = ExtractionKey {
-                repo: format!("source-head:github-releases:{package}"),
-                default_branch_commit: String::new(),
-                config_hash: "graphql-head-v1".into(),
+            let scope = SourceHeadScope {
+                source: "github-releases".into(),
+                package: package.clone(),
             };
-            let previous = self.cache.extraction_get(&key).await?;
+            let previous = self.cache.state::<SourceHead>(&scope).await?;
             if previous.is_some() {
-                warm.push((package.clone(), key, previous));
+                warm.push((package.clone(), scope, previous));
                 continue;
             }
             let i = pending.len();
@@ -87,7 +126,7 @@ impl Client {
             variables.insert(format!("o{i}"), json!(owner));
             variables.insert(format!("n{i}"), json!(name));
             fields.push(format!("r{i}:repository(owner:$o{i},name:$n{i}){{releases(first:100,orderBy:{{field:CREATED_AT,direction:DESC}}){{nodes{{tagName publishedAt isDraft isPrerelease}}pageInfo{{hasNextPage endCursor}}}}}}"));
-            pending.push((package.clone(), key, previous));
+            pending.push((package.clone(), scope, previous));
         }
         let cold = async {
             if pending.is_empty() {
@@ -99,13 +138,13 @@ impl Client {
                 .graphql(&query, Value::Object(variables))
                 .await?;
             Ok(stream::iter(pending.into_iter().enumerate())
-                .map(|(i, (package, key, previous))| {
+                .map(|(i, (package, scope, previous))| {
                     let data = &data;
                     async move {
                         let result = self
                             .release_catalog(
                                 &package,
-                                key,
+                                scope,
                                 previous,
                                 Head::Page(&data[format!("r{i}")]["releases"]),
                             )
@@ -117,12 +156,12 @@ impl Client {
                 .collect()
                 .await)
         };
-        let warm = stream::iter(warm).map(|(package, key, previous)| async move {
+        let warm = stream::iter(warm).map(|(package, scope, previous)| async move {
             let result = async {
                 let response = self.github.get_derived(&format!("repos/{package}/releases?per_page=1"), "github-release-head-v1", compact_release_head).await?;
                 let nodes: Vec<Value> = serde_json::from_slice(&response.body)?;
                 let nodes: Vec<_> = nodes.iter().map(|node| json!({"tagName":node["tag_name"],"publishedAt":node["published_at"],"isDraft":node["draft"],"isPrerelease":node["prerelease"]})).collect();
-                self.release_catalog(&package, key, previous, Head::Newest(json!({"nodes":nodes,"pageInfo":{"hasNextPage":true,"endCursor":null}}))).await
+                self.release_catalog(&package, scope, previous, Head::Newest(json!({"nodes":nodes,"pageInfo":{"hasNextPage":true,"endCursor":null}}))).await
             }.await;
             (package, result)
         }).buffer_unordered(self.github.concurrency()).collect::<BTreeMap<_,_>>();
@@ -135,8 +174,8 @@ impl Client {
     async fn release_catalog(
         &self,
         package: &str,
-        key: ExtractionKey,
-        previous: Option<Vec<u8>>,
+        scope: SourceHeadScope,
+        previous: Option<SourceHead>,
         head: Head<'_>,
     ) -> Result<Catalog> {
         let (connection, reusable) = match &head {
@@ -144,15 +183,15 @@ impl Client {
             Head::Newest(connection) => (connection, false),
         };
         let first = GraphqlPage::<Value>::from_connection(connection, "")?;
-        let fingerprint = serde_json::to_vec(&first.nodes.first().map(|node| {
+        let fingerprint = SourceHead(first.nodes.first().map(|node| {
             json!([
                 node["tagName"],
                 node["publishedAt"],
                 node["isDraft"],
                 node["isPrerelease"]
             ])
-        }))?;
-        if previous.as_deref() != Some(fingerprint.as_slice()) {
+        }));
+        if previous.as_ref().map(|head| &head.0) != Some(&fingerprint.0) {
             let (owner, name) = package.split_once('/').ok_or(Error::Invalid)?;
             let mut variables = json!({"owner":owner,"name":name,"cursor":null});
             let mut first_page = reusable.then_some(first);
@@ -200,7 +239,7 @@ impl Client {
             if !complete {
                 return Err(Error::Invalid);
             }
-            self.cache.extraction_put(&key, &fingerprint).await?;
+            self.cache.set_state(&scope, &fingerprint).await?;
         }
         let mut catalog = Catalog {
             versions: self
@@ -267,16 +306,12 @@ impl Client {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
-        let catalog_key = ExtractionKey {
-            repo: format!("source-tags:{package}"),
-            default_branch_commit: fingerprint,
-            config_hash: "tag-catalog-v2".into(),
+        let catalog_scope = TagCatalogScope {
+            package: package.into(),
+            fingerprint,
         };
-        if let Some(bytes) = self.cache.extraction_get(&catalog_key).await? {
-            return Ok(with_release_dates(
-                serde_json::from_slice(&bytes)?,
-                &releases,
-            ));
+        if let Some(saved) = self.cache.state::<TagCatalog>(&catalog_scope).await? {
+            return Ok(with_release_dates(saved.0, &releases));
         }
         let mut versions = Vec::with_capacity(refs.len());
         let mut targets: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -290,19 +325,17 @@ impl Client {
         }
         let mut missing = Vec::new();
         for (sha, names) in targets {
-            let key = ExtractionKey {
-                repo: format!("tag-object:{package}"),
-                default_branch_commit: sha.clone(),
-                config_hash: "tag-object-v2".into(),
+            let scope = TagObjectScope {
+                package: package.into(),
+                object_sha: sha.clone(),
             };
-            if let Some(bytes) = self.cache.extraction_get(&key).await? {
-                let target: Version = serde_json::from_slice(&bytes)?;
+            if let Some(saved) = self.cache.state::<TagObject>(&scope).await? {
                 versions.extend(names.into_iter().map(|version| Version {
                     version,
-                    ..target.clone()
+                    ..saved.0.clone()
                 }));
             } else {
-                missing.push((sha, names, key));
+                missing.push((sha, names, scope));
             }
         }
         let (owner, name) = package.split_once('/').ok_or(Error::Invalid)?;
@@ -331,7 +364,7 @@ impl Client {
                     .graphql(&query, Value::Object(variables))
                     .await?;
                 let mut result = Vec::new();
-                for (i, (sha, names, key)) in chunk.iter().enumerate() {
+                for (i, (sha, names, scope)) in chunk.iter().enumerate() {
                     let node = &data["repository"][format!("t{i}")];
                     if node["oid"] != *sha {
                         return Err(Error::Invalid);
@@ -342,12 +375,11 @@ impl Client {
                         published_at: node["tagger"]["date"].as_str().map(str::to_owned),
                         digest: commit["oid"].as_str().map(str::to_owned),
                     });
-                    self.cache
-                        .extraction_put(key, &serde_json::to_vec(&target)?)
-                        .await?;
+                    let saved = TagObject(target);
+                    self.cache.set_state(scope, &saved).await?;
                     result.extend(names.iter().map(|version| Version {
                         version: version.clone(),
-                        ..target.clone()
+                        ..saved.0.clone()
                     }));
                 }
                 Ok::<_, Error>(result)
@@ -363,10 +395,9 @@ impl Client {
             versions,
             dist_tags: BTreeMap::new(),
         };
-        self.cache
-            .extraction_put(&catalog_key, &serde_json::to_vec(&catalog)?)
-            .await?;
-        Ok(with_release_dates(catalog, &releases))
+        let saved = TagCatalog(catalog);
+        self.cache.set_state(&catalog_scope, &saved).await?;
+        Ok(with_release_dates(saved.0, &releases))
     }
     /// Refresh only requested mutable tag targets while version lists are reused.
     /// One missing/inaccessible object falls back to its ordinary ref lookup.
@@ -564,20 +595,31 @@ mod tests {
             }
         }
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        // Old immutable-object entries must not perpetuate commit-date ages.
+        // Tag objects under a state version this build does not read must not
+        // perpetuate commit-date ages.
+        #[derive(Serialize, Deserialize)]
+        struct OtherTagObject(Version);
+        #[derive(Serialize)]
+        struct OtherTagObjectScope {
+            package: String,
+            object_sha: String,
+        }
+        impl State for OtherTagObject {
+            const NAMESPACE: &'static str = "tag-object";
+            const VERSION: u32 = 2;
+            type Scope = OtherTagObjectScope;
+        }
         cache
-            .extraction_put(
-                &ExtractionKey {
-                    repo: "tag-object:example/dates".into(),
-                    default_branch_commit: format!("{:040x}", 0),
-                    config_hash: "tag-object-v1".into(),
+            .set_state(
+                &OtherTagObjectScope {
+                    package: "example/dates".into(),
+                    object_sha: format!("{:040x}", 0),
                 },
-                &serde_json::to_vec(&Version::from(Release {
+                &OtherTagObject(Version::from(Release {
                     version: String::new(),
                     published_at: Some("2000-01-01T00:00:00Z".into()),
                     digest: Some("a".repeat(40)),
-                }))
-                .unwrap(),
+                })),
             )
             .await
             .unwrap();

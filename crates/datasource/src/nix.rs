@@ -1,7 +1,6 @@
 //! Flake inputs as nix resolves them: `nix flake prefetch` reports the
 //! revision a reference points at now and when that commit was made.
 use super::*;
-use patchula_cache::ExtractionKey;
 use std::{future::Future, pin::Pin, sync::Arc};
 
 /// Runs `nix flake prefetch --json` for one flake reference and returns its
@@ -15,14 +14,21 @@ pub trait Flakes: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = std::result::Result<Vec<u8>, String>> + Send + 'a>>;
 }
 
-/// A stored resolution is reused for this long, like a mise listing.
-const FRESH_MS: i64 = 3_600_000;
-
+#[derive(Serialize)]
+struct PrefetchScope {
+    reference: String,
+    credential_scope: String,
+}
 #[derive(Serialize, Deserialize)]
 struct Resolved {
     fetched_at: i64,
     revision: String,
     last_modified: Option<i64>,
+}
+impl State for Resolved {
+    const NAMESPACE: &'static str = "nix-prefetch";
+    const VERSION: u32 = 1;
+    type Scope = PrefetchScope;
 }
 
 impl Client {
@@ -36,17 +42,17 @@ impl Client {
     /// of an input without one, dated by its `lastModified`.
     pub(super) async fn nix(&self, reference: &str) -> Result<Catalog> {
         let flakes = self.nix.as_ref().ok_or(Error::NoNix)?;
-        let key = ExtractionKey {
-            repo: format!("nix-prefetch:{reference}"),
-            default_branch_commit: self.github.credential_scope().into(),
-            config_hash: "nix-prefetch-v1".into(),
+        let scope = PrefetchScope {
+            reference: reference.into(),
+            credential_scope: self.github.credential_scope().into(),
         };
         let now = chrono::Utc::now().timestamp_millis();
-        let saved = match self.cache.extraction_get(&key).await? {
-            Some(bytes) if !self.http.is_revalidating() => {
-                serde_json::from_slice::<Resolved>(&bytes)
-                    .ok()
-                    .filter(|saved| (0..FRESH_MS).contains(&now.saturating_sub(saved.fetched_at)))
+        let saved = match self.cache.state::<Resolved>(&scope).await? {
+            Some(saved)
+                if !self.http.is_revalidating()
+                    && (0..FRESH_MS).contains(&now.saturating_sub(saved.fetched_at)) =>
+            {
+                Some(saved)
             }
             _ => None,
         };
@@ -69,9 +75,7 @@ impl Client {
                         .to_owned(),
                     last_modified: locked["lastModified"].as_i64(),
                 };
-                self.cache
-                    .extraction_put(&key, &serde_json::to_vec(&resolved)?)
-                    .await?;
+                self.cache.set_state(&scope, &resolved).await?;
                 resolved
             }
         };

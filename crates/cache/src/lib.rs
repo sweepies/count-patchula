@@ -31,7 +31,7 @@ pub enum Error {
     Worker,
     #[error("cache URL must be absolute HTTP(S) without credentials")]
     Url,
-    #[error("cache schema {0} is newer than supported schema 8")]
+    #[error("cache schema {0} is newer than supported schema {max}", max = store::MIGRATIONS.len())]
     FutureSchema(i64),
     #[error("cache integrity check failed")]
     Corrupt,
@@ -160,11 +160,51 @@ pub struct ReleaseList {
     pub releases: Vec<Release>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExtractionKey {
-    pub repo: String,
-    pub default_branch_commit: String,
-    pub config_hash: String,
+/// A value the Count keeps between runs, under its own namespace.
+pub trait State: serde::Serialize + serde::de::DeserializeOwned {
+    /// Names the stored shape. Never reused for a different shape.
+    const NAMESPACE: &'static str;
+    /// Bump when the stored shape or its meaning changes.
+    const VERSION: u32;
+    /// Whether the value also depends on this build's code (decoding,
+    /// validation, extraction semantics), so a new release never reads it.
+    const PER_BUILD: bool = false;
+    /// What one entry is about: a small serializable struct with named fields.
+    type Scope: serde::Serialize;
+}
+
+/// The release whose code wrote a `PER_BUILD` value.
+pub(crate) const BUILD: &str = env!("CARGO_PKG_VERSION");
+
+/// Whether a `State::NAMESPACE` leaves `@` and `+` to the row key: `@v` starts
+/// the version and `+` the build, which opening the cache relies on.
+const fn plain(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'@' || bytes[i] == b'+' {
+            return false;
+        }
+        i += 1;
+    }
+    !bytes.is_empty()
+}
+
+/// The `namespace` column of a state row: the shape's name and version, plus
+/// this build's version when the value depends on the build's code.
+fn state_namespace<T: State>() -> String {
+    const {
+        assert!(
+            plain(T::NAMESPACE),
+            "a state namespace is nonempty and has no @ or +"
+        )
+    };
+    let namespace = format!("{}@v{}", T::NAMESPACE, T::VERSION);
+    if T::PER_BUILD {
+        format!("{namespace}+{BUILD}")
+    } else {
+        namespace
+    }
 }
 
 type Job = Box<dyn FnOnce(&mut Store) + Send>;
@@ -441,26 +481,57 @@ impl Cache {
         .await
     }
 
-    pub async fn extraction_get(&self, key: &ExtractionKey) -> Result<Option<Vec<u8>>> {
-        let key = key.clone();
-        self.read(move |store| store.extraction_get(&key)).await
+    /// The value kept for `scope`, or None when there is none or it no longer
+    /// decodes.
+    pub async fn state<T: State + Send + 'static>(&self, scope: &T::Scope) -> Result<Option<T>> {
+        let namespace = state_namespace::<T>();
+        let scope = serde_json::to_string(scope)?;
+        self.read(move |store| {
+            let value = store
+                .conn
+                .query_row(
+                    "SELECT value FROM state WHERE namespace=?1 AND scope=?2",
+                    rusqlite::params![namespace, scope],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()?;
+            let Some(bytes) = value else {
+                return Ok(None);
+            };
+            match serde_json::from_slice(&bytes) {
+                Ok(value) => Ok(Some(value)),
+                Err(_) => {
+                    tracing::debug!(%namespace, "cache state does not decode; treating it as a miss");
+                    Ok(None)
+                }
+            }
+        })
+        .await
     }
 
-    pub async fn extraction_put(&self, key: &ExtractionKey, serialized: &[u8]) -> Result<()> {
-        let (key, serialized) = (key.clone(), serialized.to_vec());
-        self.call(move |store| {
-            store.conn.execute("INSERT INTO extraction(repo, branch_commit, config_hash, result) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(repo, branch_commit, config_hash) DO UPDATE SET result=excluded.result",
-                rusqlite::params![key.repo, key.default_branch_commit, key.config_hash, serialized])?;
-            Ok(())
-        }).await
-    }
-
-    pub async fn extraction_remove(&self, key: &ExtractionKey) -> Result<()> {
-        let key = key.clone();
+    /// Keep `value` for `scope`, replacing any earlier value.
+    pub async fn set_state<T: State>(&self, scope: &T::Scope, value: &T) -> Result<()> {
+        let namespace = state_namespace::<T>();
+        let scope = serde_json::to_string(scope)?;
+        let value = serde_json::to_vec(value)?;
         self.call(move |store| {
             store.conn.execute(
-                "DELETE FROM extraction WHERE repo=?1 AND branch_commit=?2 AND config_hash=?3",
-                rusqlite::params![key.repo, key.default_branch_commit, key.config_hash],
+                "INSERT INTO state(namespace,scope,value) VALUES (?1,?2,?3) ON CONFLICT(namespace,scope) DO UPDATE SET value=excluded.value",
+                rusqlite::params![namespace, scope, value],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Forget the value kept for `scope`.
+    pub async fn clear_state<T: State>(&self, scope: &T::Scope) -> Result<()> {
+        let namespace = state_namespace::<T>();
+        let scope = serde_json::to_string(scope)?;
+        self.call(move |store| {
+            store.conn.execute(
+                "DELETE FROM state WHERE namespace=?1 AND scope=?2",
+                rusqlite::params![namespace, scope],
             )?;
             Ok(())
         })
@@ -471,6 +542,57 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn opening_drops_per_build_state_from_other_releases() {
+        #[derive(Serialize, Deserialize)]
+        struct Parsed(u32);
+        #[derive(Serialize)]
+        struct Scope {
+            key: String,
+        }
+        impl State for Parsed {
+            const NAMESPACE: &'static str = "test-parsed";
+            const VERSION: u32 = 1;
+            const PER_BUILD: bool = true;
+            type Scope = Scope;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let scope = Scope { key: "k".into() };
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        cache.set_state(&scope, &Parsed(1)).await.unwrap();
+        cache
+            .call(|store| {
+                store.conn.execute(
+                    "INSERT INTO state(namespace, scope, value) VALUES ('test-parsed@v1+0.0.1', '{}', '1'), ('plain@v1', '{}', '1')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        drop(cache);
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        assert_eq!(
+            cache.state::<Parsed>(&scope).await.unwrap().map(|p| p.0),
+            Some(1)
+        );
+        let namespaces = cache
+            .read(|store| {
+                let mut statement = store
+                    .conn
+                    .prepare("SELECT namespace FROM state ORDER BY namespace")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+                Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            namespaces,
+            ["plain@v1".to_string(), format!("test-parsed@v1+{BUILD}")]
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn commands_opening_a_new_cache_together_all_succeed() {
@@ -513,15 +635,19 @@ mod tests {
             }));
         }
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            #[derive(Serialize, Deserialize)]
+            struct Probe(String);
+            #[derive(Serialize)]
+            struct ProbeScope {
+                key: String,
+            }
+            impl State for Probe {
+                const NAMESPACE: &'static str = "test-probe";
+                const VERSION: u32 = 1;
+                type Scope = ProbeScope;
+            }
             cache
-                .extraction_put(
-                    &ExtractionKey {
-                        repo: "repo".into(),
-                        default_branch_commit: "sha".into(),
-                        config_hash: "config".into(),
-                    },
-                    b"data",
-                )
+                .set_state(&ProbeScope { key: "data".into() }, &Probe("value".into()))
                 .await
                 .unwrap();
             for task in tasks {
