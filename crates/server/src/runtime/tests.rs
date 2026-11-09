@@ -291,7 +291,13 @@ fn lookup_app(transport: Arc<dyn Transport>, id: u64) -> Arc<App> {
             .unwrap()
             .to_string()
     });
-    App::new(id, pem.as_bytes(), transport).unwrap()
+    App::new(
+        id,
+        pem.as_bytes(),
+        transport,
+        reqwest::Url::parse("https://api.github.com/").unwrap(),
+    )
+    .unwrap()
 }
 
 #[tokio::test]
@@ -546,7 +552,13 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     let transport: Arc<dyn Transport> = Arc::new(DiscoveryAndMissingRepository);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let runner = Engines {
-        app: App::new(1, pem.as_bytes(), transport.clone()).unwrap(),
+        app: App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            reqwest::Url::parse("https://api.github.com/").unwrap(),
+        )
+        .unwrap(),
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),

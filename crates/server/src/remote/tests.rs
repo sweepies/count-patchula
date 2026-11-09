@@ -133,7 +133,13 @@ fn app() -> Arc<App> {
             .unwrap()
             .to_string()
     });
-    App::new(7, pem.as_bytes(), Arc::new(GitHub)).unwrap()
+    App::new(
+        7,
+        pem.as_bytes(),
+        Arc::new(GitHub),
+        reqwest::Url::parse("https://api.github.com/").unwrap(),
+    )
+    .unwrap()
 }
 
 async fn api(runner: Arc<Recorder>, client_id: Option<&str>, settings: &str) -> Router {

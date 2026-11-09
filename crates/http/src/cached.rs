@@ -1,9 +1,9 @@
 //! Conditional, unauthenticated registry GETs sharing the batch transport pool.
 use crate::{
-    Credential, RequestTrace, Response, Transport,
+    Credential, RequestTrace, Response, Transport, conditional,
     credentials::{matching, mirrored},
 };
-use patchula_cache::{Cache, HttpEntry, HttpKey};
+use patchula_cache::{Cache, HttpEntry};
 use reqwest::{
     Method, Request, StatusCode, Url,
     header::{self, HeaderValue},
@@ -55,9 +55,9 @@ impl Options {
     }
     pub fn validate(&self) -> Result<(), Error> {
         if self.registry_retries > 5
-            || !(1..=100).contains(&self.default_host_concurrency)
+            || !(1..=crate::MAX_CONCURRENCY).contains(&self.default_host_concurrency)
             || self.host_concurrency.iter().any(|(host, limit)| {
-                !(1..=100).contains(limit)
+                !(1..=crate::MAX_CONCURRENCY).contains(limit)
                     || !Url::parse(&format!("https://{host}/")).is_ok_and(|url| {
                         url.host_str() == Some(host.as_str())
                             && url.as_str() == format!("https://{host}/")
@@ -507,14 +507,7 @@ impl Cached {
     ) -> Result<Option<Response>, Error> {
         // A previous GET also proves a manifest digest if HEAD has not yet been cached.
         let fallback = if cached.is_none() && method == Method::HEAD {
-            let mut key = HttpKey::new(
-                "GET",
-                url.as_str(),
-                BTreeMap::from([("accept".into(), accept.into())]),
-            )?;
-            if let Some(id) = scope {
-                key = key.credential(id);
-            }
+            let key = conditional::key("GET", url.as_str(), &[("accept", accept)], None, scope)?;
             self.inner.cache.http_get(&key).await?
         } else {
             None
@@ -522,7 +515,7 @@ impl Cached {
         let Some(entry) = cached.or(fallback.as_ref()) else {
             return Ok(None);
         };
-        let mut response = cached_response(entry)?;
+        let mut response = conditional::response(entry).map_err(|_| Error::Configuration)?;
         response
             .headers
             .insert("x-patchula-stale", HeaderValue::from_static("rate-limit"));
@@ -584,14 +577,6 @@ impl Cached {
             .then(|| mirrored(&self.inner.options.credentials, &url))
             .flatten()
             .unwrap_or(url);
-        let mut key = HttpKey::new(
-            method.as_str(),
-            url.as_str(),
-            BTreeMap::from([("accept".into(), accept.into())]),
-        )?;
-        if let Some((format, _)) = derived {
-            key = key.representation(format);
-        }
         let credential = matching(&self.inner.options.credentials, &url).cloned();
         // Whether the answer comes from the network or the cache, whose
         // entries are kept per credential, it is one these credentials read.
@@ -601,9 +586,13 @@ impl Cached {
             crate::tracked::sent();
         }
         let scope = credential.as_ref().map(Credential::scope);
-        if let Some(id) = scope {
-            key = key.credential(id);
-        }
+        let key = conditional::key(
+            method.as_str(),
+            url.as_str(),
+            &[("accept", accept)],
+            derived.map(|(format, _)| format),
+            scope,
+        )?;
         let mut trace = RequestTrace::new(method.as_str(), &url);
         let cached = self.inner.cache.http_get(&key).await?;
         let now = SystemTime::now()
@@ -669,19 +658,7 @@ impl Cached {
             if entry.status == 404 {
                 return Err(Error::Status(404));
             }
-            let mut headers = header::HeaderMap::new();
-            for (name, value) in &entry.headers {
-                headers.insert(
-                    header::HeaderName::from_bytes(name.as_bytes())
-                        .map_err(|_| Error::Configuration)?,
-                    HeaderValue::from_str(value).map_err(|_| Error::Configuration)?,
-                );
-            }
-            let response = Response {
-                status: StatusCode::from_u16(entry.status).map_err(|_| Error::Configuration)?,
-                headers,
-                body: entry.body.clone(),
-            };
+            let response = conditional::response(entry).map_err(|_| Error::Configuration)?;
             trace.fresh(&response);
             return Ok(response);
         }
@@ -707,17 +684,7 @@ impl Cached {
             HeaderValue::from_static(concat!("patchula/", env!("CARGO_PKG_VERSION"))),
         );
         if let Some(entry) = &cached {
-            for (name, value) in [
-                (header::IF_NONE_MATCH, &entry.etag),
-                (header::IF_MODIFIED_SINCE, &entry.last_modified),
-            ] {
-                if let Some(value) = value {
-                    request.headers_mut().insert(
-                        name,
-                        HeaderValue::from_str(value).map_err(|_| Error::Configuration)?,
-                    );
-                }
-            }
+            conditional::add_validators(&mut request, entry).map_err(|_| Error::Configuration)?;
         }
         let mut attempt = 0;
         let mut redirects = BTreeSet::from([url.to_string()]);
@@ -881,18 +848,8 @@ impl Cached {
             let entry = cached.ok_or(Error::MissingBody)?;
             self.inner.not_modified.fetch_add(1, Ordering::Relaxed);
             self.inner.cache_hits.fetch_add(1, Ordering::Relaxed);
-            response.status =
-                StatusCode::from_u16(entry.status).map_err(|_| Error::Configuration)?;
-            response.body = entry.body;
-            for (name, value) in entry.headers {
-                if !response.headers.contains_key(&name) {
-                    response.headers.insert(
-                        header::HeaderName::from_bytes(name.as_bytes())
-                            .map_err(|_| Error::Configuration)?,
-                        HeaderValue::from_str(&value).map_err(|_| Error::Configuration)?,
-                    );
-                }
-            }
+            response =
+                conditional::not_modified(response, entry).map_err(|_| Error::Configuration)?;
         }
         if registry.is_some() && matches!(response.status.as_u16(), 401 | 429) {
             return Ok(response);
@@ -924,29 +881,14 @@ impl Cached {
             return Err(Error::Status(response.status.as_u16()));
         }
         if !not_modified && let Some((_, derive)) = derived {
-            let permit = self
-                .inner
-                .decoding
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(|_| Error::Worker)?;
-            let body = std::mem::take(&mut response.body);
-            response.body = tokio::task::spawn_blocking(move || {
-                let _permit = permit;
-                derive(&body)
-            })
+            response.body = conditional::derive(
+                std::mem::take(&mut response.body),
+                derive,
+                &self.inner.decoding,
+            )
             .await
             .map_err(|_| Error::Worker)??;
         }
-        let text = |name: &str| {
-            response
-                .headers
-                .get(name)
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_owned)
-        };
-        let control = text("cache-control");
         // Bytes addressed by their digest are the same for everyone, so a
         // registry's no-store or Vary cannot make them private. Those read with
         // an account's token or an operator entry's credentials may be private,
@@ -955,63 +897,14 @@ impl Cached {
             || credential
                 .as_ref()
                 .is_some_and(|entry| entry.auth != crate::Auth::Anonymous);
-        let uncacheable = foreign
-            || !(registry.is_some() && immutable(&url) && !account)
-                && (control.as_ref().is_some_and(|c| {
-                    c.split(',')
-                        .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
-                }) || text("vary").is_some_and(|v| {
-                    v.split(',').any(|n| {
-                        !["accept", "accept-encoding", "user-agent"]
-                            .iter()
-                            .any(|known| n.trim().eq_ignore_ascii_case(known))
-                    })
-                }));
-        if uncacheable {
+        let public_digest = registry.is_some() && immutable(&url) && !account;
+        // A registry bearer token is not in the key; operator credentials are,
+        // through their scope.
+        let authorization_in_key = !matches!(registry, Some(Some(_)));
+        if foreign || !(public_digest || conditional::storable(&response, authorization_in_key)) {
             self.inner.cache.http_remove(&key).await?;
         } else {
-            let entry = HttpEntry {
-                status: response.status.as_u16(),
-                etag: text("etag"),
-                last_modified: text("last-modified"),
-                headers: [
-                    "etag",
-                    "last-modified",
-                    "cache-control",
-                    "vary",
-                    "content-type",
-                    "link",
-                    "docker-content-digest",
-                ]
-                .into_iter()
-                .filter_map(|name| text(name).map(|v| (name.into(), v)))
-                .collect(),
-                body: response.body.clone(),
-                fetched_at: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64,
-                expires_at: control
-                    .as_deref()
-                    .and_then(|c| {
-                        c.split(',').find_map(|p| {
-                            p.trim()
-                                .strip_prefix("max-age=")?
-                                .trim_matches('"')
-                                .parse::<i64>()
-                                .ok()
-                        })
-                    })
-                    .filter(|age| *age >= 0)
-                    .and_then(|age| {
-                        let elapsed = text("age")
-                            .and_then(|v| v.parse::<i64>().ok())
-                            .unwrap_or(0)
-                            .max(0);
-                        now.checked_add(age.saturating_sub(elapsed).max(0))
-                    }),
-                cache_control: control,
-            };
+            let entry = conditional::entry(&response, conditional::unix_now());
             if not_modified {
                 self.inner.cache.http_refresh(&key, &entry).await?;
             } else {
@@ -1020,21 +913,6 @@ impl Cached {
         }
         Ok(response)
     }
-}
-
-fn cached_response(entry: &HttpEntry) -> Result<Response, Error> {
-    let mut headers = header::HeaderMap::new();
-    for (name, value) in &entry.headers {
-        headers.insert(
-            header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| Error::Configuration)?,
-            HeaderValue::from_str(value).map_err(|_| Error::Configuration)?,
-        );
-    }
-    Ok(Response {
-        status: StatusCode::from_u16(entry.status).map_err(|_| Error::Configuration)?,
-        headers,
-        body: entry.body.clone(),
-    })
 }
 
 /// What a registry's 429 asks of later requests.
@@ -1089,26 +967,17 @@ fn exhausted_quota(response: &Response) -> Option<Duration> {
 }
 
 fn retry_delay(response: &Response, attempt: u32) -> Option<Duration> {
-    match response.headers.get("retry-after") {
-        None => Some(Duration::from_secs(1_u64 << attempt.min(5))),
-        Some(value) => {
-            let value = value.to_str().ok()?;
-            value
-                .parse::<u64>()
-                .ok()
-                .map(Duration::from_secs)
-                .or_else(|| {
-                    httpdate::parse_http_date(value)
-                        .ok()
-                        .map(|date| date.duration_since(SystemTime::now()).unwrap_or_default())
-                })
-        }
+    if response.headers.contains_key("retry-after") {
+        conditional::retry_after(response)
+    } else {
+        Some(Duration::from_secs(1_u64 << attempt.min(5)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patchula_cache::HttpKey;
 
     struct Revalidate(std::sync::atomic::AtomicUsize);
     impl Transport for Revalidate {

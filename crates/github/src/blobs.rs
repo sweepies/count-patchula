@@ -3,11 +3,11 @@
 //! its text hashes to the SHA asked for, so a binary, truncated or re-encoded
 //! answer is never taken for the blob. Either way the blob is kept in the
 //! cache as its REST representation, so a later read needs no request.
-use crate::{Client, Error, Read, Result, cache_entry};
+use crate::{Client, Error, Read, Result, SENT};
 use base64::Engine;
 use futures_util::{StreamExt, stream};
-use patchula_http::Response;
-use reqwest::{Method, StatusCode, header::HeaderMap};
+use patchula_http::{Response, conditional};
+use reqwest::{StatusCode, header::HeaderMap};
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 use std::{
@@ -192,11 +192,21 @@ impl Client {
             headers: HeaderMap::new(),
             body,
         };
-        let request = self.request(Method::GET, self.url(&path(repo, sha))?);
-        let key = self.key(&request, [])?;
+        let url = self.url(&path(repo, sha))?;
+        let key = conditional::key(
+            "GET",
+            url.as_str(),
+            SENT,
+            None,
+            Some(self.credential_scope()),
+        )
+        .map_err(|_| Error::Cache)?;
         self.0
             .cache
-            .http_put(&key, &cache_entry(&response))
+            .http_put(
+                &key,
+                &conditional::entry(&response, conditional::unix_now()),
+            )
             .await
             .map_err(|_| Error::Cache)
     }

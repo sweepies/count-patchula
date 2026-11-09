@@ -1,5 +1,5 @@
-use crate::{Client, Error, Result};
-use reqwest::header;
+use crate::{Client, Error, Response, Result};
+use reqwest::{Url, header};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -36,37 +36,8 @@ impl Client {
             if done {
                 return Ok(result);
             }
-            // Link may occur in several fields. Split only outside angle/quoted
-            // strings so commas in URIs or extension parameters are preserved.
-            for link in response.headers.get_all(header::LINK) {
-                for part in split_links(link.to_str().map_err(|_| Error::Pagination)?)? {
-                    let Some((target, params)) = part
-                        .trim()
-                        .strip_prefix('<')
-                        .and_then(|part| part.split_once('>'))
-                    else {
-                        return Err(Error::Pagination);
-                    };
-                    let is_next = params
-                        .split(';')
-                        .filter_map(|param| param.trim().split_once('='))
-                        .any(|(name, value)| {
-                            name.eq_ignore_ascii_case("rel")
-                                && value
-                                    .trim()
-                                    .trim_matches('"')
-                                    .split_whitespace()
-                                    .any(|rel| rel == "next")
-                        });
-                    if is_next {
-                        if next.is_some() {
-                            return Err(Error::Pagination);
-                        }
-                        next = Some(
-                            self.url(url.join(target).map_err(|_| Error::Pagination)?.as_str())?,
-                        );
-                    }
-                }
+            if let Some(target) = next_link(&response, &url)? {
+                next = Some(self.url(target.as_str())?);
             }
             if next.is_none() {
                 return Ok(result);
@@ -133,6 +104,43 @@ impl<T: DeserializeOwned> GraphqlPage<T> {
             end_cursor: info.end_cursor,
         })
     }
+}
+
+/// The `rel="next"` target of a REST page's Link headers, resolved against
+/// the page URL. Errors on malformed links or more than one next.
+pub(crate) fn next_link(response: &Response, url: &Url) -> Result<Option<Url>> {
+    let mut next = None;
+    // Link may occur in several fields. Split only outside angle/quoted
+    // strings so commas in URIs or extension parameters are preserved.
+    for link in response.headers.get_all(header::LINK) {
+        for part in split_links(link.to_str().map_err(|_| Error::Pagination)?)? {
+            let Some((target, params)) = part
+                .trim()
+                .strip_prefix('<')
+                .and_then(|part| part.split_once('>'))
+            else {
+                return Err(Error::Pagination);
+            };
+            let is_next = params
+                .split(';')
+                .filter_map(|param| param.trim().split_once('='))
+                .any(|(name, value)| {
+                    name.eq_ignore_ascii_case("rel")
+                        && value
+                            .trim()
+                            .trim_matches('"')
+                            .split_whitespace()
+                            .any(|rel| rel == "next")
+                });
+            if is_next {
+                if next.is_some() {
+                    return Err(Error::Pagination);
+                }
+                next = Some(url.join(target).map_err(|_| Error::Pagination)?);
+            }
+        }
+    }
+    Ok(next)
 }
 
 fn split_links(value: &str) -> Result<Vec<&str>> {

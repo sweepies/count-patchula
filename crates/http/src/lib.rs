@@ -113,7 +113,12 @@ impl Transport for Network {
     }
 }
 
+/// The upper bound every client concurrency setting shares: registry host
+/// limits, the GitHub client's in-flight cap and repository batch parallelism.
+pub const MAX_CONCURRENCY: usize = 100;
+
 mod cached;
+pub mod conditional;
 mod credentials;
 pub use cached::{Bearer, Cached, Error as CacheError, Options, Stats};
 pub use credentials::{Auth, Credential, entry_for, prefix as url_prefix};

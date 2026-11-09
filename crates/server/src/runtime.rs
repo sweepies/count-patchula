@@ -81,8 +81,13 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         .map_err(|_| Error("cannot recover pending work"))?;
     let transport: Arc<dyn Transport> =
         Arc::new(patchula_http::Network::new().map_err(|_| Error("cannot create HTTP transport"))?);
-    let app = App::new(options.app_id, &options.private_key, transport.clone())
-        .map_err(|_| Error("invalid GitHub App credentials"))?;
+    let app = App::new(
+        options.app_id,
+        &options.private_key,
+        transport.clone(),
+        settings.current().github_options().api_url,
+    )
+    .map_err(|_| Error("invalid GitHub App credentials"))?;
     // The image has no mise of its own: the first start installs the pinned
     // one into the tool store, and later starts find it there.
     if let Some(workspace) = cache.workspace_dir() {
