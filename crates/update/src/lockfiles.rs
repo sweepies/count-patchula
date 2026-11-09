@@ -20,6 +20,7 @@ use crate::{
     plan::{hash, unified},
 };
 use futures_util::StreamExt;
+use patchula_cache::State;
 use patchula_config::{Config, NpmEngine};
 use patchula_manager::Dependency;
 use patchula_process::{Executor, SystemExecutor};
@@ -529,11 +530,21 @@ pub fn maintenance(
     }))
 }
 
-fn refresh_key(repo: &str) -> patchula_cache::ExtractionKey {
-    patchula_cache::ExtractionKey {
-        repo: repo.into(),
-        default_branch_commit: "maintenance".into(),
-        config_hash: "maintenance-success-v1".into(),
+/// When a repository's lockfile maintenance last completed.
+#[derive(Serialize, Deserialize)]
+struct MaintenanceSuccess(i64);
+#[derive(Serialize)]
+struct MaintenanceScope {
+    repository: String,
+}
+impl State for MaintenanceSuccess {
+    const NAMESPACE: &'static str = "maintenance-success";
+    const VERSION: u32 = 1;
+    type Scope = MaintenanceScope;
+}
+fn refresh_scope(repo: &str) -> MaintenanceScope {
+    MaintenanceScope {
+        repository: repo.into(),
     }
 }
 pub async fn defer_completed_refresh(
@@ -546,12 +557,11 @@ pub async fn defer_completed_refresh(
     if !plan.maintenance || plan.action.status != BranchStatus::Planned {
         return Ok(());
     }
-    if let Some(bytes) = cache
-        .extraction_get(&refresh_key(&plan.action.repository))
+    if let Some(last) = cache
+        .state::<MaintenanceSuccess>(&refresh_scope(&plan.action.repository))
         .await
         .map_err(|e| e.to_string())?
-        && let Ok(last) = serde_json::from_slice::<i64>(&bytes)
-        && let Some(last) = chrono::DateTime::<chrono::Utc>::from_timestamp(last, 0)
+        && let Some(last) = chrono::DateTime::<chrono::Utc>::from_timestamp(last.0, 0)
         && (last.iso_week() == now.iso_week()
             || now - last < chrono::Duration::hours(i64::from(config.lockfiles.wait_hours)))
     {
@@ -578,9 +588,9 @@ pub async fn record_refresh(
             })
         {
             cache
-                .extraction_put(
-                    &refresh_key(&plan.action.repository),
-                    &serde_json::to_vec(&now.timestamp()).map_err(|e| e.to_string())?,
+                .set_state(
+                    &refresh_scope(&plan.action.repository),
+                    &MaintenanceSuccess(now.timestamp()),
                 )
                 .await
                 .map_err(|e| e.to_string())?;

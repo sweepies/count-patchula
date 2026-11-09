@@ -11,6 +11,17 @@ struct Saved {
     /// Whether a request made for it carried credentials.
     credentialed: bool,
 }
+#[derive(Serialize)]
+struct CatalogScope {
+    versions_host: bool,
+    package: PackageId,
+    credential_scope: String,
+}
+impl State for Saved {
+    const NAMESPACE: &'static str = "catalog";
+    const VERSION: u32 = 1;
+    type Scope = CatalogScope;
+}
 pub(super) type Evidence = BTreeMap<LookupKey, CatalogEvidence>;
 
 fn reuse_hours(wait_hours: u32) -> Option<u32> {
@@ -20,15 +31,11 @@ fn eligible(fetched: i64, now: i64, hours: u32) -> bool {
     now >= fetched && now.saturating_sub(fetched) < i64::from(hours) * 3_600_000
 }
 impl Engine {
-    fn catalog_cache_key(&self, key: &LookupKey) -> ExtractionKey {
-        ExtractionKey {
-            repo: format!(
-                "catalog:{}:{}",
-                key.0,
-                serde_json::to_string(&key.1).unwrap_or_default()
-            ),
-            default_branch_commit: self.github.credential_scope().into(),
-            config_hash: "age-catalog-v4".into(),
+    fn catalog_scope(&self, key: &LookupKey) -> CatalogScope {
+        CatalogScope {
+            versions_host: key.0,
+            package: key.1.clone(),
+            credential_scope: self.github.credential_scope().into(),
         }
     }
     pub(super) async fn age_catalogs(
@@ -48,16 +55,8 @@ impl Engine {
             .map(|key| async move {
                 let saved = if !force.contains(&key)
                     && reuse_hours(*waits.get(&key).unwrap_or(&0)).is_some()
-                    && let Some(bytes) = self
-                        .cache
-                        .extraction_get(&self.catalog_cache_key(&key))
-                        .await?
                 {
-                    tokio::task::spawn_blocking(move || {
-                        serde_json::from_slice::<Saved>(&bytes).ok()
-                    })
-                    .await
-                    .map_err(|error| Error::Invalid(error.to_string()))?
+                    self.cache.state::<Saved>(&self.catalog_scope(&key)).await?
                 } else {
                     None
                 };
@@ -117,13 +116,13 @@ impl Engine {
                     },
                 );
                 self.cache
-                    .extraction_put(
-                        &self.catalog_cache_key(key),
-                        &serde_json::to_vec(&Saved {
+                    .set_state(
+                        &self.catalog_scope(key),
+                        &Saved {
                             fetched_at: now.timestamp_millis(),
                             catalog: catalog.clone(),
                             credentialed: credentialed.contains(key),
-                        })?,
+                        },
                     )
                     .await?;
             }
@@ -138,12 +137,16 @@ struct Controls {
     branches: BTreeMap<String, BTreeSet<String>>,
     targets: BTreeMap<String, BTreeSet<String>>,
 }
+impl State for Controls {
+    const NAMESPACE: &'static str = "catalog-controls";
+    const VERSION: u32 = 1;
+    type Scope = CredentialScope;
+}
 impl Engine {
-    fn catalog_controls_key(&self, repo: &str) -> ExtractionKey {
-        ExtractionKey {
-            repo: format!("catalog-controls:{repo}"),
-            default_branch_commit: self.github.credential_scope().into(),
-            config_hash: "dependency-controls-v1".into(),
+    fn catalog_controls_scope(&self, repo: &str) -> CredentialScope {
+        CredentialScope {
+            repository: repo.into(),
+            credential_scope: self.github.credential_scope().into(),
         }
     }
     pub(super) async fn forced_catalog_keys(&self, work: &[Work]) -> Result<BTreeSet<LookupKey>> {
@@ -158,9 +161,8 @@ impl Engine {
             {
                 let saved = self
                     .cache
-                    .extraction_get(&self.catalog_controls_key(&repo.report.repository))
-                    .await?
-                    .and_then(|bytes| serde_json::from_slice::<Controls>(&bytes).ok());
+                    .state::<Controls>(&self.catalog_controls_scope(&repo.report.repository))
+                    .await?;
                 if let Some(saved) = saved {
                     for (name, entries) in controls
                         .branches
@@ -272,9 +274,9 @@ impl Engine {
                 }
             }
             self.cache
-                .extraction_put(
-                    &self.catalog_controls_key(&repo.report.repository),
-                    &serde_json::to_vec(&controls)?,
+                .set_state(
+                    &self.catalog_controls_scope(&repo.report.repository),
+                    &controls,
                 )
                 .await?;
         }

@@ -1,18 +1,25 @@
 //! Tool versions as the pinned `mise ls-remote --json` lists them.
 use super::*;
-use patchula_cache::ExtractionKey;
 use patchula_mise::{Lookup, Query, Release};
 use std::sync::Arc;
 
-/// A stored listing is reused for this long. mise keeps its own version lists
-/// for about as long; a release-age wait is evaluated against the dates in the
-/// listing, so a stored listing never hides a release for longer than this.
-const FRESH_MS: i64 = 3_600_000;
-
+#[derive(Serialize)]
+struct ListingScope {
+    tool: String,
+    prefix: String,
+    credential_scope: String,
+    mise_version: String,
+    versions_host: bool,
+}
 #[derive(Serialize, Deserialize)]
 struct Listing {
     fetched_at: i64,
     releases: Vec<Release>,
+}
+impl State for Listing {
+    const NAMESPACE: &'static str = "mise-ls-remote";
+    const VERSION: u32 = 1;
+    type Scope = ListingScope;
 }
 
 /// What mise lists for a tool installed from a Git ref, with or without a
@@ -48,15 +55,13 @@ impl Client {
             None
         }
     }
-    fn mise_key(&self, lookup: &Lookup, tool: &str, prefix: Option<&str>) -> ExtractionKey {
-        ExtractionKey {
-            repo: format!("mise-ls-remote:{tool}:{}", prefix.unwrap_or("")),
-            default_branch_commit: self.github.credential_scope().into(),
-            config_hash: format!(
-                "mise-ls-remote-v2:{}:{}",
-                lookup.version(),
-                self.use_versions_host
-            ),
+    fn mise_scope(&self, lookup: &Lookup, tool: &str, prefix: Option<&str>) -> ListingScope {
+        ListingScope {
+            tool: tool.into(),
+            prefix: prefix.unwrap_or_default().into(),
+            credential_scope: self.github.credential_scope().into(),
+            mise_version: lookup.version().into(),
+            versions_host: self.use_versions_host,
         }
     }
     /// One tool's listing, from the store while fresh and from mise otherwise.
@@ -68,11 +73,10 @@ impl Client {
     ) -> Result<Vec<Release>> {
         patchula_mise::check(tool)?;
         let lookup = self.mise_lookup()?;
-        let key = self.mise_key(lookup, tool, prefix);
+        let scope = self.mise_scope(lookup, tool, prefix);
         let now = chrono::Utc::now().timestamp_millis();
         if !self.http.is_revalidating()
-            && let Some(bytes) = self.cache.extraction_get(&key).await?
-            && let Ok(saved) = serde_json::from_slice::<Listing>(&bytes)
+            && let Some(saved) = self.cache.state::<Listing>(&scope).await?
             && (0..FRESH_MS).contains(&now.saturating_sub(saved.fetched_at))
         {
             return Ok(saved.releases);
@@ -86,16 +90,12 @@ impl Client {
                 versions_host: self.use_versions_host,
             })
             .await?;
-        self.cache
-            .extraction_put(
-                &key,
-                &serde_json::to_vec(&Listing {
-                    fetched_at: now,
-                    releases: releases.clone(),
-                })?,
-            )
-            .await?;
-        Ok(releases)
+        let saved = Listing {
+            fetched_at: now,
+            releases,
+        };
+        self.cache.set_state(&scope, &saved).await?;
+        Ok(saved.releases)
     }
     pub(super) async fn mise(&self, tool: &str) -> Result<Catalog> {
         let releases = self.mise_releases(tool, None).await?;

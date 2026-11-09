@@ -5,7 +5,7 @@ use crate::{
     text::{self, code},
     update_key,
 };
-use patchula_cache::{Cache, ExtractionKey};
+use patchula_cache::{Cache, State};
 use patchula_config::Config;
 use patchula_github::Client;
 use patchula_report::{Dependency, Repository};
@@ -278,12 +278,19 @@ struct Permits {
     actor: String,
     targets: BTreeSet<String>,
 }
-fn permits_key(repo: &str) -> ExtractionKey {
-    ExtractionKey {
-        repo: repo.into(),
-        default_branch_commit: String::new(),
-        config_hash: "dashboard-age-permits-v1".into(),
+#[derive(Serialize)]
+struct RepositoryScope {
+    repository: String,
+}
+fn repository_scope(repo: &str) -> RepositoryScope {
+    RepositoryScope {
+        repository: repo.into(),
     }
+}
+impl State for Permits {
+    const NAMESPACE: &'static str = "dashboard-age-permits";
+    const VERSION: u32 = 1;
+    type Scope = RepositoryScope;
 }
 pub async fn load_permits(
     cache: &Cache,
@@ -291,10 +298,9 @@ pub async fn load_permits(
     actor: &str,
 ) -> Result<BTreeSet<String>, String> {
     Ok(cache
-        .extraction_get(&permits_key(repo))
+        .state::<Permits>(&repository_scope(repo))
         .await
         .map_err(|e| e.to_string())?
-        .and_then(|b| serde_json::from_slice::<Permits>(&b).ok())
         .filter(|p| p.actor == actor)
         .map(|p| p.targets)
         .unwrap_or_default())
@@ -306,13 +312,12 @@ pub async fn save_permits(
     targets: BTreeSet<String>,
 ) -> Result<(), String> {
     cache
-        .extraction_put(
-            &permits_key(repo),
-            &serde_json::to_vec(&Permits {
+        .set_state(
+            &repository_scope(repo),
+            &Permits {
                 actor: actor.into(),
                 targets,
-            })
-            .map_err(|e| e.to_string())?,
+            },
         )
         .await
         .map_err(|e| e.to_string())
@@ -1199,18 +1204,17 @@ struct Receipt {
     actor: String,
     hash: String,
 }
-fn receipt_key(repo: &str) -> ExtractionKey {
-    ExtractionKey {
-        repo: repo.into(),
-        default_branch_commit: String::default(),
-        config_hash: "dashboard-receipt-v1".into(),
-    }
+impl State for Receipt {
+    const NAMESPACE: &'static str = "dashboard-receipt";
+    const VERSION: u32 = 1;
+    type Scope = RepositoryScope;
 }
 /// The dashboard issue the Count last wrote in `repo`.
 pub async fn issue_number(cache: &Cache, repo: &str) -> Option<u64> {
-    let bytes = cache.extraction_get(&receipt_key(repo)).await.ok()??;
-    serde_json::from_slice::<Receipt>(&bytes)
-        .ok()
+    cache
+        .state::<Receipt>(&repository_scope(repo))
+        .await
+        .ok()?
         .map(|receipt| receipt.number)
 }
 pub async fn reconcile(
@@ -1235,16 +1239,15 @@ pub async fn reconcile(
         }
         // A closed dashboard is no longer the repository's dashboard.
         return cache
-            .extraction_remove(&receipt_key(&repo.repository))
+            .clear_state::<Receipt>(&repository_scope(&repo.repository))
             .await
             .map_err(|e| e.to_string());
     }
     let digest = hash(body.as_bytes());
     let previous = cache
-        .extraction_get(&receipt_key(&repo.repository))
+        .state::<Receipt>(&repository_scope(&repo.repository))
         .await
-        .map_err(|e| e.to_string())?
-        .and_then(|b| serde_json::from_slice::<Receipt>(&b).ok());
+        .map_err(|e| e.to_string())?;
     let number = if let Some(existing) = existing {
         let number = existing["number"]
             .as_u64()
@@ -1269,14 +1272,13 @@ pub async fn reconcile(
             .ok_or("missing created dashboard number")?
     };
     cache
-        .extraction_put(
-            &receipt_key(&repo.repository),
-            &serde_json::to_vec(&Receipt {
+        .set_state(
+            &repository_scope(&repo.repository),
+            &Receipt {
                 number,
                 actor: inventory.actor.clone(),
                 hash: digest,
-            })
-            .map_err(|e| e.to_string())?,
+            },
         )
         .await
         .map_err(|e| e.to_string())

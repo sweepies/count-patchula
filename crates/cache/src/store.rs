@@ -1,4 +1,4 @@
-use crate::{Error, ExtractionKey, HttpEntry, Options, Release, ReleaseList, Result};
+use crate::{Error, HttpEntry, Options, Release, ReleaseList, Result};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::{
     collections::HashSet,
@@ -36,7 +36,7 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
     // cache together migrate it once.
     let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version > 9 {
+    if version > 10 {
         return Err(Error::FutureSchema(version));
     }
     if version < 1 {
@@ -65,6 +65,9 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
     }
     if version < 9 {
         transaction.execute_batch(include_str!("migrations/009.sql"))?;
+    }
+    if version < 10 {
+        transaction.execute_batch(include_str!("migrations/010.sql"))?;
     }
     transaction.commit()?;
     Ok(conn)
@@ -285,10 +288,6 @@ impl Store {
         }
         tx.commit()?;
         Ok(reached_known)
-    }
-
-    pub fn extraction_get(&self, key: &ExtractionKey) -> Result<Option<Vec<u8>>> {
-        Ok(self.conn.query_row("SELECT result FROM extraction WHERE repo=?1 AND branch_commit=?2 AND config_hash=?3", params![key.repo,key.default_branch_commit,key.config_hash], |row| row.get(0)).optional()?)
     }
 }
 

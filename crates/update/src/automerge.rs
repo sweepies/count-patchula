@@ -1,7 +1,7 @@
 //! Native auto-merge, or conservative later-run merging backed by write receipts.
 use crate::{Inventory, Plan, pull_requests::owned_pr};
 use chrono::{DateTime, Duration, Utc};
-use patchula_cache::{Cache, ExtractionKey};
+use patchula_cache::{Cache, State};
 use patchula_config::Config;
 use patchula_github::{Client, GraphqlPage};
 use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus, Repository};
@@ -13,12 +13,19 @@ struct History {
     actor: String,
     prs: Vec<Value>,
 }
-fn history_key(repo: &str) -> ExtractionKey {
-    ExtractionKey {
-        repo: repo.into(),
-        default_branch_commit: String::new(),
-        config_hash: "auto-merge-history-v1".into(),
+#[derive(Serialize)]
+struct HistoryScope {
+    repository: String,
+}
+fn history_scope(repo: &str) -> HistoryScope {
+    HistoryScope {
+        repository: repo.into(),
     }
+}
+impl State for History {
+    const NAMESPACE: &'static str = "auto-merge-history";
+    const VERSION: u32 = 1;
+    type Scope = HistoryScope;
 }
 pub(crate) async fn load_history(
     cache: &Cache,
@@ -26,10 +33,9 @@ pub(crate) async fn load_history(
     actor: &str,
 ) -> Result<Vec<Value>, String> {
     Ok(cache
-        .extraction_get(&history_key(repo))
+        .state::<History>(&history_scope(repo))
         .await
         .map_err(|e| e.to_string())?
-        .and_then(|bytes| serde_json::from_slice::<History>(&bytes).ok())
         .filter(|h| h.actor == actor)
         .map(|h| h.prs)
         .unwrap_or_default())
@@ -37,11 +43,10 @@ pub(crate) async fn load_history(
 /// The PRs the Count last recorded merging in `repo`, oldest first, at most 20.
 pub async fn merged(cache: &Cache, repo: &str) -> Vec<Value> {
     cache
-        .extraction_get(&history_key(repo))
+        .state::<History>(&history_scope(repo))
         .await
         .ok()
         .flatten()
-        .and_then(|bytes| serde_json::from_slice::<History>(&bytes).ok())
         .map(|h| h.prs)
         .unwrap_or_default()
 }
@@ -69,13 +74,12 @@ async fn save_history(
         prs.drain(..prs.len() - 20);
     }
     cache
-        .extraction_put(
-            &history_key(repo),
-            &serde_json::to_vec(&History {
+        .set_state(
+            &history_scope(repo),
+            &History {
                 actor: inventory.actor.clone(),
                 prs,
-            })
-            .map_err(|e| e.to_string())?,
+            },
         )
         .await
         .map_err(|e| e.to_string())

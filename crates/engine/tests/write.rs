@@ -11,6 +11,21 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// The write receipts patchula_update stores, read through the same
+/// namespace and scope.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Receipts(Value);
+#[derive(serde::Serialize)]
+struct ReceiptsScope {
+    repository: String,
+    branch_prefix: String,
+}
+impl patchula_cache::State for Receipts {
+    const NAMESPACE: &'static str = "verified-write-receipts";
+    const VERSION: u32 = 1;
+    type Scope = ReceiptsScope;
+}
+
 struct Fake {
     files: BTreeMap<String, String>,
     lock: bool,
@@ -1090,20 +1105,17 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
                 dashboard.contains("## Merged") && dashboard.contains("merged by patchula"),
                 "{case}: {dashboard}"
             );
-            let bytes = cache
-                .extraction_get(&patchula_cache::ExtractionKey {
-                    repo: "demo/sandbox".into(),
-                    default_branch_commit: "patchula/".into(),
-                    config_hash: "verified-write-receipts-v3".into(),
+            let receipts = cache
+                .state::<Receipts>(&ReceiptsScope {
+                    repository: "demo/sandbox".into(),
+                    branch_prefix: "patchula/".into(),
                 })
                 .await
                 .unwrap()
-                .unwrap();
+                .unwrap()
+                .0;
             assert!(
-                serde_json::from_slice::<Value>(&bytes).unwrap()["writes"]
-                    .as_object()
-                    .unwrap()
-                    .is_empty(),
+                receipts["writes"].as_object().unwrap().is_empty(),
                 "merged heads must not remain eligible for another merge"
             );
             let github = patchula_github::Client::with_transport(

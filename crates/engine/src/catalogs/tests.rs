@@ -224,10 +224,7 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
     };
     engine
         .cache
-        .extraction_put(
-            &engine.catalog_controls_key("demo/app"),
-            &serde_json::to_vec(&mapping).unwrap(),
-        )
+        .set_state(&engine.catalog_controls_scope("demo/app"), &mapping)
         .await
         .unwrap();
     for mode in [

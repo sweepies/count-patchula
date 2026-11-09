@@ -13,6 +13,21 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// The write receipts patchula_update stores, read through the same
+/// namespace and scope.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Receipts(Value);
+#[derive(serde::Serialize)]
+struct ReceiptsScope {
+    repository: String,
+    branch_prefix: String,
+}
+impl patchula_cache::State for Receipts {
+    const NAMESPACE: &'static str = "verified-write-receipts";
+    const VERSION: u32 = 1;
+    type Scope = ReceiptsScope;
+}
+
 struct Fake {
     files: BTreeMap<String, String>,
     writes: Mutex<Vec<(String, Value)>>,
@@ -299,16 +314,15 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
         let cache = Cache::open_dir(&cache_path, Default::default())
             .await
             .unwrap();
-        let bytes = cache
-            .extraction_get(&patchula_cache::ExtractionKey {
-                repo: "demo/sandbox".into(),
-                default_branch_commit: "patchula/".into(),
-                config_hash: "verified-write-receipts-v3".into(),
+        let receipts = cache
+            .state::<Receipts>(&ReceiptsScope {
+                repository: "demo/sandbox".into(),
+                branch_prefix: "patchula/".into(),
             })
             .await
             .unwrap()
-            .expect("CLI must persist receipts before returning");
-        let receipts: Value = serde_json::from_slice(&bytes).unwrap();
+            .expect("CLI must persist receipts before returning")
+            .0;
         assert_eq!(receipts["writes"].as_object().unwrap().len(), 1);
         assert_eq!(receipts["closed"].as_object().unwrap().len(), 2);
         drop(cache);

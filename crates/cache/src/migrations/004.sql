@@ -1,5 +1,5 @@
 -- Queue rows survive the entire execution. Generation fencing preserves events
--- arriving while an older generation is in flight. NULL repo represents discovery.
+-- arriving while an older generation is in flight. An empty repo is discovery.
 CREATE TABLE server_work (
     installation INTEGER NOT NULL,
     repo TEXT NOT NULL,

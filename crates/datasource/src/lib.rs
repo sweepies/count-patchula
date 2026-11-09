@@ -17,7 +17,7 @@ mod nuget;
 mod packagist;
 mod registries;
 mod rubygems;
-use patchula_cache::{Cache, Release};
+use patchula_cache::{Cache, Release, State};
 use patchula_config::PackageId;
 use patchula_github::Error as GithubError;
 use patchula_http::Cached;
@@ -107,6 +107,11 @@ impl std::fmt::Display for Failure {
 }
 /// Go releases dated through `.info` on a cold lookup, newest first.
 const GO_DATED_RELEASES: usize = 20;
+/// A stored listing or resolution is reused for this long. The tools keep
+/// their own version lists for about as long, and a release-age wait is
+/// evaluated against the dates in the listing, so a stored one never hides
+/// a release for longer than this.
+pub(crate) const FRESH_MS: i64 = 3_600_000;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Catalog {
     pub versions: Vec<Version>,

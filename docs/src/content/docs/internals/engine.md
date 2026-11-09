@@ -26,7 +26,8 @@ repository are rejected, and only literal import targets are supported.
 
 An unchanged commit and config fingerprint reuses the previous extraction with
 no tree or blob calls, Pkl evaluation or scanning; the fingerprint's namespace
-changes whenever extraction semantics do. A new commit reads the tree and the
+carries this build's version, so a release that changes extraction semantics
+never reuses the previous release's entries. A new commit reads the tree and the
 selected files again, but those are cached by blob SHA, and config evaluation
 and extraction are keyed by the content of the files they read as well: a push
 that changes no file the scan reads costs one tree request and no Pkl
@@ -79,7 +80,7 @@ run caches and reports outside this repository.
 ## Branch write path
 
 `Engine::run` shares discovery, configuration, lookup and policy with
-`lookup`. The extraction cache keeps each file's contents, Git blob SHA and
+`lookup`. The `extract` state keeps each file's contents, Git blob SHA and
 mode, the full path inventory and the lockfile packages checked for advisories.
 
 **Edits.** The updater derives branches and scalar edits from proposals and
