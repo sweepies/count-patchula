@@ -9,6 +9,7 @@ mod markdown;
 mod releases;
 mod source;
 pub use adapters::{parse_go_history, parse_release_sgml};
+use base64::{Engine, engine::general_purpose::STANDARD};
 pub use changelog::{Section, parse_changelog};
 pub use chart::render_changes;
 use forge::{compare_link, releases_url};
@@ -83,6 +84,31 @@ pub struct Notes {
     pub incomplete: bool,
     /// The sections are the chart's own list of changes, not its upstream's.
     pub from_chart: bool,
+}
+
+/// Decode a GitHub blob response into its text content.
+fn blob_text(bytes: &[u8]) -> std::result::Result<String, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct Blob {
+        content: String,
+    }
+    let blob: Blob = serde_json::from_slice(bytes)?;
+    let decoded = STANDARD
+        .decode(
+            blob.content
+                .bytes()
+                .filter(|byte| !byte.is_ascii_whitespace())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(serde::de::Error::custom)?;
+    String::from_utf8(decoded).map_err(serde::de::Error::custom)
+}
+
+/// Whether `path` sits inside `directory`, the way the changelog sort and
+/// filter mean it.
+fn under_directory(path: &str, directory: &str) -> bool {
+    path.strip_prefix(directory)
+        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn parsed(text: &str) -> Option<Parsed> {
@@ -513,8 +539,7 @@ impl Client {
         let Some((old, new)) = note_bounds(source, package, current, target, repository) else {
             return Ok(notes);
         };
-        let mut old_tag = None;
-        let mut new_tag = None;
+        let mut bounds = (None, None);
         let mut template = None;
         // The mirror contract does not permit API list fallback, including on
         // errors, empty responses, 404s or truncated lists. Bodies are fetched
@@ -532,12 +557,7 @@ impl Client {
                         continue;
                     };
                     template.get_or_insert_with(|| release.tag.clone());
-                    if Ecosystem::Loose.order(&version, &old).is_eq() {
-                        old_tag = Some(release.tag.clone());
-                    }
-                    if Ecosystem::Loose.order(&version, &new).is_eq() {
-                        new_tag = Some(release.tag.clone());
-                    }
+                    forge::observe(&release.tag, &version, &old, &new, &mut bounds);
                     if hidden_prerelease(release.prerelease, &new) {
                         continue;
                     }
@@ -585,7 +605,7 @@ impl Client {
             }
             Err(_) => notes.incomplete = true,
         }
-        if (old_tag.is_none() || new_tag.is_none())
+        if (bounds.0.is_none() || bounds.1.is_none())
             && let Ok(tags) = self.notes_list(repo, "tags").await
         {
             notes.incomplete |= tags.truncated;
@@ -595,12 +615,7 @@ impl Client {
                     continue;
                 };
                 template.get_or_insert_with(|| tag.tag.clone());
-                if Ecosystem::Loose.order(&version, &old).is_eq() {
-                    old_tag = Some(tag.tag.clone());
-                }
-                if Ecosystem::Loose.order(&version, &new).is_eq() {
-                    new_tag = Some(tag.tag);
-                }
+                forge::observe(&tag.tag, &version, &old, &new, &mut bounds);
             }
         }
         // Changelogs fill versions with missing/empty releases. Discover once;
@@ -633,7 +648,7 @@ impl Client {
                     repository
                         .directory
                         .as_ref()
-                        .is_none_or(|dir| !file.path.starts_with(&format!("{dir}/"))),
+                        .is_none_or(|dir| !under_directory(&file.path, dir)),
                     file.path.clone(),
                 )
             });
@@ -642,14 +657,14 @@ impl Client {
                     repository
                         .directory
                         .as_ref()
-                        .is_some_and(|d| f.path.starts_with(&format!("{d}/")))
+                        .is_some_and(|d| under_directory(&f.path, d))
                 })
             {
                 files.retain(|f| {
                     repository
                         .directory
                         .as_ref()
-                        .is_some_and(|d| f.path.starts_with(&format!("{d}/")))
+                        .is_some_and(|d| under_directory(&f.path, d))
                 });
             }
             for file in files {
@@ -704,15 +719,21 @@ impl Client {
             .collect();
         sections.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
         notes.sections.extend(sections.into_iter().map(|(_, s)| s));
-        if old_tag.is_none() || new_tag.is_none() {
+        if bounds.0.is_none() || bounds.1.is_none() {
             notes.compare_inferred = true;
             notes.incomplete = true;
             if let Some(template) = template {
-                old_tag = old_tag.or_else(|| inferred_tag(&template, package, repository, &old));
-                new_tag = new_tag.or_else(|| inferred_tag(&template, package, repository, &new));
+                bounds.0 = bounds
+                    .0
+                    .take()
+                    .or_else(|| inferred_tag(&template, package, repository, &old));
+                bounds.1 = bounds
+                    .1
+                    .take()
+                    .or_else(|| inferred_tag(&template, package, repository, &new));
             }
         }
-        if let (Some(old), Some(new)) = (old_tag, new_tag) {
+        if let (Some(old), Some(new)) = (bounds.0, bounds.1) {
             notes.compare = Some(compare(repo, &old, &new));
         } else {
             // No observed tag namespace: do not invent a compare URL.

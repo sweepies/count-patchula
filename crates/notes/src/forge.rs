@@ -27,7 +27,7 @@ fn encoded(path: &str) -> String {
         })
         .collect()
 }
-fn observe(
+pub(super) fn observe(
     tag: &str,
     version: &Parsed,
     old: &Parsed,

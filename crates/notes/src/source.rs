@@ -146,10 +146,7 @@ impl Client {
             return Ok(None);
         }
         let (source, package) = (id.source, id.name.as_str());
-        if package.is_empty()
-            || package.contains(['?', '#', '\\'])
-            || package.split('/').any(|p| matches!(p, "." | ".."))
-        {
+        if !patchula_datasource::package_name_safe(package) {
             return Err(Error::Invalid);
         }
         let response = match source {

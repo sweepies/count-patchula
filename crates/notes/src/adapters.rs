@@ -1,6 +1,5 @@
 //! Upstream-specific notes for upstreams without GitHub releases.
 use super::*;
-use base64::{Engine, engine::general_purpose::STANDARD};
 
 /// The parsed sections of one immutable upstream document.
 #[derive(Serialize, Deserialize)]
@@ -69,24 +68,6 @@ pub(super) fn compact_listing(bytes: &[u8]) -> std::result::Result<Vec<u8>, serd
 }
 const NOTES_ADAPTER_LISTING: patchula_http::Derived<serde_json::Error> =
     patchula_http::Derived::new("notes-adapter-listing", compact_listing);
-
-/// Decode a GitHub blob into its text content.
-fn blob_text(bytes: &[u8]) -> std::result::Result<String, serde_json::Error> {
-    #[derive(Deserialize)]
-    struct Blob {
-        content: String,
-    }
-    let blob: Blob = serde_json::from_slice(bytes)?;
-    let decoded = STANDARD
-        .decode(
-            blob.content
-                .bytes()
-                .filter(|byte| !byte.is_ascii_whitespace())
-                .collect::<Vec<_>>(),
-        )
-        .map_err(serde::de::Error::custom)?;
-    String::from_utf8(decoded).map_err(serde::de::Error::custom)
-}
 
 pub(super) fn compact_sgml(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&parse_release_sgml(&blob_text(bytes)?))
