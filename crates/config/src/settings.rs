@@ -57,24 +57,53 @@ pub struct Secret {
     pub file: Option<PathBuf>,
 }
 impl Secret {
-    /// The secret's value. Errors name where it should be, never what it is.
-    /// The one rule every secret source shares: strip trailing CR/LF, reject
-    /// empty.
-    pub fn read(&self) -> Result<String, String> {
+    /// Where the secret is read from, for errors: never the value.
+    fn source(&self) -> String {
+        match (&self.env, &self.file) {
+            (Some(name), None) => format!("environment variable {name}"),
+            (None, Some(path)) => format!("file {}", path.display()),
+            _ => "secret".to_owned(),
+        }
+    }
+    /// The one rule every secret source shares, on bytes: strip trailing
+    /// CR/LF, reject empty. Values need not be UTF-8 — a webhook secret or a
+    /// key file is bytes. Errors name where the secret should be, never what
+    /// it is.
+    pub fn read_bytes(&self) -> Result<Vec<u8>, String> {
         let value = match (&self.env, &self.file) {
-            (Some(name), None) => std::env::var(name)
-                .map_err(|_| format!("environment variable {name} is not set or not UTF-8"))?,
-            (None, Some(path)) => std::fs::read_to_string(path)
-                .map_err(|_| format!("cannot read {}", path.display()))?
-                .trim_end_matches(['\r', '\n'])
-                .to_owned(),
+            (Some(name), None) => std::env::var_os(name)
+                .map(|value| os_bytes(&value))
+                .ok_or_else(|| format!("environment variable {name} is not set"))?,
+            (None, Some(path)) => {
+                std::fs::read(path).map_err(|_| format!("cannot read {}", path.display()))?
+            }
             _ => return Err("secret needs exactly one of env and file".into()),
         };
-        if value.is_empty() {
+        let end = value
+            .iter()
+            .rposition(|byte| !matches!(byte, b'\r' | b'\n'))
+            .map_or(0, |at| at + 1);
+        if end == 0 {
             return Err("secret is empty".into());
         }
-        Ok(value)
+        Ok(value[..end].to_vec())
     }
+    /// The secret's value as UTF-8 text, for credentials sent as text.
+    pub fn read(&self) -> Result<String, String> {
+        let bytes = self.read_bytes()?;
+        String::from_utf8(bytes).map_err(|_| format!("the {} is not UTF-8", self.source()))
+    }
+}
+/// An environment variable's bytes. Unix keeps them as they are; elsewhere
+/// they arrive as text already.
+#[cfg(unix)]
+fn os_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    value.as_bytes().to_vec()
+}
+#[cfg(not(unix))]
+fn os_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
+    value.to_string_lossy().into_owned().into_bytes()
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

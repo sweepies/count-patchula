@@ -143,7 +143,28 @@ fn app() -> Arc<App> {
     .unwrap()
 }
 
-async fn api(runner: Arc<Recorder>, client_id: Option<&str>, settings: &str) -> Router {
+/// A runner whose run never finishes, so only the time limit can end it.
+struct Hung {
+    started: Arc<tokio::sync::Notify>,
+}
+impl Runner for Hung {
+    fn run<'a>(
+        &'a self,
+        _installation: u64,
+        _repositories: Vec<String>,
+        _mode: Mode,
+        _login: &'a str,
+        _settings: &'a Settings,
+    ) -> BoxFuture<'a, Result<Report, &'static str>> {
+        let started = self.started.clone();
+        Box::pin(async move {
+            started.notify_one();
+            std::future::pending().await
+        })
+    }
+}
+
+async fn api(runner: Arc<dyn Runner>, client_id: Option<&str>, settings: &str) -> Router {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("server.pkl");
     std::fs::write(
@@ -364,6 +385,41 @@ async fn a_run_that_panics_fails_and_frees_its_user() {
         let (status, _) = call(&router, start("ghu_writer", body)).await;
         assert_eq!(status, StatusCode::ACCEPTED);
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_past_its_limit_fails_and_frees_the_user() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let router = api(
+        Arc::new(Hung {
+            started: started.clone(),
+        }),
+        Some("client"),
+        "",
+    )
+    .await;
+    let body = json!({"mode": "lookup", "repositories": ["acme/app"]});
+    let (status, first) = call(&router, start("ghu_writer", body.clone())).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = first["id"].as_str().unwrap();
+    started.notified().await;
+    assert_eq!(
+        call(&router, poll("ghu_writer", id)).await.1["status"],
+        "running"
+    );
+    tokio::time::advance(Duration::from_secs(RUN_LIMIT_SECONDS as u64 + 1)).await;
+    let polled = loop {
+        let (_, polled) = call(&router, poll("ghu_writer", id)).await;
+        if polled["status"] != "running" {
+            break polled;
+        }
+        tokio::task::yield_now().await;
+    };
+    assert_eq!(polled["status"], "failed", "{polled}");
+    assert_eq!(polled["error"], "the run exceeded the server's time limit");
+    // The failed run does not block the user's next one.
+    let (status, _) = call(&router, start("ghu_writer", body)).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
 }
 
 #[tokio::test]

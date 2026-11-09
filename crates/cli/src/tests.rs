@@ -928,12 +928,11 @@ fn remote_flags_cover_every_local_only_policy() {
         .map(|(name, _)| name)
         .collect();
     for (flag, policy) in REMOTE_POLICY {
-        if *policy == RemotePolicy::Local {
-            assert!(
-                names.contains(flag),
-                "--{flag} is local-only but remote_flags never checks it"
-            );
-        }
+        assert_eq!(
+            names.contains(flag),
+            *policy == RemotePolicy::Local,
+            "--{flag}: remote_flags and REMOTE_POLICY disagree"
+        );
     }
 }
 

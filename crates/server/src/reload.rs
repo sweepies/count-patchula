@@ -31,7 +31,7 @@ impl Reload {
         let result = Settings::load(path).and_then(|settings| {
             patchula_engine::settings::check(&settings)
                 .map(|_| settings)
-                .map_err(|message| miette::miette!("{message}"))
+                .map_err(|(_, message)| miette::miette!("{message}"))
         });
         let mut state = self.0.write().expect("settings lock");
         match result {

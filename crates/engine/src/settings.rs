@@ -10,33 +10,39 @@ use patchula_http::{Auth, Credential, Options as HttpOptions};
 
 /// The settings rules `patchula-config` cannot check without the HTTP
 /// client's types: registry prefixes and their mirrors, the tools-prefix
-/// rules, and `http.hostConcurrency`.
-pub fn check(settings: &Settings) -> Result<(), &'static str> {
+/// rules, and `http.hostConcurrency`. An error is the settings field it is
+/// about and the message, so a caller holding the file can point at it.
+pub fn check(settings: &Settings) -> Result<(), (&'static str, &'static str)> {
     let mut prefixes = std::collections::BTreeSet::new();
     let mut mirrored = std::collections::BTreeSet::new();
     let mut entries = Vec::new();
     for (prefix, registry) in &settings.registries {
         let Some(normalised) = Credential::new(prefix, Auth::Withheld) else {
-            return Err(
+            return Err((
+                "registries",
                 "registries keys must be https URL prefixes without a user, query or fragment",
-            );
+            ));
         };
         if !prefixes.insert(normalised.prefix().to_owned()) {
-            return Err("registries keys must differ by more than a trailing slash");
+            return Err((
+                "registries",
+                "registries keys must differ by more than a trailing slash",
+            ));
         }
         if let Some(public) = &registry.mirror_of {
             let Some(mirror) = normalised.clone().mirroring(public) else {
-                return Err(
+                return Err((
+                    "mirrorOf",
                     "mirrorOf must be an https URL prefix without a user, query or fragment, other than the entry's own",
-                );
+                ));
             };
             if !mirrored.insert(mirror.mirror_of().unwrap_or_default().to_owned()) {
-                return Err("mirrorOf must differ between registries");
+                return Err(("mirrorOf", "mirrorOf must differ between registries"));
             }
         }
         // An `.npmrc` key ends at `=` and a comment starts at `;`.
         if registry.tools && normalised.prefix().contains(['=', ';']) {
-            return Err("tools entries need a prefix without = or ;");
+            return Err(("tools", "tools entries need a prefix without = or ;"));
         }
         entries.push((normalised, registry.tools));
     }
@@ -50,11 +56,17 @@ pub fn check(settings: &Settings) -> Result<(), &'static str> {
                 .iter()
                 .any(|(inner, _)| inner.prefix() != outer.prefix() && outer.encloses(inner))
     }) {
-        return Err("tools entries cannot hold other registries under their prefix");
+        return Err((
+            "tools",
+            "tools entries cannot hold other registries under their prefix",
+        ));
     }
-    http_options(settings)
-        .validate()
-        .map_err(|_| "hostConcurrency needs lowercase hostnames and limits 1..100")?;
+    http_options(settings).validate().map_err(|_| {
+        (
+            "http.hostConcurrency",
+            "hostConcurrency needs lowercase hostnames and limits 1..100",
+        )
+    })?;
     Ok(())
 }
 

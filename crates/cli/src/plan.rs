@@ -47,7 +47,12 @@ impl std::fmt::Display for WriteError {
 impl Plan {
     /// Write every file in place. Each is first checked by opening it for
     /// writing, so a missing file, a permission, or two names for the same
-    /// file (a symlink or a hard link) stops the write with nothing written.
+    /// file stops the write with nothing written. On Unix the sameness is
+    /// the device and inode, so a symlink or a hard link is caught; on other
+    /// platforms only resolved paths count, and the text check below is what
+    /// still refuses a second write to one file. Right before a file is
+    /// truncated its text is compared with the text it was planned from, so
+    /// an edit made since planning is refused rather than overwritten.
     /// Files are then written one at a time, each open only while it is
     /// written, so a plan may touch more files than the process may hold
     /// open. Writing in place keeps each file's owner, mode, links and
@@ -55,10 +60,10 @@ impl Plan {
     /// such as a full disk, can stop partway, and the error names what was
     /// written.
     pub fn write(&self, dir: &Path) -> Result<(), WriteError> {
-        use std::io::Write as _;
+        use std::io::{Read as _, Seek as _, Write as _};
         let mut checked = Vec::new();
         let mut identities = BTreeSet::new();
-        for (file, (_, content)) in &self.files {
+        for (file, (old, content)) in &self.files {
             let check = (|| {
                 // A symlinked file is written through its link.
                 let target = std::fs::canonicalize(dir.join(file))?;
@@ -77,7 +82,7 @@ impl Plan {
                 Ok((target, id))
             })();
             match check {
-                Ok((target, id)) => checked.push((file, target, id, content)),
+                Ok((target, id)) => checked.push((file, target, id, old, content)),
                 Err(error) => {
                     return Err(WriteError {
                         written: Vec::new(),
@@ -88,7 +93,7 @@ impl Plan {
             }
         }
         let mut written = Vec::new();
-        for (file, target, id, content) in checked {
+        for (file, target, id, old, content) in checked {
             let mut opened = None;
             let result = std::fs::metadata(&target)
                 .and_then(|metadata| {
@@ -98,16 +103,31 @@ impl Plan {
                         Err(std::io::Error::other("not a regular file"))
                     }
                 })
-                .and_then(|()| std::fs::OpenOptions::new().write(true).open(&target))
-                .and_then(|handle| {
+                .and_then(|()| {
+                    std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&target)
+                })
+                .and_then(|mut handle| {
                     // The file checked, not one put in its place since.
                     if identity(&target, &handle.metadata()?) != id {
                         return Err(std::io::Error::other(
                             "the file changed since the Count checked it",
                         ));
                     }
+                    // The same inode can still hold an edit made after
+                    // planning; it must not be written over.
+                    let mut current = String::new();
+                    handle.read_to_string(&mut current)?;
+                    if current != *old {
+                        return Err(std::io::Error::other(
+                            "the file changed since the Count planned it",
+                        ));
+                    }
                     let handle = opened.insert(handle);
                     handle.set_len(0)?;
+                    handle.rewind()?;
                     handle.write_all(content.as_bytes())?;
                     handle.flush()
                 });
@@ -165,17 +185,22 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
             ));
             continue;
         }
-        let targets: Vec<_> = dependencies
+        // The update was reported against every occurrence of this
+        // declaration; the tree must still hold exactly those, or the edit
+        // would land on only some of them.
+        let occurrence = |d: &&patchula_manager::Dependency| {
+            d.file == update.file
+                && d.name == update.name
+                && d.package == update.package
+                && d.current == update.current
+        };
+        let found: BTreeSet<usize> = dependencies
             .iter()
-            .filter(|d| {
-                d.file == update.file
-                    && d.name == update.name
-                    && d.package == update.package
-                    && d.current == update.current
-                    && update.starts.contains(&d.location.start)
-            })
+            .filter(|d| occurrence(d))
+            .map(|d| d.location.start)
             .collect();
-        if targets.is_empty() {
+        let reported: BTreeSet<usize> = update.starts.iter().copied().collect();
+        if found.is_empty() || found != reported {
             skipped.push((
                 index,
                 format!(
@@ -185,6 +210,7 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
             ));
             continue;
         }
+        let targets: Vec<_> = dependencies.iter().filter(|d| occurrence(d)).collect();
         if let Some(other) = targets
             .iter()
             .find_map(|d| claimed.get(&(d.file.as_str(), d.location.start)))

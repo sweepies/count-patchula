@@ -282,8 +282,13 @@ fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Re
         ConfigCommand::CheckSettings(check) => {
             let settings =
                 patchula_config::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
-            patchula_engine::settings::check(&settings)
-                .map_err(|message| (2, miette::miette!("{message}")))?;
+            patchula_engine::settings::check(&settings).map_err(|(field, message)| {
+                let source = std::fs::read_to_string(&check.path).unwrap_or_default();
+                (
+                    2,
+                    patchula_config::problem(&check.path, &source, field, message),
+                )
+            })?;
             writeln!(
                 io::stdout().lock(),
                 "{}",
@@ -1087,6 +1092,9 @@ async fn report(
         Source::Local(dir, config) => (Vec::new(), Some(dir), config.map(|config| *config)),
     };
     let settings = settings(scan)?;
+    // Reject a bad settings file before tokens, secrets or the cache are touched.
+    patchula_engine::settings::check(&settings)
+        .map_err(|(_, message)| (2, miette::miette!("{message}")))?;
     let concurrency = scan.concurrency.unwrap_or(settings.concurrency);
     let recheck = recheck(app, run.is_some(), &settings)?;
     let (credentials, failed) = patchula_engine::settings::credentials(&settings, None);
@@ -1122,7 +1130,14 @@ async fn report(
         cache,
         transport,
     )
-    .map_err(|e| (1, miette::miette!("{e}")))?;
+    .map_err(|e| {
+        let code = if matches!(e, patchula_engine::Error::Configuration(_)) {
+            2
+        } else {
+            1
+        };
+        (code, miette::miette!("{e}"))
+    })?;
     if let Some(spinner) = &spinner {
         engine = engine.with_progress(spinner.clone());
     }

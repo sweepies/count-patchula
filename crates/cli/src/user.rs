@@ -60,9 +60,19 @@ fn cache_dir_with(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 /// The invoking user's mise data directory, when it has installs. Local runs
 /// borrow matching tool versions from it instead of downloading them.
 pub fn mise_data() -> Option<PathBuf> {
+    mise_data_with(var)
+}
+
+fn mise_data_with(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     var(MISE_DATA)
         .map(PathBuf::from)
-        .or_else(|| var(XDG_DATA).map(|dir| PathBuf::from(dir).join("mise")))
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| {
+            var(XDG_DATA)
+                .map(PathBuf::from)
+                .filter(|dir| dir.is_absolute())
+                .map(|dir| dir.join("mise"))
+        })
         .or_else(|| home(&var).map(|home| home.join(".local/share/mise")))
         .filter(|dir| dir.join("installs").is_dir())
 }
@@ -115,5 +125,50 @@ mod tests {
 
     fn settings_file_with(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         config_dir_with(var).map(|dir| dir.join("patchula").join("settings.pkl"))
+    }
+
+    #[test]
+    fn mise_data_needs_absolute_dirs_with_installs() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let mise = dir.path().join("mise-data");
+        let xdg = dir.path().join("xdg");
+        for base in [
+            home.join(".local/share/mise"),
+            mise.clone(),
+            xdg.join("mise"),
+        ] {
+            std::fs::create_dir_all(base.join("installs")).unwrap();
+        }
+        let lookup = |list: &[(&str, &str)]| mise_data_with(vars(list));
+        assert_eq!(
+            lookup(&[
+                (MISE_DATA, mise.to_str().unwrap()),
+                (XDG_DATA, xdg.to_str().unwrap()),
+                (HOME, home.to_str().unwrap()),
+            ]),
+            Some(mise)
+        );
+        assert_eq!(
+            lookup(&[
+                (XDG_DATA, xdg.to_str().unwrap()),
+                (HOME, home.to_str().unwrap()),
+            ]),
+            Some(xdg.join("mise"))
+        );
+        // An empty MISE_DATA_DIR or a relative XDG_DATA_HOME is ignored, like
+        // the config and cache lookups.
+        assert_eq!(
+            lookup(&[
+                (MISE_DATA, ""),
+                (XDG_DATA, "relative"),
+                (HOME, home.to_str().unwrap()),
+            ]),
+            Some(home.join(".local/share/mise"))
+        );
+        assert_eq!(
+            lookup(&[(MISE_DATA, "relative"), (HOME, home.to_str().unwrap())]),
+            Some(home.join(".local/share/mise"))
+        );
     }
 }

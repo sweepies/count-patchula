@@ -1,6 +1,6 @@
-//! The report flattened into selectable updates: the model `patchula
-//! lookup --json`, `patchula run` output and `patchula apply` share,
-//! with no terminal types.
+//! The report flattened into selectable updates: the model `patchula run`
+//! output, `patchula apply` and the TUI share, with no terminal types.
+//! `lookup --json` serializes the raw report instead.
 use patchula_report::Report;
 use patchula_words::{DependencyKind, Manager, ResolutionKind, Update as UpdateKind};
 

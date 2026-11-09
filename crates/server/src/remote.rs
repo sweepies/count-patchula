@@ -8,7 +8,7 @@ use crate::{
     reload::Reload,
     remote::protocol::{
         Accepted, AuthInfo, JOB_TTL_SECONDS, JobStatus, MAX_JOBS, MAX_REPOSITORIES,
-        Reject as RejectBody, Start, USER_TTL_SECONDS,
+        RUN_LIMIT_SECONDS, Reject as RejectBody, Start, USER_TTL_SECONDS,
     },
 };
 use axum::{
@@ -31,6 +31,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Duration,
 };
 use tokio::sync::Mutex;
 
@@ -292,16 +293,23 @@ async fn start(
     while tasks.try_join_next().is_some() {}
     tasks.spawn(async move {
         // The runner is called inside the caught future, so a panic while
-        // building its future is caught too.
-        let result = std::panic::AssertUnwindSafe(async {
-            job.0
-                .runner
-                .run(installation, repositories, start.mode, &login, &settings)
-                .await
-        })
-        .catch_unwind()
-        .await
-        .unwrap_or(Err("the run stopped unexpectedly"));
+        // building its future is caught too. RUN_LIMIT_SECONDS bounds the
+        // run: a hung one fails, freeing the user for their next run.
+        let result = tokio::time::timeout(
+            Duration::from_secs(RUN_LIMIT_SECONDS as u64),
+            std::panic::AssertUnwindSafe(async {
+                job.0
+                    .runner
+                    .run(installation, repositories, start.mode, &login, &settings)
+                    .await
+            })
+            .catch_unwind(),
+        )
+        .await;
+        let result = match result {
+            Ok(outcome) => outcome.unwrap_or(Err("the run stopped unexpectedly")),
+            Err(_) => Err("the run exceeded the server's time limit"),
+        };
         let success = result.is_ok();
         let at = chrono::Utc::now().timestamp();
         let mut jobs = job.0.jobs.lock().await;

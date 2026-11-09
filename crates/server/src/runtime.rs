@@ -53,7 +53,11 @@ pub struct Options {
 
 pub async fn serve(options: Options) -> miette::Result<()> {
     let settings = Settings::load(&options.settings)?;
-    patchula_engine::settings::check(&settings).map_err(|message| miette::miette!("{message}"))?;
+    patchula_engine::settings::check(&settings).map_err(|(field, message)| {
+        std::fs::read_to_string(&options.settings)
+            .map(|source| patchula_config::problem(&options.settings, &source, field, message))
+            .unwrap_or_else(|_| miette::miette!("{message}"))
+    })?;
     let settings = Reload::new(settings);
     serve_with_settings(options, settings)
         .await

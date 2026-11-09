@@ -451,17 +451,18 @@ impl Engine {
         transport: Arc<dyn Transport>,
     ) -> Result<Self> {
         self::settings::check(settings)
-            .map_err(|message| Error::Configuration(message.to_owned()))?;
+            .map_err(|(_, message)| Error::Configuration(message.to_owned()))?;
         let mut http_options = self::settings::http_options(settings);
         http_options.credentials = credentials;
         let tool_registries = http_options.credentials.clone();
         let github_options = self::settings::github_options(settings);
         let github = match &auth {
+            // A token run is the CLI's: it keeps the host limit it always had.
             Auth::Token(token) => Github::with_transport(
                 token,
                 cache.clone(),
                 GithubOptions {
-                    concurrency: github_options.concurrency,
+                    concurrency: http_options.host_limit("api.github.com"),
                     ..Default::default()
                 },
                 transport.clone(),
@@ -474,13 +475,16 @@ impl Engine {
             )?,
         };
         let lockfiles = cache.workspace_dir().map(|path| {
-            let runner = match &auth {
+            let mut runner = match &auth {
                 Auth::Token(token) => patchula_update::lockfiles::Runner::new(path.into(), token),
                 Auth::Credentials(credentials) => {
                     patchula_update::lockfiles::Runner::new(path.into(), "")
                         .with_credentials(credentials.clone())
                 }
             };
+            // Set before `build` clones the runner into `sources` for Nix
+            // lookups, so every copy shares the limit.
+            runner.set_cache_limit(settings.lockfiles.cache_gib);
             runner.with_registries(&tool_registries)
         });
         let mut engine = Self::build(
@@ -493,7 +497,7 @@ impl Engine {
         )?
         .with_recheck(recheck);
         engine.advisories = true;
-        engine.set_lockfile_cache_limit(settings.lockfiles.cache_gib);
+        engine.lockfile_cache_gib = settings.lockfiles.cache_gib;
         Ok(engine)
     }
     fn catalog_key(&self, dep: &Dependency, config: Option<&Config>) -> LookupKey {

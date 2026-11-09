@@ -15,15 +15,20 @@ fn env(name: &str) -> Result<Option<String>> {
 }
 /// A secret from a file (`--flag` or the file's env var) or an env var holding
 /// the value itself — never both. Reading shares the settings `Secret` rule:
-/// strip trailing CR/LF, reject empty, and errors never carry the value.
+/// strip trailing CR/LF, reject empty, and errors never carry the value. The
+/// bytes are kept as they are: a webhook secret or key need not be UTF-8.
 fn secret(path: Option<&PathBuf>, file_env: &str, value_env: &str) -> Result<Vec<u8>> {
-    let path = path.cloned().or(env(file_env)?.map(PathBuf::from));
-    if path.is_some() && env(value_env)?.is_some() {
+    // Presence is checked on the raw variable: a secret need not be UTF-8.
+    let path = path
+        .cloned()
+        .or_else(|| std::env::var_os(file_env).map(PathBuf::from));
+    let value = std::env::var_os(value_env).is_some();
+    if path.is_some() && value {
         return Err(invalid(
             "choose either a secret file or a secret environment value",
         ));
     }
-    if path.is_none() && env(value_env)?.is_none() {
+    if path.is_none() && !value {
         return Err(invalid(
             "server requires App private key and webhook secret via env or files",
         ));
@@ -32,10 +37,7 @@ fn secret(path: Option<&PathBuf>, file_env: &str, value_env: &str) -> Result<Vec
         env: path.is_none().then(|| value_env.to_owned()),
         file: path,
     };
-    secret
-        .read()
-        .map(String::into_bytes)
-        .map_err(|message| invalid(&message))
+    secret.read_bytes().map_err(|message| invalid(&message))
 }
 pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
     let settings = patchula_config::settings::Settings::for_server(serve.settings.as_deref())
