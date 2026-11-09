@@ -2,7 +2,15 @@
 //! the App's device flow identifies the caller, and every repository in a
 //! request must let that user push. Jobs live in memory only: a restart loses
 //! them, and the CLI reports that.
-use crate::settings::{Reload, Settings, valid_repo};
+pub mod protocol;
+
+use crate::{
+    reload::Reload,
+    remote::protocol::{
+        Accepted, AuthInfo, JOB_TTL_SECONDS, JobStatus, MAX_JOBS, MAX_REPOSITORIES,
+        Reject as RejectBody, Start, USER_TTL_SECONDS,
+    },
+};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, State},
@@ -12,11 +20,10 @@ use axum::{
 };
 use futures_util::{FutureExt, future::BoxFuture};
 use patchula_cache::Cache;
+use patchula_config::settings::{Settings, valid_repo};
 use patchula_github::{Client, app::App};
 use patchula_http::Transport;
 use patchula_report::Report;
-use serde::Deserialize;
-use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -27,21 +34,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-/// Repositories one request may name.
-const MAX_REPOSITORIES: usize = 20;
-/// How long a verified user token is trusted before GitHub is asked again.
-const USER_TTL_SECONDS: i64 = 300;
-/// How long a finished job's report stays available to poll.
-const JOB_TTL_SECONDS: i64 = 900;
-const MAX_JOBS: usize = 1000;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Mode {
-    Lookup,
-    DryRun,
-    Run,
-}
+/// What a run request asks for; the wire shape is `protocol::Mode`.
+pub use self::protocol::Mode;
 
 /// Runs one request's repositories, which all belong to one installation.
 pub(crate) trait Runner: Send + Sync + 'static {
@@ -149,7 +143,14 @@ struct Reject(StatusCode, &'static str, String);
 impl IntoResponse for Reject {
     fn into_response(self) -> Response {
         tracing::warn!(target: "patchula_server", status = self.0.as_u16(), error_kind = self.1, "remote request rejected");
-        (self.0, Json(json!({"errorKind": self.1, "error": self.2}))).into_response()
+        (
+            self.0,
+            Json(RejectBody {
+                error_kind: self.1,
+                error: &self.2,
+            }),
+        )
+            .into_response()
     }
 }
 fn reject(status: StatusCode, kind: &'static str, message: impl Into<String>) -> Reject {
@@ -170,7 +171,7 @@ fn github_unavailable() -> Reject {
     )
 }
 
-async fn auth(State(api): State<Api>) -> Result<Json<serde_json::Value>, Reject> {
+async fn auth(State(api): State<Api>) -> Result<Json<AuthInfo>, Reject> {
     let client_id = api.0.client_id.as_deref().ok_or_else(|| {
         reject(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -178,14 +179,10 @@ async fn auth(State(api): State<Api>) -> Result<Json<serde_json::Value>, Reject>
             "the server could not read its GitHub App's client ID",
         )
     })?;
-    Ok(Json(json!({"clientId": client_id, "bot": api.0.bot})))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Start {
-    mode: Mode,
-    repositories: Vec<String>,
+    Ok(Json(AuthInfo {
+        client_id: client_id.to_owned(),
+        bot: api.0.bot.clone(),
+    }))
 }
 
 async fn start(
@@ -320,14 +317,14 @@ async fn start(
         tracing::info!(target: "patchula_server", installation, user = %login, success, "remote run finished");
     });
     drop(tasks);
-    Ok((StatusCode::ACCEPTED, Json(json!({"id": id}))).into_response())
+    Ok((StatusCode::ACCEPTED, Json(Accepted { id })).into_response())
 }
 
 async fn status(
     State(api): State<Api>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, Reject> {
+) -> Result<Json<JobStatus>, Reject> {
     let login = api.user(&headers).await?.login;
     let jobs = api.0.jobs.lock().await;
     let job = jobs
@@ -341,9 +338,13 @@ async fn status(
             )
         })?;
     Ok(Json(match &job.state {
-        JobState::Running => json!({"status": "running"}),
-        JobState::Complete { report, .. } => json!({"status": "complete", "report": report}),
-        JobState::Failed { error, .. } => json!({"status": "failed", "error": error}),
+        JobState::Running => JobStatus::Running,
+        JobState::Complete { report, .. } => JobStatus::Complete {
+            report: report.as_ref().clone(),
+        },
+        JobState::Failed { error, .. } => JobStatus::Failed {
+            error: (*error).to_owned(),
+        },
     }))
 }
 

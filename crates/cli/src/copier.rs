@@ -35,25 +35,8 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 /// Paths `git status` reports in the checkout holding `dir`, relative to its
 /// root, untracked files included.
 pub fn changed(dir: &Path) -> Result<Vec<String>, String> {
-    let text = git(
-        dir,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-    )?;
-    let mut paths = Vec::new();
-    let mut entries = text.split('\0').filter(|e| !e.is_empty());
-    while let Some(entry) = entries.next() {
-        let Some(path) = entry.get(3..) else {
-            continue;
-        };
-        paths.push(path.to_owned());
-        // A rename is followed by its old path.
-        if entry.starts_with('R') || entry.starts_with('C') {
-            entries.next();
-        }
-    }
-    paths.sort();
-    paths.dedup();
-    Ok(paths)
+    let text = git(dir, &crate::tree::STATUS_ARGS)?;
+    Ok(crate::tree::changed(&text))
 }
 
 /// Run `program update` for the answers file `answers` (relative to `dir`),

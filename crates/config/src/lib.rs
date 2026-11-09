@@ -3,6 +3,7 @@
 
 mod model;
 mod package;
+pub mod settings;
 pub use package::PackageId;
 mod validate;
 pub use model::*;

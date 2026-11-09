@@ -89,6 +89,16 @@ pub struct Options {
     /// still reach registries; nothing is ever written.
     pub local: Option<std::path::PathBuf>,
 }
+/// How an engine reaches GitHub: a caller's token, or an installation's
+/// credentials. The lockfile tools get the same identity.
+#[derive(Clone)]
+pub enum Auth {
+    /// A user token.
+    Token(String),
+    /// An installation's credentials.
+    Credentials(Arc<dyn patchula_github::Credentials>),
+}
+
 pub struct Engine {
     lockfiles: Option<patchula_update::lockfiles::Runner>,
     /// The persistent tool caches' size cap in GiB, applied to the runner.
@@ -423,6 +433,65 @@ impl Engine {
     pub fn with_advisories(mut self) -> Self {
         self.advisories = true;
         self
+    }
+    /// The one engine construction the CLI and the server share. Operator
+    /// `settings` supply the HTTP options, GitHub options, registry
+    /// `credentials` (already resolved for this caller) and the lockfile
+    /// cache limit; `auth` is the GitHub identity; `concurrency` and `recheck`
+    /// are the batch's current values. Advisory checks are on, as both entry
+    /// points run them.
+    pub fn from_settings(
+        settings: &patchula_config::settings::Settings,
+        credentials: Vec<patchula_http::Credential>,
+        auth: Auth,
+        concurrency: usize,
+        recheck: Recheck,
+        cache: Cache,
+        transport: Arc<dyn Transport>,
+    ) -> Result<Self> {
+        let mut http_options = settings.http_options();
+        http_options.credentials = credentials;
+        let tool_registries = http_options.credentials.clone();
+        let github_options = settings.github_options();
+        let github = match &auth {
+            Auth::Token(token) => Github::with_transport(
+                token,
+                cache.clone(),
+                GithubOptions {
+                    concurrency: github_options.concurrency,
+                    ..Default::default()
+                },
+                transport.clone(),
+            )?,
+            Auth::Credentials(credentials) => Github::with_credentials(
+                credentials.clone(),
+                cache.clone(),
+                github_options,
+                transport.clone(),
+            )?,
+        };
+        let lockfiles = cache.workspace_dir().map(|path| {
+            let runner = match &auth {
+                Auth::Token(token) => patchula_update::lockfiles::Runner::new(path.into(), token),
+                Auth::Credentials(credentials) => {
+                    patchula_update::lockfiles::Runner::new(path.into(), "")
+                        .with_credentials(credentials.clone())
+                }
+            };
+            runner.with_registries(&tool_registries)
+        });
+        let mut engine = Self::build(
+            github,
+            cache,
+            concurrency,
+            transport,
+            http_options,
+            lockfiles,
+        )?
+        .with_recheck(recheck);
+        engine.advisories = true;
+        engine.set_lockfile_cache_limit(settings.lockfiles.cache_gib);
+        Ok(engine)
     }
     fn catalog_key(&self, dep: &Dependency, config: Option<&Config>) -> LookupKey {
         let enabled = self

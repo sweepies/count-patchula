@@ -1,5 +1,5 @@
 //! Verify the raw, bounded body before any JSON decoding or delivery processing.
-use crate::settings::{Reload, Settings};
+use crate::reload::Reload;
 use axum::{
     Json,
     body::Bytes,
@@ -10,6 +10,7 @@ use axum::{
 };
 use hmac::{Hmac, KeyInit, Mac};
 use patchula_cache::{Cache, queue::Work};
+use patchula_config::settings::Settings;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use std::sync::{
@@ -43,7 +44,7 @@ impl Failure {
         self.installation = payload["installation"]["id"].as_u64();
         self.repository = payload["repository"]["full_name"]
             .as_str()
-            .filter(|repo| crate::settings::valid_repo(repo))
+            .filter(|repo| patchula_config::settings::valid_repo(repo))
             .map(str::to_owned);
         self
     }
@@ -332,7 +333,7 @@ fn log_delivery(
     reason: &str,
     resolution: Option<&str>,
 ) {
-    tracing::info!(target: "patchula_server", event, action = payload["action"].as_str().filter(|s| metadata_word(s)).unwrap_or(""), delivery_id = delivery, installation = payload["installation"]["id"].as_u64(), repository = payload["repository"]["full_name"].as_str().filter(|s| crate::settings::valid_repo(s)), outcome, reason, installation_resolution = resolution, "webhook received");
+    tracing::info!(target: "patchula_server", event, action = payload["action"].as_str().filter(|s| metadata_word(s)).unwrap_or(""), delivery_id = delivery, installation = payload["installation"]["id"].as_u64(), repository = payload["repository"]["full_name"].as_str().filter(|s| patchula_config::settings::valid_repo(s)), outcome, reason, installation_resolution = resolution, "webhook received");
 }
 fn metadata_word(value: &str) -> bool {
     !value.is_empty()

@@ -3,10 +3,13 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, RwLock},
 };
 
 pub const SCHEMA: &str = include_str!("../../../PatchulaSettings.pkl");
+
+/// The environment variable naming the settings file, read by both the CLI's
+/// scan commands and `patchula serve`.
+pub const ENV_VAR: &str = "PATCHULA_SETTINGS";
 
 /// Operator settings shared by the CLI and the server; `server` is read only by
 /// `patchula serve`.
@@ -55,7 +58,9 @@ pub struct Secret {
 }
 impl Secret {
     /// The secret's value. Errors name where it should be, never what it is.
-    fn read(&self) -> Result<String, String> {
+    /// The one rule every secret source shares: strip trailing CR/LF, reject
+    /// empty.
+    pub fn read(&self) -> Result<String, String> {
         let value = match (&self.env, &self.file) {
             (Some(name), None) => std::env::var(name)
                 .map_err(|_| format!("environment variable {name} is not set or not UTF-8"))?,
@@ -157,13 +162,13 @@ impl Settings {
         let source = std::fs::read_to_string(path)
             .into_diagnostic()
             .wrap_err_with(|| format!("cannot read settings {}", path.display()))?;
-        let value = patchula_config::evaluate_local(path, "PatchulaSettings.pkl", SCHEMA)?;
+        let value = crate::evaluate_local(path, "PatchulaSettings.pkl", SCHEMA)?;
         let settings: Self = serde_path_to_error::deserialize(value).map_err(|error| {
-            patchula_config::problem(path, &source, &error.path().to_string(), &error.to_string())
+            crate::problem(path, &source, &error.path().to_string(), &error.to_string())
         })?;
         settings.validate().map_err(|message| {
             let field = message.split_whitespace().next().unwrap_or("");
-            patchula_config::problem(path, &source, field, message)
+            crate::problem(path, &source, field, message)
         })?;
         Ok(settings)
     }
@@ -265,7 +270,7 @@ impl Settings {
             return Err("workers must be 1..64");
         }
         if let Some(cron) = &server.sweep_cron {
-            patchula_config::schedule(cron, true)
+            crate::schedule(cron, true)
                 .map_err(|_| "sweepCron must be valid (six or seven fields)")?;
         }
         chrono_tz::Tz::from_str(&server.sweep_timezone)
@@ -424,6 +429,31 @@ impl Settings {
     }
 }
 
+/// The settings file `flag` names, else the one `PATCHULA_SETTINGS` names.
+fn named(flag: Option<&Path>) -> Option<PathBuf> {
+    flag.map(Path::to_path_buf)
+        .or_else(|| std::env::var_os(ENV_VAR).map(PathBuf::from))
+}
+
+impl Settings {
+    /// The settings for `lookup`, `run`, `apply` and `tui`: the file `flag` or
+    /// `PATCHULA_SETTINGS` names, else `user` — the user's
+    /// `patchula/settings.pkl` — when it exists, else the schema's defaults.
+    pub fn for_cli(flag: Option<&Path>, user: Option<PathBuf>) -> miette::Result<Self> {
+        match named(flag).or_else(|| user.filter(|path| path.is_file())) {
+            Some(path) => Self::load(&path),
+            None => Ok(Self::default()),
+        }
+    }
+    /// The settings file `patchula serve` uses: the one `flag` or
+    /// `PATCHULA_SETTINGS` names, required — a server never picks up a
+    /// developer's personal settings file. The path, not the settings, since
+    /// serve reloads the file as it changes.
+    pub fn for_server(flag: Option<&Path>) -> miette::Result<PathBuf> {
+        named(flag).ok_or_else(|| miette::miette!("serve requires --settings or {ENV_VAR}"))
+    }
+}
+
 /// Operator source can accidentally contain secrets, even in rejected properties.
 /// Retain the evaluator's file and labels, but mask string contents in excerpts.
 fn sanitize_diagnostic(error: miette::Report) -> miette::Report {
@@ -492,47 +522,6 @@ pub fn valid_repo(repo: &str) -> bool {
                 && p.bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
         })
-}
-
-/// Invalid edits leave the active snapshot usable but readiness reports the error.
-#[derive(Clone)]
-pub struct Reload(Arc<RwLock<Snapshot>>);
-struct Snapshot {
-    settings: Settings,
-    valid: bool,
-}
-impl Reload {
-    pub fn new(settings: Settings) -> Self {
-        Self(Arc::new(RwLock::new(Snapshot {
-            settings,
-            valid: true,
-        })))
-    }
-    pub fn current(&self) -> Settings {
-        self.0.read().expect("settings lock").settings.clone()
-    }
-    pub fn valid(&self) -> bool {
-        self.0.read().expect("settings lock").valid
-    }
-    pub fn refresh(&self, path: &Path) {
-        let result = Settings::load(path);
-        let mut state = self.0.write().expect("settings lock");
-        match result {
-            Ok(settings) => {
-                if !state.valid || settings != state.settings {
-                    tracing::info!(target: "patchula_server", "settings loaded");
-                }
-                state.settings = settings;
-                state.valid = true;
-            }
-            Err(_) => {
-                if state.valid {
-                    tracing::error!(target: "patchula_server", "settings rejected; keeping last good settings; run config check-settings for diagnostics");
-                }
-                state.valid = false;
-            }
-        }
-    }
 }
 
 /// `url` normalised for advertising, or None if the CLI would refuse it.
@@ -661,29 +650,6 @@ mod tests {
                 "{bad}"
             );
         }
-    }
-    #[test]
-    fn reload_keeps_last_good_settings_and_recovers() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.pkl");
-        let source = "amends \"PatchulaSettings.pkl\"\nconcurrency = 3\n";
-        std::fs::write(&path, source).unwrap();
-        let settings = Settings::load(&path).unwrap();
-        let reload = Reload::new(settings);
-        std::fs::write(&path, "amends \"PatchulaSettings.pkl\"\nconcurrency = 0\n").unwrap();
-        reload.refresh(&path);
-        assert!(!reload.valid());
-        assert_eq!(reload.current().concurrency, 3);
-        std::fs::write(&path, source.replace("3", "5")).unwrap();
-        reload.refresh(&path);
-        assert!(reload.valid());
-        assert_eq!(reload.current().concurrency, 5);
-        std::fs::write(
-            &path,
-            "amends \"PatchulaSettings.pkl\"\nwebhookSecret = \"forbidden\"\n",
-        )
-        .unwrap();
-        assert!(Settings::load(&path).is_err());
     }
     #[test]
     fn defaults_match_the_schema_and_http_settings_are_validated() {

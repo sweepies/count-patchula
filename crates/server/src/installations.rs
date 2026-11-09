@@ -1,6 +1,6 @@
 //! Resolve non-App webhooks without persisting JWTs or installation tokens.
-use crate::settings::valid_repo;
 use patchula_cache::{Cache, installations::Mapping};
+use patchula_config::settings::valid_repo;
 use patchula_github::app::App;
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};

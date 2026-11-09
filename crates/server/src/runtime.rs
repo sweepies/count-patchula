@@ -1,5 +1,5 @@
 use crate::{
-    settings::{Reload, Settings},
+    reload::Reload,
     webhook::{BODY_LIMIT, Webhook},
 };
 use axum::{
@@ -14,6 +14,7 @@ use patchula_cache::{
     Cache,
     queue::{Attribution, Finish, Work},
 };
+use patchula_config::settings::Settings;
 use patchula_engine::Engine;
 use patchula_github::{Client, app::App};
 use patchula_http::Transport;
@@ -120,7 +121,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
             .webhook_url()
             .await
             .ok()
-            .and_then(|url| crate::settings::from_webhook(&url)),
+            .and_then(|url| patchula_config::settings::from_webhook(&url)),
         None => None,
     };
     let current = settings.current();
@@ -337,7 +338,10 @@ trait Batch: Send + Sync + 'static {
 }
 /// What an installation engine was built from: the `http` settings and its
 /// registry credentials.
-type EngineKey = (crate::settings::Http, Vec<patchula_http::Credential>);
+type EngineKey = (
+    patchula_config::settings::Http,
+    Vec<patchula_http::Credential>,
+);
 /// An installation's engine and the settings it was built from, once built.
 type Slot = Arc<Mutex<Option<(EngineKey, Engine)>>>;
 
@@ -553,18 +557,16 @@ impl Engines {
         let slot = self.engines.lock().await.entry(id).or_default().clone();
         let mut slot = slot.lock_owned().await;
         if slot.as_ref().is_none_or(|(built, _)| *built != key) {
-            let mut http = settings.http_options();
-            http.credentials.clone_from(&key.1);
-            let engine = Engine::with_credentials(
-                self.app.installation(id),
-                self.cache.clone(),
+            let engine = Engine::from_settings(
+                settings,
+                key.1.clone(),
+                patchula_engine::Auth::Credentials(self.app.installation(id)),
                 settings.concurrency,
+                settings.recheck(self.recheck),
+                self.cache.clone(),
                 self.transport.clone(),
-                http,
-                settings.github_options(),
             )
-            .map_err(|_| Error("cannot create batch engine"))?
-            .with_advisories();
+            .map_err(|_| Error("cannot create batch engine"))?;
             *slot = Some((key, engine));
         }
         let (_, engine) = slot.as_mut().ok_or(Error("missing batch engine"))?;
@@ -732,7 +734,10 @@ fn prune_reports(directory: &std::path::Path, kept: usize) {
 fn skip_report(reason: &str, discovery_only: bool) {
     tracing::info!(target: "patchula_server", reason, discovery_only, repository_runs = 0, "batch report skipped");
 }
-async fn output_report(report: &Report, server: &crate::settings::Server) -> Result<(), Error> {
+async fn output_report(
+    report: &Report,
+    server: &patchula_config::settings::Server,
+) -> Result<(), Error> {
     if let Some(directory) = &server.report_directory {
         let report = report.clone();
         let directory = directory.to_owned();

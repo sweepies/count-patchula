@@ -3,7 +3,7 @@
 //! warnings. On a terminal it is coloured and fitted to the width; anywhere
 //! else it is plain text, one item per line, for grep and logs, with only the
 //! summary wrapped, at 80 columns.
-use crate::{cli, palette, tui};
+use crate::{cli, palette, updates};
 use patchula_report::{BranchStatus, PullRequestStatus, Report, Repository, Status};
 use patchula_words::Update as UpdateKind;
 use std::fmt::Write;
@@ -374,7 +374,7 @@ pub fn report(report: &Report, style: &Style) -> String {
         Paint::Bold
     };
     style.summary(&mut out, &format!("{}{headline}", style.bat()), paint);
-    let updates = tui::updates(report);
+    let updates = updates::updates(report);
     let indent = if single { 0 } else { 2 };
     for repo in &report.repositories {
         if !single {
@@ -406,7 +406,7 @@ pub fn report(report: &Report, style: &Style) -> String {
         if let Some(actions) = &report.actions {
             actions_section(&mut out, style, indent, actions, &repo.repository);
         } else {
-            let mut rows: Vec<&tui::Update> = updates
+            let mut rows: Vec<&updates::Update> = updates
                 .iter()
                 .filter(|u| u.repository == repo.repository)
                 .collect();

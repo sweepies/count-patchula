@@ -13,39 +13,33 @@ fn env(name: &str) -> Result<Option<String>> {
         Err(_) => Err(invalid("server environment value is not valid UTF-8")),
     }
 }
+/// A secret from a file (`--flag` or the file's env var) or an env var holding
+/// the value itself — never both. Reading shares the settings `Secret` rule:
+/// strip trailing CR/LF, reject empty, and errors never carry the value.
 fn secret(path: Option<&PathBuf>, file_env: &str, value_env: &str) -> Result<Vec<u8>> {
     let path = path.cloned().or(env(file_env)?.map(PathBuf::from));
-    let value = env(value_env)?;
-    if path.is_some() && value.is_some() {
+    if path.is_some() && env(value_env)?.is_some() {
         return Err(invalid(
             "choose either a secret file or a secret environment value",
         ));
     }
-    let bytes = if let Some(path) = path {
-        std::fs::read(path).map_err(|_| invalid("cannot read server secret file"))?
-    } else {
-        value
-            .ok_or_else(|| {
-                invalid("server requires App private key and webhook secret via env or files")
-            })?
-            .into_bytes()
+    if path.is_none() && env(value_env)?.is_none() {
+        return Err(invalid(
+            "server requires App private key and webhook secret via env or files",
+        ));
+    }
+    let secret = patchula_config::settings::Secret {
+        env: path.is_none().then(|| value_env.to_owned()),
+        file: path,
     };
-    // Strip terminal line endings from secret files, preserving other secret bytes.
-    let mut bytes = bytes;
-    while bytes.last().is_some_and(|b| matches!(b, b'\r' | b'\n')) {
-        bytes.pop();
-    }
-    if bytes.is_empty() {
-        return Err(invalid("server secret must be nonempty"));
-    }
-    Ok(bytes)
+    secret
+        .read()
+        .map(String::into_bytes)
+        .map_err(|message| invalid(&message))
 }
 pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
-    let settings = serve
-        .settings
-        .clone()
-        .or(env("PATCHULA_SETTINGS")?.map(PathBuf::from))
-        .ok_or_else(|| invalid("serve requires --settings or PATCHULA_SETTINGS"))?;
+    let settings = patchula_config::settings::Settings::for_server(serve.settings.as_deref())
+        .map_err(|e| (2, e))?;
     let listen = serve.listen.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_LISTEN")?
             .unwrap_or_else(|| "127.0.0.1:8080".into())
