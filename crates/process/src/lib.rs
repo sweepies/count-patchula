@@ -178,7 +178,15 @@ impl Executor for SystemExecutor {
                 .stderr
                 .take()
                 .ok_or_else(|| Failure::Io("missing stderr".into()))?;
-            let longest = spec.secrets.iter().map(String::len).max().unwrap_or(0);
+            // A secret longer than the lookahead that starts inside the kept
+            // window is cut short, and `failure_stream` drops its fragment.
+            let longest = spec
+                .secrets
+                .iter()
+                .map(String::len)
+                .max()
+                .unwrap_or(0)
+                .min(FAILURE_STREAM_LIMIT);
             let result = tokio::time::timeout(spec.timeout, async {
                 let (status, out, err) = tokio::join!(
                     child.wait(),
