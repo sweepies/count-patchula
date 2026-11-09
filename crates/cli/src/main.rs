@@ -280,7 +280,10 @@ fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Re
                 .map_err(|e| (1, miette::miette!("{e}")))
         }
         ConfigCommand::CheckSettings(check) => {
-            patchula_config::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
+            let settings =
+                patchula_config::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
+            patchula_engine::settings::check(&settings)
+                .map_err(|message| (2, miette::miette!("{message}")))?;
             writeln!(
                 io::stdout().lock(),
                 "{}",
@@ -1086,7 +1089,7 @@ async fn report(
     let settings = settings(scan)?;
     let concurrency = scan.concurrency.unwrap_or(settings.concurrency);
     let recheck = recheck(app, run.is_some(), &settings)?;
-    let (credentials, failed) = settings.credentials(None);
+    let (credentials, failed) = patchula_engine::settings::credentials(&settings, None);
     if let Some((prefix, reason)) = failed.first() {
         return Err((
             2,

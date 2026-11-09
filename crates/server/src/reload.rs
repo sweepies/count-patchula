@@ -26,7 +26,13 @@ impl Reload {
         self.0.read().expect("settings lock").valid
     }
     pub fn refresh(&self, path: &Path) {
-        let result = Settings::load(path);
+        // The engine-side rules (registry prefixes, mirrors, host
+        // concurrency) reject a file the same way load's own validation does.
+        let result = Settings::load(path).and_then(|settings| {
+            patchula_engine::settings::check(&settings)
+                .map(|_| settings)
+                .map_err(|message| miette::miette!("{message}"))
+        });
         let mut state = self.0.write().expect("settings lock");
         match result {
             Ok(settings) => {

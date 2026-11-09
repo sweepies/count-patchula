@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 mod catalogs;
 mod overrides;
+pub mod settings;
 
 use futures_util::{StreamExt, stream};
 use patchula_cache::{Cache, State};
@@ -449,10 +450,12 @@ impl Engine {
         cache: Cache,
         transport: Arc<dyn Transport>,
     ) -> Result<Self> {
-        let mut http_options = settings.http_options();
+        self::settings::check(settings)
+            .map_err(|message| Error::Configuration(message.to_owned()))?;
+        let mut http_options = self::settings::http_options(settings);
         http_options.credentials = credentials;
         let tool_registries = http_options.credentials.clone();
-        let github_options = settings.github_options();
+        let github_options = self::settings::github_options(settings);
         let github = match &auth {
             Auth::Token(token) => Github::with_transport(
                 token,

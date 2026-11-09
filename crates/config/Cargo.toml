@@ -13,9 +13,7 @@ workspace = true
 [dependencies]
 patchula-words = { path = "../words" }
 patchula-versioning = { path = "../versioning" }
-patchula-http = { path = "../http" }
-patchula-github = { path = "../github" }
-reqwest.workspace = true
+url = "2.5.8"
 pklr = { version = "5.1.1", default-features = false, features = ["native-io", "miette-diagnostics"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

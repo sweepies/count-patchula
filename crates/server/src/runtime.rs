@@ -52,7 +52,9 @@ pub struct Options {
 }
 
 pub async fn serve(options: Options) -> miette::Result<()> {
-    let settings = Reload::new(Settings::load(&options.settings)?);
+    let settings = Settings::load(&options.settings)?;
+    patchula_engine::settings::check(&settings).map_err(|message| miette::miette!("{message}"))?;
+    let settings = Reload::new(settings);
     serve_with_settings(options, settings)
         .await
         .map_err(miette::Report::msg)
@@ -86,7 +88,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         options.app_id,
         &options.private_key,
         transport.clone(),
-        settings.current().github_options().api_url,
+        patchula_engine::settings::github_options(&settings.current()).api_url,
     )
     .map_err(|_| Error("invalid GitHub App credentials"))?;
     // The image has no mise of its own: the first start installs the pinned
@@ -377,7 +379,7 @@ impl Batch for Engines {
                 let client = Client::with_credentials(
                     credentials.clone(),
                     self.cache.clone(),
-                    settings.github_options(),
+                    patchula_engine::settings::github_options(settings),
                     self.transport.clone(),
                 )
                 .map_err(|_| Error("cannot create installation client"))?;
@@ -434,7 +436,7 @@ impl Batch for Engines {
             let client = Client::with_credentials(
                 credentials.clone(),
                 self.cache.clone(),
-                settings.github_options(),
+                patchula_engine::settings::github_options(settings),
                 self.transport.clone(),
             )
             .map_err(|_| Error("cannot create check-event client"))?;
@@ -548,7 +550,7 @@ impl Engines {
         id: u64,
         settings: &Settings,
     ) -> Result<tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>, Error> {
-        let (credentials, failed) = settings.credentials(Some(id));
+        let (credentials, failed) = patchula_engine::settings::credentials(settings, Some(id));
         for (prefix, reason) in &failed {
             tracing::error!(target: "patchula_server", installation = id, registry = %prefix, reason = %reason,
                 "registry credentials unavailable; its lookups run without them");
@@ -621,7 +623,7 @@ impl crate::remote::Runner for Engines {
                 if let Ok(client) = Client::with_credentials(
                     self.app.installation(installation),
                     self.cache.clone(),
-                    settings.github_options(),
+                    patchula_engine::settings::github_options(settings),
                     self.transport.clone(),
                 ) {
                     crate::public::record(
