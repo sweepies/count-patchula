@@ -43,6 +43,21 @@ pub enum Registry {
 /// someone else's.
 const AMBIGUOUS: &str = "ambiguous: ";
 
+/// Whether `value` is an https registry URL a repository may name: an
+/// `https://` scheme in any case, a non-empty host, and no user, query,
+/// fragment, space or `$` to expand. `Registry::from_recorded` sorts stored
+/// bytes by it and producers apply it before normalising what they record.
+pub fn acceptable_registry_url(value: &str) -> bool {
+    value
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        && {
+            let rest = &value[8..];
+            let host = rest.split('/').next().unwrap_or_default();
+            !host.is_empty() && !value.contains(['@', '?', '#', ' ', '$'])
+        }
+}
+
 impl Registry {
     /// The registry of a package that could come from any of `indexes`.
     pub fn ambiguous(indexes: &[String]) -> Self {
@@ -78,18 +93,9 @@ impl Registry {
                 indexes: rest.split(", ").map(str::to_owned).collect(),
             };
         }
-        // The same acceptance `registry_url` applies to what a repository
-        // writes, minus its normalisation: recorded URLs are already
-        // normalised, so the check only sorts stored bytes back into kinds.
-        let url = value
-            .get(..8)
-            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
-            && {
-                let rest = &value[8..];
-                let host = rest.split('/').next().unwrap_or_default();
-                !host.is_empty() && !value.contains(['@', '?', '#', ' ', '$'])
-            };
-        if url {
+        // Recorded bytes were written normalized, so the shared acceptance
+        // check only sorts them back into kinds.
+        if acceptable_registry_url(value) {
             Self::Url(value.to_owned())
         } else {
             Self::Unusable(value.to_owned())
@@ -139,6 +145,7 @@ impl std::str::FromStr for Registry {
         Ok(Self::from_recorded(value))
     }
 }
+
 impl Serialize for Registry {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.recorded())
@@ -181,5 +188,68 @@ impl PackageId {
     /// which may be someone else's.
     pub fn is_public(&self) -> bool {
         self.registry.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `from_recorded` sorts stored registry bytes into the same variants
+    /// the producers wrote: `ambiguous: …` indexes, an acceptable https URL,
+    /// or the value kept as written.
+    #[test]
+    fn recorded_registries_sort_into_their_kinds() {
+        for (recorded, expected) in [
+            (
+                "ambiguous: https://a.dev/, https://b.dev/",
+                Registry::Ambiguous {
+                    recorded: "ambiguous: https://a.dev/, https://b.dev/".into(),
+                    indexes: vec!["https://a.dev/".into(), "https://b.dev/".into()],
+                },
+            ),
+            (
+                "https://npm.acme.dev/",
+                Registry::Url("https://npm.acme.dev/".into()),
+            ),
+            // The scheme check is case-insensitive; the bytes are kept.
+            (
+                "HTTPS://NPM.ACME.DEV/simple",
+                Registry::Url("HTTPS://NPM.ACME.DEV/simple".into()),
+            ),
+            (
+                "http://npm.acme.dev/",
+                Registry::Unusable("http://npm.acme.dev/".into()),
+            ),
+            ("https://", Registry::Unusable("https://".into())),
+            ("https:///path", Registry::Unusable("https:///path".into())),
+            (
+                "https://user@npm.acme.dev/",
+                Registry::Unusable("https://user@npm.acme.dev/".into()),
+            ),
+            (
+                "https://npm.acme.dev/?q=1",
+                Registry::Unusable("https://npm.acme.dev/?q=1".into()),
+            ),
+            (
+                "https://npm.acme.dev/#frag",
+                Registry::Unusable("https://npm.acme.dev/#frag".into()),
+            ),
+            (
+                "https://npm.acme .dev/",
+                Registry::Unusable("https://npm.acme .dev/".into()),
+            ),
+            (
+                "https://$REGISTRY/",
+                Registry::Unusable("https://$REGISTRY/".into()),
+            ),
+            (
+                "sparse+https://index.crates.io/",
+                Registry::Unusable("sparse+https://index.crates.io/".into()),
+            ),
+            ("not a url", Registry::Unusable("not a url".into())),
+        ] {
+            assert_eq!(Registry::from_recorded(recorded), expected, "{recorded}");
+        }
     }
 }

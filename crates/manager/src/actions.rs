@@ -40,7 +40,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                     path,
                     text,
                     reference,
-                    "uses",
+                    Locator::Uses,
                     &format!("/jobs/{job}/uses"),
                     DependencyKind::ReusableWorkflow,
                     bare,
@@ -69,9 +69,9 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                     text,
                     image,
                     if container.is_string() {
-                        "container"
+                        Locator::Container
                     } else {
-                        "image"
+                        Locator::Image
                     },
                     &format!("/jobs/{job}/container"),
                     DependencyKind::ContainerImage,
@@ -87,7 +87,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
                             path,
                             text,
                             image,
-                            "image",
+                            Locator::Image,
                             &format!(
                                 "/jobs/{job}/services/{}/image",
                                 name.as_str().unwrap_or("?")
@@ -127,7 +127,7 @@ fn steps_extract(
                 path,
                 text,
                 reference,
-                "uses",
+                Locator::Uses,
                 &format!("{pointer}/{i}/uses"),
                 DependencyKind::Action,
                 bare,
@@ -225,12 +225,46 @@ fn setup_input(
     });
     Ok(())
 }
+/// The YAML keys `add` finds a scalar under.
+#[derive(Clone, Copy)]
+enum Locator {
+    Uses,
+    Container,
+    Image,
+}
+
+impl Locator {
+    /// The pattern locating this key's scalar in the file's text.
+    fn pattern(self) -> &'static Regex {
+        static USES: std::sync::LazyLock<Regex> =
+            std::sync::LazyLock::new(|| locator_pattern("uses"));
+        static CONTAINER: std::sync::LazyLock<Regex> =
+            std::sync::LazyLock::new(|| locator_pattern("container"));
+        static IMAGE: std::sync::LazyLock<Regex> =
+            std::sync::LazyLock::new(|| locator_pattern("image"));
+        match self {
+            Self::Uses => &USES,
+            Self::Container => &CONTAINER,
+            Self::Image => &IMAGE,
+        }
+    }
+}
+
+/// The locator pattern for YAML key `key`.
+fn locator_pattern(key: &str) -> Regex {
+    Regex::new(&format!(
+        r#"(?m)^\s*(?:-\s*)?{}:\s*(?<value>[^\n]+)"#,
+        regex::escape(key)
+    ))
+    .expect("action locator pattern")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn add(
     path: &str,
     text: &str,
     reference: &str,
-    key: &str,
+    key: Locator,
     pointer: &str,
     kind: DependencyKind,
     bare: Option<&str>,
@@ -242,34 +276,7 @@ fn add(
     }
     // YAML parsing selects only semantic uses/container nodes. The line locator
     // retains the original scalar (and its pin comment) for later editing.
-    static LOCATORS: std::sync::LazyLock<std::collections::BTreeMap<&'static str, Regex>> =
-        std::sync::LazyLock::new(|| {
-            ["uses", "container", "image"]
-                .into_iter()
-                .map(|key| {
-                    (
-                        key,
-                        Regex::new(&format!(
-                            r#"(?m)^\s*(?:-\s*)?{}:\s*(?<value>[^\n]+)"#,
-                            regex::escape(key)
-                        ))
-                        .expect("action locator pattern"),
-                    )
-                })
-                .collect()
-        });
-    let owned;
-    let pattern = match LOCATORS.get(key) {
-        Some(pattern) => pattern,
-        None => {
-            owned = Regex::new(&format!(
-                r#"(?m)^\s*(?:-\s*)?{}:\s*(?<value>[^\n]+)"#,
-                regex::escape(key)
-            ))
-            .map_err(|e| e.to_string())?;
-            &owned
-        }
-    };
+    let pattern = key.pattern();
     let located = pattern
         .captures_iter(text)
         .find_map(|c| {

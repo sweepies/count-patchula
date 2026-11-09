@@ -30,12 +30,22 @@ fn alias<'a>(name: &'a str, value: &'a str) -> (&'a str, &'a str) {
         .and_then(|v| v.rsplit_once('@'))
         .unwrap_or((name, value))
 }
+/// Whether `value` names a registry version rather than a local path,
+/// workspace member, patch, git or HTTP source. The `scheme:` check is the
+/// public verdict's local-source taxonomy, so the protocols it calls local
+/// are no registry versions here either; nor is `patch:`, whose version
+/// belongs to the locator it wraps. `npm:` stays, since it aliases one.
 fn registry(value: &str) -> bool {
-    !value.starts_with(['$', '.', '/'])
-        && !["workspace:", "file:", "link:", "catalog:", "git", "http"]
-            .iter()
-            .any(|p| value.starts_with(p))
-        && !value.contains("github:")
+    if value.starts_with(['$', '.', '/']) || value.contains("github:") {
+        return false;
+    }
+    if let Some((scheme, _)) = value.split_once(':')
+        && (crate::public::LOCAL_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str())
+            || scheme.eq_ignore_ascii_case("patch"))
+    {
+        return false;
+    }
+    !["git", "http"].iter().any(|p| value.starts_with(p))
 }
 
 pub(super) fn extract(
@@ -657,6 +667,9 @@ impl crate::Ecosystem for Descriptor {
     }
     fn backend_settings(&self, path: &str) -> bool {
         self.registry_file(path)
+    }
+    fn locked_source(&self) -> Option<Source> {
+        Some(Source::Npm)
     }
     fn declared_form(
         &self,

@@ -7,7 +7,7 @@
 //! most 100 modules.
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 /// The text of `entry` and every local module it imports, keyed by the
 /// normalized path `read` resolves them under. `read` returns a module's
@@ -73,19 +73,8 @@ where
 /// `path` with `.` and `..` resolved, refusing one that climbs out of the
 /// tree it started in.
 fn normalize(path: &Path) -> Result<String, String> {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    return Err("config import escapes repository".into());
-                }
-            }
-            Component::CurDir => {}
-            part => normalized.push(part.as_os_str()),
-        }
-    }
-    normalized
+    crate::normalize_path(path)
+        .ok_or_else(|| "config import escapes repository".to_owned())?
         .to_str()
         .map(str::to_owned)
         .ok_or_else(|| "config path is not UTF-8".to_owned())

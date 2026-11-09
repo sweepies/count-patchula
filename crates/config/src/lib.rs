@@ -6,14 +6,33 @@ pub use imports::import_files;
 mod model;
 mod package;
 pub mod settings;
-pub use package::{PackageId, Registry, join_package, split_package};
+pub use package::{PackageId, Registry, acceptable_registry_url, join_package, split_package};
 mod validate;
 pub use model::*;
 pub use patchula_words::Window;
 
 use chrono::{DateTime, Duration, Utc};
 use miette::{Diagnostic, IntoDiagnostic, NamedSource, SourceSpan, WrapErr};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+/// `path` with `.` and `..` resolved, or `None` when it climbs out of the
+/// tree it started in. The one normaliser the import walk and the virtual
+/// filesystem share.
+fn normalize_path(path: &Path) -> Option<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return None;
+                }
+            }
+            Component::CurDir => {}
+            part => normalized.push(part.as_os_str()),
+        }
+    }
+    Some(normalized)
+}
 
 /// The schema is part of the executable, independent of the current directory.
 pub const SCHEMA: &str = include_str!("../../../PatchulaConfig.pkl");

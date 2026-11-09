@@ -45,23 +45,58 @@ pub fn credential_reason(path: &str, kind: &str) -> String {
     )
 }
 
+/// The credential check a file's text gets, which the file-role taxonomy
+/// assigns: `eco_roles` gives a file one exactly when it may hold a
+/// committed credential, so `keyed` cannot drift from the taxonomy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CredentialScan {
+    /// `.npmrc`: auth keys and registry URLs.
+    Npmrc,
+    /// `pnpm-workspace.yaml`: auth keys.
+    PnpmWorkspace,
+    /// `.yarnrc.yml`: auth keys and registry server URLs.
+    Yarnrc,
+    /// `composer.json`: auth settings and repository URLs.
+    Composer,
+    /// `poetry.toml`: auth settings.
+    Poetry,
+    /// `pyproject.toml` or `uv.toml`: index URLs.
+    Python,
+    /// `pip.conf` or `pip.ini`: index URLs.
+    Pip,
+    /// `Gemfile`: source URLs.
+    Gemfile,
+    /// `nuget.config`: credentials and source URLs.
+    Nuget,
+    /// A Cargo configuration: registry tokens and index URLs.
+    Cargo,
+}
+
+impl CredentialScan {
+    /// Run the check on `text`; an unparseable file is left to the tool.
+    fn check(self, path: &str, text: &str) -> Option<String> {
+        match self {
+            Self::Npmrc => npmrc(text).or_else(|| npmrc_urls(text)),
+            Self::PnpmWorkspace => pnpm_workspace(text),
+            Self::Yarnrc => yarnrc(text).or_else(|| yarnrc_urls(text)),
+            Self::Composer => composer(text).or_else(|| composer_urls(text)),
+            Self::Poetry => poetry(text),
+            Self::Python => poetry(text).or_else(|| python_urls(path, text)),
+            Self::Pip => pip_urls(text),
+            Self::Gemfile => gemfile_urls(text),
+            Self::Nuget => nuget(text).or_else(|| nuget_urls(text)),
+            Self::Cargo => cargo(text).or_else(|| cargo_urls(text)),
+        }
+    }
+}
+
 /// The credential kinds the settings file at `path` can hold, checked with
 /// the parser of its format. An unparseable file is left to the tool.
 fn keyed(path: &str, text: &str) -> Option<String> {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
-    match leaf {
-        ".npmrc" => npmrc(text).or_else(|| npmrc_urls(text)),
-        "pnpm-workspace.yaml" => pnpm_workspace(text),
-        ".yarnrc.yml" => yarnrc(text).or_else(|| yarnrc_urls(text)),
-        "composer.json" => composer(text).or_else(|| composer_urls(text)),
-        "poetry.toml" => poetry(text),
-        "pyproject.toml" | "uv.toml" => poetry(text).or_else(|| python_urls(path, text)),
-        "pip.conf" | "pip.ini" => pip_urls(text),
-        "Gemfile" => gemfile_urls(text),
-        _ if leaf.eq_ignore_ascii_case("nuget.config") => nuget(text).or_else(|| nuget_urls(text)),
-        _ if crate::cargo::config_file(path) => cargo(text).or_else(|| cargo_urls(text)),
-        _ => None,
-    }
+    patchula_words::Manager::ALL
+        .iter()
+        .find_map(|manager| crate::roles::eco_roles(*manager, path).credential_scan)
+        .and_then(|scan| scan.check(path, text))
 }
 
 /// Whether `url` carries a committed password: a userinfo whose password

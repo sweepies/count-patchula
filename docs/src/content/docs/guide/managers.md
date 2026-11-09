@@ -57,10 +57,11 @@ branch cleanup or auto-merge.
 
 `npm` covers dependencies, devDependencies, peers, optional dependencies,
 aliases (`npm:pkg@^1`), nested overrides, resolutions and `packageManager`.
-`workspace:`, `file:`, `link:` and `catalog:` references are local and left
-alone. Catalogs are dependencies where they are declared: `catalog` and named
-`catalogs` in `pnpm-workspace.yaml`, `.yarnrc.yml` for Yarn 4, and the root
-`package.json` for Bun. `.nvmrc` and `.node-version` pin Node; aliases such as
+`workspace:`, `file:`, `link:`, `catalog:`, `portal:`, `patch:` and the other
+local protocols name no registry version and are left alone. Catalogs are
+dependencies where they are declared: `catalog` and named `catalogs` in
+`pnpm-workspace.yaml`, `.yarnrc.yml` for Yarn 4, and the root `package.json`
+for Bun. `.nvmrc` and `.node-version` pin Node; aliases such as
 `lts/*` are not versions. `.npmrc` and `.yarnrc.yml` name each package's
 [registry](/guide/sources/#package-registries).
 
