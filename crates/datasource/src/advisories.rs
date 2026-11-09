@@ -12,6 +12,9 @@ use std::sync::Arc;
 const OSV: &str = "https://api.osv.dev/v1";
 /// OSV accepts at most this many queries in one batch.
 const BATCH: usize = 1000;
+/// Pages one query may take. OSV pages a package's advisories by the
+/// thousand, so a listing this long is a broken server, not a real package.
+const MAX_PAGES: usize = 100;
 
 /// One package version to check, in OSV's ecosystem naming.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -187,6 +190,9 @@ impl Client {
         queries: &BTreeSet<AdvisoryQuery>,
     ) -> Result<AdvisoryListing> {
         let mut listed = BTreeMap::<&AdvisoryQuery, Vec<Listed>>::new();
+        // Every page token a query has been given: a repeat or too many pages
+        // fails the listing rather than paging forever.
+        let mut tokens = BTreeMap::<&AdvisoryQuery, BTreeSet<String>>::new();
         let mut pending: Vec<(&AdvisoryQuery, Option<String>)> =
             queries.iter().map(|q| (q, None)).collect();
         while !pending.is_empty() {
@@ -220,6 +226,10 @@ impl Client {
                 for ((query, _), result) in chunk.iter().zip(batch.results) {
                     listed.entry(query).or_default().extend(result.vulns);
                     if let Some(token) = result.next_page_token {
+                        let seen = tokens.entry(query).or_default();
+                        if seen.len() + 1 >= MAX_PAGES || !seen.insert(token.clone()) {
+                            return Err(Error::Invalid);
+                        }
                         next.push((*query, Some(token)));
                     }
                 }

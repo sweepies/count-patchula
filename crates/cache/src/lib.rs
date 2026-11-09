@@ -176,6 +176,10 @@ pub struct Cache {
     jobs: mpsc::Sender<Job>,
     readers: Arc<Vec<mpsc::Sender<Job>>>,
     next_reader: Arc<AtomicUsize>,
+    /// Whether reads may use the reader connections. Cleared for good once the
+    /// store is found corrupt or falls back to memory: a rebuild moves the old
+    /// file aside, and the readers still hold it open, so after that only the
+    /// writer's connection sees the live database.
     readers_valid: Arc<AtomicBool>,
     touches: Arc<Mutex<HashSet<String>>>,
 }

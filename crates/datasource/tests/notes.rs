@@ -512,6 +512,40 @@ async fn release_body_batches_validate_timestamps_and_fetch_only_edited_bodies_a
 }
 
 #[test]
+fn a_fence_in_a_list_item_or_quote_hides_its_headings() {
+    for (open, inside, close) in [
+        ("- ```text", "  ## 1.9.0", "  ```"),
+        ("> ```text", "> ## 1.9.0", "> ```"),
+        ("1. ~~~", "   ## 1.9.0", "   ~~~"),
+    ] {
+        let text = format!("## 2.0.0\nNew\n{open}\n{inside}\n{close}\nMore\n## 1.0.0\nOld\n");
+        let sections = parse_changelog(&text);
+        assert_eq!(
+            sections
+                .iter()
+                .map(|s| s.version.as_str())
+                .collect::<Vec<_>>(),
+            ["2.0.0", "1.0.0"],
+            "{open}"
+        );
+    }
+}
+
+/// A fence in a quote or list item that is never closed ends with its
+/// container, so the versions after it are still read.
+#[test]
+fn an_unclosed_fence_ends_with_its_quote_or_list_item() {
+    for open in ["> ```text\n> code", "- ```text\n  code"] {
+        let text = format!("## 2.0.0\nNew\n{open}\n## 1.0.0\nOld\n## 0.9.0\nOlder\n");
+        let versions: Vec<_> = parse_changelog(&text)
+            .into_iter()
+            .map(|s| s.version)
+            .collect();
+        assert_eq!(versions, ["2.0.0", "1.0.0", "0.9.0"], "{open}");
+    }
+}
+
+#[test]
 fn headings_fences_setext_plain_text_and_utf8_are_sliced_once() {
     let text = "# Changelog\n\n## [v2.1.0](https://example.org/2.1.0) (2026-01-01)\nCrab 🦀\n### Fixes\nKept\n```md\n## 99.0.0\n```\n2.0.0 - 2025-01-01\n==================\nOld fixes\n\n# Footer\nNo version here\n";
     let sections = parse_changelog(text);
@@ -2376,4 +2410,36 @@ async fn a_multi_platform_index_annotates_the_source_for_its_platforms() {
         .unwrap()
         .unwrap();
     assert_eq!(source.github.as_deref(), Some("example/multi"));
+}
+
+/// The fence `fit` closes for a cut body is closed inside its quote or list
+/// item, so nothing after it turns into code; a tab indents a list item's
+/// content as far as four spaces would.
+#[test]
+fn a_closed_fence_stays_in_its_container_and_tabs_indent() {
+    // A tab after a list marker reaches column four, so the closer is indented
+    // four spaces, where GitHub reads the item's content.
+    for open in ["- \t```\n    code", "-\t```\n    code", "1.\t```\n    code"] {
+        let (kept, _) = fit(&format!("{open}\n"), 10_000);
+        assert!(kept.trim_end().ends_with("\n    ```"), "{open:?}: {kept:?}");
+    }
+    for open in [
+        "> ```\n> code",
+        "- ```\n  code",
+        "> - ```\n>   code",
+        "- \t```\n    code",
+        "1.\t```\n    code",
+    ] {
+        let (kept, _) = fit(&format!("## 2.0.0\n<details>\n{open}\n"), 10_000);
+        let versions: Vec<_> = parse_changelog(&format!("{kept}\n## 1.0.0\nOld\n"))
+            .into_iter()
+            .map(|s| s.version)
+            .collect();
+        assert_eq!(versions, ["2.0.0", "1.0.0"], "{open}: {kept}");
+    }
+    let versions: Vec<_> = parse_changelog("## 2.0.0\n- ```\n\tcode\n\t```\n## 1.0.0\nOld\n")
+        .into_iter()
+        .map(|s| s.version)
+        .collect();
+    assert_eq!(versions, ["2.0.0", "1.0.0"]);
 }

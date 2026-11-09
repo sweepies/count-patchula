@@ -91,6 +91,8 @@ pub enum Error {
 pub struct Stats {
     pub requests: u64,
     pub not_modified: u64,
+    /// Answers taken from the cache: served fresh, served stale while
+    /// rate limited, or confirmed by a 304.
     pub cache_hits: u64,
 }
 struct Inner {
@@ -102,16 +104,85 @@ struct Inner {
     requests: AtomicU64,
     not_modified: AtomicU64,
     cache_hits: AtomicU64,
-    derived_reads: tokio::sync::Mutex<BTreeMap<String, Coalesced>>,
+    reads: Reads,
 }
 struct Host {
     semaphore: Arc<Semaphore>,
     cooldown: Mutex<Option<Instant>>,
     pull_cooldown: Mutex<Option<Instant>>,
 }
+/// Identical reads in flight, keyed by request. Callers that overlap one
+/// fetch share its answer. An entry exists only while some caller holds it,
+/// so the map is bounded by the reads in flight, not by every URL ever read.
+#[derive(Default)]
+struct Reads(Mutex<BTreeMap<String, Read>>);
 /// The last answer for a read, when it finished, and whether its request
 /// carried credentials, which a caller served the same answer records too.
-type Coalesced = Arc<tokio::sync::Mutex<Option<(Instant, Response, bool)>>>;
+type Read = Arc<tokio::sync::Mutex<Option<(Instant, Response, bool)>>>;
+/// A caller's hold on a read. Dropping it, on every path including
+/// cancellation, removes the entry once no other caller holds it.
+struct Lease<'a> {
+    reads: &'a Reads,
+    key: String,
+    read: Option<Read>,
+}
+impl Reads {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Read>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    /// The answer of a fetch that finished after this call began, or else
+    /// `fetch`'s, shared with overlapping callers when `share` accepts it.
+    async fn coalesce(
+        &self,
+        key: String,
+        fetch: impl Future<Output = (Result<Response, Error>, bool)>,
+        share: fn(&Response) -> bool,
+    ) -> Result<Response, Error> {
+        let started = Instant::now();
+        let read = self.lock().entry(key.clone()).or_default().clone();
+        let lease = Lease {
+            reads: self,
+            key,
+            read: Some(read),
+        };
+        let mut previous = lease.read().lock().await;
+        if let Some((finished, response, credentialed)) = &*previous
+            && *finished >= started
+        {
+            if *credentialed {
+                crate::tracked::sent();
+            }
+            return Ok(response.clone());
+        }
+        let (response, credentialed) = fetch.await;
+        let response = response?;
+        if share(&response) {
+            *previous = Some((Instant::now(), response.clone(), credentialed));
+        }
+        Ok(response)
+    }
+}
+impl Lease<'_> {
+    fn read(&self) -> &Read {
+        self.read.as_ref().expect("held until drop")
+    }
+}
+impl Drop for Lease<'_> {
+    fn drop(&mut self) {
+        // Clones are only taken under this lock, so a count of one here means
+        // no caller holds the read and none can take it before it is removed.
+        let mut reads = self.reads.lock();
+        self.read = None;
+        if reads
+            .get(&self.key)
+            .is_some_and(|read| Arc::strong_count(read) == 1)
+        {
+            reads.remove(&self.key);
+        }
+    }
+}
 type Derive = fn(&[u8]) -> Result<Vec<u8>, Error>;
 /// How long a digest-addressed registry document stays fresh: ten years, so
 /// only the cache's size budget evicts it.
@@ -132,16 +203,24 @@ fn immutable(url: &Url) -> bool {
     url.path().contains("/manifests/sha256:") || url.path().contains("/blobs/sha256:")
 }
 #[derive(Clone)]
-pub struct Cached(Arc<Inner>, bool);
+pub struct Cached {
+    inner: Arc<Inner>,
+    /// A scoped manual retry: cached documents are revalidated, never served
+    /// fresh.
+    revalidating: bool,
+}
 impl Cached {
     /// A scoped manual retry revalidates cached documents, preserving validators,
     /// shared governors and quotas without changing ordinary callers' freshness.
     pub fn revalidating(&self) -> Self {
-        Self(self.0.clone(), true)
+        Self {
+            inner: self.inner.clone(),
+            revalidating: true,
+        }
     }
     /// Whether this handle is a scoped manual retry.
     pub fn is_revalidating(&self) -> bool {
-        self.1
+        self.revalidating
     }
     pub fn new(
         cache: Cache,
@@ -167,8 +246,8 @@ impl Cached {
         options: Options,
     ) -> Result<Self, Error> {
         options.validate()?;
-        Ok(Self(
-            Arc::new(Inner {
+        Ok(Self {
+            inner: Arc::new(Inner {
                 transport,
                 cache,
                 hosts: Default::default(),
@@ -177,22 +256,22 @@ impl Cached {
                 requests: AtomicU64::new(0),
                 not_modified: AtomicU64::new(0),
                 cache_hits: AtomicU64::new(0),
-                derived_reads: Default::default(),
+                reads: Reads::default(),
             }),
-            false,
-        ))
+            revalidating: false,
+        })
     }
     fn host(&self, url: &Url) -> Result<Arc<Host>, Error> {
         let host = url.host_str().ok_or(Error::Configuration)?;
         Ok(self
-            .0
+            .inner
             .hosts
             .lock()
             .map_err(|_| Error::Configuration)?
             .entry(host.to_owned())
             .or_insert_with(|| {
                 Arc::new(Host {
-                    semaphore: Arc::new(Semaphore::new(self.0.options.host_limit(host))),
+                    semaphore: Arc::new(Semaphore::new(self.inner.options.host_limit(host))),
                     cooldown: Mutex::new(None),
                     pull_cooldown: Mutex::new(None),
                 })
@@ -248,13 +327,13 @@ impl Cached {
     }
     /// The operator entry whose credentials requests to `url` carry.
     pub fn credential(&self, url: &str) -> Option<&Credential> {
-        matching(&self.0.options.credentials, &Url::parse(url).ok()?)
+        matching(&self.inner.options.credentials, &Url::parse(url).ok()?)
     }
     pub fn stats(&self) -> Stats {
         Stats {
-            requests: self.0.requests.load(Ordering::Relaxed),
-            not_modified: self.0.not_modified.load(Ordering::Relaxed),
-            cache_hits: self.0.cache_hits.load(Ordering::Relaxed),
+            requests: self.inner.requests.load(Ordering::Relaxed),
+            not_modified: self.inner.not_modified.load(Ordering::Relaxed),
+            cache_hits: self.inner.cache_hits.load(Ordering::Relaxed),
         }
     }
     pub async fn get(&self, url: &str, accept: &str) -> Result<Response, Error> {
@@ -274,7 +353,7 @@ impl Cached {
         if url.scheme() != "https" || url.host_str().is_none() {
             return Err(Error::Configuration);
         }
-        let url = mirrored(&self.0.options.credentials, &url).unwrap_or(url);
+        let url = mirrored(&self.inner.options.credentials, &url).unwrap_or(url);
         let trace = RequestTrace::new(method.as_str(), &url);
         let mut request = Request::new(method, url.clone());
         let headers = request.headers_mut();
@@ -284,7 +363,7 @@ impl Cached {
             HeaderValue::from_static(concat!("patchula/", env!("CARGO_PKG_VERSION"))),
         );
         if let Some(value) =
-            matching(&self.0.options.credentials, &url).and_then(|entry| entry.auth.header())
+            matching(&self.inner.options.credentials, &url).and_then(|entry| entry.auth.header())
         {
             crate::tracked::sent();
             headers.insert(header::AUTHORIZATION, value);
@@ -298,9 +377,14 @@ impl Cached {
         }
         let queued = Instant::now();
         let _permit = self.acquire(&url, false).await?;
-        self.0.requests.fetch_add(1, Ordering::Relaxed);
+        self.inner.requests.fetch_add(1, Ordering::Relaxed);
         let response = trace
-            .send(self.0.transport.as_ref(), request, queued.elapsed(), false)
+            .send(
+                self.inner.transport.as_ref(),
+                request,
+                queued.elapsed(),
+                false,
+            )
             .await?;
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
@@ -347,44 +431,26 @@ impl Cached {
         derived: Option<(&'static str, Derive)>,
         method: Method,
     ) -> Result<Response, Error> {
-        let started = Instant::now();
         let key = format!(
             "registry:{method}:{}:{}:{url}\n{accept}\n{}:{}",
             token.is_some(),
             token.is_some_and(|t| t.account),
             derived.map_or("", |(format, _)| format),
-            self.1
+            self.revalidating
         );
-        let read = self
-            .0
-            .derived_reads
-            .lock()
-            .await
-            .entry(key)
-            .or_default()
-            .clone();
-        let mut previous = read.lock().await;
-        if let Some((finished, response, credentialed)) = &*previous
-            && *finished >= started
-        {
-            if *credentialed {
-                crate::tracked::sent();
-            }
-            return Ok(response.clone());
-        }
-        let (response, credentialed) = crate::tracked::tracked(self.get_representation(
+        // Boxed: the fetch future is large and would otherwise sit inline in
+        // every caller's future as well as in `coalesce`'s.
+        let fetch = Box::pin(crate::tracked::tracked(self.get_representation(
             url,
             accept,
             derived,
             Some(token),
-            method,
-        ))
-        .await;
-        let response = response?;
-        if response.status.is_success() {
-            *previous = Some((Instant::now(), response.clone(), credentialed));
-        }
-        Ok(response)
+            method.clone(),
+        )));
+        self.inner
+            .reads
+            .coalesce(key, fetch, |response| response.status.is_success())
+            .await
     }
 
     /// Fetch an anonymous token without caching the raw response. The registry
@@ -420,9 +486,14 @@ impl Cached {
             .insert(header::ACCEPT, HeaderValue::from_static("application/json"));
         let queued = Instant::now();
         let _permit = self.acquire(&url, false).await?;
-        self.0.requests.fetch_add(1, Ordering::Relaxed);
+        self.inner.requests.fetch_add(1, Ordering::Relaxed);
         Ok(trace
-            .send(self.0.transport.as_ref(), request, queued.elapsed(), false)
+            .send(
+                self.inner.transport.as_ref(),
+                request,
+                queued.elapsed(),
+                false,
+            )
             .await?)
     }
 
@@ -444,7 +515,7 @@ impl Cached {
             if let Some(id) = scope {
                 key = key.credential(id);
             }
-            self.0.cache.http_get(&key).await?
+            self.inner.cache.http_get(&key).await?
         } else {
             None
         };
@@ -460,7 +531,7 @@ impl Cached {
             HeaderValue::from_str(&entry.fetched_at.to_string())
                 .map_err(|_| Error::Configuration)?,
         );
-        self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.inner.cache_hits.fetch_add(1, Ordering::Relaxed);
         Ok(Some(response))
     }
 
@@ -473,38 +544,19 @@ impl Cached {
         format: &'static str,
         derive: Derive,
     ) -> Result<Response, Error> {
-        let started = Instant::now();
-        let key = format!("{url}\n{accept}\n{format}:{}", self.1);
-        let read = self
-            .0
-            .derived_reads
-            .lock()
-            .await
-            .entry(key)
-            .or_default()
-            .clone();
-        let mut previous = read.lock().await;
+        let key = format!("{url}\n{accept}\n{format}:{}", self.revalidating);
         // Coalesce overlapping callers even when upstream requires revalidation.
         // A later sequential call still observes normal HTTP freshness rules.
-        if let Some((finished, response, credentialed)) = &*previous
-            && *finished >= started
-        {
-            if *credentialed {
-                crate::tracked::sent();
-            }
-            return Ok(response.clone());
-        }
-        let (response, credentialed) = crate::tracked::tracked(self.get_representation(
+        // Boxed: the fetch future is large and would otherwise sit inline in
+        // every caller's future as well as in `coalesce`'s.
+        let fetch = Box::pin(crate::tracked::tracked(self.get_representation(
             url,
             accept,
             Some((format, derive)),
             None,
             Method::GET,
-        ))
-        .await;
-        let response = response?;
-        *previous = Some((Instant::now(), response.clone(), credentialed));
-        Ok(response)
+        )));
+        self.inner.reads.coalesce(key, fetch, |_| true).await
     }
 
     async fn get_representation(
@@ -529,7 +581,7 @@ impl Cached {
         let requested = url.clone();
         let url = registry
             .is_none()
-            .then(|| mirrored(&self.0.options.credentials, &url))
+            .then(|| mirrored(&self.inner.options.credentials, &url))
             .flatten()
             .unwrap_or(url);
         let mut key = HttpKey::new(
@@ -540,7 +592,7 @@ impl Cached {
         if let Some((format, _)) = derived {
             key = key.representation(format);
         }
-        let credential = matching(&self.0.options.credentials, &url).cloned();
+        let credential = matching(&self.inner.options.credentials, &url).cloned();
         // Whether the answer comes from the network or the cache, whose
         // entries are kept per credential, it is one these credentials read.
         if credential.as_ref().is_some_and(|entry| entry.auth.sends())
@@ -553,7 +605,7 @@ impl Cached {
             key = key.credential(id);
         }
         let mut trace = RequestTrace::new(method.as_str(), &url);
-        let cached = self.0.cache.http_get(&key).await?;
+        let cached = self.inner.cache.http_get(&key).await?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -577,12 +629,12 @@ impl Cached {
                     && entry.etag.is_none()
                     && entry.last_modified.is_none()
                 {
-                    self.0.options.registry_freshness_secs
+                    self.inner.options.registry_freshness_secs
                 } else if requested.host_str() == Some("proxy.golang.org")
                     && (requested.path().ends_with("/@v/list")
                         || requested.path().ends_with("/@latest"))
                 {
-                    self.0.options.go_freshness_secs
+                    self.inner.options.go_freshness_secs
                 } else {
                     0
                 };
@@ -611,9 +663,9 @@ impl Cached {
         if let Some(entry) = &cached
             && ttl.is_some_and(|ttl| ttl > 0)
             && !no_cache
-            && !self.1
+            && !self.revalidating
         {
-            self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
+            self.inner.cache_hits.fetch_add(1, Ordering::Relaxed);
             if entry.status == 404 {
                 return Err(Error::Status(404));
             }
@@ -655,7 +707,6 @@ impl Cached {
             HeaderValue::from_static(concat!("patchula/", env!("CARGO_PKG_VERSION"))),
         );
         if let Some(entry) = &cached {
-            self.0.cache_hits.fetch_add(1, Ordering::Relaxed);
             for (name, value) in [
                 (header::IF_NONE_MATCH, &entry.etag),
                 (header::IF_MODIFIED_SINCE, &entry.last_modified),
@@ -691,10 +742,10 @@ impl Cached {
                 }
                 Err(error) => return Err(error),
             };
-            self.0.requests.fetch_add(1, Ordering::Relaxed);
+            self.inner.requests.fetch_add(1, Ordering::Relaxed);
             let response = trace
                 .send(
-                    self.0.transport.as_ref(),
+                    self.inner.transport.as_ref(),
                     request.try_clone().ok_or(Error::Configuration)?,
                     queued.elapsed(),
                     cached.is_some(),
@@ -725,7 +776,7 @@ impl Cached {
                         request.headers_mut().remove(name);
                     }
                 }
-                let next_entry = matching(&self.0.options.credentials, &next);
+                let next_entry = matching(&self.inner.options.credentials, &next);
                 if matches!(registry, Some(Some(_))) {
                     // A registry token stays on its origin; one issued under an
                     // operator entry also stays within that entry's prefix.
@@ -761,33 +812,41 @@ impl Cached {
                 self.cooldown(&target, window, true)?;
             }
             if registry.is_some() && response.status == StatusCode::TOO_MANY_REQUESTS {
-                let pull_quota = target.host_str() == Some("registry-1.docker.io")
-                    && (response
-                        .headers
-                        .get("ratelimit-remaining")
-                        .and_then(|v| v.to_str().ok())
-                        .is_some_and(|v| v.split(';').next().is_some_and(|v| v.trim() == "0"))
-                        || response
-                            .body
-                            .windows(b"pull rate limit".len())
-                            .any(|v| v.eq_ignore_ascii_case(b"pull rate limit"))
-                        || !response.headers.contains_key("retry-after"));
-                let delay = if pull_quota {
-                    None
+                let docker_hub = target.host_str() == Some("registry-1.docker.io");
+                // Only manifest GETs consume Docker Hub's pull counter, so only
+                // their 429 can mean it is spent. A HEAD or tag-list 429 cools
+                // the host for the counter's window when it names one (that is
+                // evidence those requests are throttled too), and is otherwise
+                // an ordinary throttle.
+                let throttle = if docker_hub && pull_request && pull_limit(&response) {
+                    Throttle::Pulls(
+                        exhausted_quota(&response).unwrap_or(Duration::from_secs(21600)),
+                    )
+                } else if let Some(window) =
+                    docker_hub.then(|| exhausted_quota(&response)).flatten()
+                {
+                    Throttle::Host(window)
                 } else {
-                    retry_delay(&response, attempt)
+                    Throttle::Retry(retry_delay(&response, attempt))
                 };
                 // Publish even an exhausted/long cooldown before releasing the
                 // permit, so unrelated queued requests to this host respect it.
-                if let Some(delay) = delay {
-                    self.cooldown(&target, delay, false)?;
-                } else if pull_quota && exhausted_quota(&response).is_none() {
-                    self.cooldown(&target, Duration::from_secs(21600), pull_request)?;
-                } else if pull_quota && !pull_request {
-                    // An actual HEAD/tag-list 429 is evidence of throttling
-                    // those requests too, unlike a successful zero-counter HEAD.
-                    self.cooldown(&target, exhausted_quota(&response).unwrap(), false)?;
-                }
+                let delay = match throttle {
+                    Throttle::Pulls(window) => {
+                        self.cooldown(&target, window, true)?;
+                        None
+                    }
+                    Throttle::Host(window) => {
+                        self.cooldown(&target, window, false)?;
+                        None
+                    }
+                    Throttle::Retry(delay) => {
+                        if let Some(delay) = delay {
+                            self.cooldown(&target, delay, false)?;
+                        }
+                        delay
+                    }
+                };
                 drop(permit);
                 if let Some(response) = self
                     .stale_registry(cached.as_ref(), &url, accept, &method, scope)
@@ -795,7 +854,7 @@ impl Cached {
                 {
                     return Ok(response);
                 }
-                if attempt < self.0.options.registry_retries
+                if attempt < self.inner.options.registry_retries
                     && delay.is_some_and(|delay| delay <= Duration::from_secs(60))
                 {
                     attempt += 1;
@@ -820,7 +879,8 @@ impl Cached {
         let not_modified = response.status == StatusCode::NOT_MODIFIED;
         if not_modified {
             let entry = cached.ok_or(Error::MissingBody)?;
-            self.0.not_modified.fetch_add(1, Ordering::Relaxed);
+            self.inner.not_modified.fetch_add(1, Ordering::Relaxed);
+            self.inner.cache_hits.fetch_add(1, Ordering::Relaxed);
             response.status =
                 StatusCode::from_u16(entry.status).map_err(|_| Error::Configuration)?;
             response.body = entry.body;
@@ -844,7 +904,7 @@ impl Cached {
                 && registry.is_some()
                 && (immutable(&url) || [".att", ".sbom"].iter().any(|s| url.path().ends_with(s)))
             {
-                self.0
+                self.inner
                     .cache
                     .http_put(
                         &key,
@@ -865,7 +925,7 @@ impl Cached {
         }
         if !not_modified && let Some((_, derive)) = derived {
             let permit = self
-                .0
+                .inner
                 .decoding
                 .clone()
                 .acquire_owned()
@@ -908,7 +968,7 @@ impl Cached {
                     })
                 }));
         if uncacheable {
-            self.0.cache.http_remove(&key).await?;
+            self.inner.cache.http_remove(&key).await?;
         } else {
             let entry = HttpEntry {
                 status: response.status.as_u16(),
@@ -953,9 +1013,9 @@ impl Cached {
                 cache_control: control,
             };
             if not_modified {
-                self.0.cache.http_refresh(&key, &entry).await?;
+                self.inner.cache.http_refresh(&key, &entry).await?;
             } else {
-                self.0.cache.http_put(&key, &entry).await?;
+                self.inner.cache.http_put(&key, &entry).await?;
             }
         }
         Ok(response)
@@ -975,6 +1035,36 @@ fn cached_response(entry: &HttpEntry) -> Result<Response, Error> {
         headers,
         body: entry.body.clone(),
     })
+}
+
+/// What a registry's 429 asks of later requests.
+enum Throttle {
+    /// Docker Hub's pull counter is spent: manifest GETs wait out the window.
+    Pulls(Duration),
+    /// Every request to the host waits out the window, with no retry.
+    Host(Duration),
+    /// The host is busy: wait the delay and retry when it is short. `None`
+    /// is a `Retry-After` that could not be read, so no retry.
+    Retry(Option<Duration>),
+}
+
+/// A manifest GET's 429 is Docker Hub's pull limit: its counter reads zero,
+/// its body says so, or it gives no `Retry-After`, which the pull limit omits.
+fn pull_limit(response: &Response) -> bool {
+    response
+        .headers
+        .get("ratelimit-remaining")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .is_some_and(|v| v.trim().parse::<u64>() == Ok(0))
+        })
+        || response
+            .body
+            .windows(b"pull rate limit".len())
+            .any(|v| v.eq_ignore_ascii_case(b"pull rate limit"))
+        || !response.headers.contains_key("retry-after")
 }
 
 // Docker Hub uses `remaining;w=seconds`, not the unrelated Hub REST API's X- headers.
@@ -1740,5 +1830,94 @@ mod tests {
                 .is_err()
         );
         assert!(transport.0.lock().unwrap().is_empty());
+    }
+    struct Throttled(std::sync::atomic::AtomicUsize);
+    impl Transport for Throttled {
+        fn send(&self, _: Request) -> crate::Exchange<'_> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async {
+                Ok(Response {
+                    status: StatusCode::TOO_MANY_REQUESTS,
+                    headers: Default::default(),
+                    body: Vec::new(),
+                })
+            })
+        }
+    }
+    /// A HEAD does not consume Docker Hub's pull counter, so its bare 429 is an
+    /// ordinary throttle, not hours without the registry.
+    #[tokio::test]
+    async fn a_bare_docker_hub_head_429_is_a_short_throttle() {
+        let transport = Arc::new(Throttled(Default::default()));
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let client = Cached::with_options(
+            cache,
+            transport.clone(),
+            Options {
+                registry_retries: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let url = "https://registry-1.docker.io/v2/library/image/manifests/latest";
+        for calls in [1, 2] {
+            let response = client.registry_head(url, "text/plain", None).await.unwrap();
+            assert_eq!(response.status, 429);
+            assert_eq!(transport.0.load(Ordering::Relaxed), calls);
+        }
+    }
+    /// Coalesced reads leave nothing behind once their callers are done,
+    /// whether they finish, fail or are cancelled.
+    #[tokio::test]
+    async fn coalesced_reads_are_dropped_when_no_caller_holds_them() {
+        fn same(body: &[u8]) -> Result<Vec<u8>, Error> {
+            Ok(body.to_vec())
+        }
+        let (started, mut calls) = tokio::sync::mpsc::unbounded_channel();
+        let transport = Arc::new(Blocked {
+            started,
+            release: Semaphore::new(0),
+        });
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let client = Cached::with_options(cache, transport.clone(), Default::default()).unwrap();
+        let read = |client: Cached| async move {
+            client
+                .get_derived("https://a.org/doc", "text/plain", "same", same)
+                .await
+        };
+        let first = tokio::spawn(read(client.clone()));
+        let second = tokio::spawn(read(client.clone()));
+        calls.recv().await.unwrap();
+        // Both callers hold the one read: the map, the fetching caller and the
+        // one waiting on it.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while client
+                .inner
+                .reads
+                .lock()
+                .values()
+                .map(Arc::strong_count)
+                .ne([3])
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        transport.release.add_permits(1);
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+        assert_eq!(
+            calls.try_recv().ok(),
+            None,
+            "the overlapping caller shared one fetch"
+        );
+        assert!(client.inner.reads.lock().is_empty());
+
+        let cancelled = tokio::spawn(read(client.clone()));
+        calls.recv().await.unwrap();
+        cancelled.abort();
+        assert!(cancelled.await.unwrap_err().is_cancelled());
+        assert!(client.inner.reads.lock().is_empty());
     }
 }

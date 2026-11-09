@@ -103,47 +103,19 @@ pub fn sanitise(text: &str, links: Links<'_>) -> String {
     static DEFINITIONS: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(r"(?m)^[ \t]{0,3}\[([^\]\n]+)\]:").expect("reference definitions")
     });
-    static LIST_MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"^(?:[-+*]|[0-9]{1,9}[.)])\s+").expect("Markdown list marker")
-    });
     let references: BTreeSet<_> = DEFINITIONS
         .captures_iter(text)
         .map(|c| reference_label(&c[1]))
         .collect();
     let mut output = String::with_capacity(text.len());
     let mut offset = 0;
-    let mut fence = None;
+    let mut fences = Fences::default();
     while offset < text.len() {
         let rest = &text[offset..];
-        // Fences may use either character and any run of at least three. A
-        // shorter run inside a fence is content, not its closing delimiter.
         if offset == 0 || text.as_bytes()[offset - 1] == b'\n' {
             let end = rest.find('\n').map_or(rest.len(), |n| n + 1);
             let line = &rest[..end];
-            let mut trimmed = line.trim_start();
-            while let Some(quoted) = trimmed.strip_prefix('>') {
-                trimmed = quoted.trim_start();
-            }
-            let trimmed = LIST_MARKER
-                .find(trimmed)
-                .map_or(trimmed, |m| &trimmed[m.end()..]);
-            let ch = trimmed.as_bytes().first().copied().unwrap_or_default();
-            let count = trimmed.bytes().take_while(|b| *b == ch).count();
-            if matches!(ch, b'`' | b'~') && count >= 3 {
-                match fence {
-                    None => fence = Some((ch, count)),
-                    Some((kind, size))
-                        if kind == ch && count >= size && trimmed[count..].trim().is_empty() =>
-                    {
-                        fence = None
-                    }
-                    _ => {}
-                }
-                output.push_str(line);
-                offset += end;
-                continue;
-            }
-            if fence.is_some() {
+            if fences.advance(line) || fences.is_open() {
                 output.push_str(line);
                 offset += end;
                 continue;
@@ -379,22 +351,6 @@ fn without_backlink(url: &str) -> String {
     }
 }
 
-/// An opening or closing code fence: its character and length.
-fn fence(line: &str) -> Option<(char, usize, &str)> {
-    static LIST_MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"^(?:[-+*]|[0-9]{1,9}[.)])[ \t]+").expect("list marker")
-    });
-    // A fence may sit in a block quote or a list item, as in `sanitise`.
-    let mut line = line.trim_start_matches([' ', '\t']);
-    while let Some(quoted) = line.strip_prefix('>') {
-        line = quoted.trim_start_matches([' ', '\t']);
-    }
-    let line = LIST_MARKER.find(line).map_or(line, |m| &line[m.end()..]);
-    let ch = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
-    let count = line.chars().take_while(|c| *c == ch).count();
-    (count >= 3).then(|| (ch, count, &line[count..]))
-}
-
 /// An ATX heading's level, if the line is one.
 fn heading(line: &str) -> Option<usize> {
     let indent = line.len() - line.trim_start_matches(' ').len();
@@ -413,23 +369,161 @@ fn list_item(line: &str) -> bool {
     MARKER.is_match(line)
 }
 
+/// Which lines are code: the one place a document's fences are tracked, so
+/// every reader of release notes agrees on them. Fences may use either
+/// character and any run of at least three, and may sit in a block quote or
+/// a list item. As in CommonMark, a fence in a quote or list item ends with
+/// that container, and only a fence line in the same container closes it; a
+/// shorter run inside a fence is content, not its close.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Fences(Option<Open>);
+#[derive(Clone, Copy)]
+struct Open {
+    ch: char,
+    count: usize,
+    /// Block quotes enclosing the fence.
+    quotes: usize,
+    /// The column a list item's content starts at, for a fence opened in
+    /// one.
+    list: Option<usize>,
+}
+impl Fences {
+    pub(super) fn is_open(self) -> bool {
+        self.0.is_some()
+    }
+    /// Moves past `line`: true when it opens or closes a fence.
+    pub(super) fn advance(&mut self, line: &str) -> bool {
+        static LIST_MARKER: LazyLock<regex::Regex> = LazyLock::new(|| {
+            regex::Regex::new(r"^(?:[-+*]|[0-9]{1,9}[.)])[ \t]+").expect("list marker")
+        });
+        let line = line.trim_end_matches(['\n', '\r']);
+        let Some(open) = self.0 else {
+            let (quotes, rest) = unquote(line, usize::MAX);
+            let (width, bytes) = indent(rest);
+            let (list, rest) = match LIST_MARKER.find(&rest[bytes..]) {
+                // The content column counts the marker's padding in columns, a
+                // tab reaching the next tab stop, as GitHub does.
+                Some(marker) => (
+                    Some(column(width, marker.as_str())),
+                    &rest[bytes + marker.end()..],
+                ),
+                None => (None, rest),
+            };
+            let Some((ch, count, _)) = token(rest) else {
+                return false;
+            };
+            self.0 = Some(Open {
+                ch,
+                count,
+                quotes,
+                list,
+            });
+            return true;
+        };
+        let (quotes, rest) = unquote(line, open.quotes);
+        let ended = |fences: &mut Self| {
+            // The container ended, and the fence with it; the line is read
+            // afresh, so it may open a fence of its own.
+            fences.0 = None;
+            fences.advance(line)
+        };
+        if quotes < open.quotes {
+            return ended(self);
+        }
+        let rest = match open.list {
+            Some(column) => {
+                if indent(rest).0 < column && !rest.trim().is_empty() {
+                    return ended(self);
+                }
+                rest
+            }
+            None => rest,
+        };
+        match token(rest) {
+            Some((ch, count, tail))
+                if ch == open.ch && count >= open.count && tail.trim().is_empty() =>
+            {
+                self.0 = None;
+                true
+            }
+            _ => false,
+        }
+    }
+    /// The line that closes the open fence where it is: inside its quotes,
+    /// and indented to its list item's content.
+    fn closer(self) -> Option<String> {
+        self.0.map(|open| {
+            format!(
+                "{}{}{}",
+                "> ".repeat(open.quotes),
+                " ".repeat(open.list.unwrap_or(0)),
+                open.ch.to_string().repeat(open.count)
+            )
+        })
+    }
+    /// Whether `line` would open a fence where none is open.
+    fn opens(line: &str) -> bool {
+        Self::default().advance(line)
+    }
+}
+
+/// The column after `text` written from column `start`, a tab reaching the
+/// next multiple of four.
+fn column(start: usize, text: &str) -> usize {
+    text.chars().fold(start, |column, c| match c {
+        '\t' => column + 4 - column % 4,
+        _ => column + 1,
+    })
+}
+
+/// The width of `text`'s leading spaces and tabs, a tab reaching the next
+/// multiple of four as in CommonMark, and how many bytes they take.
+fn indent(text: &str) -> (usize, usize) {
+    let mut width = 0;
+    let mut bytes = 0;
+    for b in text.bytes() {
+        match b {
+            b' ' => width += 1,
+            b'\t' => width += 4 - width % 4,
+            _ => break,
+        }
+        bytes += 1;
+    }
+    (width, bytes)
+}
+
+/// Up to `depth` block-quote markers stripped from `line`: how many there
+/// were, and the rest.
+fn unquote(line: &str, depth: usize) -> (usize, &str) {
+    let mut rest = line;
+    let mut quotes = 0;
+    while quotes < depth {
+        let Some(inner) = rest.trim_start_matches([' ', '\t']).strip_prefix('>') else {
+            break;
+        };
+        rest = inner.strip_prefix(' ').unwrap_or(inner);
+        quotes += 1;
+    }
+    (quotes, rest)
+}
+
+/// A fence delimiter at the start of `text`: its character, its length and
+/// what follows it.
+fn token(text: &str) -> Option<(char, usize, &str)> {
+    let text = text.trim_start_matches([' ', '\t']);
+    let ch = text.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let count = text.chars().take_while(|c| *c == ch).count();
+    (count >= 3).then(|| (ch, count, &text[count..]))
+}
+
 /// Lines with the fence state in force at their start.
 fn lines_with_fences(text: &str) -> Vec<(usize, &str, bool)> {
-    let mut open = None::<(char, usize)>;
+    let mut fences = Fences::default();
     let mut lines = Vec::new();
     let mut offset = 0;
     for line in text.split_inclusive('\n') {
-        let in_fence = open.is_some();
-        lines.push((offset, line, in_fence));
-        match (open, fence(line.trim_end_matches('\n'))) {
-            (None, Some((ch, count, _))) => open = Some((ch, count)),
-            (Some((kind, size)), Some((ch, count, rest)))
-                if kind == ch && count >= size && rest.trim().is_empty() =>
-            {
-                open = None;
-            }
-            _ => {}
-        }
+        lines.push((offset, line, fences.is_open()));
+        fences.advance(line);
         offset += line.len();
     }
     lines
@@ -495,27 +589,18 @@ fn without_code_spans(line: &str) -> String {
 /// `<details>`, so a cut can't swallow what follows it.
 pub(super) fn close_open_blocks(text: &str) -> String {
     let mut output = text.trim_end().to_owned();
-    let mut open = None::<(char, usize)>;
+    let mut fences = Fences::default();
     let mut details = 0_i32;
     for line in output.lines() {
-        match (open, fence(line)) {
-            (None, Some((ch, count, _))) => open = Some((ch, count)),
-            (Some((kind, size)), Some((ch, count, rest)))
-                if kind == ch && count >= size && rest.trim().is_empty() =>
-            {
-                open = None;
-            }
-            (None, _) => {
-                let lower = without_code_spans(line).to_ascii_lowercase();
-                details += lower.matches("<details").count() as i32;
-                details -= lower.matches("</details>").count() as i32;
-            }
-            _ => {}
+        if !fences.advance(line) && !fences.is_open() {
+            let lower = without_code_spans(line).to_ascii_lowercase();
+            details += lower.matches("<details").count() as i32;
+            details -= lower.matches("</details>").count() as i32;
         }
     }
-    if let Some((ch, count)) = open {
+    if let Some(closer) = fences.closer() {
         output.push('\n');
-        output.push_str(&ch.to_string().repeat(count));
+        output.push_str(&closer);
     }
     for _ in 0..details.max(0) {
         output.push_str("\n</details>");
@@ -546,7 +631,7 @@ pub fn fit(text: &str, limit: usize) -> (String, bool) {
             && (previous_blank
                 || heading(line).is_some()
                 || list_item(line)
-                || fence(line).is_some());
+                || Fences::opens(line));
         if starts_block && !previous_heading {
             cut = *offset;
         }
