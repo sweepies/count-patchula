@@ -444,4 +444,96 @@ mod tests {
             markers::hidden_json(&marker, markers::TARGETS, markers::PAYLOAD).unwrap();
         assert_eq!(parsed[0].package, "evil--><!-- patchula:x");
     }
+
+    /// An update group that lands on the batch branch's name is refused
+    /// before the batch is built, and told to rename.
+    #[test]
+    fn a_plan_on_the_batch_branch_fails_the_run() {
+        use std::collections::BTreeMap;
+        let config = patchula_config::load_files(
+            "/repo/patchula.pkl",
+            BTreeMap::from([(
+                "/repo/patchula.pkl".into(),
+                "amends \"PatchulaConfig.pkl\"".into(),
+            )]),
+        )
+        .unwrap();
+        let batch = crate::branch_name(&config.prs.branch, "batch").unwrap();
+        let dep = Dependency {
+            manager: patchula_words::Manager::Npm,
+            file: "package.json".into(),
+            location: patchula_manager::Location {
+                start: 0,
+                end: 1,
+                line: 1,
+                column: 1,
+                pointer: String::new(),
+            },
+            form: patchula_manager::EditForm::Scalar(patchula_manager::Syntax::Json),
+            name: "shared".into(),
+            package: "shared".into(),
+            kind: patchula_words::DependencyKind::Production,
+            current: "1.0.0".into(),
+            resolved: Some("1.0.0".into()),
+            digest: None,
+            source: patchula_words::Source::Npm,
+            scheme: patchula_words::Scheme::Semver,
+            extract: None,
+            included_by: None,
+            registry: None,
+        };
+        let repository: Repository = serde_json::from_value(json!({
+            "repository": "o/r",
+            "status": "complete",
+            "defaultBranch": "main",
+            "commit": "a".repeat(40),
+            "packageFiles": [{
+                "path": "package.json",
+                "dependencies": [{
+                    "manager": "npm", "name": "shared", "package": "shared",
+                    "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
+                    "updates": [{"newValue": "1.2.0", "newVersion": "1.2.0", "newDigest": null,
+                        "updateType": "minor", "group": null}],
+                    "metadata": {"source": "npm", "kinds": [], "locations": []}
+                }]
+            }]
+        }))
+        .unwrap();
+        let text = "{\"shared\":\"1.0.0\"}";
+        let snapshot = Snapshot {
+            paths: BTreeSet::from(["package.json".to_string()]),
+            files: BTreeMap::from([(
+                "package.json".to_string(),
+                crate::Blob {
+                    sha: crate::blob_sha(text),
+                    mode: "100644".into(),
+                    content: text.into(),
+                },
+            )]),
+            public_only: Default::default(),
+        };
+        let mut plans = vec![group_plan(&batch, "package.json")];
+        let prs = vec![pr(
+            1,
+            "patchula/shared-1.x",
+            update_body(&"1".repeat(64), &[change("shared", "1.2.0")], true),
+        )];
+        let error = apply(
+            &mut plans,
+            &repository,
+            &config,
+            &[dep],
+            &snapshot,
+            &prs,
+            "bot",
+            true,
+            None,
+            chrono::Utc::now(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            format!("{batch} is reserved for the batch PR; rename the update group")
+        );
+    }
 }

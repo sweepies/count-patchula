@@ -77,6 +77,7 @@ struct State {
     pr_next_page: Option<String>,
     release_note_body: Option<String>,
     release_queries: Vec<Value>,
+    pull_error: BTreeSet<u64>,
 }
 struct Fake(Mutex<State>);
 fn response(status: u16, body: Value) -> Response {
@@ -348,6 +349,9 @@ impl Transport for Fake {
             reply
         } else if let Some(n) = path.strip_prefix("/repos/demo/app/pulls/") {
             let n = n.parse::<u64>().unwrap();
+            if state.pull_error.contains(&n) {
+                return Box::pin(async move { Ok(response(500, json!({}))) });
+            }
             if state.pr_lag_reads > 0 {
                 state.pr_lag_reads -= 1;
             } else if let Some(head) = state.pending_heads.remove(&n) {
@@ -4086,4 +4090,451 @@ fn only_newly_ticked_controls_count_as_edits() {
         line("x", recheck),
         line("x", recheck)
     ))));
+}
+
+/// A plan whose lockfiles were never generated fails before a single GitHub
+/// request — publication requires them ready.
+#[tokio::test(start_paused = true)]
+async fn ungenerated_lockfiles_fail_before_any_github_request() {
+    let (mut p, snapshot) = make_plan("22.0.0");
+    p.lock_jobs = vec![patchula_update::lockfiles::Job {
+        ecosystem: patchula_update::lockfiles::Ecosystem::Node,
+        directory: String::new(),
+        scope: patchula_update::lockfiles::Scope::Directory,
+        exact_version: false,
+    }];
+    p.lockfiles_ready = false;
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    patchula_update::apply_all(
+        &github,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+        "main",
+        "patchula[bot]",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert_eq!(
+        p.action().reason.as_deref(),
+        Some("lockfiles must be generated successfully before publication")
+    );
+    assert!(server.0.lock().unwrap().requests.is_empty());
+}
+
+/// A branch tip without the Count's base marker, or with one that cannot
+/// name a commit, is left untouched.
+#[tokio::test(start_paused = true)]
+async fn unmarked_and_badly_marked_branch_tips_are_protected() {
+    for (message, expected) in [
+        (json!("human work"), "unmarked branch history"),
+        (
+            json!(format!(
+                "subject\n\nPatchula: v1\nPatchula-Base: {}",
+                "a".repeat(65)
+            )),
+            "invalid recorded branch base",
+        ),
+        (
+            json!("subject\n\nPatchula: v1\nPatchula-Base: not-a-sha!"),
+            "invalid recorded branch base",
+        ),
+    ] {
+        let (mut first, snapshot) = make_plan("22.0.0");
+        let server = fake(&snapshot);
+        let github = client(server.clone()).await;
+        patchula_update::apply_all(
+            &github,
+            std::slice::from_mut(&mut first),
+            &snapshot,
+            "main",
+            "patchula[bot]",
+            Rebase::Behind,
+            false,
+        )
+        .await;
+        assert_eq!(first.action().status, BranchStatus::Created);
+        server
+            .0
+            .lock()
+            .unwrap()
+            .commits
+            .get_mut(first.action().commit.as_ref().unwrap())
+            .unwrap()["message"] = message;
+        let count = server.0.lock().unwrap().writes.len();
+        let (mut next, _) = make_plan("22.1.0");
+        patchula_update::apply_all(
+            &github,
+            std::slice::from_mut(&mut next),
+            &snapshot,
+            "main",
+            "patchula[bot]",
+            Rebase::Behind,
+            false,
+        )
+        .await;
+        assert_eq!(
+            next.action().status,
+            BranchStatus::Protected,
+            "{expected}: {:?}",
+            next.action()
+        );
+        assert!(
+            next.action()
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains(expected)),
+            "{expected}: {:?}",
+            next.action().reason
+        );
+        assert_eq!(server.0.lock().unwrap().writes.len(), count);
+    }
+}
+
+/// The shared tail turns lifecycle failures into warnings and goes on:
+/// a batched closure and a checkbox acknowledgement that fail are reported,
+/// and a good recheck is still unticked.
+#[tokio::test(start_paused = true)]
+async fn settle_turns_lifecycle_failures_into_report_warnings() {
+    let (mut config, repo) = pr_config();
+    config.prs.dashboard = false;
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let key = "f".repeat(64);
+    let owned = |number: u64, branch: &str, body: &str| {
+        json!({"number":number,"state":"open","body":body,
+            "user":{"login":"patchula[bot]"},
+            "head":{"ref":branch,"sha":"base","repo":{"full_name":"demo/app"}},
+            "base":{"ref":"main","repo":{"full_name":"demo/app"}},
+            "labels":[],"auto_merge":null,"merged_at":null})
+    };
+    let marker = |update: &str| {
+        format!(
+            "<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{update}\"}} -->",
+            "a".repeat(64)
+        )
+    };
+    let server = fake(&snapshot);
+    {
+        let mut s = server.0.lock().unwrap();
+        // A batched PR the batch now carries, which the run cannot read.
+        s.prs.insert(
+            7,
+            owned(
+                7,
+                "patchula/left-pad-1.x",
+                &format!("- [x] Add to the batch PR. <!-- patchula-batch-add -->\n- [x] re-check <!-- patchula-recheck -->\n{}", marker(&key)),
+            ),
+        );
+        // A PR whose re-check box is ticked and can be acknowledged.
+        s.prs.insert(
+            8,
+            owned(
+                8,
+                "patchula/other-1.x",
+                &format!(
+                    "- [x] re-check <!-- patchula-recheck -->\n{}",
+                    marker(&"b".repeat(64))
+                ),
+            ),
+        );
+        s.pull_error.insert(7);
+    }
+    let github = client(server.clone()).await;
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    p.batch = Some(vec![patchula_update::batch::Item {
+        origin: key,
+        number: Some(7),
+        title: "batched".into(),
+        targets: p.changes.clone(),
+    }]);
+    let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut p),
+        &config,
+        chrono::Utc::now(),
+        patchula_words::Recheck::NextRun,
+        &patchula_update::dashboard::Controls {
+            batched: BTreeSet::from(["f".repeat(64)]),
+            ..Default::default()
+        },
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    patchula_update::apply_all(
+        &github,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+        "main",
+        "patchula[bot]",
+        Rebase::Behind,
+        false,
+    )
+    .await;
+    publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
+    let inventory = patchula_update::Inventory::default();
+    let settlement = patchula_update::settle(
+        &github,
+        &cache,
+        &repo,
+        &config,
+        &inventory,
+        std::slice::from_mut(&mut p),
+        Some(&mut lifecycle),
+        patchula_words::Recheck::NextRun,
+        None,
+        chrono::Utc::now(),
+    )
+    .await;
+    assert!(
+        settlement
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("batched PR closure: ")),
+        "{:?}",
+        settlement.warnings
+    );
+    assert!(
+        settlement
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("PR checkbox acknowledgement: ")),
+        "{:?}",
+        settlement.warnings
+    );
+    // The reachable re-check was still unticked.
+    let body = server.0.lock().unwrap().prs[&8]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(body.contains("- [ ]"), "{body}");
+    assert!(!body.contains("- [x]"), "{body}");
+}
+
+/// A maintenance plan's PR lists the files it refreshed.
+#[tokio::test(start_paused = true)]
+async fn a_maintenance_pr_lists_the_files_it_refreshed() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    p.maintenance = true;
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let actions = pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    assert_eq!(
+        actions[0].status,
+        patchula_report::PullRequestStatus::Created
+    );
+    let body = server.0.lock().unwrap().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(body.contains("Scheduled"), "{body}");
+    assert!(body.contains("mise.toml"), "{body}");
+}
+
+/// After eight release-note sections the PR body says the source
+/// repositories have the rest.
+#[tokio::test(start_paused = true)]
+async fn release_notes_stop_after_eight_with_a_pointer() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let base = p.changes[0].clone();
+    p.changes = (0..9)
+        .map(|i| patchula_update::Change {
+            version: Some(format!("22.0.{i}")),
+            value: Some(format!("22.0.{i}")),
+            ..base.clone()
+        })
+        .collect();
+    for change in &mut p.changes {
+        change.release_notes = true;
+    }
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    let body = server.0.lock().unwrap().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        body.contains("Out of room for more release notes"),
+        "{body}"
+    );
+}
+
+/// An image rebuild that fixes advisories shows the fixed rows without the
+/// "nothing to fix" note.
+#[tokio::test(start_paused = true)]
+async fn a_rebuild_that_fixes_advisories_skips_the_empty_note() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    p.changes[0].image = Some(patchula_report::ImageCheck {
+        state: patchula_report::ImageState::Checked,
+        fixed: vec![patchula_report::ImageAdvisory {
+            id: "GHSA-1".into(),
+            package: "openssl".into(),
+            old: "1.0".into(),
+            new: Some("1.1".into()),
+            platforms: vec!["linux".into()],
+        }],
+        ..Default::default()
+    });
+    p.changes[0].advisories = vec![patchula_report::Advisory {
+        id: "GHSA-1".into(),
+        aliases: vec![],
+        severity: None,
+        summary: None,
+        url: "https://a.example".into(),
+        fixed_in: None,
+    }];
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    let body = server.0.lock().unwrap().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !body.contains("OSV.dev knows of no vulnerability"),
+        "{body}"
+    );
+    assert!(body.contains("GHSA-1"), "{body}");
+}
+
+/// When the controls and ownership marker would overflow the body budget,
+/// the controls give way and the ownership marker stays.
+#[tokio::test(start_paused = true)]
+async fn an_overfull_tail_drops_the_controls_but_keeps_ownership() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    // A TARGETS marker just under its own cap, and release-age permits that
+    // together push the tail past the body budget.
+    let base = p.changes[0].clone();
+    p.changes.clear();
+    while serde_json::to_string(&p.changes).unwrap().len() < 11_200 {
+        p.changes.push(patchula_update::Change {
+            package: format!("package-number-{}", p.changes.len()),
+            ..base.clone()
+        });
+    }
+    let permits: BTreeSet<String> = (0..340).map(|i| format!("{i:064x}")).collect();
+    let branch = p.action().branch.clone();
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut p),
+        &config,
+        chrono::Utc::now(),
+        patchula_words::Recheck::NextRun,
+        &patchula_update::dashboard::Controls {
+            branch_permits: BTreeMap::from([(branch, permits)]),
+            ..Default::default()
+        },
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    patchula_update::apply_all(
+        &github,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+        "main",
+        "patchula[bot]",
+        config.prs.rebase,
+        false,
+    )
+    .await;
+    publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
+    let body = server.0.lock().unwrap().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(!body.contains("Add to the batch PR"), "{body}");
+    assert!(body.contains("<!-- patchula:"), "{body}");
+}
+
+/// A merge the Count never recorded is not presented as a merge outcome on
+/// the dashboard.
+#[test]
+fn dashboard_history_hides_merges_the_count_did_not_record() {
+    let merged = |number: u64, note: Option<&str>| {
+        let mut pr = json!({"number":number,"state":"closed","merged_at":"2026-01-01T00:00:00Z"});
+        if let Some(note) = note {
+            pr["patchula_merge"] = json!(note);
+        }
+        pr
+    };
+    let prs = vec![
+        merged(1, None),
+        merged(2, Some("native auto-merge enabled")),
+    ];
+    let history = patchula_update::automerge::dashboard_history(
+        &patchula_update::Inventory::default(),
+        prs,
+        &[],
+    );
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["number"], 2);
+}
+
+/// An owned, signed ref outside the branch prefix whose tip carries the
+/// Count's mark still counts as his obsolete work, and the receipts fast
+/// path closes.
+#[tokio::test(start_paused = true)]
+async fn a_marked_ref_outside_the_prefix_counts_as_obsolete_work() {
+    let (config, repo) = pr_config();
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    // No plans: the ref scan still marks his marked, signed, own-authored
+    // branch outside the prefix obsolete, which defeats the fast path.
+    let inventory = patchula_update::Inventory {
+        actor: "patchula[bot]".into(),
+        refs: vec![json!({
+            "name": "renovate/other",
+            "target": {
+                "author": {"user": {"login": "patchula[bot]"}},
+                "committer": {"user": {"login": "web-flow"}},
+                "signature": {"isValid": true},
+                "message": "subject\n\nPatchula: v1"
+            }
+        })],
+        ..Default::default()
+    };
+    let outcome = patchula_update::restore_inventory(
+        &cache,
+        &repo,
+        &config,
+        &mut [],
+        Default::default(),
+        None,
+        &inventory,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, patchula_update::RestoreOutcome::Partial);
 }
