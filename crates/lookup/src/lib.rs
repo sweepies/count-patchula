@@ -1464,3 +1464,58 @@ impl Evaluator {
             .map(|(_, v)| v.clone()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `extractor` caches the compiled pattern per distinct `extract` field:
+    /// two lookups with the same pattern compile it once.
+    #[test]
+    fn an_extract_pattern_is_compiled_once_across_lookups() {
+        let config = patchula_config::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/benchmark-public.pkl"),
+        )
+        .unwrap();
+        let eval = Evaluator::new(&config).unwrap();
+        let dep = |extract: &str| patchula_manager::Dependency {
+            manager: Manager::Npm,
+            file: "package.json".into(),
+            location: patchula_manager::Location {
+                start: 0,
+                end: 1,
+                line: 1,
+                column: 1,
+                pointer: String::new(),
+            },
+            form: patchula_manager::EditForm::Scalar(patchula_manager::Syntax::Json),
+            name: "lib".into(),
+            package: "lib".into(),
+            kind: DependencyKind::Production,
+            current: "1.0.0".into(),
+            resolved: Some("1.0.0".into()),
+            digest: None,
+            source: Source::Npm,
+            scheme: patchula_words::Scheme::Semver,
+            extract: Some(extract.into()),
+            included_by: None,
+            registry: None,
+        };
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        for _ in 0..2 {
+            assert!(
+                eval.lookup_evidence(&dep("^v(?P<version>.+)$"), None, now)
+                    .is_ok()
+            );
+        }
+        assert_eq!(eval.extractors.lock().unwrap().len(), 1);
+        assert!(
+            eval.lookup_evidence(&dep("^w(?P<version>.+)$"), None, now)
+                .is_ok()
+        );
+        assert_eq!(eval.extractors.lock().unwrap().len(), 2);
+    }
+}

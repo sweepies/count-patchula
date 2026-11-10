@@ -1821,17 +1821,6 @@ fn bracketed_intervals_start_at_their_first_bound_and_widen() {
 }
 
 #[test]
-fn an_extract_pattern_is_compiled_once_across_lookups() {
-    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
-    let mut dep = dependency("lib");
-    dep.extract = Some("^v(?P<version>.+)$".into());
-    let now = instant("2026-10-12T00:00:00Z");
-    for _ in 0..2 {
-        assert!(eval.lookup_evidence(&dep, None, now).is_ok());
-    }
-}
-
-#[test]
 fn floating_latest_skips_yanked_unnormalizable_and_unparsable_releases() {
     let eval = Evaluator::new(&config("benchmark-public")).unwrap();
     let mut dep = dependency("lib");

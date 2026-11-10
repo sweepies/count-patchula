@@ -461,9 +461,18 @@ mod tests {
 
     #[test]
     fn rank_orders_competing_kinds_widest_first() {
-        let ranks: Vec<u8> = Update::RANKED.iter().map(|k| k.rank()).collect();
-        assert_eq!(ranks, [0, 1, 2, 3, 4]);
-        assert!(Update::Major.rank() < Update::Digest.rank());
-        assert!(Update::Pin.rank() < Update::Digest.rank());
+        assert_eq!(
+            Update::RANKED,
+            [
+                Update::Major,
+                Update::Minor,
+                Update::Patch,
+                Update::Pin,
+                Update::Digest
+            ]
+        );
+        for (i, kind) in Update::RANKED.iter().enumerate() {
+            assert_eq!(kind.rank() as usize, i, "{kind:?}");
+        }
     }
 }

@@ -1972,8 +1972,8 @@ mod tests {
         }
         let derived = Derived::new("same", derive_same);
         let cloned = cloned(&derived);
-        assert_eq!(cloned.name, derived.name);
-        assert_eq!(cloned.representation(), derived.representation());
+        assert_eq!(cloned.name, "same");
+        assert_eq!(cloned.representation(), format!("same+{BUILD}"));
     }
 
     struct Always {
@@ -2094,15 +2094,28 @@ mod tests {
             .unwrap();
         assert_eq!(response.status, 429);
         assert_eq!(transport.calls.load(Ordering::Relaxed), 1);
+        // An ordinary throttle cools the host only briefly: the next pull
+        // waits it out and is sent. The pull limit would Err at once.
+        let response = client
+            .registry_get(
+                "https://registry-1.docker.io/v2/library/image/manifests/latest",
+                "text/plain",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, 429);
+        assert_eq!(transport.calls.load(Ordering::Relaxed), 2);
     }
 
     /// A nonzero pull counter and a clean body leave only the missing
     /// `Retry-After` to mark the 429 as the pull limit being spent.
     #[tokio::test]
     async fn a_remaining_pull_counter_without_retry_after_is_the_pull_limit() {
-        struct Remaining;
+        struct Remaining(std::sync::atomic::AtomicUsize);
         impl Transport for Remaining {
             fn send(&self, _: Request) -> crate::Exchange<'_> {
+                self.0.fetch_add(1, Ordering::Relaxed);
                 Box::pin(async {
                     Ok(Response {
                         status: StatusCode::TOO_MANY_REQUESTS,
@@ -2116,10 +2129,11 @@ mod tests {
                 })
             }
         }
+        let transport = Arc::new(Remaining(Default::default()));
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let client = Cached::with_options(
             cache,
-            Arc::new(Remaining),
+            transport.clone(),
             Options {
                 rules: test_rules(3600, 3600),
                 ..Default::default()
@@ -2135,5 +2149,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status, 429);
+        // The pull limit is spent: no retry spent part of the budget, and the
+        // next pull fails fast inside the six-hour window.
+        assert_eq!(transport.0.load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            client
+                .registry_get(
+                    "https://registry-1.docker.io/v2/library/image/manifests/latest",
+                    "text/plain",
+                    None,
+                )
+                .await,
+            Err(Error::Status(429))
+        ));
+        assert_eq!(transport.0.load(Ordering::Relaxed), 1);
     }
 }

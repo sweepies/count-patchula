@@ -1795,5 +1795,9 @@ async fn serve_rejects_settings_the_engine_rules_refuse() {
         shutdown_timeout: Duration::from_secs(1),
     })
     .await;
-    assert!(result.is_err());
+    let error = format!("{:?}", result.unwrap_err());
+    assert!(
+        error.contains("hostConcurrency"),
+        "the settings rule's field must name the error: {error}"
+    );
 }

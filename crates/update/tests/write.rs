@@ -4373,6 +4373,11 @@ async fn release_notes_stop_after_eight_with_a_pointer() {
         .as_str()
         .unwrap()
         .to_owned();
+    assert_eq!(
+        body.matches("### node").count(),
+        8,
+        "nine releases must render exactly eight sections: {body}"
+    );
     assert!(
         body.contains("Out of room for more release notes"),
         "{body}"

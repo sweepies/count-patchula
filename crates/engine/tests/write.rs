@@ -51,7 +51,8 @@ struct Fake {
     extra_tree: Mutex<Vec<Value>>,
     /// The `/branches` listing cleanup inspects.
     branches: Mutex<Vec<Value>>,
-    /// The ref-update GraphQL mutation fails with this message.
+    /// A delete-shaped ref-update GraphQL mutation fails with this message;
+    /// branch writes still succeed.
     ref_update_error: Mutex<Option<String>>,
     /// The write inventory GraphQL query fails.
     inventory_error: std::sync::atomic::AtomicBool,
@@ -312,7 +313,7 @@ impl Transport for Fake {
                 self.writes.lock().unwrap().push((path.into(), body));
                 (
                     200,
-                    if let Some(error) = self.ref_update_error.lock().unwrap().clone() {
+                    if deleting && let Some(error) = self.ref_update_error.lock().unwrap().clone() {
                         json!({"errors":[{"message":error}]})
                     } else if deleting
                         && self
@@ -2532,6 +2533,22 @@ async fn a_failed_branch_deletion_fails_the_repository() {
         .unwrap();
     let repo = &report.repositories[0];
     assert_eq!(repo.status, Status::Error, "{repo:?}");
+    assert!(
+        fake.writes.lock().unwrap().iter().any(|(_, body)| {
+            body["variables"]["input"]["refUpdates"]
+                .as_array()
+                .is_some_and(|refs| {
+                    refs.iter()
+                        .any(|r| r["afterOid"] == "0000000000000000000000000000000000000000")
+                })
+        }),
+        "a deletion refUpdate must have been attempted: {:?}",
+        fake.writes.lock().unwrap()
+    );
+    assert!(
+        repo.reason.as_deref().unwrap().contains("update refused"),
+        "{repo:?}"
+    );
 }
 
 /// A dashboard write failure fails the repository with the step's reason,
@@ -2670,10 +2687,11 @@ async fn a_recheck_click_revalidates_advisories() {
     assert_eq!(osv_requests(), 1, "the retry must bypass the cached answer");
 }
 
-/// A PR recheck box ticked before the run's first saved controls retries the
-/// whole repository: with nothing saved, every dependency is revalidated.
+/// A PR recheck box ticked against saved controls retries the branch it
+/// names: on a warm cache an unticked run writes nothing, so the commit a
+/// ticked run writes can only be the tick driving the revalidation.
 #[tokio::test(start_paused = true)]
-async fn a_ticked_pr_without_saved_controls_retries_everything() {
+async fn a_ticked_pr_retries_the_branch_it_names() {
     let fake = Arc::new(Fake::new(false));
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
@@ -2682,47 +2700,36 @@ async fn a_ticked_pr_without_saved_controls_retries_everything() {
     let config = checkbox_config();
     let now = chrono::Utc::now();
     checkbox_run(&engine, &config, now).await;
-    let body = fake.prs.lock().unwrap()[0]["body"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    // Replay the same GitHub state against a cache that never saw a run.
-    let fresh = Arc::new(Fake::new(false));
-    fresh.prs.lock().unwrap().push({
-        let mut pr = fake.prs.lock().unwrap()[0].clone();
-        pr["body"] = json!(body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check"));
-        pr
-    });
-    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    let engine = Engine::with_transport("offline-installation", cache, 4, fresh.clone())
-        .unwrap()
-        .with_versions_host(false);
-    let report = engine
-        .run_at(
-            Options {
-                repositories: vec!["demo/sandbox".into()],
-                config: Some(config),
-                ..Default::default()
-            },
-            false,
-            false,
-            now,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        report.repositories[0].status,
-        Status::Complete,
-        "{report:?}"
-    );
+    fake.writes.lock().unwrap().clear();
+    checkbox_run(&engine, &config, now + chrono::Duration::minutes(1)).await;
     assert!(
-        fresh
+        !fake
             .writes
             .lock()
             .unwrap()
             .iter()
             .any(|(p, _)| p.ends_with("/git/commits")),
-        "the retry must rewrite the branch"
+        "an unticked run on a warm cache writes nothing: {:?}",
+        fake.writes.lock().unwrap()
+    );
+    let body = fake.prs.lock().unwrap()[0]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        body.contains("- [ ] Tick to re-check"),
+        "the re-check marker drifted: {body}"
+    );
+    fake.prs.lock().unwrap()[0]["body"] =
+        json!(body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check"));
+    checkbox_run(&engine, &config, now + chrono::Duration::minutes(2)).await;
+    assert!(
+        fake.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(p, _)| p.ends_with("/git/commits")),
+        "the tick must rewrite the branch"
     );
 }
 
