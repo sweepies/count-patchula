@@ -269,6 +269,27 @@ required by package `jsonwebtoken v10.4.0`\n\
     }
 
     #[test]
+    fn an_exit_with_a_multiline_status_falls_back_to_the_display_reason() {
+        let failure = tool_failure(
+            "lockfile generation failed: cargo",
+            &exited("exit status: 1\nwith detail", "out"),
+        );
+        assert!(failure.summary.contains("exit status"), "{failure:?}");
+        assert!(failure.detail.is_some());
+        let timed_out = tool_failure(
+            "lockfile generation failed: cargo",
+            &patchula_process::Failure::TimedOut {
+                limit: std::time::Duration::from_secs(1),
+            },
+        );
+        assert!(
+            timed_out
+                .summary
+                .contains("lockfile generation failed: cargo")
+        );
+    }
+
+    #[test]
     fn a_short_one_line_reason_stays_as_it_is() {
         assert_eq!(
             failure("lockfile generation failed: mise lock did not resolve node to 26.13.0"),
