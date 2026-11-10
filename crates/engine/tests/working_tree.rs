@@ -323,3 +323,187 @@ async fn a_selected_non_utf8_file_refuses_the_read() {
     };
     assert_eq!(error.to_string(), "selected file is not UTF-8");
 }
+
+/// An executable file keeps the mode `git add` would record for it, so a
+/// written branch carries the same mode.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_executable_file_is_listed_with_gits_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    write(root, "package.json", MANIFEST);
+    write(root, "app/package.json", MANIFEST);
+    std::fs::set_permissions(
+        root.join("app/package.json"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
+    let view = local_view(root, &scanner, &config).await.unwrap();
+    assert_eq!(
+        view.blobs.get("app/package.json").map(|blob| &blob.mode),
+        Some(&"100755".to_owned())
+    );
+    assert_eq!(
+        view.blobs.get("package.json").map(|blob| &blob.mode),
+        Some(&"100644".to_owned())
+    );
+}
+
+/// A repository whose index Git cannot read fails the listing with Git's
+/// error rather than falling back to a silent walk.
+#[tokio::test]
+async fn a_corrupt_index_fails_the_git_listing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    write(root, "package.json", MANIFEST);
+    git(root, &["add", "."]);
+    std::fs::write(root.join(".git/index"), b"not-an-index").unwrap();
+    let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
+    let Err(error) = local_view(root, &scanner, &config).await else {
+        panic!("the view succeeded")
+    };
+    assert!(
+        error.to_string().starts_with("git ls-files failed:"),
+        "{error}"
+    );
+}
+
+/// A tracked path that is not UTF-8 fails the Git listing rather than being
+/// dropped silently.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_non_utf8_tracked_name_fails_the_listing() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    write(root, "package.json", MANIFEST);
+    std::fs::write(
+        root.join(std::ffi::OsStr::from_bytes(b"bad\xffname")),
+        MANIFEST,
+    )
+    .unwrap();
+    git(root, &["add", "-A"]);
+    let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
+    let Err(error) = local_view(root, &scanner, &config).await else {
+        panic!("the view succeeded")
+    };
+    assert!(
+        error.to_string().contains("repository path is not UTF-8"),
+        "{error}"
+    );
+}
+
+/// The same non-UTF-8 name outside a work tree fails the walker's listing.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_non_utf8_name_fails_the_plain_walk() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, "package.json", MANIFEST);
+    std::fs::write(
+        root.join(std::ffi::OsStr::from_bytes(b"bad\xffname")),
+        MANIFEST,
+    )
+    .unwrap();
+    let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
+    let Err(error) = local_view(root, &scanner, &config).await else {
+        panic!("the view succeeded")
+    };
+    assert!(
+        error.to_string().contains("repository path is not UTF-8"),
+        "{error}"
+    );
+}
+
+/// A local directory without `patchula.pkl` is skipped with the opt-in
+/// reason, not errored: the Count visits only repositories that invite him.
+#[tokio::test]
+async fn a_local_directory_without_config_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "package.json", MANIFEST);
+    let cache = patchula_cache::Cache::open(":memory:", Default::default())
+        .await
+        .unwrap();
+    let engine = patchula_engine::Engine::with_transport(
+        "offline-token",
+        cache,
+        4,
+        std::sync::Arc::new(NoTransport),
+    )
+    .unwrap();
+    let report = engine
+        .lookup_at(
+            patchula_engine::Options {
+                local: Some(dir.path().to_owned()),
+                ..Default::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Skipped, "{repo:?}");
+    assert!(
+        repo.reason.as_deref().unwrap().contains("no patchula.pkl"),
+        "{repo:?}"
+    );
+}
+
+/// A local checkout that commits registry credentials is refused: its
+/// lockfile tools would fetch what they buy into the shared public cache
+/// partition.
+#[tokio::test]
+async fn a_local_checkout_that_commits_credentials_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "patchula.pkl",
+        "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\n",
+    );
+    write(dir.path(), "package.json", MANIFEST);
+    write(dir.path(), ".npmrc", "//npm.acme.test/:_authToken=t0ken\n");
+    let cache = patchula_cache::Cache::open(":memory:", Default::default())
+        .await
+        .unwrap();
+    let engine = patchula_engine::Engine::with_transport(
+        "offline-token",
+        cache,
+        4,
+        std::sync::Arc::new(NoTransport),
+    )
+    .unwrap();
+    let report = engine
+        .lookup_at(
+            patchula_engine::Options {
+                local: Some(dir.path().to_owned()),
+                ..Default::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Error, "{repo:?}");
+    assert!(
+        repo.reason
+            .as_deref()
+            .unwrap()
+            .contains(".npmrc holds a credential in repository config"),
+        "{repo:?}"
+    );
+}
+
+/// A local read needs no transport: reaching one would be a bug.
+struct NoTransport;
+impl patchula_http::Transport for NoTransport {
+    fn send(&self, _: reqwest::Request) -> patchula_http::Exchange<'_> {
+        panic!("a local lookup must not reach the network")
+    }
+}

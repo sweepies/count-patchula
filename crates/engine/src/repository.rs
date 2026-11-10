@@ -503,4 +503,160 @@ mod tests {
             assert!(!view.blobs.contains_key("src/main.rs"));
         }
     }
+
+    /// A selected file the source cannot read refuses the repository: it is
+    /// failed, not dropped, so its dependencies are not silently absent.
+    #[tokio::test]
+    async fn a_primary_read_failure_refuses_the_view() {
+        let config = config("amends \"PatchulaConfig.pkl\"\n");
+        let scanner = Scanner::new(&config).unwrap();
+        let mut source = Fixed(BTreeMap::new());
+        let listing = Listing {
+            entries: vec![entry("patchula.pkl"), entry("package.json")],
+            hidden: Vec::new(),
+        };
+        let Err(error) = view(&mut source, listing, &scanner, &config).await else {
+            panic!("the view succeeded")
+        };
+        assert_eq!(
+            error.to_string(),
+            "cannot read package.json: no package.json"
+        );
+    }
+
+    /// A registry-settings file the source cannot read stays unreadable
+    /// rather than failing the repository: its packages' lookups fail later
+    /// instead of reaching the public registry. The same holds when its
+    /// bytes are not text.
+    #[tokio::test]
+    async fn an_unreadable_or_binary_settings_file_is_unreadable_not_refused() {
+        let config = config("amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\n");
+        let scanner = Scanner::new(&config).unwrap();
+        // A read error and non-UTF-8 bytes land the same way.
+        for content in [None, Some(b"registry=\xff".to_vec())] {
+            let mut map = BTreeMap::new();
+            map.insert(
+                "package.json".to_owned(),
+                b"{\"dependencies\":{\"left-pad\":\"1.0.0\"}}".to_vec(),
+            );
+            if let Some(bytes) = &content {
+                map.insert(".npmrc".into(), bytes.clone());
+            }
+            let mut source = Fixed(map);
+            let listing = Listing {
+                entries: vec![entry("package.json"), entry(".npmrc")],
+                hidden: Vec::new(),
+            };
+            let view = view(&mut source, listing, &scanner, &config).await.unwrap();
+            assert_eq!(
+                view.files.get(".npmrc"),
+                Some(&Text::Unread(Unread::Failed)),
+                "{content:?}"
+            );
+        }
+    }
+
+    /// A path the include chain names that the listing only saw as hidden —
+    /// below a symlinked directory — is unreadable rather than absent, so its
+    /// lookups fail saying why.
+    #[tokio::test]
+    async fn a_named_path_without_a_tree_entry_is_unreadable() {
+        let config = config("amends \"PatchulaConfig.pkl\"\n");
+        let scanner = Scanner::new(&config).unwrap();
+        let mut map = BTreeMap::new();
+        map.insert(
+            "settings.gradle.kts".to_owned(),
+            b"includeBuild(\"tools/logic\")\n".to_vec(),
+        );
+        let mut source = Fixed(map);
+        let listing = Listing {
+            entries: vec![entry("settings.gradle.kts")],
+            hidden: vec![Hidden {
+                path: "tools/logic/src/main/kotlin/Repos.kt".into(),
+                resolves: false,
+            }],
+        };
+        let view = view(&mut source, listing, &scanner, &config).await.unwrap();
+        assert_eq!(
+            view.files.get("tools/logic/src/main/kotlin/Repos.kt"),
+            Some(&Text::Unread(Unread::Failed)),
+            "{:?}",
+            view.files
+        );
+    }
+
+    /// When the include chain still names files after the round limit, they
+    /// are marked too deep and warned about, so their lookups say why.
+    #[tokio::test]
+    async fn a_chain_past_the_round_limit_is_marked_too_deep() {
+        let config = config("amends \"PatchulaConfig.pkl\"\n");
+        let scanner = Scanner::new(&config).unwrap();
+        let mut map = BTreeMap::new();
+        let mut entries = Vec::new();
+        // An `apply from:` chain of Groovy scripts longer than MORE_ROUNDS:
+        // .groovy is not selected outright, so each script names the next
+        // only once read, and the last rounds' names are never read.
+        let depth = MORE_ROUNDS + 2;
+        map.insert(
+            "settings.gradle.kts".into(),
+            b"apply from: \"a1.groovy\"\n".to_vec(),
+        );
+        entries.push(entry("settings.gradle.kts"));
+        for i in 1..=depth {
+            let path = format!("a{i}.groovy");
+            let next = format!("apply from: \"a{}.groovy\"\n", i + 1);
+            map.insert(path.clone(), next.into_bytes());
+            entries.push(entry(&path));
+        }
+        let mut source = Fixed(map);
+        let listing = Listing {
+            entries,
+            hidden: Vec::new(),
+        };
+        let view = view(&mut source, listing, &scanner, &config).await.unwrap();
+        let deep: Vec<_> = view
+            .files
+            .iter()
+            .filter(|(_, text)| matches!(text, Text::Unread(Unread::TooDeep)))
+            .map(|(path, _)| path.clone())
+            .collect();
+        assert!(!deep.is_empty(), "{:?}", view.files);
+        for path in &deep {
+            assert!(
+                view.warnings
+                    .iter()
+                    .any(|w| w.contains(path) && w.contains("include chain")),
+                "{path}: {:?}",
+                view.warnings
+            );
+        }
+    }
+
+    /// More YAML manifests than the delivery scan takes leaves delivery
+    /// unknown: a warning, and no manifest read attempted.
+    #[tokio::test]
+    async fn more_yaml_than_the_manifest_limit_leaves_delivery_unknown() {
+        let config = config(
+            "amends \"PatchulaConfig.pkl\"\nrules = new Listing {}\nmanagers = new Listing { \"bundler\" }\nprs { batchMerge = true }\n",
+        );
+        let scanner = Scanner::new(&config).unwrap();
+        let entries: Vec<_> = (0..=tooling::MANIFEST_LIMIT)
+            .map(|i| entry(&format!("deploy/{i}.yaml")))
+            .collect();
+        let mut source = Fixed(BTreeMap::new());
+        let listing = Listing {
+            entries,
+            hidden: Vec::new(),
+        };
+        let view = view(&mut source, listing, &scanner, &config).await.unwrap();
+        assert!(
+            view.warnings.iter().any(|w| w
+                == &format!(
+                    "delivery unknown: more than {} YAML files",
+                    tooling::MANIFEST_LIMIT
+                )),
+            "{:?}",
+            view.warnings
+        );
+    }
 }
