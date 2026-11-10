@@ -87,6 +87,20 @@ fn the_window_zone_decides_when_a_time_is_due() {
     ));
 }
 
+#[test]
+fn a_window_with_an_unknown_zone_is_never_due() {
+    let broken = vec![Window {
+        cron: vec!["* * * * *".into()],
+        zone: "Not/AZone".into(),
+    }];
+    assert!(!due(&broken, None, at("2026-10-22T03:00:30Z")));
+    assert!(!due(
+        &broken,
+        Some(at("2026-10-22T02:00:00Z")),
+        at("2026-10-22T03:00:30Z")
+    ));
+}
+
 fn fixture(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("patchula.pkl");
