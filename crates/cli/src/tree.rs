@@ -41,4 +41,9 @@ mod tests {
         let text = "R  src/new.rs\0src/old.rs\0C  dst.txt\0src.txt\0MM src/new.rs\0?? other.txt\0";
         assert_eq!(changed(text), ["dst.txt", "other.txt", "src/new.rs"]);
     }
+
+    #[test]
+    fn entries_too_short_to_be_a_status_are_skipped() {
+        assert_eq!(changed("ab\0 M src/x\0"), ["src/x"]);
+    }
 }

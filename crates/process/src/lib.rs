@@ -253,4 +253,37 @@ mod tests {
         let text = failure_stream(out.as_bytes(), true, std::slice::from_ref(&secret));
         assert_eq!(text, "error: ");
     }
+
+    #[test]
+    fn a_cut_inside_a_multibyte_character_backs_off_to_a_boundary() {
+        let secrets = ["secret".to_string()];
+        let mut out = "x".repeat(FAILURE_STREAM_LIMIT - 1).into_bytes();
+        out.extend_from_slice("é".as_bytes());
+        let text = failure_stream(&out, false, &secrets);
+        assert_eq!(text.len(), FAILURE_STREAM_LIMIT - 1);
+        assert!(text.ends_with('x'));
+    }
+
+    #[tokio::test]
+    async fn a_program_that_cannot_start_is_a_spawn_failure() {
+        let program = PathBuf::from("/nonexistent/patchula-no-such-program");
+        let result = SystemExecutor
+            .run(CommandSpec {
+                program: program.clone(),
+                args: Vec::new(),
+                cwd: std::env::temp_dir(),
+                env: BTreeMap::new(),
+                secrets: Vec::new(),
+                timeout: Duration::from_secs(5),
+                output_limit: 4096,
+                complete_output: false,
+            })
+            .await;
+        match result {
+            Err(Failure::Spawn {
+                program: failed, ..
+            }) => assert_eq!(failed, program),
+            other => panic!("expected a spawn failure, got {other:?}"),
+        }
+    }
 }

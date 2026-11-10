@@ -662,4 +662,54 @@ mod tests {
             "GitHub GraphQL returned errors"
         );
     }
+
+    struct NoTransport;
+    impl Transport for NoTransport {
+        fn send(&self, _: Request) -> patchula_http::Exchange<'_> {
+            panic!("no request expected")
+        }
+    }
+
+    #[tokio::test]
+    async fn client_options_are_validated_and_the_api_root_normalized() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        for options in [
+            Options {
+                concurrency: 0,
+                ..Default::default()
+            },
+            Options {
+                max_pages: 0,
+                ..Default::default()
+            },
+            Options {
+                max_retries: 11,
+                ..Default::default()
+            },
+            Options {
+                api_url: Url::parse("http://api.github.com/").unwrap(),
+                ..Default::default()
+            },
+        ] {
+            assert!(matches!(
+                Client::with_transport("token", cache.clone(), options, Arc::new(NoTransport)),
+                Err(Error::Configuration)
+            ));
+        }
+        // An API root without a trailing slash joins paths under its own path.
+        let client = Client::with_transport(
+            "token",
+            cache,
+            Options {
+                api_url: Url::parse("https://ghe.example/api/v3").unwrap(),
+                ..Default::default()
+            },
+            Arc::new(NoTransport),
+        )
+        .unwrap();
+        assert_eq!(
+            client.0.options.api_url.as_str(),
+            "https://ghe.example/api/v3/"
+        );
+    }
 }

@@ -1664,3 +1664,136 @@ async fn a_dropped_remote_run_discards_its_engine() {
     drop(run);
     assert!(slot.lock().await.is_none(), "a dropped run kept its engine");
 }
+
+/// Lookup, dry-run and real remote runs share the installation's engine
+/// slot; a repository GitHub does not show comes back as an error report,
+/// and a real run still records it for the public API.
+#[tokio::test]
+async fn remote_modes_share_the_engine_slot_and_report_failures() {
+    let directory = tempfile::tempdir().unwrap();
+    let transport: Arc<dyn Transport> = Arc::new(DiscoveryAndMissingRepository);
+    let runner = Engines {
+        app: lookup_app(transport.clone(), 1),
+        transport,
+        cache: Cache::open(":memory:", Default::default()).await.unwrap(),
+        engines: Mutex::new(BTreeMap::new()),
+        recheck: None,
+        bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
+    };
+    let mut settings = settings();
+    settings.server.report_directory = Some(directory.path().to_owned());
+    for mode in [
+        crate::remote::Mode::Lookup,
+        crate::remote::Mode::DryRun,
+        crate::remote::Mode::Run,
+    ] {
+        let report = crate::remote::Runner::run(
+            &runner,
+            1,
+            vec!["owner/repo".to_owned()],
+            mode,
+            "writer",
+            &settings,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.repositories[0].status, Status::Error, "{mode:?}");
+    }
+    // The real run left its batch report behind.
+    assert_eq!(
+        std::fs::read_dir(directory.path()).unwrap().count(),
+        1,
+        "only the real run writes a report file"
+    );
+}
+
+#[tokio::test]
+async fn a_payload_of_the_wrong_shape_is_rejected() {
+    let state = state().await;
+    let router = router(state.clone(), Arc::new(AtomicBool::new(true)));
+    let body = br#"{"installation": 5}"#.to_vec();
+    let response = router
+        .oneshot(request(body, "push", "shape"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(error_kind(response).await, "invalid-payload");
+}
+
+/// An installation's `created` delivery lists its repositories; the public
+/// API learns them whether or not the delivery starts a batch.
+#[tokio::test]
+async fn an_installation_created_tracks_its_repositories() {
+    let state = state().await;
+    let router = router(state.clone(), Arc::new(AtomicBool::new(true)));
+    let mut install = payload();
+    install["action"] = json!("created");
+    install["repositories"] = json!([
+        {"full_name": "Owner/Public", "private": false},
+        {"full_name": "owner/secret", "private": true},
+    ]);
+    let response = router
+        .oneshot(request(
+            serde_json::to_vec(&install).unwrap(),
+            "installation",
+            "install-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let repos = state.cache.repositories().await.unwrap();
+    assert!(
+        repos
+            .iter()
+            .any(|row| row.repo == "owner/public" && row.installation == 1 && !row.private)
+    );
+    assert!(
+        repos
+            .iter()
+            .any(|row| row.repo == "owner/secret" && row.installation == 1 && row.private)
+    );
+}
+
+#[test]
+fn batch_report_names_round_trip_and_reject_lookalikes() {
+    let at = chrono::DateTime::parse_from_rfc3339("2026-10-15T12:34:56.789Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let name = report_name::name(at, 123, 7);
+    assert!(report_name::report(&name), "{name}");
+    for bad in [
+        "batch-20261015T123456Z-1-2.json",
+        "batch-20261015T123456.78901234Z-1-2.json",
+        "batch-20261015T123456.789Z-1-2.json",
+        "other-20261015T123456.789012345Z-1-2.json",
+        "batch-20261015T123456.789012345Z-x-2.json",
+        "batch-20261015T123456.789012345Z-1-2",
+    ] {
+        assert!(!report_name::report(bad), "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn serve_rejects_settings_the_engine_rules_refuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("settings.pkl");
+    std::fs::write(
+        &settings,
+        "amends \"PatchulaSettings.pkl\"\nhttp { hostConcurrency { [\"API.github.com\"] = 8 } }\n",
+    )
+    .unwrap();
+    let result = serve(Options {
+        settings,
+        cache: dir.path().join("cache"),
+        listen: "127.0.0.1:0".parse().unwrap(),
+        app_id: 1,
+        private_key: Vec::new(),
+        webhook_secret: b"secret".to_vec(),
+        recheck: None,
+        shutdown_timeout: Duration::from_secs(1),
+    })
+    .await;
+    assert!(result.is_err());
+}

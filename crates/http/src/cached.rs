@@ -1961,4 +1961,179 @@ mod tests {
         assert!(cancelled.await.unwrap_err().is_cancelled());
         assert!(client.inner.reads.lock().is_empty());
     }
+
+    fn derive_same(body: &[u8]) -> Result<Vec<u8>, Error> {
+        Ok(body.to_vec())
+    }
+    #[test]
+    fn a_derived_spec_clones_like_its_copy() {
+        fn cloned<T: Clone>(value: &T) -> T {
+            value.clone()
+        }
+        let derived = Derived::new("same", derive_same);
+        let cloned = cloned(&derived);
+        assert_eq!(cloned.name, derived.name);
+        assert_eq!(cloned.representation(), derived.representation());
+    }
+
+    struct Always {
+        status: u16,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    impl Transport for Always {
+        fn send(&self, _: Request) -> crate::Exchange<'_> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            let status = StatusCode::from_u16(self.status).unwrap();
+            Box::pin(async move {
+                Ok(Response {
+                    status,
+                    headers: Default::default(),
+                    body: Vec::new(),
+                    stale: None,
+                })
+            })
+        }
+    }
+
+    /// Without registry rules a missing manifest is asked about again on the
+    /// next run rather than remembered for a day.
+    #[tokio::test]
+    async fn a_registry_404_is_remembered_only_when_the_rules_say_so() {
+        // The rules remember a missing attestation or SBOM, not a missing tag.
+        let url = "https://registry-1.docker.io/v2/library/image/manifests/latest.att";
+        for (rules, expected_calls) in [
+            (Arc::new(NoRules) as Arc<dyn RegistryRules>, 2),
+            (test_rules(3600, 3600), 1),
+        ] {
+            let transport = Arc::new(Always {
+                status: 404,
+                calls: Default::default(),
+            });
+            let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+            let client = Cached::with_options(
+                cache,
+                transport.clone(),
+                Options {
+                    rules,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            for _ in 0..2 {
+                assert!(matches!(
+                    client.registry_get(url, "text/plain", None).await,
+                    Err(Error::Status(404))
+                ));
+            }
+            assert_eq!(transport.calls.load(Ordering::Relaxed), expected_calls);
+        }
+    }
+
+    /// A digest manifest is immutable, so its registry floor keeps an expired
+    /// entry fresh without asking again.
+    #[tokio::test]
+    async fn an_immutable_manifest_outlives_its_expiry() {
+        let url = "https://registry-1.docker.io/v2/library/image/manifests/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cached_entry(&cache, url, None, 300, None).await;
+        let client = Cached::with_options(
+            cache,
+            Arc::new(Never),
+            Options {
+                rules: test_rules(3600, 3600),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            client
+                .registry_get(url, "text/plain", None)
+                .await
+                .unwrap()
+                .body,
+            b"catalog"
+        );
+    }
+
+    /// Rules that know the pull quota but not what a pull-limit 429 looks
+    /// like get the default answer: it is not one, so the bare 429 is an
+    /// ordinary throttle returned inside the retry budget.
+    #[derive(Debug)]
+    struct PullsOnly;
+    impl RegistryRules for PullsOnly {
+        fn pull_quota(&self, method: &Method, url: &Url) -> bool {
+            *method == Method::GET
+                && url.host_str() == Some("registry-1.docker.io")
+                && url.path().contains("/manifests/")
+        }
+    }
+    #[tokio::test]
+    async fn pull_quota_without_pull_limit_knowledge_is_an_ordinary_throttle() {
+        let transport = Arc::new(Always {
+            status: 429,
+            calls: Default::default(),
+        });
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let client = Cached::with_options(
+            cache,
+            transport.clone(),
+            Options {
+                registry_retries: 0,
+                rules: Arc::new(PullsOnly),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let response = client
+            .registry_get(
+                "https://registry-1.docker.io/v2/library/image/manifests/latest",
+                "text/plain",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, 429);
+        assert_eq!(transport.calls.load(Ordering::Relaxed), 1);
+    }
+
+    /// A nonzero pull counter and a clean body leave only the missing
+    /// `Retry-After` to mark the 429 as the pull limit being spent.
+    #[tokio::test]
+    async fn a_remaining_pull_counter_without_retry_after_is_the_pull_limit() {
+        struct Remaining;
+        impl Transport for Remaining {
+            fn send(&self, _: Request) -> crate::Exchange<'_> {
+                Box::pin(async {
+                    Ok(Response {
+                        status: StatusCode::TOO_MANY_REQUESTS,
+                        headers: header::HeaderMap::from_iter([(
+                            header::HeaderName::from_static("ratelimit-remaining"),
+                            HeaderValue::from_static("5;w=3600"),
+                        )]),
+                        body: b"slow down".to_vec(),
+                        stale: None,
+                    })
+                })
+            }
+        }
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let client = Cached::with_options(
+            cache,
+            Arc::new(Remaining),
+            Options {
+                rules: test_rules(3600, 3600),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let response = client
+            .registry_get(
+                "https://registry-1.docker.io/v2/library/image/manifests/latest",
+                "text/plain",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, 429);
+    }
 }

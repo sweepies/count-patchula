@@ -109,6 +109,7 @@ pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn a_secret_file_keeps_non_utf8_bytes() {
         let dir = tempfile::tempdir().unwrap();
@@ -118,5 +119,51 @@ mod tests {
             secret_with(Some(&key), "KEY_FILE", "KEY", |_| None).unwrap(),
             [0xff, 0xfe]
         );
+    }
+
+    #[test]
+    fn a_secret_needs_a_file_or_a_value() {
+        let (code, error) =
+            secret_with(None, "PATCHULA_KEY_FILE", "PATCHULA_KEY", |_| None).unwrap_err();
+        assert_eq!(code, 2);
+        assert!(
+            error
+                .to_string()
+                .contains("requires App private key and webhook secret")
+        );
+    }
+
+    /// Flag validation runs before the secrets are read, so a `--recheck`
+    /// flag is accepted and the run still stops on the missing secret files.
+    #[tokio::test]
+    async fn serve_takes_the_recheck_flag_before_reading_secrets() {
+        let app = App::parse_from(
+            &[
+                "serve",
+                "--settings",
+                "/tmp/patchula-no-such-settings.pkl",
+                "--listen",
+                "127.0.0.1:0",
+                "--app-id",
+                "1",
+                "--cache",
+                "/tmp/patchula-no-such-cache",
+                "--shutdown-timeout-secs",
+                "1",
+                "--private-key-file",
+                "/tmp/patchula-no-such-key",
+                "--webhook-secret-file",
+                "/tmp/patchula-no-such-secret",
+                "--recheck",
+                "now",
+            ]
+            .map(std::ffi::OsStr::new),
+        )
+        .unwrap();
+        let Some(crate::cli::Command::Serve(serve)) = &app.command else {
+            panic!("serve")
+        };
+        let result = run(&app, serve).await;
+        assert!(matches!(result, Err((2, _))), "{result:?}");
     }
 }

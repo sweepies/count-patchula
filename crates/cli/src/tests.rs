@@ -1271,3 +1271,37 @@ fn hard_links_are_one_file_and_wide_plans_write() {
             .all(|name| std::fs::read_to_string(root.join(name)).unwrap() == "new")
     );
 }
+
+#[tokio::test]
+async fn check_settings_names_the_field_the_engine_rules_refuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let bad = dir.path().join("bad.pkl");
+    std::fs::write(
+        &bad,
+        "amends \"PatchulaSettings.pkl\"\nhttp { hostConcurrency { [\"API.github.com\"] = 8 } }\n",
+    )
+    .unwrap();
+    let args: Vec<_> = [
+        OsStr::new("config"),
+        OsStr::new("check-settings"),
+        bad.as_os_str(),
+    ]
+    .into();
+    let app = App::parse_from(&args).unwrap();
+    let Err((code, error)) = run(&app, &Services::default()).await else {
+        panic!("invalid settings passed check-settings")
+    };
+    assert_eq!(code, 2);
+    assert!(error.to_string().contains("hostConcurrency"), "{error}");
+
+    let good = dir.path().join("good.pkl");
+    std::fs::write(&good, "amends \"PatchulaSettings.pkl\"\n").unwrap();
+    let args: Vec<_> = [
+        OsStr::new("config"),
+        OsStr::new("check-settings"),
+        good.as_os_str(),
+    ]
+    .into();
+    let app = App::parse_from(&args).unwrap();
+    assert_eq!(run(&app, &Services::default()).await.unwrap(), 0);
+}

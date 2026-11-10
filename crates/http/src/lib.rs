@@ -141,7 +141,29 @@ pub use tracked::tracked;
 
 #[cfg(test)]
 mod tests {
-    use super::Network;
+    use super::{Network, Transport};
+
+    #[tokio::test]
+    async fn loopback_http_serves_a_real_response() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 8192];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nhi")
+                .unwrap();
+        });
+        let network = Network::with_loopback_http().unwrap();
+        let url = reqwest::Url::parse(&format!("http://{address}/")).unwrap();
+        let request = reqwest::Request::new(reqwest::Method::GET, url);
+        let response = network.send(request).await.unwrap();
+        assert_eq!(response.status, reqwest::StatusCode::OK);
+        assert_eq!(response.body, b"hi");
+        assert_eq!(response.stale, None);
+    }
 
     #[test]
     fn only_the_loopback_mode_allows_plain_http_and_only_to_loopback() {

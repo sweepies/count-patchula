@@ -271,6 +271,44 @@ mod tests {
     }
 
     #[test]
+    fn credentials_report_prefixes_and_secrets_they_cannot_use() {
+        // `check` refuses these; `credentials` still runs on settings built
+        // without it and reports rather than panics.
+        let registry = |auth| patchula_config::settings::Registry {
+            auth,
+            username: None,
+            secret: None,
+            mirror_of: None,
+            allowed_installations: Vec::new(),
+            tools: false,
+        };
+        let mut settings = Settings::default();
+        settings.registries.insert(
+            "not-an-https-prefix".into(),
+            registry(Some(RegistryAuth::Bearer)),
+        );
+        settings.registries.insert(
+            "https://reg.example".into(),
+            registry(Some(RegistryAuth::Bearer)),
+        );
+        let (entries, failed) = credentials(&settings, None);
+        assert!(failed.iter().any(|(prefix, reason)| {
+            prefix == "not-an-https-prefix" && reason == "not an https URL prefix"
+        }));
+        assert!(failed.iter().any(|(prefix, reason)| {
+            prefix == "https://reg.example" && reason == "secret is missing"
+        }));
+        // The bad prefix claims nothing; the missing secret leaves its
+        // prefix withheld rather than falling through to a broader entry.
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.prefix() != "not-an-https-prefix")
+        );
+        assert!(entries.iter().any(|entry| entry.auth == Auth::Withheld));
+    }
+
+    #[test]
     fn mirrors_need_no_credentials_and_keep_standing_in_when_a_secret_is_missing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.pkl");

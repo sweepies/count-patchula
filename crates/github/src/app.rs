@@ -331,4 +331,128 @@ mod tests {
         assert_eq!(transport.0.load(Ordering::SeqCst), 3);
         assert_ne!(app.installation(10).scope(), app.installation(20).scope());
     }
+
+    /// Answers the App metadata and installations endpoints; the second
+    /// installations page arrives through the Link header.
+    struct AppReads(AtomicUsize);
+    impl Transport for AppReads {
+        fn send(&self, request: Request) -> Exchange<'_> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            let path = request.url().path().to_owned();
+            let page_two = request
+                .url()
+                .query()
+                .is_some_and(|query| query.contains("page=2"));
+            Box::pin(async move {
+                let (body, link) = if path.ends_with("/app/hook/config") {
+                    (
+                        serde_json::json!({"url": "https://patchula.example.com/hook"}),
+                        None,
+                    )
+                } else if path.ends_with("/app/installations") {
+                    if page_two {
+                        (serde_json::json!([{"id": 30}]), None)
+                    } else {
+                        (
+                            serde_json::json!([
+                                {"id": 10},
+                                {"id": 20, "suspended_at": "2026-01-01T00:00:00Z"}
+                            ]),
+                            Some(
+                                "<https://api.github.com/app/installations?per_page=100&page=2>; rel=\"next\"",
+                            ),
+                        )
+                    }
+                } else {
+                    (
+                        serde_json::json!({"slug": "count-patchula", "client_id": "Iv1.client"}),
+                        None,
+                    )
+                };
+                let mut headers = header::HeaderMap::new();
+                if let Some(link) = link {
+                    headers.insert(header::LINK, HeaderValue::from_static(link));
+                }
+                Ok(Response {
+                    status: reqwest::StatusCode::OK,
+                    headers,
+                    body: serde_json::to_vec(&body).unwrap(),
+                    stale: None,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn app_metadata_and_installations_paginate() {
+        use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
+        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let app = App::new(
+            1,
+            pem.as_bytes(),
+            Arc::new(AppReads(AtomicUsize::new(0))),
+            Url::parse("https://api.github.com").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(app.bot_login().await.unwrap(), "count-patchula[bot]");
+        assert_eq!(app.client_id().await.unwrap(), "Iv1.client");
+        assert_eq!(
+            app.webhook_url().await.unwrap(),
+            "https://patchula.example.com/hook"
+        );
+        // The suspended installation is skipped and the Link header's second
+        // page is followed.
+        assert_eq!(app.installations().await.unwrap(), vec![10, 30]);
+    }
+
+    /// Every installations page links back to itself: pagination must stop
+    /// rather than loop forever.
+    struct CyclingReads;
+    impl Transport for CyclingReads {
+        fn send(&self, request: Request) -> Exchange<'_> {
+            let next = request.url().to_string();
+            Box::pin(async move {
+                let (body, link) = if request.url().path().ends_with("/app/installations") {
+                    (
+                        serde_json::json!([{"id": 10}]),
+                        Some(format!("<{next}>; rel=\"next\"")),
+                    )
+                } else {
+                    (serde_json::json!({}), None)
+                };
+                let mut headers = header::HeaderMap::new();
+                if let Some(link) = link {
+                    headers.insert(
+                        header::LINK,
+                        HeaderValue::from_str(&link).unwrap(),
+                    );
+                }
+                Ok(Response {
+                    status: reqwest::StatusCode::OK,
+                    headers,
+                    body: serde_json::to_vec(&body).unwrap(),
+                    stale: None,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_page_that_links_to_itself_is_a_pagination_error() {
+        use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
+        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let app = App::new(
+            1,
+            pem.as_bytes(),
+            Arc::new(CyclingReads),
+            Url::parse("https://api.github.com").unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            app.installations().await,
+            Err(Error::Pagination)
+        ));
+    }
 }
