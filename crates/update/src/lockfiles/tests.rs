@@ -6583,6 +6583,37 @@ fn every_materialized_file_has_a_credential_decision() {
     }
 }
 
+/// `upward` lists every match root first, and within a directory in `names`
+/// order, so applying the files in order leaves the nearest, last-named one
+/// winning, as mise's own precedence does.
+#[test]
+fn upward_orders_matches_root_first_then_by_name() {
+    let paths: BTreeMap<String, ()> = [
+        "mise.toml",
+        ".tool-versions",
+        "apps/.mise.toml",
+        "apps/web/.tool-versions",
+        "apps/web/mise.toml",
+        "apps/webby/mise.toml",
+        "apps/web/pkg/other.txt",
+    ]
+    .map(|path| (path.to_owned(), ()))
+    .into();
+    let names = [".tool-versions", "mise.toml", ".mise.toml"];
+    assert_eq!(
+        upward(&paths, "apps/web/pkg", &names),
+        [
+            ".tool-versions",
+            "mise.toml",
+            "apps/.mise.toml",
+            "apps/web/.tool-versions",
+            "apps/web/mise.toml",
+        ]
+    );
+    assert_eq!(upward(&paths, "", &names), [".tool-versions", "mise.toml"]);
+    assert!(upward(&paths, "docs", &["Cargo.lock"]).is_empty());
+}
+
 #[test]
 fn nearest_takes_the_deepest_lock_directory_above_a_file() {
     let paths: BTreeSet<String> = [

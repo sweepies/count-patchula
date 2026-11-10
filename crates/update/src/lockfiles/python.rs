@@ -26,7 +26,7 @@ fn python(
     directory: &str,
     versions: &BTreeMap<String, String>,
 ) -> Result<String, String> {
-    let pinned = upward(baseline.keys(), directory, &[".python-version"])
+    let pinned = upward(baseline, directory, &[".python-version"])
         .last()
         .copied()
         .and_then(|path| {
