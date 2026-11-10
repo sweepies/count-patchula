@@ -447,4 +447,23 @@ mod tests {
         assert_eq!("now".parse::<Recheck>().unwrap(), Recheck::Now);
         assert_eq!("next-run".parse::<Recheck>().unwrap(), Recheck::NextRun);
     }
+
+    #[test]
+    fn advisory_severity_reads_any_case_and_refuses_other_words() {
+        assert_eq!(Severity::advisory("critical"), Some(Severity::Critical));
+        assert_eq!(Severity::advisory("HIGH"), Some(Severity::High));
+        assert_eq!(Severity::advisory("Moderate"), Some(Severity::Moderate));
+        assert_eq!(Severity::advisory("medium"), Some(Severity::Moderate));
+        assert_eq!(Severity::advisory("low"), Some(Severity::Low));
+        assert_eq!(Severity::advisory("moderate-ish"), None);
+        assert_eq!(Severity::advisory(""), None);
+    }
+
+    #[test]
+    fn rank_orders_competing_kinds_widest_first() {
+        let ranks: Vec<u8> = Update::RANKED.iter().map(|k| k.rank()).collect();
+        assert_eq!(ranks, [0, 1, 2, 3, 4]);
+        assert!(Update::Major.rank() < Update::Digest.rank());
+        assert!(Update::Pin.rank() < Update::Digest.rank());
+    }
 }
