@@ -212,6 +212,7 @@ impl<V> Paths for BTreeMap<String, V> {
 /// them in order leaves the nearest, highest-precedence file winning. It
 /// walks up from `directory` and looks each candidate up, so its cost grows
 /// with the directory's depth, not with the size of the repository.
+/// `names` are leaf names, never paths.
 fn upward<'a>(paths: &'a impl Paths, directory: &str, names: &[&str]) -> Vec<&'a str> {
     let mut dirs = vec![directory];
     let mut dir = directory;
