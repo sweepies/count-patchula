@@ -47,6 +47,20 @@ struct Fake {
     auto_merge_refusal: Mutex<Option<String>>,
     /// The default branch's commit; its tree is always `base-tree`.
     head: Mutex<String>,
+    /// Extra entries appended to the tree listing, whose blobs are absent.
+    extra_tree: Mutex<Vec<Value>>,
+    /// The `/branches` listing cleanup inspects.
+    branches: Mutex<Vec<Value>>,
+    /// The ref-update GraphQL mutation fails with this message.
+    ref_update_error: Mutex<Option<String>>,
+    /// The write inventory GraphQL query fails.
+    inventory_error: std::sync::atomic::AtomicBool,
+    /// The REST pull request listing fails.
+    pulls_error: std::sync::atomic::AtomicBool,
+    /// Dashboard issue writes fail.
+    issue_error: std::sync::atomic::AtomicBool,
+    /// The OSV.dev querybatch response.
+    osv: Mutex<Value>,
 }
 
 struct Rotating(std::sync::atomic::AtomicUsize);
@@ -125,6 +139,9 @@ impl Fake {
         checks: Mutex::new(vec![json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"})]),
         change_head_on_checks: Default::default(), merge_refused: Default::default(), deletion_race: Default::default(), auto_merge_refusal: Default::default(),
         head: Mutex::new("base".into()),
+        extra_tree: Default::default(), branches: Default::default(), ref_update_error: Default::default(),
+        inventory_error: Default::default(), pulls_error: Default::default(), issue_error: Default::default(),
+        osv: Mutex::new(json!({"results":[{}]})),
     }
     }
     fn tree(&self) -> Value {
@@ -138,6 +155,7 @@ impl Fake {
                 json!({"path":self.lock_name,"sha":"unselected-lock","type":"blob","mode":"100644"}),
             );
         }
+        tree.extend(self.extra_tree.lock().unwrap().iter().cloned());
         json!({"truncated":false,"tree":tree})
     }
 }
@@ -154,7 +172,9 @@ impl Transport for Fake {
             path.into(),
             body.clone(),
         ));
-        let (status, value) = if request.url().host_str() == Some("registry.npmjs.org") {
+        let (status, value) = if request.url().host_str() == Some("api.osv.dev") {
+            (200, self.osv.lock().unwrap().clone())
+        } else if request.url().host_str() == Some("registry.npmjs.org") {
             (
                 if self.fail_lookup.load(std::sync::atomic::Ordering::Relaxed) {
                     503
@@ -197,6 +217,17 @@ impl Transport for Fake {
             } else if body["query"] == "query{viewer{login}}" {
                 (200, json!({"data":{"viewer":{"login":"patchula[bot]"}}}))
             } else if body["query"] == patchula_update::INVENTORY_QUERY {
+                if self
+                    .inventory_error
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    return Box::pin(std::future::ready(Ok(Response {
+                        status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                        headers: Default::default(),
+                        body: serde_json::to_vec(&json!({"message":"inventory boom"})).unwrap(),
+                        stale: None,
+                    })));
+                }
                 let prs = self.prs.lock().unwrap();
                 let nodes: Vec<_> = prs.iter().filter(|p|p["state"] == "open").map(|p|json!({
                     "name":p["head"]["ref"],"target":{"oid":p["head"]["sha"],"tree":{"oid":"updated-tree"},"signature":{"isValid":true}},
@@ -281,7 +312,9 @@ impl Transport for Fake {
                 self.writes.lock().unwrap().push((path.into(), body));
                 (
                     200,
-                    if deleting
+                    if let Some(error) = self.ref_update_error.lock().unwrap().clone() {
+                        json!({"errors":[{"message":error}]})
+                    } else if deleting
                         && self
                             .deletion_race
                             .load(std::sync::atomic::Ordering::Relaxed)
@@ -310,6 +343,14 @@ impl Transport for Fake {
         } else if request.method() == reqwest::Method::PATCH
             && path.starts_with("/repos/demo/sandbox/issues/")
         {
+            if self.issue_error.load(std::sync::atomic::Ordering::Relaxed) {
+                return Box::pin(std::future::ready(Ok(Response {
+                    status: reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+                    headers: Default::default(),
+                    body: serde_json::to_vec(&json!({"message":"issue boom"})).unwrap(),
+                    stale: None,
+                })));
+            }
             self.writes
                 .lock()
                 .unwrap()
@@ -362,6 +403,14 @@ impl Transport for Fake {
             } else if path.contains("/issues/") && path.ends_with("/comments") {
                 (201, json!({"id":1,"body":body["body"]}))
             } else if path.ends_with("/issues") {
+                if self.issue_error.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Box::pin(std::future::ready(Ok(Response {
+                        status: reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+                        headers: Default::default(),
+                        body: serde_json::to_vec(&json!({"message":"issue boom"})).unwrap(),
+                        stale: None,
+                    })));
+                }
                 let number = 100 + self.issues.lock().unwrap().len();
                 let issue = json!({"number":number,"id":format!("dashboard-{number}"),"title":body["title"],"body":body["body"],"state":"OPEN","author":{"__typename":"Bot","login":"patchula"}});
                 self.issues.lock().unwrap().push(issue.clone());
@@ -382,7 +431,11 @@ impl Transport for Fake {
                 panic!("unexpected write {path}");
             }
         } else if path == "/repos/demo/sandbox/pulls" {
-            (200, json!(*self.prs.lock().unwrap()))
+            if self.pulls_error.load(std::sync::atomic::Ordering::Relaxed) {
+                (500, json!({"message":"pulls boom"}))
+            } else {
+                (200, json!(*self.prs.lock().unwrap()))
+            }
         } else if path.starts_with("/repos/demo/sandbox/pulls/") {
             let number: u64 = path.rsplit('/').next().unwrap().parse().unwrap();
             if self
@@ -402,21 +455,26 @@ impl Transport for Fake {
                     .clone(),
             )
         } else if path == "/repos/demo/sandbox/branches" {
-            (200, json!([]))
+            (200, json!(self.branches.lock().unwrap().clone()))
         } else if path == "/repos/demo/sandbox" {
             (200, json!({"default_branch":"main","node_id":"repo-id"}))
         } else if path.ends_with("/git/trees/base-tree") {
             (200, self.tree())
         } else if let Some(sha) = path.strip_prefix("/repos/demo/sandbox/git/blobs/") {
-            let content = if sha == "unselected-lock" {
-                "{}"
+            let content = (sha == "unselected-lock").then_some("{}").or_else(|| {
+                self.files
+                    .values()
+                    .find(|c| blob_sha(c) == sha)
+                    .map(String::as_str)
+            });
+            if let Some(content) = content {
+                (
+                    200,
+                    json!({"encoding":"base64","content":STANDARD.encode(content)}),
+                )
             } else {
-                self.files.values().find(|c| blob_sha(c) == sha).unwrap()
-            };
-            (
-                200,
-                json!({"encoding":"base64","content":STANDARD.encode(content)}),
-            )
+                (404, json!({"message":"not found"}))
+            }
         } else if let Some(sha) = path.strip_prefix("/repos/demo/sandbox/commits/") {
             // Every head the fake publishes is one signed patchula commit.
             (
@@ -2283,5 +2341,424 @@ async fn the_write_path_reads_the_viewer_login_once() {
             .count(),
         1,
         "{requests:?}"
+    );
+}
+
+/// The write inventory and the dashboard controls are read inside the scan;
+/// either failing fails the repository before any write is attempted.
+#[tokio::test(start_paused = true)]
+async fn inventory_and_controls_failures_fail_the_repository_before_writes() {
+    for failure in ["inventory", "controls"] {
+        let fake = Arc::new(Fake::new(false));
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
+        let config = checkbox_config();
+        let now = chrono::Utc::now();
+        let options = || Options {
+            repositories: vec!["demo/sandbox".into()],
+            config: Some(config.clone()),
+            ..Default::default()
+        };
+        if failure == "inventory" {
+            fake.inventory_error
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            // Two bot-owned dashboards cannot be told apart; the run refuses.
+            checkbox_run(&engine, &config, now).await;
+            let mut dupe = fake.issues.lock().unwrap()[0].clone();
+            dupe["number"] = json!(999);
+            fake.issues.lock().unwrap().push(dupe);
+            fake.writes.lock().unwrap().clear();
+        }
+        let report = engine.run_at(options(), false, false, now).await.unwrap();
+        let repo = &report.repositories[0];
+        assert_eq!(repo.status, Status::Error, "{failure}: {repo:?}");
+        let reason = repo.reason.as_deref().unwrap();
+        if failure == "controls" {
+            assert!(
+                reason.contains("multiple bot-owned dependency dashboards"),
+                "{reason}"
+            );
+        }
+        assert!(fake.writes.lock().unwrap().is_empty(), "{failure}");
+    }
+}
+
+/// A branch plan that cannot be computed fails the repository rather than
+/// being dropped: the invalid `prs.branch` names the step's failure.
+#[tokio::test(start_paused = true)]
+async fn an_invalid_branch_prefix_fails_the_repository() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let mut config = checkbox_config();
+    config.prs.branch = "bad..prefix/".into();
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config: Some(config),
+                ..Default::default()
+            },
+            false,
+            false,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Error, "{repo:?}");
+    assert!(
+        repo.reason
+            .as_deref()
+            .unwrap()
+            .contains("prs.branch produces an invalid Git branch name"),
+        "{repo:?}"
+    );
+    assert!(fake.writes.lock().unwrap().is_empty());
+}
+
+/// A write receipt that cannot be decoded is a cache miss, not an error:
+/// the run reconciles and writes fresh rather than failing closed on a
+/// value it cannot read.
+#[tokio::test(start_paused = true)]
+async fn an_undecodable_write_receipt_is_a_miss_and_rewritten() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    cache
+        .set_state(
+            &ReceiptsScope {
+                repository: "demo/sandbox".into(),
+                branch_prefix: "patchula/".into(),
+            },
+            &Receipts(json!("corrupted")),
+        )
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config: Some(checkbox_config()),
+                ..Default::default()
+            },
+            false,
+            true,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Complete, "{repo:?}");
+    assert!(
+        fake.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(p, _)| p.ends_with("/git/commits")),
+        "a missed receipt must reconcile by writing"
+    );
+}
+
+/// A pull-request listing that fails after the receipt check ends the
+/// repository's write with the API error as the reason.
+#[tokio::test(start_paused = true)]
+async fn a_pulls_listing_failure_fails_the_repository() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    fake.pulls_error
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config: Some(checkbox_config()),
+                ..Default::default()
+            },
+            false,
+            true,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Error, "{repo:?}");
+    assert!(
+        !fake
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, path, _)| path.ends_with("/merge")),
+        "a failed lifecycle read must not merge"
+    );
+}
+
+/// An obsolete owned branch whose deletion GitHub refuses fails the
+/// repository rather than being retried silently.
+#[tokio::test(start_paused = true)]
+async fn a_failed_branch_deletion_fails_the_repository() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    // An owned branch the plans no longer want is a cleanup candidate.
+    *fake.branches.lock().unwrap() =
+        vec![json!({"name":"patchula/stale","commit":{"sha":"stale-head"}})];
+    *fake.ref_update_error.lock().unwrap() = Some("update refused".into());
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config: Some(checkbox_config()),
+                ..Default::default()
+            },
+            false,
+            true,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Error, "{repo:?}");
+}
+
+/// A dashboard write failure fails the repository with the step's reason,
+/// leaving the branch work reported.
+#[tokio::test(start_paused = true)]
+async fn a_dashboard_write_failure_fails_the_repository() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    fake.issue_error
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config: Some(checkbox_config()),
+                ..Default::default()
+            },
+            false,
+            true,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Error, "{repo:?}");
+    assert!(
+        repo.reason
+            .as_deref()
+            .unwrap()
+            .contains("dependency dashboard:"),
+        "{repo:?}"
+    );
+}
+
+/// Lockfile maintenance plans its own branch in its window; without a disk
+/// cache or an injected runner the generation failure is a branch error
+/// that stops publication.
+#[tokio::test(start_paused = true)]
+async fn lockfile_maintenance_plans_and_a_missing_runner_fails_the_branch() {
+    let mut fixture = Fake::new(true);
+    fixture.lock_name = "package-lock.json";
+    let fake = Arc::new(fixture);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let mut config = checkbox_config();
+    config.lockfiles.refresh = true;
+    // Monday inside the default maintenance window keeps the plan unheld.
+    let now = "2026-10-12T01:00:00Z".parse().unwrap();
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config: Some(config),
+                ..Default::default()
+            },
+            false,
+            true,
+            now,
+        )
+        .await
+        .unwrap();
+    let branches = &report.actions.as_ref().unwrap().branches;
+    let maintenance = branches
+        .iter()
+        .find(|b| b.branch.contains("lock-file-maintenance"))
+        .unwrap_or_else(|| panic!("no maintenance plan: {branches:?}"));
+    assert_eq!(maintenance.status, BranchStatus::Error, "{maintenance:?}");
+    assert!(
+        maintenance
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("lockfile generation requires a disk cache or an injected runner"),
+        "{maintenance:?}"
+    );
+}
+
+/// A blob the batch cannot produce is a repository error, not an empty file:
+/// the read fails closed.
+#[tokio::test(start_paused = true)]
+async fn an_unfetchable_blob_fails_the_repository() {
+    let fixture = Fake::new(false);
+    *fixture.extra_tree.lock().unwrap() = vec![
+        json!({"path":"nested/package.json","sha":"0".repeat(40),"mode":"100644","type":"blob"}),
+    ];
+    let fake = Arc::new(fixture);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let report = engine
+        .lookup_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                ..Default::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Error, "{repo:?}");
+    assert!(repo.reason.is_some(), "{repo:?}");
+}
+
+/// A recheck click revalidates every dependency: the advisory query is sent
+/// again through the bypassing source rather than served from the cache.
+#[tokio::test(start_paused = true)]
+async fn a_recheck_click_revalidates_advisories() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false)
+        .with_advisories();
+    let config = checkbox_config();
+    let now = chrono::Utc::now();
+    checkbox_run(&engine, &config, now).await;
+    let osv_requests = || {
+        fake.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, path, _)| path.contains("querybatch"))
+            .count()
+    };
+    assert_eq!(osv_requests(), 1);
+    tick_dashboard(&fake, "recheck");
+    fake.requests.lock().unwrap().clear();
+    checkbox_run(&engine, &config, now).await;
+    assert_eq!(osv_requests(), 1, "the retry must bypass the cached answer");
+}
+
+/// A PR recheck box ticked before the run's first saved controls retries the
+/// whole repository: with nothing saved, every dependency is revalidated.
+#[tokio::test(start_paused = true)]
+async fn a_ticked_pr_without_saved_controls_retries_everything() {
+    let fake = Arc::new(Fake::new(false));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let config = checkbox_config();
+    let now = chrono::Utc::now();
+    checkbox_run(&engine, &config, now).await;
+    let body = fake.prs.lock().unwrap()[0]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Replay the same GitHub state against a cache that never saw a run.
+    let fresh = Arc::new(Fake::new(false));
+    fresh.prs.lock().unwrap().push({
+        let mut pr = fake.prs.lock().unwrap()[0].clone();
+        pr["body"] = json!(body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check"));
+        pr
+    });
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fresh.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config: Some(config),
+                ..Default::default()
+            },
+            false,
+            false,
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        report.repositories[0].status,
+        Status::Complete,
+        "{report:?}"
+    );
+    assert!(
+        fresh
+            .writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(p, _)| p.ends_with("/git/commits")),
+        "the retry must rewrite the branch"
+    );
+}
+
+/// A policy that cannot evaluate a dependency — an LTS channel a catalog
+/// does not carry — is a warning naming the dependency, not a scan failure.
+#[tokio::test(start_paused = true)]
+async fn a_policy_that_cannot_evaluate_warns_the_dependency() {
+    let mut fixture = Fake::new(false);
+    fixture.files.insert(
+        "patchula.pkl".into(),
+        "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\nrules { new Rule { select = new Selector { packages = new Listing { \"fixture\" } }; apply = new Overrides { channel = \"lts\" } } }\n".into(),
+    );
+    fixture.files.insert(
+        "package.json".into(),
+        "{\n  \"dependencies\": {\"fixture\": \"^1.0.0\"}\n}\n".into(),
+    );
+    let fake = Arc::new(fixture);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let report = engine
+        .lookup_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                ..Default::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Complete, "{repo:?}");
+    assert!(
+        repo.warnings.iter().any(|w| w.contains("fixture:")),
+        "{:?}",
+        repo.warnings
     );
 }

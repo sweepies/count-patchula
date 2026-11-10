@@ -844,3 +844,261 @@ async fn a_rebuild_whose_fixes_are_all_withdrawn_is_no_security_fix() {
     assert!(update.image.as_ref().unwrap().fixed.is_empty());
     assert!(dep.metadata.as_ref().unwrap().advisories.is_empty());
 }
+
+/// OSV.dev failing leaves the image check unreadable with the API error as
+/// its detail: a warning state, not a repository failure.
+#[tokio::test]
+async fn an_osv_failure_marks_the_image_check_unreadable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spec.json");
+    let none = serde_json::json!({});
+    let (old, mut images) = simulated_image("spec/app", "amd64", &[("zlib", "1")], none.clone());
+    let (new, more) = simulated_image("spec/app", "amd64", &[("zlib", "2")], none);
+    images.extend(more);
+    let dockerfile = format!("FROM ghcr.io/spec/app:1.0@{old}\n");
+    let config = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"dockerfile\" }\n";
+    let mut interactions = vec![exchange(
+        "POST",
+        "https://api.github.com/graphql",
+        &[GITHUB[0], GITHUB[1], ("content-type", "application/json")],
+        Body::Json(
+            json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
+        ),
+        200,
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        None,
+    )];
+    interactions.push(github(
+        "repos/demo/app/git/trees/tree?recursive=1",
+        json!({"truncated":false,"tree":[
+            {"path":"patchula.pkl","type":"blob","sha":"config"},
+            {"path":"Dockerfile","type":"blob","sha":"dockerfile"}
+        ]}),
+        200,
+        "tree",
+        false,
+    ));
+    for (sha, text) in [("config", config), ("dockerfile", dockerfile.as_str())] {
+        interactions.push(github(
+            &format!("repos/demo/app/git/blobs/{sha}"),
+            json!({"encoding":"base64","content":STANDARD.encode(text)}),
+            200,
+            sha,
+            false,
+        ));
+    }
+    interactions.push(exchange(
+        "GET",
+        "https://ghcr.io/v2/spec/app/tags/list?n=1000",
+        &[("accept", "application/json")],
+        Body::Text(String::new()),
+        200,
+        json!({"tags":["1.0","1.1"]}),
+        None,
+    ));
+    let mut head = exchange(
+        "HEAD",
+        "https://ghcr.io/v2/spec/app/manifests/1.0",
+        &[(
+            "accept",
+            "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
+        )],
+        Body::Text(String::new()),
+        200,
+        Value::Null,
+        None,
+    );
+    head.response.body = Body::Text(String::new());
+    head.response
+        .headers
+        .insert("docker-content-digest".into(), vec![old.to_string()]);
+    interactions.push(head);
+    let mut head = exchange(
+        "HEAD",
+        "https://ghcr.io/v2/spec/app/manifests/1.1",
+        &[(
+            "accept",
+            "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
+        )],
+        Body::Text(String::new()),
+        200,
+        Value::Null,
+        None,
+    );
+    head.response.body = Body::Text(String::new());
+    head.response
+        .headers
+        .insert("docker-content-digest".into(), vec![new.to_string()]);
+    interactions.push(head);
+    interactions.extend(images);
+    let query = |name: &str, version: &str| json!({"package":{"ecosystem":"Debian:12","name":name},"version":version});
+    interactions.push(exchange(
+        "POST",
+        "https://api.osv.dev/v1/querybatch",
+        &[
+            ("accept", "application/json"),
+            ("content-type", "application/json"),
+        ],
+        Body::Json(json!({"queries":[query("zlib", "1"), query("zlib", "2")]})),
+        503,
+        json!({"error":"backend error"}),
+        None,
+    ));
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the GitHub, OCI distribution and OSV.dev API documentation"
+            .into(),
+        interactions,
+    };
+    patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone())
+        .unwrap()
+        .with_versions_host(false)
+        .with_advisories();
+    let report = engine
+        .lookup_at(
+            Options {
+                repositories: vec!["demo/app".into()],
+                ..Options::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = &repo.package_files[0].dependencies[0];
+    let update = dep
+        .updates
+        .iter()
+        .find(|u| u.image.is_some())
+        .unwrap_or_else(|| panic!("no image update: {dep:?}"));
+    let check = update.image.as_ref().unwrap();
+    assert_eq!(
+        check.state,
+        patchula_report::ImageState::Unreadable,
+        "{check:?}"
+    );
+    assert!(
+        check.detail.as_deref().unwrap().contains("OSV.dev failed"),
+        "{check:?}"
+    );
+    replay.assert_finished().unwrap();
+}
+
+/// A manifest read that fails for the current tag is a lookup failure naming
+/// the tag; the repository stays complete.
+#[tokio::test]
+async fn a_failed_manifest_read_is_a_lookup_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spec.json");
+    let none = serde_json::json!({});
+    let (old, images) = simulated_image("spec/app", "amd64", &[("zlib", "1")], none);
+    let dockerfile = format!("FROM ghcr.io/spec/app:1.0@{old}\n");
+    let config = "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"dockerfile\" }\n";
+    let mut interactions = vec![exchange(
+        "POST",
+        "https://api.github.com/graphql",
+        &[GITHUB[0], GITHUB[1], ("content-type", "application/json")],
+        Body::Json(
+            json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
+        ),
+        200,
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        None,
+    )];
+    interactions.push(github(
+        "repos/demo/app/git/trees/tree?recursive=1",
+        json!({"truncated":false,"tree":[
+            {"path":"patchula.pkl","type":"blob","sha":"config"},
+            {"path":"Dockerfile","type":"blob","sha":"dockerfile"}
+        ]}),
+        200,
+        "tree",
+        false,
+    ));
+    for (sha, text) in [("config", config), ("dockerfile", dockerfile.as_str())] {
+        interactions.push(github(
+            &format!("repos/demo/app/git/blobs/{sha}"),
+            json!({"encoding":"base64","content":STANDARD.encode(text)}),
+            200,
+            sha,
+            false,
+        ));
+    }
+    interactions.push(exchange(
+        "GET",
+        "https://ghcr.io/v2/spec/app/tags/list?n=1000",
+        &[("accept", "application/json")],
+        Body::Text(String::new()),
+        200,
+        json!({"tags":["1.0","1.1"]}),
+        None,
+    ));
+    for (tag, status, digest) in [("1.0", 500, old.as_str()), ("1.1", 500, "")] {
+        let mut head = exchange(
+            "HEAD",
+            &format!("https://ghcr.io/v2/spec/app/manifests/{tag}"),
+            &[(
+                "accept",
+                "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
+            )],
+            Body::Text(String::new()),
+            status,
+            Value::Null,
+            None,
+        );
+        head.response.body = Body::Text(String::new());
+        if status == 200 {
+            head.response
+                .headers
+                .insert("docker-content-digest".into(), vec![digest.to_string()]);
+        }
+        interactions.push(head);
+    }
+    interactions.extend(images);
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the GitHub, OCI distribution and OSV.dev API documentation"
+            .into(),
+        interactions,
+    };
+    patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
+    let replay = Arc::new(Replay::open(&path, Default::default()).unwrap());
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let engine = Engine::with_transport("offline", cache, 4, replay.clone())
+        .unwrap()
+        .with_versions_host(false)
+        .with_advisories();
+    let report = engine
+        .lookup_at(
+            Options {
+                repositories: vec!["demo/app".into()],
+                ..Options::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let messages: Vec<_> = repo
+        .lookup_failures
+        .iter()
+        .map(|f| f.message.clone())
+        .collect();
+    assert!(
+        messages.iter().any(|m| m.starts_with("digest of 1.0:")),
+        "{messages:?}"
+    );
+    assert!(
+        messages.iter().any(|m| m.starts_with("digest of 1.1:")),
+        "{messages:?}"
+    );
+}
