@@ -11,13 +11,15 @@ use std::{
 struct Steps(Mutex<VecDeque<(String, Response)>>);
 impl Transport for Steps {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
-        let (url, response) = self
-            .0
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("unexpected network read");
-        assert_eq!(request.url().as_str(), url);
+        let url = request.url().to_string();
+        let mut steps = self.0.lock().unwrap();
+        // Registries may fan out reads in any order; the set of requests is
+        // the behavior under test, not their sequence.
+        let at = steps
+            .iter()
+            .position(|(expected, _)| expected == &url)
+            .unwrap_or_else(|| panic!("unexpected network read: {url}"));
+        let (_, response) = steps.remove(at).unwrap();
         Box::pin(async { Ok(response) })
     }
 }
