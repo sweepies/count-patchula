@@ -2030,6 +2030,8 @@ struct MiseFixture {
     git: Arc<Fixture>,
     fault: &'static str,
     calls: Mutex<Vec<Vec<String>>>,
+    /// The driver mise.toml each call ran with.
+    tomls: Mutex<Vec<String>>,
 }
 impl Executor for MiseFixture {
     fn run(
@@ -2058,6 +2060,7 @@ impl Executor for MiseFixture {
             let work =
                 Path::new(&spec.args[spec.args.iter().position(|arg| arg == "--cd").unwrap() + 1]);
             let text = std::fs::read_to_string(work.join("mise.toml")).unwrap();
+            self.tomls.lock().unwrap().push(text.clone());
             assert!(!text.contains("tasks") && !text.contains("env") && !text.contains("hooks"));
             let mut lock = std::fs::read_to_string(work.join("mise.lock")).unwrap();
             if self.fault == "failure" {
@@ -2128,6 +2131,7 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
                 git: fixture(files.clone(), false, false),
                 fault,
                 calls: Mutex::new(Vec::new()),
+                tomls: Mutex::new(Vec::new()),
             });
             let temp = tempfile::tempdir().unwrap();
             let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
@@ -2208,6 +2212,7 @@ async fn mise_lock_updates_a_tool_that_records_no_platforms() {
             git: fixture(files.clone(), false, false),
             fault: "",
             calls: Mutex::new(Vec::new()),
+            tomls: Mutex::new(Vec::new()),
         });
         let temp = tempfile::tempdir().unwrap();
         let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
@@ -2292,6 +2297,7 @@ async fn mise_lock_ignores_configuration_below_the_lockfile() {
             git: fixture(files.clone(), false, false),
             fault: "",
             calls: Mutex::new(Vec::new()),
+            tomls: Mutex::new(Vec::new()),
         }),
         configs: Mutex::new(Vec::new()),
     });
@@ -2361,6 +2367,7 @@ async fn mise_lock_in_a_subdirectory_reads_the_configuration_beside_it() {
         git: fixture(files.clone(), false, false),
         fault: "",
         calls: Mutex::new(Vec::new()),
+        tomls: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
     let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
@@ -2450,6 +2457,7 @@ async fn mise_lock_records_every_request_a_multi_version_declaration_makes() {
                     git: fixture(files.clone(), false, false),
                     fault: "",
                     calls: Mutex::new(Vec::new()),
+                    tomls: Mutex::new(Vec::new()),
                 }),
                 edit: if omit {
                     |lock| {
@@ -5440,6 +5448,7 @@ async fn mise_lock_follows_the_tools_tasks_install() {
             git: fixture(files.clone(), false, false),
             fault: "",
             calls: Mutex::new(Vec::new()),
+            tomls: Mutex::new(Vec::new()),
         }),
         configs: Mutex::new(Vec::new()),
     });
@@ -5507,6 +5516,7 @@ async fn lock_task_file_tool(
         git: fixture(files.clone(), false, false),
         fault: "",
         calls: Mutex::new(Vec::new()),
+        tomls: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
     let runner =
@@ -5606,6 +5616,7 @@ async fn mise_lock_refuses_a_task_that_declares_a_tool_with_other_options() {
         git: fixture(files.clone(), false, false),
         fault: "",
         calls: Mutex::new(Vec::new()),
+        tomls: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
     let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
@@ -5663,6 +5674,7 @@ async fn lock_node_declared_twice(old: &str, lock: String) -> (Plan, Vec<String>
             git: fixture(files.clone(), false, false),
             fault: "",
             calls: Mutex::new(Vec::new()),
+            tomls: Mutex::new(Vec::new()),
         }),
         configs: Mutex::new(Vec::new()),
     });
@@ -7800,6 +7812,7 @@ async fn tool_versions_with_extra_words_become_mise_arrays() {
         git: fixture(files.clone(), false, false),
         fault: "",
         calls: Mutex::new(Vec::new()),
+        tomls: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
     let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
@@ -7821,7 +7834,18 @@ async fn tool_versions_with_extra_words_become_mise_arrays() {
     p.maintenance = false;
     p.lock_jobs = vec![job];
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
-    assert!(!executor.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        executor
+            .tomls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|toml| toml.contains("node = [\"22.0.0\", \"lts\"]"))
+            .count(),
+        1,
+        "{:?}",
+        executor.tomls.lock().unwrap()
+    );
 }
 
 /// A regenerated mise.lock that drops a platform a tool had, or that
@@ -7843,6 +7867,7 @@ async fn mise_lock_that_drops_platforms_or_moves_the_target_fails() {
             git: fixture(files.clone(), false, false),
             fault,
             calls: Mutex::new(Vec::new()),
+            tomls: Mutex::new(Vec::new()),
         });
         let temp = tempfile::tempdir().unwrap();
         let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
@@ -7973,12 +7998,16 @@ async fn a_failing_installation_token_stops_the_run() {
 async fn a_gradle_wrapper_job_takes_the_wrapper_path() {
     let files = BTreeMap::from([(
         "gradle/wrapper/gradle-wrapper.properties".into(),
-        "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.0-bin.zip\n".into(),
+        "distributionSha256Sum=0000\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.0-bin.zip\n".into(),
     )]);
     let executor = fixture(files.clone(), false, false);
+    let transport = Arc::new(Checksums {
+        requests: Mutex::new(Vec::new()),
+    });
     let temp = tempfile::tempdir().unwrap();
     let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+        .with_executor(executor.clone())
+        .with_http(transport.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = Plan::new(BranchAction {
@@ -8001,13 +8030,19 @@ async fn a_gradle_wrapper_job_takes_the_wrapper_path() {
         exact_version: false,
     }];
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
-    assert!(
-        matches!(
-            p.action().status,
-            BranchStatus::Planned | BranchStatus::Error | BranchStatus::Skipped
-        ),
-        "{:?}",
-        p.action()
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert_eq!(
+        *transport.requests.lock().unwrap(),
+        [
+            "https://services.gradle.org/distributions/gradle-8.0-bin.zip.sha256",
+            "https://downloads.gradle.org/distributions/gradle-8.0-bin.zip.sha256",
+        ]
     );
-    assert!(!executor.calls.lock().unwrap().is_empty() || true);
+    assert_eq!(
+        p.contents["gradle/wrapper/gradle-wrapper.properties"],
+        format!(
+            "distributionSha256Sum={}\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.0-bin.zip\n",
+            "a".repeat(64)
+        )
+    );
 }

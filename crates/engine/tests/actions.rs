@@ -29,6 +29,8 @@ struct Fake {
     forge: Mutex<BTreeMap<&'static str, Value>>,
     /// Fails the multi-package releases query so the per-package fallback runs.
     fail_release_batch: std::sync::atomic::AtomicBool,
+    /// Package count of each release-catalog query, in order.
+    release_queries: Mutex<Vec<usize>>,
     requests: Mutex<Vec<(String, String)>>,
 }
 
@@ -40,6 +42,7 @@ impl Fake {
             commits: Default::default(),
             forge: Default::default(),
             fail_release_batch: Default::default(),
+            release_queries: Default::default(),
             requests: Default::default(),
         }
     }
@@ -143,6 +146,10 @@ impl Transport for Fake {
             }
             if query.contains("releases(first:100") {
                 let variables = body["variables"].as_object().unwrap();
+                self.release_queries
+                    .lock()
+                    .unwrap()
+                    .push(variables.len() / 2);
                 if variables.len() > 2
                     && self
                         .fail_release_batch
@@ -362,6 +369,20 @@ async fn an_action_on_a_branch_ref_resolves_its_commit() {
             .any(|(_, path)| path == "/repos/actions/checkout/commits/main"),
         "{:?}",
         fake.requests.lock().unwrap()
+    );
+    let dep = &repo.package_files[0].dependencies[0];
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_eq!(resolution.kind, patchula_words::ResolutionKind::FloatingRef);
+    assert_eq!(resolution.version, "main");
+    assert!(
+        dep.updates
+            .iter()
+            .any(|u| u.new_digest.as_deref() == Some(&"c".repeat(40))),
+        "the resolved commit must land in the report: {dep:?}"
     );
 }
 
@@ -636,10 +657,42 @@ async fn a_failed_release_catalog_batch_falls_back_per_package() {
     let repo = lookup(&report);
     assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
     assert!(
-        repo.package_files
+        repo.lookup_failures.is_empty(),
+        "{:?}",
+        repo.lookup_failures
+    );
+    for (name, version) in [("bun", "v1.1.0"), ("hashicorp/terraform", "1.6.0")] {
+        let dep = repo
+            .package_files
             .iter()
             .flat_map(|f| &f.dependencies)
-            .any(|d| !d.updates.is_empty()),
-        "{repo:?}"
+            .find(|d| d.name == name)
+            .unwrap_or_else(|| panic!("no {name} dependency: {repo:?}"));
+        let reached = dep
+            .updates
+            .iter()
+            .any(|u| u.new_version.as_deref() == Some(version))
+            || dep
+                .metadata
+                .as_ref()
+                .and_then(|m| m.resolution.as_ref())
+                .is_some_and(|r| r.version == version);
+        assert!(
+            reached,
+            "{name} must reach {version} through the fallback lookups: {dep:?}"
+        );
+        assert!(
+            dep.metadata
+                .as_ref()
+                .and_then(|m| m.lookup.as_ref())
+                .and_then(|l| l.catalog.as_ref())
+                .is_some_and(|c| !c.reused),
+            "{name} must have been fetched individually: {dep:?}"
+        );
+    }
+    assert_eq!(
+        *fake.release_queries.lock().unwrap(),
+        [2, 1, 1],
+        "the failed batch must fall back to one query per package"
     );
 }

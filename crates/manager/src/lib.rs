@@ -1274,7 +1274,10 @@ mod tests {
     #[test]
     fn every_manager_has_a_descriptor() {
         for manager in super::Manager::ALL {
-            let _ = super::ecosystem(*manager);
+            // The call is the check: ecosystem() routes YAML-family managers
+            // through yaml::descriptor, which panics for a manager missing
+            // from yaml::MANAGERS.
+            super::ecosystem(*manager);
         }
     }
 
