@@ -494,3 +494,42 @@ fn the_repositorys_own_config_keeps_the_schema_policy() {
     );
     assert_eq!(own, defaults);
 }
+
+#[test]
+fn a_settings_problem_points_into_the_file_only_when_it_reads() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.pkl");
+    std::fs::write(&path, "concurrency = 4\n").unwrap();
+    // No file at all: the bare message, with no invented location.
+    let error = patchula_config::settings_problem(None, "concurrency", "bad value");
+    assert!(error.to_string().contains("bad value"), "{error}");
+    // A file that cannot be read gets the same bare message.
+    let missing = directory.path().join("missing.pkl");
+    let error = patchula_config::settings_problem(Some(&missing), "concurrency", "bad value");
+    assert!(error.to_string().contains("bad value"), "{error}");
+    // A readable file gets the labelled problem naming it.
+    let error = patchula_config::settings_problem(Some(&path), "concurrency", "bad value");
+    let diagnostic = format!("{error:?}");
+    assert!(diagnostic.contains("settings.pkl"), "{diagnostic}");
+}
+
+#[test]
+fn an_unreadable_imported_module_is_a_named_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("patchula.pkl");
+    // `sub` exists but is a directory: reading it is a real error, not a
+    // missing module, so it must not pass for the schema's stand-in.
+    std::fs::create_dir(directory.path().join("sub")).unwrap();
+    std::fs::write(&path, "amends \"PatchulaConfig.pkl\"\nimport \"sub\"\n").unwrap();
+    let error = patchula_config::evaluate_local(
+        &path,
+        patchula_config::SCHEMA_NAME,
+        patchula_config::SCHEMA,
+    )
+    .unwrap_err();
+    let diagnostic = format!("{error:?}");
+    assert!(
+        diagnostic.contains("cannot read config module"),
+        "{diagnostic}"
+    );
+}

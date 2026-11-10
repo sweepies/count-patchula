@@ -632,4 +632,23 @@ mod tests {
             assert_eq!(read(Some(raw)).unwrap(), [0xff]);
         }
     }
+    #[test]
+    fn a_secret_problem_names_where_it_is_read_from_never_the_value() {
+        // `read` reports a non-UTF-8 value through `source`; both-set and
+        // neither-set secrets are refused before a value is read.
+        let secret = |env: Option<&str>, file: Option<&str>| Secret {
+            env: env.map(str::to_owned),
+            file: file.map(PathBuf::from),
+        };
+        assert_eq!(
+            secret(Some("TOKEN"), None).source(),
+            "environment variable TOKEN"
+        );
+        assert_eq!(
+            secret(None, Some("/run/secrets/token")).source(),
+            "file /run/secrets/token"
+        );
+        assert_eq!(secret(Some("A"), Some("/x")).source(), "secret");
+        assert_eq!(secret(None, None).source(), "secret");
+    }
 }

@@ -252,4 +252,36 @@ mod tests {
             assert_eq!(Registry::from_recorded(recorded), expected, "{recorded}");
         }
     }
+
+    #[test]
+    fn indexes_and_conversions_read_a_registry_back() {
+        let ambiguous =
+            Registry::ambiguous(&["https://a.dev/".to_owned(), "https://b.dev/".to_owned()]);
+        assert_eq!(
+            ambiguous.indexes(),
+            Some(["https://a.dev/".to_owned(), "https://b.dev/".to_owned()].as_slice())
+        );
+        assert_eq!(Registry::Url("https://a.dev/".into()).indexes(), None);
+        assert_eq!(Registry::Unusable("x".into()).indexes(), None);
+        // `From<String>` and `FromStr` read recorded bytes like `from_recorded`.
+        assert_eq!(
+            Registry::from("https://a.dev/".to_owned()),
+            Registry::Url("https://a.dev/".into())
+        );
+        assert_eq!(
+            "ambiguous: https://a.dev/".parse::<Registry>().unwrap(),
+            Registry::ambiguous(&["https://a.dev/".to_owned()])
+        );
+    }
+
+    #[test]
+    fn equal_recorded_text_is_told_apart_by_kind_and_indexes() {
+        use std::cmp::Ordering;
+        let ambiguous = Registry::ambiguous(&["https://a.dev/".to_owned()]);
+        // Same recorded text: kind decides before the indexes do.
+        let url = Registry::Url(ambiguous.recorded().to_owned());
+        assert_eq!(url.cmp(&ambiguous), Ordering::Less);
+        let same = Registry::ambiguous(&["https://a.dev/".to_owned()]);
+        assert_eq!(ambiguous.cmp(&same), Ordering::Equal);
+    }
 }

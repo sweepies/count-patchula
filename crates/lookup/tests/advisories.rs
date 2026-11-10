@@ -477,3 +477,39 @@ fn a_package_from_its_own_registry_gets_no_public_advisories() {
     private.registry = Some("https://npm.acme.dev".into());
     assert!(advisory_query(&private).is_none());
 }
+
+#[test]
+fn a_transitive_fix_needs_a_parseable_current_version() {
+    let eval = patchula_lookup::Evaluator::new(
+        &patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap(),
+    )
+    .unwrap();
+    let mut dep = dependency(Source::Crates, "bogus", "bogus", Some("bogus"));
+    dep.kind = DependencyKind::Transitive;
+    let q = query("crates.io", "bogus", "bogus");
+    assert!(eval.transitive_fix(&dep, (&q, &[])).unwrap().is_none());
+}
+
+#[test]
+fn a_transitive_fix_is_suppressed_when_the_matched_rule_deactivates_updates() {
+    let eval = patchula_lookup::Evaluator::new(
+        &patchula_config::load(std::path::Path::new("../../examples/go-module.pkl")).unwrap(),
+    )
+    .unwrap();
+    let mut dep = dependency(Source::Crates, "1password/cli", "1.0.0", Some("1.0.0"));
+    dep.kind = DependencyKind::Transitive;
+    let q = advisory_query(&dep).unwrap();
+    let ranges = |fixed: &[&str]| {
+        fixed
+            .iter()
+            .map(|f| vec![Event::Introduced("0".into()), Event::Fixed((*f).into())])
+            .collect()
+    };
+    let found = vec![Arc::new(advisory(
+        "crates.io",
+        "1password/cli",
+        ranges(&["1.0.1"]),
+        &[],
+    ))];
+    assert!(eval.transitive_fix(&dep, (&q, &found)).unwrap().is_none());
+}

@@ -138,3 +138,60 @@ fn exhausted_quota(response: &Response) -> Option<Duration> {
         .unwrap_or(21600);
     Some(Duration::from_secs(window.max(61)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::{StatusCode, header::HeaderMap};
+
+    fn response(status: u16, headers: &[(&str, &str)], body: &str) -> Response {
+        Response {
+            status: StatusCode::from_u16(status).unwrap(),
+            headers: headers
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        reqwest::header::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                        v.parse().unwrap(),
+                    )
+                })
+                .collect::<HeaderMap>(),
+            body: body.as_bytes().to_vec(),
+            stale: None,
+        }
+    }
+
+    /// A manifest GET's 429 is Docker Hub's pull limit when its counter
+    /// reads zero, its body says so, or it omits `Retry-After` — the pull
+    /// limit is the one throttle that does not ask to be retried.
+    #[test]
+    fn a_manifest_429_is_a_pull_limit_only_on_the_evidence() {
+        let rules = registry_rules(&Options::default());
+        // The counter spent: `remaining` parses to zero.
+        assert!(rules.pull_limited(&response(
+            429,
+            &[("ratelimit-remaining", "0;w=21600"), ("retry-after", "30")],
+            "{}",
+        )));
+        // Docker Hub's own wording, in any case.
+        assert!(rules.pull_limited(&response(
+            429,
+            &[("retry-after", "30")],
+            "You have reached your pull rate limit.",
+        )));
+        // No `Retry-After` at all: the pull limit omits it.
+        assert!(rules.pull_limited(&response(429, &[], "{}")));
+        // An ordinary throttle names its wait and keeps its counter.
+        assert!(!rules.pull_limited(&response(
+            429,
+            &[
+                ("ratelimit-remaining", "137;w=21600"),
+                ("retry-after", "30"),
+            ],
+            "{}",
+        )));
+        // A spent counter on a non-pull-limit body still reads as limited:
+        // the header alone is the evidence.
+        assert!(rules.pull_limited(&response(429, &[("ratelimit-remaining", "0")], "{}",)));
+    }
+}

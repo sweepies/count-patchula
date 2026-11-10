@@ -391,6 +391,82 @@ mod tests {
     }
 
     #[test]
+    fn a_revisited_module_is_skipped_and_a_missing_one_fails() {
+        // A diamond: both a.pkl and b.pkl import shared.pkl; the second
+        // visit is skipped rather than read or failed again.
+        let files = BTreeMap::from([
+            (
+                "entry.pkl".to_owned(),
+                "import \"a.pkl\"\nimport \"b.pkl\"\n".to_owned(),
+            ),
+            ("a.pkl".to_owned(), "import \"shared.pkl\"\n".to_owned()),
+            ("b.pkl".to_owned(), "import \"shared.pkl\"\n".to_owned()),
+            ("shared.pkl".to_owned(), String::new()),
+        ]);
+        let modules = walk("entry.pkl", &files).unwrap();
+        assert!(modules.contains_key("shared.pkl"));
+        // Only the schema module stands in for a missing file.
+        let files = BTreeMap::from([("entry.pkl".to_owned(), "import \"gone.pkl\"\n".to_owned())]);
+        assert_eq!(
+            walk("entry.pkl", &files).unwrap_err(),
+            "missing config module gone.pkl"
+        );
+    }
+
+    #[test]
+    fn dot_components_resolve_to_the_same_module() {
+        let files = BTreeMap::from([
+            (
+                "dir/patchula.pkl".to_owned(),
+                "import \"./shared.pkl\"\nimport \"sub/../other.pkl\"\n".to_owned(),
+            ),
+            ("dir/shared.pkl".to_owned(), String::new()),
+            ("dir/other.pkl".to_owned(), String::new()),
+        ]);
+        let modules = walk("dir/patchula.pkl", &files).unwrap();
+        assert!(modules.contains_key("dir/shared.pkl"));
+        assert!(modules.contains_key("dir/other.pkl"));
+    }
+
+    #[test]
+    fn import_targets_reads_every_clause_form() {
+        for (text, expected) in [
+            ("amends \"a.pkl\"", vec!["a.pkl"]),
+            ("extends \"b.pkl\"", vec!["b.pkl"]),
+            ("import \"c.pkl\"", vec!["c.pkl"]),
+            ("import* \"d.pkl\"", vec!["d.pkl"]),
+            ("import (\"e.pkl\")", vec!["e.pkl"]),
+            ("amends /* note */ \"f.pkl\"", vec!["f.pkl"]),
+            ("extends // note\n\"g.pkl\"", vec!["g.pkl"]),
+            ("import*\n// note\n/* note */\n(\"h.pkl\")", vec!["h.pkl"]),
+            ("import ##\"raw-hash.pkl\"##", vec!["raw-hash.pkl"]),
+            ("import \"\"\"i.pkl\"\"\"", vec!["i.pkl"]),
+            // A clause keyword with no string after it is not an import.
+            ("import = value", vec![]),
+            ("import (compute())", vec![]),
+            ("extends", vec![]),
+        ] {
+            assert_eq!(import_targets(text), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_lexer_skips_strings_comments_and_interpolations() {
+        // `#` that opens no raw string, an unterminated string, a nested
+        // block comment and interpolations inside every string form.
+        let text = concat!(
+            "a = ## not a string\n",
+            "b = \"unterminated\n",
+            "/* outer /* inner */ tail */ c = 1\n",
+            "d = \"x\\(f(\"s\", 1) /* c */ // note\n g(2))y\"\n",
+            "e = \"\"\"x\\(h(3))y\"\"\"\n",
+            "f = #\"raw \\(not-code)\"#\n",
+            "import \"real.pkl\"\n",
+        );
+        assert_eq!(import_targets(text), ["real.pkl"]);
+    }
+
+    #[test]
     fn an_absolute_entry_cannot_import_outside_its_directory() {
         let files = BTreeMap::from([
             (

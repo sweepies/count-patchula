@@ -899,6 +899,47 @@ mod tests {
     }
 
     #[test]
+    fn a_proposed_update_needs_a_target_and_no_duplicates() {
+        let report = |updates: serde_json::Value| {
+            serde_json::json!({
+                "schemaVersion": SCHEMA_VERSION,
+                "repositories": [{
+                    "repository": "demo/app",
+                    "status": "complete",
+                    "reason": null,
+                    "packageFiles": [{
+                        "path": "package.json",
+                        "dependencies": [{
+                            "manager": "npm",
+                            "name": "left-pad",
+                            "package": "left-pad",
+                            "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
+                            "updates": updates
+                        }]
+                    }]
+                }]
+            })
+        };
+        let parse = |v: &serde_json::Value| Report::from_json(&serde_json::to_vec(v).unwrap());
+        // An update with no new value, version or digest proposes nothing.
+        let empty = report(serde_json::json!([{"updateType": "patch"}]));
+        assert!(parse(&empty).is_err());
+        // Two identical proposals are ambiguous.
+        let update = serde_json::json!({
+            "newValue": "1.0.1", "newVersion": "1.0.1", "newDigest": null,
+            "updateType": "patch", "group": null
+        });
+        let duplicate = report(serde_json::json!([update.clone(), update]));
+        assert!(parse(&duplicate).is_err());
+        // A lockfile-only update carries just a version and is fine.
+        let lockfile_only = report(serde_json::json!([{
+            "newValue": null, "newVersion": "1.0.1", "newDigest": null,
+            "updateType": "patch", "group": null
+        }]));
+        parse(&lockfile_only).unwrap();
+    }
+
+    #[test]
     fn action_versions_and_dry_run_states_are_validated() {
         let mut value = serde_json::json!({
             "schemaVersion": 6,

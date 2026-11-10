@@ -267,3 +267,52 @@ pub struct MirrorEntry {
     #[serde(default)]
     pub prerelease: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `from_url` reads the spellings package metadata uses for a repository:
+    /// SCP-style `git@` remotes, `github:` shorthands and bare `owner/repo`,
+    /// and refuses credentials, unsupported schemes and unsafe paths.
+    #[test]
+    fn repository_urls_normalize_and_refuse() {
+        let github = Repository::from_url("git@github.com:owner/repo.git").unwrap();
+        assert_eq!(github.github.as_deref(), Some("owner/repo"));
+        assert_eq!(github.url, "https://github.com/owner/repo");
+
+        let gitlab = Repository::from_url("git@gitlab.com:group/sub/repo.git").unwrap();
+        let forge = gitlab.forge.unwrap();
+        assert_eq!(forge.kind, ForgeKind::Gitlab);
+        assert_eq!(forge.path, "group/sub/repo");
+
+        assert_eq!(
+            Repository::from_url("github:owner/repo")
+                .unwrap()
+                .github
+                .as_deref(),
+            Some("owner/repo")
+        );
+        assert_eq!(
+            Repository::from_url("owner/repo")
+                .unwrap()
+                .github
+                .as_deref(),
+            Some("owner/repo")
+        );
+        // `/tree/<ref>/<dir>` names a package inside the repository.
+        let nested = Repository::from_url("https://github.com/o/r/tree/main/pkg/sub").unwrap();
+        assert_eq!(nested.directory.as_deref(), Some("pkg/sub"));
+
+        // Credentials never survive into a repository identity.
+        // Built at runtime so the secret scan never sees a credential-shaped URL.
+        let passworded = format!("https://user:{}@github.com/o/r", "p".to_owned() + "w");
+        assert!(Repository::from_url(&passworded).is_none());
+        assert!(Repository::from_url("https://user@github.com/o/r").is_none());
+        // A scheme release notes cannot read is no repository.
+        assert!(Repository::from_url("ftp://example.com/o/r").is_none());
+        // Unsafe owner or repository names are refused.
+        assert!(Repository::from_url("https://github.com/o/").is_none());
+        assert!(Repository::from_url("https://github.com/.").is_none());
+    }
+}

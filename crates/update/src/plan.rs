@@ -1513,3 +1513,95 @@ mod fingerprint_bytes {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use patchula_manager::{EditForm, Location, Syntax};
+    use patchula_words::{DependencyKind, Manager, Scheme};
+
+    fn dep() -> Dependency {
+        Dependency {
+            manager: Manager::Npm,
+            file: "package.json".into(),
+            location: Location {
+                start: 0,
+                end: 1,
+                line: 1,
+                column: 1,
+                pointer: String::new(),
+            },
+            form: EditForm::Scalar(Syntax::Json),
+            name: "left-pad".into(),
+            package: "left-pad".into(),
+            kind: DependencyKind::Production,
+            current: "1.0.0".into(),
+            resolved: Some("1.0.0".into()),
+            digest: None,
+            source: Source::Npm,
+            scheme: Scheme::Semver,
+            extract: None,
+            included_by: None,
+            registry: None,
+        }
+    }
+
+    fn reported() -> patchula_report::Dependency {
+        patchula_report::Dependency {
+            manager: Manager::Npm,
+            name: "left-pad".into(),
+            occurrence: None,
+            package: "left-pad".into(),
+            registry: None,
+            current: patchula_report::Current {
+                value: None,
+                version: None,
+                digest: None,
+            },
+            updates: vec![],
+            metadata: None,
+        }
+    }
+
+    fn update() -> Update {
+        Update {
+            new_value: Some("1.2.0".into()),
+            new_version: Some("1.2.0".into()),
+            new_digest: None,
+            update_type: UpdateKind::Minor,
+            group: None,
+            policy: None,
+            release_age: None,
+            fixes: vec![],
+            image: None,
+        }
+    }
+
+    /// A package looked up in its own registry is a different branch than
+    /// the public package of the same name, named for that registry.
+    #[test]
+    fn a_registry_package_gets_its_own_identity_and_branch_prefix() {
+        let mut dep = dep();
+        dep.registry = Some(Registry::Url("https://npm.acme.dev".into()));
+        let names: PackageNames = BTreeMap::from([(
+            package_slug(&dep.package),
+            BTreeSet::from([
+                (Source::Npm, "left-pad".into(), dep.registry.clone()),
+                (Source::Npm, "left-pad".into(), None),
+            ]),
+        )]);
+        let (identity, branch) =
+            branch_identity(&dep, &reported(), &update(), &[dep.clone()], &names, None);
+        assert!(identity.contains("npm.acme.dev"), "{identity}");
+        assert!(branch.starts_with("npm-acme-dev-"), "{branch}");
+
+        dep.registry = None;
+        let names: PackageNames = BTreeMap::from([(
+            package_slug(&dep.package),
+            BTreeSet::from([(Source::Npm, "left-pad".into(), None)]),
+        )]);
+        let (_, plain) =
+            branch_identity(&dep, &reported(), &update(), &[dep.clone()], &names, None);
+        assert!(plain.starts_with("left-pad-"), "{plain}");
+    }
+}

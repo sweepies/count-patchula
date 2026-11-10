@@ -1819,3 +1819,99 @@ fn bracketed_intervals_start_at_their_first_bound_and_widen() {
         );
     }
 }
+
+#[test]
+fn an_extract_pattern_is_compiled_once_across_lookups() {
+    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let mut dep = dependency("lib");
+    dep.extract = Some("^v(?P<version>.+)$".into());
+    let now = instant("2026-10-12T00:00:00Z");
+    for _ in 0..2 {
+        assert!(eval.lookup_evidence(&dep, None, now).is_ok());
+    }
+}
+
+#[test]
+fn floating_latest_skips_yanked_unnormalizable_and_unparsable_releases() {
+    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let mut dep = dependency("lib");
+    dep.kind = DependencyKind::Tool;
+    dep.current = "latest".into();
+    dep.resolved = None;
+    dep.extract = Some("^v(?P<version>.+)$".into());
+    let mut cat = catalog(&["v9.9.9", "other", "vnotsemver", "v2.0.0"]);
+    cat.versions[0].yanked = true;
+    let result = eval.evaluate_at(&dep, &cat, instant("2026-10-12T00:00:00Z"));
+    let evaluation = result.unwrap();
+    assert_eq!(evaluation.updates.len(), 1);
+    assert_eq!(evaluation.updates[0].update_type, Update::Pin);
+    assert_eq!(evaluation.updates[0].new_version.as_deref(), Some("2.0.0"));
+}
+
+#[test]
+fn a_permitted_filter_skips_tag_candidates_it_rejects() {
+    let eval = Evaluator::new(&config("nightly-pins")).unwrap();
+    let mut dep = dependency("pingdotgg/t3code");
+    dep.current = "nightly".into();
+    dep.resolved = Some("nightly".into());
+    let mut cat = catalog(&["3.0.0-alpha.1", "2.9.0-nightly.3"]);
+    cat.dist_tags
+        .insert("nightly".into(), "3.0.0-nightly.7".into());
+    let evaluation = eval
+        .evaluate_at(&dep, &cat, instant("2026-10-12T00:00:00Z"))
+        .unwrap();
+    assert_eq!(evaluation.updates.len(), 1);
+    assert_eq!(evaluation.updates[0].update_type, Update::Pin);
+    assert_eq!(
+        evaluation.updates[0].new_version.as_deref(),
+        Some("2.9.0-nightly.3")
+    );
+}
+
+#[test]
+fn mise_tool_versions_resolve_through_the_extract_pattern() {
+    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let mut dep = dependency("lib");
+    dep.manager = Manager::Mise;
+    dep.resolved = Some("1.0.0".into());
+    dep.extract = Some("^v(?P<version>.+)$".into());
+    let cat = catalog(&["v1.0.0", "v1.2.0", "junk"]);
+    assert_eq!(
+        eval.resolved_tool_version(&dep, &cat).unwrap().as_deref(),
+        Some("1.0.0")
+    );
+    dep.resolved = Some("bogus".into());
+    assert!(eval.resolved_tool_version(&dep, &cat).unwrap().is_none());
+}
+
+#[test]
+fn a_tagged_action_with_a_short_tag_resolves_through_its_commit_digest() {
+    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let mut dep = dependency("actions/checkout");
+    dep.manager = Manager::GithubActions;
+    dep.source = Source::GithubTags;
+    dep.current = "v1".into();
+    dep.resolved = None;
+    dep.digest = None;
+    let version = |v: &str, digest: &str| Version {
+        version: v.into(),
+        published_at: None,
+        digest: Some(digest.into()),
+        deprecated: false,
+        yanked: false,
+    };
+    let cat = Catalog {
+        versions: vec![
+            version("v1", "d1"),
+            version("v1.2.3", "d1"),
+            version("v1.9.9", "other"),
+        ],
+        dist_tags: Default::default(),
+    };
+    assert_eq!(
+        eval.resolved_current_version(&dep, &cat)
+            .unwrap()
+            .as_deref(),
+        Some("v1.2.3")
+    );
+}

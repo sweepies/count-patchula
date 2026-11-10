@@ -510,6 +510,7 @@ mod tests {
 
     #[test]
     fn cut_and_truncate_marked_never_sever_his_markers() {
+        assert_eq!(cut_bytes("héllo", 2), "h");
         assert_eq!(cut_bytes("héllo", 3), "hé");
         assert_eq!(cut_bytes("abc", 10), "abc");
         let text = body(" foreign tail");

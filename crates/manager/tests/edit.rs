@@ -619,3 +619,69 @@ fn apm_pins_leave_a_tab_separated_comment_after_the_new_one() {
         format!("dependencies:\n  apm:\n    - owner/repo#{sha} # v1.0.0\t# note\n")
     );
 }
+
+fn dep(
+    manager: Manager,
+    form: patchula_manager::EditForm,
+    pointer: &str,
+) -> patchula_manager::Dependency {
+    patchula_manager::Dependency {
+        manager,
+        file: "manifest".into(),
+        location: patchula_manager::Location {
+            start: 0,
+            end: 1,
+            line: 1,
+            column: 1,
+            pointer: pointer.into(),
+        },
+        form,
+        name: "foo".into(),
+        package: "foo".into(),
+        kind: patchula_words::DependencyKind::Production,
+        current: "1.0.0".into(),
+        resolved: None,
+        digest: None,
+        source: patchula_words::Source::Npm,
+        scheme: patchula_words::Scheme::Semver,
+        extract: None,
+        included_by: None,
+        registry: None,
+    }
+}
+
+#[test]
+fn an_extracted_scalar_that_differs_from_the_dependency_is_refused() {
+    let text = "{\"dependencies\":{\"foo\":\"9.9.9\"}}";
+    let start = text.find("\"9.9.9\"").unwrap();
+    let mut dep = dep(
+        Manager::Npm,
+        patchula_manager::EditForm::Scalar(patchula_manager::Syntax::Json),
+        "/dependencies/foo",
+    );
+    dep.location.start = start;
+    dep.location.end = start + "\"9.9.9\"".len();
+    let error = edits(&dep, text, "2.0.0", None).unwrap_err();
+    assert!(error.contains("does not match"), "{error}");
+}
+
+#[test]
+fn a_separate_yaml_digest_field_that_is_not_there_is_refused() {
+    let text = "image: app:1.0.0\n";
+    let start = text.find("1.0.0").unwrap();
+    let mut dep = dep(
+        Manager::Npm,
+        patchula_manager::EditForm::Image {
+            syntax: patchula_manager::Syntax::Yaml,
+            digest_pointer: Some("/missing".into()),
+            comment: false,
+        },
+        "/image/tag",
+    );
+    dep.location.start = start;
+    dep.location.end = start + "1.0.0".len();
+    dep.current = "1.0.0".into();
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let error = edits(&dep, text, "2.0.0", Some(&digest)).unwrap_err();
+    assert!(error.contains("not supported yet"), "{error}");
+}
