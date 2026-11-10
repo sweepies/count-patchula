@@ -119,8 +119,9 @@ fn with_foreign(text: String, current: &str) -> String {
 /// bytes of other people's text fit beside it.
 const FOREIGN_LIMIT: usize = 65_000;
 /// The most `truncate_marked` may keep of a body a closure rewrites: the
-/// limit less the `"\n\n"` separator and `marker` appended after it, so the
-/// marker's own growth can never push the body past GitHub's limit.
+/// limit less the `"\n\n"` separator and `marker` appended after it.
+/// `truncate_marked` never cuts the Count's own section, which stays within
+/// `BODY_LIMIT`, so only the text around it gives way.
 fn closure_budget(marker: &str) -> usize {
     FOREIGN_LIMIT - "\n\n".len() - marker.len()
 }
