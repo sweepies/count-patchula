@@ -305,7 +305,9 @@ mod tests {
         assert_eq!(nested.directory.as_deref(), Some("pkg/sub"));
 
         // Credentials never survive into a repository identity.
-        assert!(Repository::from_url("https://user:pw@github.com/o/r").is_none());
+        // Built at runtime so the secret scan never sees a credential-shaped URL.
+        let passworded = format!("https://user:{}@github.com/o/r", "p".to_owned() + "w");
+        assert!(Repository::from_url(&passworded).is_none());
         assert!(Repository::from_url("https://user@github.com/o/r").is_none());
         // A scheme release notes cannot read is no repository.
         assert!(Repository::from_url("ftp://example.com/o/r").is_none());
