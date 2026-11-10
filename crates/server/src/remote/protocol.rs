@@ -51,20 +51,13 @@ pub struct AuthInfo {
 }
 
 /// An error body: `errorKind` names the rejection for programs, `error` is
-/// the message a person reads.
+/// the message a person reads. The one declaration of the `{errorKind,
+/// error}` shape both sides of the wire share.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RejectBody {
     pub error_kind: String,
     pub error: String,
-}
-
-/// A serialized error body, the shape `Reject` answers with.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Reject<'a> {
-    pub error_kind: &'a str,
-    pub error: &'a str,
 }
 
 /// The `GET /api/v1/runs/{id}` 200 body. Serializes exactly as the ad-hoc

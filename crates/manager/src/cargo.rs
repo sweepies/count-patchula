@@ -353,7 +353,7 @@ pub(crate) fn config_file(path: &str) -> bool {
 /// site host. The one answer `locked`, `nonpublic_registry` and `CRATES`
 /// share; a lookalike host or a `registry+`/`sparse+` prefix on anything
 /// else does not count.
-pub(crate) fn crates_io(value: &str) -> bool {
+pub fn crates_io(value: &str) -> bool {
     let value = value
         .strip_prefix("registry+")
         .or_else(|| value.strip_prefix("sparse+"))

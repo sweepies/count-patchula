@@ -7,6 +7,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["terraform"],
     versions: true,
     install: Install::Plain,
+    proof: Proof::None,
+    run: Run::Direct,
     refresh: Refresh::Locks(&[Manager::Terraform]),
     output: Output::Default,
 };

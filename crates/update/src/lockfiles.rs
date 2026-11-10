@@ -18,7 +18,7 @@ mod ruby;
 mod terraform;
 mod tool;
 mod tools;
-use tool::{Install, Output, Refresh, Tool, descriptor, descriptors};
+use tool::{Install, Output, Proof, Refresh, Run, Tool, descriptor, descriptors, ecosystem};
 pub use tools::{bootstrap_mise, tools_dir};
 mod wrapper;
 use crate::{Blob, Plan, Snapshot, blob_sha, plan::unified};
@@ -259,7 +259,7 @@ pub(crate) fn job(
     update: &Update,
     snapshot: &Snapshot,
 ) -> Result<Option<Job>, String> {
-    let (ecosystem, root) = match dep.manager {
+    let root = match dep.manager {
         Manager::Mise => {
             // A lockfile records the configuration beside it and above it, never
             // below: a nested mise.toml is locked by a mise.lock of its own.
@@ -316,7 +316,7 @@ pub(crate) fn job(
             }) {
                 return Err("unsupported lockfile format".into());
             }
-            (Ecosystem::Node, root)
+            root
         }
         // `helm dependency update` downloads chart archives into the tree;
         // a committed Chart.lock is not regenerated yet.
@@ -343,7 +343,7 @@ pub(crate) fn job(
             {
                 return Ok(None);
             }
-            (Ecosystem::Apm, root)
+            root
         }
         Manager::Bundler if dep.kind == patchula_words::DependencyKind::Toolchain => {
             return Ok(None);
@@ -356,7 +356,7 @@ pub(crate) fn job(
             ) else {
                 return Ok(None);
             };
-            (Ecosystem::Ruby, root)
+            root
         }
         Manager::Composer => {
             let Some(root) = nearest_dir(
@@ -366,7 +366,7 @@ pub(crate) fn job(
             ) else {
                 return Ok(None);
             };
-            (Ecosystem::Php, root)
+            root
         }
         // Each flake input is moved by name; nix resolves its new revision.
         Manager::Nix => {
@@ -449,12 +449,9 @@ pub(crate) fn job(
             if lock.is_none() && update.new_value.is_none() {
                 return Ok(None);
             }
-            (
-                Ecosystem::Cargo,
-                lock.unwrap_or_else(|| directory(&dep.file)),
-            )
+            lock.unwrap_or_else(|| directory(&dep.file))
         }
-        Manager::Go => (Ecosystem::Go, directory(&dep.file)),
+        Manager::Go => directory(&dep.file),
         // `.python-version` pins the interpreter, which no lockfile records.
         Manager::Pyproject if dep.file.ends_with(".python-version") => return Ok(None),
         Manager::Pyproject => {
@@ -484,13 +481,12 @@ pub(crate) fn job(
             let Some(root) = supported else {
                 return Ok(None);
             };
-            (Ecosystem::Python, root)
+            root
         }
-        Manager::Terraform if dep.source == Source::Terraform => {
-            (Ecosystem::Terraform, directory(&dep.file))
-        }
+        Manager::Terraform if dep.source == Source::Terraform => directory(&dep.file),
         _ => return Ok(None),
     };
+    let ecosystem = ecosystem(dep.manager).expect("job's dispatch maps every ecosystem it yields");
     let targeted = dep.movable_lockfile();
     Ok(Some(Job {
         ecosystem,
@@ -1079,38 +1075,39 @@ impl Runner {
             spec.args.push(format!("{tool}@{version}"));
         }
         spec.args.push("--".into());
-        if call.descriptor.tools.contains(&"rust") {
-            let version = call
-                .tools
-                .iter()
-                .find(|(tool, _)| tool == "rust")
-                .map(|(_, version)| version.clone())
-                .ok_or("missing tool version")?;
-            spec.env
-                .insert("RUSTUP_HOME".into(), self.rustup_home.as_os_str().into());
-            let cargo_home = spec
-                .env
-                .get(std::ffi::OsStr::new("CARGO_HOME"))
-                .ok_or("missing isolated Cargo home")?
-                .clone();
-            let install_home = self.cache.join("tool-cargo");
-            std::fs::create_dir_all(&install_home).map_err(|e| e.to_string())?;
-            spec.env
-                .insert("CARGO_HOME".into(), install_home.into_os_string());
-            let rustc = self.rustup.with_file_name("rustc");
-            if rustc.is_file() {
-                spec.env.insert("RUSTC".into(), rustc.into_os_string());
+        match call.descriptor.run {
+            Run::Rustup(toolchain) => {
+                let version = call
+                    .tools
+                    .iter()
+                    .find(|(tool, _)| tool.as_str() == toolchain)
+                    .map(|(_, version)| version.clone())
+                    .ok_or("missing tool version")?;
+                spec.env
+                    .insert("RUSTUP_HOME".into(), self.rustup_home.as_os_str().into());
+                let cargo_home = spec
+                    .env
+                    .get(std::ffi::OsStr::new("CARGO_HOME"))
+                    .ok_or("missing isolated Cargo home")?
+                    .clone();
+                let install_home = self.cache.join("tool-cargo");
+                std::fs::create_dir_all(&install_home).map_err(|e| e.to_string())?;
+                spec.env
+                    .insert("CARGO_HOME".into(), install_home.into_os_string());
+                let rustc = self.rustup.with_file_name("rustc");
+                if rustc.is_file() {
+                    spec.env.insert("RUSTC".into(), rustc.into_os_string());
+                }
+                spec.args.extend([
+                    "env".into(),
+                    format!("CARGO_HOME={}", cargo_home.to_string_lossy()),
+                    self.rustup.to_string_lossy().into_owned(),
+                    "run".into(),
+                    version,
+                    call.bin.name().to_owned(),
+                ]);
             }
-            spec.args.extend([
-                "env".into(),
-                format!("CARGO_HOME={}", cargo_home.to_string_lossy()),
-                self.rustup.to_string_lossy().into_owned(),
-                "run".into(),
-                version,
-                call.bin.name().to_owned(),
-            ]);
-        } else {
-            spec.args.push(call.bin.name().into());
+            Run::Direct => spec.args.push(call.bin.name().into()),
         }
         spec.args.extend(call.args);
         spec.secrets = call.secrets;
@@ -1229,7 +1226,9 @@ fn validate_targets(
                     .is_some_and(|packages| {
                         packages.iter().any(|p| {
                             p.get("name").and_then(toml_edit::Item::as_str) == Some(&change.package)
-                                && crates_io(p).is_some()
+                                && p.get("source")
+                                    .and_then(toml_edit::Item::as_str)
+                                    .is_some_and(patchula_manager::crates_io)
                                 && p.get("version")
                                     .and_then(toml_edit::Item::as_str)
                                     .zip(change.version.as_deref())
@@ -1248,16 +1247,17 @@ fn validate_targets(
             }
             continue;
         }
-        let manifest = [
-            Manager::Npm,
-            Manager::Cargo,
-            Manager::Go,
-            Manager::Pyproject,
-            Manager::Bundler,
-            Manager::Composer,
-        ]
-        .iter()
-        .any(|manager| manifest_names(*manager).contains(&leaf));
+        // A manifest proves its declared target only for managers whose
+        // ecosystem's descriptor says `validate_targets` reads declarations
+        // back — the same mapping `job()` dispatches through.
+        let manifest = Manager::ALL.iter().any(|manager| {
+            ecosystem(*manager).is_some_and(|e| {
+                matches!(
+                    descriptor(e).proof,
+                    Proof::Declared | Proof::DeclaredAndResolved
+                )
+            }) && manifest_names(*manager).contains(&leaf)
+        });
         if !manifest && !change.file.ends_with(".tf") {
             continue;
         }
@@ -1290,16 +1290,10 @@ fn validate_targets(
                 },
             );
         if !unread
-            && (matches!(
-                dep.manager,
-                Manager::Npm
-                    | Manager::Bun
-                    | Manager::Cargo
-                    | Manager::Pyproject
-                    | Manager::Bundler
-                    | Manager::Composer
-            ) || (dep.source == Source::Terraform
-                && dep.kind == patchula_words::DependencyKind::Provider))
+            && (ecosystem(dep.manager)
+                .is_some_and(|e| descriptor(e).proof == Proof::DeclaredAndResolved)
+                || (dep.source == Source::Terraform
+                    && dep.kind == patchula_words::DependencyKind::Provider))
             && let Some(version) = &change.version
             && !dep
                 .resolved
@@ -1342,32 +1336,25 @@ fn versions(
         &[".tool-versions", "mise.toml", ".mise.toml"],
     ) {
         let blob = &baseline[path];
-        if path.ends_with(".tool-versions") {
-            for line in blob.content.lines() {
-                let mut words = line.split('#').next().unwrap_or("").split_whitespace();
-                let (Some(name), Some(version)) = (words.next(), words.next()) else {
-                    continue;
-                };
-                let Some(slot) = versions.get_mut(name) else {
-                    continue;
-                };
-                check_tool_version(name, version)?;
-                *slot = version.into();
-            }
-            continue;
-        }
-        let doc = toml_edit::Document::parse(blob.content.as_str()).map_err(|e| e.to_string())?;
-        if let Some(tools) = doc.get("tools") {
-            for (tool, version) in &mut versions {
-                if let Some(spec) = tools.get(tool) {
-                    let value = spec
-                        .as_str()
-                        .or_else(|| spec.get("version").and_then(toml_edit::Item::as_str))
-                        .ok_or_else(|| format!("{tool}: expected a version string or table"))?;
-                    check_tool_version(tool, value)?;
-                    *version = value.into();
+        for (name, pin) in mise::pins(path, &blob.content)? {
+            let Some(slot) = versions.get_mut(name.as_str()) else {
+                continue;
+            };
+            let version = match &pin {
+                // `.tool-versions` pins the first word, as it always did.
+                mise::Pin::Words(words) => words.first().map(String::as_str),
+                mise::Pin::Spec(spec) => spec
+                    .as_str()
+                    .or_else(|| spec.get("version").and_then(toml_edit::Item::as_str)),
+            };
+            let Some(version) = version else {
+                if matches!(pin, mise::Pin::Spec(_)) {
+                    return Err(format!("{name}: expected a version string or table"));
                 }
-            }
+                continue;
+            };
+            check_tool_version(&name, version)?;
+            *slot = version.into();
         }
     }
     Ok(versions)
@@ -1389,16 +1376,6 @@ fn check_tool_version(tool: &str, value: &str) -> Result<(), String> {
 /// for `zstd-sys` fixes `2.1.2`, which the lock records as `2.1.2+zstd.1.5.7`.
 pub(crate) fn same_release(locked: &str, requested: &str) -> bool {
     locked == requested || (!requested.contains('+') && locked.split('+').next() == Some(requested))
-}
-/// The source a Cargo.lock entry records when it comes from crates.io.
-fn crates_io(entry: &toml_edit::Table) -> Option<&str> {
-    entry
-        .get("source")
-        .and_then(toml_edit::Item::as_str)
-        .filter(|source| {
-            source.starts_with("registry+https://github.com/rust-lang/crates.io-index")
-                || source.starts_with("sparse+https://index.crates.io/")
-        })
 }
 /// The pinned tool versions used when a repository does not pin its own,
 /// parsed once: the file is embedded, so it cannot change between calls.

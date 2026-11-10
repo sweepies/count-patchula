@@ -1714,6 +1714,16 @@ fn pr_config() -> (Config, Repository) {
     config.prs.per_hour = None;
     (config, repo)
 }
+/// Publish with the note sources a run builds, composing what
+/// `publish_with_sources` takes directly.
+async fn publish(state: &mut patchula_update::Lifecycle, client: &Client, plans: &mut [Plan]) {
+    let sources = patchula_notes::Client::new(patchula_datasource::Client::new(
+        client.clone(),
+        client.public_http(patchula_datasource::http_options().rules),
+        client.cache(),
+    ));
+    state.publish_with_sources(client, &sources, plans).await;
+}
 async fn pr_cycle(
     client: &Client,
     repo: &Repository,
@@ -1743,7 +1753,7 @@ async fn pr_cycle(
         false,
     )
     .await;
-    state.publish(client, plans).await;
+    publish(&mut state, client, plans).await;
     state.actions
 }
 
@@ -1831,9 +1841,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             false,
         )
         .await;
-        lifecycle
-            .publish(&github, std::slice::from_mut(&mut p))
-            .await;
+        publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
         patchula_update::save_receipts(
             &cache,
             &repo,
@@ -1895,14 +1903,17 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             s.latency = std::time::Duration::from_millis(200);
         }
         let started = tokio::time::Instant::now();
-        let all = patchula_update::restore_unchanged(
-            &github,
+        let inventory = patchula_update::Inventory::read(&github, &cache, &repo, &config)
+            .await
+            .unwrap();
+        let all = patchula_update::restore_inventory(
             &cache,
             &repo,
             &config,
             std::slice::from_mut(&mut next),
             Default::default(),
             None,
+            &inventory,
         )
         .await
         .unwrap();
@@ -2022,9 +2033,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             server.0.lock().unwrap().close_after_reads = Some(1);
         }
         let started = tokio::time::Instant::now();
-        lifecycle
-            .publish(&github, std::slice::from_mut(&mut next))
-            .await;
+        publish(&mut lifecycle, &github, std::slice::from_mut(&mut next)).await;
         let result = &lifecycle.actions[0];
         let s = server.0.lock().unwrap();
         let reads = s
@@ -2128,7 +2137,7 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
         false,
     )
     .await;
-    lifecycle.publish(&github, &mut plans).await;
+    publish(&mut lifecycle, &github, &mut plans).await;
     assert_eq!(plans[1].action().verified, Some(true));
     lifecycle.actions.push(patchula_report::PullRequestAction {
         repository: repo.repository.clone(),
@@ -2220,14 +2229,17 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
             s.requests.clear();
         }
         let (mut warm, _) = make_plan(if case == "target" { "22.1.0" } else { "22.0.0" });
-        let all = patchula_update::restore_unchanged(
-            &github,
+        let inventory = patchula_update::Inventory::read(&github, &cache, &repo, &config)
+            .await
+            .unwrap();
+        let all = patchula_update::restore_inventory(
             &cache,
             &repo,
             &config,
             std::slice::from_mut(&mut warm),
             Default::default(),
             None,
+            &inventory,
         )
         .await
         .unwrap();
@@ -2813,9 +2825,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         false,
     )
     .await;
-    lifecycle
-        .publish(&github, std::slice::from_mut(&mut p))
-        .await;
+    publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
     {
         let s = server.0.lock().unwrap();
         let body = s.prs[&1]["body"].as_str().unwrap();
@@ -2879,9 +2889,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         c.body_notes = vec!["huge 🦀 <!-- patchula:fake -->".repeat(5000)];
     });
     let count = server.0.lock().unwrap().release_queries.len();
-    lifecycle
-        .publish(&github, std::slice::from_mut(&mut repeat))
-        .await;
+    publish(&mut lifecycle, &github, std::slice::from_mut(&mut repeat)).await;
     let s = server.0.lock().unwrap();
     let body = s.prs[&1]["body"].as_str().unwrap();
     assert!(body.len() <= patchula_update::BODY_LIMIT);
@@ -3916,9 +3924,7 @@ async fn paginated_inventory_connections_close_the_receipts_fast_path() {
             false,
         )
         .await;
-        lifecycle
-            .publish(&github, std::slice::from_mut(&mut p))
-            .await;
+        publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
         patchula_update::save_receipts(
             &cache,
             &repo,
@@ -3955,14 +3961,17 @@ async fn paginated_inventory_connections_close_the_receipts_fast_path() {
             }
         }
         let (mut next, _) = make_plan("22.0.0");
-        let outcome = patchula_update::restore_unchanged(
-            &github,
+        let inventory = patchula_update::Inventory::read(&github, &cache, &repo, &config)
+            .await
+            .unwrap();
+        let outcome = patchula_update::restore_inventory(
             &cache,
             &repo,
             &config,
             std::slice::from_mut(&mut next),
             Default::default(),
             None,
+            &inventory,
         )
         .await
         .unwrap();

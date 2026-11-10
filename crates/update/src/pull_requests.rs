@@ -118,6 +118,13 @@ fn with_foreign(text: String, current: &str) -> String {
 /// The Count's own section stays within `BODY_LIMIT`, so more than 30,000
 /// bytes of other people's text fit beside it.
 const FOREIGN_LIMIT: usize = 65_000;
+/// The most `truncate_marked` may keep of a body a closure rewrites: the
+/// limit less the `"\n\n"` separator and `marker` appended after it.
+/// `truncate_marked` never cuts the Count's own section, which stays within
+/// `BODY_LIMIT`, so only the text around it gives way.
+fn closure_budget(marker: &str) -> usize {
+    FOREIGN_LIMIT - "\n\n".len() - marker.len()
+}
 pub(crate) fn body_hash(text: &str) -> String {
     // GitHub may return CRLF for a body published with LF. Compare the same
     // content hash as write receipts, without treating transport newlines as edits.
@@ -137,6 +144,8 @@ pub(crate) struct Pr {
     pub title: Option<String>,
     /// The merge timestamp; `None` while open or closed unmerged.
     pub merged_at: Option<Value>,
+    /// The body text, for hashing and marker reads.
+    pub body: Option<String>,
     #[serde(default)]
     pub head: PrHead,
 }
@@ -145,6 +154,9 @@ pub(crate) struct PrHead {
     /// The head branch's name (`head.ref`).
     #[serde(rename = "ref", default)]
     pub branch: Option<String>,
+    /// The head commit (`head.sha`).
+    #[serde(default)]
+    pub sha: Option<String>,
 }
 impl Pr {
     pub(crate) fn read(pr: &Value) -> Self {
@@ -158,6 +170,7 @@ impl Pr {
             number: field(pr, "number"),
             title: field(pr, "title"),
             merged_at: field(pr, "merged_at"),
+            body: field(pr, "body"),
             head: field(pr, "head").unwrap_or_default(),
         }
     }
@@ -179,6 +192,11 @@ pub fn owned_pr(pr: &Value, actor: &str, repo: &str) -> bool {
     pr["user"]["login"] == actor
         && same_repo(pr, repo)
         && markers::ownership_marker(body(pr)).is_some()
+}
+/// The action a plan whose PR already says everything records: the PR is
+/// left exactly as it is.
+pub fn unchanged(repo: &str, branch: &str, pr: &Value) -> PullRequestAction {
+    action(repo, branch, Some(pr), PullRequestStatus::Unchanged, None)
 }
 fn action(
     repo: &str,
@@ -412,7 +430,8 @@ impl Lifecycle {
             if head["commit"]["sha"] != base {
                 return Err("base moved before obsolete PR closure; rerun".into());
             }
-            let mut text = markers::truncate_marked(body(&fresh), FOREIGN_LIMIT - 100);
+            let mut text =
+                markers::truncate_marked(body(&fresh), closure_budget(markers::OBSOLETE));
             text.push_str("\n\n");
             text.push_str(markers::OBSOLETE);
             client
@@ -507,14 +526,6 @@ impl Lifecycle {
         Ok(state)
     }
 
-    pub async fn publish(&mut self, client: &Client, plans: &mut [Plan]) {
-        let sources = patchula_notes::Client::new(patchula_datasource::Client::new(
-            client.clone(),
-            client.public_http(patchula_datasource::http_options().rules),
-            client.cache(),
-        ));
-        self.publish_with_sources(client, &sources, plans).await;
-    }
     pub async fn publish_with_sources(
         &mut self,
         client: &Client,
@@ -571,13 +582,8 @@ impl Lifecycle {
         sources.prepare_release_notes(&ranges).await;
         for plan in plans {
             if let Some(pr) = &plan.cached_pr {
-                self.actions.push(action(
-                    &self.repo,
-                    &plan.action().branch,
-                    Some(pr),
-                    PullRequestStatus::Unchanged,
-                    None,
-                ));
+                self.actions
+                    .push(unchanged(&self.repo, &plan.action().branch, pr));
                 continue;
             }
             if !matches!(
@@ -652,7 +658,7 @@ impl Lifecycle {
             }
             // Closed first: a closed PR is never visited again, so a failure
             // after this cannot repeat the comment.
-            let mut text = markers::truncate_marked(body(&fresh), FOREIGN_LIMIT - 100);
+            let mut text = markers::truncate_marked(body(&fresh), closure_budget(markers::BATCHED));
             text.push_str("\n\n");
             text.push_str(markers::BATCHED);
             let closed = client

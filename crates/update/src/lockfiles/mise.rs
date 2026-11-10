@@ -7,9 +7,49 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &[],
     versions: false,
     install: Install::Mise,
+    proof: Proof::None,
+    run: Run::Direct,
     refresh: Refresh::Locks(&[Manager::Mise]),
     output: Output::Default,
 };
+
+/// A tool pin one mise configuration file declares.
+pub(super) enum Pin {
+    /// `.tool-versions`: the version words on the line, in order.
+    Words(Vec<String>),
+    /// `mise.toml` or `.mise.toml`: the `[tools]` declaration as written.
+    Spec(toml_edit::Item),
+}
+
+/// The tool pins `path`'s text declares, the one parse `versions` and
+/// `mise_lock` share: `.tool-versions` lines give a name plus its version
+/// words; a TOML config's `[tools]` table gives each entry's item.
+pub(super) fn pins(path: &str, text: &str) -> Result<Vec<(String, Pin)>, String> {
+    if path.ends_with(".tool-versions") {
+        return Ok(text
+            .lines()
+            .filter_map(|line| {
+                let mut words = line.split('#').next().unwrap_or("").split_whitespace();
+                let name = words.next()?;
+                Some((
+                    name.to_owned(),
+                    Pin::Words(words.map(str::to_owned).collect()),
+                ))
+            })
+            .collect());
+    }
+    // A `DocumentMut` so each spec's decor survives the clone into `Pin`.
+    let doc = toml_edit::Document::parse(text)
+        .map_err(|e| e.to_string())?
+        .into_mut();
+    Ok(doc
+        .get("tools")
+        .and_then(toml_edit::Item::as_table_like)
+        .into_iter()
+        .flat_map(|tools| tools.iter())
+        .map(|(name, spec)| (name.to_owned(), Pin::Spec(spec.clone())))
+        .collect())
+}
 
 fn value(value: &toml_edit::Value) -> Value {
     if let Some(v) = value.as_str() {
@@ -284,60 +324,53 @@ impl Runner {
         paths.sort_by_key(|path| path.len());
         for path in paths {
             let text = std::fs::read_to_string(root.join(path)).map_err(|e| e.to_string())?;
-            if path.ends_with(".tool-versions") {
-                for line in text.lines() {
-                    let mut words = line.split('#').next().unwrap_or("").split_whitespace();
-                    if let Some(name) = words.next()
-                        && selected.contains(name)
-                    {
-                        let versions: Vec<_> = words.collect();
-                        if versions.len() == 1 {
-                            tools[name] = toml_edit::value(versions[0]);
+            for (name, pin) in pins(path, &text)? {
+                if !selected.contains(name.as_str()) {
+                    continue;
+                }
+                match pin {
+                    Pin::Words(words) => {
+                        if words.len() == 1 {
+                            tools[name.as_str()] = toml_edit::value(words[0].as_str());
                         } else {
-                            tools[name] = toml_edit::value(
-                                versions.into_iter().collect::<toml_edit::Array>(),
-                            );
+                            tools[name.as_str()] =
+                                toml_edit::value(words.into_iter().collect::<toml_edit::Array>());
                         }
                     }
-                }
-            } else {
-                let doc = toml_edit::Document::parse(text)
-                    .map_err(|e| e.to_string())?
-                    .into_mut();
-                if let Some(declarations) =
-                    doc.get("tools").and_then(toml_edit::Item::as_table_like)
-                {
-                    for (name, spec) in declarations
-                        .iter()
-                        .filter(|(name, _)| selected.contains(*name))
-                    {
-                        tools.insert(name, spec.clone());
+                    Pin::Spec(spec) => {
+                        tools.insert(name.as_str(), spec);
                     }
                 }
-                for task in doc
-                    .get("tasks")
-                    .and_then(toml_edit::Item::as_table_like)
-                    .into_iter()
-                    .flat_map(|tasks| tasks.iter().map(|(_, task)| task))
-                {
-                    task_declarations(task, &selected, &mut task_tools);
-                }
-                // TOML task files the configuration includes, by file, glob or
-                // directory, hold tasks as top-level tables.
-                for include in doc
-                    .get("task_config")
-                    .and_then(|config| config.get("includes"))
-                    .and_then(toml_edit::Item::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(toml_edit::Value::as_str)
-                {
-                    includes.extend(patchula_manager::included_files(
-                        super::directory(path),
-                        include,
-                        baseline.keys().map(String::as_str),
-                    ));
-                }
+            }
+            if path.ends_with(".tool-versions") {
+                continue;
+            }
+            let doc = toml_edit::Document::parse(text)
+                .map_err(|e| e.to_string())?
+                .into_mut();
+            for task in doc
+                .get("tasks")
+                .and_then(toml_edit::Item::as_table_like)
+                .into_iter()
+                .flat_map(|tasks| tasks.iter().map(|(_, task)| task))
+            {
+                task_declarations(task, &selected, &mut task_tools);
+            }
+            // TOML task files the configuration includes, by file, glob or
+            // directory, hold tasks as top-level tables.
+            for include in doc
+                .get("task_config")
+                .and_then(|config| config.get("includes"))
+                .and_then(toml_edit::Item::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml_edit::Value::as_str)
+            {
+                includes.extend(patchula_manager::included_files(
+                    super::directory(path),
+                    include,
+                    baseline.keys().map(String::as_str),
+                ));
             }
         }
         includes.sort_unstable();

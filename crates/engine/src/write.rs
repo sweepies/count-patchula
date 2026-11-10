@@ -143,13 +143,12 @@ impl Write<'_> {
                                     .any(|a| a.branch == p.action().branch)
                             })
                             .filter_map(|p| {
-                                p.cached_pr.as_ref().map(|pr| PullRequestAction {
-                                    repository: repo.repository.clone(),
-                                    branch: p.action().branch.clone(),
-                                    number: pr["number"].as_u64(),
-                                    url: pr["html_url"].as_str().map(str::to_owned),
-                                    status: PullRequestStatus::Unchanged,
-                                    reason: None,
+                                p.cached_pr.as_ref().map(|pr| {
+                                    patchula_update::pull_requests::unchanged(
+                                        &repo.repository,
+                                        &p.action().branch,
+                                        pr,
+                                    )
                                 })
                             }),
                     );

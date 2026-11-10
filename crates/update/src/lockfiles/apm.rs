@@ -8,6 +8,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["apm"],
     versions: true,
     install: Install::Plain,
+    proof: Proof::None,
+    run: Run::Direct,
     refresh: Refresh::LocksBesideManifest(&[Manager::Apm]),
     output: Output::Default,
 };

@@ -7,6 +7,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["node", "bun", "aube", "yarn"],
     versions: true,
     install: Install::Plain,
+    proof: Proof::DeclaredAndResolved,
+    run: Run::Direct,
     refresh: Refresh::Locks(&[Manager::Npm, Manager::Bun]),
     output: Output::Default,
 };

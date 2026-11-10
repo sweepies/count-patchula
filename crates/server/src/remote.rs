@@ -8,7 +8,7 @@ use crate::{
     reload::Reload,
     remote::protocol::{
         Accepted, AuthInfo, JOB_TTL_SECONDS, JobStatus, MAX_JOBS, MAX_REPOSITORIES,
-        RUN_LIMIT_SECONDS, Reject as RejectBody, Start, USER_TTL_SECONDS,
+        RUN_LIMIT_SECONDS, RejectBody, Start, USER_TTL_SECONDS,
     },
 };
 use axum::{
@@ -147,8 +147,8 @@ impl IntoResponse for Reject {
         (
             self.0,
             Json(RejectBody {
-                error_kind: self.1,
-                error: &self.2,
+                error_kind: self.1.into(),
+                error: self.2,
             }),
         )
             .into_response()

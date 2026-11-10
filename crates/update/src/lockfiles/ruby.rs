@@ -6,6 +6,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["ruby"],
     versions: true,
     install: Install::Plain,
+    proof: Proof::DeclaredAndResolved,
+    run: Run::Direct,
     refresh: Refresh::Locks(&[Manager::Bundler]),
     output: Output::Default,
 };

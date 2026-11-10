@@ -8,6 +8,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     tools: &["rust"],
     versions: true,
     install: Install::None,
+    proof: Proof::DeclaredAndResolved,
+    run: Run::Rustup("rust"),
     refresh: Refresh::Locks(&[Manager::Cargo]),
     output: Output::Default,
 };
@@ -41,9 +43,13 @@ pub(super) fn crates_io_entries(lock: &str, package: &str) -> Vec<(String, Strin
         .flatten()
         .filter(|entry| entry.get("name").and_then(toml_edit::Item::as_str) == Some(package))
         .filter_map(|entry| {
+            let source = entry.get("source").and_then(toml_edit::Item::as_str)?;
+            if !patchula_manager::crates_io(source) {
+                return None;
+            }
             Some((
                 entry.get("version")?.as_str()?.to_owned(),
-                crates_io(entry)?.to_owned(),
+                source.to_owned(),
             ))
         })
         .collect()
