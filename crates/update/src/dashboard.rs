@@ -1222,3 +1222,103 @@ pub async fn reconcile(
         .await
         .map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use patchula_report::{ImageCheck, ImageState, ToolingWarning};
+    use patchula_words::{ToolingDetail, ToolingRule};
+
+    fn warning(rule: ToolingRule, detail: Option<ToolingDetail>) -> ToolingWarning {
+        ToolingWarning {
+            rule,
+            detail,
+            branches: vec!["main".into()],
+            silenced: None,
+        }
+    }
+
+    #[test]
+    fn tooling_lines_word_each_missing_delivery_case() {
+        for (rule, detail, expected) in [
+            (
+                ToolingRule::MergeWithoutCi,
+                Some(ToolingDetail::Native),
+                "GitHub merges",
+            ),
+            (
+                ToolingRule::MergeWithoutCi,
+                Some(ToolingDetail::ReviewsOnly),
+                "stay open",
+            ),
+            (ToolingRule::MergeWithoutCi, None, "stay open"),
+            (
+                ToolingRule::MergeWithoutCi,
+                Some(ToolingDetail::TaggedRelease),
+                "stay open",
+            ),
+            (
+                ToolingRule::MergeWithoutRequiredChecks,
+                Some(ToolingDetail::ReviewsOnly),
+                "requires a review",
+            ),
+            (
+                ToolingRule::MergeWithoutRequiredChecks,
+                Some(ToolingDetail::Native),
+                "requires no status checks",
+            ),
+            (
+                ToolingRule::MergeWithoutRequiredChecks,
+                None,
+                "requires no status checks",
+            ),
+            (
+                ToolingRule::SecurityMergeWithoutDelivery,
+                Some(ToolingDetail::TaggedRelease),
+                "when `main` changes",
+            ),
+            (
+                ToolingRule::SecurityMergeWithoutDelivery,
+                Some(ToolingDetail::Native),
+                "nothing ships",
+            ),
+            (
+                ToolingRule::SecurityMergeWithoutDelivery,
+                None,
+                "nothing ships",
+            ),
+        ] {
+            let line = tooling_line(&warning(rule, detail), "main");
+            assert!(line.contains(expected), "{rule:?} {detail:?}: {line}");
+        }
+    }
+
+    #[test]
+    fn image_gaps_name_why_the_count_cannot_vouch() {
+        let check = |state: ImageState, detail: Option<&str>, os: Option<&str>| -> ImageCheck {
+            ImageCheck {
+                state,
+                detail: detail.map(Into::into),
+                os: os.map(Into::into),
+                ..Default::default()
+            }
+        };
+        assert_eq!(
+            image_gap(&check(ImageState::NoSbom, None, None)),
+            "no SBOM published"
+        );
+        assert!(image_gap(&check(ImageState::SbomWithoutOs, Some("syft"), None)).contains("syft"));
+        assert!(
+            image_gap(&check(ImageState::OsNotCovered, None, Some("windows"))).contains("windows")
+        );
+        assert!(image_gap(&check(ImageState::OsNotCovered, None, None)).contains("OSV.dev"));
+        assert!(
+            image_gap(&check(ImageState::PreviousUnavailable, None, None))
+                .contains("previous image")
+        );
+        assert_eq!(
+            image_gap(&check(ImageState::Checked, None, None)),
+            "checked"
+        );
+    }
+}

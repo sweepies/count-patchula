@@ -627,3 +627,27 @@ pub async fn save_receipts(
         closed = receipts.closed.len(), "write receipts saved");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bot_actors_are_marked_and_humans_pass_through() {
+        assert_eq!(
+            actor_login(&serde_json::json!({"login": "hubot", "__typename": "Bot"})).as_deref(),
+            Some("hubot[bot]")
+        );
+        assert_eq!(
+            actor_login(&serde_json::json!({"login": "dependabot[bot]", "__typename": "Bot"}))
+                .as_deref(),
+            Some("dependabot[bot]")
+        );
+        assert_eq!(
+            actor_login(&serde_json::json!({"login": "octocat"})).as_deref(),
+            Some("octocat")
+        );
+        assert!(actor_login(&serde_json::json!({})).is_none());
+        assert!(actor_login(&serde_json::json!({"login": 7})).is_none());
+    }
+}

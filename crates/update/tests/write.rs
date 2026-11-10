@@ -4064,3 +4064,24 @@ fn transitions_keep_the_serialized_status_and_reason() {
     same.unchanged("head".into(), "tree".into());
     assert_eq!(pair(&same), (json!("unchanged"), Value::Null));
 }
+
+#[test]
+fn only_newly_ticked_controls_count_as_edits() {
+    use patchula_update::pull_requests::{checked, controls_edited};
+    let recheck = "<!-- patchula-recheck -->";
+    let add = "<!-- patchula-batch-add -->";
+    let line = |tick: &str, marker: &str| format!("- {tick}] item {marker}\n");
+    assert!(controls_edited(&line(" ", recheck), &line("x", recheck)));
+    assert!(!controls_edited(&line("x", recheck), &line("x", recheck)));
+    assert!(controls_edited("", &line("x", add)));
+    assert!(!controls_edited(&line(" ", add), &line(" ", add)));
+    // `checked` wants exactly one recheck marker and a ticked line ending in it.
+    let pr = |text: &str| json!({"body": text});
+    assert!(checked(&pr(&line("x", recheck))));
+    assert!(!checked(&pr(&line(" ", recheck))));
+    assert!(!checked(&pr(&format!(
+        "{}{}",
+        line("x", recheck),
+        line("x", recheck)
+    ))));
+}
