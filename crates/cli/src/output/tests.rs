@@ -197,3 +197,12 @@ fn colour_needs_a_terminal_unless_forced() {
     assert_eq!(style.bold("x"), "\x1b[1mx\x1b[0m");
     assert_eq!(Style::PLAIN.bold("x"), "x");
 }
+
+#[test]
+fn advisory_severities_paint_by_weight() {
+    use patchula_words::Severity;
+    assert!(matches!(severity_paint(Severity::Critical), Paint::Error));
+    assert!(matches!(severity_paint(Severity::High), Paint::Error));
+    assert!(matches!(severity_paint(Severity::Moderate), Paint::Warning));
+    assert!(matches!(severity_paint(Severity::Low), Paint::Dim));
+}

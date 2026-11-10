@@ -406,4 +406,129 @@ mod tests {
             "planning writes nothing"
         );
     }
+
+    /// A tree holding `manifest` as package.json and the bundled config.
+    fn tree(manifest: &str) -> (tempfile::TempDir, Local) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), manifest).unwrap();
+        std::fs::write(
+            dir.path().join("patchula.pkl"),
+            "amends \"PatchulaConfig.pkl\"\n",
+        )
+        .unwrap();
+        let local = local(dir.path(), None).unwrap();
+        (dir, local)
+    }
+
+    /// The manifest offset of `dep`'s quoted current version, which is what
+    /// the lookup reports as the declaration's location.
+    fn at(manifest: &str, current: &str) -> usize {
+        manifest.find(&format!("\"{current}\"")).unwrap()
+    }
+
+    /// One npm dependency's proposed update, its starts unset.
+    fn npm_update(name: &str, current: &str, target: &str) -> Update {
+        updates(&report(&[(name, current, target, "patch")]))
+            .into_iter()
+            .next()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_plan_writes_its_files_and_names_what_it_left() {
+        let manifest =
+            "{\n  \"dependencies\": {\n    \"zod\": \"3.22.0\",\n    \"hono\": \"4.7.0\"\n  }\n}\n";
+        let (dir, local) = tree(manifest);
+        let mut zod = npm_update("zod", "3.22.0", "3.23.0");
+        zod.starts = vec![at(manifest, "3.22.0")];
+        let mut hono = npm_update("hono", "4.7.0", "4.7.1");
+        hono.starts = vec![at(manifest, "4.7.0")];
+        hono.transitive = true;
+        let plan = plan(&local, &[&zod, &hono]).unwrap();
+        assert_eq!(plan.applied, [0]);
+        assert_eq!(plan.skipped.len(), 1);
+        plan.write(dir.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("package.json")).unwrap(),
+            manifest.replace("3.22.0", "3.23.0")
+        );
+    }
+
+    #[test]
+    fn an_update_that_changes_nothing_is_skipped_as_already_allowed() {
+        let manifest = "{\n  \"dependencies\": {\n    \"zod\": \"3.22.0\"\n  }\n}\n";
+        let (_dir, local) = tree(manifest);
+        let mut update = npm_update("zod", "3.22.0", "3.22.0");
+        update.starts = vec![at(manifest, "3.22.0")];
+        let plan = plan(&local, &[&update]).unwrap();
+        assert!(plan.applied.is_empty());
+        assert_eq!(plan.skipped.len(), 1);
+        assert!(
+            plan.skipped[0].1.contains("already allows"),
+            "{}",
+            plan.skipped[0].1
+        );
+    }
+
+    #[test]
+    fn a_file_changed_after_planning_is_refused_before_anything_is_written() {
+        let manifest = "{\n  \"dependencies\": {\n    \"zod\": \"3.22.0\"\n  }\n}\n";
+        let (dir, local) = tree(manifest);
+        let mut update = npm_update("zod", "3.22.0", "3.23.0");
+        update.starts = vec![at(manifest, "3.22.0")];
+        let first = plan(&local, &[&update]).unwrap();
+        assert_eq!(first.applied, [0]);
+        std::fs::write(
+            dir.path().join("package.json"),
+            manifest.replace("3.22.0", "3.22.1"),
+        )
+        .unwrap();
+        let error = first.write(dir.path()).unwrap_err();
+        assert!(error.written.is_empty());
+        assert_eq!(error.partial, None);
+        assert!(
+            error.error.contains("changed since the Count planned it"),
+            "{error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("{}; nothing was written", error.error)
+        );
+        // And a file that became a directory is refused in the check phase.
+        let (dir, local) = tree(manifest);
+        let mut update = npm_update("zod", "3.22.0", "3.23.0");
+        update.starts = vec![at(manifest, "3.22.0")];
+        let second = plan(&local, &[&update]).unwrap();
+        assert_eq!(second.applied, [0]);
+        std::fs::remove_file(dir.path().join("package.json")).unwrap();
+        std::fs::create_dir(dir.path().join("package.json")).unwrap();
+        let error = second.write(dir.path()).unwrap_err();
+        assert!(error.error.contains("not a regular file"), "{error}");
+    }
+
+    #[test]
+    fn write_error_says_what_it_left_behind() {
+        let error = |written: &[&str], partial: Option<&str>| WriteError {
+            written: written.iter().map(|s| s.to_string()).collect(),
+            partial: partial.map(str::to_owned),
+            error: "denied".into(),
+        };
+        assert_eq!(error(&[], None).to_string(), "denied; nothing was written");
+        assert_eq!(
+            error(&[], Some("f")).to_string(),
+            "denied; f may be left partly written"
+        );
+        assert_eq!(
+            error(&["a"], None).to_string(),
+            "denied; only a was written"
+        );
+        assert_eq!(
+            error(&["a", "b"], None).to_string(),
+            "denied; only a, b were written"
+        );
+        assert_eq!(
+            error(&["a"], Some("b")).to_string(),
+            "denied; b may be left partly written; only a was written"
+        );
+    }
 }

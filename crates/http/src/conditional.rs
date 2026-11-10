@@ -353,4 +353,18 @@ mod tests {
         );
         assert_eq!(entry.expires_at, Some(1300));
     }
+
+    #[test]
+    fn key_rejects_a_url_the_cache_key_rejects() {
+        assert!(key("GET", "not a url", &[], None, None).is_err());
+    }
+
+    #[test]
+    fn retry_after_reads_an_http_date() {
+        let date = Box::leak(
+            httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(120)).into_boxed_str(),
+        );
+        let delay = retry_after(&response(429, &[("retry-after", date)])).unwrap();
+        assert!(delay > Duration::from_secs(60) && delay <= Duration::from_secs(120));
+    }
 }

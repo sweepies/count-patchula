@@ -201,3 +201,32 @@ fn split_links(value: &str) -> Result<Vec<&str>> {
     parts.push(&value[start..]);
     Ok(parts)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::{StatusCode, header::HeaderValue};
+
+    fn response(links: &[&'static str]) -> Response {
+        let mut headers = header::HeaderMap::new();
+        for link in links {
+            headers.append(header::LINK, HeaderValue::from_static(link));
+        }
+        Response {
+            status: StatusCode::OK,
+            headers,
+            body: Vec::new(),
+            stale: None,
+        }
+    }
+
+    #[test]
+    fn two_next_links_are_a_pagination_error() {
+        let url = Url::parse("https://api.github.com/app/installations?per_page=100").unwrap();
+        let response = response(&[
+            "<https://api.github.com/app/installations?per_page=100&page=2>; rel=\"next\"",
+            "<https://api.github.com/app/installations?per_page=100&page=3>; rel=\"next\"",
+        ]);
+        assert!(matches!(next_link(&response, &url), Err(Error::Pagination)));
+    }
+}

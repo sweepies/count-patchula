@@ -125,3 +125,87 @@ pub fn updates(report: &Report) -> Vec<Update> {
     }
     updates
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn update(value: Option<&str>, version: Option<&str>, digest: Option<&str>) -> Update {
+        Update {
+            repository: "owner/repo".into(),
+            file: "package.json".into(),
+            manager: Manager::Npm,
+            name: "dep".into(),
+            package: "dep".into(),
+            current: "1.0.0".into(),
+            value: value.map(str::to_owned),
+            version: version.map(str::to_owned),
+            digest: digest.map(str::to_owned),
+            kind: UpdateKind::Patch,
+            published_at: None,
+            fixes: Vec::new(),
+            starts: Vec::new(),
+            transitive: false,
+            locked: false,
+            pick: Pick::Open,
+        }
+    }
+
+    #[test]
+    fn target_prefers_the_new_value_then_version_then_digest() {
+        assert_eq!(
+            update(Some("2.0.0"), Some("2.0.0"), Some("sha256:abcdef")).target(),
+            "2.0.0@abcdef"
+        );
+        assert_eq!(update(Some("^2.0.0"), None, None).target(), "^2.0.0");
+        assert_eq!(
+            update(None, Some("2.0.0"), Some("sha256:abcdef")).target(),
+            "2.0.0"
+        );
+        assert_eq!(
+            update(None, None, Some("sha256:0123456789abcdef")).target(),
+            "0123456789ab"
+        );
+        assert_eq!(update(None, None, None).target(), "1.0.0");
+    }
+
+    #[test]
+    fn fixes_name_the_cves_each_advisory_carries() {
+        let report: Report = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 6,
+            "repositories": [{
+                "repository": "owner/repo",
+                "status": "complete",
+                "packageFiles": [{"path": "package.json", "dependencies": [{
+                    "manager": "npm", "name": "dep", "package": "dep",
+                    "current": {"value": "1.0.0"},
+                    "updates": [{
+                        "newValue": "1.0.1", "updateType": "patch",
+                        "fixes": ["GHSA-aaaa-bbbb-cccc", "GHSA-dddd-eeee-ffff", "RUSTSEC-0000-0000"]
+                    }],
+                    "metadata": {"source": "npm", "kinds": ["production"], "locations": [],
+                        "advisories": [
+                            {"id": "GHSA-aaaa-bbbb-cccc",
+                             "aliases": ["CVE-2024-1111", "CVE-2024-2222", "GHSA-other"],
+                             "url": "https://osv.dev/GHSA-aaaa-bbbb-cccc"},
+                            {"id": "GHSA-dddd-eeee-ffff", "aliases": [],
+                             "url": "https://osv.dev/GHSA-dddd-eeee-ffff"},
+                            {"id": "RUSTSEC-0000-0000", "aliases": ["CVE-2024-3333"],
+                             "url": "https://osv.dev/RUSTSEC-0000-0000"}
+                        ]}
+                }]}]
+            }]
+        }))
+        .unwrap();
+        let found = updates(&report);
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].fixes,
+            [
+                "GHSA-aaaa-bbbb-cccc (CVE-2024-1111, CVE-2024-2222)",
+                "GHSA-dddd-eeee-ffff",
+                "RUSTSEC-0000-0000 (CVE-2024-3333)",
+            ]
+        );
+    }
+}

@@ -417,3 +417,169 @@ fn here_conflicts_with_remote() {
     let args = ["lookup", "--remote", "--here", "acme/app"];
     assert!(App::parse_from(&args.iter().map(std::ffi::OsStr::new).collect::<Vec<_>>()).is_err());
 }
+
+/// A server that accepts the run and answers status polls from `replies`,
+/// repeating the last; `post` overrides the POST /runs answer once.
+#[derive(Default)]
+struct RunFake {
+    replies: Mutex<std::collections::VecDeque<Value>>,
+    post: Mutex<Option<(u16, Value)>>,
+}
+impl Transport for RunFake {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        let url = request.url().to_string();
+        let (status, value) = match (request.method().as_str(), url.as_str()) {
+            ("POST", "https://patchula.acme.dev/api/v1/runs") => self
+                .post
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or((202, json!({"id": "job-1"}))),
+            ("GET", "https://patchula.acme.dev/api/v1/runs/job-1") => {
+                let mut replies = self.replies.lock().unwrap();
+                let value = if replies.len() > 1 {
+                    replies.pop_front().unwrap()
+                } else {
+                    replies
+                        .front()
+                        .cloned()
+                        .unwrap_or_else(|| json!({"status": "running"}))
+                };
+                (200, value)
+            }
+            other => panic!("unexpected request {other:?}"),
+        };
+        Box::pin(async move {
+            Ok(Response {
+                status: reqwest::StatusCode::from_u16(status).unwrap(),
+                headers: reqwest::header::HeaderMap::new(),
+                body: serde_json::to_vec(&value).unwrap(),
+                stale: None,
+            })
+        })
+    }
+}
+
+/// Services with a stored, unexpired token so `report` goes straight to the run.
+fn run_services(fake: Arc<RunFake>, dir: &std::path::Path) -> Services {
+    seed(
+        dir,
+        json!({"accessToken": "ghu_stored", "expiresAt": 4_000_000_000_i64}),
+    );
+    Services {
+        transport: Some(fake),
+        config_dir: Some(dir.to_owned()),
+        server: Some(SERVER.into()),
+        ..Services::default()
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn run_statuses_surface_their_own_failures() {
+    let attempt = |replies: Vec<Value>| async move {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Arc::new(RunFake {
+            replies: Mutex::new(replies.into()),
+            ..RunFake::default()
+        });
+        report(
+            &run_services(fake, dir.path()),
+            SERVER,
+            vec!["acme/app".into()],
+            Mode::Lookup,
+        )
+        .await
+    };
+    let complete = |report: Value| json!({"status": "complete", "report": report});
+    let valid = json!({
+        "schemaVersion": patchula_report::SCHEMA_VERSION,
+        "repositories": [], "stats": null, "actions": null
+    });
+
+    // A finished report with another schema version names both versions.
+    let Err((code, error)) = attempt(vec![complete(json!({
+        "schemaVersion": patchula_report::SCHEMA_VERSION + 1,
+        "repositories": [], "stats": null, "actions": null
+    }))])
+    .await
+    else {
+        panic!("a foreign schema version was accepted")
+    };
+    assert_eq!(code, 1);
+    assert!(error.to_string().contains("sends report schema"), "{error}");
+
+    // A report that is not a report at all.
+    let Err((_, error)) = attempt(vec![complete(json!({"schemaVersion": "six"}))]).await else {
+        panic!("a malformed report was accepted")
+    };
+    assert!(error.to_string().contains("cannot read"), "{error}");
+
+    // A status the protocol does not know.
+    let Err((_, error)) = attempt(vec![json!({"status": "confused"})]).await else {
+        panic!("an unknown status was accepted")
+    };
+    assert!(error.to_string().contains("unknown run status"), "{error}");
+
+    // The server's own failure reason reaches the user.
+    let Err((_, error)) = attempt(vec![
+        json!({"status": "failed", "error": "the Count slipped"}),
+    ])
+    .await
+    else {
+        panic!("a failed run was accepted")
+    };
+    assert!(error.to_string().contains("the Count slipped"), "{error}");
+
+    // And a good report still comes back.
+    let done = attempt(vec![complete(valid)]).await.unwrap();
+    assert!(done.repositories.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rejected_run_start_says_the_run_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(RunFake {
+        post: Mutex::new(Some((
+            404,
+            json!({"errorKind": "unknown-run", "error": "no such run"}),
+        ))),
+        ..RunFake::default()
+    });
+    let Err((code, error)) = report(
+        &run_services(fake, dir.path()),
+        SERVER,
+        vec!["acme/app".into()],
+        Mode::Lookup,
+    )
+    .await
+    else {
+        panic!("a rejected run was accepted")
+    };
+    assert_eq!(code, 1);
+    let message = error.to_string();
+    assert!(message.contains("the run is gone"), "{message}");
+    assert!(message.contains("15 minutes"), "{message}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_that_never_finishes_times_out_with_the_servers_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(RunFake::default());
+    let Err((code, error)) = report(
+        &run_services(fake, dir.path()),
+        SERVER,
+        vec!["acme/app".into()],
+        Mode::Lookup,
+    )
+    .await
+    else {
+        panic!("a run that never finished was accepted")
+    };
+    assert_eq!(code, 1);
+    let message = error.to_string();
+    assert!(
+        message.contains("did not finish within 6 hours"),
+        "{message}"
+    );
+    assert!(message.contains("may still be running"), "{message}");
+}

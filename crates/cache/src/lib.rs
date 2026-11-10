@@ -601,6 +601,41 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn state_that_does_not_decode_is_a_miss() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        struct Parsed(u32);
+        #[derive(Serialize)]
+        struct Scope {
+            key: String,
+        }
+        impl State for Parsed {
+            const NAMESPACE: &'static str = "test-corrupt";
+            const VERSION: u32 = 1;
+            const PER_BUILD: bool = true;
+            type Scope = Scope;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let cache = Cache::open(directory.path().join("cache.sqlite"), Options::default())
+            .await
+            .unwrap();
+        let scope = Scope { key: "k".into() };
+        cache.set_state(&scope, &Parsed(1)).await.unwrap();
+        cache
+            .call(|store| {
+                // Bytes that are not the value's JSON, stored as a blob the
+                // way set_state writes them.
+                store.conn.execute(
+                    "UPDATE state SET value=x'6e6f74206a736f6e' WHERE namespace=?1",
+                    rusqlite::params![format!("test-corrupt@v1+{BUILD}")],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(cache.state::<Parsed>(&scope).await.unwrap(), None);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn commands_opening_a_new_cache_together_all_succeed() {
         for _ in 0..10 {
