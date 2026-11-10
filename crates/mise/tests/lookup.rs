@@ -383,6 +383,51 @@ async fn a_tools_backend_comes_from_mise() {
     assert_eq!(replay.lookups(), [["tool", "--json", "--", "prettier"]]);
 }
 
+#[test]
+fn bootstrap_reads_back_only_the_argv_the_count_builds() {
+    let args = |argv: &[&str]| argv.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    assert!(matches!(
+        patchula_mise::bootstrap(&args(&[
+            "--no-config",
+            "install",
+            "aqua:jdx/mise@2026.10.11"
+        ])),
+        patchula_mise::Bootstrap::Install
+    ));
+    match patchula_mise::bootstrap(&args(&[
+        "--no-config",
+        "exec",
+        "aqua:jdx/mise@2026.10.11",
+        "--",
+        "mise",
+        "ls-remote",
+        "--json",
+    ])) {
+        patchula_mise::Bootstrap::Exec(rest) => {
+            assert_eq!(rest, &["ls-remote".to_owned(), "--json".to_owned()]);
+        }
+        _ => panic!("the exec argv is not read back"),
+    }
+    // Anything `Lookup` never builds is Other, so a replay refuses to guess.
+    for argv in [
+        &[][..],
+        &["--no-config"][..],
+        &["--no-config", "install", "aqua:jdx/mise"][..],
+        &["--no-config", "install", "aqua:jdx/mise@"][..],
+        &["--no-config", "install", "other/tool@1"][..],
+        &["--no-config", "exec", "aqua:jdx/mise@1", "--", "other"][..],
+        &["install", "aqua:jdx/mise@1"][..],
+    ] {
+        assert!(
+            matches!(
+                patchula_mise::bootstrap(&args(argv)),
+                patchula_mise::Bootstrap::Other
+            ),
+            "{argv:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_stuck_install_is_reported_and_retried_by_the_next_lookup() {
     struct Failing(std::sync::atomic::AtomicUsize);
