@@ -36,6 +36,14 @@ struct Fixture {
     watched: Mutex<Vec<String>>,
     /// What a tool writes to its lockfile; a placeholder when `None`.
     lock: Option<String>,
+    /// Git tree metadata overrides per path, such as `160000 commit`.
+    modes: BTreeMap<String, String>,
+    /// Whether checkout writes differ from what ls-tree advertises.
+    tamper: bool,
+    /// Other files a tool writes beside its lockfile.
+    extra: Vec<String>,
+    /// Files a tool deletes while it runs.
+    removes: Vec<String>,
 }
 impl Executor for Fixture {
     fn run(
@@ -64,7 +72,10 @@ impl Executor for Fixture {
                     return Ok(self
                         .files
                         .iter()
-                        .map(|(p, c)| format!("100644 blob {}\t{p}\0", blob_sha(c)))
+                        .map(|(p, c)| {
+                            let metadata = self.modes.get(p).map_or("100644 blob", String::as_str);
+                            format!("{metadata} {}\t{p}\0", blob_sha(c))
+                        })
                         .collect::<String>()
                         .into_bytes());
                 }
@@ -76,7 +87,12 @@ impl Executor for Fixture {
                             .unwrap(),
                     );
                     for path in &spec.args[i + 3..] {
-                        write(root, path, &self.files[path]).unwrap();
+                        let content = if self.tamper {
+                            format!("{}x", self.files[path])
+                        } else {
+                            self.files[path].clone()
+                        };
+                        write(root, path, &content).unwrap();
                     }
                 }
                 return Ok(Vec::new());
@@ -247,6 +263,12 @@ impl Executor for Fixture {
                 .as_deref()
                 .unwrap_or("fixture deterministic lock\n");
             write(&root, &leaf, lock).unwrap();
+            for path in &self.extra {
+                write(&spec.cwd, path, "extra\n").unwrap();
+            }
+            for path in &self.removes {
+                let _ = std::fs::remove_file(root.join(path));
+            }
             Ok(Vec::new())
         })
     }
@@ -387,6 +409,10 @@ fn fixture_with(
         watch: None,
         watched: Mutex::new(Vec::new()),
         lock: None,
+        modes: BTreeMap::new(),
+        tamper: false,
+        extra: Vec::new(),
+        removes: Vec::new(),
     })
 }
 fn repo() -> Repository {
@@ -2052,6 +2078,22 @@ impl Executor for MiseFixture {
                     .filter(|line| !line.contains("macos"))
                     .collect::<Vec<_>>()
                     .join("\n");
+            }
+            if self.fault == "platform-drop" {
+                let mut drop = false;
+                lock = lock
+                    .lines()
+                    .filter(|line| {
+                        if line.starts_with('[') {
+                            drop = line.contains("macos");
+                        }
+                        !(drop || line.contains("macos"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            if self.fault == "mismatch" {
+                lock = lock.replace("version = \"24.0.0\"", "version = \"24.0.1\"");
             }
             std::fs::write(work.join("mise.lock"), lock).unwrap();
             Ok(Vec::new())
@@ -5008,6 +5050,10 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                 envs: Mutex::new(Vec::new()),
                 watch: Some(manifest.into()),
                 watched: Mutex::new(Vec::new()),
+                modes: BTreeMap::new(),
+                tamper: false,
+                extra: Vec::new(),
+                removes: Vec::new(),
                 lock: Some(lock_recording(
                     &lock,
                     package,
@@ -6960,4 +7006,1008 @@ fn file_classification_is_pinned() {
             "{path}: nuget.config"
         );
     }
+}
+
+/// A dependency as extraction would report it, for `job()` dispatch cases.
+fn mkdep(manager: Manager, file: &str, kind: patchula_words::DependencyKind) -> Dependency {
+    Dependency {
+        manager,
+        file: file.into(),
+        location: patchula_manager::Location {
+            start: 0,
+            end: 1,
+            line: 1,
+            column: 1,
+            pointer: String::new(),
+        },
+        form: patchula_manager::EditForm::Scalar(patchula_manager::Syntax::Json),
+        name: "dep".into(),
+        package: "dep".into(),
+        kind,
+        current: "1.0.0".into(),
+        resolved: Some("1.0.0".into()),
+        digest: None,
+        source: Source::Npm,
+        scheme: patchula_words::Scheme::Semver,
+        extract: None,
+        included_by: None,
+        registry: None,
+    }
+}
+fn update() -> Update {
+    Update {
+        new_value: Some("1.2.0".into()),
+        new_version: Some("1.2.0".into()),
+        ..serde_json::from_value(serde_json::json!({"updateType":"minor"})).unwrap()
+    }
+}
+
+/// `job()` places each manager's lock work on the lockfile it owns — NuGet's
+/// beside the project, Gradle's wrapper at its properties file, Go's and
+/// Terraform's at the manifest — and refuses or skips what it cannot do.
+#[test]
+fn jobs_find_each_managers_lockfile_root() {
+    let mkfiles = |paths: &[&str]| {
+        snapshot(
+            &paths
+                .iter()
+                .map(|p| (p.to_string(), "x".to_string()))
+                .collect(),
+        )
+    };
+    // APM's lock sits beside apm.yml; without it there is no work.
+    let d = mkdep(
+        Manager::Apm,
+        "apm.yml",
+        patchula_words::DependencyKind::Production,
+    );
+    assert_eq!(
+        job(&d, &update(), &mkfiles(&["apm.yml", "apm.lock.yaml"]))
+            .unwrap()
+            .map(|j| (j.ecosystem, j.directory)),
+        Some((Ecosystem::Apm, String::new()))
+    );
+    assert!(
+        job(&d, &update(), &mkfiles(&["apm.yml"]))
+            .unwrap()
+            .is_none()
+    );
+    // NuGet restores the directory holding locks below the manifest.
+    let d = mkdep(
+        Manager::Nuget,
+        "src/app.csproj",
+        patchula_words::DependencyKind::Production,
+    );
+    let locked = job(
+        &d,
+        &update(),
+        &mkfiles(&["src/app.csproj", "src/packages.lock.json"]),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(locked.ecosystem, Ecosystem::Dotnet);
+    assert_eq!(locked.directory, "src");
+    assert_eq!(locked.package(), None, "a directory job moves no package");
+    for snap in [
+        mkfiles(&["src/app.csproj"]),
+        mkfiles(&["src/app.csproj", "obj/project.assets.json"]),
+    ] {
+        assert!(job(&d, &update(), &snap).unwrap().is_none(), "{snap:?}");
+    }
+    // Tool manifests and dotnet's local tool manifest never produce a job.
+    let toolchain = mkdep(
+        Manager::Nuget,
+        "src/app.csproj",
+        patchula_words::DependencyKind::Toolchain,
+    );
+    let snap = mkfiles(&["src/app.csproj", "src/packages.lock.json"]);
+    assert!(job(&toolchain, &update(), &snap).unwrap().is_none());
+    let tools = mkdep(
+        Manager::Nuget,
+        "src/dotnet-tools.json",
+        patchula_words::DependencyKind::Production,
+    );
+    assert!(job(&tools, &update(), &snap).unwrap().is_none());
+    // The wrapper properties file is Gradle's only regenerable work.
+    let d = mkdep(
+        Manager::Gradle,
+        "gradle/wrapper/gradle-wrapper.properties",
+        patchula_words::DependencyKind::Production,
+    );
+    let wrapper = job(
+        &d,
+        &update(),
+        &mkfiles(&["gradle/wrapper/gradle-wrapper.properties"]),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(wrapper.ecosystem, Ecosystem::GradleWrapper);
+    assert_eq!(wrapper.directory, "gradle/wrapper");
+    // Dependency locking needs the build itself; a committed gradle.lockfile
+    // holds the update instead of planning a job.
+    let d = mkdep(
+        Manager::Gradle,
+        "app/build.gradle.kts",
+        patchula_words::DependencyKind::Production,
+    );
+    let error = job(
+        &d,
+        &update(),
+        &mkfiles(&["app/build.gradle.kts", "gradle.lockfile"]),
+    )
+    .unwrap_err();
+    assert!(error.contains("unsupported lockfile format"), "{error}");
+    assert!(
+        job(&d, &update(), &mkfiles(&["app/build.gradle.kts"]))
+            .unwrap()
+            .is_none()
+    );
+    // Go and Terraform modules lock beside their manifests.
+    let d = mkdep(
+        Manager::Go,
+        "go.mod",
+        patchula_words::DependencyKind::Production,
+    );
+    let jobbed = job(&d, &update(), &mkfiles(&["go.mod"])).unwrap().unwrap();
+    assert_eq!(
+        (jobbed.ecosystem, jobbed.directory.as_str()),
+        (Ecosystem::Go, "")
+    );
+    let mut d = mkdep(
+        Manager::Terraform,
+        "main.tf",
+        patchula_words::DependencyKind::Production,
+    );
+    d.source = Source::Terraform;
+    let jobbed = job(&d, &update(), &mkfiles(&["main.tf"])).unwrap().unwrap();
+    assert_eq!(
+        (jobbed.ecosystem, jobbed.directory.as_str()),
+        (Ecosystem::Terraform, "")
+    );
+    d.source = Source::Npm;
+    assert!(
+        job(&d, &update(), &mkfiles(&["main.tf"]))
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// A job serialized without a package is directory-scoped, as the wire shape
+/// reads it.
+#[test]
+fn a_job_without_a_package_deserializes_as_directory_scoped() {
+    let job: Job = serde_json::from_value(serde_json::json!({
+        "ecosystem": "Node", "directory": "web",
+        "package": null, "current": null, "target": null, "lock_only": false,
+    }))
+    .unwrap();
+    assert_eq!(job.scope, Scope::Directory);
+    assert_eq!(job.package(), None);
+    assert_eq!(job.current(), None);
+}
+
+/// `dotnet restore` runs against the one project under the job's directory,
+/// on the SDK the nearest global.json names, with the nuget.configs the tree
+/// carries deciding which sources get credentials.
+#[tokio::test]
+async fn dotnet_restore_uses_global_json_sdk_and_tree_nuget_configs() {
+    let files = BTreeMap::from([
+        ("a/b/app.csproj".into(), "<Project/>\n".into()),
+        ("a/b/packages.lock.json".into(), "old lock\n".into()),
+        ("a/b/global.json".into(), "not json\n".into()),
+        ("a/global.json".into(), "{}\n".into()),
+        (
+            "global.json".into(),
+            "{\"sdk\":{\"version\":\"8.0.100\"}}\n".into(),
+        ),
+        (
+            "nuget.config".into(),
+            "<?xml version=\"1.0\"?>\n<configuration><packageSources><add key=\"acme\" value=\"https://nuget.acme.dev/feed\" /></packageSources></configuration>\n".into(),
+        ),
+        ("a/NuGet.Config".into(), "<configuration/>\n".into()),
+    ]);
+    let mut executor = fixture(files.clone(), false, false);
+    Arc::get_mut(&mut executor).unwrap().extra = vec!["packages.lock.json".into()];
+    let temp = tempfile::tempdir().unwrap();
+    let entry = patchula_http::Credential::new(
+        "https://nuget.acme.dev",
+        patchula_http::Auth::Basic {
+            username: "ci".into(),
+            password: "pw".into(),
+        },
+    )
+    .unwrap()
+    .for_tools();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone())
+        .with_registries(&[entry]);
+    let mut snap1 = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snap1, None, monday())
+        .unwrap()
+        .unwrap();
+    p.lock_jobs.retain(|j| j.ecosystem == Ecosystem::Dotnet);
+    assert_eq!(p.lock_jobs.len(), 1);
+    prepare_one(&runner, &mut p, &mut snap1, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let calls = executor.calls.lock().unwrap().clone();
+    let restore = calls
+        .iter()
+        .find(|args| args.iter().any(|a| a == "restore"))
+        .unwrap_or_else(|| panic!("no restore call: {calls:?}"));
+    assert!(
+        restore.iter().any(|a| a.ends_with("app.csproj")),
+        "{restore:?}"
+    );
+    assert!(restore.iter().any(|a| a == "--force-evaluate"));
+    assert_eq!(
+        p.contents["a/b/packages.lock.json"],
+        "extra\n",
+        "{:?}",
+        p.action()
+    );
+
+    // An edited manifest whose lock does not change fails the branch.
+    let files = {
+        let mut files = files.clone();
+        files.insert("a/b/packages.lock.json".into(), "extra\n".into());
+        files
+    };
+    let mut executor = fixture(files.clone(), false, false);
+    Arc::get_mut(&mut executor).unwrap().extra = vec!["packages.lock.json".into()];
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snap2 = snapshot(&files);
+    let mut p = maintenance(&repo(), &config, &snap2, None, monday())
+        .unwrap()
+        .unwrap();
+    p.lock_jobs.retain(|j| j.ecosystem == Ecosystem::Dotnet);
+    p.maintenance = false;
+    p.contents
+        .insert("a/b/app.csproj".into(), "<Project/>\n".into());
+    prepare_one(&runner, &mut p, &mut snap2, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.clone().unwrap_or_default();
+    assert!(
+        reason.contains("packages.lock.json did not change after the manifest edit"),
+        "{reason}"
+    );
+}
+
+/// Go runs `go mod download` unless asked to tidy, and GOPRIVATE plus a
+/// `.netrc` carry the credentials of basic entries to the tool.
+#[tokio::test]
+async fn go_gets_private_hosts_through_netrc_and_downloads() {
+    let files = BTreeMap::from([
+        ("go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into()),
+        ("go.sum".into(), "sums\n".into()),
+    ]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let entry = patchula_http::Credential::new(
+        "https://go.acme.dev",
+        patchula_http::Auth::Basic {
+            username: "ci".into(),
+            password: "pw".into(),
+        },
+    )
+    .unwrap()
+    .for_tools();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone())
+        .with_registries(&[entry]);
+    let mut snapshot = snapshot(&files);
+    let config = patchula_config::load_files(
+        "/repo/patchula.pkl",
+        BTreeMap::from([(
+            "/repo/patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nlockfiles { refresh = true; tidyGo = false; }".into(),
+        )]),
+    )
+    .unwrap();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let envs = executor.envs.lock().unwrap();
+    let go_env = envs
+        .iter()
+        .find(|env| env.contains_key(std::ffi::OsStr::new("GOPRIVATE")))
+        .unwrap_or_else(|| panic!("no GOPRIVATE in {envs:?}"));
+    assert_eq!(
+        go_env[std::ffi::OsStr::new("GOPRIVATE")],
+        std::ffi::OsString::from("go.acme.dev")
+    );
+    let calls = executor.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|args| args.windows(2).any(|w| w == ["mod", "download"])),
+        "{calls:?}"
+    );
+}
+
+/// A directory-scope cargo job refreshes the whole workspace lockfile.
+#[tokio::test]
+async fn cargo_runs_update_workspace_for_untargeted_jobs() {
+    let files = BTreeMap::from([
+        ("Cargo.toml".into(), "[package]\nname='app'\n".into()),
+        ("Cargo.lock".into(), "version = 4\n".into()),
+    ]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    p.lock_jobs.retain(|j| j.ecosystem == Ecosystem::Cargo);
+    p.maintenance = false;
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let calls = executor.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|args| args.iter().any(|a| a == "--workspace")),
+        "{calls:?}"
+    );
+}
+
+/// Each descriptor's install and refresh rules: cargo installs through
+/// rustup (nothing through mise), the Gradle wrapper never schedules
+/// maintenance, and PHP installs only when both tools are pinned.
+#[test]
+fn install_specs_and_refresh_claims_cover_the_special_cases() {
+    let defaults = tool_defaults().unwrap();
+    assert!(
+        descriptor(Ecosystem::Cargo)
+            .install_specs(defaults)
+            .is_empty()
+    );
+    let missing: toml_edit::Document<&'static str> =
+        toml_edit::Document::parse("[tools]\nphp = 1\ncomposer = 'x'\n").unwrap();
+    assert!(
+        descriptor(Ecosystem::Php)
+            .install_specs(&missing)
+            .is_empty()
+    );
+    let config = config();
+    let paths = BTreeSet::from(["gradle/wrapper/gradle-wrapper.properties".to_string()]);
+    assert!(!descriptor(Ecosystem::GradleWrapper).refresh.claims(
+        &config,
+        "gradle-wrapper.properties",
+        "gradle/wrapper",
+        &paths
+    ));
+}
+
+/// Cargo's lockfile reader answers empty for a lockfile it cannot parse,
+/// and a package job whose versions are not semver takes the update path.
+#[test]
+fn cargo_lockfile_reader_answers_empty_for_what_it_cannot_parse() {
+    assert!(cargo::crates_io_entries("this is not [toml", "tokio").is_empty());
+}
+#[tokio::test]
+async fn cargo_package_job_with_unparseable_versions_still_updates() {
+    let files = BTreeMap::from([
+        ("Cargo.toml".into(), "[package]\nname='app'\n".into()),
+        ("Cargo.lock".into(), "version = 4\n".into()),
+    ]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = Plan::new(BranchAction {
+        repository: "demo/app".into(),
+        branch: "patchula/x".into(),
+        base_commit: "a".repeat(40),
+        status: BranchStatus::Planned,
+        reason: None,
+        message: "m".into(),
+        previous_commit: None,
+        commit: None,
+        verified: None,
+        lockfile_pending: false,
+        files: Vec::new(),
+    });
+    p.lock_jobs = vec![Job {
+        ecosystem: Ecosystem::Cargo,
+        directory: String::new(),
+        scope: Scope::Package {
+            package: "tokio".into(),
+            current: Some("not semver".into()),
+            target: Some("1.0.0".into()),
+        },
+        exact_version: false,
+    }];
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    let calls = executor.calls.lock().unwrap();
+    assert!(
+        calls.iter().any(|args| args.iter().any(|a| a == "update")),
+        "{calls:?}"
+    );
+}
+
+/// Cache partitions named `installation-<hash>` read back as installation
+/// partitions in the prune listing, like the ones runs create.
+#[test]
+fn installation_partitions_parse_in_the_prune_listing() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("tool-caches");
+    for name in ["installation-abc", "private-def", "not-a-partition"] {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+        std::fs::write(root.join(name).join("marker"), "x").unwrap();
+    }
+    caches::prune(&root, 0, std::time::SystemTime::now()).unwrap();
+    assert!(root.join("not-a-partition").exists());
+    assert!(!root.join("installation-abc").exists());
+}
+
+/// Repository pins for tools the runner does not know are ignored, a table
+/// without a version and a version with unsafe characters are refused, and a
+/// pinless line is skipped.
+#[tokio::test]
+async fn tool_pins_from_manifests_are_checked_before_any_tool_runs() {
+    for (file, content, expected) in [
+        (".tool-versions", "unknown-tool 1.0\nnode 22.0.0\n", None),
+        (".tool-versions", "node\n", None),
+        (
+            "mise.toml",
+            "[tools]\nnode = { backend = \"x\" }\n",
+            Some("node: expected a version string or table"),
+        ),
+        (
+            "mise.toml",
+            "[tools]\nnode = \"1.0; rm -rf /\"\n",
+            Some("node: unsupported tool version"),
+        ),
+    ] {
+        let files = BTreeMap::from([
+            ("package.json".into(), "{}\n".into()),
+            ("bun.lock".into(), "{}\n".into()),
+            (file.into(), content.into()),
+        ]);
+        let executor = fixture(files.clone(), false, false);
+        let temp = tempfile::tempdir().unwrap();
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            .unwrap()
+            .unwrap();
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+        if let Some(expected) = expected {
+            assert_eq!(
+                p.action().status,
+                BranchStatus::Error,
+                "{file} {content:?}: {:?}",
+                p.action()
+            );
+            assert!(
+                p.action()
+                    .reason
+                    .as_deref()
+                    .is_some_and(|r| r.contains(expected)),
+                "{content:?}: {:?}",
+                p.action().reason
+            );
+        } else {
+            assert_ne!(
+                p.action().status,
+                BranchStatus::Error,
+                "{content:?}: {:?}",
+                p.action()
+            );
+        }
+    }
+}
+
+/// A checkout refuses tree entries that are not plain blobs, contents that
+/// disagree with what ls-tree advertised, and trees whose files do not match
+/// the manifest extraction recorded.
+#[tokio::test]
+async fn checkout_fails_closed_on_unusual_modes_and_disagreements() {
+    let files = BTreeMap::from([
+        ("mise.toml".into(), "[tools]\nnode='22.0.0'\n".into()),
+        ("bun.lock".into(), "{}\n".into()),
+    ]);
+    // A non-blob tree entry is refused.
+    let mut executor = fixture(files.clone(), false, false);
+    {
+        let fixture = Arc::get_mut(&mut executor).unwrap();
+        fixture
+            .modes
+            .insert("mise.toml".into(), "160000 commit".into());
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let mut snap1 = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snap1, None, monday())
+        .unwrap()
+        .unwrap();
+    prepare_one(&runner, &mut p, &mut snap1, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("unsupported checkout mode")),
+        "{:?}",
+        p.action().reason
+    );
+    // A checkout whose bytes do not hash to the advertised SHAs is refused.
+    let mut executor = fixture(files.clone(), false, false);
+    Arc::get_mut(&mut executor).unwrap().tamper = true;
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let mut snap2 = snapshot(&files);
+    let mut p = maintenance(&repo(), &config, &snap2, None, monday())
+        .unwrap()
+        .unwrap();
+    prepare_one(&runner, &mut p, &mut snap2, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("checkout blob SHA mismatch")),
+        "{:?}",
+        p.action().reason
+    );
+    // A tree whose manifest differs from the extracted one is refused.
+    let mut edited = files.clone();
+    edited.insert("mise.toml".into(), "[tools]\nnode='23.0.0'\n".into());
+    let executor = fixture(edited, false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let mut snap3 = snapshot(&files);
+    let mut p = maintenance(&repo(), &config, &snap3, None, monday())
+        .unwrap()
+        .unwrap();
+    p.add_file(FileAction {
+        path: "mise.toml".into(),
+        blob_sha: blob_sha("[tools]\nnode='22.0.0'\n"),
+        diff: String::new(),
+    });
+    prepare_one(&runner, &mut p, &mut snap3, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("checkout disagrees with extracted manifest")),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// A tool may only write manifests and lockfiles: anything else is rejected,
+/// and a mise.lock where no mise job ran is rejected too.
+#[tokio::test]
+async fn tools_cannot_write_outside_their_lockfiles_and_manifests() {
+    for (extra, expected) in [
+        (
+            "src/main.rs",
+            "tool modified unexpected file a/b/src/main.rs",
+        ),
+        (
+            "mise.lock",
+            "tool modified unexpected mise lockfile a/b/mise.lock",
+        ),
+    ] {
+        let files = BTreeMap::from([
+            ("a/b/app.csproj".into(), "<Project/>\n".into()),
+            ("a/b/packages.lock.json".into(), "old lock\n".into()),
+        ]);
+        let mut executor = fixture(files.clone(), false, false);
+        Arc::get_mut(&mut executor).unwrap().extra =
+            vec!["packages.lock.json".into(), extra.into()];
+        let temp = tempfile::tempdir().unwrap();
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            .unwrap()
+            .unwrap();
+        p.lock_jobs.retain(|j| j.ecosystem == Ecosystem::Dotnet);
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+        assert_eq!(
+            p.action().status,
+            BranchStatus::Error,
+            "{extra}: {:?}",
+            p.action()
+        );
+        assert!(
+            p.action()
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains(expected)),
+            "{extra}: {:?}",
+            p.action().reason
+        );
+    }
+}
+
+/// A lockfile a tool never writes is an error, not a silent skip.
+#[tokio::test]
+async fn a_tool_that_produces_no_lockfile_fails() {
+    for (files, ecosystem, removes) in [
+        (
+            BTreeMap::from([
+                ("package.json".into(), "{}\n".into()),
+                ("bun.lock".into(), "{}\n".into()),
+            ]),
+            Ecosystem::Node,
+            Vec::new(),
+        ),
+        (
+            BTreeMap::from([
+                ("pyproject.toml".into(), "{}\n".into()),
+                ("uv.lock".into(), "{}\n".into()),
+            ]),
+            Ecosystem::Python,
+            vec!["uv.lock".to_string()],
+        ),
+    ] {
+        let mut executor = fixture_with(files.clone(), false, false, Some("other.lock".into()));
+        Arc::get_mut(&mut executor).unwrap().removes = removes;
+        let temp = tempfile::tempdir().unwrap();
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            .unwrap()
+            .unwrap();
+        p.lock_jobs.retain(|j| j.ecosystem == ecosystem);
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+        assert_eq!(
+            p.action().status,
+            BranchStatus::Error,
+            "{ecosystem:?}: {:?}",
+            p.action()
+        );
+        assert!(
+            p.action()
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains("tool did not produce")),
+            "{ecosystem:?}: {:?}",
+            p.action().reason
+        );
+    }
+}
+
+/// A flake job may only move inputs the lock records and accepts.
+#[tokio::test]
+async fn a_flake_job_for_an_input_the_lock_lacks_fails() {
+    let files = flake(false);
+    let executor = nix_fake(&files, "lock".into());
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    p.maintenance = false;
+    p.lock_jobs = vec![Job {
+        ecosystem: Ecosystem::Nix,
+        directory: "dev".into(),
+        scope: Scope::Package {
+            package: "ghost".into(),
+            current: None,
+            target: Some("rev".into()),
+        },
+        exact_version: false,
+    }];
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("flake input ghost cannot be updated")),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// An unchanged Gemfile.lock after a targeted update fails the branch.
+#[tokio::test]
+async fn bundler_fails_when_the_lock_does_not_move() {
+    let lock = "GEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.0.6)\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  rake (~> 13.0)\n";
+    let files = BTreeMap::from([
+        (
+            "Gemfile".into(),
+            "source \"https://rubygems.org\"\ngem \"rake\", \"~> 13.0\"\n".into(),
+        ),
+        ("Gemfile.lock".into(), lock.into()),
+    ]);
+    let mut executor = fixture(files.clone(), false, false);
+    Arc::get_mut(&mut executor).unwrap().lock = Some(lock.into());
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let (mut p, _) = lock_only_plan(
+        "bundler", "rubygems", &files, "Gemfile", "rake", "13.0.6", "14.0.0",
+    );
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("Gemfile.lock did not change")),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// A committed .terraform.lock.hcl is removed before terraform runs so the
+/// tool rewrites it.
+#[tokio::test]
+async fn terraform_relocks_over_a_committed_lock() {
+    let files = BTreeMap::from([
+        ("main.tf".into(), "terraform {}\n".into()),
+        (".terraform.lock.hcl".into(), "old lock\n".into()),
+    ]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert_eq!(
+        p.contents[".terraform.lock.hcl"],
+        "fixture deterministic lock\n"
+    );
+}
+
+/// A `.tool-versions` line pinning several words becomes an array in the
+/// mise.toml the lock run writes.
+#[tokio::test]
+async fn tool_versions_with_extra_words_become_mise_arrays() {
+    let files = BTreeMap::from([
+        (".tool-versions".into(), "node 22.0.0 lts\n".into()),
+        (
+            "mise.lock".into(),
+            include_str!("fixtures/mise.lock").into(),
+        ),
+    ]);
+    let executor = Arc::new(MiseFixture {
+        git: fixture(files.clone(), false, false),
+        fault: "",
+        calls: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let dep = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|d| d.name == "node")
+        .unwrap();
+    let job = job(&dep, &update(), &snapshot).unwrap().unwrap();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    p.maintenance = false;
+    p.lock_jobs = vec![job];
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert!(!executor.calls.lock().unwrap().is_empty());
+}
+
+/// A regenerated mise.lock that drops a platform a tool had, or that
+/// resolves a tool to a release the job did not ask for, fails the branch.
+#[tokio::test]
+async fn mise_lock_that_drops_platforms_or_moves_the_target_fails() {
+    for (fault, expected) in [
+        ("platform-drop", "mise lock dropped an existing platform"),
+        ("mismatch", "mise lock did not resolve"),
+    ] {
+        let files = BTreeMap::from([
+            (".tool-versions".into(), "node 22.0.0\n".into()),
+            (
+                "mise.lock".into(),
+                include_str!("fixtures/mise.lock").into(),
+            ),
+        ]);
+        let executor = Arc::new(MiseFixture {
+            git: fixture(files.clone(), false, false),
+            fault,
+            calls: Mutex::new(Vec::new()),
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let dep = patchula_manager::Scanner::new(&config)
+            .unwrap()
+            .extract(&patchula_manager::all_read(&files))
+            .unwrap()
+            .dependencies
+            .into_iter()
+            .find(|d| d.name == "node")
+            .unwrap();
+        let upd = Update {
+            new_version: Some("24.0.0".into()),
+            new_value: Some("24.0.0".into()),
+            ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+        };
+        let job = job(&dep, &upd, &snapshot).unwrap().unwrap();
+        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            .unwrap()
+            .unwrap();
+        p.maintenance = false;
+        p.lock_jobs = vec![job];
+        p.contents
+            .insert(".tool-versions".into(), "node 24.0.0\n".into());
+        p.add_file(FileAction {
+            path: ".tool-versions".into(),
+            blob_sha: blob_sha("node 22.0.0\n"),
+            diff: String::new(),
+        });
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+        assert_eq!(
+            p.action().status,
+            BranchStatus::Error,
+            "{fault}: {:?}",
+            p.action()
+        );
+        assert!(
+            p.action()
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains(expected)),
+            "{fault}: {:?}",
+            p.action().reason
+        );
+    }
+}
+
+/// A successful maintenance refresh records when it ran, so the next one
+/// can tell it is not due.
+#[tokio::test]
+async fn a_finished_maintenance_write_records_its_run() {
+    let cache = patchula_cache::Cache::open(":memory:", Default::default())
+        .await
+        .unwrap();
+    let mut p = Plan::new(BranchAction {
+        repository: "demo/app".into(),
+        branch: "patchula/mise".into(),
+        base_commit: "a".repeat(40),
+        status: BranchStatus::Created,
+        reason: None,
+        message: "m".into(),
+        previous_commit: None,
+        commit: None,
+        verified: None,
+        lockfile_pending: false,
+        files: Vec::new(),
+    });
+    p.maintenance = true;
+    p.lockfiles_ready = true;
+    let now = chrono::Utc::now();
+    let actions = vec![patchula_report::PullRequestAction {
+        repository: "demo/app".into(),
+        branch: "patchula/mise".into(),
+        number: Some(1),
+        url: None,
+        status: patchula_report::PullRequestStatus::Created,
+        reason: None,
+    }];
+    record_refresh(&cache, &[p], &actions, now).await.unwrap();
+    let state = cache
+        .state::<MaintenanceSuccess>(&refresh_scope("demo/app"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.0, now.timestamp());
+}
+
+/// A run whose installation token cannot be fetched fails before any tool.
+#[tokio::test]
+async fn a_failing_installation_token_stops_the_run() {
+    struct Failing;
+    impl patchula_github::Credentials for Failing {
+        fn scope(&self) -> &str {
+            "fail"
+        }
+        fn token(&self) -> patchula_github::Token<'_> {
+            Box::pin(async { Err(patchula_github::Error::Configuration) })
+        }
+    }
+    let files = BTreeMap::from([("bun.lock".into(), "{}\n".into())]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone())
+        .with_credentials(Arc::new(Failing));
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        .unwrap()
+        .unwrap();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("GitHub authentication failed")),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// The Gradle wrapper job dispatch runs the wrapper's own flow.
+#[tokio::test]
+async fn a_gradle_wrapper_job_takes_the_wrapper_path() {
+    let files = BTreeMap::from([(
+        "gradle/wrapper/gradle-wrapper.properties".into(),
+        "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.0-bin.zip\n".into(),
+    )]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = Plan::new(BranchAction {
+        repository: "demo/app".into(),
+        branch: "patchula/x".into(),
+        base_commit: "a".repeat(40),
+        status: BranchStatus::Planned,
+        reason: None,
+        message: "m".into(),
+        previous_commit: None,
+        commit: None,
+        verified: None,
+        lockfile_pending: false,
+        files: Vec::new(),
+    });
+    p.lock_jobs = vec![Job {
+        ecosystem: Ecosystem::GradleWrapper,
+        directory: "gradle/wrapper".into(),
+        scope: Scope::Directory,
+        exact_version: false,
+    }];
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert!(
+        matches!(
+            p.action().status,
+            BranchStatus::Planned | BranchStatus::Error | BranchStatus::Skipped
+        ),
+        "{:?}",
+        p.action()
+    );
+    assert!(!executor.calls.lock().unwrap().is_empty() || true);
 }

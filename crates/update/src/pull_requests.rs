@@ -1937,3 +1937,72 @@ mod foreign_text_tests {
         assert_eq!(dropped, format!("{}\n", section("t\n").trim_end()));
     }
 }
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    use patchula_report::BranchStatus;
+
+    fn action(branch: &str) -> patchula_report::BranchAction {
+        patchula_report::BranchAction {
+            repository: "o/r".into(),
+            branch: branch.into(),
+            base_commit: "b".repeat(40),
+            status: BranchStatus::Planned,
+            reason: None,
+            message: "m".into(),
+            previous_commit: None,
+            commit: None,
+            verified: None,
+            lockfile_pending: false,
+            files: Vec::new(),
+        }
+    }
+    fn change(merge: bool) -> crate::Change {
+        crate::Change {
+            source: patchula_words::Source::Npm,
+            package: "a".into(),
+            registry: None,
+            file: "package.json".into(),
+            current: "1.0.0".into(),
+            current_version: None,
+            value: Some("1.1.0".into()),
+            version: Some("1.1.0".into()),
+            digest: None,
+            kind: patchula_words::Update::Minor,
+            merge,
+            labels: Vec::new(),
+            release_notes: false,
+            body_notes: Vec::new(),
+            advisories: Vec::new(),
+            image: None,
+        }
+    }
+
+    /// Maintenance follows the repository's merge policy alone; other plans
+    /// merge only when every change opts in, and never with a lockfile pending.
+    #[test]
+    fn merge_requests_follow_policy_opt_ins_and_lockfile_readiness() {
+        let mut config = patchula_config::defaults().unwrap();
+        let mut plan = Plan::new(action("patchula/mise"));
+        plan.maintenance = true;
+        config.defaults.merge = true;
+        assert!(merge_requested(&plan, &config.defaults));
+        config.defaults.merge = false;
+        assert!(!merge_requested(&plan, &config.defaults));
+        // An ordinary plan merges only when every change asks for it.
+        plan.maintenance = false;
+        config.defaults.merge = true;
+        assert!(!merge_requested(&plan, &config.defaults));
+        plan.changes = vec![change(true)];
+        assert!(merge_requested(&plan, &config.defaults));
+        plan.changes.push(change(false));
+        assert!(!merge_requested(&plan, &config.defaults));
+        // A pending lockfile never merges, policy or opt-ins regardless.
+        let mut pending_action = action("patchula/b");
+        pending_action.lockfile_pending = true;
+        let mut pending = Plan::new(pending_action);
+        pending.maintenance = true;
+        assert!(!merge_requested(&pending, &config.defaults));
+    }
+}

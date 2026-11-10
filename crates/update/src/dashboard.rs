@@ -1321,4 +1321,80 @@ mod tests {
             "checked"
         );
     }
+
+    /// An advisory a batched update fixes points at the batch PR, when the
+    /// batch carries the update's key and has an open PR.
+    #[test]
+    fn a_batched_fix_reports_the_batch_prs_number() {
+        use patchula_report::BranchStatus;
+        let action = |branch: &str| patchula_report::BranchAction {
+            repository: "o/r".into(),
+            branch: branch.into(),
+            base_commit: "b".repeat(40),
+            status: BranchStatus::Planned,
+            reason: None,
+            message: "m".into(),
+            previous_commit: None,
+            commit: None,
+            verified: None,
+            lockfile_pending: false,
+            files: Vec::new(),
+        };
+        let change = || crate::Change {
+            source: patchula_words::Source::Npm,
+            package: "shared".into(),
+            registry: None,
+            file: "package.json".into(),
+            current: "1.0.0".into(),
+            current_version: None,
+            value: Some("1.2.0".into()),
+            version: Some("1.2.0".into()),
+            digest: None,
+            kind: patchula_words::Update::Minor,
+            merge: false,
+            labels: Vec::new(),
+            release_notes: false,
+            body_notes: Vec::new(),
+            advisories: Vec::new(),
+            image: None,
+        };
+        let mut held = Plan::new(action("patchula/shared-1.x"));
+        held.changes = vec![change()];
+        held.identity = "shared".into();
+        held.hold(crate::plan::Hold::Batched);
+        let mut carrier = Plan::new(action("patchula/batch"));
+        carrier.batch = Some(vec![crate::batch::Item {
+            origin: crate::pull_requests::update_key(&held),
+            number: None,
+            title: "batched".into(),
+            targets: vec![change()],
+        }]);
+        let prs = vec![serde_json::json!({
+            "number": 7, "state": "open",
+            "head": {"ref": "patchula/batch"}, "body": ""
+        })];
+        let dep: patchula_report::Dependency = serde_json::from_value(serde_json::json!({
+            "manager": "npm", "name": "shared", "package": "shared",
+            "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
+            "updates": [{"newValue": "1.2.0", "newVersion": "1.2.0", "newDigest": null,
+                "updateType": "minor", "fixes": ["GHSA-1"]}],
+        }))
+        .unwrap();
+        let metadata: patchula_report::DependencyMetadata =
+            serde_json::from_value(serde_json::json!({
+                "source": "npm", "kinds": [], "locations": [],
+                "advisories": [{"id": "GHSA-1", "url": "https://a.example"}],
+            }))
+            .unwrap();
+        let advisory = &metadata.advisories[0];
+        let fix = fix_status(
+            &[held, carrier],
+            &prs,
+            "package.json",
+            &dep,
+            &metadata,
+            advisory,
+        );
+        assert_eq!(fix.render(), "fixed by #7");
+    }
 }
