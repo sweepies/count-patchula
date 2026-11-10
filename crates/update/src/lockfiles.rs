@@ -192,45 +192,46 @@ fn under(path: &str, root: &str) -> bool {
 fn within(path: &str, root: &str) -> bool {
     path == root || under(path, root)
 }
+/// A set of repository paths `upward` can look a candidate up in.
+pub(crate) trait Paths {
+    fn find(&self, path: &str) -> Option<&String>;
+}
+impl Paths for BTreeSet<String> {
+    fn find(&self, path: &str) -> Option<&String> {
+        self.get(path)
+    }
+}
+impl<V> Paths for BTreeMap<String, V> {
+    fn find(&self, path: &str) -> Option<&String> {
+        self.get_key_value(path).map(|(path, _)| path)
+    }
+}
 /// The repo files `names` names in `directory` or a directory above it,
 /// ordered root-first — by directory depth, then by `names` order (an
-/// earlier name loses to a later one in the same directory), then by path —
-/// so applying them in order leaves the nearest, highest-precedence file
-/// winning. A candidate counts when its directory is `directory` itself or
-/// an ancestor of it, the same reach `under` gives.
-fn upward<'a>(
-    paths: impl IntoIterator<Item = &'a String>,
-    directory: &str,
-    names: &[&str],
-) -> Vec<&'a str> {
-    let mut found: Vec<&str> = paths
-        .into_iter()
-        .map(String::as_str)
-        .filter(|path| {
-            let leaf = path.rsplit('/').next().unwrap_or(path);
-            names.contains(&leaf)
-                && (directory == self::directory(path) || under(directory, self::directory(path)))
-        })
-        .collect();
-    found.sort_by_key(|path| {
-        (
-            self::directory(path).len(),
+/// earlier name loses to a later one in the same directory) — so applying
+/// them in order leaves the nearest, highest-precedence file winning. It
+/// walks up from `directory` and looks each candidate up, so its cost grows
+/// with the directory's depth, not with the size of the repository.
+fn upward<'a>(paths: &'a impl Paths, directory: &str, names: &[&str]) -> Vec<&'a str> {
+    let mut dirs = vec![directory];
+    let mut dir = directory;
+    while !dir.is_empty() {
+        dir = self::directory(dir);
+        dirs.push(dir);
+    }
+    dirs.iter()
+        .rev()
+        .flat_map(|dir| {
             names
                 .iter()
-                .position(|name| *name == path.rsplit('/').next().unwrap_or(path))
-                .unwrap_or(usize::MAX),
-            path.len(),
-        )
-    });
-    found
+                .filter_map(move |name| paths.find(&context::join(dir, name)))
+        })
+        .map(String::as_str)
+        .collect()
 }
 /// The directory holding the nearest file `names` names at or above
 /// `directory`, from `paths`.
-fn nearest_dir<'a>(
-    paths: impl IntoIterator<Item = &'a String>,
-    directory: &str,
-    names: &[&str],
-) -> Option<&'a str> {
+fn nearest_dir<'a>(paths: &'a impl Paths, directory: &str, names: &[&str]) -> Option<&'a str> {
     upward(paths, directory, names)
         .last()
         .map(|path| self::directory(path))
@@ -304,8 +305,7 @@ pub(crate) fn job(
                 })
                 .copied()
                 .collect();
-            let Some(root) = nearest_dir(snapshot.paths.iter(), directory(&dep.file), &locks)
-            else {
+            let Some(root) = nearest_dir(&snapshot.paths, directory(&dep.file), &locks) else {
                 return Ok(None);
             };
             if [Manager::Npm, Manager::Bun].iter().any(|manager| {
@@ -350,7 +350,7 @@ pub(crate) fn job(
         }
         Manager::Bundler => {
             let Some(root) = nearest_dir(
-                snapshot.paths.iter(),
+                &snapshot.paths,
                 directory(&dep.file),
                 lock_names(Manager::Bundler).supported,
             ) else {
@@ -360,7 +360,7 @@ pub(crate) fn job(
         }
         Manager::Composer => {
             let Some(root) = nearest_dir(
-                snapshot.paths.iter(),
+                &snapshot.paths,
                 directory(&dep.file),
                 lock_names(Manager::Composer).supported,
             ) else {
@@ -418,7 +418,7 @@ pub(crate) fn job(
         // need the build itself to regenerate; hold such updates.
         Manager::Gradle => {
             if nearest_dir(
-                snapshot.paths.iter(),
+                &snapshot.paths,
                 directory(&dep.file),
                 lock_names(Manager::Gradle).unsupported,
             )
@@ -439,7 +439,7 @@ pub(crate) fn job(
         }
         Manager::Cargo => {
             let lock = nearest_dir(
-                snapshot.paths.iter(),
+                &snapshot.paths,
                 directory(&dep.file),
                 lock_names(Manager::Cargo).supported,
             );
@@ -460,14 +460,10 @@ pub(crate) fn job(
             // with it. The closest lockfile governs the project, so one above a
             // supported lock does not hold it.
             let names = lock_names(Manager::Pyproject);
-            let supported =
-                nearest_dir(snapshot.paths.iter(), directory(&dep.file), names.supported);
-            if let Some(lock) = nearest_dir(
-                snapshot.paths.iter(),
-                directory(&dep.file),
-                names.unsupported,
-            )
-            .filter(|lock| supported.is_none_or(|root| lock.len() >= root.len()))
+            let supported = nearest_dir(&snapshot.paths, directory(&dep.file), names.supported);
+            if let Some(lock) =
+                nearest_dir(&snapshot.paths, directory(&dep.file), names.unsupported)
+                    .filter(|lock| supported.is_none_or(|root| lock.len() >= root.len()))
             {
                 return Err(format!(
                     "unsupported lockfile format: {}",
@@ -1281,14 +1277,12 @@ fn validate_targets(
         // pnpm and Yarn locks are not read back (aube-lock.yaml is), so the unchanged-lockfile rule
         // checks them instead. Every lock this runner reads must prove the target.
         let unread = matches!(dep.manager, Manager::Npm | Manager::Bun)
-            && nearest_dir(paths.iter(), directory(&change.file), &node_locks()).is_some_and(
-                |dir| {
-                    ![Manager::Npm, Manager::Bun]
-                        .iter()
-                        .flat_map(|manager| lock_names(*manager).readable.iter().copied())
-                        .any(|leaf| paths.contains(&context::join(dir, leaf)))
-                },
-            );
+            && nearest_dir(&paths, directory(&change.file), &node_locks()).is_some_and(|dir| {
+                ![Manager::Npm, Manager::Bun]
+                    .iter()
+                    .flat_map(|manager| lock_names(*manager).readable.iter().copied())
+                    .any(|leaf| paths.contains(&context::join(dir, leaf)))
+            });
         if !unread
             && (ecosystem(dep.manager)
                 .is_some_and(|e| descriptor(e).proof == Proof::DeclaredAndResolved)
@@ -1331,7 +1325,7 @@ fn versions(
     // same directory, and a deeper file over a shallower one; `upward`
     // orders the same way, so applying in order leaves the winner last.
     for path in upward(
-        baseline.keys(),
+        baseline,
         directory,
         &[".tool-versions", "mise.toml", ".mise.toml"],
     ) {

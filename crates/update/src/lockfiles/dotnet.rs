@@ -16,7 +16,7 @@ pub(super) static DESCRIPTOR: Tool = Tool {
 /// The SDK the nearest `global.json` at or above the restore directory asks
 /// for, else the pinned default.
 fn sdk(baseline: &BTreeMap<String, Blob>, root: &Path, directory: &str, pinned: &str) -> String {
-    for path in upward(baseline.keys(), directory, &["global.json"])
+    for path in upward(baseline, directory, &["global.json"])
         .into_iter()
         .rev()
     {
