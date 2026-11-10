@@ -1582,3 +1582,49 @@ async fn a_python_package_is_read_from_its_private_index_or_not_at_all() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn a_tag_outside_the_registry_alphabet_is_refused_before_any_read() {
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::new())));
+    let dir = tempfile::tempdir().unwrap();
+    let sources = client(steps.clone(), dir.path()).await;
+    for tag in ["", "has space", "semi;colon", "slash/tag"] {
+        assert!(matches!(
+            sources.registry_digest("spec", tag).await,
+            Err(patchula_datasource::Error::Invalid)
+        ));
+    }
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_charts_source_falls_back_to_the_manifest_annotation() {
+    let digest = format!("sha256:{}", "b".repeat(64));
+    let manifest = format!(
+        r#"{{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{{"mediaType":"application/vnd.cncf.helm.config.v1+json","digest":"{digest}"}},"annotations":{{"org.opencontainers.image.source":"https://github.com/spec/chart"}}}}"#
+    );
+    // The chart config's own `sources` names nothing readable, so the
+    // manifest annotation is what release notes read.
+    let config = r#"{"config":{"Labels":{}},"sources":["not a repository"],"annotations":{}}"#;
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            "https://ghcr.io/v2/spec/chart/manifests/1.0.0".into(),
+            response(200, &manifest, &[]),
+        ),
+        (
+            format!("https://ghcr.io/v2/spec/chart/blobs/{digest}"),
+            response(200, config, &[]),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let sources = client(steps.clone(), dir.path()).await;
+    let repository = sources
+        .image_source("ghcr.io/spec/chart", "1.0.0")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(repository.github.as_deref(), Some("spec/chart"));
+    assert_eq!(repository.url, "https://github.com/spec/chart");
+    assert!(repository.chart_sources);
+    assert!(steps.0.lock().unwrap().is_empty());
+}

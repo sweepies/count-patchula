@@ -618,3 +618,55 @@ pub fn escape_go(package: &str) -> Result<String> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A lookup error keeps the kind a report sorts it under: an empty mise
+    /// listing or a release-less tool is "not found", anything the Count
+    /// cannot classify stays "other".
+    #[test]
+    fn error_kinds_classify_failures_for_the_report() {
+        assert_eq!(
+            Error::NoReleases {
+                tool: "t".into(),
+                sample: "s".into()
+            }
+            .kind(),
+            LookupErrorKind::NotFound
+        );
+        assert_eq!(
+            Error::Mise(patchula_mise::Error::Empty("t".into())).kind(),
+            LookupErrorKind::NotFound
+        );
+        assert_eq!(Error::Invalid.kind(), LookupErrorKind::Other);
+        assert_eq!(Error::NoMise.kind(), LookupErrorKind::Other);
+    }
+
+    /// The stale keys a rate-limited registry read is remembered under: the
+    /// catalog, or one tag's manifest with `+` read back as `_`.
+    #[test]
+    fn stale_keys_name_the_catalog_and_each_manifest() {
+        assert_eq!(StaleKey::CATALOG.to_string(), "catalog");
+        assert_eq!(
+            StaleKey::digest("1.0+build").to_string(),
+            "digest:1.0_build"
+        );
+        assert!(StaleKey::digest("1.0+build").is_manifest_of("1.0+build"));
+        assert!(StaleKey::digest("1.0+build").is_manifest_of("1.0_build"));
+        assert!(!StaleKey::digest("1.0").is_manifest_of("2.0"));
+        assert!(!StaleKey::CATALOG.is_manifest_of("1.0"));
+    }
+
+    /// `truncate` never splits a character: the cut backs up to a boundary.
+    #[test]
+    fn truncate_cuts_on_a_character_boundary() {
+        assert_eq!(truncate("abcdef", 3), "abc");
+        // "aéb" is four bytes; a cut inside `é` backs up to before it.
+        assert_eq!(truncate("aéb", 2), "a");
+        assert_eq!(truncate("aéb", 3), "aé");
+        assert_eq!(truncate("aéb", 4), "aéb");
+        assert_eq!(truncate("short", 100), "short");
+    }
+}
