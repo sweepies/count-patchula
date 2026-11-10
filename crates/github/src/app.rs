@@ -423,10 +423,7 @@ mod tests {
                 };
                 let mut headers = header::HeaderMap::new();
                 if let Some(link) = link {
-                    headers.insert(
-                        header::LINK,
-                        HeaderValue::from_str(&link).unwrap(),
-                    );
+                    headers.insert(header::LINK, HeaderValue::from_str(&link).unwrap());
                 }
                 Ok(Response {
                     status: reqwest::StatusCode::OK,
@@ -450,9 +447,6 @@ mod tests {
             Url::parse("https://api.github.com").unwrap(),
         )
         .unwrap();
-        assert!(matches!(
-            app.installations().await,
-            Err(Error::Pagination)
-        ));
+        assert!(matches!(app.installations().await, Err(Error::Pagination)));
     }
 }
