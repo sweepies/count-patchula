@@ -623,4 +623,20 @@ mod tests {
         actual.sort_unstable();
         assert_eq!(actual, expected);
     }
+
+    /// Managers the Count only reads through other files name no lockfile
+    /// or manifest of their own; Gradle's one lockfile is unsupported.
+    #[test]
+    fn managers_without_lockfiles_or_manifests_report_none() {
+        let go = lock_names(Manager::Go);
+        assert!(go.supported.is_empty() && go.unsupported.is_empty() && go.readable.is_empty());
+        assert!(
+            lock_names(Manager::Gradle)
+                .unsupported
+                .contains(&"gradle.lockfile")
+        );
+        assert!(manifest_names(Manager::Gradle).is_empty());
+        assert!(manifest_names(Manager::Terraform).is_empty());
+        assert!(manifest_names(Manager::GithubActions).is_empty());
+    }
 }
