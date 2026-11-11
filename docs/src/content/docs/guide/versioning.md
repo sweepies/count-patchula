@@ -86,7 +86,8 @@ project supports rather than the one it installs, so they default to
 `preserve` too: a release the constraint allows changes nothing, and one past
 its ceiling is left alone. A version file such as `.nvmrc`, `.node-version`
 or `.terraform-version` pins the installed version and is updated like any
-other pin.
+other pin, and a partial version updates to an exact pin: `.nvmrc` holding
+`20` is written as, say, `20.0.1`.
 
 Under `preserve` a release the declaration already allows does not edit the
 manifest. When the manifest has a committed lockfile, the update moves that

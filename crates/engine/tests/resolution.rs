@@ -8,12 +8,21 @@
 use patchula_cache::Cache;
 use patchula_engine::{Engine, Options};
 use patchula_testkit::{
-    Body, Cassette, Interaction, RecordedRequest, RecordedResponse, Redactor, Replay,
+    Body, Cassette, Interaction, MiseReplay, Outcome, RecordedRequest, RecordedResponse, Redactor,
+    Replay, Run,
 };
 use serde_json::json;
 use std::sync::Arc;
 
 async fn report(tree: &std::path::Path, cassette: Cassette) -> patchula_report::Report {
+    report_with_mise(tree, cassette, vec![]).await
+}
+
+async fn report_with_mise(
+    tree: &std::path::Path,
+    cassette: Cassette,
+    runs: Vec<Run>,
+) -> patchula_report::Report {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("spec.json");
     patchula_testkit::save(&path, &cassette, &Redactor::default()).unwrap();
@@ -27,6 +36,13 @@ async fn report(tree: &std::path::Path, cassette: Cassette) -> patchula_report::
     let engine = Engine::with_transport("offline", cache, 4, replay.clone())
         .unwrap()
         .with_versions_host(false);
+    let engine = if runs.is_empty() {
+        engine
+    } else {
+        let runner = patchula_tools::Runner::new(dir.path().join("tools.sqlite"), "offline")
+            .with_executor(Arc::new(MiseReplay::new(runs)));
+        engine.with_lockfile_runner(runner)
+    };
     let report = engine
         .run_at(
             Options {
@@ -559,4 +575,58 @@ async fn a_package_manager_tool_reports_declared_never_lockfile() {
     assert_ne!(resolution.kind, patchula_words::ResolutionKind::Lockfile);
     assert_eq!(resolution.kind, patchula_words::ResolutionKind::Declared);
     assert_eq!(resolution.version, "9.0.0");
+}
+
+/// A version file records the installed pin, which the tool listing resolves
+/// like a `.tool-versions` pin: `release-line`, not the `supported-range` a
+/// runtime constraint reports.
+#[tokio::test]
+async fn a_version_file_pin_reports_release_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\n",
+            ),
+            (".nvmrc", "20.1.0\n"),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "No HTTP: the tool listing comes from the mise replay".into(),
+        interactions: vec![],
+    };
+    let runs = vec![Run {
+        args: vec![
+            "ls-remote".into(),
+            "--json".into(),
+            "--prerelease".into(),
+            "--".into(),
+            "node".into(),
+        ],
+        result: Outcome::Output(json!([
+            {"version": "20.1.0"},
+            {"version": "20.1.1"},
+            {"version": "21.0.0"}
+        ])),
+    }];
+    let report = report_with_mise(&tree, cassette, runs).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = repo
+        .package_files
+        .iter()
+        .flat_map(|f| &f.dependencies)
+        .find(|d| d.name == "node")
+        .unwrap_or_else(|| panic!("no node dependency: {repo:?}"));
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_eq!(resolution.kind, patchula_words::ResolutionKind::ReleaseLine);
+    assert_eq!(resolution.version, "20.1.0");
 }

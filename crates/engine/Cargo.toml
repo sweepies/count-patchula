@@ -36,4 +36,5 @@ sha2 = "0.11.1"
 tokio = { workspace = true, features = ["test-util"] }
 patchula-process = { path = "../process" }
 patchula-testkit = { path = "../testkit" }
+patchula-tools = { path = "../tools" }
 tempfile = "3"
