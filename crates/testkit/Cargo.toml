@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+base64 = "0.23"
 graphql-parser = "0.4"
 regex = "1"
 percent-encoding = "2"

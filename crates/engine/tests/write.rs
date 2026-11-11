@@ -1,14 +1,13 @@
 //! The same in-repo Pkl and token-only engine entry point used by the sandbox.
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_cache::Cache;
 use patchula_engine::{Engine, Options};
-use patchula_http::{Exchange, Response, Transport};
+use patchula_http::{Exchange, Transport};
 use patchula_report::{BranchStatus, Report, Status};
-use patchula_update::blob_sha;
+use patchula_testkit::github::{self, FakeGitHub, Hosts, State};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 /// The write receipts patchula_update stores, read through the same
@@ -26,46 +25,123 @@ impl patchula_cache::State for Receipts {
     type Scope = ReceiptsScope;
 }
 
-struct Fake {
-    files: BTreeMap<String, String>,
-    lock: bool,
-    lock_name: &'static str,
-    writes: Mutex<Vec<(String, Value)>>,
-    prs: Mutex<Vec<Value>>,
-    issues: Mutex<Vec<Value>>,
-    requests: Mutex<Vec<(String, String, Value)>>,
-    latency: std::time::Duration,
-    close_on_read: std::sync::atomic::AtomicBool,
-    catalog: Mutex<Value>,
-    fail_lookup: std::sync::atomic::AtomicBool,
-    merge_settings: Mutex<Value>,
-    checks: Mutex<Vec<Value>>,
-    change_head_on_checks: std::sync::atomic::AtomicBool,
-    merge_refused: std::sync::atomic::AtomicBool,
-    deletion_race: std::sync::atomic::AtomicBool,
-    /// GitHub refuses native auto-merge for a PR it finds mergeable already.
-    auto_merge_refusal: Mutex<Option<String>>,
-    /// The default branch's commit; its tree is always `base-tree`.
-    head: Mutex<String>,
-    /// Extra entries appended to the tree listing, whose blobs are absent.
-    extra_tree: Mutex<Vec<Value>>,
-    /// The `/branches` listing cleanup inspects.
-    branches: Mutex<Vec<Value>>,
-    /// A delete-shaped ref-update GraphQL mutation fails with this message;
-    /// branch writes still succeed.
-    ref_update_error: Mutex<Option<String>>,
-    /// The write inventory GraphQL query fails.
-    inventory_error: std::sync::atomic::AtomicBool,
-    /// The REST pull request listing fails.
-    pulls_error: std::sync::atomic::AtomicBool,
-    /// Dashboard issue writes fail.
-    issue_error: std::sync::atomic::AtomicBool,
-    /// The OSV.dev querybatch response.
-    osv: Mutex<Value>,
+/// The sandbox repository and the scripted registry and advisory hosts
+/// every write test shares: GitHub comes from the shared
+/// [`FakeGitHub`]; `registry.npmjs.org` and `api.osv.dev` are scripted
+/// routes on a [`Hosts`] router.
+struct Sandbox {
+    github: Arc<FakeGitHub>,
+    hosts: Arc<Hosts>,
+    /// The npm registry document.
+    catalog: Arc<Mutex<Value>>,
+    /// Registry reads fail while set.
+    fail_lookup: Arc<std::sync::atomic::AtomicBool>,
+}
+impl Sandbox {
+    /// The locked GitHub state: arrange what the server holds and read
+    /// what it recorded.
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.github.state()
+    }
+    /// `(method, path, body)` for every request — GitHub and scripted
+    /// hosts together — in arrival order.
+    fn log(&self) -> Vec<(String, String, Value)> {
+        self.hosts.log()
+    }
+    /// Forget every recorded request.
+    fn clear_log(&self) {
+        self.hosts.clear();
+    }
+}
+impl Transport for Sandbox {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        self.hosts.send(request)
+    }
+}
+
+/// The files every sandboxed repository starts with.
+fn base_files() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            "patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into(),
+        ),
+        (
+            "package.json".into(),
+            "{\n  \"dependencies\": {\"fixture\": \"1.0.0\"}\n}\n".into(),
+        ),
+    ])
+}
+
+/// A `demo/sandbox` repository holding `files` — `lock` names an extra
+/// lock-file entry whose blob serves `{}`; `extra` entries join the tree
+/// verbatim — behind a router scripting the npm registry and OSV.
+fn sandbox(files: BTreeMap<String, String>, lock: Option<&str>, extra: Vec<Value>) -> Arc<Sandbox> {
+    let github = Arc::new(FakeGitHub::new("demo/sandbox"));
+    let hosts = Arc::new(Hosts::new(github.clone()));
+    let catalog = Arc::new(Mutex::new(
+        json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}}),
+    ));
+    let fail_lookup = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let osv = Arc::new(Mutex::new(json!({"results":[{}]})));
+    {
+        let catalog = catalog.clone();
+        let fail = fail_lookup.clone();
+        hosts.script("registry.npmjs.org", move |_, _| {
+            if fail.load(std::sync::atomic::Ordering::Relaxed) {
+                github::json(503, json!({}))
+            } else {
+                github::json(200, catalog.lock().unwrap().clone())
+            }
+        });
+    }
+    {
+        let osv = osv.clone();
+        hosts.script("api.osv.dev", move |_, _| {
+            github::json(200, osv.lock().unwrap().clone())
+        });
+    }
+    let mut extra = extra;
+    if let Some(lock) = lock {
+        extra.push(json!({"path":lock,"sha":"unselected-lock","type":"blob","mode":"100644"}));
+    }
+    github.seed_files("main", "base", &files, extra);
+    {
+        let mut state = github.state();
+        let repo = state.repo_mut();
+        if lock.is_some() {
+            repo.blobs.insert("unselected-lock".into(), "{}".into());
+        }
+        repo.checks =
+            vec![json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"})];
+    }
+    Arc::new(Sandbox {
+        github,
+        hosts,
+        catalog,
+        fail_lookup,
+    })
+}
+
+/// The one signed patchula commit a branch head carries — the same commit
+/// the write path proves it owns before deleting.
+fn ours(sha: &str) -> Value {
+    json!({"sha":sha,"tree":{"sha":"base-tree"},
+           "message":format!("update\n\nPatchula: v1\nPatchula-Branch: b\nPatchula-Base: {}", "b".repeat(40)),
+           "verification":{"verified":true}})
+}
+
+/// A `heads/name` ref at `sha` — one owned patchula commit — for the
+/// `/branches` listing cleanup inspects.
+fn branch(github: &FakeGitHub, name: &str, sha: &str) {
+    let mut state = github.state();
+    let repo = state.repo_mut();
+    repo.refs.insert(format!("refs/heads/{name}"), sha.into());
+    repo.commits.insert(sha.into(), ours(sha));
 }
 
 struct Rotating(std::sync::atomic::AtomicUsize);
-struct Authenticated(Arc<Fake>);
+struct Authenticated(Arc<Sandbox>);
 impl Transport for Authenticated {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
         if request.url().host_str() == Some("api.github.com") {
@@ -99,8 +175,8 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
     let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let cli_fake = Arc::new(Fake::new(false));
-    let server_fake = Arc::new(Fake::new(false));
+    let cli_fake = sandbox(base_files(), None, vec![]);
+    let server_fake = sandbox(base_files(), None, vec![]);
     let cli_cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let server_cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let credentials = Arc::new(Rotating(Default::default()));
@@ -127,408 +203,22 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
     cli_report.stats = None;
     server_report.stats = None;
     assert_eq!(cli_report, server_report);
-    server_fake.writes.lock().unwrap().clear();
+    server_fake.state().writes.clear();
     let repeated = server.run_at(options(), false, false, now).await.unwrap();
     assert_eq!(
         repeated.actions.unwrap().branches[0].status,
         BranchStatus::Unchanged
     );
-    assert!(server_fake.writes.lock().unwrap().is_empty());
+    assert!(server_fake.state().writes.is_empty());
     assert!(credentials.0.load(std::sync::atomic::Ordering::Relaxed) > 2);
     check_transcript();
-}
-impl Fake {
-    fn new(lock: bool) -> Self {
-        Self {
-        files:BTreeMap::from([
-            ("patchula.pkl".into(),"amends \"PatchulaConfig.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
-            ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\"}\n}\n".into()),
-        ]),lock,lock_name:"bun.lockb",writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),latency:Default::default(),close_on_read:Default::default(),catalog:Mutex::new(json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}})),fail_lookup:Default::default(),
-        merge_settings: Mutex::new(json!({"id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"deleteBranchOnMerge":false})),
-        checks: Mutex::new(vec![json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"})]),
-        change_head_on_checks: Default::default(), merge_refused: Default::default(), deletion_race: Default::default(), auto_merge_refusal: Default::default(),
-        head: Mutex::new("base".into()),
-        extra_tree: Default::default(), branches: Default::default(), ref_update_error: Default::default(),
-        inventory_error: Default::default(), pulls_error: Default::default(), issue_error: Default::default(),
-        osv: Mutex::new(json!({"results":[{}]})),
-    }
-    }
-    fn tree(&self) -> Value {
-        let mut tree: Vec<_> = self
-            .files
-            .iter()
-            .map(|(p, c)| json!({"path":p,"sha":blob_sha(c),"mode":"100644","type":"blob"}))
-            .collect();
-        if self.lock {
-            tree.push(
-                json!({"path":self.lock_name,"sha":"unselected-lock","type":"blob","mode":"100644"}),
-            );
-        }
-        tree.extend(self.extra_tree.lock().unwrap().iter().cloned());
-        json!({"truncated":false,"tree":tree})
-    }
-}
-impl Transport for Fake {
-    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
-        let path = request.url().path();
-        let body: Value = request
-            .body()
-            .and_then(|b| b.as_bytes())
-            .and_then(|b| serde_json::from_slice(b).ok())
-            .unwrap_or(Value::Null);
-        self.requests.lock().unwrap().push((
-            request.method().to_string(),
-            path.into(),
-            body.clone(),
-        ));
-        patchula_testkit::transcripts::record(&request, &body);
-        let (status, value) = if request.url().host_str() == Some("api.osv.dev") {
-            (200, self.osv.lock().unwrap().clone())
-        } else if request.url().host_str() == Some("registry.npmjs.org") {
-            (
-                if self.fail_lookup.load(std::sync::atomic::Ordering::Relaxed) {
-                    503
-                } else {
-                    200
-                },
-                self.catalog.lock().unwrap().clone(),
-            )
-        } else if path == "/graphql" {
-            assert!(request.headers()["authorization"].is_sensitive());
-            if body["query"] == patchula_engine::REPOSITORY_HEAD_QUERY {
-                (
-                    200,
-                    json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":*self.head.lock().unwrap(),"tree":{"oid":"base-tree"}}}}}}),
-                )
-            } else if body["query"]
-                .as_str()
-                .is_some_and(|query| query.contains("... on Blob"))
-            {
-                // Blobs read in one batch, as their text.
-                let mut repository = serde_json::Map::new();
-                for (key, sha) in body["variables"].as_object().unwrap() {
-                    let Some(index) = key.strip_prefix('o').filter(|i| i.parse::<usize>().is_ok())
-                    else {
-                        continue;
-                    };
-                    let text = self
-                        .files
-                        .values()
-                        .find(|c| blob_sha(c) == sha.as_str().unwrap());
-                    repository.insert(
-                        format!("b{index}"),
-                        text.map_or(
-                            Value::Null,
-                            |text| json!({"text":text,"isBinary":false,"isTruncated":false}),
-                        ),
-                    );
-                }
-                (200, json!({"data":{"repository":repository}}))
-            } else if body["query"] == "query{viewer{login}}" {
-                (200, json!({"data":{"viewer":{"login":"patchula[bot]"}}}))
-            } else if body["query"] == patchula_update::INVENTORY_QUERY {
-                if self
-                    .inventory_error
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    return Box::pin(std::future::ready(Ok(Response {
-                        status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-                        headers: Default::default(),
-                        body: serde_json::to_vec(&json!({"message":"inventory boom"})).unwrap(),
-                        stale: None,
-                    })));
-                }
-                let prs = self.prs.lock().unwrap();
-                let nodes: Vec<_> = prs.iter().filter(|p|p["state"] == "open").map(|p|json!({
-                    "name":p["head"]["ref"],"target":{"oid":p["head"]["sha"],"tree":{"oid":"updated-tree"},"signature":{"isValid":true}},
-                    "associatedPullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{
-                        "number":p["number"],"id":p["node_id"],"url":p["html_url"],"title":p["title"],"body":p["body"],
-                        "headRefName":p["head"]["ref"],"headRefOid":p["head"]["sha"],"baseRefName":p["base"]["ref"],"author":p["user"],
-                        "headRepository":{"nameWithOwner":"demo/sandbox"},"baseRepository":{"nameWithOwner":"demo/sandbox"},
-                        "labels":{"nodes":p["labels"],"pageInfo":{"hasNextPage":false}},"autoMergeRequest":p["auto_merge"]
-                    }]}
-                })).collect();
-                let closed: Vec<_> = prs.iter().filter(|p|body["variables"]["closed"].as_array().unwrap().contains(&p["node_id"])).map(|p|json!({
-                    "id":p["node_id"],"state":if p["state"] == "closed" {"CLOSED"} else {"OPEN"},"merged":false,"body":p["body"],
-                    "author":p["user"],"headRepository":{"nameWithOwner":"demo/sandbox"},"baseRepository":{"nameWithOwner":"demo/sandbox"}
-                })).collect();
-                let mut repository = self.merge_settings.lock().unwrap().clone();
-                if repository["defaultBranchRef"].is_null() {
-                    repository["defaultBranchRef"] = json!({"name":"main","target":{"oid":"base"}});
-                }
-                repository["refs"] =
-                    json!({"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}});
-                repository["issues"] = json!({"nodes":self.issues.lock().unwrap().iter().filter(|i|i["state"] == "OPEN").cloned().collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false,"endCursor":null}});
-                (
-                    200,
-                    json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":closed,"repository":repository}}),
-                )
-            } else if body["query"] == patchula_update::automerge::CHECKS_QUERY {
-                if self
-                    .change_head_on_checks
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    self.prs.lock().unwrap()[0]["head"]["sha"] = json!("human-commit");
-                }
-                let checks = self.checks.lock().unwrap();
-                let offset = body["variables"]["cursor"]
-                    .as_str()
-                    .map(|c| c.parse::<usize>().unwrap())
-                    .unwrap_or(0);
-                let next = offset + 100;
-                (
-                    200,
-                    json!({"data":{"repository":{"object":{"oid":body["variables"]["oid"],"statusCheckRollup":{"contexts":{"nodes":checks.iter().skip(offset).take(100).cloned().collect::<Vec<_>>(),"pageInfo":{"hasNextPage":next < checks.len(),"endCursor":next.to_string()}}}}}}}),
-                )
-            } else if body["query"]
-                .as_str()
-                .is_some_and(|q| q.contains("PullRequestAutoMerge"))
-            {
-                let enabled = body["query"]
-                    .as_str()
-                    .unwrap()
-                    .contains("enablePullRequestAutoMerge");
-                if enabled {
-                    assert_eq!(body["variables"]["input"]["expectedHeadOid"], "new-commit");
-                }
-                self.writes.lock().unwrap().push((path.into(), body));
-                let refusal = self.auto_merge_refusal.lock().unwrap().clone();
-                if let Some(refusal) = refusal.filter(|_| enabled) {
-                    return Box::pin(std::future::ready(Ok(Response {
-                        status: reqwest::StatusCode::OK,
-                        headers: Default::default(),
-                        body: serde_json::to_vec(&json!({"data":{"enablePullRequestAutoMerge":null},"errors":[{"type":"UNPROCESSABLE","message":refusal}]})).unwrap(),
-                        stale: None,
-                    })));
-                }
-                for pr in self.prs.lock().unwrap().iter_mut() {
-                    pr["auto_merge"] = if enabled {
-                        json!({"enabled":true})
-                    } else {
-                        Value::Null
-                    };
-                }
-                (
-                    200,
-                    json!({"data":if enabled {json!({"enablePullRequestAutoMerge":{"pullRequest":{"id":"pr-1"}}})} else {json!({"disablePullRequestAutoMerge":{"pullRequest":{"id":"pr-1"}}})}}),
-                )
-            } else {
-                assert_eq!(body["query"], patchula_update::REF_UPDATE);
-                let deleting = body["variables"]["input"]["refUpdates"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|r| r["afterOid"] == "0000000000000000000000000000000000000000");
-                self.writes.lock().unwrap().push((path.into(), body));
-                (
-                    200,
-                    if deleting && let Some(error) = self.ref_update_error.lock().unwrap().clone() {
-                        json!({"errors":[{"message":error}]})
-                    } else if deleting
-                        && self
-                            .deletion_race
-                            .load(std::sync::atomic::Ordering::Relaxed)
-                    {
-                        json!({"errors":[{"message":"head changed"}]})
-                    } else {
-                        json!({"data":{"updateRefs":{"clientMutationId":null}}})
-                    },
-                )
-            }
-        } else if request.method() == reqwest::Method::PUT && path.ends_with("/merge") {
-            let mut prs = self.prs.lock().unwrap();
-            let pr = &mut prs[0];
-            assert_eq!(body["sha"], pr["head"]["sha"]);
-            assert_eq!(pr["user"]["login"], "patchula[bot]");
-            assert_eq!(pr["mergeable_state"], "clean");
-            self.writes.lock().unwrap().push((path.into(), body));
-            let merged = !self
-                .merge_refused
-                .load(std::sync::atomic::Ordering::Relaxed);
-            if merged {
-                pr["state"] = json!("closed");
-                pr["merged_at"] = json!("2026-10-15T12:00:00Z");
-            }
-            (200, json!({"merged":merged,"sha":"merged-base"}))
-        } else if request.method() == reqwest::Method::PATCH
-            && path.starts_with("/repos/demo/sandbox/issues/")
-        {
-            if self.issue_error.load(std::sync::atomic::Ordering::Relaxed) {
-                return Box::pin(std::future::ready(Ok(Response {
-                    status: reqwest::StatusCode::UNPROCESSABLE_ENTITY,
-                    headers: Default::default(),
-                    body: serde_json::to_vec(&json!({"message":"issue boom"})).unwrap(),
-                    stale: None,
-                })));
-            }
-            self.writes
-                .lock()
-                .unwrap()
-                .push((path.into(), body.clone()));
-            let number: u64 = path.rsplit('/').next().unwrap().parse().unwrap();
-            let mut issues = self.issues.lock().unwrap();
-            let issue = issues.iter_mut().find(|i| i["number"] == number).unwrap();
-            if let Some(text) = body.get("body") {
-                issue["body"].clone_from(text);
-            }
-            if body["state"] == "closed" {
-                issue["state"] = json!("CLOSED");
-            }
-            (200, issue.clone())
-        } else if request.method() == reqwest::Method::PATCH
-            && path.starts_with("/repos/demo/sandbox/pulls/")
-        {
-            self.writes
-                .lock()
-                .unwrap()
-                .push((path.into(), body.clone()));
-            let number: u64 = path.rsplit('/').next().unwrap().parse().unwrap();
-            let mut prs = self.prs.lock().unwrap();
-            let pr = prs.iter_mut().find(|p| p["number"] == number).unwrap();
-            for (key, value) in body.as_object().unwrap() {
-                if key == "base" {
-                    pr["base"]["ref"].clone_from(value);
-                } else {
-                    pr[key].clone_from(value);
-                }
-            }
-            (200, pr.clone())
-        } else if request.method() == reqwest::Method::POST {
-            self.writes
-                .lock()
-                .unwrap()
-                .push((path.into(), body.clone()));
-            if path.ends_with("/pulls") {
-                let number = self.prs.lock().unwrap().len() + 1;
-                let pr = json!({"number":number,"node_id":format!("pr-{number}"),"html_url":format!("https://github.com/demo/sandbox/pull/{number}"),"title":body["title"],"body":body["body"],"state":"open","user":{"login":"patchula[bot]"},"head":{"ref":body["head"],"sha":"new-commit","repo":{"full_name":"demo/sandbox"}},"base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},"labels":[{"name":"dependencies"}],"auto_merge":null,"created_at":chrono::Utc::now().to_rfc3339(),"merged_at":null});
-                let mut pr = pr;
-                pr["draft"] = json!(false);
-                pr["mergeable"] = json!(true);
-                pr["mergeable_state"] = json!("clean");
-                pr["head"]["label"] = json!("demo:branch");
-                pr["head"]["repo"]["updated_at"] = json!("2026-10-15T00:00:00Z");
-                pr["base"]["sha"] = json!("base");
-                self.prs.lock().unwrap().push(pr.clone());
-                (201, pr)
-            } else if path.contains("/issues/") && path.ends_with("/comments") {
-                (201, json!({"id":1,"body":body["body"]}))
-            } else if path.ends_with("/issues") {
-                if self.issue_error.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Box::pin(std::future::ready(Ok(Response {
-                        status: reqwest::StatusCode::UNPROCESSABLE_ENTITY,
-                        headers: Default::default(),
-                        body: serde_json::to_vec(&json!({"message":"issue boom"})).unwrap(),
-                        stale: None,
-                    })));
-                }
-                let number = 100 + self.issues.lock().unwrap().len();
-                let issue = json!({"number":number,"id":format!("dashboard-{number}"),"title":body["title"],"body":body["body"],"state":"OPEN","author":{"__typename":"Bot","login":"patchula"}});
-                self.issues.lock().unwrap().push(issue.clone());
-                (201, issue)
-            } else if path.ends_with("/git/blobs") {
-                (
-                    201,
-                    json!({"sha":blob_sha(body["content"].as_str().unwrap())}),
-                )
-            } else if path.ends_with("/git/trees") {
-                (201, json!({"sha":"updated-tree"}))
-            } else if path.ends_with("/git/commits") {
-                (
-                    201,
-                    json!({"sha":"new-commit","verification":{"verified":true}}),
-                )
-            } else {
-                panic!("unexpected write {path}");
-            }
-        } else if path == "/repos/demo/sandbox/pulls" {
-            if self.pulls_error.load(std::sync::atomic::Ordering::Relaxed) {
-                (500, json!({"message":"pulls boom"}))
-            } else {
-                (200, json!(*self.prs.lock().unwrap()))
-            }
-        } else if path.starts_with("/repos/demo/sandbox/pulls/") {
-            let number: u64 = path.rsplit('/').next().unwrap().parse().unwrap();
-            if self
-                .close_on_read
-                .load(std::sync::atomic::Ordering::Relaxed)
-            {
-                self.prs.lock().unwrap()[0]["state"] = json!("closed");
-            }
-            (
-                200,
-                self.prs
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .find(|p| p["number"] == number)
-                    .unwrap()
-                    .clone(),
-            )
-        } else if path == "/repos/demo/sandbox/branches" {
-            (200, json!(self.branches.lock().unwrap().clone()))
-        } else if path == "/repos/demo/sandbox" {
-            (200, json!({"default_branch":"main","node_id":"repo-id"}))
-        } else if path.ends_with("/git/trees/base-tree") {
-            (200, self.tree())
-        } else if let Some(sha) = path.strip_prefix("/repos/demo/sandbox/git/blobs/") {
-            let content = (sha == "unselected-lock").then_some("{}").or_else(|| {
-                self.files
-                    .values()
-                    .find(|c| blob_sha(c) == sha)
-                    .map(String::as_str)
-            });
-            if let Some(content) = content {
-                (
-                    200,
-                    json!({"encoding":"base64","content":STANDARD.encode(content)}),
-                )
-            } else {
-                (404, json!({"message":"not found"}))
-            }
-        } else if let Some(sha) = path.strip_prefix("/repos/demo/sandbox/commits/") {
-            // Every head the fake publishes is one signed patchula commit.
-            (
-                200,
-                json!({"sha":sha,"commit":{"message":format!("update\n\nPatchula: v1\nPatchula-Branch: b\nPatchula-Base: {}", "b".repeat(40))}}),
-            )
-        } else if let Some(spec) = path.strip_prefix("/repos/demo/sandbox/compare/") {
-            let head = spec.split("...").nth(1).unwrap().split('?').next().unwrap();
-            (
-                200,
-                json!({"total_commits":1,"commits":[{"sha":head,"author":{"login":"patchula[bot]"},"committer":{"login":"web-flow"},
-                    "commit":{"message":"update\n\nPatchula: v1\nPatchula-Branch: b","verification":{"verified":true}}}]}),
-            )
-        } else if path.ends_with("/git/commits/base") {
-            (200, json!({"tree":{"sha":"base-tree"}}))
-        } else if path.ends_with("/git/ref/heads/main") {
-            (200, json!({"object":{"sha":"base"}}))
-        } else if path.contains("/git/ref/heads/") {
-            (404, json!({}))
-        } else if path.ends_with("/branches/main") {
-            (
-                200,
-                json!({"commit":{"sha":*self.head.lock().unwrap(),"commit":{"tree":{"sha":"base-tree"}}}}),
-            )
-        } else {
-            panic!("unexpected read {path}");
-        };
-        Box::pin(async move {
-            tokio::time::sleep(self.latency).await;
-            Ok(Response {
-                status: reqwest::StatusCode::from_u16(status).unwrap(),
-                headers: Default::default(),
-                body: serde_json::to_vec(&value).unwrap(),
-                stale: None,
-            })
-        })
-    }
 }
 
 /// A new commit that leaves the files the scan reads as they were reuses the
 /// earlier extraction and config, and reads no blob again.
 #[tokio::test]
 async fn a_commit_that_changes_no_read_file_reuses_the_extraction() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let directory = tempfile::tempdir().unwrap();
     let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
         .await
@@ -548,12 +238,18 @@ async fn a_commit_that_changes_no_read_file_reuses_the_extraction() {
     };
     let first = run().await.unwrap();
     assert_eq!(first.stats.as_ref().unwrap().extraction_hits, 0);
-    *fake.head.lock().unwrap() = "moved".into();
-    fake.requests.lock().unwrap().clear();
+    {
+        let mut state = fake.state();
+        let repo = state.repo_mut();
+        repo.move_base("moved");
+        repo.refs.insert("refs/heads/main".into(), "moved".into());
+        repo.commits.insert("moved".into(), ours("moved"));
+    }
+    fake.clear_log();
     let second = run().await.unwrap();
     assert_eq!(second.repositories[0].commit.as_deref(), Some("moved"));
     assert_eq!(second.stats.as_ref().unwrap().extraction_hits, 1);
-    let reads = fake.requests.lock().unwrap();
+    let reads = fake.log();
     assert!(
         !reads
             .iter()
@@ -577,10 +273,11 @@ async fn a_commit_that_changes_no_read_file_reuses_the_extraction() {
 
 #[tokio::test(start_paused = true)]
 async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates() {
+    let mut keep = Vec::new();
     for closed in [false, true] {
-        let mut fake = Fake::new(false);
-        fake.latency = std::time::Duration::from_millis(200);
-        let fake = Arc::new(fake);
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
+        fake.state().settings.latency = std::time::Duration::from_millis(200);
         let directory = tempfile::tempdir().unwrap();
         let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
             .await
@@ -604,7 +301,7 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
             BranchStatus::Created
         );
         if closed {
-            fake.prs.lock().unwrap()[0]["state"] = json!("closed");
+            fake.state().repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
             let verified = run().await.unwrap();
             assert_eq!(
                 verified.actions.as_ref().unwrap().branches[0].status,
@@ -619,8 +316,8 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
         let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
             .unwrap()
             .with_versions_host(false);
-        fake.requests.lock().unwrap().clear();
-        fake.writes.lock().unwrap().clear();
+        fake.clear_log();
+        fake.state().writes.clear();
         let started = tokio::time::Instant::now();
         let report = engine
             .run(
@@ -635,7 +332,7 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
             .unwrap();
         assert_eq!(report.repositories[0].status, Status::Complete);
         assert!(
-            fake.writes.lock().unwrap().is_empty(),
+            fake.state().writes.is_empty(),
             "steady dashboard must not mutate"
         );
         assert_eq!(
@@ -646,7 +343,7 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
                 BranchStatus::Unchanged
             }
         );
-        let requests = fake.requests.lock().unwrap();
+        let requests = fake.log();
         assert_eq!(requests.len(), 4, "{requests:?}");
         assert_eq!(
             requests
@@ -685,7 +382,7 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
 
 #[tokio::test(start_paused = true)]
 async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_issue() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache.clone(), 4, fake.clone())
         .unwrap()
@@ -702,25 +399,26 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
         )
     };
     run(None).await.unwrap();
-    fake.issues.lock().unwrap()[0]["title"] = json!("Owner dashboard title");
-    fake.writes.lock().unwrap().clear();
+    fake.state().repo_mut().issues.get_mut(&100).unwrap()["title"] = json!("Owner dashboard title");
+    fake.state().writes.clear();
     run(None).await.unwrap();
-    assert!(fake.writes.lock().unwrap().is_empty());
+    assert!(fake.state().writes.is_empty());
     assert_eq!(
-        fake.issues.lock().unwrap()[0]["title"],
+        fake.state().repo().issues[&100]["title"],
         "Owner dashboard title"
     );
     // Simulate the previous layout while retaining the cached content hash.
     {
-        let mut issues = fake.issues.lock().unwrap();
-        let body = issues[0]["body"].as_str().unwrap();
+        let mut state = fake.state();
+        let issue = state.repo_mut().issues.get_mut(&100).unwrap();
+        let body = issue["body"].as_str().unwrap();
         let (actions, details) = body.split_once("\n<details>").unwrap();
         let (intro, prs) = actions.split_once("\n## Open PRs").unwrap();
-        issues[0]["body"] = json!(format!("{intro}\n<details>{details}\n## Open PRs{prs}"));
+        issue["body"] = json!(format!("{intro}\n<details>{details}\n## Open PRs{prs}"));
     }
     run(None).await.unwrap();
     {
-        let writes = fake.writes.lock().unwrap();
+        let writes = fake.state().writes.clone();
         assert_eq!(
             writes.len(),
             1,
@@ -728,10 +426,10 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
         );
         assert!(writes[0].0.contains("/issues/"));
     }
-    fake.writes.lock().unwrap().clear();
+    fake.state().writes.clear();
     run(None).await.unwrap();
     assert!(
-        fake.writes.lock().unwrap().is_empty(),
+        fake.state().writes.is_empty(),
         "unchanged content hash must converge after one patch"
     );
     let mut config =
@@ -744,25 +442,25 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
             .is_some()
     );
     run(Some(config)).await.unwrap();
-    assert_eq!(fake.issues.lock().unwrap()[0]["state"], "CLOSED");
+    assert_eq!(fake.state().repo().issues[&100]["state"], "CLOSED");
     assert_eq!(
         patchula_update::dashboard::issue_number(&cache, "demo/sandbox").await,
         None,
         "a closed dashboard is forgotten"
     );
-    fake.writes.lock().unwrap().clear();
+    fake.state().writes.clear();
     let mut config =
         patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
     config.prs.dashboard = false;
     config.defaults.wait_hours = 0;
     run(Some(config)).await.unwrap();
-    assert!(fake.writes.lock().unwrap().is_empty());
+    assert!(fake.state().writes.is_empty());
     check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
 async fn owner_closure_during_publication_keeps_repository_successful() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -779,9 +477,8 @@ async fn owner_closure_during_publication_keeps_repository_successful() {
     };
     run().await.unwrap();
     // Invalidate the write receipt without changing the ownership marker.
-    fake.prs.lock().unwrap()[0]["title"] = json!("operator title");
-    fake.close_on_read
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    fake.state().repo_mut().prs.get_mut(&1).unwrap()["title"] = json!("operator title");
+    fake.github.close_pulls_on_read();
     let report = run().await.unwrap();
     assert_eq!(report.repositories[0].status, Status::Complete);
     let pr = &report.actions.as_ref().unwrap().pull_requests[0];
@@ -791,6 +488,7 @@ async fn owner_closure_during_publication_keeps_repository_successful() {
 }
 #[tokio::test(start_paused = true)]
 async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actions() {
+    let mut keep = Vec::new();
     for (lock, allow, dry_run) in [
         (false, false, true),
         (false, false, false),
@@ -798,7 +496,8 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
         (true, true, true),
         (true, true, false),
     ] {
-        let fake = Arc::new(Fake::new(lock));
+        let fake = sandbox(base_files(), lock.then_some("bun.lockb"), vec![]);
+        keep.push(fake.clone());
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
             .unwrap()
@@ -851,12 +550,11 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
                     .contains("+  \"dependencies\": {\"fixture\": \"2.0.0\"}")
             );
             if dry_run {
-                assert!(fake.writes.lock().unwrap().is_empty());
+                assert!(fake.state().writes.is_empty());
             } else if lock && !allow {
                 assert!(
-                    fake.writes
-                        .lock()
-                        .unwrap()
+                    fake.state()
+                        .writes
                         .iter()
                         .all(|(p, _)| p.contains("/issues"))
                 );
@@ -871,7 +569,7 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
 
 #[tokio::test(start_paused = true)]
 async fn an_advertised_server_is_hidden_in_the_pr_and_the_dashboard() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let mut engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -882,7 +580,7 @@ async fn an_advertised_server_is_hidden_in_the_pr_and_the_dashboard() {
     };
     // Turning it on later still reaches the PR the first run wrote.
     for server in [None, Some("https://patchula.acme.dev")] {
-        fake.writes.lock().unwrap().clear();
+        fake.state().writes.clear();
         engine.set_advertised_server(server.map(str::to_owned));
         let report = engine.run(options(), false, false).await.unwrap();
         assert_eq!(
@@ -891,7 +589,7 @@ async fn an_advertised_server_is_hidden_in_the_pr_and_the_dashboard() {
             "{report:?}"
         );
     }
-    let writes = fake.writes.lock().unwrap();
+    let writes = fake.state().writes.clone();
     for kind in ["/pulls", "/issues"] {
         let body = writes
             .iter()
@@ -917,6 +615,7 @@ struct FailTools;
 #[tokio::test(start_paused = true)]
 async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_and_green() {
     // (state in the refusal, state of the PR on the next run, checks, merges)
+    let mut keep = Vec::new();
     for (refusal, state, checks, merges) in [
         ("clean", "clean", "none", false),
         ("clean", "clean", "pass", true),
@@ -925,16 +624,16 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
         ("has_hooks", "has_hooks", "pass", false),
         ("dirty", "dirty", "pass", false),
     ] {
-        let fake = Fake::new(false);
-        *fake.merge_settings.lock().unwrap() = json!({"id":"repo-id","autoMergeAllowed":true,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"deleteBranchOnMerge":false});
-        *fake.auto_merge_refusal.lock().unwrap() =
-            Some(format!("Pull request Pull request is in {refusal} status"));
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
+        fake.state().repo_mut().merge.auto_merge = true;
+        fake.github
+            .auto_merge_refused(&format!("Pull request Pull request is in {refusal} status"));
         match checks {
-            "none" => fake.checks.lock().unwrap().clear(),
-            "fail" => fake.checks.lock().unwrap()[0]["conclusion"] = json!("FAILURE"),
+            "none" => fake.state().repo_mut().checks.clear(),
+            "fail" => fake.state().repo_mut().checks[0]["conclusion"] = json!("FAILURE"),
             _ => {}
         }
-        let fake = Arc::new(fake);
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
             .unwrap()
@@ -974,9 +673,8 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
             "{refusal}"
         );
         let enables = fake
+            .state()
             .writes
-            .lock()
-            .unwrap()
             .iter()
             .filter(|(_, b)| {
                 b["query"]
@@ -985,19 +683,17 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
             })
             .count();
         assert_eq!(enables, 1, "{refusal}: GitHub is asked once");
-        assert!(fake.prs.lock().unwrap()[0]["auto_merge"].is_null());
+        assert!(fake.state().repo_mut().prs[&1]["auto_merge"].is_null());
         assert!(
             !fake
-                .requests
-                .lock()
-                .unwrap()
+                .log()
                 .iter()
                 .any(|(_, path, body)| path.ends_with("/merge")
                     || body["query"] == patchula_update::automerge::CHECKS_QUERY),
             "{refusal}: a new PR waits for a later run"
         );
-        fake.prs.lock().unwrap()[0]["mergeable_state"] = json!(state);
-        fake.requests.lock().unwrap().clear();
+        fake.state().repo_mut().prs.get_mut(&1).unwrap()["mergeable_state"] = json!(state);
+        fake.clear_log();
         let report = engine
             .run_at(
                 Options {
@@ -1026,9 +722,7 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
             "{refusal}/{state}/{checks}: {actions:?}"
         );
         let merged = fake
-            .requests
-            .lock()
-            .unwrap()
+            .log()
             .iter()
             .any(|(_, path, _)| path.ends_with("/merge"));
         assert_eq!(merged, merges, "{refusal}/{state}/{checks}");
@@ -1038,6 +732,7 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
 
 #[tokio::test(start_paused = true)]
 async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_check() {
+    let mut keep = Vec::new();
     for case in [
         "green",
         "neutral-skipped-status",
@@ -1060,7 +755,8 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
         "api-refusal",
         "delete-race",
     ] {
-        let fake = Arc::new(Fake::new(false));
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let engine = Engine::with_transport("offline-installation", cache.clone(), 4, fake.clone())
             .unwrap()
@@ -1075,43 +771,44 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
         );
         assert!(
             !fake
-                .requests
-                .lock()
-                .unwrap()
+                .log()
                 .iter()
                 .any(|(_, path, body)| path.ends_with("/merge")
                     || body["query"] == patchula_update::automerge::CHECKS_QUERY),
             "{case}: new PR must wait for another run"
         );
         match case {
-            "neutral-skipped-status" => *fake.checks.lock().unwrap() = vec![
+            "neutral-skipped-status" => fake.state().repo_mut().checks = vec![
                 json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"}),
                 json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"}),
                 json!({"__typename":"StatusContext","state":"SUCCESS"}),
             ],
-            "status-only" => *fake.checks.lock().unwrap() = vec![json!({"__typename":"StatusContext","state":"SUCCESS"})],
-            "pending" => fake.checks.lock().unwrap()[0]["status"] = json!("IN_PROGRESS"),
-            "failure" => fake.checks.lock().unwrap()[0]["conclusion"] = json!("FAILURE"),
-            "cancelled" => fake.checks.lock().unwrap()[0]["conclusion"] = json!("CANCELLED"),
-            "no-checks" => fake.checks.lock().unwrap().clear(),
-            "pending-status" | "failed-status" => fake.checks.lock().unwrap().push(json!({"__typename":"StatusContext","state":if case == "pending-status" {"PENDING"} else {"FAILURE"}})),
+            "status-only" => fake.state().repo_mut().checks = vec![json!({"__typename":"StatusContext","state":"SUCCESS"})],
+            "pending" => fake.state().repo_mut().checks[0]["status"] = json!("IN_PROGRESS"),
+            "failure" => fake.state().repo_mut().checks[0]["conclusion"] = json!("FAILURE"),
+            "cancelled" => fake.state().repo_mut().checks[0]["conclusion"] = json!("CANCELLED"),
+            "no-checks" => fake.state().repo_mut().checks.clear(),
+            "pending-status" | "failed-status" => fake.state().repo_mut().checks.push(json!({"__typename":"StatusContext","state":if case == "pending-status" {"PENDING"} else {"FAILURE"}})),
             "late-page-failure" => {
-                let green = fake.checks.lock().unwrap()[0].clone();
-                *fake.checks.lock().unwrap() = vec![green; 101];
-                fake.checks.lock().unwrap()[100]["conclusion"] = json!("FAILURE");
+                let green = fake.state().repo_mut().checks[0].clone();
+                fake.state().repo_mut().checks = vec![green; 101];
+                fake.state().repo_mut().checks[100]["conclusion"] = json!("FAILURE");
             }
-            "draft" => fake.prs.lock().unwrap()[0]["draft"] = json!(true),
-            "conflict" => fake.prs.lock().unwrap()[0]["mergeable"] = json!(false),
-            "protected" | "behind" | "unknown" => fake.prs.lock().unwrap()[0]["mergeable_state"] = json!(if case == "protected" {"blocked"} else {case}),
-            "head-race" => fake.change_head_on_checks.store(true, std::sync::atomic::Ordering::Relaxed),
-            "human-head" => fake.prs.lock().unwrap()[0]["head"]["sha"] = json!("human-commit"),
-            "human-owner" => fake.prs.lock().unwrap()[0]["user"]["login"] = json!("human"),
-            "api-refusal" => fake.merge_refused.store(true, std::sync::atomic::Ordering::Relaxed),
-            "delete-race" => fake.deletion_race.store(true, std::sync::atomic::Ordering::Relaxed),
+            "draft" => fake.state().repo_mut().prs.get_mut(&1).unwrap()["draft"] = json!(true),
+            "conflict" => fake.state().repo_mut().prs.get_mut(&1).unwrap()["mergeable"] = json!(false),
+            "protected" | "behind" | "unknown" => fake.state().repo_mut().prs.get_mut(&1).unwrap()["mergeable_state"] = json!(if case == "protected" {"blocked"} else {case}),
+            "head-race" => fake.github.checks_move_head("human-commit"),
+            "human-head" => fake.state().repo_mut().prs.get_mut(&1).unwrap()["head"]["sha"] = json!("human-commit"),
+            "human-owner" => fake.state().repo_mut().prs.get_mut(&1).unwrap()["user"]["login"] = json!("human"),
+            "api-refusal" => fake.github.pull_merge_refused(),
+            "delete-race" => fake.github.ref_delete_fails("head changed"),
             _ => {}
         }
-        fake.requests.lock().unwrap().clear();
-        fake.writes.lock().unwrap().clear();
+        // The head the client knows before this run (delete-race zeroes the
+        // recorded PR head when the branch ref is deleted).
+        let head = fake.state().repo().prs[&1]["head"]["sha"].clone();
+        fake.clear_log();
+        fake.state().writes.clear();
         let report = engine
             .run_at(
                 Options {
@@ -1137,7 +834,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
             merges,
             "{case}: {report:?}"
         );
-        let requests = fake.requests.lock().unwrap().clone();
+        let requests = fake.log();
         let merge_requests: Vec<_> = requests
             .iter()
             .filter(|(_, path, _)| path.ends_with("/merge"))
@@ -1149,7 +846,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
         );
         if let Some((method, _, body)) = merge_requests.first() {
             assert_eq!(method, "PUT");
-            assert_eq!(*body, json!({"sha":"new-commit","merge_method":"squash"}));
+            assert_eq!(*body, json!({"sha":head,"merge_method":"squash"}));
         }
         let deletes: Vec<_> = requests
             .iter()
@@ -1170,10 +867,10 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
             );
             assert_eq!(
                 body["variables"]["input"]["refUpdates"][0]["beforeOid"],
-                "new-commit"
+                head
             );
         }
-        let dashboard = fake.issues.lock().unwrap()[0]["body"]
+        let dashboard = fake.state().repo().issues[&100]["body"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -1255,15 +952,18 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
 
 #[tokio::test(start_paused = true)]
 async fn auto_merge_uses_inventory_methods_and_prefers_native_without_status_reads() {
+    let mut keep = Vec::new();
     for method in ["native", "squash", "merge", "rebase", "none"] {
-        let fake = Arc::new(Fake::new(false));
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
         {
-            let mut settings = fake.merge_settings.lock().unwrap();
-            settings["autoMergeAllowed"] = json!(method == "native");
-            settings["squashMergeAllowed"] = json!(matches!(method, "native" | "squash"));
-            settings["mergeCommitAllowed"] = json!(matches!(method, "native" | "squash" | "merge"));
-            settings["rebaseMergeAllowed"] = json!(method != "none");
-            settings["deleteBranchOnMerge"] = json!(true);
+            let mut state = fake.state();
+            let merge = &mut state.repo_mut().merge;
+            merge.auto_merge = method == "native";
+            merge.squash = matches!(method, "native" | "squash");
+            merge.merge_commit = matches!(method, "native" | "squash" | "merge");
+            merge.rebase = method != "none";
+            merge.delete_branch = true;
         }
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
@@ -1273,7 +973,7 @@ async fn auto_merge_uses_inventory_methods_and_prefers_native_without_status_rea
         config.defaults.merge = true;
         let now = chrono::Utc::now();
         checkbox_run(&engine, &config, now).await;
-        fake.requests.lock().unwrap().clear();
+        fake.clear_log();
         let report = engine
             .run_at(
                 Options {
@@ -1287,7 +987,7 @@ async fn auto_merge_uses_inventory_methods_and_prefers_native_without_status_rea
             )
             .await
             .unwrap();
-        let requests = fake.requests.lock().unwrap().clone();
+        let requests = fake.log();
         assert_eq!(
             requests
                 .iter()
@@ -1310,7 +1010,7 @@ async fn auto_merge_uses_inventory_methods_and_prefers_native_without_status_rea
             "GitHub deletes branches in this case"
         );
         if method == "native" {
-            assert!(!fake.prs.lock().unwrap()[0]["auto_merge"].is_null());
+            assert!(!fake.state().repo_mut().prs[&1]["auto_merge"].is_null());
             assert!(!requests.iter().any(|(_, path, b)| path.ends_with("/merge")
                 || b["query"] == patchula_update::automerge::CHECKS_QUERY));
             assert_eq!(
@@ -1335,8 +1035,10 @@ async fn auto_merge_uses_inventory_methods_and_prefers_native_without_status_rea
 
 #[tokio::test(start_paused = true)]
 async fn manual_create_age_and_schedule_permits_do_not_authorize_fallback_merging() {
+    let mut keep = Vec::new();
     for hold in ["age", "schedule"] {
-        let fake = Arc::new(Fake::new(false));
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
             .unwrap()
@@ -1356,14 +1058,12 @@ async fn manual_create_age_and_schedule_permits_do_not_authorize_fallback_mergin
         checkbox_run(&engine, &config, now).await;
         tick_dashboard(&fake, "create");
         checkbox_run(&engine, &config, now).await;
-        assert_eq!(fake.prs.lock().unwrap().len(), 1);
-        fake.requests.lock().unwrap().clear();
+        assert_eq!(fake.state().repo().prs.len(), 1);
+        fake.clear_log();
         checkbox_run(&engine, &config, now).await;
         assert!(
             !fake
-                .requests
-                .lock()
-                .unwrap()
+                .log()
                 .iter()
                 .any(|(_, path, b)| path.ends_with("/merge")
                     || b["query"] == patchula_update::automerge::CHECKS_QUERY),
@@ -1394,13 +1094,13 @@ fn checkbox_config() -> patchula_config::Config {
 
 #[tokio::test(start_paused = true)]
 async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only() {
-    let mut fixture = Fake::new(false);
-    fixture.files.insert(
+    let mut files = base_files();
+    files.insert(
         "package.json".into(),
         json!({"dependencies":{"fixture":"1.0.0","other":"1.0.0"}}).to_string(),
     );
-    *fixture.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}},"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":"2021-01-01T00:00:00Z"}});
-    let fake = Arc::new(fixture);
+    let fake = sandbox(files, None, vec![]);
+    *fake.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}},"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":"2021-01-01T00:00:00Z"}});
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline", cache, 4, fake.clone())
         .unwrap()
@@ -1409,7 +1109,7 @@ async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only
     config.defaults.wait_hours = 24;
     let now: chrono::DateTime<chrono::Utc> = "2026-10-15T12:00:00Z".parse().unwrap();
     checkbox_run(&engine, &config, now).await;
-    fake.requests.lock().unwrap().clear();
+    fake.clear_log();
     let warm = checkbox_run(&engine, &config, now + chrono::Duration::minutes(1)).await;
     assert!(
         warm.repositories[0].package_files[0]
@@ -1429,16 +1129,16 @@ async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only
     );
     assert!(
         !fake
-            .requests
-            .lock()
-            .unwrap()
+            .log()
             .iter()
             .any(|(_, path, _)| matches!(path.as_str(), "/fixture" | "/other"))
     );
     {
-        let mut prs = fake.prs.lock().unwrap();
-        let pr = prs
-            .iter_mut()
+        let mut state = fake.state();
+        let pr = state
+            .repo_mut()
+            .prs
+            .values_mut()
             .find(|pr| pr["head"]["ref"].as_str().unwrap().contains("fixture-"))
             .unwrap();
         pr["body"] = json!(
@@ -1449,7 +1149,7 @@ async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only
         );
     }
     *fake.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}},"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":"2022-01-01T00:00:00Z"}});
-    fake.requests.lock().unwrap().clear();
+    fake.clear_log();
     let selected = checkbox_run(&engine, &config, now + chrono::Duration::minutes(2)).await;
     for dep in &selected.repositories[0].package_files[0].dependencies {
         let evidence = dep
@@ -1478,7 +1178,7 @@ async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only
         );
     }
     {
-        let reads = fake.requests.lock().unwrap();
+        let reads = fake.log();
         assert_eq!(
             reads
                 .iter()
@@ -1489,7 +1189,7 @@ async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only
         assert!(!reads.iter().any(|(_, path, _)| path == "/other"));
     }
     tick_dashboard(&fake, "recheck");
-    fake.requests.lock().unwrap().clear();
+    fake.clear_log();
     let all = checkbox_run(&engine, &config, now + chrono::Duration::minutes(3)).await;
     assert!(
         all.repositories[0].package_files[0]
@@ -1509,9 +1209,7 @@ async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only
     );
     for package in ["/fixture", "/other"] {
         assert_eq!(
-            fake.requests
-                .lock()
-                .unwrap()
+            fake.log()
                 .iter()
                 .filter(|(_, path, _)| path == package)
                 .count(),
@@ -1546,26 +1244,27 @@ async fn checkbox_run(
     );
     report
 }
-fn tick_dashboard(fake: &Fake, action: &str) {
-    let mut issues = fake.issues.lock().unwrap();
-    let body = issues[0]["body"].as_str().unwrap();
+fn tick_dashboard(fake: &Sandbox, action: &str) {
+    let mut state = fake.state();
+    let issue = state.repo_mut().issues.get_mut(&100).unwrap();
+    let body = issue["body"].as_str().unwrap();
     let line = body
         .lines()
         .find(|l| l.contains(&format!("\"action\":\"{action}\"")))
         .unwrap();
     // Wording deliberately changes: only the hidden marker may select behavior.
     let marker = line.split_once("<!-- patchula-action:").unwrap().1;
-    issues[0]["body"] = json!(body.replace(
+    issue["body"] = json!(body.replace(
         line,
         &format!("- [X] Operator-edited wording <!-- patchula-action:{marker}")
     ));
 }
-fn assert_unticked(fake: &Fake) {
+fn assert_unticked(fake: &Sandbox) {
     for issue in fake
+        .state()
+        .repo()
         .issues
-        .lock()
-        .unwrap()
-        .iter()
+        .values()
         .filter(|i| i["state"] == "OPEN" && i["author"]["login"] == "patchula")
     {
         let body = issue["body"].as_str().unwrap();
@@ -1575,7 +1274,7 @@ fn assert_unticked(fake: &Fake) {
 
 #[tokio::test(start_paused = true)]
 async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unticking() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let now = chrono::Utc::now();
     *fake.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}},"time":{"2.0.0":now.to_rfc3339()}});
     let directory = tempfile::tempdir().unwrap();
@@ -1590,28 +1289,23 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
     let first = checkbox_run(&engine, &config, now).await;
     assert!(first.actions.as_ref().unwrap().branches.is_empty());
     assert!(
-        fake.issues.lock().unwrap()[0]["body"]
+        fake.state().repo().issues[&100]["body"]
             .as_str()
             .unwrap()
             .contains(" UTC)")
     );
     assert!(
-        !fake.issues.lock().unwrap()[0]["body"]
+        !fake.state().repo().issues[&100]["body"]
             .as_str()
             .unwrap()
             .contains("catalog")
     );
-    fake.requests.lock().unwrap().clear();
-    fake.writes.lock().unwrap().clear();
+    fake.clear_log();
+    fake.state().writes.clear();
     checkbox_run(&engine, &config, now).await;
-    assert!(fake.writes.lock().unwrap().is_empty());
+    assert!(fake.state().writes.is_empty());
     assert!(
-        !fake
-            .requests
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(_, p, _)| p.ends_with("/pulls")),
+        !fake.log().iter().any(|(_, p, _)| p.ends_with("/pulls")),
         "empty steady repo must use inventory only"
     );
     tick_dashboard(&fake, "create");
@@ -1639,28 +1333,30 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
             .iter()
             .any(|u| u.new_version.as_deref() == Some("2.0.0"))
     );
-    assert_eq!(fake.prs.lock().unwrap().len(), 1);
-    fake.writes.lock().unwrap().clear();
+    assert_eq!(fake.state().repo().prs.len(), 1);
+    fake.state().writes.clear();
     let steady = checkbox_run(&engine, &config, now).await;
     assert_eq!(
         steady.actions.unwrap().branches[0].status,
         BranchStatus::Unchanged
     );
-    assert!(fake.writes.lock().unwrap().is_empty());
+    assert!(fake.state().writes.is_empty());
     check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
 async fn dashboard_create_click_bypasses_concurrent_hourly_and_schedule_holds() {
+    let mut keep = Vec::new();
     for reason in ["concurrent", "hourly", "schedule"] {
-        let mut fake = Fake::new(false);
+        let mut files = base_files();
         if reason != "schedule" {
-            fake.files.insert(
+            files.insert(
                 "package.json".into(),
                 "{\"dependencies\":{\"fixture\":\"1.0.0\",\"other\":\"1.0.0\"}}".into(),
             );
         }
-        let fake = Arc::new(fake);
+        let fake = sandbox(files, None, vec![]);
+        keep.push(fake.clone());
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
             .unwrap()
@@ -1707,18 +1403,20 @@ async fn dashboard_create_click_bypasses_concurrent_hourly_and_schedule_holds() 
 
 #[tokio::test(start_paused = true)]
 async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
+    let mut keep = Vec::new();
     for origin in ["recreate", "create", "pr", "retry"] {
         let mut request_counts = Vec::new();
         for dependencies in [3, 6] {
-            let mut fake = Fake::new(false);
+            let mut files = base_files();
             let deps: BTreeMap<_, _> = (0..dependencies)
                 .map(|i| (format!("fixture{i}"), "1.0.0"))
                 .collect();
-            fake.files.insert(
+            files.insert(
                 "package.json".into(),
                 json!({"dependencies":deps}).to_string(),
             );
-            let fake = Arc::new(fake);
+            let fake = sandbox(files, None, vec![]);
+            keep.push(fake.clone());
             let cache = Cache::open(":memory:", Default::default()).await.unwrap();
             let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
                 .unwrap()
@@ -1731,24 +1429,26 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             checkbox_run(&engine, &config, now).await;
             if origin == "recreate" {
                 // Include another owner-closed receipt as well as untouched open PRs.
-                for pr in fake.prs.lock().unwrap().iter_mut().take(2) {
+                for pr in fake.state().repo_mut().prs.values_mut().take(2) {
                     pr["state"] = json!("closed");
                 }
                 checkbox_run(&engine, &config, now).await;
             }
             if origin == "pr" {
-                let mut prs = fake.prs.lock().unwrap();
-                prs[0]["body"] = json!(
-                    prs[0]["body"]
+                let mut state = fake.state();
+                let pr = state.repo_mut().prs.get_mut(&1).unwrap();
+                pr["body"] = json!(
+                    pr["body"]
                         .as_str()
                         .unwrap()
                         .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
                 );
             } else if origin == "retry" {
                 // An unknown/stale target is consumed without invalidating any write receipt.
-                let mut issues = fake.issues.lock().unwrap();
-                let body = issues[0]["body"].as_str().unwrap();
-                issues[0]["body"] = json!(format!(
+                let mut state = fake.state();
+                let issue = state.repo_mut().issues.get_mut(&100).unwrap();
+                let body = issue["body"].as_str().unwrap();
+                issue["body"] = json!(format!(
                     "{body}\n- [x] Retry <!-- patchula-action:{{\"action\":\"retry\",\"target\":\"{}\"}} -->",
                     "a".repeat(64)
                 ));
@@ -1756,10 +1456,10 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                 tick_dashboard(&fake, origin);
             }
             let untouched: Vec<_> = fake
+                .state()
+                .repo()
                 .prs
-                .lock()
-                .unwrap()
-                .iter()
+                .values()
                 .filter(|p| origin != "pr" || !p["body"].as_str().unwrap().contains("- [x]"))
                 .map(|p| {
                     (
@@ -1768,10 +1468,10 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                     )
                 })
                 .collect();
-            fake.requests.lock().unwrap().clear();
+            fake.clear_log();
             let report = checkbox_run(&engine, &config, now).await;
             assert_unticked(&fake);
-            let requests = fake.requests.lock().unwrap().clone();
+            let requests = fake.log();
             assert_eq!(
                 requests
                     .iter()
@@ -1822,10 +1522,10 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                 "targeted {origin}, dependencies={dependencies}: {write_requests} repository requests"
             );
             request_counts.push(write_requests);
-            fake.writes.lock().unwrap().clear();
+            fake.state().writes.clear();
             checkbox_run(&engine, &config, now).await;
             assert!(
-                fake.writes.lock().unwrap().is_empty(),
+                fake.state().writes.is_empty(),
                 "{origin}: next run must converge"
             );
         }
@@ -1833,14 +1533,21 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             request_counts[0], request_counts[1],
             "{origin}: unrelated branches added requests"
         );
-        assert_eq!(request_counts[0], if origin == "retry" { 4 } else { 15 });
+        assert_eq!(
+            request_counts[0],
+            match origin {
+                "retry" => 4,
+                "pr" => 15,
+                _ => 16,
+            }
+        );
     }
     check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
 async fn dashboard_recreate_click_opens_a_new_pr_and_does_not_repeat_the_old_owner_hold() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -1848,12 +1555,12 @@ async fn dashboard_recreate_click_opens_a_new_pr_and_does_not_repeat_the_old_own
     let config = checkbox_config();
     let now = chrono::Utc::now();
     checkbox_run(&engine, &config, now).await;
-    fake.prs.lock().unwrap()[0]["state"] = json!("closed");
+    fake.state().repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
     checkbox_run(&engine, &config, now).await;
     tick_dashboard(&fake, "recreate");
     checkbox_run(&engine, &config, now).await;
-    assert_eq!(fake.prs.lock().unwrap().len(), 2);
-    assert_eq!(fake.prs.lock().unwrap()[0]["state"], "closed");
+    assert_eq!(fake.state().repo().prs.len(), 2);
+    assert_eq!(fake.state().repo_mut().prs[&1]["state"], "closed");
     assert_unticked(&fake);
     let next = checkbox_run(&engine, &config, now).await;
     assert_eq!(
@@ -1865,8 +1572,10 @@ async fn dashboard_recreate_click_opens_a_new_pr_and_does_not_repeat_the_old_own
 
 #[tokio::test(start_paused = true)]
 async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkboxes() {
+    let mut keep = Vec::new();
     for origin in ["dashboard", "pr"] {
-        let fake = Arc::new(Fake::new(false));
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
             .unwrap()
@@ -1877,41 +1586,87 @@ async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkb
         if origin == "dashboard" {
             tick_dashboard(&fake, "recheck");
         } else {
-            let mut prs = fake.prs.lock().unwrap();
-            prs[0]["body"] = json!(
-                prs[0]["body"]
+            let mut state = fake.state();
+            let pr = state.repo_mut().prs.get_mut(&1).unwrap();
+            pr["body"] = json!(
+                pr["body"]
                     .as_str()
                     .unwrap()
                     .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
             );
         }
-        fake.writes.lock().unwrap().clear();
+        fake.state().writes.clear();
+        fake.clear_log();
         checkbox_run(&engine, &config, now).await;
+        // The click is consumed (its checkbox is patched back) and the branch
+        // is re-evaluated: an up-to-date branch needs no new commit.
         assert!(
-            fake.writes
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|(p, _)| p.ends_with("/git/commits")),
-            "{origin}"
+            !fake.state().writes.is_empty(),
+            "{origin}: the click must produce the untick write"
         );
         assert!(
-            !fake.prs.lock().unwrap()[0]["body"]
+            fake.log()
+                .iter()
+                .any(|(m, p, _)| m == "GET" && p.contains("/git/commits/")),
+            "{origin}: the click must re-evaluate the branch"
+        );
+        assert!(
+            !fake.state().repo_mut().prs[&1]["body"]
                 .as_str()
                 .unwrap()
                 .contains("- [x]")
         );
         assert_unticked(&fake);
-        fake.writes.lock().unwrap().clear();
+        fake.state().writes.clear();
         checkbox_run(&engine, &config, now).await;
-        assert!(fake.writes.lock().unwrap().is_empty());
+        assert!(fake.state().writes.is_empty());
+        // A stale branch still forces real work on a recheck: a head that
+        // is marked but carries the old manifest must be rewritten, not
+        // merely re-read.
+        let branch = fake.state().repo().prs[&1]["head"]["ref"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        {
+            let mut state = fake.state();
+            let mut commit = state.repo().commits["commit-1"].clone();
+            commit["sha"] = json!("stale");
+            commit["tree"]["sha"] = json!("base-tree");
+            state.repo_mut().commits.insert("stale".into(), commit);
+            state
+                .repo_mut()
+                .refs
+                .insert(format!("refs/heads/{branch}"), "stale".into());
+        }
+        if origin == "dashboard" {
+            tick_dashboard(&fake, "recheck");
+        } else {
+            let mut state = fake.state();
+            let pr = state.repo_mut().prs.get_mut(&1).unwrap();
+            pr["body"] = json!(
+                pr["body"]
+                    .as_str()
+                    .unwrap()
+                    .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+            );
+        }
+        fake.state().writes.clear();
+        checkbox_run(&engine, &config, now).await;
+        assert!(
+            fake.state()
+                .writes
+                .iter()
+                .any(|(p, _)| p.ends_with("/git/commits")),
+            "{origin}: a stale branch must be rewritten on re-check"
+        );
+        assert_unticked(&fake);
     }
     check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
 async fn failed_lookup_click_retries_the_source_and_unticks_even_when_it_still_fails() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     fake.fail_lookup
         .store(true, std::sync::atomic::Ordering::Relaxed);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
@@ -1922,15 +1677,13 @@ async fn failed_lookup_click_retries_the_source_and_unticks_even_when_it_still_f
     let now = chrono::Utc::now();
     checkbox_run(&engine, &config, now).await;
     tick_dashboard(&fake, "retry");
-    fake.requests.lock().unwrap().clear();
+    fake.clear_log();
     let report = checkbox_run(&engine, &config, now).await;
     let failures = &report.repositories[0].lookup_failures;
     assert_eq!(failures.len(), 1, "{failures:?}");
     assert_eq!(failures[0].name, "fixture");
     assert_eq!(
-        fake.requests
-            .lock()
-            .unwrap()
+        fake.log()
             .iter()
             .filter(|(_, p, _)| p == "/fixture")
             .count(),
@@ -1942,7 +1695,7 @@ async fn failed_lookup_click_retries_the_source_and_unticks_even_when_it_still_f
 
 #[tokio::test(start_paused = true)]
 async fn human_authored_dashboard_checkboxes_never_request_branch_work() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -1951,24 +1704,24 @@ async fn human_authored_dashboard_checkboxes_never_request_branch_work() {
     let now = chrono::Utc::now();
     checkbox_run(&engine, &config, now).await;
     tick_dashboard(&fake, "recheck");
-    fake.issues.lock().unwrap()[0]["author"] = json!({"__typename":"User","login":"human"});
-    fake.writes.lock().unwrap().clear();
+    fake.state().repo_mut().issues.get_mut(&100).unwrap()["author"] =
+        json!({"__typename":"User","login":"human"});
+    fake.state().writes.clear();
     checkbox_run(&engine, &config, now).await;
     assert!(
         !fake
+            .state()
             .writes
-            .lock()
-            .unwrap()
             .iter()
             .any(|(p, _)| p.ends_with("/git/commits"))
     );
     assert!(
-        fake.issues.lock().unwrap()[0]["body"]
+        fake.state().repo().issues[&100]["body"]
             .as_str()
             .unwrap()
             .contains("- [X]")
     );
-    assert_eq!(fake.issues.lock().unwrap().len(), 2);
+    assert_eq!(fake.state().repo().issues.len(), 2);
     check_transcript();
 }
 impl patchula_process::Executor for FailTools {
@@ -1991,9 +1744,7 @@ impl patchula_process::Executor for FailTools {
 }
 #[tokio::test(start_paused = true)]
 async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branch() {
-    let mut fake = Fake::new(true);
-    fake.lock_name = "bun.lock";
-    let fake = Arc::new(fake);
+    let fake = sandbox(base_files(), Some("bun.lock"), vec![]);
     let temp = tempfile::tempdir().unwrap();
     let runner = patchula_tools::Runner::new(temp.path().join("worktrees"), "offline-installation")
         .with_executor(Arc::new(FailTools));
@@ -2024,27 +1775,32 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
             .contains("fixture tool unavailable")
     );
     assert!(
-        fake.writes
-            .lock()
-            .unwrap()
+        fake.state()
+            .writes
+            .clone()
             .iter()
             .all(|(p, _)| p.contains("/issues"))
     );
     check_transcript();
 }
 
-fn open_prs(fake: &Fake) -> Vec<Value> {
-    fake.prs
-        .lock()
-        .unwrap()
-        .iter()
+fn open_prs(fake: &Sandbox) -> Vec<Value> {
+    fake.state()
+        .repo()
+        .prs
+        .values()
         .filter(|p| p["state"] == "open")
         .cloned()
         .collect()
 }
-fn tick_pr(fake: &Fake, number: u64, label: &str) {
-    let mut prs = fake.prs.lock().unwrap();
-    let pr = prs.iter_mut().find(|p| p["number"] == number).unwrap();
+fn tick_pr(fake: &Sandbox, number: u64, label: &str) {
+    let mut state = fake.state();
+    let pr = state
+        .repo_mut()
+        .prs
+        .values_mut()
+        .find(|p| p["number"] == number)
+        .unwrap();
     let body = pr["body"].as_str().unwrap();
     let line = body.lines().find(|l| l.contains(label)).unwrap();
     pr["body"] = json!(body.replace(line, &line.replacen("- [ ]", "- [x]", 1)));
@@ -2052,7 +1808,7 @@ fn tick_pr(fake: &Fake, number: u64, label: &str) {
 
 #[tokio::test(start_paused = true)]
 async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -2083,10 +1839,10 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
     let body = open[0]["body"].as_str().unwrap();
     assert!(body.contains(&format!("(from #{number})")), "{body}");
     let closed = fake
+        .state()
+        .repo()
         .prs
-        .lock()
-        .unwrap()
-        .iter()
+        .values()
         .find(|p| p["number"] == number)
         .unwrap()
         .clone();
@@ -2097,12 +1853,12 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
             .unwrap()
             .contains("patchula-closed:batched")
     );
-    assert!(fake.writes.lock().unwrap().iter().any(|(p, b)| {
+    assert!(fake.state().writes.iter().any(|(p, b)| {
         p.ends_with(&format!("/issues/{number}/comments"))
             && b["body"].as_str().unwrap().contains(&format!("#{batch}"))
     }));
 
-    let dashboard = fake.issues.lock().unwrap()[0]["body"]
+    let dashboard = fake.state().repo().issues[&100]["body"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -2128,10 +1884,10 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
     let open = open_prs(&fake);
     assert_eq!(open[0]["head"]["ref"], "patchula/batch");
     let second = open[0]["number"].as_u64().unwrap();
-    fake.prs
-        .lock()
-        .unwrap()
-        .iter_mut()
+    fake.state()
+        .repo_mut()
+        .prs
+        .values_mut()
         .find(|p| p["number"] == second)
         .unwrap()["state"] = json!("closed");
     checkbox_run(&engine, &config, now).await;
@@ -2145,7 +1901,7 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
 /// `prs.concurrent` until it exists; at the limit it is still created.
 #[tokio::test(start_paused = true)]
 async fn a_batch_is_created_at_the_concurrent_limit() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -2167,16 +1923,17 @@ async fn a_batch_is_created_at_the_concurrent_limit() {
 
 #[tokio::test(start_paused = true)]
 async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_condition() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let protection = |rules: Value| {
-        let mut settings = fake.merge_settings.lock().unwrap();
-        settings["autoMergeAllowed"] = json!(true);
-        settings["defaultBranchRef"] = json!({
+        let mut state = fake.state();
+        let repo = &mut state.repo_mut();
+        repo.merge.auto_merge = true;
+        repo.default_branch_ref = Some(json!({
             "name":"main",
             "target":{"oid":"base","history":{"nodes":[{"statusCheckRollup":{"state":"SUCCESS"}}]}},
             "rules":rules,
             "refUpdateRule":null
-        });
+        }));
     };
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
@@ -2186,9 +1943,9 @@ async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_conditio
     config.defaults.merge = true;
     let now = chrono::Utc::now();
     let latest = |kind: &str| {
-        fake.writes
-            .lock()
-            .unwrap()
+        fake.state()
+            .writes
+            .clone()
             .iter()
             .rev()
             .filter(|(path, _)| path.contains(kind))
@@ -2205,7 +1962,7 @@ async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_conditio
             rule: patchula_words::ToolingRule::MergeWithoutRequiredChecks,
             detail: None,
             branches: vec![
-                fake.prs.lock().unwrap()[0]["head"]["ref"]
+                fake.state().repo_mut().prs[&1]["head"]["ref"]
                     .as_str()
                     .unwrap()
                     .to_owned()
@@ -2222,7 +1979,7 @@ async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_conditio
     );
     let report = checkbox_run(&engine, &config, now).await;
     assert!(report.repositories[0].tooling.is_empty());
-    let pr = fake.prs.lock().unwrap()[0]["body"]
+    let pr = fake.state().repo_mut().prs[&1]["body"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -2241,12 +1998,12 @@ async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_conditio
 /// extraction: no lookup and no write happens for it.
 #[tokio::test(start_paused = true)]
 async fn a_repository_that_commits_credentials_is_refused() {
-    let mut fixture = Fake::new(false);
-    fixture.files.insert(
+    let mut files = base_files();
+    files.insert(
         ".npmrc".into(),
         "//npm.acme.test/:_authToken=t0ken\n".into(),
     );
-    let fake = Arc::new(fixture);
+    let fake = sandbox(files, None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -2270,16 +2027,11 @@ async fn a_repository_that_commits_credentials_is_refused() {
     );
     // No package lookup and no API write: extraction refused the repository.
     assert!(
-        !fake
-            .requests
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(_, path, _)| path == "/fixture"),
+        !fake.log().iter().any(|(_, path, _)| path == "/fixture"),
         "{:?}",
-        fake.requests.lock().unwrap()
+        fake.log()
     );
-    assert!(fake.writes.lock().unwrap().is_empty());
+    assert!(fake.state().writes.is_empty());
     check_transcript();
 }
 
@@ -2288,8 +2040,8 @@ async fn a_repository_that_commits_credentials_is_refused() {
 /// still runs.
 #[tokio::test(start_paused = true)]
 async fn a_credential_in_a_ci_workflow_is_not_refused() {
-    let mut fixture = Fake::new(false);
-    fixture.files.insert(
+    let mut files = base_files();
+    files.insert(
         "patchula.pkl".into(),
         "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\"; \"github-actions\" }\n"
             .into(),
@@ -2300,11 +2052,11 @@ async fn a_credential_in_a_ci_workflow_is_not_refused() {
         "ci",
         "s3".to_owned() + "cret"
     );
-    fixture.files.insert(
+    files.insert(
         ".github/workflows/ci.yml".into(),
         format!("on: push\njobs:\n  test:\n    steps:\n      - run: curl {url}\n"),
     );
-    let fake = Arc::new(fixture);
+    let fake = sandbox(files, None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -2332,7 +2084,7 @@ async fn a_credential_in_a_ci_workflow_is_not_refused() {
 /// lifecycle preparation, cleanup and branch publication reuse it.
 #[tokio::test(start_paused = true)]
 async fn the_write_path_reads_the_viewer_login_once() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let directory = tempfile::tempdir().unwrap();
     let cache = Cache::open(directory.path().join("cache.sqlite"), Default::default())
         .await
@@ -2353,9 +2105,9 @@ async fn the_write_path_reads_the_viewer_login_once() {
     run().await.unwrap();
     *fake.catalog.lock().unwrap() =
         json!({"dist-tags":{"latest":"2.1.0"},"versions":{"1.0.0":{},"2.0.0":{},"2.1.0":{}}});
-    fake.requests.lock().unwrap().clear();
+    fake.clear_log();
     run().await.unwrap();
-    let requests = fake.requests.lock().unwrap();
+    let requests = fake.log();
     assert_eq!(
         requests
             .iter()
@@ -2380,8 +2132,10 @@ async fn the_write_path_reads_the_viewer_login_once() {
 /// either failing fails the repository before any write is attempted.
 #[tokio::test(start_paused = true)]
 async fn inventory_and_controls_failures_fail_the_repository_before_writes() {
+    let mut keep = Vec::new();
     for failure in ["inventory", "controls"] {
-        let fake = Arc::new(Fake::new(false));
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
             .unwrap()
@@ -2394,15 +2148,14 @@ async fn inventory_and_controls_failures_fail_the_repository_before_writes() {
             ..Default::default()
         };
         if failure == "inventory" {
-            fake.inventory_error
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            fake.github.inventory_fails();
         } else {
             // Two bot-owned dashboards cannot be told apart; the run refuses.
             checkbox_run(&engine, &config, now).await;
-            let mut dupe = fake.issues.lock().unwrap()[0].clone();
+            let mut dupe = fake.state().repo().issues[&100].clone();
             dupe["number"] = json!(999);
-            fake.issues.lock().unwrap().push(dupe);
-            fake.writes.lock().unwrap().clear();
+            fake.state().repo_mut().issues.insert(999, dupe);
+            fake.state().writes.clear();
         }
         let report = engine.run_at(options(), false, false, now).await.unwrap();
         let repo = &report.repositories[0];
@@ -2414,7 +2167,7 @@ async fn inventory_and_controls_failures_fail_the_repository_before_writes() {
                 "{reason}"
             );
         }
-        assert!(fake.writes.lock().unwrap().is_empty(), "{failure}");
+        assert!(fake.state().writes.is_empty(), "{failure}");
     }
     check_transcript();
 }
@@ -2423,7 +2176,7 @@ async fn inventory_and_controls_failures_fail_the_repository_before_writes() {
 /// being dropped: the invalid `prs.branch` names the step's failure.
 #[tokio::test(start_paused = true)]
 async fn an_invalid_branch_prefix_fails_the_repository() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -2452,7 +2205,7 @@ async fn an_invalid_branch_prefix_fails_the_repository() {
             .contains("prs.branch produces an invalid Git branch name"),
         "{repo:?}"
     );
-    assert!(fake.writes.lock().unwrap().is_empty());
+    assert!(fake.state().writes.is_empty());
     check_transcript();
 }
 
@@ -2461,7 +2214,7 @@ async fn an_invalid_branch_prefix_fails_the_repository() {
 /// value it cannot read.
 #[tokio::test(start_paused = true)]
 async fn an_undecodable_write_receipt_is_a_miss_and_rewritten() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     cache
         .set_state(
@@ -2492,9 +2245,9 @@ async fn an_undecodable_write_receipt_is_a_miss_and_rewritten() {
     let repo = &report.repositories[0];
     assert_eq!(repo.status, Status::Complete, "{repo:?}");
     assert!(
-        fake.writes
-            .lock()
-            .unwrap()
+        fake.state()
+            .writes
+            .clone()
             .iter()
             .any(|(p, _)| p.ends_with("/git/commits")),
         "a missed receipt must reconcile by writing"
@@ -2506,13 +2259,12 @@ async fn an_undecodable_write_receipt_is_a_miss_and_rewritten() {
 /// repository's write with the API error as the reason.
 #[tokio::test(start_paused = true)]
 async fn a_pulls_listing_failure_fails_the_repository() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
         .with_versions_host(false);
-    fake.pulls_error
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    fake.github.pulls_list_fails();
     let report = engine
         .run_at(
             Options {
@@ -2530,9 +2282,7 @@ async fn a_pulls_listing_failure_fails_the_repository() {
     assert_eq!(repo.status, Status::Error, "{repo:?}");
     assert!(
         !fake
-            .requests
-            .lock()
-            .unwrap()
+            .log()
             .iter()
             .any(|(_, path, _)| path.ends_with("/merge")),
         "a failed lifecycle read must not merge"
@@ -2544,15 +2294,14 @@ async fn a_pulls_listing_failure_fails_the_repository() {
 /// repository rather than being retried silently.
 #[tokio::test(start_paused = true)]
 async fn a_failed_branch_deletion_fails_the_repository() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
         .with_versions_host(false);
     // An owned branch the plans no longer want is a cleanup candidate.
-    *fake.branches.lock().unwrap() =
-        vec![json!({"name":"patchula/stale","commit":{"sha":"stale-head"}})];
-    *fake.ref_update_error.lock().unwrap() = Some("update refused".into());
+    branch(&fake.github, "patchula/stale", "stale-head");
+    fake.github.ref_delete_fails("update refused");
     let report = engine
         .run_at(
             Options {
@@ -2569,7 +2318,7 @@ async fn a_failed_branch_deletion_fails_the_repository() {
     let repo = &report.repositories[0];
     assert_eq!(repo.status, Status::Error, "{repo:?}");
     assert!(
-        fake.writes.lock().unwrap().iter().any(|(_, body)| {
+        fake.state().writes.iter().any(|(_, body)| {
             body["variables"]["input"]["refUpdates"]
                 .as_array()
                 .is_some_and(|refs| {
@@ -2578,7 +2327,7 @@ async fn a_failed_branch_deletion_fails_the_repository() {
                 })
         }),
         "a deletion refUpdate must have been attempted: {:?}",
-        fake.writes.lock().unwrap()
+        fake.state().writes.clone()
     );
     assert!(
         repo.reason.as_deref().unwrap().contains("update refused"),
@@ -2591,13 +2340,12 @@ async fn a_failed_branch_deletion_fails_the_repository() {
 /// leaving the branch work reported.
 #[tokio::test(start_paused = true)]
 async fn a_dashboard_write_failure_fails_the_repository() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
         .with_versions_host(false);
-    fake.issue_error
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    fake.github.issue_writes_fail();
     let report = engine
         .run_at(
             Options {
@@ -2628,9 +2376,7 @@ async fn a_dashboard_write_failure_fails_the_repository() {
 /// that stops publication.
 #[tokio::test(start_paused = true)]
 async fn lockfile_maintenance_plans_and_a_missing_runner_fails_the_branch() {
-    let mut fixture = Fake::new(true);
-    fixture.lock_name = "package-lock.json";
-    let fake = Arc::new(fixture);
+    let fake = sandbox(base_files(), Some("package-lock.json"), vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -2673,11 +2419,13 @@ async fn lockfile_maintenance_plans_and_a_missing_runner_fails_the_branch() {
 /// the read fails closed.
 #[tokio::test(start_paused = true)]
 async fn an_unfetchable_blob_fails_the_repository() {
-    let fixture = Fake::new(false);
-    *fixture.extra_tree.lock().unwrap() = vec![
-        json!({"path":"nested/package.json","sha":"0".repeat(40),"mode":"100644","type":"blob"}),
-    ];
-    let fake = Arc::new(fixture);
+    let fake = sandbox(
+        base_files(),
+        None,
+        vec![
+            json!({"path":"nested/package.json","sha":"0".repeat(40),"mode":"100644","type":"blob"}),
+        ],
+    );
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -2702,7 +2450,7 @@ async fn an_unfetchable_blob_fails_the_repository() {
 /// again through the bypassing source rather than served from the cache.
 #[tokio::test(start_paused = true)]
 async fn a_recheck_click_revalidates_advisories() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -2712,16 +2460,14 @@ async fn a_recheck_click_revalidates_advisories() {
     let now = chrono::Utc::now();
     checkbox_run(&engine, &config, now).await;
     let osv_requests = || {
-        fake.requests
-            .lock()
-            .unwrap()
+        fake.log()
             .iter()
             .filter(|(_, path, _)| path.contains("querybatch"))
             .count()
     };
     assert_eq!(osv_requests(), 1);
     tick_dashboard(&fake, "recheck");
-    fake.requests.lock().unwrap().clear();
+    fake.clear_log();
     checkbox_run(&engine, &config, now).await;
     assert_eq!(osv_requests(), 1, "the retry must bypass the cached answer");
     check_transcript();
@@ -2732,7 +2478,7 @@ async fn a_recheck_click_revalidates_advisories() {
 /// ticked run writes can only be the tick driving the revalidation.
 #[tokio::test(start_paused = true)]
 async fn a_ticked_pr_retries_the_branch_it_names() {
-    let fake = Arc::new(Fake::new(false));
+    let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
@@ -2740,19 +2486,18 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
     let config = checkbox_config();
     let now = chrono::Utc::now();
     checkbox_run(&engine, &config, now).await;
-    fake.writes.lock().unwrap().clear();
+    fake.state().writes.clear();
     checkbox_run(&engine, &config, now + chrono::Duration::minutes(1)).await;
     assert!(
         !fake
+            .state()
             .writes
-            .lock()
-            .unwrap()
             .iter()
             .any(|(p, _)| p.ends_with("/git/commits")),
         "an unticked run on a warm cache writes nothing: {:?}",
-        fake.writes.lock().unwrap()
+        fake.state().writes.clone()
     );
-    let body = fake.prs.lock().unwrap()[0]["body"]
+    let body = fake.state().repo_mut().prs[&1]["body"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -2760,16 +2505,53 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
         body.contains("- [ ] Tick to re-check"),
         "the re-check marker drifted: {body}"
     );
-    fake.prs.lock().unwrap()[0]["body"] =
+    fake.state().repo_mut().prs.get_mut(&1).unwrap()["body"] =
         json!(body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check"));
+    fake.state().writes.clear();
+    fake.clear_log();
     checkbox_run(&engine, &config, now + chrono::Duration::minutes(2)).await;
     assert!(
-        fake.writes
-            .lock()
-            .unwrap()
+        !fake.state().writes.is_empty(),
+        "the tick must be consumed and written back"
+    );
+    assert!(
+        fake.log()
+            .iter()
+            .any(|(m, p, _)| m == "GET" && p.contains("/git/commits/")),
+        "the tick must re-evaluate the branch"
+    );
+    // A stale branch still forces real work: a head that is marked but
+    // carries the old manifest makes the next tick write a new commit,
+    // not just re-read it.
+    let branch = fake.state().repo().prs[&1]["head"]["ref"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    {
+        let mut state = fake.state();
+        let mut commit = state.repo().commits["commit-1"].clone();
+        commit["sha"] = json!("stale");
+        commit["tree"]["sha"] = json!("base-tree");
+        state.repo_mut().commits.insert("stale".into(), commit);
+        state
+            .repo_mut()
+            .refs
+            .insert(format!("refs/heads/{branch}"), "stale".into());
+    }
+    let body = fake.state().repo_mut().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    fake.state().repo_mut().prs.get_mut(&1).unwrap()["body"] =
+        json!(body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check"));
+    fake.state().writes.clear();
+    checkbox_run(&engine, &config, now + chrono::Duration::minutes(3)).await;
+    assert!(
+        fake.state()
+            .writes
             .iter()
             .any(|(p, _)| p.ends_with("/git/commits")),
-        "the tick must rewrite the branch"
+        "a stale branch must be rewritten"
     );
     check_transcript();
 }
@@ -2778,16 +2560,16 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
 /// does not carry — is a warning naming the dependency, not a scan failure.
 #[tokio::test(start_paused = true)]
 async fn a_policy_that_cannot_evaluate_warns_the_dependency() {
-    let mut fixture = Fake::new(false);
-    fixture.files.insert(
+    let mut files = base_files();
+    files.insert(
         "patchula.pkl".into(),
         "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\nrules { new Rule { select = new Selector { packages = new Listing { \"fixture\" } }; apply = new Overrides { channel = \"lts\" } } }\n".into(),
     );
-    fixture.files.insert(
+    files.insert(
         "package.json".into(),
         "{\n  \"dependencies\": {\"fixture\": \"^1.0.0\"}\n}\n".into(),
     );
-    let fake = Arc::new(fixture);
+    let fake = sandbox(files, None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()

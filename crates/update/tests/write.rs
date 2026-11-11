@@ -304,6 +304,7 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
         {
             let mut state = server.state();
             let entries = state
+                .repo_mut()
                 .trees
                 .get_mut(first.tree.as_ref().unwrap())
                 .unwrap()
@@ -333,7 +334,7 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
         .await;
         assert_eq!(repeat.action().status, BranchStatus::Updated);
         let state = server.state();
-        let entries = state.trees[repeat.tree.as_ref().unwrap()]
+        let entries = state.repo().trees[repeat.tree.as_ref().unwrap()]
             .as_array()
             .unwrap();
         assert!(!entries.iter().any(|entry| entry["path"] == "obsolete.lock"));
@@ -400,9 +401,11 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
         .await;
         {
             let mut s = server.state();
-            s.base = "base2".into();
-            s.refs.insert("refs/heads/main".into(), "base2".into());
-            s.commits.insert(
+            s.repo_mut().move_base("base2");
+            s.repo_mut()
+                .refs
+                .insert("refs/heads/main".into(), "base2".into());
+            s.repo_mut().commits.insert(
                 "base2".into(),
                 json!({"sha":"base2","tree":{"sha":"base-tree"}}),
             );
@@ -450,6 +453,7 @@ async fn human_commit_is_protected_even_with_copied_patchula_markers() {
     .await;
     server
         .state()
+        .repo_mut()
         .commits
         .get_mut(first.action().commit.as_ref().unwrap())
         .unwrap()["actor"] = json!("human");
@@ -497,12 +501,12 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
             let mut state = server.state();
             let sha = first.action().commit.as_ref().unwrap();
             if earlier {
-                let mut human = state.commits[sha].clone();
+                let mut human = state.repo().commits[sha].clone();
                 human["actor"] = json!("human");
-                state.commits.insert("human".into(), human);
-                state.history.push("human".into());
+                state.repo_mut().commits.insert("human".into(), human);
+                state.repo_mut().history.push("human".into());
             } else {
-                state.commits.get_mut(sha).unwrap()["committer_login"] = json!("human");
+                state.repo_mut().commits.get_mut(sha).unwrap()["committer_login"] = json!("human");
             }
         }
         let count = server.state().writes.len();
@@ -548,12 +552,15 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
     blob.sha = blob_sha(&blob.content);
     {
         let mut state = server.state();
-        state.base = "base2".into();
-        state.refs.insert("refs/heads/main".into(), "base2".into());
-        let mut tree = state.trees["base-tree"].clone();
+        state.repo_mut().move_base("base2");
+        state
+            .repo_mut()
+            .refs
+            .insert("refs/heads/main".into(), "base2".into());
+        let mut tree = state.repo().trees["base-tree"].clone();
         tree[0]["sha"] = json!(blob.sha);
-        state.trees.insert("base-tree2".into(), tree);
-        state.commits.insert(
+        state.repo_mut().trees.insert("base-tree2".into(), tree);
+        state.repo_mut().commits.insert(
             "base2".into(),
             json!({"sha":"base2","tree":{"sha":"base-tree2"}}),
         );
@@ -607,9 +614,11 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
                     .unwrap()
                     .content
                     .push_str("# changed"),
-                1 => s.trees.get_mut("base-tree").unwrap()[0]["sha"] = json!("changed"),
+                1 => s.repo_mut().trees.get_mut("base-tree").unwrap()[0]["sha"] = json!("changed"),
                 2 => {
-                    s.refs.insert("refs/heads/main".into(), "new-base".into());
+                    s.repo_mut()
+                        .refs
+                        .insert("refs/heads/main".into(), "new-base".into());
                 }
                 3 => s.settings.unsigned = true,
                 4 => server.update_refs_fail(),
@@ -641,6 +650,7 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
         assert!(
             !server
                 .state()
+                .repo()
                 .refs
                 .contains_key(&format!("refs/heads/{}", plan.action().branch))
         );
@@ -656,6 +666,7 @@ async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
     let server = fake(&snapshot);
     server
         .state()
+        .repo_mut()
         .refs
         .insert("refs/heads/main".into(), "new-base".into());
     let (mut second, _) = make_plan("22.0.0");
@@ -1030,19 +1041,21 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
     {
         let mut s = server.state();
         let sha = s
+            .repo_mut()
             .refs
             .remove(&format!("refs/heads/{}", p.action().branch))
             .unwrap();
-        let commit = s.commits.get_mut(&sha).unwrap();
+        let commit = s.repo_mut().commits.get_mut(&sha).unwrap();
         commit["message"] = json!(commit["message"].as_str().unwrap().replace(
             "Patchula-Base: base",
             "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ));
         let mut human = commit.clone();
         human["actor"] = json!("human");
-        s.commits.insert("human".into(), human);
-        s.refs.insert(format!("refs/heads/{old}"), sha);
-        s.refs
+        s.repo_mut().commits.insert("human".into(), human);
+        s.repo_mut().refs.insert(format!("refs/heads/{old}"), sha);
+        s.repo_mut()
+            .refs
             .insert("refs/heads/patchula/human".into(), "human".into());
     }
     let actions = patchula_update::cleanup(
@@ -1060,12 +1073,9 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
     assert_eq!(actions[0].branch, old);
     assert_eq!(actions[0].status, BranchStatus::Deleted);
     let s = server.state();
-    assert_eq!(
-        s.refs[&format!("refs/heads/{old}")],
-        "0000000000000000000000000000000000000000"
-    );
-    assert!(s.refs.contains_key("refs/heads/patchula/human"));
-    assert_eq!(s.refs["refs/heads/main"], "base");
+    assert!(!s.repo().refs.contains_key(&format!("refs/heads/{old}")));
+    assert!(s.repo().refs.contains_key("refs/heads/patchula/human"));
+    assert_eq!(s.repo().refs["refs/heads/main"], "base");
     check_transcript();
 }
 
@@ -1459,39 +1469,50 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             match case {
                 "pages" => s.settings.ref_page_size = Some(1),
                 "human" => {
-                    let mut commit = s.commits[p.action().commit.as_ref().unwrap()].clone();
+                    let mut commit = s.repo().commits[p.action().commit.as_ref().unwrap()].clone();
                     commit["message"] = json!("Human work");
-                    s.commits.insert("human".into(), commit);
-                    s.refs
+                    s.repo_mut().commits.insert("human".into(), commit);
+                    s.repo_mut()
+                        .refs
                         .insert(format!("refs/heads/{}", p.action().branch), "human".into());
                 }
-                "actor" => s.prs.get_mut(&1).unwrap()["user"]["login"] = json!("other[bot]"),
+                "actor" => {
+                    s.repo_mut().prs.get_mut(&1).unwrap()["user"]["login"] = json!("other[bot]")
+                }
                 "user-with-bot-name" => {
-                    s.prs.get_mut(&1).unwrap()["graphql_author"] =
+                    s.repo_mut().prs.get_mut(&1).unwrap()["graphql_author"] =
                         json!({"__typename":"User","login":"patchula"})
                 }
                 "signature" => s.settings.unsigned = true,
-                "body" => s.prs.get_mut(&1).unwrap()["body"] = json!("Human edited body"),
-                "line-endings" => {
-                    let text = s.prs[&1]["body"].as_str().unwrap().replace('\n', "\r\n");
-                    s.prs.get_mut(&1).unwrap()["body"] = json!(text);
+                "body" => {
+                    s.repo_mut().prs.get_mut(&1).unwrap()["body"] = json!("Human edited body")
                 }
-                "title" => s.prs.get_mut(&1).unwrap()["title"] = json!("Human title"),
-                "labels" => s.prs.get_mut(&1).unwrap()["labels"] = json!([]),
-                "merge" => s.prs.get_mut(&1).unwrap()["auto_merge"] = json!({"enabled":true}),
-                "closed" => s.prs.get_mut(&1).unwrap()["state"] = json!("closed"),
+                "line-endings" => {
+                    let text = s.repo().prs[&1]["body"]
+                        .as_str()
+                        .unwrap()
+                        .replace('\n', "\r\n");
+                    s.repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(text);
+                }
+                "title" => s.repo_mut().prs.get_mut(&1).unwrap()["title"] = json!("Human title"),
+                "labels" => s.repo_mut().prs.get_mut(&1).unwrap()["labels"] = json!([]),
+                "merge" => {
+                    s.repo_mut().prs.get_mut(&1).unwrap()["auto_merge"] = json!({"enabled":true})
+                }
+                "closed" => s.repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed"),
                 "base" | "conflicts" => {
-                    s.base = "base2".into();
+                    s.repo_mut().move_base("base2");
                     repo.commit = Some("base2".into());
                     next.retarget_base("base2".into());
                 }
                 "obsolete" | "foreign-obsolete" => {
-                    let mut commit = s.commits[p.action().commit.as_ref().unwrap()].clone();
+                    let mut commit = s.repo().commits[p.action().commit.as_ref().unwrap()].clone();
                     if case == "foreign-obsolete" {
                         commit["actor"] = json!("other-app[bot]");
                     }
-                    s.commits.insert("obsolete".into(), commit);
-                    s.refs
+                    s.repo_mut().commits.insert("obsolete".into(), commit);
+                    s.repo_mut()
+                        .refs
                         .insert("refs/heads/patchula/obsolete".into(), "obsolete".into());
                 }
                 _ => {}
@@ -1593,11 +1614,13 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
         next.retarget_base("base2".into());
         {
             let mut s = server.state();
-            let mut base = s.commits["base"].clone();
+            let mut base = s.repo().commits["base"].clone();
             base["sha"] = json!("base2");
-            s.commits.insert("base2".into(), base);
-            s.base = "base2".into();
-            s.refs.insert("refs/heads/main".into(), "base2".into());
+            s.repo_mut().commits.insert("base2".into(), base);
+            s.repo_mut().move_base("base2");
+            s.repo_mut()
+                .refs
+                .insert("refs/heads/main".into(), "base2".into());
         }
         let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(
             &github,
@@ -1709,7 +1732,7 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
         &snapshot,
     )
     .await;
-    server.state().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+    server.state().repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
     let (closed, _) = make_plan("22.0.0");
     let (live, _) = make_plan("24.0.0");
     let (mut failed, _) = make_plan("26.0.0");
@@ -1804,7 +1827,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
             &snapshot,
         )
         .await;
-        server.state().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+        server.state().repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
         let (mut next, _) = make_plan("22.0.0");
         let lifecycle = patchula_update::Lifecycle::prepare_with_controls(
             &github,
@@ -1825,12 +1848,17 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
         {
             let mut s = server.state();
             match case {
-                "reopened" => s.prs.get_mut(&1).unwrap()["state"] = json!("open"),
-                "merged" => s.prs.get_mut(&1).unwrap()["merged_at"] = json!("2026-10-15T00:00:00Z"),
-                "body" => s.prs.get_mut(&1).unwrap()["body"] = json!("changed"),
-                "actor" => s.prs.get_mut(&1).unwrap()["user"]["login"] = json!("other-app[bot]"),
+                "reopened" => s.repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("open"),
+                "merged" => {
+                    s.repo_mut().prs.get_mut(&1).unwrap()["merged_at"] =
+                        json!("2026-10-15T00:00:00Z")
+                }
+                "body" => s.repo_mut().prs.get_mut(&1).unwrap()["body"] = json!("changed"),
+                "actor" => {
+                    s.repo_mut().prs.get_mut(&1).unwrap()["user"]["login"] = json!("other-app[bot]")
+                }
                 "deleted" => {
-                    s.prs.remove(&1);
+                    s.repo_mut().prs.remove(&1);
                 }
                 _ => {}
             }
@@ -1891,7 +1919,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     );
     {
         let state = server.state();
-        let pr = &state.prs[&1];
+        let pr = &state.repo().prs[&1];
         assert_eq!(pr["title"], p.action().message);
         let body = pr["body"].as_str().unwrap();
         assert!(body.contains("| Package | Change | Type | File |"));
@@ -1919,12 +1947,12 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     assert_eq!(server.state().writes.len(), count);
     {
         let mut s = server.state();
-        let body = s.prs[&1]["body"].as_str().unwrap().replace(
+        let body = s.repo().prs[&1]["body"].as_str().unwrap().replace(
             "- [ ] Tick to re-check this PR on the next run.",
             "- [x] Any operator wording",
         );
-        s.prs.get_mut(&1).unwrap()["body"] = json!(body);
-        s.prs.get_mut(&1).unwrap()["labels"]
+        s.repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(body);
+        s.repo_mut().prs.get_mut(&1).unwrap()["labels"]
             .as_array_mut()
             .unwrap()
             .push(json!({"name":"human-label"}));
@@ -1956,10 +1984,15 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     )
     .await;
     let state = server.state();
-    assert_eq!(state.prs.len(), 1);
-    assert!(state.prs[&1]["body"].as_str().unwrap().contains("22.1.0"));
+    assert_eq!(state.repo().prs.len(), 1);
     assert!(
-        state.prs[&1]["labels"]
+        state.repo().prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .contains("22.1.0")
+    );
+    assert!(
+        state.repo().prs[&1]["labels"]
             .as_array()
             .unwrap()
             .iter()
@@ -1985,11 +2018,11 @@ async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_
     .await;
     {
         let mut s = server.state();
-        s.prs.get_mut(&1).unwrap()["state"] = json!("closed");
-        let mut decoy = s.prs[&1].clone();
+        s.repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+        let mut decoy = s.repo().prs[&1].clone();
         decoy["number"] = json!(2);
         decoy["user"]["login"] = json!("human");
-        s.prs.insert(2, decoy);
+        s.repo_mut().prs.insert(2, decoy);
         s.settings.pr_page_size = Some(1);
     }
     let count = server.state().writes.len();
@@ -2029,7 +2062,7 @@ async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_
         actions[0].status,
         patchula_report::PullRequestStatus::Created
     );
-    assert_eq!(server.state().prs.len(), 3);
+    assert_eq!(server.state().repo().prs.len(), 3);
     check_transcript();
 }
 
@@ -2078,7 +2111,7 @@ async fn concurrent_and_hourly_limits_include_closed_creates_and_null_is_unlimit
             .unwrap()
             .contains("concurrent")
     );
-    server.state().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+    server.state().repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
     config.prs.concurrent = None;
     config.prs.per_hour = Some(1);
     (other, _) = make_plan("24.0.0");
@@ -2130,6 +2163,7 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
         {
             let mut s = server.state();
             let commit = s
+                .repo_mut()
                 .commits
                 .get_mut(p.action().commit.as_ref().unwrap())
                 .unwrap();
@@ -2179,7 +2213,10 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
         .unwrap();
         assert_eq!(cleanup.len(), usize::from(!human));
         let s = server.state();
-        assert_eq!(s.prs[&1]["state"], if human { "open" } else { "closed" });
+        assert_eq!(
+            s.repo().prs[&1]["state"],
+            if human { "open" } else { "closed" }
+        );
         if !human && case != "closed-by-owner" {
             let close = s
                 .writes
@@ -2216,7 +2253,7 @@ async fn generated_tables_policy_text_and_markers_do_not_gain_joiners() {
     )
     .await;
     let s = server.state();
-    let body = s.prs[&1]["body"].as_str().unwrap();
+    let body = s.repo().prs[&1]["body"].as_str().unwrap();
     assert!(body.contains("| @scope/package | 20.0.0@sha256:abcdef → 22.0.0@sha256:fedcba |"));
     assert!(body.contains("Policy @owner name@version &lt;!-- patchula:fake --&gt;"));
     assert!(!body.contains('\u{200d}'));
@@ -2267,7 +2304,10 @@ async fn text_others_wrote_in_the_description_is_left_alone_and_never_doubled() 
         &snapshot,
     )
     .await;
-    let own = server.state().prs[&1]["body"].as_str().unwrap().to_owned();
+    let own = server.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(own.starts_with("<!-- patchula-begin -->\n"), "{own}");
     // Appended, prepended, and both.
     for (before, after) in [
@@ -2279,20 +2319,20 @@ async fn text_others_wrote_in_the_description_is_left_alone_and_never_doubled() 
         ),
     ] {
         let edited = format!("{before}{own}{after}");
-        server.state().prs.get_mut(&1).unwrap()["body"] = json!(edited);
+        server.state().repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(edited);
         // No change in content: nothing is patched, three publishes over.
         server.state().requests.clear();
         for _ in 0..3 {
             publish(false).await;
-            let s = server.state();
-            assert_eq!(s.prs[&1]["body"].as_str().unwrap(), edited);
+            let mut s = server.state();
+            assert_eq!(s.repo_mut().prs[&1]["body"].as_str().unwrap(), edited);
         }
         assert_eq!(body_patches(&server), 0);
         // A rewrite (a re-check re-renders the body) keeps the same text, once.
         for _ in 0..2 {
             publish(true).await;
-            let s = server.state();
-            let now = s.prs[&1]["body"].as_str().unwrap();
+            let mut s = server.state();
+            let now = s.repo_mut().prs[&1]["body"].as_str().unwrap();
             assert_eq!(
                 now.matches("tool:summary:start").count(),
                 usize::from(edited.contains(FOREIGN)),
@@ -2306,17 +2346,17 @@ async fn text_others_wrote_in_the_description_is_left_alone_and_never_doubled() 
             assert_eq!(now.matches("<!-- patchula-begin -->").count(), 1);
         }
         // Whatever is edited back to what the Count wrote is stable again.
-        server.state().prs.get_mut(&1).unwrap()["body"] = json!(own);
+        server.state().repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(own);
         publish(true).await;
     }
     // A tool rewrites its own block in place between runs: the latest text stays.
     let rewritten =
         format!("{own}\n\n<!-- tool:summary:start -->\nrewritten\n<!-- tool:summary:end -->");
-    server.state().prs.get_mut(&1).unwrap()["body"] = json!(rewritten);
+    server.state().repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(rewritten);
     publish(true).await;
     let s = server.state();
     assert!(
-        s.prs[&1]["body"]
+        s.repo().prs[&1]["body"]
             .as_str()
             .unwrap()
             .ends_with("rewritten\n<!-- tool:summary:end -->")
@@ -2335,7 +2375,12 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
         p.changes[0].release_notes = true;
         let server = fake(&snapshot);
         servers.push(server.clone());
-        server.state().release_note_body = Some("Original upstream notes".into());
+        server
+            .state()
+            .repositories
+            .get_mut("actions/checkout")
+            .unwrap()
+            .release_note_body = Some("Original upstream notes".into());
         let github = client(server.clone()).await;
         pr_cycle(
             &github,
@@ -2353,13 +2398,19 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
             {
                 let mut s = server.state();
                 if changed {
-                    s.release_note_body = Some("Changed upstream notes".into());
+                    s.repositories
+                        .get_mut("actions/checkout")
+                        .unwrap()
+                        .release_note_body = Some("Changed upstream notes".into());
                 }
-                let mut body = s.prs[&1]["body"].as_str().unwrap().replace("\r\n", "\n");
+                let mut body = s.repo().prs[&1]["body"]
+                    .as_str()
+                    .unwrap()
+                    .replace("\r\n", "\n");
                 if origin == "pr" {
                     body = body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check");
                 }
-                s.prs.get_mut(&1).unwrap()["body"] = json!(body.replace('\n', "\r\n"));
+                s.repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(body.replace('\n', "\r\n"));
                 s.requests.clear();
                 s.writes.clear();
                 s.release_queries.clear();
@@ -2396,7 +2447,7 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
                     patchula_report::PullRequestStatus::Unchanged
                 }
             );
-            let body = s.prs[&1]["body"].as_str().unwrap();
+            let body = s.repo().prs[&1]["body"].as_str().unwrap();
             assert!(body.contains(if changed {
                 "Changed upstream notes"
             } else {
@@ -2445,7 +2496,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
     {
         let s = server.state();
-        let body = s.prs[&1]["body"].as_str().unwrap();
+        let body = s.repo().prs[&1]["body"].as_str().unwrap();
         assert!(body.len() <= patchula_update::BODY_LIMIT);
         assert!(
             body.contains("Release details 🦀") && body.contains("Tick to re-check this PR now.")
@@ -2504,7 +2555,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     let count = server.state().release_queries.len();
     publish(&mut lifecycle, &github, std::slice::from_mut(&mut repeat)).await;
     let s = server.state();
-    let body = s.prs[&1]["body"].as_str().unwrap();
+    let body = s.repo().prs[&1]["body"].as_str().unwrap();
     assert!(body.len() <= patchula_update::BODY_LIMIT);
     assert_eq!(body.matches("<!-- patchula:").count(), 1);
     assert_eq!(s.release_queries.len(), count);
@@ -2517,6 +2568,12 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
     let (mut p, snapshot) = make_plan("22.0.0");
     p.changes[0].merge = true;
     let server = fake(&snapshot);
+    {
+        let mut s = server.state();
+        let repo = s.repo_mut();
+        repo.merge.auto_merge = true;
+        repo.merge.squash = true;
+    }
     let github = client(server.clone()).await;
     let actions = pr_cycle(
         &github,
@@ -2554,7 +2611,7 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
     )
     .await;
     let s = server.state();
-    assert!(s.prs[&1]["auto_merge"].is_null());
+    assert!(s.repo().prs[&1]["auto_merge"].is_null());
     check_transcript();
 }
 
@@ -2574,7 +2631,7 @@ async fn uncertain_pr_creation_is_reconciled_next_run_and_never_blindly_retried(
     )
     .await;
     assert_eq!(actions[0].status, patchula_report::PullRequestStatus::Error);
-    assert_eq!(server.state().prs.len(), 1);
+    assert_eq!(server.state().repo().prs.len(), 1);
     let (mut repeat, _) = make_plan("22.0.0");
     let actions = pr_cycle(
         &github,
@@ -2588,7 +2645,7 @@ async fn uncertain_pr_creation_is_reconciled_next_run_and_never_blindly_retried(
         actions[0].status,
         patchula_report::PullRequestStatus::Unchanged
     );
-    assert_eq!(server.state().prs.len(), 1);
+    assert_eq!(server.state().repo().prs.len(), 1);
     check_transcript();
 }
 
@@ -2621,7 +2678,7 @@ async fn lookup_warnings_defer_obsolete_pr_closure() {
     .await
     .unwrap();
     assert!(state.actions.is_empty());
-    assert_eq!(server.state().prs[&1]["state"], "open");
+    assert_eq!(server.state().repo().prs[&1]["state"], "open");
     check_transcript();
 }
 
@@ -2840,8 +2897,8 @@ async fn pin_title_respects_prefix_and_pin_rows_never_request_release_notes() {
     let github = client(server.clone()).await;
     pr_cycle(&github, &repo, &config, &mut plans, &snapshot).await;
     let s = server.state();
-    assert_eq!(s.prs[&1]["title"], "build(deps): pin dependencies");
-    let text = s.prs[&1]["body"].as_str().unwrap();
+    assert_eq!(s.repo().prs[&1]["title"], "build(deps): pin dependencies");
+    let text = s.repo().prs[&1]["body"].as_str().unwrap();
     assert!(text.contains("| Package | Change | Type | File |"));
     assert!(text.contains("| pin |"));
     assert!(!text.to_lowercase().contains("release notes"));
@@ -2873,7 +2930,7 @@ async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
             .all(|p| p.action().status == BranchStatus::Error && p.action().commit.is_none())
     );
     let state = server.state();
-    assert_eq!(state.refs.len(), 1);
+    assert_eq!(state.repo().refs.len(), 1);
     let mutations: Vec<_> = state
         .writes
         .iter()
@@ -2996,8 +3053,8 @@ async fn no_ref_update_names_the_default_branch() {
     let before = ref_update_names(&server).len();
     {
         let mut s = server.state();
-        let sha = s.refs[&format!("refs/heads/{}", plans[0].action().branch)].clone();
-        let commit = s.commits.get_mut(&sha).unwrap();
+        let sha = s.repo().refs[&format!("refs/heads/{}", plans[0].action().branch)].clone();
+        let commit = s.repo_mut().commits.get_mut(&sha).unwrap();
         commit["message"] = json!(commit["message"].as_str().unwrap().replace(
             "Patchula-Base: base",
             "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -3040,13 +3097,13 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
     assert_eq!(plans[0].action().status, BranchStatus::Created);
     {
         let mut s = server.state();
-        let sha = s.refs[&format!("refs/heads/{}", plans[0].action().branch)].clone();
-        let commit = s.commits.get_mut(&sha).unwrap();
+        let sha = s.repo().refs[&format!("refs/heads/{}", plans[0].action().branch)].clone();
+        let commit = s.repo_mut().commits.get_mut(&sha).unwrap();
         commit["message"] = json!(commit["message"].as_str().unwrap().replace(
             "Patchula-Base: base",
             "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ));
-        s.refs.insert(
+        s.repo_mut().refs.insert(
             "refs/heads/main".into(),
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
         );
@@ -3069,8 +3126,8 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
     // Count's; cleanup leaves it and carries on rather than failing the run.
     let retag = |from: &str, to: &str| {
         let mut s = server.state();
-        let sha = s.refs[&format!("refs/heads/{}", plans[0].action().branch)].clone();
-        let commit = s.commits.get_mut(&sha).unwrap();
+        let sha = s.repo().refs[&format!("refs/heads/{}", plans[0].action().branch)].clone();
+        let commit = s.repo_mut().commits.get_mut(&sha).unwrap();
         commit["message"] = json!(commit["message"].as_str().unwrap().replace(from, to));
     };
     retag(
@@ -3079,6 +3136,7 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
     );
     server
         .state()
+        .repo_mut()
         .refs
         .insert("refs/heads/main".into(), "base".into());
     let actions = patchula_update::cleanup(
@@ -3101,6 +3159,7 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
     // The same branch is deleted once the plans match the default branch again.
     server
         .state()
+        .repo_mut()
         .refs
         .insert("refs/heads/main".into(), "base".into());
     let actions = patchula_update::cleanup(
@@ -3164,8 +3223,8 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
     .await;
     assert_eq!(p.action().status, BranchStatus::Created, "{:?}", p.action());
     let s = server.state();
-    let commit = &s.commits[p.action().commit.as_ref().unwrap()];
-    let tree = s.trees[commit["tree"]["sha"].as_str().unwrap()]
+    let commit = &s.repo().commits[p.action().commit.as_ref().unwrap()];
+    let tree = s.repo().trees[commit["tree"]["sha"].as_str().unwrap()]
         .as_array()
         .unwrap();
     assert!(!tree.iter().any(|f| f["path"] == "go.sum"));
@@ -3217,7 +3276,7 @@ async fn owned_readable_branch_and_pr_can_follow_a_changed_track_identity() {
         patchula_report::PullRequestStatus::Updated
     );
     assert!(
-        server.state().prs[&1]["body"]
+        server.state().repo().prs[&1]["body"]
             .as_str()
             .unwrap()
             .contains(&next.identity)
@@ -3242,13 +3301,17 @@ async fn merged_pr_branch_can_be_reused_for_the_next_update_on_its_major_line() 
     {
         let mut s = server.state();
         let sha = p.action().commit.as_ref().unwrap();
-        s.merged_heads.insert(sha.clone());
-        s.prs.get_mut(&1).unwrap()["state"] = json!("closed");
-        s.prs.get_mut(&1).unwrap()["merged_at"] = json!(chrono::Utc::now().to_rfc3339());
-        s.base = "base2".into();
-        s.refs.insert("refs/heads/main".into(), "base2".into());
-        let tree = s.commits[sha]["tree"].clone();
-        s.commits.insert("base2".into(), json!({"tree":tree}));
+        s.repo_mut().merged_heads.insert(sha.clone());
+        s.repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+        s.repo_mut().prs.get_mut(&1).unwrap()["merged_at"] = json!(chrono::Utc::now().to_rfc3339());
+        s.repo_mut().move_base("base2");
+        s.repo_mut()
+            .refs
+            .insert("refs/heads/main".into(), "base2".into());
+        let tree = s.repo().commits[sha]["tree"].clone();
+        s.repo_mut()
+            .commits
+            .insert("base2".into(), json!({"tree":tree}));
     }
     let blob = snapshot.files.get_mut("mise.toml").unwrap();
     blob.content = blob.content.replace("20.0.0", "22.0.0");
@@ -3290,7 +3353,7 @@ async fn merged_pr_branch_can_be_reused_for_the_next_update_on_its_major_line() 
         actions[0].status,
         patchula_report::PullRequestStatus::Created
     );
-    assert_eq!(server.state().prs.len(), 2);
+    assert_eq!(server.state().repo().prs.len(), 2);
     check_transcript();
 }
 
@@ -3453,20 +3516,20 @@ async fn obsolete_prs_fetch_repository_metadata_once() {
         let mut s = server.state();
         let head = p.action().commit.clone().unwrap();
         // A second patchula PR, whose branch is not desired either.
-        let mut pr2 = s.prs[&1].clone();
+        let mut pr2 = s.repo().prs[&1].clone();
         pr2["number"] = json!(2);
         pr2["html_url"] = json!("https://github.com/demo/app/pull/2");
         pr2["head"]["ref"] = json!("patchula/obsolete-two");
         pr2["head"]["sha"] = json!("obsolete-two");
-        s.prs.insert(2, pr2);
-        s.refs.insert(
+        s.repo_mut().prs.insert(2, pr2);
+        s.repo_mut().refs.insert(
             "refs/heads/patchula/obsolete-two".into(),
             "obsolete-two".into(),
         );
-        let commit = s.commits[&head].clone();
-        s.commits.insert("obsolete-two".into(), commit);
+        let commit = s.repo().commits[&head].clone();
+        s.repo_mut().commits.insert("obsolete-two".into(), commit);
         // Move the base marker in every commit so both PRs are obsolete.
-        for commit in s.commits.values_mut() {
+        for commit in s.repo_mut().commits.values_mut() {
             if let Some(message) = commit["message"].as_str() {
                 commit["message"] = json!(message.replace(
                     "Patchula-Base: base",
@@ -3557,15 +3620,15 @@ async fn paginated_inventory_connections_close_the_receipts_fast_path() {
         .unwrap();
         {
             let mut s = server.state();
-            let mut other = s.prs.get(&1).unwrap().clone();
+            let mut other = s.repo().prs.get(&1).unwrap().clone();
             other["number"] = json!(2);
             other["node_id"] = json!("PR_other");
             other["html_url"] = json!("https://github.com/demo/app/pull/2");
             other["head"]["ref"] = json!("patchula/other-two");
             other["head"]["sha"] = json!("other");
             other["title"] = json!("unrelated work");
-            s.prs.insert(2, other);
-            s.commits.insert(
+            s.repo_mut().prs.insert(2, other);
+            s.repo_mut().commits.insert(
                 "other".into(),
                 json!({
                     "sha":"other",
@@ -3574,7 +3637,8 @@ async fn paginated_inventory_connections_close_the_receipts_fast_path() {
                     "actor":"human"
                 }),
             );
-            s.refs
+            s.repo_mut()
+                .refs
                 .insert("refs/heads/patchula/other-two".into(), "other".into());
             match paginated {
                 "labels" => s.settings.label_next_page = Some(2),
@@ -3625,8 +3689,8 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
     assert_eq!(first.action().status, BranchStatus::Created);
     {
         let mut s = server.state();
-        let sha = s.refs[&format!("refs/heads/{}", first.action().branch)].clone();
-        let commit = s.commits.get_mut(&sha).unwrap();
+        let sha = s.repo().refs[&format!("refs/heads/{}", first.action().branch)].clone();
+        let commit = s.repo_mut().commits.get_mut(&sha).unwrap();
         commit["message"] = json!(
             commit["message"]
                 .as_str()
@@ -3780,6 +3844,7 @@ async fn unmarked_and_badly_marked_branch_tips_are_protected() {
         assert_eq!(first.action().status, BranchStatus::Created);
         server
             .state()
+            .repo_mut()
             .commits
             .get_mut(first.action().commit.as_ref().unwrap())
             .unwrap()["message"] = message;
@@ -3840,7 +3905,7 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
     {
         let mut s = server.state();
         // A batched PR the batch now carries, which the run cannot read.
-        s.prs.insert(
+        s.repo_mut().prs.insert(
             7,
             owned(
                 7,
@@ -3849,7 +3914,7 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
             ),
         );
         // A PR whose re-check box is ticked and can be acknowledged.
-        s.prs.insert(
+        s.repo_mut().prs.insert(
             8,
             owned(
                 8,
@@ -3927,7 +3992,10 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
         settlement.warnings
     );
     // The reachable re-check was still unticked.
-    let body = server.state().prs[&8]["body"].as_str().unwrap().to_owned();
+    let body = server.state().repo().prs[&8]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(body.contains("- [ ]"), "{body}");
     assert!(!body.contains("- [x]"), "{body}");
     check_transcript();
@@ -3953,7 +4021,10 @@ async fn a_maintenance_pr_lists_the_files_it_refreshed() {
         actions[0].status,
         patchula_report::PullRequestStatus::Created
     );
-    let body = server.state().prs[&1]["body"].as_str().unwrap().to_owned();
+    let body = server.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(body.contains("Scheduled"), "{body}");
     assert!(body.contains("mise.toml"), "{body}");
     check_transcript();
@@ -3986,7 +4057,10 @@ async fn release_notes_stop_after_eight_with_a_pointer() {
         &snapshot,
     )
     .await;
-    let body = server.state().prs[&1]["body"].as_str().unwrap().to_owned();
+    let body = server.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(
         body.matches("### node").count(),
         8,
@@ -4034,7 +4108,10 @@ async fn a_rebuild_that_fixes_advisories_skips_the_empty_note() {
         &snapshot,
     )
     .await;
-    let body = server.state().prs[&1]["body"].as_str().unwrap().to_owned();
+    let body = server.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(
         !body.contains("OSV.dev knows of no vulnerability"),
         "{body}"
@@ -4089,7 +4166,10 @@ async fn an_overfull_tail_drops_the_controls_but_keeps_ownership() {
     )
     .await;
     publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
-    let body = server.state().prs[&1]["body"].as_str().unwrap().to_owned();
+    let body = server.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(!body.contains("Add to the batch PR"), "{body}");
     assert!(body.contains("<!-- patchula:"), "{body}");
     check_transcript();
