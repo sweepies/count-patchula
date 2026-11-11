@@ -7,7 +7,7 @@ use super::*;
 pub(super) struct Context<'a> {
     pub driver: &'a Path,
     pub root: &'a Path,
-    pub baseline: &'a BTreeMap<String, Blob>,
+    pub baseline: &'a BTreeMap<String, BaseFile>,
     pub directory: &'a str,
     pub config: &'a Config,
     pub versions: &'a BTreeMap<String, String>,
@@ -17,13 +17,7 @@ pub(super) struct Context<'a> {
     pub public: bool,
 }
 
-pub(super) fn join(directory: &str, leaf: &str) -> String {
-    if directory.is_empty() {
-        leaf.to_string()
-    } else {
-        format!("{directory}/{leaf}")
-    }
-}
+pub(super) use super::contract::join;
 
 pub(super) fn version(versions: &BTreeMap<String, String>, tool: &str) -> Result<String, String> {
     versions

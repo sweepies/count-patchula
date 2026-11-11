@@ -1,3 +1,5 @@
+use crate::lockfiles::contract;
+use futures_util::StreamExt;
 use patchula_config::{Config, PackageId, Registry, split_package};
 use patchula_manager::{Dependency, Edit, hash};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
@@ -33,7 +35,7 @@ enum Stage<'a> {
         contents: &'a BTreeMap<String, String>,
         message: &'a str,
         lockfile_pending: bool,
-        lock_jobs: &'a [crate::lockfiles::Job],
+        lock_jobs: &'a [contract::Job],
     },
     /// `lockfiles_generated`, after the tools rewrote the plan.
     Generated {
@@ -72,7 +74,7 @@ pub struct Plan {
     pub tree: Option<String>,
     pub cached_pr: Option<serde_json::Value>,
     pub input_fingerprint: String,
-    pub lock_jobs: Vec<crate::lockfiles::Job>,
+    pub lock_jobs: Vec<contract::Job>,
     pub lockfiles_ready: bool,
     /// The snapshot's public-only verdicts, for the lockfile runs'
     /// cache-partition choice.
@@ -250,17 +252,105 @@ impl Plan {
     }
     /// Lockfile generation failed; the report keeps the reason and the
     /// dashboard the typed failure, both from the same error.
-    pub fn lockfiles_failed(&mut self, error: crate::lockfiles::Error) {
+    pub fn lockfiles_failed(&mut self, error: contract::Failure) {
         self.action.status = BranchStatus::Error;
         let reason = format!("lockfile generation failed: {error}");
         self.action.reason = Some(reason.clone());
         self.failure = Some(match error {
-            crate::lockfiles::Error::Tool(tool) => crate::text::tool_failure(
-                &format!("lockfile generation failed: {}", tool.context),
-                &tool.failure,
+            contract::Failure::Tool { context, failure } => crate::text::tool_failure(
+                &format!("lockfile generation failed: {context}"),
+                &failure,
             ),
-            crate::lockfiles::Error::Text(_) => crate::text::failure(&reason),
+            contract::Failure::Text(_) => crate::text::failure(&reason),
         });
+    }
+    /// The lockfile work this plan asks a [`contract::Generate`] run for, or
+    /// `None` when the plan is not planned or its lockfiles already ran.
+    pub fn lock_work(&self) -> Option<contract::Work<'_>> {
+        if self.action.status != BranchStatus::Planned || self.lockfiles_ready {
+            return None;
+        }
+        Some(contract::Work {
+            repository: &self.action.repository,
+            base_commit: &self.action.base_commit,
+            jobs: &self.lock_jobs,
+            edits: &self.contents,
+            extracted: self
+                .action
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.blob_sha.as_str()))
+                .collect(),
+            targets: self
+                .changes
+                .iter()
+                .map(|change| contract::Target {
+                    file: &change.file,
+                    package: &change.package,
+                    current: &change.current,
+                    value: change.value.as_deref(),
+                    version: change.version.as_deref(),
+                })
+                .collect(),
+            public_only: &self.public_only,
+            maintenance: self.maintenance,
+        })
+    }
+    /// A finished run's files join the plan, or its failure becomes the
+    /// plan's error. Returns the base blobs of the files the run changed,
+    /// the same for every plan, for `lock_all` to join into the snapshot.
+    pub fn locked(
+        &mut self,
+        result: Result<contract::Generated, contract::Failure>,
+    ) -> Vec<(String, Blob)> {
+        let generated = match result {
+            Ok(generated) => generated,
+            Err(error) => {
+                self.lockfiles_failed(error);
+                return Vec::new();
+            }
+        };
+        let mut contents = self.contents.clone();
+        let mut deleted = BTreeSet::new();
+        let mut added = Vec::new();
+        let mut files = Vec::new();
+        for file in generated.files {
+            let old = file.base.as_ref().map_or("", |b| b.content.as_str());
+            let new = file.content.as_deref().unwrap_or("");
+            files.push(FileAction {
+                path: file.path.clone(),
+                blob_sha: file
+                    .base
+                    .as_ref()
+                    .map(|b| b.sha.clone())
+                    .unwrap_or_default(),
+                diff: unified(&file.path, old, new),
+            });
+            contents.insert(file.path.clone(), new.into());
+            if file.content.is_none() {
+                deleted.insert(file.path.clone());
+            }
+            added.push((
+                file.path,
+                file.base.map_or_else(
+                    || Blob {
+                        sha: String::new(),
+                        mode: "100644".into(),
+                        content: String::new(),
+                    },
+                    |b| Blob {
+                        sha: b.sha,
+                        mode: b.mode,
+                        content: b.content,
+                    },
+                ),
+            ));
+        }
+        self.lockfiles_generated(contents, deleted, files);
+        if self.action.files.is_empty() {
+            self.hold(Hold::LockfilesCurrent);
+        }
+        added
     }
     /// GitHub's verdict on the commit's signature.
     pub(crate) fn set_verified(&mut self, verified: Option<bool>) {
@@ -605,7 +695,7 @@ fn build(
                 keep(&mut hold, Hold::Window);
             }
         }
-        match crate::lockfiles::job(dep, update, snapshot) {
+        match contract::job(dep, update, &snapshot.paths) {
             Ok(Some(job)) => {
                 lock_jobs.insert(job);
             }
@@ -837,6 +927,45 @@ pub fn unified(path: &str, old: &str, new: &str) -> String {
     result
 }
 
+/// Every plan's lockfiles through `generator`, `concurrency` plans at a
+/// time, calling `done` as each finishes. Each plan works in its own
+/// scratch tree; the base blobs they add, the same for every plan, join
+/// `snapshot` afterwards.
+pub async fn lock_all(
+    generator: &dyn contract::Generate,
+    plans: &mut [Plan],
+    snapshot: &mut Snapshot,
+    config: &Config,
+    concurrency: usize,
+    done: &(dyn Fn() + Sync),
+) {
+    type Task<'a> =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Vec<(String, Blob)>> + Send + 'a>>;
+    let tasks: Vec<Task<'_>> = plans
+        .iter_mut()
+        .map(|plan| -> Task<'_> {
+            Box::pin(async move {
+                let added = match plan.lock_work() {
+                    Some(work) => {
+                        let result = generator.generate(&work, config).await;
+                        plan.locked(result)
+                    }
+                    None => Vec::new(),
+                };
+                done();
+                added
+            })
+        })
+        .collect();
+    let added: Vec<Vec<(String, Blob)>> = futures_util::stream::iter(tasks)
+        .buffer_unordered(concurrency.max(1))
+        .collect()
+        .await;
+    for (path, blob) in added.into_iter().flatten() {
+        snapshot.files.entry(path).or_insert(blob);
+    }
+}
+
 /// Registry-qualified identities (`registry|name`) name their branch after the
 /// package, not the registry URL.
 fn package_slug(package: &str) -> String {
@@ -936,7 +1065,7 @@ fn branch_identity(
         .contains(&patchula_words::DependencyKind::ReferenceData);
     if update.update_type == UpdateKind::Pin
         && !reference_data
-        && snapshot.is_none_or(|snapshot| crate::lockfiles::job(dep, update, snapshot).is_ok())
+        && snapshot.is_none_or(|snapshot| contract::job(dep, update, &snapshot.paths).is_ok())
     {
         ("pins".into(), "pin-dependencies".into())
     } else if update.update_type == UpdateKind::Pin && reference_data {
@@ -1110,7 +1239,7 @@ pub fn batch_plan(
                 target.version.as_deref().is_none_or(|v| {
                     dep.resolved
                         .as_deref()
-                        .is_some_and(|locked| crate::lockfiles::same_release(locked, v))
+                        .is_some_and(|locked| contract::same_release(locked, v))
                 })
             } else {
                 target.value.as_deref().is_none_or(|v| v == dep.current)

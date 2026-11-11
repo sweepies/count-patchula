@@ -11,7 +11,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Php,
     proof: Proof::DeclaredAndResolved,
     run: Run::Direct,
-    refresh: Refresh::Locks(&[Manager::Composer]),
     output: Output::Default,
 };
 
@@ -46,7 +45,7 @@ impl Runner {
         &self,
         context: context::Context<'_>,
         jobs: &[&Job],
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,

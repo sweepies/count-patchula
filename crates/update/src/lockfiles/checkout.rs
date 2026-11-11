@@ -1,8 +1,9 @@
+use super::contract::{BaseFile, Ecosystem, Failure, Work};
 use super::{
-    Blob, Ecosystem, Error, Plan, Runner, ToolFailure, blob_sha, cargo_config, collect,
-    directory_of_cargo_config, hash, materialized, safe_path, within,
+    Runner, cargo_config, collect, directory_of_cargo_config, hash, materialized, safe_path, within,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use patchula_github::blob_sha;
 use std::{collections::BTreeMap, path::Path};
 
 impl Runner {
@@ -11,7 +12,7 @@ impl Runner {
         driver: &Path,
         git_dir: &Path,
         args: Vec<String>,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<Vec<u8>, Failure> {
         let mut spec = self.command(driver);
         spec.args.extend([
             "exec".into(),
@@ -43,22 +44,23 @@ impl Runner {
         spec.secrets = vec![header, encoded, token];
         spec.complete_output = true;
         spec.output_limit = 16 * 1024 * 1024;
-        self.executor.run(spec).await.map_err(|failure| {
-            Error::Tool(ToolFailure {
+        self.executor
+            .run(spec)
+            .await
+            .map_err(|failure| Failure::Tool {
                 context: "git".into(),
                 failure,
             })
-        })
     }
     pub(super) async fn checkout(
         &self,
-        plan: &Plan,
+        work: &Work<'_>,
         root: &Path,
         driver: &Path,
-    ) -> Result<(BTreeMap<String, Blob>, BTreeMap<String, String>), Error> {
+    ) -> Result<(BTreeMap<String, BaseFile>, BTreeMap<String, String>), Failure> {
         let clones = self.cache.join("clones");
         std::fs::create_dir_all(&clones).map_err(|e| e.to_string())?;
-        let name = hash(plan.action().repository.as_bytes());
+        let name = hash(work.repository.as_bytes());
         let clone = clones.join(&name);
         let lock = std::fs::File::options()
             .write(true)
@@ -83,7 +85,7 @@ impl Runner {
             )
             .await?;
         }
-        let repo = &plan.action().repository;
+        let repo = work.repository;
         let (owner, name) = repo.split_once('/').ok_or("invalid repository")?;
         if [owner, name].iter().any(|s| {
             s.is_empty()
@@ -108,7 +110,7 @@ impl Runner {
             )
             .await?;
         }
-        let base = &plan.action().base_commit;
+        let base = work.base_commit;
         if base.len() != 40 || !base.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("invalid checkout base OID".into());
         }
@@ -151,7 +153,7 @@ impl Runner {
                     "ls-tree".into(),
                     "-rz".into(),
                     "--full-tree".into(),
-                    base.clone(),
+                    base.to_owned(),
                 ],
             )
             .await?;
@@ -160,8 +162,8 @@ impl Runner {
         for entry in tree.split(|b| *b == 0).filter(|e| !e.is_empty()) {
             let entry = std::str::from_utf8(entry).map_err(|_| "non UTF-8 repository path")?;
             let (metadata, path) = entry.split_once('\t').ok_or("invalid Git tree entry")?;
-            let cargo = self.reads_cargo_config(plan, path);
-            if !materialized(path) && !cargo && !plan.contents.contains_key(path) {
+            let cargo = self.reads_cargo_config(work, path);
+            if !materialized(path) && !cargo && !work.edits.contains_key(path) {
                 continue;
             }
             if !safe_path(path) {
@@ -189,7 +191,7 @@ impl Runner {
             let mut args = vec![
                 format!("--work-tree={}", root.display()),
                 "checkout".into(),
-                base.clone(),
+                base.to_owned(),
                 "--".into(),
             ];
             args.extend_from_slice(chunk);
@@ -199,12 +201,12 @@ impl Runner {
         let mut baseline = BTreeMap::new();
         for (path, content) in files {
             let (sha, mode) = entries.get(&path).ok_or("unexpected checkout file")?;
-            if blob_sha(&content) != *sha {
+            if blob_sha(content.as_bytes()) != *sha {
                 return Err(format!("checkout blob SHA mismatch: {path}").into());
             }
             baseline.insert(
                 path,
-                Blob {
+                BaseFile {
                     sha: sha.clone(),
                     mode: mode.clone(),
                     content,
@@ -212,11 +214,9 @@ impl Runner {
             );
         }
         // Manifest edits were extracted through the API; the clone must agree.
-        for file in &plan.action().files {
-            if baseline.get(&file.path).map(|b| b.sha.as_str()) != Some(&file.blob_sha) {
-                return Err(
-                    format!("checkout disagrees with extracted manifest {}", file.path).into(),
-                );
+        for &(path, sha) in &work.extracted {
+            if baseline.get(path).map(|b| b.sha.as_str()) != Some(sha) {
+                return Err(format!("checkout disagrees with extracted manifest {path}").into());
             }
         }
         let cargo_configs = self
@@ -226,12 +226,12 @@ impl Runner {
     }
 
     /// Whether `path` is a Cargo configuration at or above a project the
-    /// plan relocks, read for its registries when a tools entry may cover
+    /// work relocks, read for its registries when a tools entry may cover
     /// them.
-    fn reads_cargo_config(&self, plan: &Plan, path: &str) -> bool {
+    fn reads_cargo_config(&self, work: &Work<'_>, path: &str) -> bool {
         !self.registries.is_empty()
             && cargo_config(path)
-            && plan.lock_jobs.iter().any(|job| {
+            && work.jobs.iter().any(|job| {
                 let owner = directory_of_cargo_config(path);
                 job.ecosystem == Ecosystem::Cargo && within(&job.directory, owner)
             })
@@ -247,7 +247,7 @@ impl Runner {
         base: &str,
         driver: &Path,
         oids: BTreeMap<String, String>,
-    ) -> Result<BTreeMap<String, String>, Error> {
+    ) -> Result<BTreeMap<String, String>, Failure> {
         let mut out = BTreeMap::new();
         if oids.is_empty() {
             return Ok(out);
@@ -273,7 +273,7 @@ impl Runner {
                 continue;
             }
             if let Ok(text) = String::from_utf8(bytes)
-                && blob_sha(&text) == oid
+                && blob_sha(text.as_bytes()) == oid
             {
                 out.insert(path, text);
             }

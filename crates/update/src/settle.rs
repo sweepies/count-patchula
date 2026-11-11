@@ -68,7 +68,7 @@ pub async fn settle(
     let dashboard = crate::dashboard::reconcile(client, cache, repo, config, inventory, body).await;
     if let Some(state) = lifecycle {
         if let Err(error) =
-            crate::lockfiles::record_refresh(cache, plans, &state.actions, now).await
+            crate::maintenance::record_refresh(cache, plans, &state.actions, now).await
         {
             warnings.push(format!("maintenance cache: {error}"));
         }

@@ -6,10 +6,14 @@
 //! report reasons `job()` errors and generation failures produce. The
 //! tool-run tests stay in `crate::lockfiles::tests`.
 use super::*;
-use crate::lockfiles::{
-    Ecosystem, Job, Scope, defer_completed_refresh, job, maintenance, record_refresh,
-};
+use crate::lockfiles::contract::{self, Ecosystem, Job, Scope};
+use crate::maintenance::{defer_completed_refresh, maintenance, record_refresh};
 use patchula_words::Manager;
+
+/// `job()` over a snapshot's path set, as callers hold it.
+fn job(dep: &Dependency, update: &Update, snapshot: &Snapshot) -> Result<Option<Job>, String> {
+    contract::job(dep, update, &snapshot.paths)
+}
 
 fn config() -> Config {
     config_with("")
@@ -1518,19 +1522,19 @@ mod goldens {
             files: Vec::new(),
         };
         let mut plan = Plan::new(action());
-        plan.lockfiles_failed(crate::lockfiles::Error::Text("the fixture failed".into()));
+        plan.lockfiles_failed(crate::lockfiles::contract::Failure::Text(
+            "the fixture failed".into(),
+        ));
         assert_eq!(plan.action().status, BranchStatus::Error);
         assert_eq!(
             plan.action().reason.as_deref(),
             Some("lockfile generation failed: the fixture failed")
         );
         let mut plan = Plan::new(action());
-        plan.lockfiles_failed(crate::lockfiles::Error::Tool(
-            crate::lockfiles::ToolFailure {
-                context: "cargo".into(),
-                failure: patchula_process::Failure::Io("disk full".into()),
-            },
-        ));
+        plan.lockfiles_failed(crate::lockfiles::contract::Failure::Tool {
+            context: "cargo".into(),
+            failure: patchula_process::Failure::Io("disk full".into()),
+        });
         assert_eq!(
             plan.action().reason.as_deref(),
             Some("lockfile generation failed: cargo: disk full")

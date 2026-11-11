@@ -1,13 +1,40 @@
 use super::*;
+use crate::maintenance::{MaintenanceSuccess, maintenance, record_refresh, refresh_scope};
+use crate::{Blob, Plan, Snapshot, blob_sha};
 use patchula_http::{Exchange, Transport};
 use patchula_process::{CommandSpec, Failure};
+use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 /// One plan through the batch entry point, as the engine calls it.
 async fn prepare_one(runner: &Runner, plan: &mut Plan, snapshot: &mut Snapshot, config: &Config) {
-    runner
-        .prepare_all(std::slice::from_mut(plan), snapshot, config, 1, &|| {})
-        .await;
+    crate::lock_all(
+        runner,
+        std::slice::from_mut(plan),
+        snapshot,
+        config,
+        1,
+        &|| {},
+    )
+    .await;
+}
+
+/// `job()` over a snapshot's path set, as callers hold it.
+fn job(
+    dep: &patchula_manager::Dependency,
+    update: &Update,
+    snapshot: &Snapshot,
+) -> Result<Option<Job>, String> {
+    contract::job(dep, update, &snapshot.paths)
+}
+
+/// `validate_targets` for a plan's work, as callers held it.
+fn validate_targets(
+    plan: &Plan,
+    config: &Config,
+    files: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    super::validate_targets(&plan.lock_work().expect("planned lock work"), config, files)
 }
 
 mod real_python_indexes;
@@ -558,11 +585,10 @@ async fn plans_regenerate_lockfiles_side_by_side() {
         })
         .collect();
     let finished = std::sync::atomic::AtomicUsize::new(0);
-    runner
-        .prepare_all(&mut plans, &mut snapshot, &config, 3, &|| {
-            finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        })
-        .await;
+    crate::lock_all(&runner, &mut plans, &mut snapshot, &config, 3, &|| {
+        finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    })
+    .await;
     assert_eq!(finished.load(std::sync::atomic::Ordering::SeqCst), 3);
     for plan in &plans {
         assert!(plan.lockfiles_ready, "{:?}", plan.action());
@@ -2615,7 +2641,20 @@ fn tool_versions_pin_the_versions_a_run_resolves() {
             "node 22.0.0\n".to_string(),
         ),
     ]);
-    let baseline = snapshot(&files).files;
+    let baseline: BTreeMap<String, BaseFile> = snapshot(&files)
+        .files
+        .into_iter()
+        .map(|(p, b)| {
+            (
+                p,
+                BaseFile {
+                    sha: b.sha,
+                    mode: b.mode,
+                    content: b.content,
+                },
+            )
+        })
+        .collect();
     let sub_versions = versions(&baseline, "sub").unwrap();
     assert_eq!(sub_versions["node"], "22.0.0");
     assert_eq!(sub_versions["go"], "1.24.0");
@@ -5532,14 +5571,14 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
             .map(|(path, text)| {
                 (
                     path.clone(),
-                    Blob {
+                    BaseFile {
                         sha: blob_sha(text),
                         mode: "100644".into(),
                         content: text.clone(),
                     },
                 )
             })
-            .collect::<BTreeMap<String, Blob>>()
+            .collect::<BTreeMap<String, BaseFile>>()
     };
     let verdicts = |files: &BTreeMap<String, String>| {
         patchula_manager::Scanner::new(&config())
@@ -6512,7 +6551,7 @@ fn install_specs_and_refresh_claims_cover_the_special_cases() {
     );
     let config = config();
     let paths = BTreeSet::from(["gradle/wrapper/gradle-wrapper.properties".to_string()]);
-    assert!(!descriptor(Ecosystem::GradleWrapper).refresh.claims(
+    assert!(!contract::refresh(Ecosystem::GradleWrapper).claims(
         &config,
         "gradle-wrapper.properties",
         "gradle/wrapper",

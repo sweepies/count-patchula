@@ -210,12 +210,10 @@ fn render_with(repo: &Repository) -> String {
         "0.23.1",
         None,
     );
-    base64.lockfiles_failed(patchula_update::lockfiles::Error::Tool(
-        patchula_update::lockfiles::ToolFailure {
-            context: "cargo".into(),
-            failure: process,
-        },
-    ));
+    base64.lockfiles_failed(patchula_update::lockfiles::Failure::Tool {
+        context: "cargo".into(),
+        failure: process,
+    });
     let plans = [
         plan(
             "patchula/zstd-safe-8.x",

@@ -20,57 +20,6 @@ pub(super) enum Install {
     Nix,
 }
 
-/// How scheduled lockfile maintenance finds this ecosystem's work in a
-/// snapshot, from the same file roles `job()` maps dependencies through.
-pub(super) enum Refresh {
-    /// A supported lockfile of any listed manager claims the directory;
-    /// the run needs one of them enabled in `config.managers`.
-    Locks(&'static [Manager]),
-    /// `Locks`, but only beside a manifest of the same managers.
-    LocksBesideManifest(&'static [Manager]),
-    /// The managers' manifest files are the work itself.
-    Manifests(&'static [Manager]),
-    /// Maintenance never schedules this ecosystem.
-    Never,
-}
-
-impl Refresh {
-    /// Whether `leaf` in `directory` is this ecosystem's maintenance work
-    /// under `config`, given the snapshot's paths.
-    pub(super) fn claims(
-        &self,
-        config: &Config,
-        leaf: &str,
-        directory: &str,
-        paths: &BTreeSet<String>,
-    ) -> bool {
-        let enabled = |managers: &[Manager]| managers.iter().any(|m| config.managers.contains(m));
-        match self {
-            Self::Never => false,
-            Self::Manifests(managers) => {
-                enabled(managers) && managers.iter().any(|m| manifest_names(*m).contains(&leaf))
-            }
-            Self::Locks(managers) => {
-                managers
-                    .iter()
-                    .any(|m| lock_names(*m).supported.contains(&leaf))
-                    && enabled(managers)
-            }
-            Self::LocksBesideManifest(managers) => {
-                managers
-                    .iter()
-                    .any(|m| lock_names(*m).supported.contains(&leaf))
-                    && enabled(managers)
-                    && managers.iter().any(|m| {
-                        manifest_names(*m)
-                            .iter()
-                            .any(|name| paths.contains(&context::join(directory, name)))
-                    })
-            }
-        }
-    }
-}
-
 /// How the pinned tools run the ecosystem's binary once `mise exec` has
 /// them installed.
 #[derive(Clone, Copy)]
@@ -122,10 +71,6 @@ pub(super) struct Tool {
     pub run: Run,
     /// How far `validate_targets` proves its targets from regenerated files.
     pub proof: Proof,
-    /// How maintenance discovers its work; `job()` does not consult this —
-    /// extraction already applied `config.managers` to the dependencies it
-    /// reports, while maintenance sees raw paths.
-    pub refresh: Refresh,
     /// How much of the ecosystem's tool output a run keeps.
     pub output: Output,
 }
@@ -170,28 +115,6 @@ impl Tool {
             // clearly.
             Install::Nix => super::nix::tools().unwrap_or_default(),
         }
-    }
-}
-
-/// The ecosystem `manager`'s lockfile work runs through, or `None` for a
-/// manager whose changes never produce a lockfile job. `job()`'s dispatch
-/// and `validate_targets`' proof lists both read this one mapping, so
-/// re-scoping a manager's edit semantics updates validation automatically.
-pub(super) fn ecosystem(manager: Manager) -> Option<Ecosystem> {
-    match manager {
-        Manager::Mise => Some(Ecosystem::Mise),
-        Manager::Npm | Manager::Bun => Some(Ecosystem::Node),
-        Manager::Apm => Some(Ecosystem::Apm),
-        Manager::Bundler => Some(Ecosystem::Ruby),
-        Manager::Composer => Some(Ecosystem::Php),
-        Manager::Nix => Some(Ecosystem::Nix),
-        Manager::Nuget => Some(Ecosystem::Dotnet),
-        Manager::Gradle => Some(Ecosystem::GradleWrapper),
-        Manager::Cargo => Some(Ecosystem::Cargo),
-        Manager::Go => Some(Ecosystem::Go),
-        Manager::Pyproject => Some(Ecosystem::Python),
-        Manager::Terraform => Some(Ecosystem::Terraform),
-        _ => None,
     }
 }
 

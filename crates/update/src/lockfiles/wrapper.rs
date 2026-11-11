@@ -10,7 +10,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Plain,
     proof: Proof::None,
     run: Run::Direct,
-    refresh: Refresh::Never,
     output: Output::Default,
 };
 

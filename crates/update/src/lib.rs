@@ -7,6 +7,7 @@ mod body;
 mod cleanup;
 pub mod dashboard;
 pub mod identity;
+pub mod maintenance;
 pub mod markers;
 mod receipts;
 mod settle;
@@ -21,7 +22,9 @@ pub use settle::{Settlement, settle};
 pub mod lockfiles;
 mod plan;
 mod write;
-pub use plan::{Blob, Change, Hold, Plan, Snapshot, blob_sha, branch_name, plan, unified};
+pub use plan::{
+    Blob, Change, Hold, Plan, Snapshot, blob_sha, branch_name, lock_all, plan, unified,
+};
 pub use write::{REF_UPDATE, apply_all, needs_requeue};
 
 pub mod pull_requests;

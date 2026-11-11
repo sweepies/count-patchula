@@ -9,13 +9,17 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Plain,
     proof: Proof::None,
     run: Run::Direct,
-    refresh: Refresh::Locks(&[Manager::Nuget]),
     output: Output::Default,
 };
 
 /// The SDK the nearest `global.json` at or above the restore directory asks
 /// for, else the pinned default.
-fn sdk(baseline: &BTreeMap<String, Blob>, root: &Path, directory: &str, pinned: &str) -> String {
+fn sdk(
+    baseline: &BTreeMap<String, BaseFile>,
+    root: &Path,
+    directory: &str,
+    pinned: &str,
+) -> String {
     for path in upward(baseline, directory, &["global.json"])
         .into_iter()
         .rev()
@@ -153,7 +157,7 @@ impl Runner {
         &self,
         context: context::Context<'_>,
         edited: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,
