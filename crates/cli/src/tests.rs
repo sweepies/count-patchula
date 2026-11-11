@@ -1,12 +1,9 @@
 //! CLI dispatch and persistent cache regression for installation-token receipts.
 use super::{App, Services, run};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_cache::Cache;
+use patchula_testkit::github::{self, FakeGitHub, Hosts};
 use std::ffi::OsStr;
 
-use patchula_http::{Exchange, Response, Transport};
-
-use patchula_update::blob_sha;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -28,213 +25,56 @@ impl patchula_cache::State for Receipts {
     type Scope = ReceiptsScope;
 }
 
-struct Fake {
-    files: BTreeMap<String, String>,
-    writes: Mutex<Vec<(String, Value)>>,
-    prs: Mutex<Vec<Value>>,
-    issues: Mutex<Vec<Value>>,
-    requests: Mutex<Vec<(String, String, Value)>>,
-}
-impl Fake {
-    fn graphql_author(pr: &Value) -> Value {
-        let login = pr["user"]["login"].as_str().unwrap();
-        if let Some(bot) = login.strip_suffix("[bot]") {
-            json!({"__typename":"Bot", "login":bot})
-        } else {
-            json!({"__typename":"User", "login":login})
-        }
-    }
-    fn new() -> Self {
-        Self {
-        files:BTreeMap::from([
+/// A `demo/sandbox` GitHub holding the files every run starts with, behind
+/// a router scripting the npm registry and OSV. Three pull requests exist:
+/// `owner-closed-a` and `owner-closed-b` are closed, the third is an open
+/// PR from a foreign head.
+fn github() -> (Arc<FakeGitHub>, Arc<Hosts>) {
+    let github = Arc::new(FakeGitHub::new("demo/sandbox"));
+    let hosts = Arc::new(Hosts::new(github.clone()));
+    hosts.script("api.osv.dev", |_, body| {
+        let queries = body["queries"].as_array().map_or(0, Vec::len);
+        github::json(200, json!({"results": vec![json!({}); queries]}))
+    });
+    hosts.script("registry.npmjs.org", |_, _| {
+        github::json(
+            200,
+            json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}}),
+        )
+    });
+    github.seed_files(
+        "main",
+        "base",
+        &BTreeMap::from([
             ("patchula.pkl".into(),"amends \"PatchulaConfig.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n".into()),
             ("package.json".into(),"{\n  \"dependencies\": {\"fixture\": \"1.0.0\", \"owner-closed-a\": \"1.0.0\", \"owner-closed-b\": \"1.0.0\"}\n}\n".into()),
-        ]),writes:Default::default(),prs:Default::default(),issues:Default::default(),requests:Default::default(),
+        ]),
+        vec![],
+    );
+    {
+        let mut state = github.state();
+        let repo = state.repo_mut();
+        repo.merge.auto_merge = true;
+        repo.merge.rebase = false;
+        repo.commits.get_mut("base").unwrap()["message"] = json!("base");
+        repo.blobs.insert("unselected-lock".into(), "{}".into());
+        repo.refs
+            .insert("refs/heads/someone/feature".into(), "old-commit".into());
+        repo.commits.insert(
+            "old-commit".into(),
+            json!({"sha":"old-commit","tree":{"sha":"foreign-tree"},"actor":"someone"}),
+        );
+        let mut foreign = existing_pr("foreign", 3, false);
+        foreign["head"]["ref"] = json!("someone/feature");
+        foreign["user"]["login"] = json!("someone");
+        foreign["body"] = json!("unrelated private PR text");
+        repo.prs = BTreeMap::from([
+            (1, existing_pr("owner-closed-a", 1, true)),
+            (2, existing_pr("owner-closed-b", 2, true)),
+            (3, foreign),
+        ]);
     }
-    }
-    fn tree(&self) -> Value {
-        let tree: Vec<_> = self
-            .files
-            .iter()
-            .map(|(p, c)| json!({"path":p,"sha":blob_sha(c),"mode":"100644","type":"blob"}))
-            .collect();
-        json!({"truncated":false,"tree":tree})
-    }
-}
-impl Transport for Fake {
-    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
-        let path = request.url().path();
-        let body: Value = request
-            .body()
-            .and_then(|b| b.as_bytes())
-            .and_then(|b| serde_json::from_slice(b).ok())
-            .unwrap_or(Value::Null);
-        self.requests.lock().unwrap().push((
-            request.method().to_string(),
-            path.into(),
-            body.clone(),
-        ));
-        let (status, value) = if request.url().host_str() == Some("api.osv.dev") {
-            let queries = body["queries"].as_array().map_or(0, Vec::len);
-            (200, json!({"results": vec![json!({}); queries]}))
-        } else if request.url().host_str() == Some("registry.npmjs.org") {
-            (
-                200,
-                json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}}),
-            )
-        } else if path == "/graphql" {
-            assert!(request.headers()["authorization"].is_sensitive());
-            if body["query"]
-                .as_str()
-                .is_some_and(|query| query.contains("... on Blob"))
-            {
-                // Blobs read in one batch, as their text.
-                let mut repository = serde_json::Map::new();
-                for (key, sha) in body["variables"].as_object().unwrap() {
-                    let Some(index) = key.strip_prefix('o').filter(|i| i.parse::<usize>().is_ok())
-                    else {
-                        continue;
-                    };
-                    let text = self
-                        .files
-                        .values()
-                        .find(|c| blob_sha(c) == sha.as_str().unwrap());
-                    repository.insert(
-                        format!("b{index}"),
-                        text.map_or(
-                            Value::Null,
-                            |text| json!({"text":text,"isBinary":false,"isTruncated":false}),
-                        ),
-                    );
-                }
-                (200, json!({"data":{"repository":repository}}))
-            } else if body["query"] == patchula_engine::REPOSITORY_HEAD_QUERY {
-                (
-                    200,
-                    json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"base","tree":{"oid":"base-tree"}}}}}}),
-                )
-            } else if body["query"] == "query{viewer{login}}" {
-                (200, json!({"data":{"viewer":{"login":"patchula[bot]"}}}))
-            } else if body["query"] == patchula_update::INVENTORY_QUERY {
-                let prs = self.prs.lock().unwrap();
-                let nodes: Vec<_> = prs.iter().filter(|p|p["state"] == "open").map(|p|json!({
-                    "__typename":"Ref","name":p["head"]["ref"],
-                    "target":{"__typename":"Commit","oid":p["head"]["sha"],"tree":{"oid":"updated-tree"},"message":"","signature":{"__typename":"GpgSignature","isValid":true}},
-                    "associatedPullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{
-                        "__typename":"PullRequest",
-                        "number":p["number"],"id":p["node_id"],"url":p["html_url"],
-                        "title":p["title"].as_str().unwrap_or_default(),
-                        "body":p["body"].as_str().unwrap_or_default(),
-                        "state":"OPEN","merged":false,
-                        "headRefName":p["head"]["ref"],"headRefOid":p["head"]["sha"],"baseRefName":p["base"]["ref"],"author":Self::graphql_author(p),
-                        "headRepository":{"nameWithOwner":"demo/sandbox"},"baseRepository":{"nameWithOwner":"demo/sandbox"},
-                        "labels":{"nodes":p["labels"],"pageInfo":{"hasNextPage":false}},"autoMergeRequest":p["auto_merge"]
-                    }]}
-                })).collect();
-                let closed: Vec<_> = prs.iter().filter(|p|body["variables"]["closed"].as_array().unwrap().contains(&p["node_id"])).map(|p|json!({
-                    "__typename":"PullRequest","id":p["node_id"],"number":p["number"],"state":if p["state"] == "closed" {"CLOSED"} else {"OPEN"},"merged":false,"headRefName":p["head"]["ref"],
-                    "body":p["body"].as_str().unwrap_or_default(),
-                    "author":Self::graphql_author(p),"headRepository":{"nameWithOwner":"demo/sandbox"},"baseRepository":{"nameWithOwner":"demo/sandbox"}
-                })).collect();
-                (
-                    200,
-                    json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":closed,"repository":{"id":"repo-id","autoMergeAllowed":true,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":false,"deleteBranchOnMerge":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"base"}},"refs":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}},"issues":{"nodes":*self.issues.lock().unwrap(),"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
-                )
-            } else {
-                assert_eq!(body["query"], patchula_update::REF_UPDATE);
-                self.writes.lock().unwrap().push((path.into(), body));
-                (
-                    200,
-                    json!({"data":{"updateRefs":{"clientMutationId":null}}}),
-                )
-            }
-        } else if request.method() == reqwest::Method::POST {
-            self.writes
-                .lock()
-                .unwrap()
-                .push((path.into(), body.clone()));
-            if path.ends_with("/pulls") {
-                let pr = json!({"number":10,"node_id":"pr-id","html_url":"https://github.com/demo/sandbox/pull/10","title":body["title"],"body":body["body"],"state":"open","user":{"login":"patchula[bot]"},"head":{"ref":body["head"],"sha":"new-commit","repo":{"full_name":"demo/sandbox"}},"base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},"labels":[{"name":"dependencies"}],"auto_merge":null,"created_at":chrono::Utc::now().to_rfc3339(),"merged_at":null});
-                let mut pr = pr;
-                pr["head"]["label"] = json!("demo:branch");
-                pr["head"]["repo"]["updated_at"] = json!("2026-10-15T00:00:00Z");
-                pr["base"]["sha"] = json!("base");
-                self.prs.lock().unwrap().push(pr.clone());
-                (201, pr)
-            } else if path.ends_with("/issues") {
-                let issue = json!({"number":100,"id":"dashboard-id","title":body["title"].as_str().unwrap_or_default(),"body":body["body"].as_str().unwrap_or_default(),"state":"OPEN","author":{"__typename":"Bot","login":"patchula"}});
-                self.issues.lock().unwrap().push(issue.clone());
-                (201, issue)
-            } else if path.ends_with("/git/blobs") {
-                (
-                    201,
-                    json!({"sha":blob_sha(body["content"].as_str().unwrap())}),
-                )
-            } else if path.ends_with("/git/trees") {
-                (201, json!({"sha":"updated-tree"}))
-            } else if path.ends_with("/git/commits") {
-                (
-                    201,
-                    json!({"sha":"new-commit","message":body["message"],"tree":{"sha":"updated-tree"},"verification":{"verified":true}}),
-                )
-            } else {
-                panic!("unexpected write {path}");
-            }
-        } else if path == "/repos/demo/sandbox/pulls" {
-            (200, json!(*self.prs.lock().unwrap()))
-        } else if path == "/repos/demo/sandbox/pulls/10" {
-            (
-                200,
-                self.prs
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .find(|p| p["number"] == 10)
-                    .unwrap()
-                    .clone(),
-            )
-        } else if path == "/repos/demo/sandbox/branches" {
-            (200, json!([]))
-        } else if path == "/repos/demo/sandbox" {
-            (200, json!({"default_branch":"main","node_id":"repo-id"}))
-        } else if path.ends_with("/git/trees/base-tree") {
-            (200, self.tree())
-        } else if let Some(sha) = path.strip_prefix("/repos/demo/sandbox/git/blobs/") {
-            let content = if sha == "unselected-lock" {
-                "{}"
-            } else {
-                self.files.values().find(|c| blob_sha(c) == sha).unwrap()
-            };
-            (
-                200,
-                json!({"encoding":"base64","content":STANDARD.encode(content)}),
-            )
-        } else if path.ends_with("/git/commits/base") {
-            (
-                200,
-                json!({"sha":"base","message":"base","tree":{"sha":"base-tree"},"verification":{"verified":true}}),
-            )
-        } else if path.ends_with("/git/ref/heads/main") {
-            (200, json!({"object":{"sha":"base"}}))
-        } else if path.contains("/git/ref/heads/") {
-            (404, json!({}))
-        } else if path.ends_with("/branches/main") {
-            (
-                200,
-                json!({"name":"main","commit":{"sha":"base","commit":{"message":"base","tree":{"sha":"base-tree"}}}}),
-            )
-        } else {
-            panic!("unexpected read {path}");
-        };
-        Box::pin(async move {
-            Ok(Response {
-                status: reqwest::StatusCode::from_u16(status).unwrap(),
-                headers: Default::default(),
-                body: serde_json::to_vec(&value).unwrap(),
-                stale: None,
-            })
-        })
-    }
+    (github, hosts)
 }
 
 fn existing_pr(package: &str, number: u64, closed: bool) -> Value {
@@ -285,16 +125,7 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
             .with_filter(Targets::new().with_target("patchula", tracing::Level::DEBUG)),
     );
     let _guard = tracing::subscriber::set_default(subscriber);
-    let fake = Arc::new(Fake::new());
-    let mut foreign = existing_pr("foreign", 3, false);
-    foreign["head"]["ref"] = json!("someone/feature");
-    foreign["user"]["login"] = json!("someone");
-    foreign["body"] = json!("unrelated private PR text");
-    *fake.prs.lock().unwrap() = vec![
-        existing_pr("owner-closed-a", 1, true),
-        existing_pr("owner-closed-b", 2, true),
-        foreign,
-    ];
+    let (github, hosts) = github();
     let directory = tempfile::tempdir().unwrap();
     let cache_path = directory.path().join("nested/cache");
     let args: Vec<_> = [
@@ -311,13 +142,17 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
     let app = App::parse_from(&args).unwrap();
     assert_eq!(app.verbose, 2);
     for second in [false, true] {
-        fake.requests.lock().unwrap().clear();
-        fake.writes.lock().unwrap().clear();
+        hosts.clear();
+        {
+            let mut state = github.state();
+            state.requests.clear();
+            state.writes.clear();
+        }
         // Exactly the main CLI dispatch: only network I/O and token lookup are
         // substituted. batch opens/closes a fresh disk cache and engine each run.
         let services = Services {
             token: Some("offline-installation".into()),
-            transport: Some(fake.clone()),
+            transport: Some(hosts.clone()),
             ..Services::default()
         };
         assert_eq!(run(&app, &services).await.unwrap(), 0);
@@ -337,7 +172,7 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
         assert_eq!(receipts["closed"].as_object().unwrap().len(), 2);
         drop(cache);
         if second {
-            let requests = fake.requests.lock().unwrap();
+            let requests = hosts.log();
             let inventory = requests
                 .iter()
                 .position(|(_, _, b)| b["query"] == patchula_update::INVENTORY_QUERY)
@@ -349,7 +184,7 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
                     || path == "/v1/querybatch"),
                 "only the inventory and advisory queries may use POST: {requests:?}"
             );
-            assert!(fake.writes.lock().unwrap().is_empty());
+            assert!(github.writes().is_empty());
         }
     }
     let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
@@ -361,6 +196,8 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
     assert!(logs.contains("restored=3 complete=true"), "{logs}");
     assert!(!logs.contains("offline-installation"));
     assert!(!logs.contains("unrelated private PR text"));
+    let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transcripts.tsv");
+    patchula_testkit::transcripts::check(&snapshot);
 }
 
 #[test]

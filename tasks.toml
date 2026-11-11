@@ -165,9 +165,11 @@ run = "cargo test --locked -p patchula-cli --test cli help_pages_match_the_snaps
 description = "Regenerate the request-transcript snapshots after an intended fake or request change"
 env = { PATCHULA_UPDATE_TRANSCRIPTS = "1" }
 run = [
-  "rm -f crates/update/tests/transcripts.tsv crates/engine/tests/transcripts.tsv",
+  "rm -f crates/update/tests/transcripts.tsv crates/engine/tests/transcripts.tsv crates/cli/tests/transcripts.tsv crates/server/tests/transcripts.tsv",
   "cargo test --locked -p patchula-update --test write",
   "cargo test --locked -p patchula-engine --test write --test actions --test symlinks",
+  "cargo test --locked -p patchula-cli cli_run_reopens_disk_receipts",
+  "cargo test --locked -p patchula-server --lib",
 ]
 
 ["corpus:check"]

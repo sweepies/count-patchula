@@ -63,6 +63,22 @@ JSON, escaped tokens, nested fields and URLs, and accepts extra literals as
 comma-separated values in `PATCHULA_REDACT`. Failures name the cassette without
 printing the match.
 
+## Stateful GitHub tests
+
+Tests that simulate GitHub repository state — branches, commits, pulls,
+discovery listings — share one in-memory fake,
+`patchula_testkit::github::FakeGitHub`, instead of per-test transport
+scripts. The fake answers the REST and GraphQL routes the client calls,
+applies writes to its state, and scripts faults through `on(Matcher)`.
+`Hosts` fronts it for a test's other endpoints — OSV, npm, registries —
+so one transport covers a whole run.
+
+Every request the fake sees feeds a per-test transcript: the request
+multiset is normalised, hashed and compared against `tests/transcripts.tsv`
+beside the suite. `mise run transcripts:snapshot` rewrites the snapshots;
+a request change that leaves the snapshot stale fails the test, so a port
+that alters what a suite asks is a deliberate, reviewed diff.
+
 ## mise
 
 A subprocess has no HTTP cassette. mise lookups run through
