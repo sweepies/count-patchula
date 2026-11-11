@@ -2,8 +2,12 @@ use crate::cleanup::{all_ours, recorded_base};
 use crate::{Plan, Snapshot, blob_sha, trailers};
 use futures_util::{FutureExt, StreamExt, stream};
 use patchula_config::Rebase;
-use patchula_github::Client;
+use patchula_github::{
+    Client,
+    model::{Comparison, GitCommit, GitRef, Repository, Tree, TreeEntry},
+};
 use patchula_report::BranchStatus;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// GitHub's Git Data GraphQL ref update, atomic across the branch refs it names.
@@ -11,6 +15,31 @@ use serde_json::{Value, json};
 /// reject even a no-op update to it, so the base is checked when it is read.
 pub const REF_UPDATE: &str =
     "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}";
+
+/// `updateRefs`'s `data`: the mutation acknowledges with its payload object.
+/// A null — or a `data` without it — is GitHub declining without errors and
+/// reads as no acknowledgement.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RefUpdates {
+    update_refs: Option<RefUpdatesPayload>,
+}
+impl RefUpdates {
+    /// Whether GitHub answered the mutation with its payload object.
+    pub(crate) fn acknowledged(&self) -> bool {
+        self.update_refs.is_some()
+    }
+}
+/// The payload; the write reads only that it arrived.
+#[derive(Deserialize)]
+struct RefUpdatesPayload {}
+
+/// The `git-tree` fields a tree creation returns that the write reads: the
+/// OpenAPI `git-tree` schema's required `sha`.
+#[derive(Deserialize)]
+struct CreatedTree {
+    sha: String,
+}
 
 /// Why a write did not happen.
 #[derive(Clone, Debug)]
@@ -44,11 +73,6 @@ fn refuse(plan: &mut Plan, refusal: Refusal) {
     }
 }
 
-fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
-    value[key]
-        .as_str()
-        .ok_or_else(|| format!("GitHub response has no {key}"))
-}
 pub(crate) fn ref_path(repo: &str, branch: &str) -> String {
     let mut url = reqwest::Url::parse(&format!(
         "https://api.github.com/repos/{repo}/git/ref/heads/"
@@ -57,17 +81,13 @@ pub(crate) fn ref_path(repo: &str, branch: &str) -> String {
     url.path_segments_mut().unwrap().pop_if_empty().push(branch);
     url.path().into()
 }
-pub(crate) async fn fresh(client: &Client, path: &str) -> Result<Value, String> {
-    let response = client.get(path).await.map_err(|e| e.to_string())?;
-    serde_json::from_slice(&response.body).map_err(|e| e.to_string())
-}
 
 struct Base {
     repository: String,
     commit: String,
     node_id: String,
     tree_sha: String,
-    entries: Vec<Value>,
+    entries: Vec<TreeEntry>,
     default_branch: String,
     /// The run's one viewer login, read with the inventory.
     actor: String,
@@ -79,35 +99,43 @@ async fn prepare(
     default_branch: &str,
     actor: &str,
 ) -> Result<Base, Refusal> {
-    let metadata = fresh(client, &format!("repos/{repo}")).await?;
-    if field(&metadata, "default_branch")? != default_branch {
+    let metadata = client
+        .get_fresh::<Repository>(&format!("repos/{repo}"))
+        .await
+        .map_err(|e| e.to_string())?;
+    if metadata.default_branch != default_branch {
         return Err(Refusal::Stale(
             "default branch changed since extraction; rerun",
         ));
     }
-    let head = fresh(client, &ref_path(repo, default_branch)).await?;
-    if field(&head["object"], "sha")? != base_commit {
+    let head = client
+        .get_fresh::<GitRef>(&ref_path(repo, default_branch))
+        .await
+        .map_err(|e| e.to_string())?;
+    if head.object.sha != base_commit {
         return Err(Refusal::Stale(
             "default branch moved since extraction; stale blob refusal, rerun",
         ));
     }
-    let base = fresh(client, &format!("repos/{repo}/git/commits/{base_commit}")).await?;
-    let tree_sha = field(&base["tree"], "sha")?.to_owned();
-    let tree = fresh(
-        client,
-        &format!("repos/{repo}/git/trees/{tree_sha}?recursive=1"),
-    )
-    .await?;
-    if tree["truncated"].as_bool() != Some(false) {
+    let base = client
+        .get_fresh::<GitCommit>(&format!("repos/{repo}/git/commits/{base_commit}"))
+        .await
+        .map_err(|e| e.to_string())?;
+    let tree_sha = base.tree.sha;
+    let tree = client
+        .get_fresh::<Tree>(&format!("repos/{repo}/git/trees/{tree_sha}?recursive=1"))
+        .await
+        .map_err(|e| e.to_string())?;
+    if tree.truncated {
         return Err("truncated tree; cannot validate extracted blobs".into());
     }
     Ok(Base {
         default_branch: default_branch.into(),
         repository: repo.into(),
         commit: base_commit.into(),
-        node_id: field(&metadata, "node_id")?.into(),
+        node_id: metadata.node_id,
         tree_sha,
-        entries: tree["tree"].as_array().ok_or("missing Git tree")?.clone(),
+        entries: tree.tree,
         actor: actor.into(),
     })
 }
@@ -199,13 +227,13 @@ pub async fn apply_all(
                 continue;
             }
             let result = client
-                .graphql::<Value>(
+                .graphql::<RefUpdates>(
                     REF_UPDATE,
                     json!({"input":{"repositoryId":base.node_id,"refUpdates":refs}}),
                 )
                 .await;
             let error = match result {
-                Ok(value) if value["updateRefs"].is_object() => None,
+                Ok(value) if value.acknowledged() => None,
                 Ok(_) => {
                     Some("GitHub did not acknowledge atomic batch ref publication; rerun".into())
                 }
@@ -253,7 +281,7 @@ async fn apply_inner(
             .get(&file.path)
             .ok_or("missing extracted blob")?;
         if file.blob_sha.is_empty() {
-            if !blob.sha.is_empty() || entries.iter().any(|e| e["path"] == file.path) {
+            if !blob.sha.is_empty() || entries.iter().any(|e| e.path == file.path) {
                 return Err(format!(
                     "{}: expected new file is already present",
                     file.path
@@ -264,10 +292,7 @@ async fn apply_inner(
         if blob.sha != file.blob_sha
             || blob_sha(&blob.content) != blob.sha
             || !entries.iter().any(|e| {
-                e["path"] == file.path
-                    && e["sha"] == blob.sha
-                    && e["mode"] == blob.mode
-                    && e["type"] == "blob"
+                e.path == file.path && e.sha == blob.sha && e.mode == blob.mode && e.kind == "blob"
             })
         {
             return Err(format!(
@@ -276,11 +301,11 @@ async fn apply_inner(
             ));
         }
     }
-    let old = match client.get(&ref_path(&repo, &plan.action().branch)).await {
-        Ok(response) => {
-            let value: Value = serde_json::from_slice(&response.body).map_err(|e| e.to_string())?;
-            Some(field(&value["object"], "sha")?.to_owned())
-        }
+    let old = match client
+        .get_fresh::<GitRef>(&ref_path(&repo, &plan.action().branch))
+        .await
+    {
+        Ok(reference) => Some(reference.object.sha),
         Err(patchula_github::Error::Status(404)) => None,
         Err(e) => return Err(e.to_string()),
     };
@@ -288,8 +313,11 @@ async fn apply_inner(
     let mut moved_base = false;
     if let Some(old) = &old {
         let actor = base.actor.as_str();
-        let existing_tip = fresh(client, &format!("repos/{repo}/git/commits/{old}")).await?;
-        let tip_message = existing_tip["message"].as_str().unwrap_or("");
+        let existing_tip = client
+            .get_fresh::<GitCommit>(&format!("repos/{repo}/git/commits/{old}"))
+            .await
+            .map_err(|e| e.to_string())?;
+        let tip_message = existing_tip.message.as_str();
         if trailers::base(tip_message).is_none() {
             plan.protect("unmarked branch history; left untouched");
             return Ok(());
@@ -299,7 +327,7 @@ async fn apply_inner(
             return Ok(());
         };
         let compare = match client
-            .get(&format!(
+            .get_fresh::<Comparison>(&format!(
                 "repos/{repo}/compare/{recorded}...{old}?per_page=100"
             ))
             .await
@@ -308,15 +336,10 @@ async fn apply_inner(
                 plan.protect("recorded branch base is not a commit here; left untouched");
                 return Ok(());
             }
-            result => serde_json::from_slice::<Value>(&result.map_err(|e| e.to_string())?.body)
-                .map_err(|e| e.to_string())?,
+            result => result.map_err(|e| e.to_string())?,
         };
-        let commits = compare["commits"]
-            .as_array()
-            .ok_or("missing branch commit history")?;
-        let total = compare["total_commits"]
-            .as_u64()
-            .ok_or("missing branch commit count")?;
+        let commits = &compare.commits;
+        let total = compare.total_commits;
         let owned = total == commits.len() as u64 && all_ours(commits, actor);
         if !owned {
             plan.protect(
@@ -325,51 +348,45 @@ async fn apply_inner(
             return Ok(());
         }
         let latest = commits.last().ok_or("empty branch history")?;
-        if latest["sha"] != *old {
+        if latest.sha != *old {
             return Err("branch history does not end at the observed head".into());
         }
-        let message = latest["commit"]["message"]
-            .as_str()
-            .ok_or("missing commit message")?;
+        let message = latest.commit.message.as_str();
         let parent = trailers::base(message).ok_or("missing patchula base marker")?;
         moved_base = parent != plan.action().base_commit;
         if !moved_base
             || rebase == Rebase::Conflicts
                 && trailers::plan(message) == Some(plan.fingerprint.as_str())
         {
-            let existing_tree = field(&existing_tip["tree"], "sha")?;
-            let existing = fresh(
-                client,
-                &format!("repos/{repo}/git/trees/{existing_tree}?recursive=1"),
-            )
-            .await?;
-            let existing_entries = existing["tree"]
-                .as_array()
-                .filter(|_| existing["truncated"].as_bool() == Some(false))
-                .ok_or("incomplete existing branch tree")?;
+            let existing_tree = existing_tip.tree.sha;
+            let existing = client
+                .get_fresh::<Tree>(&format!(
+                    "repos/{repo}/git/trees/{existing_tree}?recursive=1"
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            if existing.truncated {
+                return Err("incomplete existing branch tree".into());
+            }
+            let existing_entries = &existing.tree;
             let contents_match = plan.contents.iter().all(|(p, c)| {
                 if plan.deleted.contains(p) {
-                    return !existing_entries.iter().any(|e| e["path"] == *p);
+                    return !existing_entries.iter().any(|e| e.path == *p);
                 }
                 existing_entries.iter().any(|e| {
-                    e["path"] == *p
-                        && e["sha"] == blob_sha(c)
-                        && e["mode"] == snapshot.files[p].mode
-                        && e["type"] == "blob"
+                    e.path == *p
+                        && e.sha == blob_sha(c)
+                        && e.mode == snapshot.files[p].mode
+                        && e.kind == "blob"
                 })
             });
             // On the same base, also reject leftover edits from an older plan.
             // Directory OIDs change with children; compare leaf entries only.
-            let leaves = |entries: &[Value]| -> std::collections::BTreeMap<String, Value> {
+            let leaves = |entries: &[TreeEntry]| -> std::collections::BTreeMap<String, Value> {
                 entries
                     .iter()
-                    .filter(|e| e["type"] != "tree")
-                    .map(|e| {
-                        (
-                            e["path"].as_str().unwrap_or("").to_owned(),
-                            json!([e["sha"], e["mode"], e["type"]]),
-                        )
-                    })
+                    .filter(|e| e.kind != "tree")
+                    .map(|e| (e.path.clone(), json!([e.sha, e.mode, e.kind])))
                     .collect()
             };
             let mut expected = leaves(entries);
@@ -384,7 +401,7 @@ async fn apply_inner(
                 }
             }
             if contents_match && (moved_base || leaves(existing_entries) == expected) {
-                plan.unchanged(old.clone(), existing_tree.into());
+                plan.unchanged(old.clone(), existing_tree);
                 return Ok(());
             }
         }
@@ -394,14 +411,14 @@ async fn apply_inner(
         else {json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","content":content})}
     }).collect();
     let tree = client
-        .post::<Value>(
+        .post::<CreatedTree>(
             &format!("repos/{repo}/git/trees"),
             json!({"base_tree":tree_sha,"tree":blobs}),
         )
         .await
         .map_err(|e| e.to_string())?;
-    let tree = field(&tree, "sha")?;
-    plan.tree = Some(tree.into());
+    let tree = tree.sha;
+    plan.tree = Some(tree.clone());
     let pending = if plan.action().lockfile_pending {
         "\n\nLockfile pending: manifest-only test branch; regenerate before merging."
     } else {
@@ -419,18 +436,18 @@ async fn apply_inner(
     );
     // App bot signing requires GitHub-supplied authorship and signature.
     let commit = client
-        .post::<Value>(
+        .post::<GitCommit>(
             &format!("repos/{repo}/git/commits"),
             json!({"message":message,"tree":tree,"parents":[plan.action().base_commit]}),
         )
         .await
         .map_err(|e| e.to_string())?;
-    let verified = commit["verification"]["verified"].as_bool();
-    plan.set_verified(verified);
-    if verified != Some(true) {
+    let verified = commit.verification.verified;
+    plan.set_verified(Some(verified));
+    if !verified {
         return Err("GitHub returned an unverified Git Data commit; branch left untouched. Check App bot signing; createCommitOnBranch may be required".into());
     }
-    let sha = field(&commit, "sha")?;
+    let sha = commit.sha;
     let status = if old.is_none() {
         BranchStatus::Created
     } else if moved_base {
@@ -438,6 +455,6 @@ async fn apply_inner(
     } else {
         BranchStatus::Updated
     };
-    plan.committed(sha.into(), status);
+    plan.committed(sha, status);
     Ok(())
 }

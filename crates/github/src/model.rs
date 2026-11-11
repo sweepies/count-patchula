@@ -15,6 +15,17 @@ pub struct Actor {
     pub login: String,
 }
 
+/// `GET /repos/{owner}/{repo}` — the OpenAPI `repository` schema, trimmed
+/// to the fields the git data reads need.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Repository {
+    /// `default_branch` — required on `repository`.
+    pub default_branch: String,
+    /// `node_id` — required; the repository's global node id, which the
+    /// `updateRefs` mutation takes as `repositoryId`.
+    pub node_id: String,
+}
+
 /// `GET /repos/{owner}/{repo}/git/ref/{ref}` — the OpenAPI `git-ref` schema.
 #[derive(Clone, Debug, Deserialize)]
 pub struct GitRef {
