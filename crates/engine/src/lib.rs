@@ -21,7 +21,7 @@ use patchula_report::{
     SCHEMA_VERSION, Status,
 };
 use patchula_words::{
-    DependencyKind, LookupErrorKind, Manager, Recheck, ResolutionKind, Source, Update as UpdateKind,
+    DependencyKind, LookupErrorKind, Recheck, ResolutionKind, Source, Update as UpdateKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

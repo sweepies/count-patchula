@@ -38,6 +38,7 @@ pub use nix::{
 mod npm;
 mod nuget;
 mod precommit;
+mod proposal;
 mod pyproject;
 pub mod roles;
 mod terraform;
@@ -366,24 +367,6 @@ pub struct Skipped {
     pub line: Option<usize>,
     pub value: String,
     pub reason: String,
-}
-impl Dependency {
-    /// An action, reusable workflow or APM package looked up by its
-    /// repository's tags, on GitHub or on a forge, whose ref can be pinned to
-    /// a commit with the tag kept in a comment.
-    pub fn tagged_action(&self) -> bool {
-        matches!(self.manager, Manager::GithubActions | Manager::Apm)
-            && matches!(self.source, Source::GithubTags | Source::ForgeTags)
-    }
-    /// A git ref its tool checks out by name, so an update writes the upstream
-    /// tag exactly as tagged rather than a normalized version.
-    pub fn exact_tag_ref(&self) -> bool {
-        match self.manager {
-            Manager::PreCommit | Manager::Apm => true,
-            Manager::Gitlabci | Manager::GitlabciInclude => self.source == Source::ForgeTags,
-            _ => false,
-        }
-    }
 }
 /// The tag source of the Git repository `path` on `host`: GitHub tags, or
 /// forge tags on GitLab and Gitea/Forgejo hosts. `None` for other hosts and

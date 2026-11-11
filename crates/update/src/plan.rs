@@ -640,7 +640,7 @@ pub fn plan(
 /// the tool must be told — the three cannot merge.
 fn no_manifest_edit(dep: &Dependency, update: &Update) -> bool {
     dep.kind == patchula_words::DependencyKind::Transitive
-        || dep.manager == patchula_words::Manager::Nix
+        || dep.relocks()
         || (update.new_value.is_none() && update.new_version.is_some())
 }
 
@@ -1079,7 +1079,7 @@ fn branch_identity(
             serde_json::json!(["group", group, major]).to_string(),
             format!("{}{}", if major { "major-" } else { "" }, slug(group)),
         )
-    } else if dep.manager == patchula_words::Manager::Nix {
+    } else if dep.relocks() {
         // An input belongs to its own lock: the same name in two flakes moves
         // on two branches, named after the input rather than its long URL. A
         // slug never holds "--", so it keeps the directory apart from the name.
