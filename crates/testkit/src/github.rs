@@ -108,6 +108,49 @@ fn graphql_author(pr: &Value) -> Value {
     }
 }
 
+/// The `__typename` a user object reports: logins ending in `[bot]` answer
+/// `Bot`, others `User`.
+fn viewer_typename(login: &str) -> &'static str {
+    if login.ends_with("[bot]") { "Bot" } else { "User" }
+}
+
+/// `node` cloned with its `__typename` stamped, for seeded nodes the fake
+/// stores in another surface's shape — the seed stays untouched, the
+/// served node declares its type.
+fn with_typename(node: &Value, typename: &str) -> Value {
+    let mut node = node.clone();
+    node.as_object_mut()
+        .unwrap()
+        .insert("__typename".into(), json!(typename));
+    node
+}
+
+/// A `PullRequest` node for the GraphQL connections: the union of fields
+/// the `nodes` and `associatedPullRequests` answers carry, built from the
+/// stored REST object and stamped with `__typename` so the pruner's
+/// inline-fragment matching sees the node's type.
+fn pull_node(pr: &Value, state: &State) -> Value {
+    json!({"__typename":"PullRequest",
+       "number":pr["number"],"id":pr["node_id"],"url":pr["html_url"],
+       "title":pr["title"],"body":pr["body"],
+       "state":if pr["state"] == "open" {"OPEN"} else {"CLOSED"},
+       "merged":!pr["merged_at"].is_null(),
+       "headRefName":pr["head"]["ref"],"headRefOid":pr["head"]["sha"],
+       "baseRefName":pr["base"]["ref"],"author":graphql_author(pr),
+       "headRepository":{"__typename":"Repository",
+           "nameWithOwner":pr["head"]["repo"]["full_name"]},
+       "baseRepository":{"__typename":"Repository",
+           "nameWithOwner":pr["base"]["repo"]["full_name"]},
+       "labels":{"__typename":"LabelConnection","nodes":pr["labels"],
+           "pageInfo":{"__typename":"PageInfo",
+               "hasNextPage":state.settings.label_next_page == pr["number"].as_u64()}},
+       "autoMergeRequest":if pr["auto_merge"].is_null() {
+           Value::Null
+       } else {
+           with_typename(&pr["auto_merge"], "AutoMergeRequest")
+       }})
+}
+
 /// Server properties: knobs that change what the server is, not what it does
 /// to one request.
 #[derive(Default)]
@@ -511,9 +554,98 @@ struct GqlField {
     name: String,
     /// `(argument name, value)` pairs.
     args: Vec<(String, Arg)>,
-    /// Selections below this field; inline fragments are flattened in.
-    children: Vec<GqlField>,
+    /// Selections below this field: fields and inline fragments.
+    selections: Vec<GqlSelection>,
 }
+
+/// A selection inside a set: a field, or an inline fragment whose fields
+/// apply when the answer's `__typename` matches its condition.
+enum GqlSelection {
+    Field(GqlField),
+    Fragment {
+        /// The `... on T` type condition; `None` is a bare `... { }`.
+        on: Option<String>,
+        selections: Vec<GqlSelection>,
+    },
+}
+impl GqlSelection {
+    /// Every unaliased field name in this selection's subtree.
+    fn names(&self) -> BTreeSet<String> {
+        match self {
+            GqlSelection::Field(field) => field.names(),
+            GqlSelection::Fragment { selections, .. } => selections
+                .iter()
+                .flat_map(GqlSelection::names)
+                .collect(),
+        }
+    }
+}
+
+/// The fields `selections` asks for on `typename`: direct fields plus the
+/// fields of matching inline fragments, for resolvers that iterate the
+/// selection to build their answer.
+fn gather<'a>(selections: &'a [GqlSelection], typename: &str, out: &mut Vec<&'a GqlField>) {
+    for selection in selections {
+        match selection {
+            GqlSelection::Field(field) => out.push(field),
+            GqlSelection::Fragment { on, selections }
+                if on.as_deref().is_none_or(|on| on == typename) =>
+            {
+                gather(selections, typename, out);
+            }
+            GqlSelection::Fragment { .. } => {}
+        }
+    }
+}
+
+/// Project `answer` — a resolver's whole object — onto `selections`, the
+/// way GraphQL prunes a full value to the selection set: a field answers
+/// under its response key (the alias), an inline fragment contributes its
+/// selections when the object's `__typename` matches its condition, and a
+/// selected field the resolver did not produce stays absent — not null.
+fn prune(answer: &Value, selections: &[GqlSelection]) -> Value {
+    match answer {
+        Value::Object(object) => {
+            let mut pruned = Map::new();
+            prune_fields(object, selections, &mut pruned);
+            Value::Object(pruned)
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|item| prune(item, selections)).collect())
+        }
+        _ => answer.clone(),
+    }
+}
+fn prune_fields(
+    answer: &Map<String, Value>,
+    selections: &[GqlSelection],
+    pruned: &mut Map<String, Value>,
+) {
+    for selection in selections {
+        match selection {
+            GqlSelection::Field(field) => {
+                // A selection's arguments make each answer its own, so
+                // resolvers key by response key; nested objects they build
+                // keep field names, where an alias finds the named field.
+                if let Some(value) = answer
+                    .get(field.key.as_str())
+                    .or_else(|| answer.get(field.name.as_str()))
+                {
+                    pruned.insert(field.key.clone(), prune(value, &field.selections));
+                }
+            }
+            GqlSelection::Fragment { on, selections } => {
+                let applies = on.as_deref().is_none_or(|condition| {
+                    answer.get("__typename").and_then(Value::as_str) == Some(condition)
+                });
+                if applies {
+                    prune_fields(answer, selections, pruned);
+                }
+            }
+        }
+    }
+}
+
 impl GqlField {
     /// This field's `name` argument resolved against the operation's
     /// variables.
@@ -529,18 +661,29 @@ impl GqlField {
     /// Every unaliased field name in this field's subtree, its own name
     /// included when unaliased.
     fn names(&self) -> BTreeSet<String> {
-        let mut names: BTreeSet<String> = self.children.iter().flat_map(GqlField::names).collect();
+        let mut names: BTreeSet<String> = self
+            .selections
+            .iter()
+            .flat_map(GqlSelection::names)
+            .collect();
         if self.key == self.name {
             names.insert(self.name.clone());
         }
         names
     }
+    /// The fields this level selects on `typename`: direct fields plus the
+    /// fields of matching inline fragments.
+    fn fields(&self, typename: &str) -> Vec<&GqlField> {
+        let mut fields = Vec::new();
+        gather(&self.selections, typename, &mut fields);
+        fields
+    }
 }
 
-/// One GraphQL operation's kind and root fields.
+/// One GraphQL operation's kind and root selections.
 struct GqlOp {
     mutation: bool,
-    fields: Vec<GqlField>,
+    selections: Vec<GqlSelection>,
 }
 
 /// The route facts request matching and the write log need, parsed once per
@@ -566,44 +709,53 @@ struct Ctx {
     ops: Vec<GqlOp>,
 }
 
+/// Distill a selection set to owned [`GqlSelection`]s: fields carry their
+/// response key, arguments and subtree; inline fragments keep their type
+/// condition for [`prune`].
+fn selections<'a>(
+    set: &'a graphql_parser::query::SelectionSet<'a, &'a str>,
+) -> Vec<GqlSelection> {
+    use graphql_parser::query::{Selection, TypeCondition, Value as ArgValue};
+    set.items
+        .iter()
+        .filter_map(|selection| match selection {
+            Selection::Field(field) => Some(GqlSelection::Field(GqlField {
+                key: field.alias.unwrap_or(field.name).to_owned(),
+                name: field.name.to_owned(),
+                args: field
+                    .arguments
+                    .iter()
+                    .map(|(name, value)| {
+                        (
+                            name.to_string(),
+                            match value {
+                                ArgValue::Variable(var) => Arg::Var((*var).to_owned()),
+                                ArgValue::String(text) => Arg::Lit(text.clone()),
+                                _ => Arg::Lit(String::new()),
+                            },
+                        )
+                    })
+                    .collect(),
+                selections: selections(&field.selection_set),
+            })),
+            // `... on Commit` keeps its type condition: resolvers build the
+            // whole answer, and the pruner keeps the fragment's fields only
+            // on a matching `__typename`.
+            Selection::InlineFragment(fragment) => Some(GqlSelection::Fragment {
+                on: fragment
+                    .type_condition
+                    .as_ref()
+                    .map(|TypeCondition::On(name)| (*name).to_owned()),
+                selections: selections(&fragment.selection_set),
+            }),
+            Selection::FragmentSpread(_) => None,
+        })
+        .collect()
+}
+
 impl Ctx {
     fn new(request: &Request, path: &str, body: &Value) -> Self {
-        use graphql_parser::query::{
-            Definition, OperationDefinition, Selection, SelectionSet, Value as ArgValue,
-            parse_query,
-        };
-        fn children<'a>(set: &'a SelectionSet<'a, &'a str>) -> Vec<GqlField> {
-            set.items
-                .iter()
-                .flat_map(|selection| match selection {
-                    Selection::Field(field) => vec![GqlField {
-                        key: field.alias.unwrap_or(field.name).to_owned(),
-                        name: field.name.to_owned(),
-                        args: field
-                            .arguments
-                            .iter()
-                            .map(|(name, value)| {
-                                (
-                                    name.to_string(),
-                                    match value {
-                                        ArgValue::Variable(var) => Arg::Var((*var).to_owned()),
-                                        ArgValue::String(text) => Arg::Lit(text.clone()),
-                                        _ => Arg::Lit(String::new()),
-                                    },
-                                )
-                            })
-                            .collect(),
-                        children: children(&field.selection_set),
-                    }],
-                    // `... on Commit` and friends sit under fields whose
-                    // answers the fake builds from state; routing reads
-                    // names only, so a fragment's fields fold into its
-                    // parent's selection.
-                    Selection::InlineFragment(fragment) => children(&fragment.selection_set),
-                    Selection::FragmentSpread(_) => vec![],
-                })
-                .collect()
-        }
+        use graphql_parser::query::{Definition, OperationDefinition, parse_query};
         let method = request.method().clone();
         let mut repo = None;
         let mut pull = None;
@@ -647,9 +799,15 @@ impl Ctx {
                     Definition::Operation(OperationDefinition::SelectionSet(set)) => (set, false),
                     _ => panic!("unmodeled GraphQL definition"),
                 };
-                let fields = children(set);
+                let selections = selections(set);
                 mutation |= is_mutation;
-                for field in &fields {
+                let mut fields = Vec::new();
+                gather(
+                    &selections,
+                    if is_mutation { "Mutation" } else { "Query" },
+                    &mut fields,
+                );
+                for field in fields {
                     names.extend(field.names());
                     if is_mutation && field.name == "updateRefs" {
                         ref_deletion = body["variables"]["input"]["refUpdates"]
@@ -670,7 +828,7 @@ impl Ctx {
                 }
                 ops.push(GqlOp {
                     mutation: is_mutation,
-                    fields,
+                    selections,
                 });
             }
         }
@@ -999,10 +1157,20 @@ impl FakeGitHub {
             );
         }
     }
+    /// Every answer the resolvers build is the whole object; `prune` then
+    /// projects it onto the operation's selection set, so a field the query
+    /// does not ask for — or a fragment on another `__typename` — never
+    /// reaches the client.
     fn graphql(&self, ctx: &Ctx, body: &Value, state: &mut State) -> Response {
         let mut data = Map::new();
         for op in &ctx.ops {
-            for field in &op.fields {
+            let mut fields = Vec::new();
+            gather(
+                &op.selections,
+                if op.mutation { "Mutation" } else { "Query" },
+                &mut fields,
+            );
+            for field in fields {
                 let answer = if op.mutation {
                     self.graphql_mutation(&field.name, body, state)
                 } else {
@@ -1010,7 +1178,7 @@ impl FakeGitHub {
                 };
                 match answer {
                     FieldAnswer::Data(value) => {
-                        data.insert(field.key.clone(), value);
+                        data.insert(field.key.clone(), prune(&value, &field.selections));
                     }
                     FieldAnswer::Errors(errors) => {
                         return response(200, json!({"errors":errors}));
@@ -1022,7 +1190,7 @@ impl FakeGitHub {
     }
     fn graphql_query(&self, field: &GqlField, body: &Value, state: &mut State) -> FieldAnswer {
         FieldAnswer::Data(match field.name.as_str() {
-            "viewer" => json!({"login":state.actor}),
+            "viewer" => json!({"__typename":viewer_typename(&state.actor),"login":state.actor}),
             "nodes" => self.closed_prs(body, state),
             "repository" => self.repository(field, body, state),
             name => panic!("unmodeled GraphQL root field {name}"),
@@ -1039,14 +1207,7 @@ impl FakeGitHub {
                     .unwrap()
                     .contains(&p["node_id"])
             })
-            .map(|p| {
-                json!({"id":p["node_id"],
-                       "state":if p["state"] == "open" {"OPEN"} else {"CLOSED"},
-                       "merged":!p["merged_at"].is_null(),
-                       "body":p["body"],"author":graphql_author(p),
-                       "headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},
-                       "baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]}})
-            })
+            .map(|p| pull_node(p, state))
             .collect();
         json!(nodes)
     }
@@ -1063,8 +1224,9 @@ impl FakeGitHub {
         }
         let repo = &state.repositories[&name];
         let mut answer = Map::new();
+        answer.insert("__typename".into(), json!("Repository"));
         let mut release_logged = false;
-        for child in &field.children {
+        for child in field.fields("Repository") {
             let key = child.key.clone();
             let value = match child.name.as_str() {
                 "id" => json!(repo.node_id),
@@ -1089,15 +1251,19 @@ impl FakeGitHub {
                             .get(&format!("refs/heads/{}", repo.default_branch))
                             .cloned()
                             .unwrap_or_else(|| repo.base.clone());
-                        json!({"name":repo.default_branch,
-                           "target":{"oid":oid,
-                                     "tree":{"oid":repo.commits.get(&oid)
-                                         .map(|c| c["tree"]["sha"].clone())
-                                         .unwrap_or(Value::Null)}}})
+                        json!({"__typename":"Ref","name":repo.default_branch,
+                           "target":{"__typename":"Commit","oid":oid,
+                                     "tree":{"__typename":"Tree",
+                                         "oid":repo.commits.get(&oid)
+                                             .map(|c| c["tree"]["sha"].clone())
+                                             .unwrap_or(Value::Null)}}})
                     }),
-                "issues" => json!({"nodes":repo.issues.values()
-                        .filter(|i| i["state"] == "OPEN").cloned().collect::<Vec<_>>(),
-                        "pageInfo":{"hasNextPage":false,"endCursor":null}}),
+                "issues" => json!({"__typename":"IssueConnection",
+                        "nodes":repo.issues.values()
+                            .filter(|i| i["state"] == "OPEN")
+                            .map(|i| with_typename(i, "Issue")).collect::<Vec<_>>(),
+                        "pageInfo":{"__typename":"PageInfo",
+                            "hasNextPage":false,"endCursor":null}}),
                 "refs" => self.refs_connection(repo, body, state),
                 "release" => {
                     if !release_logged {
@@ -1108,15 +1274,14 @@ impl FakeGitHub {
                         .release_note_body
                         .clone()
                         .unwrap_or_else(|| "Release details 🦀\n".repeat(10_000));
-                    let with_body = child.children.iter().any(|c| c.name == "description");
-                    if with_body {
-                        json!({"updatedAt":blob_sha(&text),"body":text,"draft":false,"prerelease":false})
-                    } else {
-                        json!({"updatedAt":blob_sha(&text)})
-                    }
+                    json!({"__typename":"Release","updatedAt":blob_sha(&text),
+                           "description":text,"isDraft":false,"isPrerelease":false})
                 }
-                "releases" => json!({"nodes":repo.releases,
-                        "pageInfo":{"hasNextPage":false,"endCursor":null}}),
+                "releases" => json!({"__typename":"ReleaseConnection",
+                        "nodes":repo.releases.iter()
+                            .map(|node| with_typename(node, "Release")).collect::<Vec<_>>(),
+                        "pageInfo":{"__typename":"PageInfo",
+                            "hasNextPage":false,"endCursor":null}}),
                 "object" => self.object_field(child, repo, body),
                 name => panic!("unmodeled repository field {name}"),
             };
@@ -1143,10 +1308,13 @@ impl FakeGitHub {
             panic!("object field without oid or expression");
         };
         if names.contains("text") {
-            return repo.blobs.get(oid).map_or(
-                Value::Null,
-                |text| json!({"text":text,"isBinary":false,"isTruncated":false}),
-            );
+            if let Some(text) = repo.blobs.get(oid) {
+                return json!({"__typename":"Blob","text":text,
+                              "isBinary":false,"isTruncated":false});
+            }
+            if !repo.commits.contains_key(oid) {
+                return Value::Null;
+            }
         }
         let mut object = json!({"oid":oid,"__typename":"Commit"});
         if names.contains("statusCheckRollup") {
@@ -1155,9 +1323,11 @@ impl FakeGitHub {
                 .and_then(|c| c.parse::<usize>().ok())
                 .unwrap_or(0);
             let next = offset + 100;
-            object["statusCheckRollup"] = json!({"contexts":{
+            object["statusCheckRollup"] = json!({"__typename":"StatusCheckRollup","contexts":{
+                "__typename":"StatusCheckRollupContextConnection",
                 "nodes":repo.checks.iter().skip(offset).take(100).cloned().collect::<Vec<_>>(),
-                "pageInfo":{"hasNextPage":next < repo.checks.len(),"endCursor":next.to_string()}}});
+                "pageInfo":{"__typename":"PageInfo","hasNextPage":next < repo.checks.len(),
+                            "endCursor":next.to_string()}}});
         }
         object
     }
@@ -1172,17 +1342,16 @@ impl FakeGitHub {
                     .prs
                     .values()
                     .filter(|p| p["state"] == "open" && p["head"]["ref"] == name)
-                    .map(|p| {
-                        json!({"number":p["number"],"id":p["node_id"],"url":p["html_url"],"title":p["title"],"body":p["body"],
-                               "headRefName":p["head"]["ref"],"headRefOid":p["head"]["sha"],"baseRefName":p["base"]["ref"],"author":graphql_author(p),
-                               "headRepository":{"nameWithOwner":p["head"]["repo"]["full_name"]},"baseRepository":{"nameWithOwner":p["base"]["repo"]["full_name"]},
-                               "labels":{"nodes":p["labels"],"pageInfo":{"hasNextPage":state.settings.label_next_page == p["number"].as_u64()}},"autoMergeRequest":p["auto_merge"]})
-                    })
+                    .map(|p| pull_node(p, state))
                     .collect();
-                json!({"name":name,"target":{"oid":oid,"tree":{"oid":commit["tree"]["sha"]},"message":commit["message"],
-                       "author":{"user":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("patchula[bot]")}},
-                       "committer":{"user":{"login":"web-flow"}},"signature":{"isValid":!state.settings.unsigned}},
-                       "associatedPullRequests":{"nodes":prs,"pageInfo":{"hasNextPage":state.settings.pr_next_page.as_deref() == Some(name)}}})
+                json!({"__typename":"Ref","name":name,
+                       "target":{"__typename":"Commit","oid":oid,
+                          "tree":{"__typename":"Tree","oid":commit["tree"]["sha"]},"message":commit["message"],
+                          "author":{"__typename":"CommitAuthor","user":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("patchula[bot]")}},
+                          "committer":{"__typename":"CommitAuthor","user":{"login":"web-flow"}},
+                          "signature":{"isValid":!state.settings.unsigned}},
+                       "associatedPullRequests":{"__typename":"PullRequestConnection","nodes":prs,
+                          "pageInfo":{"__typename":"PageInfo","hasNextPage":state.settings.pr_next_page.as_deref() == Some(name)}}})
             })
             .collect();
         let offset = body["variables"]["cursor"]
@@ -1192,7 +1361,8 @@ impl FakeGitHub {
         let size = state.settings.ref_page_size.unwrap_or(100);
         let more = offset + size < nodes.len();
         let nodes: Vec<_> = nodes.into_iter().skip(offset).take(size).collect();
-        json!({"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":(offset+size).to_string()}})
+        json!({"__typename":"RefConnection","nodes":nodes,
+               "pageInfo":{"__typename":"PageInfo","hasNextPage":more,"endCursor":(offset+size).to_string()}})
     }
     fn graphql_mutation(&self, name: &str, body: &Value, state: &mut State) -> FieldAnswer {
         match name {
@@ -1216,11 +1386,17 @@ impl FakeGitHub {
                     );
                 }
                 pr["auto_merge"] = if enabled {
-                    json!({"enabled":true})
+                    json!({"enabledAt":chrono::Utc::now().to_rfc3339()})
                 } else {
                     Value::Null
                 };
-                FieldAnswer::Data(json!({"pullRequest":{"id":id}}))
+                let payload = if enabled {
+                    "EnablePullRequestAutoMergePayload"
+                } else {
+                    "DisablePullRequestAutoMergePayload"
+                };
+                FieldAnswer::Data(json!({"__typename":payload,
+                    "pullRequest":{"__typename":"PullRequest","id":id}}))
             }
             _ => panic!("unmodeled GraphQL mutation {name}"),
         }
@@ -1269,7 +1445,7 @@ impl FakeGitHub {
             }
         }
         repo.pending_heads.extend(pending);
-        FieldAnswer::Data(json!({"clientMutationId":null}))
+        FieldAnswer::Data(json!({"__typename":"UpdateRefsPayload","clientMutationId":null}))
     }
     fn create_pull(&self, body: &Value, repo: &mut Repository, actor: &str) -> Response {
         let number = repo.prs.len() as u64 + 1;
@@ -1948,5 +2124,124 @@ impl Transport for Hosts {
             .unwrap_or_else(|| panic!("unscripted host {host}"));
         let reply = route(&request, &body);
         Box::pin(async move { Ok(reply) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use graphql_parser::query::{Definition, OperationDefinition, parse_query};
+
+    /// The operation's root selections, parsed the way `Ctx::new` does.
+    fn select(query: &str) -> Vec<GqlSelection> {
+        let doc = parse_query::<&str>(query).unwrap();
+        selections(match &doc.definitions[0] {
+            Definition::Operation(OperationDefinition::Query(op)) => &op.selection_set,
+            Definition::Operation(OperationDefinition::SelectionSet(set)) => set,
+            _ => panic!("test queries only"),
+        })
+    }
+
+    /// The subtree of a query's single root field.
+    fn below(query: &str) -> Vec<GqlSelection> {
+        let mut root = select(query);
+        let Some(GqlSelection::Field(field)) = root.pop() else {
+            panic!("one root field");
+        };
+        field.selections
+    }
+
+    #[test]
+    fn unselected_fields_leave_the_answer() {
+        let answer = json!({"name":"main","protected":true});
+        assert_eq!(prune(&answer, &select("{ name }")), json!({"name":"main"}));
+        // An object with nothing selected prunes to nothing.
+        assert_eq!(prune(&answer, &[]), json!({}));
+    }
+
+    #[test]
+    fn a_field_answers_under_its_alias() {
+        let answer = json!({"name":"main","target":{"oid":"abc","extra":1}});
+        let pruned = prune(
+            &answer,
+            &select("{ renamed: name target { oid } leaf: target { oid } }"),
+        );
+        assert_eq!(pruned["renamed"], "main");
+        assert_eq!(pruned["target"], json!({"oid":"abc"}));
+        assert_eq!(pruned["leaf"], json!({"oid":"abc"}));
+        // The alias still reads the named field; the schema name stays absent.
+        assert!(pruned.get("name").is_none());
+    }
+
+    #[test]
+    fn aliased_siblings_each_find_their_own_answer() {
+        // Resolvers answering per selection (different arguments) key by the
+        // response key; pruning must not cross them.
+        let answer = json!({"first":{"text":"one"},"second":{"text":"two"}});
+        assert_eq!(
+            prune(
+                &answer,
+                &select("{ first: object { text } second: object { text } }"),
+            ),
+            json!({"first":{"text":"one"},"second":{"text":"two"}})
+        );
+    }
+
+    #[test]
+    fn inline_fragments_apply_only_on_the_matching_typename() {
+        let selections = select(
+            "{ __typename ... on Commit { oid } ... on Blob { text isBinary } }",
+        );
+        let commit = json!({"__typename":"Commit","oid":"abc","text":"x"});
+        assert_eq!(
+            prune(&commit, &selections),
+            json!({"__typename":"Commit","oid":"abc"})
+        );
+        // A fragment whose condition does not match contributes nothing:
+        // the Blob keeps `text`, loses `oid`, and the unproduced `isBinary`
+        // stays absent.
+        let blob = json!({"__typename":"Blob","text":"x","oid":"ignored"});
+        assert_eq!(
+            prune(&blob, &selections),
+            json!({"__typename":"Blob","text":"x"})
+        );
+        // An object without `__typename` answers no conditional fragment.
+        assert_eq!(
+            prune(&json!({"oid":"abc","text":"x"}), &selections),
+            json!({})
+        );
+    }
+
+    #[test]
+    fn connections_prune_every_node_and_page_info() {
+        let answer = json!({
+            "nodes":[{"name":"a","sha":1},{"name":"b","sha":2}],
+            "pageInfo":{"hasNextPage":true,"endCursor":"2"},
+            "totalCount":2
+        });
+        assert_eq!(
+            prune(
+                &answer,
+                &below("{ connection { nodes { name } pageInfo { hasNextPage } } }"),
+            ),
+            json!({"nodes":[{"name":"a"},{"name":"b"}],"pageInfo":{"hasNextPage":true}})
+        );
+    }
+
+    #[test]
+    fn a_selected_field_the_resolver_did_not_produce_stays_absent() {
+        let answer = json!({"oid":"abc"});
+        assert_eq!(
+            prune(&answer, &select("{ oid missing tree { oid } }")),
+            json!({"oid":"abc"})
+        );
+        // A null the resolver produced stays null — absent is not null.
+        assert_eq!(
+            prune(
+                &json!({"autoMergeRequest":null}),
+                &select("{ autoMergeRequest { enabledAt } }"),
+            ),
+            json!({"autoMergeRequest":null})
+        );
     }
 }

@@ -1930,7 +1930,7 @@ async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_conditio
         repo.merge.auto_merge = true;
         repo.default_branch_ref = Some(json!({
             "name":"main",
-            "target":{"oid":"base","history":{"nodes":[{"statusCheckRollup":{"state":"SUCCESS"}}]}},
+            "target":{"__typename":"Commit","oid":"base","history":{"nodes":[{"statusCheckRollup":{"state":"SUCCESS"}}]}},
             "rules":rules,
             "refUpdateRule":null
         }));
@@ -1975,7 +1975,7 @@ async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_conditio
     assert!(dashboard.contains("## Tooling warnings\n"), "{dashboard}");
     assert!(dashboard.contains("Open now: #"), "{dashboard}");
     protection(
-        json!({"nodes":[{"type":"REQUIRED_STATUS_CHECKS","parameters":{"requiredStatusChecks":[{"context":"ci"}]}}],"pageInfo":{"hasNextPage":false}}),
+        json!({"nodes":[{"type":"REQUIRED_STATUS_CHECKS","parameters":{"__typename":"RequiredStatusChecksParameters","requiredStatusChecks":[{"context":"ci"}]}}],"pageInfo":{"hasNextPage":false}}),
     );
     let report = checkbox_run(&engine, &config, now).await;
     assert!(report.repositories[0].tooling.is_empty());
