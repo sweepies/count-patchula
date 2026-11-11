@@ -67,7 +67,16 @@ pub fn record(request: &reqwest::Request, body: &Value) {
 /// is real time even under tokio's paused clock, so these change every
 /// run; every other byte is fixed by the test. Anything else time- or
 /// randomness-derived would fail the stability runs, not slip through.
+///
+/// Object ids the update fake hands out from a counter (`commit-N`,
+/// `tree-N`) are masked too: branches are written concurrently, so which
+/// branch's commit takes which number depends on scheduling. Tests that
+/// care which commit a branch points at assert it themselves.
 fn normalize(line: &str) -> String {
+    static COUNTER_ID: OnceLock<regex::Regex> = OnceLock::new();
+    let line = COUNTER_ID
+        .get_or_init(|| regex::Regex::new(r"\b(commit|tree)-\d+\b").expect("static id regex"))
+        .replace_all(line, "$1-<n>");
     static TIMESTAMP: OnceLock<regex::Regex> = OnceLock::new();
     TIMESTAMP
         .get_or_init(|| {
@@ -78,7 +87,7 @@ fn normalize(line: &str) -> String {
             ))
             .expect("static timestamp regex")
         })
-        .replace_all(line, "<timestamp>")
+        .replace_all(&line, "<timestamp>")
         .into_owned()
 }
 
