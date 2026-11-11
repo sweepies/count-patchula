@@ -174,7 +174,7 @@ pub fn check(path: &Path) {
         .expect("libtest runs each test on a thread named for it")
         .to_owned();
     let hash = digest(&requests);
-    if std::env::var_os(UPDATE_VAR).is_some() {
+    if std::env::var_os(UPDATE_VAR).is_some_and(|value| value == "1") {
         update(path, &test, &hash);
     } else {
         verify(path, &test, &hash);
