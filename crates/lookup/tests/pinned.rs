@@ -1,0 +1,146 @@
+//! Today's behaviour for probable bugs the per-manager proposal-facts move
+//! must keep: each `pinned_` test states what the code does now so the later
+//! fix PRs flip them deliberately.
+use patchula_datasource::{Catalog, Version};
+use patchula_lookup::Evaluator;
+use patchula_manager::{Dependency, EditForm, Location, Syntax};
+use patchula_words::{DependencyKind, Manager, Scheme, Source};
+
+fn config() -> patchula_config::Config {
+    patchula_config::load(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus"),
+    )
+    .unwrap()
+}
+fn dependency(name: &str) -> Dependency {
+    Dependency {
+        manager: Manager::Npm,
+        file: "package.json".into(),
+        location: Location {
+            start: 0,
+            end: 1,
+            line: 1,
+            column: 1,
+            pointer: String::new(),
+        },
+        form: EditForm::Scalar(Syntax::Json),
+        name: name.into(),
+        package: name.into(),
+        kind: DependencyKind::Production,
+        current: "1.0.0".into(),
+        resolved: Some("1.0.0".into()),
+        digest: None,
+        source: Source::Npm,
+        scheme: Scheme::Semver,
+        extract: None,
+        included_by: None,
+        registry: None,
+    }
+}
+fn catalog(values: &[&str]) -> Catalog {
+    Catalog {
+        versions: values
+            .iter()
+            .map(|v| Version {
+                version: (*v).into(),
+                published_at: None,
+                digest: Some("a".repeat(40)),
+                deprecated: false,
+                yanked: false,
+            })
+            .collect(),
+        dist_tags: Default::default(),
+    }
+}
+
+/// Bug 1: version files such as `.nvmrc` are `Toolchain` declarations, and
+/// toolchain rules only apply to support ranges — so the file pinning an
+/// installed runtime gets no update at all by default.
+/// pins current behaviour, not endorsed; see bug 1.
+#[test]
+fn pinned_version_files_get_no_update() {
+    let eval = Evaluator::new(&config()).unwrap();
+    let mut dep = dependency("node");
+    dep.file = ".nvmrc".into();
+    dep.kind = DependencyKind::Toolchain;
+    dep.source = Source::Mise;
+    dep.scheme = Scheme::Loose;
+    dep.current = "20.1.0".into();
+    dep.resolved = Some("20.1.0".into());
+    let proposals = eval
+        .propose(&dep, &catalog(&["20.1.1", "20.2.0", "21.0.0"]))
+        .unwrap();
+    assert!(
+        proposals.is_empty(),
+        "a version file gets no update by default: {proposals:?}"
+    );
+}
+
+/// Bug 2: the support-range and peer facts name `Manager::Npm` alone, so a
+/// bun-enabled repository's toolchain is treated as an installed requirement
+/// and its peers are rewritten to the exact target instead of widened. This
+/// pins current behaviour, not endorsed; see bug 2.
+#[test]
+fn pinned_bun_misses_npm_toolchain_and_peer_rules() {
+    let eval = Evaluator::new(&config()).unwrap();
+    let mut toolchain = dependency("node");
+    toolchain.manager = Manager::Bun;
+    toolchain.kind = DependencyKind::Toolchain;
+    toolchain.current = "^20".into();
+    toolchain.resolved = Some("20.1.0".into());
+    let proposals = eval
+        .propose(&toolchain, &catalog(&["20.1.0", "20.1.1", "21.0.0"]))
+        .unwrap();
+    assert!(
+        !proposals.is_empty(),
+        "a bun toolchain range is treated as an installed pin: {proposals:?}"
+    );
+    let mut peer = dependency("react");
+    peer.manager = Manager::Bun;
+    peer.kind = DependencyKind::Peer;
+    peer.current = "^18".into();
+    peer.resolved = Some("18.2.0".into());
+    let proposals = eval
+        .propose(&peer, &catalog(&["18.2.0", "18.3.0", "19.0.0"]))
+        .unwrap();
+    let update = proposals
+        .iter()
+        .find(|p| p.new_version.as_deref() == Some("19.0.0"))
+        .expect("the peer updates");
+    assert_eq!(
+        update.new_value.as_deref(),
+        Some("19.0.0"),
+        "npm would widen to `^18 || ^19.0.0`; bun is rewritten exact"
+    );
+}
+
+/// Bug 5: a pre-commit `rev` that names a branch is not a commit hash, a tag
+/// or an opaque GitHub Actions ref, so it reaches "cannot classify current
+/// value" as an evaluation error.
+/// pins current behaviour, not endorsed; see bug 5.
+#[test]
+fn pinned_precommit_branch_rev_is_an_error() {
+    let eval = Evaluator::new(&config()).unwrap();
+    let mut dep = dependency("pre-commit/pre-commit-hooks");
+    dep.manager = Manager::PreCommit;
+    dep.file = ".pre-commit-config.yaml".into();
+    dep.kind = DependencyKind::Tool;
+    dep.current = "main".into();
+    dep.resolved = Some("main".into());
+    dep.source = Source::GithubTags;
+    dep.scheme = Scheme::Loose;
+    let error = eval
+        .evaluate_at(&dep, &catalog(&["v4.5.0", "v5.0.0"]), now())
+        .err()
+        .expect("a branch rev cannot classify");
+    assert!(
+        error.contains("cannot classify current value main"),
+        "{error}"
+    );
+}
+
+fn now() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+}

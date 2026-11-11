@@ -20,9 +20,10 @@ with Astro Starlight; the pages are under `docs/src/content/docs/`.
 - Tests are offline and replay HTTP cassettes from `fixtures/`. Record new ones
   with `PATCHULA_RECORD=1` (see `mise run fixtures:record`); the fixtures scan
   rejects anything that looks like a secret.
-- An intended change to extraction updates the corpus snapshot with
-  `mise run corpus:snapshot`. Review the diff in `tests/corpus-extraction.tsv`
-  as part of the change.
+- An intended change to extraction or proposal rules updates the corpus
+  snapshots with `mise run corpus:snapshot`. Review the diffs in
+  `tests/corpus-extraction.tsv` and `tests/corpus-proposals.tsv` as part of
+  the change.
 - A change to CLI flags regenerates `docs/src/content/docs/reference/cli.md`
   and `generated/` with `mise run docs:cli`.
 - User-facing behaviour changes update the matching page under
