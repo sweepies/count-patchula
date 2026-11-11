@@ -149,9 +149,12 @@ tools = { node = "26.13.0", aube = "2.9.0" }
 run = "aube exec wrangler versions upload"
 
 ["corpus:snapshot"]
-description = "Regenerate tests/corpus-extraction.tsv after an intended extraction change"
+description = "Regenerate tests/corpus-extraction.tsv and tests/corpus-proposals.tsv after an intended change"
 env = { PATCHULA_UPDATE_SNAPSHOT = "1" }
-run = "cargo test --locked -p patchula-manager --test corpus"
+run = [
+  "cargo test --locked -p patchula-manager --test corpus",
+  "cargo test --locked -p patchula-lookup --test corpus",
+]
 
 ["help:snapshot"]
 description = "Regenerate crates/cli/tests/help.txt, the plain --help pages, after an intended help change"

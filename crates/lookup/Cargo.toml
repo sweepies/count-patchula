@@ -29,4 +29,5 @@ tokio.workspace = true
 patchula-cache = { path = "../cache" }
 patchula-github = { path = "../github" }
 patchula-http = { path = "../http" }
+patchula-lockfiles = { path = "../lockfiles" }
 patchula-testkit = { path = "../testkit" }

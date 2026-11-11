@@ -2362,6 +2362,7 @@ dependencies = [
  "patchula-datasource",
  "patchula-github",
  "patchula-http",
+ "patchula-lockfiles",
  "patchula-manager",
  "patchula-report",
  "patchula-testkit",
