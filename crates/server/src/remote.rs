@@ -375,26 +375,27 @@ impl Api {
                 return Ok(user.clone());
             }
         }
-        let login = self
-            .github(token, "user")
-            .await?
-            .get("login")
-            .and_then(|login| login.as_str())
-            .filter(|login| !login.is_empty())
-            .map(str::to_owned)
-            .ok_or_else(github_unavailable)?;
+        // A `login` missing or empty can never authorize a run, so the
+        // user read fails rather than continue without it.
+        let user: patchula_github::model::Actor = self.github(token, "user").await?;
+        let login = if user.login.is_empty() {
+            return Err(github_unavailable());
+        } else {
+            user.login
+        };
         let mut installations = Vec::new();
         for page in 1..=10 {
-            let value = self
-                .github(
+            // One unreadable installation id fails the page: a skipped
+            // entry could be the one that owns the requested repository,
+            // and authorization must not run on a partial list.
+            let entries = self
+                .github::<patchula_github::model::UserInstallations>(
                     token,
                     &format!("user/installations?per_page=100&page={page}"),
                 )
-                .await?;
-            let entries = value["installations"]
-                .as_array()
-                .ok_or_else(github_unavailable)?;
-            installations.extend(entries.iter().filter_map(|entry| entry["id"].as_u64()));
+                .await?
+                .installations;
+            installations.extend(entries.iter().map(|entry| entry.id));
             if entries.len() < 100 {
                 break;
             }
@@ -411,7 +412,11 @@ impl Api {
     }
 
     /// GETs `path` from the GitHub API with the user's token.
-    async fn github(&self, token: &str, path: &str) -> Result<serde_json::Value, Reject> {
+    async fn github<T: serde::de::DeserializeOwned>(
+        &self,
+        token: &str,
+        path: &str,
+    ) -> Result<T, Reject> {
         let mut request = reqwest::Request::new(
             reqwest::Method::GET,
             format!("https://api.github.com/{path}")
@@ -446,7 +451,7 @@ impl Api {
             || response.headers.contains_key(header::RETRY_AFTER);
         match response.status {
             status if status.is_success() => {
-                serde_json::from_slice(&response.body).map_err(|_| github_unavailable())
+                serde_json::from_slice::<T>(&response.body).map_err(|_| github_unavailable())
             }
             StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS if limited => Err(reject(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -528,12 +533,12 @@ impl Api {
         })?;
         for repo in repositories {
             let permission = match client
-                .get_fresh::<serde_json::Value>(&format!(
+                .get_fresh::<patchula_github::model::CollaboratorPermission>(&format!(
                     "repos/{repo}/collaborators/{login}/permission"
                 ))
                 .await
             {
-                Ok(value) => value["permission"].as_str().map(str::to_owned),
+                Ok(read) => Some(read.permission),
                 Err(patchula_github::Error::Status(403 | 404)) => None,
                 Err(_) => {
                     return Err(reject(
@@ -543,6 +548,7 @@ impl Api {
                     ));
                 }
             };
+            // A permission read that cannot decode denies: it never grants.
             if !matches!(permission.as_deref(), Some("admin" | "write")) {
                 return Err(reject(
                     StatusCode::FORBIDDEN,

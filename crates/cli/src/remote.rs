@@ -258,6 +258,26 @@ pub async fn find(services: &Services, repository: &str) -> Result<Option<String
     Ok(discover(services, repository).await)
 }
 
+/// `GET /repos/{owner}/{repo}/issues` — the `issue` schema trimmed to the
+/// advertisement scan. One element that cannot decode abandons the page
+/// rather than act on a partially read list.
+#[derive(Deserialize)]
+struct DiscoveryIssue {
+    /// `user` — the issue's author, `Option` because a deleted account
+    /// arrives as null.
+    user: Option<DiscoveryAuthor>,
+    /// `body` — nullable by schema.
+    body: Option<String>,
+}
+/// `issue.user`, trimmed: `type` says "Bot" for an App's writes and
+/// `login` names the account.
+#[derive(Deserialize)]
+struct DiscoveryAuthor {
+    login: String,
+    #[serde(rename = "type")]
+    kind: String,
+}
+
 /// The server URL in the newest open issue or PR that the server's own bot
 /// wrote. Anyone can paste the marker, and any installed App can write as a
 /// bot, so the author must be the bot the server names.
@@ -273,23 +293,26 @@ async fn discover(services: &Services, repository: &str) -> Option<String> {
         let (status, value) = send(&*transport, Method::GET, &url, token.as_deref(), None)
             .await
             .ok()?;
-        let items = value.as_array().filter(|_| status == 200)?;
-        for item in items.iter().filter(|item| item["user"]["type"] == "Bot") {
-            let (Some(author), Some(body)) =
-                (item["user"]["login"].as_str(), item["body"].as_str())
-            else {
+        let items: Vec<DiscoveryIssue> = (status == 200)
+            .then(|| serde_json::from_value(value).ok())
+            .flatten()?;
+        for item in &items {
+            let (Some(author), Some(body)) = (&item.user, &item.body) else {
                 continue;
             };
+            if author.kind != "Bot" {
+                continue;
+            }
             let Some(server) = patchula_update::advertise::find(body)
                 .filter(|url| url.starts_with("https://"))
                 .and_then(|url| parse(url).ok())
             else {
                 continue;
             };
-            if !checked.insert((server.clone(), author.to_owned())) {
+            if !checked.insert((server.clone(), author.login.clone())) {
                 continue;
             }
-            if names_bot(services, &server).await.as_deref() == Some(author) {
+            if names_bot(services, &server).await.as_deref() == Some(author.login.as_str()) {
                 return Some(server);
             }
         }

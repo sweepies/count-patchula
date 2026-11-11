@@ -393,24 +393,22 @@ impl Batch for Engines {
                         ))
                         .await
                         .map_err(|_| Error("installation discovery failed"))?;
-                    let value: serde_json::Value = serde_json::from_slice(&value.body)
-                        .map_err(|_| Error("invalid installation repository JSON"))?;
-                    let entries = value["repositories"]
-                        .as_array()
-                        .ok_or(Error("invalid installation repositories"))?;
-                    for entry in entries {
-                        let repo = entry["full_name"]
-                            .as_str()
-                            .ok_or(Error("invalid installation repository"))?;
+                    // One unreadable entry fails the listing: a skipped
+                    // repository would silently escape the update sweep.
+                    let value: patchula_github::model::InstallationRepositories =
+                        serde_json::from_slice(&value.body)
+                            .map_err(|_| Error("invalid installation repository"))?;
+                    for entry in &value.repositories {
+                        let repo = entry.full_name.as_str();
                         if settings.allows(id, repo) {
                             let repo = repo.to_ascii_lowercase();
                             // Unknown visibility counts as private, which the public API hides.
-                            let private = entry["private"].as_bool().unwrap_or(true);
+                            let private = entry.private.unwrap_or(true);
                             listed.push((repo.clone(), private));
                             repos.push(Work::repository(id, repo));
                         }
                     }
-                    if entries.len() < 100 {
+                    if value.repositories.len() < 100 {
                         break;
                     }
                     if page == 1000 {
@@ -1124,18 +1122,17 @@ async fn check_candidate(client: &Client, work: &Work, bot: &str) -> Result<bool
     };
     for number in numbers {
         let pr = match client
-            .get_fresh::<serde_json::Value>(&format!("repos/{}/pulls/{number}", work.repo))
+            .get_fresh::<patchula_github::model::PullRequest>(&format!(
+                "repos/{}/pulls/{number}",
+                work.repo
+            ))
             .await
         {
             Ok(pr) => pr,
             Err(patchula_github::Error::Status(404)) => continue,
             Err(_) => return Err(Error("check-event PR ownership lookup failed")),
         };
-        if serde_json::from_value::<patchula_github::model::PullRequest>(pr)
-            .ok()
-            .as_ref()
-            .is_some_and(|pr| patchula_update::pull_requests::owned_pr(pr, bot, &work.repo))
-        {
+        if patchula_update::pull_requests::owned_pr(&pr, bot, &work.repo) {
             return Ok(true);
         }
     }

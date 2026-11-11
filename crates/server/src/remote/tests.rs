@@ -22,6 +22,7 @@ impl Transport for GitHub {
                 "Bearer ghu_writer" | "Bearer ghp_personal" => (200, json!({"login": "writer"})),
                 "Bearer ghu_reader" => (200, json!({"login": "reader"})),
                 "Bearer ghu_elsewhere" => (200, json!({"login": "writer"})),
+                "Bearer ghu_broken" | "Bearer ghu_malformed" => (200, json!({"login": "broken"})),
                 "Bearer ghu_limited" => (403, json!({})),
                 _ => (401, json!({})),
             },
@@ -34,6 +35,13 @@ impl Transport for GitHub {
                 "Bearer ghu_elsewhere" => {
                     (200, json!({"total_count": 1, "installations": [{"id": 2}]}))
                 }
+                "Bearer ghu_broken" => {
+                    (200, json!({"total_count": 1, "installations": [{"id": 1}]}))
+                }
+                "Bearer ghu_malformed" => (
+                    200,
+                    json!({"total_count": 2, "installations": [{"id": 1}, {}]}),
+                ),
                 _ => (403, json!({})),
             },
             "/repos/acme/app/installation" | "/repos/acme/web/installation" => {
@@ -51,6 +59,7 @@ impl Transport for GitHub {
             path if path.ends_with("/collaborators/reader/permission") => {
                 (200, json!({"permission": "read"}))
             }
+            path if path.ends_with("/collaborators/broken/permission") => (200, json!({})),
             other => panic!("unexpected request {other}"),
         };
         let mut headers = reqwest::header::HeaderMap::new();
@@ -332,6 +341,24 @@ async fn rejections_name_the_reason() {
         call(&router, unauthenticated).await.0,
         StatusCode::UNAUTHORIZED
     );
+    assert!(runner.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn unreadable_github_answers_deny_the_run() {
+    // An installation without an `id` used to fall out of the list; the
+    // rest still authorized. Now the whole page read fails, and so does
+    // the request — a partial list must never authorize a run.
+    let runner = Arc::new(Recorder::default());
+    let router = api(runner.clone(), Some("client"), "").await;
+    let run = json!({"mode": "run", "repositories": ["acme/app"]});
+    let (status, body) = call(&router, start("ghu_malformed", run.clone())).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["errorKind"], "github-unavailable");
+    // A permission read that cannot decode denies — never grants.
+    let (status, body) = call(&router, start("ghu_broken", run)).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["errorKind"], "github-unavailable");
     assert!(runner.calls.lock().unwrap().is_empty());
 }
 

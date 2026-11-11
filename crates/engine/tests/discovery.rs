@@ -364,6 +364,59 @@ async fn installation_credentials_use_installation_repository_listing() {
 }
 
 #[tokio::test]
+async fn an_unreadable_repository_listing_fails_discovery() {
+    // One element without `full_name` used to fail only its own entry;
+    // the read now fails as a whole — a skipped repository would never
+    // be updated or reported.
+    for (path, value, installation) in [
+        (
+            "user/repos?per_page=100",
+            json!([{"full_name":"demo/fine"},{"no_name":true}]),
+            false,
+        ),
+        (
+            "installation/repositories?per_page=100",
+            json!({"repositories":[{"full_name":"demo/fine"},{}],"total_count":2}),
+            true,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("listing.json");
+        let cassette = Cassette {
+            schema_version: 1,
+            provenance: "Simulated from GitHub repository listing API specifications".into(),
+            interactions: vec![get(path, value, 200, None, None, false)],
+        };
+        patchula_testkit::save(&file, &cassette, &Default::default()).unwrap();
+        let replay = Arc::new(Replay::open(&file, Default::default()).unwrap());
+        let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+            .await
+            .unwrap();
+        let engine = if installation {
+            Engine::with_credentials(
+                Arc::new(OfflineCredentials),
+                cache,
+                4,
+                replay.clone(),
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap()
+            .with_versions_host(false)
+        } else {
+            Engine::with_transport("offline", cache, 4, replay.clone())
+                .unwrap()
+                .with_versions_host(false)
+        };
+        assert!(
+            engine.lookup(Options::default()).await.is_err(),
+            "{path} decoded past an unreadable element"
+        );
+        replay.assert_finished().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn user_token_forbidden_repository_listing_surfaces() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("forbidden.json");

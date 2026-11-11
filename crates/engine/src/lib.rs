@@ -24,7 +24,6 @@ use patchula_words::{
     DependencyKind, LookupErrorKind, Recheck, ResolutionKind, Source, Update as UpdateKind,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -919,33 +918,26 @@ impl Engine {
         (results, credentialed)
     }
     async fn repositories(&self) -> Result<Vec<String>> {
+        // One unreadable entry fails the listing: a silently skipped
+        // repository would never be updated and never be reported.
         let repos = if self.installation {
             self.github
                 .rest_pages_envelope(
                     "installation/repositories?per_page=100",
                     |body| {
-                        body["repositories"]
-                            .as_array()
-                            .cloned()
-                            .ok_or(patchula_github::Error::Json)
+                        serde_json::from_value::<model::InstallationRepositories>(body.clone())
+                            .map(|body| body.repositories)
+                            .map_err(|_| patchula_github::Error::Json)
                     },
                     |page| page.len() < 100,
                 )
                 .await?
         } else {
             self.github
-                .rest_pages::<Value>("user/repos?per_page=100", |_| false)
+                .rest_pages::<model::ListedRepository>("user/repos?per_page=100", |_| false)
                 .await?
         };
-        repos
-            .iter()
-            .map(|v| {
-                v["full_name"]
-                    .as_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| Error::Invalid("invalid repository listing".into()))
-            })
-            .collect()
+        Ok(repos.into_iter().map(|repo| repo.full_name).collect())
     }
     async fn tree(&self, repo: &str, sha: &str) -> Result<Vec<Entry>> {
         let tree = self
