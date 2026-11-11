@@ -111,7 +111,11 @@ fn graphql_author(pr: &Value) -> Value {
 /// The `__typename` a user object reports: logins ending in `[bot]` answer
 /// `Bot`, others `User`.
 fn viewer_typename(login: &str) -> &'static str {
-    if login.ends_with("[bot]") { "Bot" } else { "User" }
+    if login.ends_with("[bot]") {
+        "Bot"
+    } else {
+        "User"
+    }
 }
 
 /// `node` cloned with its `__typename` stamped, for seeded nodes the fake
@@ -131,24 +135,24 @@ fn with_typename(node: &Value, typename: &str) -> Value {
 /// inline-fragment matching sees the node's type.
 fn pull_node(pr: &Value, state: &State) -> Value {
     json!({"__typename":"PullRequest",
-       "number":pr["number"],"id":pr["node_id"],"url":pr["html_url"],
-       "title":pr["title"],"body":pr["body"],
-       "state":if pr["state"] == "open" {"OPEN"} else {"CLOSED"},
-       "merged":!pr["merged_at"].is_null(),
-       "headRefName":pr["head"]["ref"],"headRefOid":pr["head"]["sha"],
-       "baseRefName":pr["base"]["ref"],"author":graphql_author(pr),
-       "headRepository":{"__typename":"Repository",
-           "nameWithOwner":pr["head"]["repo"]["full_name"]},
-       "baseRepository":{"__typename":"Repository",
-           "nameWithOwner":pr["base"]["repo"]["full_name"]},
-       "labels":{"__typename":"LabelConnection","nodes":pr["labels"],
-           "pageInfo":{"__typename":"PageInfo",
-               "hasNextPage":state.settings.label_next_page == pr["number"].as_u64()}},
-       "autoMergeRequest":if pr["auto_merge"].is_null() {
-           Value::Null
-       } else {
-           with_typename(&pr["auto_merge"], "AutoMergeRequest")
-       }})
+    "number":pr["number"],"id":pr["node_id"],"url":pr["html_url"],
+    "title":pr["title"],"body":pr["body"],
+    "state":if pr["state"] == "open" {"OPEN"} else {"CLOSED"},
+    "merged":!pr["merged_at"].is_null(),
+    "headRefName":pr["head"]["ref"],"headRefOid":pr["head"]["sha"],
+    "baseRefName":pr["base"]["ref"],"author":graphql_author(pr),
+    "headRepository":{"__typename":"Repository",
+        "nameWithOwner":pr["head"]["repo"]["full_name"]},
+    "baseRepository":{"__typename":"Repository",
+        "nameWithOwner":pr["base"]["repo"]["full_name"]},
+    "labels":{"__typename":"LabelConnection","nodes":pr["labels"],
+        "pageInfo":{"__typename":"PageInfo",
+            "hasNextPage":state.settings.label_next_page == pr["number"].as_u64()}},
+    "autoMergeRequest":if pr["auto_merge"].is_null() {
+        Value::Null
+    } else {
+        with_typename(&pr["auto_merge"], "AutoMergeRequest")
+    }})
 }
 
 /// Server properties: knobs that change what the server is, not what it does
@@ -573,10 +577,9 @@ impl GqlSelection {
     fn names(&self) -> BTreeSet<String> {
         match self {
             GqlSelection::Field(field) => field.names(),
-            GqlSelection::Fragment { selections, .. } => selections
-                .iter()
-                .flat_map(GqlSelection::names)
-                .collect(),
+            GqlSelection::Fragment { selections, .. } => {
+                selections.iter().flat_map(GqlSelection::names).collect()
+            }
         }
     }
 }
@@ -712,9 +715,7 @@ struct Ctx {
 /// Distill a selection set to owned [`GqlSelection`]s: fields carry their
 /// response key, arguments and subtree; inline fragments keep their type
 /// condition for [`prune`].
-fn selections<'a>(
-    set: &'a graphql_parser::query::SelectionSet<'a, &'a str>,
-) -> Vec<GqlSelection> {
+fn selections<'a>(set: &'a graphql_parser::query::SelectionSet<'a, &'a str>) -> Vec<GqlSelection> {
     use graphql_parser::query::{Selection, TypeCondition, Value as ArgValue};
     set.items
         .iter()
@@ -2189,9 +2190,8 @@ mod tests {
 
     #[test]
     fn inline_fragments_apply_only_on_the_matching_typename() {
-        let selections = select(
-            "{ __typename ... on Commit { oid } ... on Blob { text isBinary } }",
-        );
+        let selections =
+            select("{ __typename ... on Commit { oid } ... on Blob { text isBinary } }");
         let commit = json!({"__typename":"Commit","oid":"abc","text":"x"});
         assert_eq!(
             prune(&commit, &selections),
