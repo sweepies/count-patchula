@@ -1,10 +1,14 @@
 //! A stateful in-memory GitHub for offline tests: no sockets or network.
 //!
 //! [`FakeGitHub`] is the shared extraction of the write-path suites' fakes.
-//! A repository's refs, commits, trees and pull requests live as REST-shaped
-//! JSON — GitHub's terms, not the client's typed model — so the fake stays an
-//! independent oracle for what the code asks and writes. Object ids are
-//! counters (`commit-0`, `tree-1`), because tests pin them.
+//! A repository's refs, commits, trees, blobs, pull requests, issues,
+//! checks and merge settings live as REST-shaped JSON — GitHub's terms,
+//! not the client's typed model — so the fake stays an independent oracle
+//! for what the code asks and writes. Object ids are counters (`commit-0`,
+//! `tree-1`), because tests pin them. One server holds several
+//! repositories: [`FakeGitHub::new`] names the one the test drives;
+//! [`FakeGitHub::add_repository`] adds more (upstream packages the
+//! datasources read, or extra installed repositories for discovery).
 //!
 //! Two layers sit on that state:
 //!
@@ -17,12 +21,19 @@
 //!
 //! Requests are recorded for assertions: [`FakeGitHub::requests`] returns
 //! `(method, path)` pairs, [`FakeGitHub::writes`] `(path, body)` and
-//! [`FakeGitHub::log`] `(method, path, body)`. Every request also lands on the
-//! thread's [`crate::transcripts`] log, and the fake enforces the check:
-//! dropping a `FakeGitHub` whose transcript never ran through
-//! [`crate::transcripts::check`] panics, so a test cannot silently skip it.
+//! [`FakeGitHub::log`] `(method, path, body)`. Every request also lands on
+//! the thread's [`crate::transcripts`] log, and the fake enforces the
+//! check: dropping a `FakeGitHub` whose transcript never ran through
+//! [`crate::transcripts::check`] panics, so a test cannot silently skip
+//! it.
+//!
+//! Hosts that are not GitHub — registries, the versions host, OSV — go
+//! through [`Hosts`]: it routes `api.github.com` to the fake and every
+//! other host to a per-test scripted route, recording every request so
+//! host mix-ins still produce a checked transcript.
 
 use crate::transcripts;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_http::{Exchange, Response, Transport};
 use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
@@ -42,6 +53,11 @@ fn response(status: u16, body: Value) -> Response {
         body: serde_json::to_vec(&body).unwrap(),
         stale: None,
     }
+}
+
+/// A JSON answer for a scripted [`Hosts`] route.
+pub fn json(status: u16, body: Value) -> Response {
+    response(status, body)
 }
 
 /// The git blob sha for `content` — the same formula the client proves.
@@ -92,21 +108,51 @@ pub struct Settings {
     pub pr_next_page: Option<String>,
 }
 
-/// A canned upstream repository: contents listings, the mise-versions mirror
-/// documents, and whether `releases/tags/{tag}` serves bodies.
-struct Upstream {
-    contents: Value,
-    releases: Value,
-    tags: Value,
-    release_tags: bool,
+/// The merge surfaces a repository answers, identical on REST
+/// (`allow_*`, `delete_branch_on_merge`) and GraphQL (`*Allowed`,
+/// `deleteBranchOnMerge`). GitHub's defaults: every merge method on,
+/// auto-merge and delete-branch-on-merge off.
+#[derive(Clone)]
+pub struct Merge {
+    /// `autoMergeAllowed` / `allow_auto_merge`.
+    pub auto_merge: bool,
+    /// `squashMergeAllowed` / `allow_squash_merge`.
+    pub squash: bool,
+    /// `mergeCommitAllowed` / `allow_merge_commit`.
+    pub merge_commit: bool,
+    /// `rebaseMergeAllowed` / `allow_rebase_merge`.
+    pub rebase: bool,
+    /// `deleteBranchOnMerge` / `delete_branch_on_merge`; a merged head's
+    /// ref is deleted with the merge.
+    pub delete_branch: bool,
+}
+impl Default for Merge {
+    fn default() -> Self {
+        Self {
+            auto_merge: false,
+            squash: true,
+            merge_commit: true,
+            rebase: true,
+            delete_branch: false,
+        }
+    }
 }
 
-/// The server's repository state: REST-shaped JSON in GitHub's terms — an
-/// independent oracle, never the client's typed model.
-pub struct State {
-    repo_id: String,
-    default_branch: String,
-    actor: String,
+/// One repository the server holds: refs, commits, trees, blobs, pull
+/// requests, issues, check contexts, release nodes and settings, all as
+/// REST-shaped JSON in GitHub's terms.
+pub struct Repository {
+    /// `owner/name`.
+    pub name: String,
+    /// REST `node_id`, GraphQL `id`, the `updateRefs` `repositoryId`.
+    pub node_id: String,
+    /// `user/repos` and `installation/repositories` list repositories the
+    /// token sees; upstreams seeded only for reads stay off them.
+    pub installed: bool,
+    /// GraphQL `isPrivate`.
+    pub private: bool,
+    /// The default branch's name.
+    pub default_branch: String,
     /// Head sha of the default branch.
     pub base: String,
     /// `refs/{namespace}` → object sha. Deletions record the zero sha.
@@ -116,14 +162,97 @@ pub struct State {
     /// Commits by sha; extra `actor`/`committer_login` fields steer
     /// authorship.
     pub commits: BTreeMap<String, Value>,
+    /// Blob contents by sha, for `git/blobs/{sha}` and `object(oid:)` reads.
+    pub blobs: BTreeMap<String, String>,
     /// Pull requests by number, REST PR objects.
     pub prs: BTreeMap<u64, Value>,
+    /// Issues by number, in the inventory's node shape.
+    pub issues: BTreeMap<u64, Value>,
+    /// `statusCheckRollup` contexts check reads report.
+    pub checks: Vec<Value>,
+    /// `releases` connection nodes for release-catalog reads.
+    pub releases: Vec<Value>,
+    /// Merge settings on both surfaces.
+    pub merge: Merge,
+    /// A `defaultBranchRef` answer used verbatim — history, rules and
+    /// refUpdateRule — replacing the synthesized one.
+    pub default_branch_ref: Option<Value>,
     /// Commits `compare` reports ahead of a head.
     pub history: Vec<String>,
     /// Heads `compare` reports as merged into the base.
     pub merged_heads: BTreeSet<String>,
-    /// The upstream release's body text.
+    /// The upstream release's body text, served by `releases/tags/{tag}`
+    /// and the `release` GraphQL field.
     pub release_note_body: Option<String>,
+    /// The `contents` listing, when the repository serves one.
+    pub contents: Option<Value>,
+    /// `releases/tags/{tag}` serves bodies at all.
+    pub release_tags: bool,
+    /// The versions host's `releases.json` document.
+    pub mirror_releases: Value,
+    /// The versions host's `tags.json` document.
+    pub mirror_tags: Value,
+    /// Heads applied after `settings.pr_lag_reads` more reads.
+    pending_heads: BTreeMap<u64, Value>,
+}
+impl Repository {
+    /// Move the default branch's head to `sha`, cloning the current head's
+    /// commit when `sha` is unknown so commit and tree reads still resolve.
+    pub fn move_base(&mut self, sha: &str) {
+        if !self.commits.contains_key(sha) {
+            let mut commit = self.commits[&self.base].clone();
+            commit["sha"] = json!(sha);
+            self.commits.insert(sha.into(), commit);
+        }
+        self.refs
+            .insert(format!("refs/heads/{}", self.default_branch), sha.into());
+        self.base = sha.into();
+    }
+
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            node_id: format!("{name}-id"),
+            installed: false,
+            private: false,
+            default_branch: "main".into(),
+            base: String::new(),
+            refs: BTreeMap::new(),
+            trees: BTreeMap::new(),
+            commits: BTreeMap::new(),
+            blobs: BTreeMap::new(),
+            prs: BTreeMap::new(),
+            issues: BTreeMap::new(),
+            checks: Vec::new(),
+            releases: Vec::new(),
+            merge: Merge::default(),
+            default_branch_ref: None,
+            history: Vec::new(),
+            merged_heads: BTreeSet::new(),
+            release_note_body: None,
+            contents: None,
+            release_tags: false,
+            mirror_releases: json!({"releases":[],"truncated":false}),
+            mirror_tags: json!({"tags":[],"truncated":false}),
+            pending_heads: BTreeMap::new(),
+        }
+    }
+}
+
+/// The server's state: REST-shaped JSON in GitHub's terms — an independent
+/// oracle, never the client's typed model.
+pub struct State {
+    /// Repositories by `owner/name`: the one the test drives plus
+    /// upstreams and extra installed repositories.
+    pub repositories: BTreeMap<String, Repository>,
+    /// The acting login — `viewer{login}`, new pull requests' `user` and
+    /// new issues' `author`.
+    pub actor: String,
+    /// Installation ids `app/installations` and `{repo,org}/installation`
+    /// report.
+    pub installations: Vec<u64>,
+    /// Minted installation-token counter for `access_tokens`.
+    minted: usize,
     /// `(method, path)` of every request, in arrival order.
     pub requests: Vec<(String, String)>,
     /// `(path, body)` of every mutation request, in arrival order.
@@ -134,52 +263,56 @@ pub struct State {
     pub settings: Settings,
     /// `(method, path, body)` of every request, in arrival order.
     log: Vec<(String, String, Value)>,
-    /// Heads applied after `settings.pr_lag_reads` more reads.
-    pending_heads: BTreeMap<u64, Value>,
-    upstreams: BTreeMap<String, Upstream>,
+    /// The repository `FakeGitHub::new` named.
+    primary: String,
 }
 
 impl State {
     fn new() -> Self {
+        let mut repositories = BTreeMap::new();
+        for (name, contents, releases, tags, release_tags) in [
+            (
+                "nodejs/node",
+                json!([]),
+                json!({"releases":[],"truncated":false}),
+                json!({"tags":[],"truncated":false}),
+                false,
+            ),
+            (
+                "actions/checkout",
+                json!({"tree":[],"truncated":false}),
+                json!({"releases":[{"tag":"20.0.0"},{"tag":"22.0.0"}],"truncated":false}),
+                json!({"tags":[{"tag":"20.0.0"},{"tag":"22.0.0"}],"truncated":false}),
+                true,
+            ),
+        ] {
+            let mut upstream = Repository::new(name);
+            upstream.contents = Some(contents);
+            upstream.mirror_releases = releases;
+            upstream.mirror_tags = tags;
+            upstream.release_tags = release_tags;
+            repositories.insert(name.to_owned(), upstream);
+        }
         Self {
-            repo_id: "repo-id".into(),
-            default_branch: "main".into(),
+            repositories,
             actor: "patchula[bot]".into(),
-            base: String::new(),
-            refs: BTreeMap::new(),
-            trees: BTreeMap::new(),
-            commits: BTreeMap::new(),
-            prs: BTreeMap::new(),
-            history: Vec::new(),
-            merged_heads: BTreeSet::new(),
-            release_note_body: None,
+            installations: vec![10],
+            minted: 0,
             requests: Vec::new(),
             writes: Vec::new(),
             release_queries: Vec::new(),
             settings: Settings::default(),
             log: Vec::new(),
-            pending_heads: BTreeMap::new(),
-            upstreams: BTreeMap::from([
-                (
-                    "nodejs/node".into(),
-                    Upstream {
-                        contents: json!([]),
-                        releases: json!({"releases":[],"truncated":false}),
-                        tags: json!({"tags":[],"truncated":false}),
-                        release_tags: false,
-                    },
-                ),
-                (
-                    "actions/checkout".into(),
-                    Upstream {
-                        contents: json!({"tree":[],"truncated":false}),
-                        releases: json!({"releases":[{"tag":"20.0.0"},{"tag":"22.0.0"}],"truncated":false}),
-                        tags: json!({"tags":[{"tag":"20.0.0"},{"tag":"22.0.0"}],"truncated":false}),
-                        release_tags: true,
-                    },
-                ),
-            ]),
+            primary: String::new(),
         }
+    }
+    /// The repository `FakeGitHub::new` named — the one the test drives.
+    pub fn repo(&self) -> &Repository {
+        &self.repositories[&self.primary]
+    }
+    /// The primary repository, mutable.
+    pub fn repo_mut(&mut self) -> &mut Repository {
+        self.repositories.get_mut(&self.primary).unwrap()
     }
 }
 
@@ -189,6 +322,8 @@ pub struct Hit {
     pub method: Method,
     /// The request's path, without host or query.
     pub path: String,
+    /// The `owner/name` repository the request addresses, REST or GraphQL.
+    pub repo: Option<String>,
     /// The pull number of a `pulls/{n}` route.
     pub pull: Option<u64>,
 }
@@ -208,13 +343,39 @@ pub enum Matcher {
         /// The repository, `owner/name`.
         repo: String,
     },
+    /// `PUT /repos/{repo}/pulls/{number}/merge`; `None` matches every merge.
+    PullMerge {
+        /// The repository, `owner/name`.
+        repo: String,
+        /// A specific pull, or `None` for all merges.
+        number: Option<u64>,
+    },
     /// `GET /repos/{repo}` — repository metadata.
     RepoRead {
         /// The repository, `owner/name`.
         repo: String,
     },
-    /// A GraphQL operation root field, e.g. `"updateRefs"`.
+    /// `PATCH /repos/{repo}/issues/{number}`; `None` matches every issue
+    /// patch.
+    IssuePatch {
+        /// The repository, `owner/name`.
+        repo: String,
+        /// A specific issue, or `None` for all issues.
+        number: Option<u64>,
+    },
+    /// A REST route by method and exact path, without query.
+    Route {
+        /// The request's method.
+        method: Method,
+        /// The request's path, without host or query.
+        path: String,
+    },
+    /// A GraphQL document that names this field unaliased, at any depth —
+    /// `"updateRefs"` for the mutation, `"statusCheckRollup"` for the
+    /// checks query, `"associatedPullRequests"` for the write inventory.
     Graphql(&'static str),
+    /// An `updateRefs` mutation that deletes a ref (`afterOid` zero).
+    RefDelete,
 }
 
 type Mutation = Box<dyn Fn(&mut State, &Hit) + Send + Sync>;
@@ -297,13 +458,15 @@ impl On<'_> {
     }
 }
 
-/// A stateful in-memory GitHub: one repository's REST and GraphQL endpoints,
-/// scripted faults, request recording and transcript enforcement. Construct
-/// with [`FakeGitHub::new`], wrap in `Arc` and hand to the client's
-/// `with_transport`.
+/// A stateful in-memory GitHub: REST and GraphQL endpoints over several
+/// repositories, scripted faults, request recording and transcript
+/// enforcement. Construct with [`FakeGitHub::new`], wrap in `Arc` and hand
+/// to the client's `with_transport`; tests that also need other hosts wrap
+/// it in [`Hosts`].
 pub struct FakeGitHub {
-    /// `owner/name` — kept outside the state lock so fault helpers can be
-    /// armed while a test holds [`FakeGitHub::state`].
+    /// `owner/name` of the primary repository — kept outside the state
+    /// lock so fault helpers can be armed while a test holds
+    /// [`FakeGitHub::state`].
     repo: String,
     state: Mutex<State>,
     rules: Mutex<Vec<Rule>>,
@@ -311,15 +474,44 @@ pub struct FakeGitHub {
     transcript_checked: Arc<AtomicBool>,
 }
 
-/// A GraphQL root field, distilled to owned facts — routing needs no AST
+/// A GraphQL argument: a variable lookup or a literal.
+enum Arg {
+    Var(String),
+    Lit(String),
+}
+
+/// A GraphQL field, distilled to owned facts — routing needs no AST
 /// borrows.
 struct GqlField {
     /// The response key: the alias or the field name.
     key: String,
     name: String,
-    /// A `repository` field's own selection, as `(key, name, asks for
-    /// description)` — `release` bodies check the last.
-    children: Vec<(String, String, bool)>,
+    /// `(argument name, value)` pairs.
+    args: Vec<(String, Arg)>,
+    /// Selections below this field; inline fragments are flattened in.
+    children: Vec<GqlField>,
+}
+impl GqlField {
+    /// This field's `name` argument resolved against the operation's
+    /// variables.
+    fn arg<'a>(&'a self, name: &str, body: &'a Value) -> Option<&'a str> {
+        self.args
+            .iter()
+            .find(|(arg, _)| arg == name)
+            .and_then(|(_, value)| match value {
+                Arg::Var(var) => body["variables"][var.as_str()].as_str(),
+                Arg::Lit(text) => Some(text.as_str()),
+            })
+    }
+    /// Every unaliased field name in this field's subtree, its own name
+    /// included when unaliased.
+    fn names(&self) -> BTreeSet<String> {
+        let mut names: BTreeSet<String> = self.children.iter().flat_map(GqlField::names).collect();
+        if self.key == self.name {
+            names.insert(self.name.clone());
+        }
+        names
+    }
 }
 
 /// One GraphQL operation's kind and root fields.
@@ -338,49 +530,54 @@ struct Ctx {
     pull: Option<u64>,
     /// `GET /repos/{repo}/pulls/{n}` — its `mutate` rules fire after read lag.
     pull_read: bool,
+    /// `PATCH /repos/{repo}/issues/{n}`.
+    issue_patch: Option<u64>,
+    /// `PUT /repos/{repo}/pulls/{n}/merge`.
+    pull_merge: Option<u64>,
     /// The request's GraphQL operations are mutations.
     mutation: bool,
-    /// Root field names of the GraphQL operations.
-    graphql: Vec<String>,
+    /// Every unaliased field name in the GraphQL document.
+    names: BTreeSet<String>,
+    /// An `updateRefs` mutation carrying a deletion.
+    ref_deletion: bool,
     ops: Vec<GqlOp>,
 }
 
 impl Ctx {
     fn new(request: &Request, path: &str, body: &Value) -> Self {
         use graphql_parser::query::{
-            Definition, OperationDefinition, Selection, SelectionSet, parse_query,
+            Definition, OperationDefinition, Selection, SelectionSet, Value as ArgValue,
+            parse_query,
         };
-        fn fields<'a>(set: &'a SelectionSet<'a, &'a str>) -> Vec<GqlField> {
+        fn children<'a>(set: &'a SelectionSet<'a, &'a str>) -> Vec<GqlField> {
             set.items
                 .iter()
-                .map(|selection| {
-                    let Selection::Field(field) = selection else {
-                        panic!("unmodeled GraphQL selection")
-                    };
-                    GqlField {
+                .flat_map(|selection| match selection {
+                    Selection::Field(field) => vec![GqlField {
                         key: field.alias.unwrap_or(field.name).to_owned(),
                         name: field.name.to_owned(),
-                        children: field
-                            .selection_set
-                            .items
+                        args: field
+                            .arguments
                             .iter()
-                            .filter_map(|child| {
-                                let Selection::Field(child) = child else {
-                                    // `... on Commit` and friends sit under
-                                    // fields whose answers the fake builds
-                                    // from state; routing reads names only.
-                                    return None;
-                                };
-                                Some((
-                                    child.alias.unwrap_or(child.name).to_owned(),
-                                    child.name.to_owned(),
-                                    child.selection_set.items.iter().any(|s| {
-                                        matches!(s, Selection::Field(f) if f.name == "description")
-                                    }),
-                                ))
+                            .map(|(name, value)| {
+                                (
+                                    name.to_string(),
+                                    match value {
+                                        ArgValue::Variable(var) => Arg::Var((*var).to_owned()),
+                                        ArgValue::String(text) => Arg::Lit(text.clone()),
+                                        _ => Arg::Lit(String::new()),
+                                    },
+                                )
                             })
                             .collect(),
-                    }
+                        children: children(&field.selection_set),
+                    }],
+                    // `... on Commit` and friends sit under fields whose
+                    // answers the fake builds from state; routing reads
+                    // names only, so a fragment's fields fold into its
+                    // parent's selection.
+                    Selection::InlineFragment(fragment) => children(&fragment.selection_set),
+                    Selection::FragmentSpread(_) => vec![],
                 })
                 .collect()
         }
@@ -388,18 +585,30 @@ impl Ctx {
         let mut repo = None;
         let mut pull = None;
         let mut pull_read = false;
+        let mut issue_patch = None;
+        let mut pull_merge = None;
         if let Some(rest) = path.strip_prefix("/repos/")
             && let Some((owner, rest)) = rest.split_once('/')
         {
             let (name, rest) = rest.split_once('/').unwrap_or((rest, ""));
             repo = Some(format!("{owner}/{name}"));
             if let Some(number) = rest.strip_prefix("pulls/") {
-                pull = number.parse().ok();
-                pull_read = method == Method::GET;
+                if let Some(merge) = number.strip_suffix("/merge") {
+                    pull_merge = merge.parse().ok();
+                } else {
+                    pull = number.parse().ok();
+                    pull_read = method == Method::GET && pull.is_some();
+                }
+            } else if let Some(number) = rest.strip_prefix("issues/")
+                && !number.ends_with("/comments")
+                && method == Method::PATCH
+            {
+                issue_patch = number.parse().ok();
             }
         }
-        let mut graphql = Vec::new();
+        let mut names = BTreeSet::new();
         let mut mutation = false;
+        let mut ref_deletion = false;
         let mut ops = Vec::new();
         if path == "/graphql" {
             let doc = parse_query::<&str>(body["query"].as_str().unwrap_or("-"))
@@ -415,9 +624,27 @@ impl Ctx {
                     Definition::Operation(OperationDefinition::SelectionSet(set)) => (set, false),
                     _ => panic!("unmodeled GraphQL definition"),
                 };
-                let fields = fields(set);
+                let fields = children(set);
                 mutation |= is_mutation;
-                graphql.extend(fields.iter().map(|f| f.name.clone()));
+                for field in &fields {
+                    names.extend(field.names());
+                    if is_mutation && field.name == "updateRefs" {
+                        ref_deletion = body["variables"]["input"]["refUpdates"]
+                            .as_array()
+                            .is_some_and(|refs| {
+                                refs.iter().any(|r| {
+                                    r["afterOid"] == "0000000000000000000000000000000000000000"
+                                })
+                            });
+                    }
+                    if repo.is_none()
+                        && field.name == "repository"
+                        && let (Some(owner), Some(name)) =
+                            (field.arg("owner", body), field.arg("name", body))
+                    {
+                        repo = Some(format!("{owner}/{name}"));
+                    }
+                }
                 ops.push(GqlOp {
                     mutation: is_mutation,
                     fields,
@@ -430,8 +657,11 @@ impl Ctx {
             repo,
             pull,
             pull_read,
+            issue_patch,
+            pull_merge,
             mutation,
-            graphql,
+            names,
+            ref_deletion,
             ops,
         }
     }
@@ -451,10 +681,22 @@ impl Ctx {
             Matcher::PullCreate { repo } => {
                 self.method == Method::POST && self.path == format!("/repos/{repo}/pulls")
             }
+            Matcher::PullMerge { repo, number } => {
+                self.pull_merge.is_some()
+                    && self.repo.as_deref() == Some(repo.as_str())
+                    && number.is_none_or(|n| self.pull_merge == Some(n))
+            }
             Matcher::RepoRead { repo } => {
                 self.method == Method::GET && self.path == format!("/repos/{repo}")
             }
-            Matcher::Graphql(field) => self.graphql.iter().any(|name| name == *field),
+            Matcher::IssuePatch { repo, number } => {
+                self.issue_patch.is_some()
+                    && self.repo.as_deref() == Some(repo.as_str())
+                    && number.is_none_or(|n| self.issue_patch == Some(n))
+            }
+            Matcher::Route { method, path } => self.method == *method && self.path == *path,
+            Matcher::Graphql(field) => self.names.contains(*field),
+            Matcher::RefDelete => self.ref_deletion,
         }
     }
 }
@@ -468,31 +710,69 @@ enum FieldAnswer {
 
 impl FakeGitHub {
     /// A GitHub with one repository, `repo` (`"owner/name"`), on default
-    /// branch `main`.
+    /// branch `main`; it is the primary repository [`State::repo`]
+    /// returns and the only one the discovery listings report installed.
     pub fn new(repo: &str) -> Self {
+        let mut state = State::new();
+        let mut primary = Repository::new(repo);
+        primary.node_id = "repo-id".into();
+        primary.installed = true;
+        state.repositories.insert(repo.into(), primary);
+        state.primary = repo.into();
         let this = Self {
             repo: repo.into(),
-            state: Mutex::new(State::new()),
+            state: Mutex::new(state),
             rules: Mutex::new(Vec::new()),
             transcript_checked: Arc::new(AtomicBool::new(false)),
         };
         transcripts::watch(&this.transcript_checked);
         this
     }
-    /// Seed the repository: `branch` points at commit `base` whose tree
-    /// `"{base}-tree"` holds `entries` (REST tree entries).
+    /// Add a repository GitHub holds — an upstream the datasources read
+    /// or, with `installed`, one the token sees.
+    pub fn add_repository(&self, repo: &str, installed: bool) {
+        let mut repository = Repository::new(repo);
+        repository.installed = installed;
+        self.state().repositories.insert(repo.into(), repository);
+    }
+    /// Seed the primary repository: `branch` points at commit `base` whose
+    /// tree `"{base}-tree"` holds `entries` (REST tree entries).
     pub fn seed(&self, branch: &str, base: &str, entries: Vec<Value>) {
         let mut state = self.state();
-        state.default_branch = branch.into();
-        state.base = base.into();
-        state
-            .refs
+        let repo = state.repo_mut();
+        repo.default_branch = branch.into();
+        repo.base = base.into();
+        repo.refs
             .insert(format!("refs/heads/{branch}"), base.into());
-        state.trees.insert(format!("{base}-tree"), json!(entries));
-        state.commits.insert(
+        repo.trees.insert(format!("{base}-tree"), json!(entries));
+        repo.commits.insert(
             base.into(),
             json!({"sha":base,"tree":{"sha":format!("{base}-tree")}}),
         );
+    }
+    /// Seed the primary repository from file contents: every file becomes
+    /// a blob (`git/blobs/{sha}` and `object(oid:)` reads answer its text)
+    /// and a `100644` tree entry; `extra` entries join the tree verbatim.
+    pub fn seed_files(
+        &self,
+        branch: &str,
+        base: &str,
+        files: &BTreeMap<String, String>,
+        extra: Vec<Value>,
+    ) {
+        let mut entries: Vec<Value> = files
+            .iter()
+            .map(|(path, content)| {
+                json!({"path":path,"sha":blob_sha(content),"mode":"100644","type":"blob"})
+            })
+            .collect();
+        entries.extend(extra);
+        self.seed(branch, base, entries);
+        let mut state = self.state();
+        let repo = state.repo_mut();
+        for content in files.values() {
+            repo.blobs.insert(blob_sha(content), content.clone());
+        }
     }
     /// The locked server state: arrange what the server holds and read what
     /// it recorded, in the same shapes the old fakes exposed.
@@ -542,11 +822,62 @@ impl FakeGitHub {
         })
         .respond(500, json!({}));
     }
+    /// `GET .../pulls` answers 500 — the lifecycle listing is down.
+    pub fn pulls_list_fails(&self) {
+        self.on(Matcher::Route {
+            method: Method::GET,
+            path: format!("/repos/{}/pulls", self.repo),
+        })
+        .respond(500, json!({"message":"pulls boom"}));
+    }
+    /// `PUT .../pulls/{n}/merge` answers `{"merged":false}` — GitHub
+    /// declines the merge without telling the client why.
+    pub fn pull_merge_refused(&self) {
+        self.on(Matcher::PullMerge {
+            repo: self.repo.clone(),
+            number: None,
+        })
+        .respond(200, json!({"merged":false,"sha":"merged-base"}));
+    }
     /// `updateRefs` never satisfies the lease: GraphQL errors, refs
     /// unchanged.
     pub fn update_refs_fail(&self) {
         self.on(Matcher::Graphql("updateRefs"))
             .respond(200, json!({"errors":[{"message":"reference changed"}]}));
+    }
+    /// `updateRefs` mutations that delete a ref answer GraphQL errors with
+    /// `message`; branch writes still succeed.
+    pub fn ref_delete_fails(&self, message: &str) {
+        self.on(Matcher::RefDelete)
+            .respond(200, json!({"errors":[{"message":message}]}));
+    }
+    /// `enablePullRequestAutoMerge` answers `UNPROCESSABLE` with `message`,
+    /// as GitHub does for a PR it finds mergeable already.
+    pub fn auto_merge_refused(&self, message: &str) {
+        self.on(Matcher::Graphql("enablePullRequestAutoMerge"))
+            .respond(
+                200,
+                json!({"data":{"enablePullRequestAutoMerge":null},
+                       "errors":[{"type":"UNPROCESSABLE","message":message}]}),
+            );
+    }
+    /// The write inventory answers 500 — the scan's one big read is down.
+    pub fn inventory_fails(&self) {
+        self.on(Matcher::Graphql("associatedPullRequests"))
+            .respond(500, json!({"message":"inventory boom"}));
+    }
+    /// Dashboard issue writes — create and patch — answer 422.
+    pub fn issue_writes_fail(&self) {
+        self.on(Matcher::Route {
+            method: Method::POST,
+            path: format!("/repos/{}/issues", self.repo),
+        })
+        .respond(422, json!({"message":"issue boom"}));
+        self.on(Matcher::IssuePatch {
+            repo: self.repo.clone(),
+            number: None,
+        })
+        .respond(422, json!({"message":"issue boom"}));
     }
     /// `GET /repos/{repo}` answers 200 with an empty object.
     pub fn repo_read_malformed(&self) {
@@ -562,7 +893,13 @@ impl FakeGitHub {
             number: None,
         })
         .mutate(|state, hit| {
-            state.prs.get_mut(&hit.pull.unwrap()).unwrap()["state"] = json!("closed");
+            state
+                .repositories
+                .get_mut(hit.repo.as_deref().unwrap())
+                .unwrap()
+                .prs
+                .get_mut(&hit.pull.unwrap())
+                .unwrap()["state"] = json!("closed");
         });
     }
     /// Pulls read open for `reads` reads, then read back closed.
@@ -573,7 +910,13 @@ impl FakeGitHub {
         })
         .after(reads)
         .mutate(|state, hit| {
-            state.prs.get_mut(&hit.pull.unwrap()).unwrap()["state"] = json!("closed");
+            state
+                .repositories
+                .get_mut(hit.repo.as_deref().unwrap())
+                .unwrap()
+                .prs
+                .get_mut(&hit.pull.unwrap())
+                .unwrap()["state"] = json!("closed");
         });
     }
     /// Every pull read reports `sha` as its head — a foreign push.
@@ -584,8 +927,28 @@ impl FakeGitHub {
             number: None,
         })
         .mutate(move |state, hit| {
-            state.prs.get_mut(&hit.pull.unwrap()).unwrap()["head"]["sha"] = json!(sha);
+            state
+                .repositories
+                .get_mut(hit.repo.as_deref().unwrap())
+                .unwrap()
+                .prs
+                .get_mut(&hit.pull.unwrap())
+                .unwrap()["head"]["sha"] = json!(sha);
         });
+    }
+    /// The checks read finds `sha` on the first pull's head — a human push
+    /// landed between the pull read and the checks read.
+    pub fn checks_move_head(&self, sha: &str) {
+        let sha = sha.to_owned();
+        self.on(Matcher::Graphql("statusCheckRollup"))
+            .times(1)
+            .mutate(move |state, hit| {
+                let repo = state
+                    .repositories
+                    .get_mut(hit.repo.as_deref().unwrap())
+                    .unwrap();
+                repo.prs.values_mut().next().unwrap()["head"]["sha"] = json!(sha);
+            });
     }
     /// Fire `mutate` rules that match `ctx`. Pull reads call this after read
     /// lag, at the point the request sees state; every other route calls it
@@ -607,6 +970,7 @@ impl FakeGitHub {
                 &Hit {
                     method: ctx.method.clone(),
                     path: ctx.path.clone(),
+                    repo: ctx.repo.clone(),
                     pull: ctx.pull,
                 },
             );
@@ -643,8 +1007,9 @@ impl FakeGitHub {
     }
     fn closed_prs(&self, body: &Value, state: &State) -> Value {
         let nodes: Vec<_> = state
-            .prs
+            .repositories
             .values()
+            .flat_map(|repo| repo.prs.values())
             .filter(|p| {
                 body["variables"]["closed"]
                     .as_array()
@@ -663,64 +1028,124 @@ impl FakeGitHub {
         json!(nodes)
     }
     fn repository(&self, field: &GqlField, body: &Value, state: &mut State) -> Value {
-        let mut repo = Map::new();
+        let Some(name) = field
+            .arg("owner", body)
+            .zip(field.arg("name", body))
+            .map(|(owner, name)| format!("{owner}/{name}"))
+        else {
+            panic!("repository field without owner/name arguments");
+        };
+        if !state.repositories.contains_key(&name) {
+            panic!("unknown repository {name}");
+        }
+        let repo = &state.repositories[&name];
+        let mut answer = Map::new();
         let mut release_logged = false;
-        for (key, name, with_description) in &field.children {
-            match name.as_str() {
-                "defaultBranchRef" => {
-                    repo.insert(
-                        key.clone(),
-                        json!({"name":state.default_branch,"target":{"oid":state.base}}),
-                    );
-                }
-                "issues" => {
-                    repo.insert(
-                        key.clone(),
-                        json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}),
-                    );
-                }
-                "refs" => {
-                    repo.insert(key.clone(), self.refs_connection(body, state));
-                }
+        for child in &field.children {
+            let key = child.key.clone();
+            let value = match child.name.as_str() {
+                "id" => json!(repo.node_id),
+                "isPrivate" => json!(repo.private),
+                "autoMergeAllowed" => json!(repo.merge.auto_merge),
+                "squashMergeAllowed" => json!(repo.merge.squash),
+                "mergeCommitAllowed" => json!(repo.merge.merge_commit),
+                "rebaseMergeAllowed" => json!(repo.merge.rebase),
+                "deleteBranchOnMerge" => json!(repo.merge.delete_branch),
+                "defaultBranchRef" => repo
+                    .default_branch_ref
+                    .clone()
+                    .filter(|_| {
+                        child.names().iter().any(|name| {
+                            ["rules", "refUpdateRule", "history", "requiresStatusChecks"]
+                                .contains(&name.as_str())
+                        })
+                    })
+                    .unwrap_or_else(|| {
+                        let oid = repo
+                            .refs
+                            .get(&format!("refs/heads/{}", repo.default_branch))
+                            .cloned()
+                            .unwrap_or_else(|| repo.base.clone());
+                        json!({"name":repo.default_branch,
+                           "target":{"oid":oid,
+                                     "tree":{"oid":repo.commits.get(&oid)
+                                         .map(|c| c["tree"]["sha"].clone())
+                                         .unwrap_or(Value::Null)}}})
+                    }),
+                "issues" => json!({"nodes":repo.issues.values()
+                        .filter(|i| i["state"] == "OPEN").cloned().collect::<Vec<_>>(),
+                        "pageInfo":{"hasNextPage":false,"endCursor":null}}),
+                "refs" => self.refs_connection(repo, body, state),
                 "release" => {
                     if !release_logged {
                         state.release_queries.push(body.clone());
                         release_logged = true;
                     }
-                    let text = state
+                    let text = repo
                         .release_note_body
                         .clone()
                         .unwrap_or_else(|| "Release details 🦀\n".repeat(10_000));
-                    repo.insert(
-                        key.clone(),
-                        if *with_description {
-                            json!({"updatedAt":blob_sha(&text),"body":text,"draft":false,"prerelease":false})
-                        } else {
-                            json!({"updatedAt":blob_sha(&text)})
-                        },
-                    );
+                    let with_body = child.children.iter().any(|c| c.name == "description");
+                    if with_body {
+                        json!({"updatedAt":blob_sha(&text),"body":text,"draft":false,"prerelease":false})
+                    } else {
+                        json!({"updatedAt":blob_sha(&text)})
+                    }
                 }
-                // Server settings the suites never read through GraphQL; the
-                // old fake's answer carried none.
-                "id"
-                | "autoMergeAllowed"
-                | "squashMergeAllowed"
-                | "mergeCommitAllowed"
-                | "rebaseMergeAllowed"
-                | "deleteBranchOnMerge" => {}
+                "releases" => json!({"nodes":repo.releases,
+                        "pageInfo":{"hasNextPage":false,"endCursor":null}}),
+                "object" => self.object_field(child, repo, body),
                 name => panic!("unmodeled repository field {name}"),
-            }
+            };
+            answer.insert(key, value);
         }
-        Value::Object(repo)
+        Value::Object(answer)
     }
-    fn refs_connection(&self, body: &Value, state: &State) -> Value {
-        let nodes: Vec<_> = state
+    /// `repository { object(oid:|expression:) }`: blobs by content,
+    /// commits as `{"oid","__typename":"Commit"}`, and the
+    /// `statusCheckRollup` contexts a checks read asks for. An expression
+    /// resolves through refs; an oid resolves blobs first, then reads as a
+    /// commit.
+    fn object_field(&self, field: &GqlField, repo: &Repository, body: &Value) -> Value {
+        let names = field.names();
+        if let Some(expression) = field.arg("expression", body) {
+            return repo
+                .refs
+                .get(expression)
+                .filter(|oid| repo.commits.contains_key(*oid))
+                .map(|oid| json!({"oid":oid,"__typename":"Commit"}))
+                .unwrap_or(Value::Null);
+        }
+        let Some(oid) = field.arg("oid", body) else {
+            panic!("object field without oid or expression");
+        };
+        if names.contains("text") {
+            return repo.blobs.get(oid).map_or(
+                Value::Null,
+                |text| json!({"text":text,"isBinary":false,"isTruncated":false}),
+            );
+        }
+        let mut object = json!({"oid":oid,"__typename":"Commit"});
+        if names.contains("statusCheckRollup") {
+            let offset = body["variables"]["cursor"]
+                .as_str()
+                .and_then(|c| c.parse::<usize>().ok())
+                .unwrap_or(0);
+            let next = offset + 100;
+            object["statusCheckRollup"] = json!({"contexts":{
+                "nodes":repo.checks.iter().skip(offset).take(100).cloned().collect::<Vec<_>>(),
+                "pageInfo":{"hasNextPage":next < repo.checks.len(),"endCursor":next.to_string()}}});
+        }
+        object
+    }
+    fn refs_connection(&self, repo: &Repository, body: &Value, state: &State) -> Value {
+        let nodes: Vec<_> = repo
             .refs
             .iter()
+            .filter_map(|(name, oid)| Some((name.strip_prefix("refs/heads/")?, oid)))
             .map(|(name, oid)| {
-                let name = name.strip_prefix("refs/heads/").unwrap();
-                let commit = &state.commits[oid];
-                let prs: Vec<_> = state
+                let commit = &repo.commits[oid];
+                let prs: Vec<_> = repo
                     .prs
                     .values()
                     .filter(|p| p["state"] == "open" && p["head"]["ref"] == name)
@@ -751,26 +1176,45 @@ impl FakeGitHub {
             "updateRefs" => self.update_refs(body, state),
             "enablePullRequestAutoMerge" | "disablePullRequestAutoMerge" => {
                 let enabled = name.starts_with("enable");
-                for pr in state.prs.values_mut() {
-                    pr["auto_merge"] = if enabled {
-                        json!({"enabled":true})
-                    } else {
-                        Value::Null
-                    };
+                let input = &body["variables"]["input"];
+                let id = input["pullRequestId"].as_str().unwrap_or_default();
+                let Some(pr) = state
+                    .repositories
+                    .values_mut()
+                    .find_map(|repo| repo.prs.values_mut().find(|p| p["node_id"] == id))
+                else {
+                    panic!("auto-merge on unknown pull request {id}");
+                };
+                if !input["expectedHeadOid"].is_null()
+                    && input["expectedHeadOid"] != pr["head"]["sha"]
+                {
+                    return FieldAnswer::Errors(
+                        json!([{"message":"expectedHeadOid does not match the pull request head"}]),
+                    );
                 }
-                FieldAnswer::Data(json!({"pullRequest":{"id":"pr-id"}}))
+                pr["auto_merge"] = if enabled {
+                    json!({"enabled":true})
+                } else {
+                    Value::Null
+                };
+                FieldAnswer::Data(json!({"pullRequest":{"id":id}}))
             }
             _ => panic!("unmodeled GraphQL mutation {name}"),
         }
     }
     fn update_refs(&self, body: &Value, state: &mut State) -> FieldAnswer {
         let input = &body["variables"]["input"];
-        assert_eq!(input["repositoryId"], state.repo_id);
+        let Some(repo) = state
+            .repositories
+            .values_mut()
+            .find(|repo| repo.node_id == input["repositoryId"])
+        else {
+            panic!("updateRefs to unknown repository {}", input["repositoryId"])
+        };
         let updates = input["refUpdates"].as_array().unwrap();
         let zero = "0000000000000000000000000000000000000000";
         let valid = updates.iter().all(|r| {
-            state
-                .refs
+            repo.refs
                 .get(r["name"].as_str().unwrap())
                 .map_or(zero, String::as_str)
                 == r["beforeOid"].as_str().unwrap()
@@ -779,14 +1223,18 @@ impl FakeGitHub {
             return FieldAnswer::Errors(json!([{"message":"reference changed"}]));
         }
         for r in updates {
-            state.refs.insert(
-                r["name"].as_str().unwrap().into(),
-                r["afterOid"].as_str().unwrap().into(),
-            );
+            if r["afterOid"] == zero {
+                repo.refs.remove(r["name"].as_str().unwrap());
+            } else {
+                repo.refs.insert(
+                    r["name"].as_str().unwrap().into(),
+                    r["afterOid"].as_str().unwrap().into(),
+                );
+            }
         }
         let lag = state.settings.pr_lag_reads > 0;
         let mut pending = BTreeMap::new();
-        for pr in state.prs.values_mut() {
+        for pr in repo.prs.values_mut() {
             for r in updates {
                 if r["name"] == format!("refs/heads/{}", pr["head"]["ref"].as_str().unwrap()) {
                     if lag {
@@ -797,27 +1245,40 @@ impl FakeGitHub {
                 }
             }
         }
-        state.pending_heads.extend(pending);
+        repo.pending_heads.extend(pending);
         FieldAnswer::Data(json!({"clientMutationId":null}))
     }
-    fn create_pull(&self, body: &Value, state: &mut State) -> Response {
-        let number = state.prs.len() as u64 + 1;
-        let repo = &self.repo;
-        let sha = state.refs[&format!("refs/heads/{}", body["head"].as_str().unwrap())].clone();
-        let mut pr = json!({"number":number,"node_id":format!("pr-{number}"),"html_url":format!("https://github.com/{repo}/pull/{number}"),"state":"open","title":body["title"],"body":body["body"],"head":{"ref":body["head"],"sha":sha,"repo":{"full_name":repo}},"base":{"ref":body["base"],"repo":{"full_name":repo}},"user":{"login":"patchula[bot]"},"labels":[],"auto_merge":null,"merged_at":null,"created_at":chrono::Utc::now().to_rfc3339()});
+    fn create_pull(&self, body: &Value, repo: &mut Repository, actor: &str) -> Response {
+        let number = repo.prs.len() as u64 + 1;
+        let name = repo.name.clone();
+        let sha = repo.refs[&format!("refs/heads/{}", body["head"].as_str().unwrap())].clone();
+        let mut pr = json!({"number":number,"node_id":format!("pr-{number}"),"html_url":format!("https://github.com/{name}/pull/{number}"),"state":"open","title":body["title"],"body":body["body"],"head":{"ref":body["head"],"sha":sha,"repo":{"full_name":name}},"base":{"ref":body["base"],"repo":{"full_name":name}},"user":{"login":actor},"labels":[],"auto_merge":null,"merged_at":null,"created_at":chrono::Utc::now().to_rfc3339(),"draft":false,"mergeable":true,"mergeable_state":"clean"});
         pr["head"]["label"] = json!("demo:branch");
         pr["head"]["repo"]["updated_at"] = json!("2026-10-15T00:00:00Z");
-        pr["base"]["sha"] = json!(state.base);
+        pr["base"]["sha"] = json!(repo.base);
         pr["base"]["repo"]["size"] = json!(42);
-        state.prs.insert(number, pr.clone());
+        repo.prs.insert(number, pr.clone());
         response(201, pr)
     }
-    fn create_tree(&self, body: &Value, state: &mut State) -> Response {
-        let mut tree = state.trees[body["base_tree"].as_str().unwrap()].clone();
+    fn create_issue(&self, body: &Value, repo: &mut Repository, actor: &str) -> Response {
+        let number = 100 + repo.issues.len() as u64;
+        let author = if let Some(bot) = actor.strip_suffix("[bot]") {
+            json!({"__typename":"Bot","login":bot})
+        } else {
+            json!({"__typename":"User","login":actor})
+        };
+        let issue = json!({"number":number,"id":format!("dashboard-{number}"),"title":body["title"],"body":body["body"],"state":"OPEN","author":author});
+        repo.issues.insert(number, issue.clone());
+        response(201, issue)
+    }
+    fn create_tree(&self, body: &Value, repo: &mut Repository) -> Response {
+        let mut tree = repo.trees[body["base_tree"].as_str().unwrap()].clone();
         for original in body["tree"].as_array().unwrap() {
             let mut entry = original.clone();
-            if let Some(content) = entry["content"].as_str() {
-                entry["sha"] = json!(blob_sha(content));
+            if let Some(content) = entry["content"].as_str().map(str::to_owned) {
+                let sha = blob_sha(&content);
+                entry["sha"] = json!(sha);
+                repo.blobs.insert(sha, content);
                 entry.as_object_mut().unwrap().remove("content");
             }
             tree.as_array_mut()
@@ -827,26 +1288,26 @@ impl FakeGitHub {
                 tree.as_array_mut().unwrap().push(entry.clone());
             }
         }
-        let sha = format!("tree-{}", state.trees.len());
-        state.trees.insert(sha.clone(), tree);
+        let sha = format!("tree-{}", repo.trees.len());
+        repo.trees.insert(sha.clone(), tree);
         response(201, json!({"sha":sha}))
     }
-    fn create_commit(&self, body: &Value, state: &mut State) -> Response {
+    fn create_commit(&self, body: &Value, repo: &mut Repository, unsigned: bool) -> Response {
         assert!(
             body.get("author").is_none()
                 && body.get("committer").is_none()
                 && body.get("signature").is_none()
         );
         assert_eq!(body["parents"].as_array().unwrap().len(), 1);
-        assert_eq!(body["parents"][0], state.base);
-        let sha = format!("commit-{}", state.commits.len());
-        let commit = json!({"sha":sha,"tree":{"sha":body["tree"]},"message":body["message"],"parents":[{"sha":body["parents"][0]}],"verification":{"verified":!state.settings.unsigned}});
-        state.commits.insert(sha.clone(), commit.clone());
+        assert_eq!(body["parents"][0], repo.base);
+        let sha = format!("commit-{}", repo.commits.len());
+        let commit = json!({"sha":sha,"tree":{"sha":body["tree"]},"message":body["message"],"parents":[{"sha":body["parents"][0]}],"verification":{"verified":!unsigned}});
+        repo.commits.insert(sha.clone(), commit.clone());
         response(201, commit)
     }
-    fn patch_pull(&self, rest: &str, body: &Value, state: &mut State) -> Response {
+    fn patch_pull(&self, rest: &str, body: &Value, repo: &mut Repository) -> Response {
         let n: u64 = rest.rsplit('/').next().unwrap().parse().unwrap();
-        let pr = state.prs.get_mut(&n).unwrap();
+        let pr = repo.prs.get_mut(&n).unwrap();
         for (key, value) in body.as_object().unwrap() {
             if key == "base" {
                 pr["base"]["ref"].clone_from(value);
@@ -856,7 +1317,33 @@ impl FakeGitHub {
         }
         response(200, pr.clone())
     }
-    fn put_labels(&self, rest: &str, body: &Value, state: &mut State) -> Response {
+    fn patch_issue(&self, n: u64, body: &Value, repo: &mut Repository) -> Response {
+        let issue = repo.issues.get_mut(&n).unwrap();
+        if let Some(text) = body.get("body") {
+            issue["body"].clone_from(text);
+        }
+        if body["state"] == "closed" {
+            issue["state"] = json!("CLOSED");
+        }
+        response(200, issue.clone())
+    }
+    fn merge_pull(&self, n: u64, body: &Value, repo: &mut Repository, actor: &str) -> Response {
+        let pr = repo.prs.get_mut(&n).unwrap();
+        assert_eq!(body["sha"], pr["head"]["sha"], "merging a stale head");
+        assert_eq!(pr["user"]["login"], actor, "merging a foreign pull request");
+        assert_eq!(
+            pr["mergeable_state"], "clean",
+            "merging a pull request GitHub does not find clean"
+        );
+        let head = pr["head"]["ref"].as_str().unwrap().to_owned();
+        pr["state"] = json!("closed");
+        pr["merged_at"] = json!(chrono::Utc::now().to_rfc3339());
+        if repo.merge.delete_branch {
+            repo.refs.remove(&format!("refs/heads/{head}"));
+        }
+        response(200, json!({"merged":true,"sha":"merged-base"}))
+    }
+    fn put_labels(&self, rest: &str, body: &Value, repo: &mut Repository) -> Response {
         let n: u64 = rest.split('/').nth(1).unwrap().parse().unwrap();
         let labels: Vec<_> = body["labels"]
             .as_array()
@@ -864,18 +1351,17 @@ impl FakeGitHub {
             .iter()
             .map(|l| json!({"name":l}))
             .collect();
-        state.prs.get_mut(&n).unwrap()["labels"] = json!(labels);
+        repo.prs.get_mut(&n).unwrap()["labels"] = json!(labels);
         response(200, json!(labels))
     }
-    fn list_pulls(&self, request: &Request, state: &State) -> Response {
+    fn list_pulls(&self, request: &Request, repo: &Repository, size: usize) -> Response {
         let page = request
             .url()
             .query_pairs()
             .find(|(k, _)| k == "page")
             .and_then(|(_, p)| p.parse::<usize>().ok())
             .unwrap_or(1);
-        let size = state.settings.pr_page_size.unwrap_or(100);
-        let prs: Vec<_> = state
+        let prs: Vec<_> = repo
             .prs
             .values()
             .rev()
@@ -884,12 +1370,12 @@ impl FakeGitHub {
             .cloned()
             .collect();
         let mut reply = response(200, json!(prs));
-        if page * size < state.prs.len() {
+        if page * size < repo.prs.len() {
             reply.headers.insert(
                 "link",
                 format!(
                     "<https://api.github.com/repos/{}/pulls?state=all&page={}>; rel=\"next\"",
-                    self.repo,
+                    repo.name,
                     page + 1
                 )
                 .parse()
@@ -898,35 +1384,136 @@ impl FakeGitHub {
         }
         reply
     }
-    fn pull_read(&self, ctx: &Ctx, state: &mut State) -> Response {
+    fn pull_read(&self, ctx: &Ctx, full: &str, state: &mut State) -> Response {
         let n = ctx.pull.unwrap();
         if state.settings.pr_lag_reads > 0 {
             state.settings.pr_lag_reads -= 1;
-        } else if let Some(head) = state.pending_heads.remove(&n) {
-            state.prs.get_mut(&n).unwrap()["head"]["sha"] = head;
+        } else {
+            let head = state
+                .repositories
+                .get_mut(full)
+                .unwrap()
+                .pending_heads
+                .remove(&n);
+            if let Some(head) = head {
+                state
+                    .repositories
+                    .get_mut(full)
+                    .unwrap()
+                    .prs
+                    .get_mut(&n)
+                    .unwrap()["head"]["sha"] = head;
+            }
         }
         // `mutate` rules fire after read lag: the request sees state at its
         // own point.
         self.fire_mutates(ctx, state);
-        response(200, state.prs[&n].clone())
+        response(200, state.repositories[full].prs[&n].clone())
+    }
+    /// The App surface: installation listing, installation lookup and
+    /// per-installation access tokens.
+    fn app_routes(&self, path: &str, method: &Method, state: &mut State) -> Option<Response> {
+        if path == "/app/installations" && *method == Method::GET {
+            let installations: Vec<_> = state
+                .installations
+                .iter()
+                .map(|id| json!({"id":id,"suspended_at":null}))
+                .collect();
+            return Some(response(200, json!(installations)));
+        }
+        if let Some(id) = path
+            .strip_prefix("/app/installations/")
+            .and_then(|rest| rest.strip_suffix("/access_tokens"))
+            && *method == Method::POST
+        {
+            let _: u64 = id.parse().unwrap();
+            state.minted += 1;
+            let expires = chrono::Utc::now() + chrono::Duration::hours(1);
+            return Some(response(
+                201,
+                json!({"token":format!("installation-token-{}",state.minted),
+                       "expires_at":expires.to_rfc3339()}),
+            ));
+        }
+        if let Some(spec) = path
+            .strip_prefix("/repos/")
+            .and_then(|rest| rest.strip_suffix("/installation"))
+        {
+            let found = state.repositories.contains_key(spec) && state.repositories[spec].installed;
+            return Some(if found && let Some(id) = state.installations.first() {
+                response(200, json!({"id":id}))
+            } else {
+                response(404, json!({"message":"Not Found"}))
+            });
+        }
+        if let Some(org) = path
+            .strip_prefix("/orgs/")
+            .and_then(|rest| rest.strip_suffix("/installation"))
+        {
+            return Some(
+                if !org.is_empty()
+                    && let Some(id) = state.installations.first()
+                {
+                    response(200, json!({"id":id}))
+                } else {
+                    response(404, json!({"message":"Not Found"}))
+                },
+            );
+        }
+        None
+    }
+    /// The repository discovery listings: `user/repos` for token callers
+    /// and `installation/repositories` for installations.
+    fn discovery(&self, path: &str, state: &State) -> Option<Response> {
+        if let Some(query) = path.strip_prefix("/user/repos") {
+            let _ = query;
+            let repos: Vec<_> = state
+                .repositories
+                .values()
+                .filter(|repo| repo.installed)
+                .map(|repo| json!({"full_name":repo.name}))
+                .collect();
+            return Some(response(200, json!(repos)));
+        }
+        if path.starts_with("/installation/repositories") {
+            let repos: Vec<_> = state
+                .repositories
+                .values()
+                .filter(|repo| repo.installed)
+                .map(|repo| json!({"full_name":repo.name}))
+                .collect();
+            return Some(response(
+                200,
+                json!({"repositories":repos,"total_count":repos.len()}),
+            ));
+        }
+        None
     }
     fn dispatch(&self, request: &Request, body: &Value, ctx: &Ctx, state: &mut State) -> Response {
         let path = ctx.path.as_str();
         if path == "/graphql" {
             return self.graphql(ctx, body, state);
         }
+        if let Some(reply) = self.app_routes(path, &ctx.method, state) {
+            return reply;
+        }
+        if ctx.method == Method::GET
+            && let Some(reply) = self.discovery(path, state)
+        {
+            return reply;
+        }
         if let Some(doc) = path.strip_prefix("/data/github/") {
             let Some((repo, kind)) = doc.rsplit_once('/') else {
                 panic!("unexpected read {path}")
             };
-            let Some(upstream) = state.upstreams.get(repo) else {
+            let Some(upstream) = state.repositories.get(repo) else {
                 panic!("unexpected read {path}")
             };
             return response(
                 200,
                 match kind {
-                    "releases.json" => upstream.releases.clone(),
-                    "tags.json" => upstream.tags.clone(),
+                    "releases.json" => upstream.mirror_releases.clone(),
+                    "tags.json" => upstream.mirror_tags.clone(),
                     _ => panic!("unexpected read {path}"),
                 },
             );
@@ -936,115 +1523,212 @@ impl FakeGitHub {
         };
         let (owner, rest) = rest.split_once('/').unwrap();
         let (name, rest) = rest.split_once('/').unwrap_or((rest, ""));
-        if format!("{owner}/{name}") != self.repo {
-            let Some(upstream) = state.upstreams.get(&format!("{owner}/{name}")) else {
-                panic!("unexpected read {path}")
-            };
-            return if ctx.method == Method::GET && rest == "contents" {
-                response(200, upstream.contents.clone())
-            } else if ctx.method == Method::GET
-                && rest.starts_with("releases/tags/")
-                && upstream.release_tags
-            {
-                let etag = state.release_note_body.as_ref().map_or_else(
-                    || "\"release-one\"".into(),
-                    |text| format!("\"{}\"", blob_sha(text)),
-                );
-                let mut reply = if request
-                    .headers()
-                    .get("if-none-match")
-                    .is_some_and(|value| value == etag.as_str())
-                {
-                    response(304, Value::Null)
-                } else {
-                    response(
-                        200,
-                        json!({"body":state.release_note_body.clone().unwrap_or_else(|| {
-                            "Release details 🦀\n".repeat(10_000)
-                        })}),
-                    )
-                };
-                reply.headers.insert("etag", etag.parse().unwrap());
-                reply
-            } else {
-                panic!("unexpected read {path}")
-            };
+        let full = format!("{owner}/{name}");
+        if !state.repositories.contains_key(&full) {
+            panic!("unexpected read {path}")
         }
+        // Pull reads take the whole state — read lag and `mutate` rules run
+        // at the request's point.
+        if ctx.method == Method::GET && rest.starts_with("pulls/") {
+            return self.pull_read(ctx, &full, state);
+        }
+        let size = state.settings.pr_page_size.unwrap_or(100);
+        let truncated = state.settings.truncated;
+        let unsigned = state.settings.unsigned;
+        let actor = state.actor.clone();
+        let repo = state.repositories.get_mut(&full).unwrap();
         if ctx.method == Method::POST {
             match rest {
-                "pulls" => self.create_pull(body, state),
+                "pulls" => self.create_pull(body, repo, &actor),
+                "issues" => self.create_issue(body, repo, &actor),
+                rest if rest.ends_with("/comments") && rest.starts_with("issues/") => {
+                    response(201, json!({"id":1,"body":body["body"]}))
+                }
                 "git/blobs" => {
                     assert_eq!(body["encoding"], "utf-8");
-                    response(
-                        201,
-                        json!({"sha":blob_sha(body["content"].as_str().unwrap())}),
-                    )
+                    let content = body["content"].as_str().unwrap();
+                    let sha = blob_sha(content);
+                    repo.blobs.insert(sha.clone(), content.to_owned());
+                    response(201, json!({"sha":sha}))
                 }
-                "git/trees" => self.create_tree(body, state),
-                "git/commits" => self.create_commit(body, state),
+                "git/trees" => self.create_tree(body, repo),
+                "git/commits" => self.create_commit(body, repo, unsigned),
                 _ => panic!("unexpected write {path}"),
             }
+        } else if ctx.method == Method::PUT && rest.ends_with("/merge") {
+            let n: u64 = rest
+                .trim_start_matches("pulls/")
+                .trim_end_matches("/merge")
+                .parse()
+                .unwrap();
+            self.merge_pull(n, body, repo, &actor)
         } else if ctx.method == Method::PATCH && rest.starts_with("pulls/") {
-            self.patch_pull(rest, body, state)
+            self.patch_pull(rest, body, repo)
+        } else if ctx.method == Method::PATCH && rest.starts_with("issues/") {
+            self.patch_issue(ctx.issue_patch.unwrap(), body, repo)
         } else if ctx.method == Method::PUT && rest.ends_with("/labels") {
-            self.put_labels(rest, body, state)
+            self.put_labels(rest, body, repo)
         } else if ctx.method == Method::GET {
             if rest == "pulls" {
-                self.list_pulls(request, state)
-            } else if rest.starts_with("pulls/") {
-                self.pull_read(ctx, state)
-            } else if rest == format!("branches/{}", state.default_branch) {
-                response(200, json!({"commit":{"sha":state.base}}))
+                self.list_pulls(request, repo, size)
             } else if rest == "branches" {
-                let branches: Vec<_> = state
+                let branches: Vec<_> = repo
                     .refs
                     .iter()
-                    .map(|(n, sha)| {
-                        json!({"name":n.strip_prefix("refs/heads/").unwrap(),"commit":{"sha":sha}})
+                    .filter_map(|(n, sha)| {
+                        n.strip_prefix("refs/heads/")
+                            .map(|name| json!({"name":name,"commit":{"sha":sha}}))
                     })
                     .collect();
                 response(200, json!(branches))
-            } else if let Some(sha) = rest.strip_prefix("commits/") {
-                response(200, json!({"commit":state.commits[sha]}))
+            } else if rest == format!("branches/{}", repo.default_branch) {
+                let oid = repo.refs[&format!("refs/heads/{}", repo.default_branch)].clone();
+                let tree = repo.commits.get(&oid).map(|c| c["tree"]["sha"].clone());
+                response(
+                    200,
+                    json!({"commit":{"sha":oid,"commit":{"tree":{"sha":tree}}}}),
+                )
+            } else if let Some(reference) = rest.strip_prefix("commits/") {
+                let oid = repo
+                    .refs
+                    .get(&format!("refs/heads/{reference}"))
+                    .or_else(|| repo.refs.get(&format!("refs/tags/{reference}")))
+                    .map_or(reference, String::as_str);
+                match repo.commits.get(oid) {
+                    Some(commit) => response(200, json!({"sha":oid,"commit":commit})),
+                    None => response(404, json!({"message":"not found"})),
+                }
             } else if rest.is_empty() {
                 response(
                     200,
-                    json!({"node_id":state.repo_id,"default_branch":state.default_branch,
-                           "allow_auto_merge":true,"allow_squash_merge":true}),
+                    json!({"node_id":repo.node_id,"default_branch":repo.default_branch,
+                           "allow_auto_merge":repo.merge.auto_merge,
+                           "allow_squash_merge":repo.merge.squash,
+                           "allow_merge_commit":repo.merge.merge_commit,
+                           "allow_rebase_merge":repo.merge.rebase,
+                           "delete_branch_on_merge":repo.merge.delete_branch}),
                 )
             } else if let Some(branch) = rest.strip_prefix("git/ref/heads/") {
                 // url::Url keeps percent-encoded slashes in a path segment.
                 let branch = branch.replace("%2F", "/");
-                match state.refs.get(&format!("refs/heads/{branch}")) {
+                match repo.refs.get(&format!("refs/heads/{branch}")) {
                     Some(sha) => response(200, json!({"object":{"sha":sha}})),
                     None => response(404, json!({})),
                 }
             } else if let Some(sha) = rest.strip_prefix("git/commits/") {
-                response(200, state.commits[sha].clone())
+                match repo.commits.get(sha) {
+                    Some(commit) => response(200, commit.clone()),
+                    None => response(404, json!({"message":"not found"})),
+                }
             } else if let Some(sha) = rest.strip_prefix("git/trees/") {
-                response(
-                    200,
-                    json!({"tree":state.trees[sha],"truncated":state.settings.truncated}),
-                )
+                match repo.trees.get(sha) {
+                    Some(tree) => response(200, json!({"tree":tree,"truncated":truncated})),
+                    None => response(404, json!({"message":"not found"})),
+                }
+            } else if let Some(sha) = rest.strip_prefix("git/blobs/") {
+                match repo.blobs.get(sha) {
+                    Some(content) => response(
+                        200,
+                        json!({"encoding":"base64","content":STANDARD.encode(content)}),
+                    ),
+                    None => response(404, json!({"message":"not found"})),
+                }
+            } else if let Some(matching) = rest.strip_prefix("git/matching-refs/") {
+                if request
+                    .headers()
+                    .get("if-none-match")
+                    .is_some_and(|value| value == "tags")
+                {
+                    return response(304, Value::Null);
+                }
+                let prefix = format!("refs/{matching}");
+                let refs: Vec<_> = repo
+                    .refs
+                    .iter()
+                    .filter(|(name, _)| name.starts_with(&prefix))
+                    .map(|(name, oid)| json!({"ref":name,"object":{"sha":oid,"type":"commit"}}))
+                    .collect();
+                let mut reply = response(200, json!(refs));
+                reply.headers.insert("etag", "tags".parse().unwrap());
+                reply
+            } else if rest == "tags" {
+                if request
+                    .headers()
+                    .get("if-none-match")
+                    .is_some_and(|value| value == "tags")
+                {
+                    return response(304, Value::Null);
+                }
+                let tags: Vec<_> = repo
+                    .refs
+                    .iter()
+                    .filter_map(|(name, oid)| {
+                        name.strip_prefix("refs/tags/")
+                            .map(|tag| json!({"name":tag,"commit":{"sha":oid}}))
+                    })
+                    .collect();
+                let mut reply = response(200, json!(tags));
+                reply.headers.insert("etag", "tags".parse().unwrap());
+                reply
+            } else if rest == "contents" {
+                match &repo.contents {
+                    Some(contents) => response(200, contents.clone()),
+                    None => response(404, json!({"message":"not found"})),
+                }
+            } else if rest == "releases" {
+                let nodes: Vec<_> = repo
+                    .releases
+                    .iter()
+                    .map(|node| {
+                        json!({"tag_name":node["tagName"],"published_at":node["publishedAt"],
+                               "draft":node["isDraft"],"prerelease":node["isPrerelease"]})
+                    })
+                    .collect();
+                response(200, json!(nodes))
+            } else if let Some(_tag) = rest.strip_prefix("releases/tags/") {
+                if !repo.release_tags {
+                    response(404, json!({"message":"not found"}))
+                } else {
+                    let etag = repo.release_note_body.as_ref().map_or_else(
+                        || "\"release-one\"".into(),
+                        |text| format!("\"{}\"", blob_sha(text)),
+                    );
+                    let mut reply = if request
+                        .headers()
+                        .get("if-none-match")
+                        .is_some_and(|value| value == etag.as_str())
+                    {
+                        response(304, Value::Null)
+                    } else {
+                        response(
+                            200,
+                            json!({"body":repo.release_note_body.clone().unwrap_or_else(|| {
+                                "Release details 🦀\n".repeat(10_000)
+                            })}),
+                        )
+                    };
+                    reply.headers.insert("etag", etag.parse().unwrap());
+                    reply
+                }
             } else if rest.starts_with("compare/unknown...") {
                 response(404, json!({"message":"Not Found"}))
             } else if let Some(spec) = rest.strip_prefix("compare/") {
-                let sha = spec.split("...").nth(1).unwrap();
-                let history: Vec<_> = state
+                let sha = spec.split("...").nth(1).unwrap().split('?').next().unwrap();
+                let history: Vec<_> = repo
                     .history
                     .iter()
                     .map(String::as_str)
                     .chain(std::iter::once(sha))
                     .collect();
-                let commits: Vec<_> = if spec.starts_with(&format!("{}...", state.base))
-                    && state.merged_heads.contains(sha)
+                let commits: Vec<_> = if spec.starts_with(&format!("{}...", repo.base))
+                    && repo.merged_heads.contains(sha)
                 {
                     Vec::new()
                 } else {
                     history
                         .iter()
                         .map(|sha| {
-                            let commit = &state.commits[*sha];
+                            let commit = &repo.commits[*sha];
                             json!({"sha":sha,"author":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("patchula[bot]")},"committer":{"login":commit.get("committer_login").and_then(Value::as_str).unwrap_or("web-flow")},"commit":commit})
                         })
                         .collect()
@@ -1152,5 +1836,87 @@ impl Drop for FakeGitHub {
                 std::thread::current().name().unwrap_or("<unnamed>")
             );
         }
+    }
+}
+
+type Script = dyn Fn(&Request, &Value) -> Response + Send + Sync;
+
+/// A host router: `api.github.com` requests reach the [`FakeGitHub`];
+/// every other host needs a per-test scripted route, so suites can compose
+/// GitHub with registries, the versions host or OSV. Every request joins
+/// the router's log — GitHub's share records inside the fake again — and
+/// scripted hosts join the checked transcript like GitHub's requests.
+pub struct Hosts {
+    github: Arc<FakeGitHub>,
+    routes: Mutex<BTreeMap<String, Arc<Script>>>,
+    log: Mutex<Vec<(String, String, Value)>>,
+}
+
+impl Hosts {
+    /// A router fronting `github`.
+    pub fn new(github: Arc<FakeGitHub>) -> Self {
+        Self {
+            github,
+            routes: Mutex::new(BTreeMap::new()),
+            log: Mutex::new(Vec::new()),
+        }
+    }
+    /// The GitHub the router fronts — state and fault rules as usual.
+    pub fn github(&self) -> &FakeGitHub {
+        &self.github
+    }
+    /// Route every request for `host` through `answer`: the request and
+    /// its decoded JSON body in, the response out.
+    pub fn script(
+        &self,
+        host: &str,
+        answer: impl Fn(&Request, &Value) -> Response + Send + Sync + 'static,
+    ) {
+        self.routes
+            .lock()
+            .unwrap()
+            .insert(host.into(), Arc::new(answer));
+    }
+    /// `(method, path, body)` for every request the router answered, in
+    /// arrival order, GitHub and scripted hosts together.
+    pub fn log(&self) -> Vec<(String, String, Value)> {
+        self.log.lock().unwrap().clone()
+    }
+    /// Forget every recorded request.
+    pub fn clear(&self) {
+        self.log.lock().unwrap().clear();
+    }
+}
+
+impl Transport for Hosts {
+    fn send(&self, request: Request) -> Exchange<'_> {
+        let host = request.url().host_str().unwrap_or_default().to_owned();
+        let path = request.url().path().to_owned();
+        let body: Value = request
+            .body()
+            .and_then(|b| b.as_bytes())
+            .and_then(|b| serde_json::from_slice(b).ok())
+            .unwrap_or(Value::Null);
+        self.log
+            .lock()
+            .unwrap()
+            .push((request.method().to_string(), path.clone(), body.clone()));
+        if host == "api.github.com" {
+            return self.github.send(request);
+        }
+        assert!(
+            !request.headers().contains_key("authorization"),
+            "authorization never leaves api.github.com"
+        );
+        transcripts::record(&request, &body);
+        let route = self
+            .routes
+            .lock()
+            .unwrap()
+            .get(&host)
+            .cloned()
+            .unwrap_or_else(|| panic!("unscripted host {host}"));
+        let reply = route(&request, &body);
+        Box::pin(async move { Ok(reply) })
     }
 }
