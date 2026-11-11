@@ -3766,7 +3766,13 @@ fn only_newly_ticked_controls_count_as_edits() {
     let remove = "<!-- patchula-batch-remove:abc -->";
     assert!(controls_edited("", &line("x", remove)));
     // `checked` wants exactly one recheck marker and a ticked line ending in it.
-    let pr = |text: &str| json!({"body": text});
+    let pr = |text: &str| {
+        serde_json::from_value::<patchula_github::model::PullRequest>(json!({
+            "number":1,"node_id":"N1","html_url":"u","state":"open","title":"t",
+            "body":text,"labels":[],"user":{"login":"bot"},"head":{"ref":"b","sha":"s"},"base":{"ref":"main"}
+        }))
+        .unwrap()
+    };
     assert!(checked(&pr(&line("x", recheck))));
     assert!(!checked(&pr(&line(" ", recheck))));
     assert!(!checked(&pr(&format!(
@@ -3890,7 +3896,8 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
     let (mut p, snapshot) = make_plan("22.0.0");
     let key = "f".repeat(64);
     let owned = |number: u64, branch: &str, body: &str| {
-        json!({"number":number,"state":"open","body":body,
+        json!({"number":number,"node_id":format!("N{number}"),"html_url":"u",
+            "state":"open","title":"t","body":body,
             "user":{"login":"patchula[bot]"},
             "head":{"ref":branch,"sha":"base","repo":{"full_name":"demo/app"}},
             "base":{"ref":"main","repo":{"full_name":"demo/app"}},

@@ -42,7 +42,8 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
         .iter()
         .map(|pr| (pr, pull_requests::Pr::read(pr)))
         .filter(|(pr, fields)| {
-            fields.state.as_deref() == Some("open") && pull_requests::owned_pr(pr, actor, repo)
+            fields.state.as_deref() == Some("open")
+                && pull_requests::value_owned_pr(pr, actor, repo)
         })
         .collect();
     let batch = open
@@ -51,14 +52,14 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
     let mut items: Vec<Item> = batch
         .and_then(|(pr, _)| {
             markers::section_json::<Vec<Item>>(
-                pull_requests::body(pr),
+                pull_requests::value_body(pr),
                 markers::ITEMS,
                 markers::PAYLOAD,
             )
         })
         .unwrap_or_default();
     if let Some((pr, _)) = batch {
-        let removed: BTreeSet<_> = markers::ticked_lines(pull_requests::body(pr))
+        let removed: BTreeSet<_> = markers::ticked_lines(pull_requests::value_body(pr))
             .into_iter()
             .filter_map(|line| {
                 markers::line_end(line, markers::REMOVE, usize::MAX).map(str::to_owned)
@@ -68,16 +69,16 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
     }
     for (pr, fields) in &open {
         if fields.head.branch.as_deref() == Some(batch_branch)
-            || !markers::ticked_lines(pull_requests::body(pr))
+            || !markers::ticked_lines(pull_requests::value_body(pr))
                 .iter()
                 .any(|line| line.ends_with(markers::ADD))
         {
             continue;
         }
         let (Some(origin), Some(targets)) = (
-            pull_requests::marker_update(pull_requests::body(pr)),
+            pull_requests::marker_update(pull_requests::value_body(pr)),
             markers::section_json::<Vec<Change>>(
-                pull_requests::body(pr),
+                pull_requests::value_body(pr),
                 markers::TARGETS,
                 markers::PAYLOAD,
             ),

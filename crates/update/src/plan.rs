@@ -72,7 +72,7 @@ pub struct Plan {
     pub changes: Vec<Change>,
     pub retry: bool,
     pub tree: Option<String>,
-    pub cached_pr: Option<serde_json::Value>,
+    pub cached_pr: Option<crate::pull_requests::Tracked>,
     pub input_fingerprint: String,
     pub lock_jobs: Vec<contract::Job>,
     pub lockfiles_ready: bool,
@@ -385,7 +385,7 @@ impl Plan {
         tree: &str,
         fingerprint: &str,
         files: Vec<patchula_report::FileAction>,
-        pr: serde_json::Value,
+        pr: crate::pull_requests::Tracked,
     ) {
         self.action.status = BranchStatus::Unchanged;
         self.action.previous_commit = Some(commit.into());

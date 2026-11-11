@@ -56,7 +56,11 @@ pub async fn settle(
     // REST view after a write, the inventory's on the receipts path.
     let prs = match lifecycle.as_deref() {
         Some(state) => state.dashboard_prs(),
-        None => inventory.pull_requests(&repo.repository),
+        None => inventory
+            .pull_requests(&repo.repository)
+            .iter()
+            .map(crate::pull_requests::Tracked::value)
+            .collect(),
     };
     let body = crate::dashboard::render(
         repo,

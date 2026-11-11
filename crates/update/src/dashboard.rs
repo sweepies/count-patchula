@@ -177,12 +177,16 @@ impl Controls {
                 }
             }
         }
-        for pr in inventory.pull_requests(repo) {
+        for pr in inventory
+            .pull_requests(repo)
+            .iter()
+            .map(crate::pull_requests::Tracked::value)
+        {
             result
                 .age_permits
-                .extend(pr_permits(crate::pull_requests::body(&pr)));
+                .extend(pr_permits(crate::pull_requests::value_body(&pr)));
             let fields = crate::pull_requests::Pr::read(&pr);
-            if (result.recheck || crate::pull_requests::checked(&pr))
+            if (result.recheck || crate::pull_requests::value_checked(&pr))
                 && let Some(branch) = fields.head.branch.as_deref()
             {
                 result.branches.insert(branch.into());
