@@ -75,6 +75,7 @@ impl Transport for Fake {
             .lock()
             .unwrap()
             .push((request.method().to_string(), path.clone()));
+        patchula_testkit::transcripts::record(&request, &body);
         if let Some(spec) = path.strip_prefix("/api/v1/repos/") {
             let key = spec.strip_suffix("/tags").unwrap_or(spec);
             return self.answer(
@@ -337,6 +338,13 @@ fn lookup(report: &patchula_report::Report) -> &patchula_report::Repository {
     &report.repositories[0]
 }
 
+/// Hash this test's recorded requests and compare them with the snapshot;
+/// `PATCHULA_UPDATE_TRANSCRIPTS=1` rewrites it instead.
+fn check_transcript() {
+    let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transcripts.tsv");
+    patchula_testkit::transcripts::check(&snapshot);
+}
+
 /// A mutable ref is not a version; its commit is read up front so a digest
 /// pin can quote it.
 #[tokio::test]
@@ -384,6 +392,7 @@ async fn an_action_on_a_branch_ref_resolves_its_commit() {
             .any(|u| u.new_digest.as_deref() == Some(&"c".repeat(40))),
         "the resolved commit must land in the report: {dep:?}"
     );
+    check_transcript();
 }
 
 /// A bare SHA pin has no version comment: the replacement tag is unknown and
@@ -414,6 +423,7 @@ async fn a_sha_pin_without_a_version_comment_warns() {
         "{:?}",
         repo.warnings
     );
+    check_transcript();
 }
 
 /// A tag catalog that comes back empty is a warning, not an error: version
@@ -443,6 +453,7 @@ async fn an_empty_tag_catalog_warns_the_lookup_is_unavailable() {
                 .contains("registry returned an empty tag catalog; version lookup is unavailable")),
         "{repo:#?}"
     );
+    check_transcript();
 }
 
 /// A ref whose commit cannot be resolved reports its digest failure; a
@@ -497,6 +508,7 @@ async fn unresolved_and_failed_digests_are_lookup_failures() {
             .any(|m| m.contains("cannot pin v4.3.0 to a digest")),
         "{messages:?}"
     );
+    check_transcript();
 }
 
 /// On a warm run the catalog is reused, so mutable tag targets are refreshed
@@ -560,6 +572,7 @@ async fn a_warm_run_resolves_mutable_tags_in_one_graphql_read() {
             .any(|u| u.new_digest.as_deref() == Some(&"e".repeat(40))),
         "{dep:?}"
     );
+    check_transcript();
 }
 
 /// A forge ref absent from its tag catalog is "not found" without ever being
@@ -610,6 +623,7 @@ async fn a_forge_ref_missing_from_its_catalog_is_not_sent_to_github() {
         "{:?}",
         fake.requests.lock().unwrap()
     );
+    check_transcript();
 }
 
 /// A multi-package release-catalog query that fails falls back to one lookup
@@ -695,4 +709,5 @@ async fn a_failed_release_catalog_batch_falls_back_per_package() {
         [2, 1, 1],
         "the failed batch must fall back to one query per package"
     );
+    check_transcript();
 }

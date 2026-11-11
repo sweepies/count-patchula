@@ -117,6 +117,7 @@ impl Transport for Fake {
         state
             .requests
             .push((request.method().to_string(), path.clone()));
+        patchula_testkit::transcripts::record(&request, &body);
         let reply = if path == "/graphql" {
             if body["query"] == patchula_update::INVENTORY_QUERY {
                 let label_next = state.label_next_page;
@@ -599,6 +600,13 @@ async fn client(fake: Arc<Fake>) -> Client {
     .unwrap()
 }
 
+/// Hash this test's recorded GitHub requests and compare them with the
+/// snapshot; `PATCHULA_UPDATE_TRANSCRIPTS=1` rewrites it instead.
+fn check_transcript() {
+    let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transcripts.tsv");
+    patchula_testkit::transcripts::check(&snapshot);
+}
+
 #[tokio::test(start_paused = true)]
 async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
     let (mut first, snapshot) = make_plan("22.0.0");
@@ -659,6 +667,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
         repeat.action()
     );
     assert_eq!(server.0.lock().unwrap().writes.len(), count);
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -703,6 +712,7 @@ async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
         server.0.lock().unwrap().writes.is_empty(),
         "no tree, commit or ref mutation on forced recheck"
     );
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -764,6 +774,7 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
         );
         assert_eq!(state.writes.len(), 3);
     }
+    check_transcript();
 }
 #[tokio::test(start_paused = true)]
 async fn dry_run_plans_diffs_and_never_sends_mutations() {
@@ -797,6 +808,7 @@ async fn dry_run_plans_diffs_and_never_sends_mutations() {
     );
     assert!(server.0.lock().unwrap().writes.is_empty());
     assert!(server.0.lock().unwrap().requests.is_empty());
+    check_transcript();
 }
 #[tokio::test(start_paused = true)]
 async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() {
@@ -847,6 +859,7 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
             next.action()
         );
     }
+    check_transcript();
 }
 #[tokio::test(start_paused = true)]
 async fn human_commit_is_protected_even_with_copied_patchula_markers() {
@@ -889,6 +902,7 @@ async fn human_commit_is_protected_even_with_copied_patchula_markers() {
         next.action()
     );
     assert_eq!(server.0.lock().unwrap().writes.len(), count);
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -939,6 +953,7 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
         );
         assert_eq!(server.0.lock().unwrap().writes.len(), count);
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1002,6 +1017,7 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
         next.action()
     );
     assert!(next.contents["mise.toml"].contains("# new base comment"));
+    check_transcript();
 }
 #[tokio::test(start_paused = true)]
 async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed() {
@@ -1060,6 +1076,7 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
             assert!(server.0.lock().unwrap().writes.is_empty());
         }
     }
+    check_transcript();
 }
 #[tokio::test]
 async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
@@ -1090,6 +1107,7 @@ async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
             .all(|plan| patchula_update::needs_requeue(plan.action()))
     );
     assert!(server.0.lock().unwrap().writes.is_empty());
+    check_transcript();
 }
 
 #[test]
@@ -1478,6 +1496,7 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
     );
     assert!(s.refs.contains_key("refs/heads/patchula/human"));
     assert_eq!(s.refs["refs/heads/main"], "base");
+    check_transcript();
 }
 
 #[test]
@@ -1643,6 +1662,7 @@ async fn shared_base_write_trace_and_request_budget() {
             .filter(|(p, _)| p.ends_with("/git/trees"))
             .all(|(_, b)| b["tree"][0]["content"] == p.contents["mise.toml"])
     );
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1710,6 +1730,7 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
         state.requests.len(),
         started.elapsed()
     );
+    check_transcript();
 }
 
 fn pr_config() -> (Config, Repository) {
@@ -1970,6 +1991,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 .all(|(m, p)| m == "POST" && p == "/graphql")
         );
     }
+    check_transcript();
 }
 #[tokio::test(start_paused = true)]
 async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
@@ -2092,6 +2114,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             }
         }
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2180,6 +2203,7 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
             .collect::<Vec<_>>(),
         [&plans[0].action().branch]
     );
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2262,6 +2286,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
             [("POST".into(), "/graphql".into())]
         );
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2360,6 +2385,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
             .iter()
             .any(|l| l["name"] == "human-label")
     );
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2424,6 +2450,7 @@ async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_
         patchula_report::PullRequestStatus::Created
     );
     assert_eq!(server.0.lock().unwrap().prs.len(), 3);
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2449,6 +2476,7 @@ async fn security_updates_skip_the_concurrent_and_hourly_limits() {
             .all(|a| a.status == patchula_report::PullRequestStatus::Created),
         "{actions:?}"
     );
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2498,6 +2526,7 @@ async fn concurrent_and_hourly_limits_include_closed_creates_and_null_is_unlimit
         actions[0].status,
         patchula_report::PullRequestStatus::Created
     );
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2581,6 +2610,7 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
             assert!(close < delete);
         }
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2608,6 +2638,7 @@ async fn generated_tables_policy_text_and_markers_do_not_gain_joiners() {
     assert!(!body.contains('\u{200d}'));
     assert_eq!(body.matches("<!-- patchula:").count(), 1);
     assert_eq!(body.matches("<!-- patchula-content:").count(), 1);
+    check_transcript();
 }
 
 const FOREIGN: &str = "<!-- tool:summary:start -->\nA generated summary, with a [link](https://example.org/x) and @someone.\n<!-- tool:summary:end -->";
@@ -2712,6 +2743,7 @@ async fn text_others_wrote_in_the_description_is_left_alone_and_never_doubled() 
             .unwrap()
             .ends_with("rewritten\n<!-- tool:summary:end -->")
     );
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2793,6 +2825,7 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
             assert!(!body.contains("- [x]"));
         }
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2899,6 +2932,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     assert!(body.len() <= patchula_update::BODY_LIMIT);
     assert_eq!(body.matches("<!-- patchula:").count(), 1);
     assert_eq!(s.release_queries.len(), count);
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2945,6 +2979,7 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
     .await;
     let s = server.0.lock().unwrap();
     assert!(s.prs[&1]["auto_merge"].is_null());
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2978,6 +3013,7 @@ async fn uncertain_pr_creation_is_reconciled_next_run_and_never_blindly_retried(
         patchula_report::PullRequestStatus::Unchanged
     );
     assert_eq!(server.0.lock().unwrap().prs.len(), 1);
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -3010,6 +3046,7 @@ async fn lookup_warnings_defer_obsolete_pr_closure() {
     .unwrap();
     assert!(state.actions.is_empty());
     assert_eq!(server.0.lock().unwrap().prs[&1]["state"], "open");
+    check_transcript();
 }
 
 #[test]
@@ -3233,6 +3270,7 @@ async fn pin_title_respects_prefix_and_pin_rows_never_request_release_notes() {
     assert!(text.contains("| pin |"));
     assert!(!text.to_lowercase().contains("release notes"));
     assert!(!s.requests.iter().any(|(_, p)| p.contains("/releases/")));
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -3281,6 +3319,7 @@ async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
             "{reason}"
         );
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -3309,6 +3348,7 @@ async fn single_branch_ref_failure_names_githubs_reason() {
         "{:?}",
         p.action().reason
     );
+    check_transcript();
 }
 
 /// Every `updateRefs` input recorded by the fake, as lists of ref names.
@@ -3405,6 +3445,7 @@ async fn no_ref_update_names_the_default_branch() {
     let names = ref_update_names(&server);
     assert!(names.len() > before);
     assert!(names.iter().flatten().all(|n| n != "refs/heads/main"));
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -3505,6 +3546,7 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
     .await
     .unwrap();
     assert!(actions.iter().any(|a| a.status == BranchStatus::Deleted));
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -3573,6 +3615,7 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
             .count(),
         1
     );
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -3610,6 +3653,7 @@ async fn owned_readable_branch_and_pr_can_follow_a_changed_track_identity() {
             .unwrap()
             .contains(&next.identity)
     );
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -3678,6 +3722,7 @@ async fn merged_pr_branch_can_be_reused_for_the_next_update_on_its_major_line() 
         patchula_report::PullRequestStatus::Created
     );
     assert_eq!(server.0.lock().unwrap().prs.len(), 2);
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -3892,6 +3937,7 @@ async fn obsolete_prs_fetch_repository_metadata_once() {
         "the head is re-read before each closure: {:?}",
         s.requests
     );
+    check_transcript();
 }
 
 /// Labels or associated pull requests past their first page leave the
@@ -3985,6 +4031,7 @@ async fn paginated_inventory_connections_close_the_receipts_fast_path() {
             "{paginated}"
         );
     }
+    check_transcript();
 }
 
 /// A branch whose tip records a base GitHub cannot compare is left alone as
@@ -4043,6 +4090,7 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
             .contains("not a commit here")
     );
     assert_eq!(server.0.lock().unwrap().writes.len(), writes);
+    check_transcript();
 }
 
 /// The report reads the plan's action: each named transition's status and
@@ -4122,6 +4170,7 @@ async fn ungenerated_lockfiles_fail_before_any_github_request() {
         Some("lockfiles must be generated successfully before publication")
     );
     assert!(server.0.lock().unwrap().requests.is_empty());
+    check_transcript();
 }
 
 /// A branch tip without the Count's base marker, or with one that cannot
@@ -4191,6 +4240,7 @@ async fn unmarked_and_badly_marked_branch_tips_are_protected() {
         );
         assert_eq!(server.0.lock().unwrap().writes.len(), count);
     }
+    check_transcript();
 }
 
 /// The shared tail turns lifecycle failures into warnings and goes on:
@@ -4312,6 +4362,7 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
         .to_owned();
     assert!(body.contains("- [ ]"), "{body}");
     assert!(!body.contains("- [x]"), "{body}");
+    check_transcript();
 }
 
 /// A maintenance plan's PR lists the files it refreshed.
@@ -4340,6 +4391,7 @@ async fn a_maintenance_pr_lists_the_files_it_refreshed() {
         .to_owned();
     assert!(body.contains("Scheduled"), "{body}");
     assert!(body.contains("mise.toml"), "{body}");
+    check_transcript();
 }
 
 /// After eight release-note sections the PR body says the source
@@ -4382,6 +4434,7 @@ async fn release_notes_stop_after_eight_with_a_pointer() {
         body.contains("Out of room for more release notes"),
         "{body}"
     );
+    check_transcript();
 }
 
 /// An image rebuild that fixes advisories shows the fixed rows without the
@@ -4428,6 +4481,7 @@ async fn a_rebuild_that_fixes_advisories_skips_the_empty_note() {
         "{body}"
     );
     assert!(body.contains("GHSA-1"), "{body}");
+    check_transcript();
 }
 
 /// When the controls and ownership marker would overflow the body budget,
@@ -4482,6 +4536,7 @@ async fn an_overfull_tail_drops_the_controls_but_keeps_ownership() {
         .to_owned();
     assert!(!body.contains("Add to the batch PR"), "{body}");
     assert!(body.contains("<!-- patchula:"), "{body}");
+    check_transcript();
 }
 
 /// A merge the Count never recorded is not presented as a merge outcome on

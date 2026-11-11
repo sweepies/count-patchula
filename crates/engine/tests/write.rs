@@ -87,6 +87,13 @@ impl patchula_github::Credentials for Rotating {
         Box::pin(async move { Ok(format!("offline-token-{count}")) })
     }
 }
+
+/// Hash this test's recorded requests and compare them with the snapshot;
+/// `PATCHULA_UPDATE_TRANSCRIPTS=1` rewrites it instead.
+fn check_transcript() {
+    let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transcripts.tsv");
+    patchula_testkit::transcripts::check(&snapshot);
+}
 #[tokio::test]
 async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_receipts_warm() {
     let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
@@ -128,6 +135,7 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
     );
     assert!(server_fake.writes.lock().unwrap().is_empty());
     assert!(credentials.0.load(std::sync::atomic::Ordering::Relaxed) > 2);
+    check_transcript();
 }
 impl Fake {
     fn new(lock: bool) -> Self {
@@ -173,6 +181,7 @@ impl Transport for Fake {
             path.into(),
             body.clone(),
         ));
+        patchula_testkit::transcripts::record(&request, &body);
         let (status, value) = if request.url().host_str() == Some("api.osv.dev") {
             (200, self.osv.lock().unwrap().clone())
         } else if request.url().host_str() == Some("registry.npmjs.org") {
@@ -563,6 +572,7 @@ async fn a_commit_that_changes_no_read_file_reuses_the_extraction() {
             .collect::<Vec<_>>()
     };
     assert_eq!(found(&second), found(&first));
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -670,6 +680,7 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
             started.elapsed()
         );
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -746,6 +757,7 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
     config.defaults.wait_hours = 0;
     run(Some(config)).await.unwrap();
     assert!(fake.writes.lock().unwrap().is_empty());
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -775,6 +787,7 @@ async fn owner_closure_during_publication_keeps_repository_successful() {
     let pr = &report.actions.as_ref().unwrap().pull_requests[0];
     assert_eq!(pr.status, patchula_report::PullRequestStatus::Skipped);
     assert!(pr.reason.as_deref().unwrap().contains("closed-by-owner"));
+    check_transcript();
 }
 #[tokio::test(start_paused = true)]
 async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actions() {
@@ -853,6 +866,7 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
             }
         }
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -890,6 +904,7 @@ async fn an_advertised_server_is_hidden_in_the_pr_and_the_dashboard() {
             "{kind}"
         );
     }
+    check_transcript();
 }
 
 struct FailTools;
@@ -1018,6 +1033,7 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
             .any(|(_, path, _)| path.ends_with("/merge"));
         assert_eq!(merged, merges, "{refusal}/{state}/{checks}");
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1234,6 +1250,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
             );
         }
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1313,6 +1330,7 @@ async fn auto_merge_uses_inventory_methods_and_prefers_native_without_status_rea
             );
         }
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1363,6 +1381,7 @@ async fn manual_create_age_and_schedule_permits_do_not_authorize_fallback_mergin
             );
         }
     }
+    check_transcript();
 }
 
 fn checkbox_config() -> patchula_config::Config {
@@ -1500,6 +1519,7 @@ async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only
         );
     }
     assert_unticked(&fake);
+    check_transcript();
 }
 async fn checkbox_run(
     engine: &Engine,
@@ -1627,6 +1647,7 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
         BranchStatus::Unchanged
     );
     assert!(fake.writes.lock().unwrap().is_empty());
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1681,6 +1702,7 @@ async fn dashboard_create_click_bypasses_concurrent_hourly_and_schedule_holds() 
         );
         assert_unticked(&fake);
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1813,6 +1835,7 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
         );
         assert_eq!(request_counts[0], if origin == "retry" { 4 } else { 15 });
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1837,6 +1860,7 @@ async fn dashboard_recreate_click_opens_a_new_pr_and_does_not_repeat_the_old_own
         next.actions.unwrap().branches[0].status,
         BranchStatus::Unchanged
     );
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1882,6 +1906,7 @@ async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkb
         checkbox_run(&engine, &config, now).await;
         assert!(fake.writes.lock().unwrap().is_empty());
     }
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1912,6 +1937,7 @@ async fn failed_lookup_click_retries_the_source_and_unticks_even_when_it_still_f
         1
     );
     assert_unticked(&fake);
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1943,6 +1969,7 @@ async fn human_authored_dashboard_checkboxes_never_request_branch_work() {
             .contains("- [X]")
     );
     assert_eq!(fake.issues.lock().unwrap().len(), 2);
+    check_transcript();
 }
 impl patchula_process::Executor for FailTools {
     fn run(
@@ -2006,6 +2033,7 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
             .iter()
             .all(|(p, _)| p.contains("/issues"))
     );
+    check_transcript();
 }
 
 fn open_prs(fake: &Fake) -> Vec<Value> {
@@ -2113,6 +2141,7 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
     let open = open_prs(&fake);
     assert_eq!(open.len(), 1, "{open:?}");
     assert_eq!(open[0]["head"]["ref"], branch.as_str());
+    check_transcript();
 }
 
 /// The batch PR replaces the PRs it carries, which count toward
@@ -2136,6 +2165,7 @@ async fn a_batch_is_created_at_the_concurrent_limit() {
     let open = open_prs(&fake);
     assert_eq!(open.len(), 1, "{open:?}");
     assert_eq!(open[0]["head"]["ref"], "patchula/batch");
+    check_transcript();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2207,6 +2237,7 @@ async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_conditio
         report.repositories[0].tooling.is_empty(),
         "unreadable protection never warns"
     );
+    check_transcript();
 }
 
 /// A repository that commits its own registry credentials is refused during
@@ -2252,6 +2283,7 @@ async fn a_repository_that_commits_credentials_is_refused() {
         fake.requests.lock().unwrap()
     );
     assert!(fake.writes.lock().unwrap().is_empty());
+    check_transcript();
 }
 
 /// A credentialed URL in a file no lockfile tool or registry lookup reads —
@@ -2296,6 +2328,7 @@ async fn a_credential_in_a_ci_workflow_is_not_refused() {
         Status::Complete,
         "{report:?}"
     );
+    check_transcript();
 }
 
 /// The write path reads the viewer login once, inside the run's inventory;
@@ -2343,6 +2376,7 @@ async fn the_write_path_reads_the_viewer_login_once() {
         1,
         "{requests:?}"
     );
+    check_transcript();
 }
 
 /// The write inventory and the dashboard controls are read inside the scan;
@@ -2385,6 +2419,7 @@ async fn inventory_and_controls_failures_fail_the_repository_before_writes() {
         }
         assert!(fake.writes.lock().unwrap().is_empty(), "{failure}");
     }
+    check_transcript();
 }
 
 /// A branch plan that cannot be computed fails the repository rather than
@@ -2421,6 +2456,7 @@ async fn an_invalid_branch_prefix_fails_the_repository() {
         "{repo:?}"
     );
     assert!(fake.writes.lock().unwrap().is_empty());
+    check_transcript();
 }
 
 /// A write receipt that cannot be decoded is a cache miss, not an error:
@@ -2466,6 +2502,7 @@ async fn an_undecodable_write_receipt_is_a_miss_and_rewritten() {
             .any(|(p, _)| p.ends_with("/git/commits")),
         "a missed receipt must reconcile by writing"
     );
+    check_transcript();
 }
 
 /// A pull-request listing that fails after the receipt check ends the
@@ -2503,6 +2540,7 @@ async fn a_pulls_listing_failure_fails_the_repository() {
             .any(|(_, path, _)| path.ends_with("/merge")),
         "a failed lifecycle read must not merge"
     );
+    check_transcript();
 }
 
 /// An obsolete owned branch whose deletion GitHub refuses fails the
@@ -2549,6 +2587,7 @@ async fn a_failed_branch_deletion_fails_the_repository() {
         repo.reason.as_deref().unwrap().contains("update refused"),
         "{repo:?}"
     );
+    check_transcript();
 }
 
 /// A dashboard write failure fails the repository with the step's reason,
@@ -2584,6 +2623,7 @@ async fn a_dashboard_write_failure_fails_the_repository() {
             .contains("dependency dashboard:"),
         "{repo:?}"
     );
+    check_transcript();
 }
 
 /// Lockfile maintenance plans its own branch in its window; without a disk
@@ -2629,6 +2669,7 @@ async fn lockfile_maintenance_plans_and_a_missing_runner_fails_the_branch() {
             .contains("lockfile generation requires a disk cache or an injected runner"),
         "{maintenance:?}"
     );
+    check_transcript();
 }
 
 /// A blob the batch cannot produce is a repository error, not an empty file:
@@ -2657,6 +2698,7 @@ async fn an_unfetchable_blob_fails_the_repository() {
     let repo = &report.repositories[0];
     assert_eq!(repo.status, Status::Error, "{repo:?}");
     assert!(repo.reason.is_some(), "{repo:?}");
+    check_transcript();
 }
 
 /// A recheck click revalidates every dependency: the advisory query is sent
@@ -2685,6 +2727,7 @@ async fn a_recheck_click_revalidates_advisories() {
     fake.requests.lock().unwrap().clear();
     checkbox_run(&engine, &config, now).await;
     assert_eq!(osv_requests(), 1, "the retry must bypass the cached answer");
+    check_transcript();
 }
 
 /// A PR recheck box ticked against saved controls retries the branch it
@@ -2731,6 +2774,7 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
             .any(|(p, _)| p.ends_with("/git/commits")),
         "the tick must rewrite the branch"
     );
+    check_transcript();
 }
 
 /// A policy that cannot evaluate a dependency — an LTS channel a catalog
@@ -2768,4 +2812,5 @@ async fn a_policy_that_cannot_evaluate_warns_the_dependency() {
         "{:?}",
         repo.warnings
     );
+    check_transcript();
 }

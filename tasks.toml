@@ -158,6 +158,15 @@ description = "Regenerate crates/cli/tests/help.txt, the plain --help pages, aft
 env = { PATCHULA_UPDATE_SNAPSHOT = "1" }
 run = "cargo test --locked -p patchula-cli --test cli help_pages_match_the_snapshot"
 
+["transcripts:snapshot"]
+description = "Regenerate the request-transcript snapshots after an intended fake or request change"
+env = { PATCHULA_UPDATE_TRANSCRIPTS = "1" }
+run = [
+  "rm -f crates/update/tests/transcripts.tsv crates/engine/tests/transcripts.tsv",
+  "cargo test --locked -p patchula-update --test write",
+  "cargo test --locked -p patchula-engine --test write --test actions --test symlinks",
+]
+
 ["corpus:check"]
 description = "Look up every corpus dependency against live registries and plan its branches without writing; needs a GitHub token; forwards run flags; PATCHULA_BIN runs an already-built binary"
 raw_args = true
