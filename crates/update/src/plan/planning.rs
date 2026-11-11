@@ -74,7 +74,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
     let snapshot = snapshot(&files);
     let mut config = config();
     let repo = repo();
-    let mut p = maintenance(&repo, &config, &snapshot, None, monday())
+    let p = maintenance(&repo, &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
     assert_eq!(p.action().branch, "patchula/lock-file-maintenance");
@@ -92,7 +92,9 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
     let cache = patchula_cache::Cache::open(":memory:", Default::default())
         .await
         .unwrap();
-    p.lockfiles_ready = true;
+    let mut p = crate::plan::testing::Draft::from(p)
+        .lockfiles_ready(true)
+        .build();
     p.hold(crate::plan::Hold::LockfilesCurrent);
     record_refresh(&cache, &[p], &[], monday()).await.unwrap();
     for days in [0, 7] {
@@ -157,8 +159,8 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
     let plan = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    assert_eq!(plan.lock_jobs.len(), 1);
-    assert_eq!(plan.lock_jobs[0].ecosystem, Ecosystem::Mise);
+    assert_eq!(plan.lock_jobs().len(), 1);
+    assert_eq!(plan.lock_jobs()[0].ecosystem, Ecosystem::Mise);
 }
 
 /// A job's scope is an enum in memory but its wire shape is the flat field
@@ -513,14 +515,14 @@ fn an_in_range_release_is_a_lock_only_plan_for_bundler_composer_and_pyproject() 
             "{manager}: {:?}",
             plan.action()
         );
-        assert!(plan.contents.is_empty(), "{manager}");
+        assert!(plan.contents().is_empty(), "{manager}");
         assert_eq!(
             plan.action().message,
             format!("chore(deps): update {package} to {target}"),
             "{manager}"
         );
         assert_eq!(
-            plan.lock_jobs,
+            plan.lock_jobs(),
             [Job {
                 ecosystem,
                 directory: String::new(),
@@ -815,7 +817,7 @@ fn a_batch_moves_every_declaration_of_a_dependency_in_a_file() {
     )
     .unwrap()
     .expect("a batch plan");
-    let written = &plan.contents[".github/workflows/ci.yml"];
+    let written = &plan.contents()[".github/workflows/ci.yml"];
     assert_eq!(
         written.matches("actions/checkout@v4.2.0").count(),
         3,
@@ -873,7 +875,7 @@ fn a_batch_drops_a_target_older_than_the_current_version() {
     assert!(batch("24.22.2").is_none());
     assert!(batch("26.13.0").is_none());
     let newer = batch("26.14.0").expect("a newer target is still batched");
-    assert!(newer.contents["mise.toml"].contains("26.14.0"));
+    assert!(newer.contents()["mise.toml"].contains("26.14.0"));
 }
 
 /// Supersession reads the lock: a lockfile-only target older than the locked
@@ -1387,19 +1389,116 @@ mod goldens {
         let plan = maintenance(&repo(), &config(), &snapshot(&files), None, monday())
             .unwrap()
             .unwrap();
-        assert!(plan.maintenance);
+        assert!(plan.is_maintenance());
         assert_eq!(
-            plan.fingerprint,
+            plan.fingerprint(),
             "afc5cee4a02f229ef7a115e629120a6d10e8aa1c7a66e40e2afbc8bf00369cac"
         );
-        assert_eq!(plan.input_fingerprint, plan.fingerprint);
+        assert_eq!(plan.input_fingerprint(), plan.fingerprint());
         assert_eq!(
-            plan.identity,
+            plan.identity(),
             "066510027b40697776d9e4eddb977f9302a2e648de2f0d4c8371579d1b1f94f4"
         );
         assert_eq!(
-            crate::update_key(&plan),
+            plan.update_key(),
             "39b92221b8041c0d7005557eac085932f17517b7ff35be1b9aa0538d7f971ecb"
+        );
+    }
+
+    /// An update plan's `update_key` — the hash the PR ownership marker
+    /// carries for the branch and its targets — is pinned for fixed inputs.
+    #[test]
+    fn an_update_plans_update_key_is_frozen() {
+        let config = config();
+        let evaluator = patchula_lookup::Evaluator::new(&config).unwrap();
+        let files = BTreeMap::from([(
+            "package.json".to_string(),
+            "{\"dependencies\":{\"dep\":\"1.0.0\"}}\n".to_string(),
+        )]);
+        let dep = mkdep(
+            Manager::Npm,
+            "package.json",
+            patchula_words::DependencyKind::Production,
+        );
+        let update = update();
+        let plan = build(
+            &repo(),
+            &config,
+            &evaluator,
+            &snapshot(&files),
+            false,
+            None,
+            monday(),
+            "golden",
+            "patchula/golden".into(),
+            &[Item {
+                dep: &dep,
+                update: &update,
+                current_version: None,
+                advisories: &[],
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            plan.update_key(),
+            "15b8ee4e4771104763996d169c7b732b4a162bf1fa7fc90f5c7737972d3872f3"
+        );
+    }
+
+    /// The batch plan's fingerprint — the built-stage hash the trailer and
+    /// the write receipts carry — and its `update_key` are pinned for fixed
+    /// inputs.
+    #[test]
+    fn a_batch_plans_fingerprint_and_update_key_are_frozen() {
+        let workflow = "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4.1.0\n";
+        let files =
+            BTreeMap::from([(".github/workflows/ci.yml".to_string(), workflow.to_string())]);
+        let config = config();
+        let dependencies = patchula_manager::Scanner::new(&config)
+            .unwrap()
+            .extract(&patchula_manager::all_read(&files))
+            .unwrap()
+            .dependencies
+            .into_iter()
+            .filter(|d| d.package == "actions/checkout")
+            .collect::<Vec<_>>();
+        let target = crate::plan::Change {
+            registry: None,
+            source: dependencies[0].source,
+            package: dependencies[0].package.clone(),
+            file: ".github/workflows/ci.yml".into(),
+            current: dependencies[0].current.clone(),
+            current_version: None,
+            value: Some("v4.2.0".into()),
+            version: Some("4.2.0".into()),
+            digest: None,
+            kind: patchula_words::Update::Minor,
+            merge: false,
+            labels: Vec::new(),
+            release_notes: false,
+            body_notes: Vec::new(),
+            advisories: Vec::new(),
+            image: None,
+        };
+        let plan = crate::plan::batch_plan(
+            &repo(),
+            &config,
+            &dependencies,
+            &snapshot(&files),
+            &[target],
+            false,
+            None,
+            monday(),
+        )
+        .unwrap()
+        .expect("a batch plan");
+        assert_eq!(
+            plan.fingerprint(),
+            "7b4481e59fd80abacc94f9b8e9d0b1b9ebd8c3bf8a67730a9565d72d36389f34"
+        );
+        assert_eq!(
+            plan.update_key(),
+            "e6336e6849029ee6bc95f8f5ce7751b009895228b45b809be41efab34a8cb9f8"
         );
     }
 
@@ -1527,7 +1626,7 @@ mod goldens {
             lockfile_pending: false,
             files: Vec::new(),
         };
-        let mut plan = Plan::new(action());
+        let mut plan = testing::Draft::new(action()).build();
         plan.lockfiles_failed(patchula_lockfiles::Failure::Text(
             "the fixture failed".into(),
         ));
@@ -1536,7 +1635,7 @@ mod goldens {
             plan.action().reason.as_deref(),
             Some("lockfile generation failed: the fixture failed")
         );
-        let mut plan = Plan::new(action());
+        let mut plan = testing::Draft::new(action()).build();
         plan.lockfiles_failed(patchula_lockfiles::Failure::Tool {
             context: "cargo".into(),
             failure: patchula_process::Failure::Io("disk full".into()),

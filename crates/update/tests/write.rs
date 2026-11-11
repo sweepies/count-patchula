@@ -9,6 +9,7 @@ use patchula_report::{
     Repository, Status, Update,
 };
 use patchula_testkit::github::FakeGitHub;
+use patchula_update::testing::Draft;
 use patchula_update::{Blob, Plan, Snapshot, blob_sha, branch_name, plan};
 use patchula_words::{Manager, Source, Update as UpdateKind};
 use serde_json::{Value, json};
@@ -253,11 +254,13 @@ async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
         false,
     )
     .await;
-    let (mut repeat, _) = make_plan("22.0.0");
-    repeat.retry = true;
-    // Policy/renderer fingerprints do not require a new Git commit when
-    // the complete intended tree and base are unchanged.
-    repeat.fingerprint = "changed-policy-fingerprint".into();
+    let (repeat, _) = make_plan("22.0.0");
+    let mut repeat = Draft::from(repeat)
+        .retry(true)
+        // Policy/renderer fingerprints do not require a new Git commit when
+        // the complete intended tree and base are unchanged.
+        .fingerprint("changed-policy-fingerprint")
+        .build();
     server.state().writes.clear();
     patchula_update::apply_all(
         &github,
@@ -306,7 +309,7 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
             let entries = state
                 .repo_mut()
                 .trees
-                .get_mut(first.tree.as_ref().unwrap())
+                .get_mut(first.tree().unwrap())
                 .unwrap()
                 .as_array_mut()
                 .unwrap();
@@ -320,8 +323,8 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
             }
             state.writes.clear();
         }
-        let (mut repeat, _) = make_plan("22.0.0");
-        repeat.retry = true;
+        let (repeat, _) = make_plan("22.0.0");
+        let mut repeat = Draft::from(repeat).retry(true).build();
         patchula_update::apply_all(
             &github,
             std::slice::from_mut(&mut repeat),
@@ -334,7 +337,7 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
         .await;
         assert_eq!(repeat.action().status, BranchStatus::Updated);
         let state = server.state();
-        let entries = state.repo().trees[repeat.tree.as_ref().unwrap()]
+        let entries = state.repo().trees[repeat.tree().unwrap()]
             .as_array()
             .unwrap();
         assert!(!entries.iter().any(|entry| entry["path"] == "obsolete.lock"));
@@ -412,7 +415,7 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
         }
         let (mut next, _) = make_plan("22.0.0");
         next.retarget_base("base2".into());
-        next.retry = true;
+        let mut next = Draft::from(next).retry(true).build();
         patchula_update::apply_all(
             &github,
             std::slice::from_mut(&mut next),
@@ -595,7 +598,7 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
         "{:?}",
         next.action()
     );
-    assert!(next.contents["mise.toml"].contains("# new base comment"));
+    assert!(next.contents()["mise.toml"].contains("# new base comment"));
     check_transcript();
 }
 #[tokio::test(start_paused = true)]
@@ -764,7 +767,7 @@ fn grouped_files_and_prefixes_are_stable_when_occurrence_order_changes() {
     .pop()
     .unwrap();
     assert_eq!(first.action(), second.action());
-    assert_eq!(first.fingerprint, second.fingerprint);
+    assert_eq!(first.fingerprint(), second.fingerprint());
 }
 #[test]
 fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
@@ -908,10 +911,10 @@ fn a_zero_x_crates_in_range_release_yields_to_its_next_minor() {
         plans.iter().map(|p| &p.action().branch).collect::<Vec<_>>()
     );
     let p = &plans[0];
-    assert_eq!(p.changes.len(), 1);
-    assert_eq!(p.changes[0].version.as_deref(), Some("0.10.0"));
-    assert_eq!(p.lock_jobs.len(), 1, "{:?}", p.lock_jobs);
-    assert_eq!(p.lock_jobs[0].target(), Some("0.10.0"));
+    assert_eq!(p.changes().len(), 1);
+    assert_eq!(p.changes()[0].version.as_deref(), Some("0.10.0"));
+    assert_eq!(p.lock_jobs().len(), 1, "{:?}", p.lock_jobs());
+    assert_eq!(p.lock_jobs()[0].target(), Some("0.10.0"));
     assert!(
         p.action().message.ends_with("update hcl-edit to 0.10.0"),
         "{}",
@@ -964,9 +967,9 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
             .unwrap();
             assert!(!p.action().lockfile_pending, "{lock}");
             assert_eq!(p.action().status, BranchStatus::Planned, "{lock}");
-            assert_eq!(p.lock_jobs.len(), 1, "{lock}");
+            assert_eq!(p.lock_jobs().len(), 1, "{lock}");
             assert_eq!(
-                p.lock_jobs[0].ecosystem,
+                p.lock_jobs()[0].ecosystem,
                 patchula_lockfiles::Ecosystem::Node,
                 "{lock}"
             );
@@ -1018,7 +1021,7 @@ fn consolidates_minor_patch_digest_pins_and_keeps_only_latest_major() {
         .iter()
         .find(|p| p.action().branch.ends_with("20.x"))
         .unwrap();
-    assert!(nonmajor.contents["mise.toml"].contains("20.9.0"));
+    assert!(nonmajor.contents()["mise.toml"].contains("20.9.0"));
     assert_eq!(nonmajor.action().status, BranchStatus::Planned);
 }
 
@@ -1240,7 +1243,7 @@ async fn shared_base_write_trace_and_request_budget() {
             .writes
             .iter()
             .filter(|(p, _)| p.ends_with("/git/trees"))
-            .all(|(_, b)| b["tree"][0]["content"] == p.contents["mise.toml"])
+            .all(|(_, b)| b["tree"][0]["content"] == p.contents()["mise.toml"])
     );
     check_transcript();
 }
@@ -1256,8 +1259,7 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
             .map(|n| {
                 let (mut p, _) = make_plan("22.0.0");
                 p.rename_branch(format!("patchula/tool-{n}-22.x"));
-                p.retry = true;
-                p
+                Draft::from(p).retry(true).build()
             })
             .collect::<Vec<_>>()
     };
@@ -1392,23 +1394,26 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         if case == "conflicts" {
             config.prs.rebase = Rebase::Conflicts;
         }
-        let (mut p, snapshot) = make_plan("22.0.0");
+        let (p, snapshot) = make_plan("22.0.0");
+        let mut draft = Draft::from(p);
         if case == "notes" {
-            p.changes[0].source = Source::GithubTags;
-            p.changes[0].package = "actions/checkout".into();
-            p.changes[0].release_notes = true;
+            draft.changes_mut()[0].source = Source::GithubTags;
+            draft.changes_mut()[0].package = "actions/checkout".into();
+            draft.changes_mut()[0].release_notes = true;
         }
-        p.changes[0].labels = vec!["dependencies".into()];
+        draft.changes_mut()[0].labels = vec!["dependencies".into()];
         if case == "generated" {
-            p.fingerprint = "d".repeat(64);
-            p.lock_jobs.push(patchula_lockfiles::Job {
-                ecosystem: patchula_lockfiles::Ecosystem::Cargo,
-                directory: String::new(),
-                scope: patchula_lockfiles::Scope::Directory,
-                exact_version: false,
-            });
-            p.lockfiles_ready = true;
+            draft = draft
+                .fingerprint("d".repeat(64))
+                .lock_job(patchula_lockfiles::Job {
+                    ecosystem: patchula_lockfiles::Ecosystem::Cargo,
+                    directory: String::new(),
+                    scope: patchula_lockfiles::Scope::Directory,
+                    exact_version: false,
+                })
+                .lockfiles_ready(true);
         }
+        let mut p = draft.build();
         let server = fake(&snapshot);
         servers.push(server.clone());
         let github = client(server.clone()).await;
@@ -1422,9 +1427,8 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 &snapshot,
             )
             .await;
-            let (mut next, _) = make_plan("22.0.0");
-            next.changes.clone_from(&p.changes);
-            p = next;
+            let (next, _) = make_plan("22.0.0");
+            p = Draft::from(next).changes(p.changes().to_vec()).build();
         }
         let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(
             &github,
@@ -1458,12 +1462,16 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         )
         .await
         .unwrap();
-        let (mut next, _) = make_plan(if case == "plan" { "22.1.0" } else { "22.0.0" });
+        let (next, _) = make_plan(if case == "plan" { "22.1.0" } else { "22.0.0" });
+        let mut draft = Draft::from(next);
         if case == "notes" {
-            next.changes.clone_from(&p.changes);
+            *draft.changes_mut() = p.changes().to_vec();
         }
-        next.changes[0].labels.clone_from(&p.changes[0].labels);
-        next.lock_jobs.clone_from(&p.lock_jobs);
+        draft.changes_mut()[0]
+            .labels
+            .clone_from(&p.changes()[0].labels);
+        *draft.lock_jobs_mut() = p.lock_jobs().to_vec();
+        let mut next = draft.build();
         {
             let mut s = server.state();
             match case {
@@ -1901,9 +1909,11 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
 #[tokio::test(start_paused = true)]
 async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
     let (config, repo) = pr_config();
-    let (mut p, snapshot) = make_plan("22.0.0");
-    p.changes[0].labels = vec!["dependencies".into()];
-    p.changes[0].body_notes = vec!["Review our deployment first.".into()];
+    let (p, snapshot) = make_plan("22.0.0");
+    let mut draft = Draft::from(p);
+    draft.changes_mut()[0].labels = vec!["dependencies".into()];
+    draft.changes_mut()[0].body_notes = vec!["Review our deployment first.".into()];
+    let mut p = draft.build();
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     let actions = pr_cycle(
@@ -1931,8 +1941,8 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
         assert_eq!(pr["labels"][0]["name"], "dependencies");
     }
     let count = server.state().writes.len();
-    let (mut repeat, _) = make_plan("22.0.0");
-    repeat.changes.clone_from(&p.changes);
+    let (repeat, _) = make_plan("22.0.0");
+    let mut repeat = Draft::from(repeat).changes(p.changes().to_vec()).build();
     let actions = pr_cycle(
         &github,
         &repo,
@@ -1958,8 +1968,8 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
             .unwrap()
             .push(json!({"name":"human-label"}));
     }
-    let (mut retry, _) = make_plan("22.0.0");
-    retry.changes.clone_from(&p.changes);
+    let (retry, _) = make_plan("22.0.0");
+    let mut retry = Draft::from(retry).changes(p.changes().to_vec()).build();
     let actions = pr_cycle(
         &github,
         &repo,
@@ -1968,14 +1978,16 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
         &snapshot,
     )
     .await;
-    assert!(retry.retry);
+    assert!(retry.retry());
     assert_eq!(retry.action().status, BranchStatus::Unchanged);
     assert_eq!(
         actions[0].status,
         patchula_report::PullRequestStatus::Updated
     );
-    let (mut next, _) = make_plan("22.1.0");
-    next.changes[0].labels = vec!["new-policy".into()];
+    let (next, _) = make_plan("22.1.0");
+    let mut draft = Draft::from(next);
+    draft.changes_mut()[0].labels = vec!["new-policy".into()];
+    let mut next = draft.build();
     pr_cycle(
         &github,
         &repo,
@@ -2029,9 +2041,9 @@ async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_
     let count = server.state().writes.len();
     let (mut repeat, _) = make_plan("22.0.0");
     repeat.set_message("build: different wording".into());
-    let mut row = repeat.changes[0].clone();
+    let mut row = repeat.changes()[0].clone();
     row.file = "other.toml".into();
-    repeat.changes.push(row);
+    let mut repeat = Draft::from(repeat).change(row).build();
     pr_cycle(
         &github,
         &repo,
@@ -2073,13 +2085,15 @@ async fn security_updates_skip_the_concurrent_and_hourly_limits() {
     config.prs.concurrent = Some(1);
     config.prs.per_hour = Some(1);
     let (p, snapshot) = make_plan("22.0.0");
-    let (mut security, _) = make_plan("24.0.0");
-    security.changes[0].advisories = vec![
+    let (security, _) = make_plan("24.0.0");
+    let mut draft = Draft::from(security);
+    draft.changes_mut()[0].advisories = vec![
         serde_json::from_value(
             json!({"id":"GHSA-test","url":"https://osv.dev/vulnerability/GHSA-test"}),
         )
         .unwrap(),
     ];
+    let security = draft.build();
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     let mut plans = vec![p, security];
@@ -2238,11 +2252,14 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
 #[tokio::test(start_paused = true)]
 async fn generated_tables_policy_text_and_markers_do_not_gain_joiners() {
     let (config, repo) = pr_config();
-    let (mut p, snapshot) = make_plan("22.0.0");
-    p.changes[0].package = "@scope/package".into();
-    p.changes[0].current = "20.0.0@sha256:abcdef".into();
-    p.changes[0].digest = Some("sha256:fedcba".into());
-    p.changes[0].body_notes = vec!["Policy @owner name@version <!-- patchula:fake -->".into()];
+    let (p, snapshot) = make_plan("22.0.0");
+    let mut draft = Draft::from(p);
+    draft.changes_mut()[0].package = "@scope/package".into();
+    draft.changes_mut()[0].current = "20.0.0@sha256:abcdef".into();
+    draft.changes_mut()[0].digest = Some("sha256:fedcba".into());
+    draft.changes_mut()[0].body_notes =
+        vec!["Policy @owner name@version <!-- patchula:fake -->".into()];
+    let mut p = draft.build();
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     pr_cycle(
@@ -2280,11 +2297,13 @@ async fn text_others_wrote_in_the_description_is_left_alone_and_never_doubled() 
     let (mut p, snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
-    let changes = p.changes.clone();
+    let changes = p.changes().to_vec();
     let publish = |retry: bool| {
-        let (mut next, _) = make_plan("22.0.0");
-        next.changes.clone_from(&changes);
-        next.retry = retry;
+        let (next, _) = make_plan("22.0.0");
+        let mut next = Draft::from(next)
+            .changes(changes.clone())
+            .retry(retry)
+            .build();
         let (github, repo, config, snapshot) = (&github, &repo, &config, &snapshot);
         async move {
             pr_cycle(
@@ -2370,10 +2389,12 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
     let mut servers = Vec::new();
     for origin in ["repository", "pr"] {
         let (config, repo) = pr_config();
-        let (mut p, snapshot) = make_plan("22.0.0");
-        p.changes[0].source = Source::GithubTags;
-        p.changes[0].package = "actions/checkout".into();
-        p.changes[0].release_notes = true;
+        let (p, snapshot) = make_plan("22.0.0");
+        let mut draft = Draft::from(p);
+        draft.changes_mut()[0].source = Source::GithubTags;
+        draft.changes_mut()[0].package = "actions/checkout".into();
+        draft.changes_mut()[0].release_notes = true;
+        let mut p = draft.build();
         let server = fake(&snapshot);
         servers.push(server.clone());
         server
@@ -2393,9 +2414,11 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
         .await;
         // Exercise both unchanged and changed re-renders in distinct batches.
         for changed in [false, true] {
-            let (mut next, _) = make_plan("22.0.0");
-            next.changes.clone_from(&p.changes);
-            next.retry = origin == "repository";
+            let (next, _) = make_plan("22.0.0");
+            let mut next = Draft::from(next)
+                .changes(p.changes().to_vec())
+                .retry(origin == "repository")
+                .build();
             {
                 let mut s = server.state();
                 if changed {
@@ -2463,15 +2486,17 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
 #[tokio::test(start_paused = true)]
 async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     let (config, repo) = pr_config();
-    let (mut p, snapshot) = make_plan("22.0.0");
+    let (p, snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
-    p.changes[0].source = Source::GithubTags;
-    p.changes[0].package = "actions/checkout".into();
-    p.changes[0].release_notes = true;
-    let mut row = p.changes[0].clone();
+    let mut draft = Draft::from(p);
+    draft.changes_mut()[0].source = Source::GithubTags;
+    draft.changes_mut()[0].package = "actions/checkout".into();
+    draft.changes_mut()[0].release_notes = true;
+    let mut row = draft.changes_mut()[0].clone();
     row.file = "other.yml".into();
-    p.changes.push(row);
+    draft.changes_mut().push(row);
+    let mut p = draft.build();
     let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(
         &github,
         &repo,
@@ -2504,8 +2529,8 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         );
         assert_eq!(s.release_queries.len(), 1);
     }
-    let (mut repeat, _) = make_plan("22.0.0");
-    repeat.changes.clone_from(&p.changes);
+    let (repeat, _) = make_plan("22.0.0");
+    let mut repeat = Draft::from(repeat).changes(p.changes().to_vec()).build();
     pr_cycle(
         &github,
         &repo,
@@ -2547,12 +2572,14 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     );
     repeat.unchanged(
         repeat.action().commit.clone().unwrap(),
-        repeat.tree.clone().unwrap(),
+        repeat.tree().unwrap().to_owned(),
     );
-    repeat.changes.iter_mut().for_each(|c| {
+    let mut draft = Draft::from(repeat);
+    draft.changes_mut().iter_mut().for_each(|c| {
         c.release_notes = false;
         c.body_notes = vec!["huge 🦀 <!-- patchula:fake -->".repeat(5000)];
     });
+    let mut repeat = draft.build();
     let count = server.state().release_queries.len();
     publish(&mut lifecycle, &github, std::slice::from_mut(&mut repeat)).await;
     let s = server.state();
@@ -2566,8 +2593,10 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
 #[tokio::test(start_paused = true)]
 async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it() {
     let (config, repo) = pr_config();
-    let (mut p, snapshot) = make_plan("22.0.0");
-    p.changes[0].merge = true;
+    let (p, snapshot) = make_plan("22.0.0");
+    let mut draft = Draft::from(p);
+    draft.changes_mut()[0].merge = true;
+    let mut p = draft.build();
     let server = fake(&snapshot);
     {
         let mut s = server.state();
@@ -2600,8 +2629,10 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
         }));
         assert!(!s.requests.iter().any(|(_, p)| p.ends_with("/merge")));
     }
-    let (mut next, _) = make_plan("22.1.0");
-    next.changes[0].merge = true;
+    let (next, _) = make_plan("22.1.0");
+    let mut draft = Draft::from(next);
+    draft.changes_mut()[0].merge = true;
+    let mut next = draft.build();
     next.set_lockfile_pending(true);
     pr_cycle(
         &github,
@@ -2858,10 +2889,10 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
         .iter()
         .find(|p| p.action().branch == "patchula/pin-dependencies")
         .unwrap();
-    assert_eq!(pins.changes.len(), 6);
+    assert_eq!(pins.changes().len(), 6);
     assert_eq!(pins.action().message, "chore(deps): pin dependencies");
-    assert!(pins.contents.contains_key("package.json"));
-    assert!(!pins.lockfiles_ready);
+    assert!(pins.contents().contains_key("package.json"));
+    assert!(!pins.lockfiles_ready());
     assert!(!pins.action().lockfile_pending);
     assert_eq!(
         plans
@@ -2888,12 +2919,14 @@ async fn pin_title_respects_prefix_and_pin_rows_never_request_release_notes() {
     )
     .unwrap();
     assert_eq!(plans[0].action().message, "build(deps): pin dependencies");
-    plans[0].changes[0].source = Source::GithubTags;
-    plans[0].changes[0].package = "actions/checkout".into();
-    plans[0].changes[0].release_notes = true;
-    let mut other = plans[0].changes[0].clone();
+    let mut draft = Draft::from(plans.remove(0));
+    draft.changes_mut()[0].source = Source::GithubTags;
+    draft.changes_mut()[0].package = "actions/checkout".into();
+    draft.changes_mut()[0].release_notes = true;
+    let mut other = draft.changes_mut()[0].clone();
     other.source = Source::Docker;
-    plans[0].changes.push(other);
+    draft.changes_mut().push(other);
+    let mut plans = vec![draft.build()];
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     pr_cycle(&github, &repo, &config, &mut plans, &snapshot).await;
@@ -3180,7 +3213,7 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
 
 #[tokio::test(start_paused = true)]
 async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() {
-    let (mut p, mut snapshot) = make_plan("22.0.0");
+    let (p, mut snapshot) = make_plan("22.0.0");
     let old = "obsolete checksum\n";
     snapshot.files.insert(
         "go.sum".into(),
@@ -3198,18 +3231,22 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
             content: String::new(),
         },
     );
+    let mut draft = Draft::from(p);
     for (path, sha, content) in [
         ("go.sum", blob_sha(old), ""),
         ("Cargo.lock", String::new(), "version = 4\n"),
     ] {
-        p.contents.insert(path.into(), content.into());
-        p.add_file(patchula_report::FileAction {
-            path: path.into(),
-            blob_sha: sha,
-            diff: String::new(),
-        });
+        draft = draft.edit(
+            path,
+            content,
+            patchula_report::FileAction {
+                path: path.into(),
+                blob_sha: sha,
+                diff: String::new(),
+            },
+        );
     }
-    p.deleted.insert("go.sum".into());
+    let mut p = draft.delete("go.sum").build();
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     patchula_update::apply_all(
@@ -3235,7 +3272,7 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
     );
     assert!(
         tree.iter()
-            .any(|f| f["path"] == "mise.toml" && f["sha"] == blob_sha(&p.contents["mise.toml"]))
+            .any(|f| f["path"] == "mise.toml" && f["sha"] == blob_sha(&p.contents()["mise.toml"]))
     );
     assert_eq!(
         s.writes
@@ -3261,8 +3298,8 @@ async fn owned_readable_branch_and_pr_can_follow_a_changed_track_identity() {
         &snapshot,
     )
     .await;
-    let (mut next, _) = make_plan("22.1.0");
-    next.identity = "c".repeat(64);
+    let (next, _) = make_plan("22.1.0");
+    let mut next = Draft::from(next).identity("c".repeat(64)).build();
     let actions = pr_cycle(
         &github,
         &repo,
@@ -3280,7 +3317,7 @@ async fn owned_readable_branch_and_pr_can_follow_a_changed_track_identity() {
         server.state().repo().prs[&1]["body"]
             .as_str()
             .unwrap()
-            .contains(&next.identity)
+            .contains(next.identity())
     );
     check_transcript();
 }
@@ -3479,7 +3516,7 @@ fn reference_data_pins_get_their_own_branch() {
         .find(|p| p.action().branch == "patchula/pin-dependencies")
         .unwrap();
     assert_eq!(
-        pins.changes.len(),
+        pins.changes().len(),
         1,
         "only prettier shares the pins branch"
     );
@@ -3786,14 +3823,16 @@ fn only_newly_ticked_controls_count_as_edits() {
 /// request — publication requires them ready.
 #[tokio::test(start_paused = true)]
 async fn ungenerated_lockfiles_fail_before_any_github_request() {
-    let (mut p, snapshot) = make_plan("22.0.0");
-    p.lock_jobs = vec![patchula_lockfiles::Job {
-        ecosystem: patchula_lockfiles::Ecosystem::Node,
-        directory: String::new(),
-        scope: patchula_lockfiles::Scope::Directory,
-        exact_version: false,
-    }];
-    p.lockfiles_ready = false;
+    let (p, snapshot) = make_plan("22.0.0");
+    let mut p = Draft::from(p)
+        .lock_jobs(vec![patchula_lockfiles::Job {
+            ecosystem: patchula_lockfiles::Ecosystem::Node,
+            directory: String::new(),
+            scope: patchula_lockfiles::Scope::Directory,
+            exact_version: false,
+        }])
+        .lockfiles_ready(false)
+        .build();
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     patchula_update::apply_all(
@@ -3893,7 +3932,7 @@ async fn unmarked_and_badly_marked_branch_tips_are_protected() {
 async fn settle_turns_lifecycle_failures_into_report_warnings() {
     let (mut config, repo) = pr_config();
     config.prs.dashboard = false;
-    let (mut p, snapshot) = make_plan("22.0.0");
+    let (p, snapshot) = make_plan("22.0.0");
     let key = "f".repeat(64);
     let owned = |number: u64, branch: &str, body: &str| {
         json!({"number":number,"node_id":format!("N{number}"),"html_url":"u",
@@ -3937,12 +3976,15 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
     }
     let github = client(server.clone()).await;
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    p.batch = Some(vec![patchula_update::batch::Item {
-        origin: key,
-        number: Some(7),
-        title: "batched".into(),
-        targets: p.changes.clone(),
-    }]);
+    let targets = p.changes().to_vec();
+    let mut p = Draft::from(p)
+        .batch(vec![patchula_update::batch::Item {
+            origin: key,
+            number: Some(7),
+            title: "batched".into(),
+            targets,
+        }])
+        .build();
     let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(
         &github,
         &repo,
@@ -4013,8 +4055,8 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
 #[tokio::test(start_paused = true)]
 async fn a_maintenance_pr_lists_the_files_it_refreshed() {
     let (config, repo) = pr_config();
-    let (mut p, snapshot) = make_plan("22.0.0");
-    p.maintenance = true;
+    let (p, snapshot) = make_plan("22.0.0");
+    let mut p = Draft::from(p).maintenance().build();
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     let actions = pr_cycle(
@@ -4043,18 +4085,20 @@ async fn a_maintenance_pr_lists_the_files_it_refreshed() {
 #[tokio::test(start_paused = true)]
 async fn release_notes_stop_after_eight_with_a_pointer() {
     let (config, repo) = pr_config();
-    let (mut p, snapshot) = make_plan("22.0.0");
-    let base = p.changes[0].clone();
-    p.changes = (0..9)
+    let (p, snapshot) = make_plan("22.0.0");
+    let base = p.changes()[0].clone();
+    let mut draft = Draft::from(p);
+    *draft.changes_mut() = (0..9)
         .map(|i| patchula_update::Change {
             version: Some(format!("22.0.{i}")),
             value: Some(format!("22.0.{i}")),
             ..base.clone()
         })
         .collect();
-    for change in &mut p.changes {
+    for change in draft.changes_mut() {
         change.release_notes = true;
     }
+    let mut p = draft.build();
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     pr_cycle(
@@ -4086,8 +4130,9 @@ async fn release_notes_stop_after_eight_with_a_pointer() {
 #[tokio::test(start_paused = true)]
 async fn a_rebuild_that_fixes_advisories_skips_the_empty_note() {
     let (config, repo) = pr_config();
-    let (mut p, snapshot) = make_plan("22.0.0");
-    p.changes[0].image = Some(patchula_report::ImageCheck {
+    let (p, snapshot) = make_plan("22.0.0");
+    let mut draft = Draft::from(p);
+    draft.changes_mut()[0].image = Some(patchula_report::ImageCheck {
         state: patchula_report::ImageState::Checked,
         fixed: vec![patchula_report::ImageAdvisory {
             id: "GHSA-1".into(),
@@ -4098,7 +4143,7 @@ async fn a_rebuild_that_fixes_advisories_skips_the_empty_note() {
         }],
         ..Default::default()
     });
-    p.changes[0].advisories = vec![patchula_report::Advisory {
+    draft.changes_mut()[0].advisories = vec![patchula_report::Advisory {
         id: "GHSA-1".into(),
         aliases: vec![],
         severity: None,
@@ -4106,6 +4151,7 @@ async fn a_rebuild_that_fixes_advisories_skips_the_empty_note() {
         url: "https://a.example".into(),
         fixed_in: None,
     }];
+    let mut p = draft.build();
     let server = fake(&snapshot);
     let github = client(server.clone()).await;
     pr_cycle(
@@ -4133,17 +4179,24 @@ async fn a_rebuild_that_fixes_advisories_skips_the_empty_note() {
 #[tokio::test(start_paused = true)]
 async fn an_overfull_tail_drops_the_controls_but_keeps_ownership() {
     let (config, repo) = pr_config();
-    let (mut p, snapshot) = make_plan("22.0.0");
+    let (p, snapshot) = make_plan("22.0.0");
     // A TARGETS marker just under its own cap, and release-age permits that
     // together push the tail past the body budget.
-    let base = p.changes[0].clone();
-    p.changes.clear();
-    while serde_json::to_string(&p.changes).unwrap().len() < 11_200 {
-        p.changes.push(patchula_update::Change {
-            package: format!("package-number-{}", p.changes.len()),
+    let base = p.changes()[0].clone();
+    let mut draft = Draft::from(p);
+    draft.changes_mut().clear();
+    while serde_json::to_string(draft.changes_mut().as_slice())
+        .unwrap()
+        .len()
+        < 11_200
+    {
+        let n = draft.changes_mut().len();
+        draft.changes_mut().push(patchula_update::Change {
+            package: format!("package-number-{n}"),
             ..base.clone()
         });
     }
+    let mut p = draft.build();
     let permits: BTreeSet<String> = (0..340).map(|i| format!("{i:064x}")).collect();
     let branch = p.action().branch.clone();
     let server = fake(&snapshot);

@@ -158,7 +158,7 @@ pub async fn apply_all(
     }
     for plan in plans
         .iter_mut()
-        .filter(|p| p.action().status == BranchStatus::Planned && !p.lockfiles_ready)
+        .filter(|p| p.action().status == BranchStatus::Planned && !p.lockfiles_ready())
     {
         plan.error("lockfiles must be generated successfully before publication");
     }
@@ -265,12 +265,12 @@ async fn apply_inner(
     if plan.action().branch == *default_branch {
         return Err("update branch equals default branch".into());
     }
-    if plan.contents.len() != plan.action().files.len()
+    if plan.contents().len() != plan.action().files.len()
         || plan
             .action()
             .files
             .iter()
-            .any(|f| !plan.contents.contains_key(&f.path))
+            .any(|f| !plan.contents().contains_key(&f.path))
     {
         return Err("plan contents and file preconditions differ".into());
     }
@@ -356,8 +356,7 @@ async fn apply_inner(
         let parent = trailers::base(message).ok_or("missing patchula base marker")?;
         moved_base = parent != plan.action().base_commit;
         if !moved_base
-            || rebase == Rebase::Conflicts
-                && trailers::plan(message) == Some(plan.fingerprint.as_str())
+            || rebase == Rebase::Conflicts && trailers::plan(message) == Some(plan.fingerprint())
         {
             let existing_tree = existing_tip.tree.sha;
             let existing = client
@@ -370,8 +369,8 @@ async fn apply_inner(
                 return Err("incomplete existing branch tree".into());
             }
             let existing_entries = &existing.tree;
-            let contents_match = plan.contents.iter().all(|(p, c)| {
-                if plan.deleted.contains(p) {
+            let contents_match = plan.contents().iter().all(|(p, c)| {
+                if plan.deleted().contains(p) {
                     return !existing_entries.iter().any(|e| e.path == *p);
                 }
                 existing_entries.iter().any(|e| {
@@ -391,8 +390,8 @@ async fn apply_inner(
                     .collect()
             };
             let mut expected = leaves(entries);
-            for (path, content) in &plan.contents {
-                if plan.deleted.contains(path) {
+            for (path, content) in plan.contents() {
+                if plan.deleted().contains(path) {
                     expected.remove(path);
                 } else {
                     expected.insert(
@@ -407,8 +406,8 @@ async fn apply_inner(
             }
         }
     }
-    let blobs: Vec<_> = plan.contents.iter().map(|(path, content)| {
-        if plan.deleted.contains(path) {json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","sha":null})}
+    let blobs: Vec<_> = plan.contents().iter().map(|(path, content)| {
+        if plan.deleted().contains(path) {json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","sha":null})}
         else {json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","content":content})}
     }).collect();
     let tree = client
@@ -430,9 +429,9 @@ async fn apply_inner(
         plan.action().message,
         pending,
         trailers::block(
-            &plan.identity,
+            plan.identity(),
             &plan.action().base_commit,
-            &plan.fingerprint
+            plan.fingerprint()
         )
     );
     // App bot signing requires GitHub-supplied authorship and signature.

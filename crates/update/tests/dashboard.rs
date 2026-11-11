@@ -589,7 +589,7 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
 #[test]
 fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
     let plan = |package: &str, hold: patchula_update::Hold| {
-        let mut plan = patchula_update::Plan::new(patchula_report::BranchAction {
+        let mut plan = patchula_update::testing::Draft::new(patchula_report::BranchAction {
             repository: "demo/app".into(),
             branch: format!("patchula/{package}"),
             base_commit: "a".repeat(40),
@@ -601,11 +601,12 @@ fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
             verified: None,
             lockfile_pending: false,
             files: Vec::new(),
-        });
-        plan.identity = package.into();
-        plan.fingerprint = package.into();
-        plan.input_fingerprint = package.into();
-        plan.lockfiles_ready = true;
+        })
+        .identity(package)
+        .fingerprint(package)
+        .input_fingerprint(package)
+        .lockfiles_ready(true)
+        .build();
         plan.hold(hold);
         plan
     };

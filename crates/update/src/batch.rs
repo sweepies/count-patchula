@@ -3,7 +3,7 @@
 //! which never suppresses the update. Unticking, removing or closing the batch
 //! returns its updates to individual PRs.
 use crate::markers;
-use crate::{Change, Plan, Snapshot, pull_requests, update_key};
+use crate::{Change, Plan, Snapshot, pull_requests};
 use patchula_config::{Config, Registry};
 use patchula_manager::Dependency;
 use patchula_report::Repository;
@@ -142,7 +142,7 @@ pub fn apply(
         .into_iter()
         .filter(|i| {
             i.targets.iter().any(|t| {
-                plan.changes.iter().any(|c| {
+                plan.changes().iter().any(|c| {
                     c.touches(
                         &t.file,
                         t.source,
@@ -158,7 +158,7 @@ pub fn apply(
     // PRs close as batched; a removed item resumes on the same branch.
     for p in plans
         .iter_mut()
-        .filter(|p| origins.contains(&update_key(p)))
+        .filter(|p| origins.contains(&p.update_key()))
     {
         p.hold(crate::plan::Hold::Batched);
     }
@@ -288,7 +288,7 @@ mod tests {
     fn group_plan(branch: &str, file: &str) -> Plan {
         let mut target = change("shared", "1.2.0");
         target.file = file.into();
-        let mut plan = Plan::new(patchula_report::BranchAction {
+        crate::plan::testing::Draft::new(patchula_report::BranchAction {
             repository: "o/r".into(),
             branch: branch.into(),
             base_commit: "base".into(),
@@ -300,11 +300,11 @@ mod tests {
             verified: None,
             lockfile_pending: false,
             files: Vec::new(),
-        });
-        plan.identity = branch.into();
-        plan.changes = vec![target];
-        plan.lockfiles_ready = true;
-        plan
+        })
+        .identity(branch)
+        .change(target)
+        .lockfiles_ready(true)
+        .build()
     }
 
     /// A tick lifts only a hold a tick may lift: a plan outside its window
@@ -344,7 +344,7 @@ mod tests {
                 )
             })
             .into();
-        let keys: BTreeSet<_> = plans.iter().map(update_key).collect();
+        let keys: BTreeSet<_> = plans.iter().map(Plan::update_key).collect();
         assert_eq!(keys.len(), 3);
         let prs: Vec<_> = plans
             .iter()
@@ -353,7 +353,7 @@ mod tests {
                 pr(
                     n,
                     &p.action().branch,
-                    update_body(&update_key(p), &p.changes, true),
+                    update_body(&p.update_key(), p.changes(), true),
                 )
             })
             .collect();

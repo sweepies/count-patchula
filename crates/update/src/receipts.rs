@@ -456,18 +456,18 @@ fn receipts_scope(repo: &str, prefix: &str) -> ReceiptsScope {
 fn intent(plan: &Plan, config: &Config, recheck: Recheck, server: Option<&str>) -> String {
     let inputs = (
         "release-notes-v4",
-        &plan.identity,
-        &plan.input_fingerprint,
-        &plan.changes,
+        plan.identity(),
+        plan.input_fingerprint(),
+        plan.changes(),
         config,
         crate::pull_requests::recheck_hashed(recheck),
     );
     // Tooling warnings join only when present, so other receipts stay valid.
     hash(
-        match (server, plan.tooling.is_empty()) {
+        match (server, plan.callouts().is_empty()) {
             (None, true) => serde_json::to_string(&inputs),
             (Some(url), true) => serde_json::to_string(&(inputs, url)),
-            (server, false) => serde_json::to_string(&(inputs, server, &plan.tooling)),
+            (server, false) => serde_json::to_string(&(inputs, server, plan.callouts())),
         }
         .expect("serializable intent")
         .as_bytes(),
@@ -860,7 +860,7 @@ pub async fn restore_inventory(
         .iter_mut()
         .filter(|p| p.action().status == BranchStatus::Planned)
     {
-        let result = if plan.retry {
+        let result = if plan.retry() {
             Err("checkbox-recheck")
         } else if let Some(receipt) = receipts.closed.get(&plan.action().branch) {
             if receipt.actor != actor {
@@ -975,7 +975,7 @@ fn restore_write(
         return Err("pr-state-changed");
     }
     if receipt.base != plan.action().base_commit
-        && (config.prs.rebase != Rebase::Conflicts || !plan.lock_jobs.is_empty())
+        && (config.prs.rebase != Rebase::Conflicts || plan.has_lock_jobs())
     {
         return Err("base-changed");
     }
@@ -1004,7 +1004,7 @@ pub(crate) async fn save_merge_states(
         return Ok(());
     };
     for plan in plans {
-        let Some(pr) = &plan.cached_pr else {
+        let Some(pr) = plan.restored_pr() else {
             continue;
         };
         if plan.action().status == BranchStatus::Merged {
@@ -1063,10 +1063,10 @@ pub async fn save_receipts(
         {
             continue;
         }
-        let (Some(commit), Some(tree)) = (&plan.action().commit, &plan.tree) else {
+        let (Some(commit), Some(tree)) = (plan.action().commit.as_ref(), plan.tree()) else {
             continue;
         };
-        let Some(pr) = plan.cached_pr.as_ref().or_else(|| {
+        let Some(pr) = plan.restored_pr().or_else(|| {
             lifecycle
                 .prs
                 .iter()
@@ -1087,11 +1087,11 @@ pub async fn save_receipts(
             Receipt {
                 actor: actor.into(),
                 commit: commit.clone(),
-                tree: tree.clone(),
+                tree: tree.to_owned(),
                 base: plan.action().base_commit.clone(),
                 intent: intent(plan, config, lifecycle.recheck, lifecycle.server.as_deref()),
                 pr: PrState::from_rest(&pr.pr).value(),
-                fingerprint: plan.fingerprint.clone(),
+                fingerprint: plan.fingerprint().to_owned(),
                 files: plan.action().files.clone(),
             },
         );

@@ -10,6 +10,9 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+testing = []
+
 [dependencies]
 patchula-notes = { path = "../notes" }
 patchula-cache = { path = "../cache" }
@@ -35,6 +38,7 @@ patchula-process = { path = "../process" }
 patchula-words = { path = "../words" }
 
 [dev-dependencies]
+patchula-update = { path = ".", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
 patchula-http = { path = "../http" }
 patchula-datasource = { path = "../datasource" }

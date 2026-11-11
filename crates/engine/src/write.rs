@@ -143,7 +143,7 @@ impl Write<'_> {
                                     .any(|a| a.branch == p.action().branch)
                             })
                             .filter_map(|p| {
-                                p.cached_pr.as_ref().map(|tracked| {
+                                p.restored_pr().map(|tracked| {
                                     patchula_update::pull_requests::unchanged(
                                         &repo.repository,
                                         &p.action().branch,
@@ -448,7 +448,7 @@ impl Write<'_> {
             .await;
         } else {
             for plan in plans.iter_mut() {
-                if plan.action().status == BranchStatus::Planned && !plan.lockfiles_ready {
+                if plan.action().status == BranchStatus::Planned && !plan.lockfiles_ready() {
                     plan.error("lockfile generation requires a disk cache or an injected runner");
                 }
             }

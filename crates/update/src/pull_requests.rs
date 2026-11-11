@@ -68,11 +68,11 @@ pub(crate) fn recheck_hashed(recheck: Recheck) -> &'static str {
 /// current/base/file/message so a closed update stays closed after a rebase,
 /// policy wording change or new occurrence.
 pub fn update_key(plan: &Plan) -> String {
-    if plan.maintenance {
-        return hash(format!("maintenance:{}", plan.input_fingerprint).as_bytes());
+    if plan.is_maintenance() {
+        return hash(format!("maintenance:{}", plan.input_fingerprint()).as_bytes());
     }
     let targets: BTreeSet<_> = plan
-        .changes
+        .changes()
         .iter()
         .map(|c| (&c.source, &c.package, &c.value, &c.version, &c.digest))
         .collect();
@@ -87,10 +87,10 @@ pub fn update_key(plan: &Plan) -> String {
 /// policy, and every other plan merges only when all its changes opt in.
 pub(crate) fn merge_requested(plan: &Plan, policy: &patchula_config::Policy) -> bool {
     !plan.action().lockfile_pending
-        && if plan.maintenance {
+        && if plan.is_maintenance() {
             policy.merge
         } else {
-            !plan.changes.is_empty() && plan.changes.iter().all(|c| c.merge)
+            !plan.changes().is_empty() && plan.changes().iter().all(|c| c.merge)
         }
 }
 /// The Count's note on a PR's merge state, carried on the PR object the
@@ -399,7 +399,7 @@ impl Lifecycle {
     }
     pub fn record_merges(&mut self, plans: &[Plan], actions: Vec<PullRequestAction>) {
         for plan in plans {
-            if let Some(pr) = &plan.cached_pr
+            if let Some(pr) = plan.restored_pr()
                 && let Some(old) = self.prs.iter_mut().find(|p| p.pr.number == pr.pr.number)
             {
                 old.clone_from(pr);
@@ -417,7 +417,7 @@ impl Lifecycle {
             .collect()
     }
     pub(crate) fn closed_for(&self, plan: &Plan) -> Option<&Tracked> {
-        let key = update_key(plan);
+        let key = plan.update_key();
         self.prs.iter().find(|p| {
             owned_pr(&p.pr, &self.actor, &self.repo)
                 && p.pr.state == "closed"
@@ -613,7 +613,7 @@ impl Lifecycle {
                 plan.protect("unowned or ambiguous open PR for branch");
                 continue;
             }
-            let key = update_key(plan);
+            let key = plan.update_key();
             if existing.is_empty()
                 && !controls.recreate.contains(&key)
                 && owned.iter().any(|p| {
@@ -643,8 +643,8 @@ impl Lifecycle {
             // until it exists, so holding it would keep them open for good.
             let bypass = controls.create.contains(&key)
                 || controls.recreate.contains(&key)
-                || plan.batch.is_some()
-                || plan.changes.iter().any(|c| !c.advisories.is_empty());
+                || plan.batch_items().is_some()
+                || plan.changes().iter().any(|c| !c.advisories.is_empty());
             if !bypass && config.prs.concurrent.is_some_and(|n| active >= n) {
                 plan.hold(crate::plan::Hold::Concurrent);
                 continue;
@@ -667,7 +667,7 @@ impl Lifecycle {
     ) {
         let mut ranges = BTreeSet::new();
         for plan in plans.iter().filter(|p| {
-            p.cached_pr.is_none()
+            p.restored_pr().is_none()
                 && matches!(
                     p.action().status,
                     BranchStatus::Created
@@ -687,7 +687,7 @@ impl Lifecycle {
             }
             let mut plan_ranges = BTreeSet::new();
             for change in plan
-                .changes
+                .changes()
                 .iter()
                 .filter(|c| c.kind != UpdateKind::Pin && c.release_notes)
             {
@@ -714,7 +714,7 @@ impl Lifecycle {
         let ranges: Vec<_> = ranges.into_iter().collect();
         sources.prepare_release_notes(&ranges).await;
         for plan in plans {
-            if let Some(pr) = &plan.cached_pr {
+            if let Some(pr) = plan.restored_pr() {
                 self.actions
                     .push(unchanged(&self.repo, &plan.action().branch, &pr.pr));
                 continue;
@@ -748,7 +748,7 @@ impl Lifecycle {
             // PR could be a batch member or the batch PR itself.
             return Err("repository pull request list is incomplete".into());
         }
-        let Some(plan) = plans.iter().find(|p| p.batch.is_some()) else {
+        let Some(plan) = plans.iter().find(|p| p.batch_items().is_some()) else {
             return Ok(());
         };
         if !matches!(
@@ -958,11 +958,11 @@ impl Lifecycle {
         };
         let number = pr.pr.number;
         let labels: BTreeSet<_> = plan
-            .changes
+            .changes()
             .iter()
             .flat_map(|c| c.labels.iter().cloned())
             .chain(
-                plan.maintenance
+                plan.is_maintenance()
                     .then_some(&self.maintenance_policy.labels)
                     .into_iter()
                     .flatten()
@@ -1041,11 +1041,11 @@ impl Lifecycle {
     }
 
     fn body_intent(&self, plan: &Plan) -> (String, String) {
-        let mut text = tooling_section(&plan.tooling);
-        text.push_str(&security_section(&plan.changes));
-        text.push_str(&image_section(&plan.changes));
+        let mut text = tooling_section(plan.callouts());
+        text.push_str(&security_section(plan.changes()));
+        text.push_str(&image_section(plan.changes()));
         text.push_str("| Package | Change | Type | File |\n| --- | --- | --- | --- |\n");
-        if plan.maintenance {
+        if plan.is_maintenance() {
             text.push_str(&format!(
                 "\nScheduled {} using the repository's mise tool versions.\n",
                 safe(&self.maintenance_group)
@@ -1054,7 +1054,7 @@ impl Lifecycle {
                 append(&mut text, &format!("\n- {}", cell(&file.path)), 18_000);
             }
         }
-        for c in &plan.changes {
+        for c in plan.changes() {
             let target = format!(
                 "{}{}",
                 c.value
@@ -1083,15 +1083,15 @@ impl Lifecycle {
         if plan.action().lockfile_pending {
             text.push_str("\nLockfile pending: regenerate and validate it before merging.\n");
         }
-        if let Some(items) = &plan.batch {
+        if let Some(items) = plan.batch_items() {
             text.push_str(&crate::batch::render(items));
         }
-        let body_notes: BTreeSet<_> = plan.changes.iter().flat_map(|c| &c.body_notes).collect();
+        let body_notes: BTreeSet<_> = plan.changes().iter().flat_map(|c| &c.body_notes).collect();
         for note in body_notes {
             append(&mut text, &format!("\n{}\n", safe(note)), 22_000);
         }
         let ranges: Vec<_> = plan
-            .changes
+            .changes()
             .iter()
             .map(|c| {
                 (
@@ -1134,9 +1134,9 @@ impl Lifecycle {
         existing.is_some_and(|pr| {
             markers::section(body(pr)).is_some_and(|s| s.contains(content_marker))
                 && !checked(pr)
-                && !plan.retry
+                && !plan.retry()
                 && markers::ownership_marker(body(pr))
-                    .is_some_and(|m| m.identity == plan.identity && m.update == update_key(plan))
+                    .is_some_and(|m| m.identity == plan.identity() && m.update == plan.update_key())
         })
     }
     /// The batch controls his body offers: the "Add to batch" box and the
@@ -1144,10 +1144,10 @@ impl Lifecycle {
     /// The reviewed targets travel with the PR, so batching keeps them even
     /// after a newer release changes this branch's plan.
     fn controls(plan: &Plan) -> String {
-        if plan.batch.is_some() || plan.maintenance {
+        if plan.batch_items().is_some() || plan.is_maintenance() {
             return String::new();
         }
-        let targets = markers::hidden(markers::TARGETS, &plan.changes);
+        let targets = markers::hidden(markers::TARGETS, &plan.changes());
         if targets.len() > 12_000 {
             return String::new();
         }
@@ -1185,8 +1185,8 @@ impl Lifecycle {
             markers::RECHECK
         ));
         let ownership = markers::ownership(&markers::Marker::new(
-            plan.identity.clone(),
-            update_key(plan),
+            plan.identity().to_owned(),
+            plan.update_key(),
         ));
         let with_controls = format!("{tail}{controls}\n{ownership}\n");
         if markers::START.len() + 1 + with_controls.len() <= BODY_LIMIT {
@@ -1236,7 +1236,7 @@ impl Lifecycle {
         let mut notes = crate::body::Body::new(BODY_LIMIT - 1_500, controls.len());
         notes.push(&intent, usize::MAX);
         let mut releases = BTreeSet::new();
-        for change in &plan.changes {
+        for change in plan.changes() {
             if releases.len() >= 8 || notes.room(usize::MAX) < 1_000 {
                 notes.push("\nOut of room for more release notes. The source repositories have the rest.\n", usize::MAX);
                 break;
@@ -2127,25 +2127,31 @@ mod merge_tests {
     #[test]
     fn merge_requests_follow_policy_opt_ins_and_lockfile_readiness() {
         let mut config = patchula_config::defaults().unwrap();
-        let mut plan = Plan::new(action("patchula/mise"));
-        plan.maintenance = true;
+        let plan = crate::plan::testing::Draft::new(action("patchula/mise"))
+            .maintenance()
+            .build();
         config.defaults.merge = true;
         assert!(merge_requested(&plan, &config.defaults));
         config.defaults.merge = false;
         assert!(!merge_requested(&plan, &config.defaults));
         // An ordinary plan merges only when every change asks for it.
-        plan.maintenance = false;
+        let plan = crate::plan::testing::Draft::from(plan).update().build();
         config.defaults.merge = true;
         assert!(!merge_requested(&plan, &config.defaults));
-        plan.changes = vec![change(true)];
+        let plan = crate::plan::testing::Draft::from(plan)
+            .change(change(true))
+            .build();
         assert!(merge_requested(&plan, &config.defaults));
-        plan.changes.push(change(false));
+        let plan = crate::plan::testing::Draft::from(plan)
+            .change(change(false))
+            .build();
         assert!(!merge_requested(&plan, &config.defaults));
         // A pending lockfile never merges, policy or opt-ins regardless.
         let mut pending_action = action("patchula/b");
         pending_action.lockfile_pending = true;
-        let mut pending = Plan::new(pending_action);
-        pending.maintenance = true;
+        let pending = crate::plan::testing::Draft::new(pending_action)
+            .maintenance()
+            .build();
         assert!(!merge_requested(&pending, &config.defaults));
     }
 }
