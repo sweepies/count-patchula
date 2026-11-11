@@ -463,3 +463,100 @@ async fn a_cargo_version_recorded_by_its_lockfile_reports_lockfile() {
     assert_eq!(rust.kind, patchula_words::ResolutionKind::Declared);
     assert_eq!(rust.version, "1.75.0");
 }
+
+/// Without its committed lockfile a lock-capable manager records no resolved
+/// version, so the report carries no `resolution` at all — the
+/// `dep.resolved.is_some()` guard means it can never say `lockfile`.
+#[tokio::test]
+async fn a_gem_without_its_lockfile_records_no_resolution() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"bundler\" }\n",
+            ),
+            (
+                "Gemfile",
+                "source \"https://rubygems.org\"\ngem \"rake\", \"~> 13.0\"\n",
+            ),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the rubygems.org versions format".into(),
+        interactions: vec![interaction(
+            "https://rubygems.org/api/v1/versions/rake.json",
+            "application/json",
+            json!([
+                {"number": "13.2.1", "platform": "ruby", "created_at": "2026-01-01T00:00:00Z"},
+                {"number": "13.2.0", "platform": "ruby", "created_at": "2025-12-01T00:00:00Z"},
+                {"number": "13.0.0", "platform": "ruby", "created_at": "2025-01-01T00:00:00Z"}
+            ]),
+        )],
+    };
+    let report = report(&tree, cassette).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = &repo.package_files[0].dependencies[0];
+    assert!(
+        dep.metadata
+            .as_ref()
+            .and_then(|m| m.resolution.as_ref())
+            .is_none(),
+        "a gem with no committed lockfile must never report `lockfile`: {dep:?}"
+    );
+}
+
+/// npm's `packageManager` field is a tool declaration whose `resolved` is the
+/// value the manifest itself names, so the Tool exclusion keeps the report at
+/// `declared` — never `lockfile`.
+#[tokio::test]
+async fn a_package_manager_tool_reports_declared_never_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\n",
+            ),
+            (
+                "package.json",
+                r#"{"packageManager":"pnpm@9.0.0","dependencies":{}}"#,
+            ),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the npm registry metadata format".into(),
+        interactions: vec![interaction(
+            "https://registry.npmjs.org/pnpm",
+            "application/json",
+            json!({
+                "versions": {"9.0.0": {}, "9.0.1": {}, "10.0.0": {}},
+                "dist-tags": {"latest": "10.0.0"},
+            }),
+        )],
+    };
+    let report = report(&tree, cassette).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = repo
+        .package_files
+        .iter()
+        .flat_map(|f| &f.dependencies)
+        .find(|d| d.name == "pnpm")
+        .unwrap_or_else(|| panic!("no pnpm dependency: {repo:?}"));
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_ne!(resolution.kind, patchula_words::ResolutionKind::Lockfile);
+    assert_eq!(resolution.kind, patchula_words::ResolutionKind::Declared);
+    assert_eq!(resolution.version, "9.0.0");
+}
