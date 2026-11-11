@@ -114,12 +114,11 @@ fn pinned_bun_misses_npm_toolchain_and_peer_rules() {
     );
 }
 
-/// Bug 5: a pre-commit `rev` that names a branch is not a commit hash, a tag
-/// or an opaque GitHub Actions ref, so it reaches "cannot classify current
-/// value" as an evaluation error.
-/// pins current behaviour, not endorsed; see bug 5.
+/// A pre-commit `rev` that names a branch is an opaque ref, as a GitHub
+/// Actions branch ref is: it has no version to compare, so it is never
+/// looked up and never errors. Only a version-shaped `rev` is looked up.
 #[test]
-fn pinned_precommit_branch_rev_is_an_error() {
+fn a_precommit_branch_rev_is_an_opaque_ref() {
     let eval = Evaluator::new(&config()).unwrap();
     let mut dep = dependency("pre-commit/pre-commit-hooks");
     dep.manager = Manager::PreCommit;
@@ -129,14 +128,21 @@ fn pinned_precommit_branch_rev_is_an_error() {
     dep.resolved = Some("main".into());
     dep.source = Source::GithubTags;
     dep.scheme = Scheme::Loose;
-    let error = eval
-        .evaluate_at(&dep, &catalog(&["v4.5.0", "v5.0.0"]), now())
-        .err()
-        .expect("a branch rev cannot classify");
     assert!(
-        error.contains("cannot classify current value main"),
-        "{error}"
+        !eval.needs_lookup(&dep),
+        "a branch rev has no version to look up"
     );
+    let evaluation = eval
+        .evaluate_at(&dep, &catalog(&["v4.5.0", "v5.0.0"]), now())
+        .expect("a branch rev is preserved, not an error");
+    assert!(
+        evaluation.updates.is_empty(),
+        "a branch rev gets no proposals: {:?}",
+        evaluation.updates
+    );
+    dep.current = "v4.5.0".into();
+    dep.resolved = Some("v4.5.0".into());
+    assert!(eval.needs_lookup(&dep), "a tag rev is looked up");
 }
 
 fn now() -> chrono::DateTime<chrono::Utc> {

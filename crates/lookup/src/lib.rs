@@ -261,6 +261,7 @@ impl Evaluator {
         }
         // A branch ref has no version to compare; only tags are looked up.
         if dep.tagged_action()
+            || dep.manager == Manager::PreCommit
             || matches!(dep.manager, Manager::Gitlabci | Manager::GitlabciInclude)
                 && dep.source == Source::ForgeTags
         {
@@ -757,7 +758,9 @@ impl Evaluator {
         // Branch and opaque refs are preserved. Their digest is proposed through
         // digest_proposal after the engine resolves that same ref.
         if baseline.is_none()
-            && (dep.manager == Manager::GithubActions || scheme == Ecosystem::Docker)
+            && (dep.manager == Manager::GithubActions
+                || dep.manager == Manager::PreCommit
+                || scheme == Ecosystem::Docker)
         {
             return Ok(Evaluation::default());
         }
