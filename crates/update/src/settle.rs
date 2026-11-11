@@ -2,13 +2,14 @@
 //! receipts, in that order, over the run's one authoritative inventory.
 //! Both outcomes call it — plans settled from verified receipts and plans
 //! that went through the full write — so the two can never drift apart.
-use crate::{Inventory, Lifecycle, Plan};
+use crate::{Inventory, Lifecycle, Plan, pull_requests::Tracked};
 use chrono::{DateTime, Utc};
 use patchula_cache::Cache;
 use patchula_config::Config;
 use patchula_github::Client;
 use patchula_report::{PullRequestAction, Repository};
 use patchula_words::Recheck;
+use serde_json::Value;
 
 /// What the shared tail produced, for the caller's report assembly.
 pub struct Settlement {
@@ -56,19 +57,19 @@ pub async fn settle(
     // REST view after a write, the inventory's on the receipts path.
     let prs = match lifecycle.as_deref() {
         Some(state) => state.dashboard_prs(),
-        None => inventory
-            .pull_requests(&repo.repository)
-            .iter()
-            .map(crate::pull_requests::Tracked::value)
-            .collect(),
+        None => inventory.pull_requests(&repo.repository),
     };
-    let body = crate::dashboard::render(
-        repo,
-        plans,
-        &crate::automerge::dashboard_history(inventory, prs, plans),
-        recheck,
-        server,
+    let history = crate::automerge::dashboard_history(inventory, prs, plans);
+    // The renderer still takes one Value set until the dashboard commit;
+    // the tracked PRs project down, the merged rows serialize back.
+    let mut rows: Vec<Value> = history.open.iter().map(Tracked::value).collect();
+    rows.extend(
+        history
+            .merged
+            .iter()
+            .filter_map(|m| serde_json::to_value(m).ok()),
     );
+    let body = crate::dashboard::render(repo, plans, &rows, recheck, server);
     let dashboard = crate::dashboard::reconcile(client, cache, repo, config, inventory, body).await;
     if let Some(state) = lifecycle {
         if let Err(error) =

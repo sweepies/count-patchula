@@ -23,7 +23,7 @@ impl patchula_cache::State for DashboardReceipt {
 
 fn owned(number: u64, branch: &str) -> Value {
     let marker = json!({"version": 1, "identity": "a".repeat(64), "update": "b".repeat(64)});
-    json!({"number": number, "html_url": format!("https://github.com/acme/app/pull/{number}"),
+    json!({"number": number, "node_id": format!("PR_node{number}"), "html_url": format!("https://github.com/acme/app/pull/{number}"),
         "title": "Update serde to v2", "body": format!("| serde | 1 → 2 |\n<!-- patchula:{marker} -->"),
         "state": "open", "draft": false, "labels": [{"name": "dependencies"}],
         "user": {"login": "patchula[bot]"},

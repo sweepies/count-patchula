@@ -1,5 +1,8 @@
 //! Native auto-merge, or conservative later-run merging backed by write receipts.
-use crate::{Inventory, Plan, pull_requests::value_owned_pr};
+use crate::{
+    Inventory, Plan,
+    pull_requests::{Tracked, body, body_hash, owned_pr},
+};
 use chrono::{DateTime, Utc};
 use patchula_cache::{Cache, State};
 use patchula_config::Config;
@@ -8,10 +11,63 @@ use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus, Reposi
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+/// One auto-merge history row: the fields the dashboard's merged section,
+/// the server's public page and [`merged`] read, persisted under
+/// `auto-merge-history` v1. Every field is `Option` so a row missing any
+/// of them still decodes the way the old full-REST rows did; a row that
+/// is not an object at all is dropped at decode, as invisible as the
+/// fieldless `Value` it was before.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MergedPr {
+    /// `number` — rows dedupe and sort by it.
+    pub number: Option<u64>,
+    /// `title`.
+    pub title: Option<String>,
+    /// `html_url`.
+    pub html_url: Option<String>,
+    /// `merged_at` — `date-time` verbatim; absent rows are invisible.
+    pub merged_at: Option<String>,
+    /// The Count's merge note, under its persisted `patchula_merge` key.
+    #[serde(rename = "patchula_merge")]
+    pub merge_note: Option<String>,
+}
+impl MergedPr {
+    /// Project a lifecycle PR down to its history row.
+    pub(crate) fn from_tracked(tracked: &Tracked) -> Self {
+        Self {
+            number: Some(tracked.pr.number),
+            title: Some(tracked.pr.title.clone()),
+            html_url: Some(tracked.pr.html_url.clone()),
+            merged_at: tracked.pr.merged_at.clone(),
+            merge_note: tracked.merge_note().map(str::to_owned),
+        }
+    }
+}
+/// What the dashboard renders beside the live PR list: the tracked PRs
+/// and the merge rows [`dashboard_history`] computes for them.
+pub struct DashboardPrs {
+    /// Live PRs — open ones, plus merged ones whose note keeps them
+    /// rendered.
+    pub open: Vec<Tracked>,
+    /// The merged section's rows: live merged PRs, recorded history and
+    /// cached merges, in that order.
+    pub merged: Vec<MergedPr>,
+}
 #[derive(Default, Serialize, Deserialize)]
 struct History {
     actor: String,
-    prs: Vec<Value>,
+    #[serde(default, deserialize_with = "merged_prs")]
+    prs: Vec<MergedPr>,
+}
+/// Element-wise row decode: a row that fails is invisible, never fatal to
+/// the rest — the same leeway `Vec<Value>` gave.
+fn merged_prs<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<MergedPr>, D::Error> {
+    Ok(Vec::<Value>::deserialize(deserializer)?
+        .into_iter()
+        .filter_map(|row| MergedPr::deserialize(row).ok())
+        .collect())
 }
 #[derive(Serialize)]
 struct HistoryScope {
@@ -31,7 +87,7 @@ pub(crate) async fn load_history(
     cache: &Cache,
     repo: &str,
     actor: &str,
-) -> Result<Vec<Value>, String> {
+) -> Result<Vec<MergedPr>, String> {
     Ok(cache
         .state::<History>(&history_scope(repo))
         .await
@@ -41,7 +97,7 @@ pub(crate) async fn load_history(
         .unwrap_or_default())
 }
 /// The PRs the Count last recorded merging in `repo`, oldest first, at most 20.
-pub async fn merged(cache: &Cache, repo: &str) -> Vec<Value> {
+pub async fn merged(cache: &Cache, repo: &str) -> Vec<MergedPr> {
     cache
         .state::<History>(&history_scope(repo))
         .await
@@ -59,18 +115,18 @@ async fn save_history(
     let merged: Vec<_> = plans
         .iter()
         .filter(|p| p.action().status == BranchStatus::Merged)
-        .filter_map(|p| p.cached_pr.clone().map(|t| t.value()))
+        .filter_map(|p| p.cached_pr.clone())
         .collect();
     if merged.is_empty() {
         return Ok(());
     }
     let mut prs = inventory.merged_prs.clone();
-    for pr in merged {
-        let number = crate::pull_requests::Pr::read(&pr).number;
-        prs.retain(|p| crate::pull_requests::Pr::read(p).number != number);
-        prs.push(pr);
+    for tracked in merged {
+        let row = MergedPr::from_tracked(&tracked);
+        prs.retain(|p| p.number != row.number);
+        prs.push(row);
     }
-    prs.sort_by_key(|p| crate::pull_requests::Pr::read(p).number);
+    prs.sort_by_key(|p| p.number);
     if prs.len() > 20 {
         prs.drain(..prs.len() - 20);
     }
@@ -249,18 +305,23 @@ async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, String> 
             _ => false,
         }))
 }
-fn same_head(pr: &Value, proof: &Value, actor: &str, repo: &str) -> bool {
-    let fields = crate::pull_requests::Pr::read(pr);
-    let proof_fields = crate::pull_requests::Pr::read(proof);
-    value_owned_pr(pr, actor, repo)
-        && fields.state.as_deref() == Some("open")
-        && fields.merged_at.is_none()
-        && pr["node_id"] == proof["node_id"]
-        && fields.head.sha == proof_fields.head.sha
-        && fields.head.branch == proof_fields.head.branch
-        && pr["base"]["ref"] == proof["base"]["ref"]
-        && crate::pull_requests::body_hash(fields.body.as_deref().unwrap_or(""))
-            == crate::pull_requests::body_hash(proof_fields.body.as_deref().unwrap_or(""))
+/// Whether a fresh REST read still is the PR a verified receipt saw:
+/// every compared field is required, so a PR missing one cannot reach
+/// this comparison — the decode failed it first.
+fn same_head(
+    fresh: &model::PullRequest,
+    proof: &model::PullRequest,
+    actor: &str,
+    repo: &str,
+) -> bool {
+    owned_pr(fresh, actor, repo)
+        && fresh.state == "open"
+        && fresh.merged_at.is_none()
+        && fresh.node_id == proof.node_id
+        && fresh.head.sha == proof.head.sha
+        && fresh.head.branch == proof.head.branch
+        && fresh.base.branch == proof.base.branch
+        && body_hash(body(fresh)) == body_hash(body(proof))
 }
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Native {
@@ -321,15 +382,10 @@ async fn one(
     client: &Client,
     inventory: &Inventory,
     repo: &Repository,
-    pr: &mut Value,
+    pr: &mut Tracked,
 ) -> Result<(PullRequestStatus, String), String> {
-    let fields = crate::pull_requests::Pr::read(pr);
-    let head_oid = fields
-        .head
-        .sha
-        .as_ref()
-        .map_or(Value::Null, |sha| json!(sha));
-    if pr["base"]["ref"].as_str() != repo.default_branch.as_deref() {
+    let head_oid = json!(pr.pr.head.sha);
+    if pr.pr.base.branch != repo.default_branch.as_deref().unwrap_or_default() {
         return Ok((
             PullRequestStatus::Protected,
             "auto-merge blocked: PR no longer targets the default branch".into(),
@@ -343,48 +399,41 @@ async fn one(
     // A PR that GitHub already finds mergeable cannot take native auto-merge;
     // it falls through to the Count's own merge, behind the same gate.
     if settings.native {
-        if pr["auto_merge"].is_null()
-            && enable_native(
-                client,
-                pr["node_id"].as_str().unwrap_or_default(),
-                method,
-                &head_oid,
-            )
-            .await?
-                == Native::Enabled
+        if pr.pr.auto_merge.is_none()
+            && enable_native(client, &pr.pr.node_id, method, &head_oid).await? == Native::Enabled
         {
-            pr["auto_merge"] = json!({"enabled":true});
+            pr.set_auto_merge(true);
         }
-        if !pr["auto_merge"].is_null() {
+        if pr.pr.auto_merge.is_some() {
             return Ok((
                 PullRequestStatus::Unchanged,
                 "native auto-merge enabled".into(),
             ));
         }
     }
-    let number = fields.number.ok_or("missing PR number")?;
-    let head = fields.head.sha.as_deref().ok_or("missing receipt head")?;
+    let number = pr.pr.number;
+    let head = pr.pr.head.sha.clone();
     let path = format!("repos/{}/pulls/{number}", repo.repository);
     let fresh = client
-        .get_fresh::<Value>(&path)
+        .get_fresh::<model::PullRequest>(&path)
         .await
         .map_err(|e| e.to_string())?;
-    if !same_head(&fresh, pr, &inventory.actor, &repo.repository) {
+    if !same_head(&fresh, &pr.pr, &inventory.actor, &repo.repository) {
         return Ok((
             PullRequestStatus::Protected,
             "auto-merge blocked: ownership or receipt head changed".into(),
         ));
     }
-    if fresh["draft"].as_bool() != Some(false)
-        || fresh["mergeable"].as_bool() != Some(true)
-        || fresh["mergeable_state"] != "clean"
+    if fresh.draft != Some(false)
+        || fresh.mergeable != Some(true)
+        || fresh.mergeable_state.as_deref() != Some("clean")
     {
         return Ok((
             PullRequestStatus::Skipped,
             "auto-merge waiting: GitHub mergeability/protection is not clean".into(),
         ));
     }
-    if !green(client, &repo.repository, head).await? {
+    if !green(client, &repo.repository, &head).await? {
         return Ok((
             PullRequestStatus::Skipped,
             "auto-merge waiting: at least one check is required and all checks/statuses must pass"
@@ -394,13 +443,13 @@ async fn one(
     // Recheck ownership/protections after pagination, then use a head lease on the
     // normal merge API. No admin/bypass option, direct base write or force merge.
     let fresh = client
-        .get_fresh::<Value>(&path)
+        .get_fresh::<model::PullRequest>(&path)
         .await
         .map_err(|e| e.to_string())?;
-    if !same_head(&fresh, pr, &inventory.actor, &repo.repository)
-        || fresh["draft"].as_bool() != Some(false)
-        || fresh["mergeable"].as_bool() != Some(true)
-        || fresh["mergeable_state"] != "clean"
+    if !same_head(&fresh, &pr.pr, &inventory.actor, &repo.repository)
+        || fresh.draft != Some(false)
+        || fresh.mergeable != Some(true)
+        || fresh.mergeable_state.as_deref() != Some("clean")
     {
         return Ok((
             PullRequestStatus::Protected,
@@ -408,13 +457,13 @@ async fn one(
         ));
     }
     let result = client
-        .put::<Value>(
+        .put::<model::MergeResult>(
             &format!("{path}/merge"),
             json!({"sha":head,"merge_method":method}),
         )
         .await
         .map_err(|e| e.to_string())?;
-    if result["merged"].as_bool() != Some(true) {
+    if !result.merged {
         return Ok((
             PullRequestStatus::Skipped,
             "auto-merge refused by GitHub; retry on a later run".into(),
@@ -432,8 +481,8 @@ async fn one(
                 repo.default_branch
                     .as_deref()
                     .ok_or("missing default branch")?,
-                fields.head.branch.as_deref().ok_or("missing head branch")?,
-                head,
+                &pr.pr.head.branch,
+                &head,
             )
             .await
         }
@@ -442,9 +491,8 @@ async fn one(
             reason.push_str(&format!("; branch cleanup deferred: {error}"));
         }
     }
-    pr["state"] = json!("closed");
     // The cached PR keeps GitHub's shape: merged_at is when it merged.
-    pr["merged_at"] = json!(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    pr.mark_merged(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     Ok((PullRequestStatus::Merged, reason))
 }
 
@@ -468,30 +516,27 @@ pub async fn reconcile(
             continue;
         };
         // Check policy independently of manual create/schedule/age permits.
-        let proof = pr.value();
+        let proof = pr.clone();
         let allowed = policy_allows(repo, plan, now);
         let pr = plan.cached_pr.as_mut().expect("restored receipt");
-        let mut value = pr.value();
         let (status, reason) = if !allowed {
             (PullRequestStatus::Skipped, "auto-merge waiting: release age, schedule or lookup evidence does not permit merging".into())
         } else {
-            one(client, inventory, repo, &mut value)
+            one(client, inventory, repo, pr)
                 .await
                 .unwrap_or_else(|e| (PullRequestStatus::Error, format!("auto-merge: {e}")))
         };
-        pr.resync(value);
         pr.set_merge_note(Some(crate::pull_requests::MergeNote::Reason(
             reason.clone(),
         )));
         if status == PullRequestStatus::Merged {
             plan.merged();
         }
-        let proof_fields = crate::pull_requests::Pr::read(&proof);
         actions.push(PullRequestAction {
             repository: repo.repository.clone(),
             branch: plan.action().branch.clone(),
-            number: proof_fields.number,
-            url: proof["html_url"].as_str().map(str::to_owned),
+            number: Some(proof.pr.number),
+            url: Some(proof.pr.html_url.clone()),
             status,
             reason: Some(reason),
         });
@@ -519,39 +564,162 @@ pub async fn reconcile(
     actions
 }
 
-pub fn dashboard_history(inventory: &Inventory, mut prs: Vec<Value>, plans: &[Plan]) -> Vec<Value> {
+/// The dashboard's PR lists: the live pulls it renders, and the merged
+/// rows beside them — live merged PRs, recorded history and cached
+/// merges, deduplicated by number exactly as the combined list was.
+pub fn dashboard_history(inventory: &Inventory, prs: Vec<Tracked>, plans: &[Plan]) -> DashboardPrs {
     // Untracked historical/native merges are not presented as fallback outcomes.
-    prs.retain(|p| {
-        crate::pull_requests::Pr::read(p).merged_at.is_none()
-            || crate::pull_requests::merge_note(p).is_some()
-    });
-    for pr in &inventory.merged_prs {
-        let number = crate::pull_requests::Pr::read(pr).number;
-        if !prs
-            .iter()
-            .any(|p| crate::pull_requests::Pr::read(p).number == number)
+    let mut open: Vec<_> = prs
+        .into_iter()
+        .filter(|t| t.pr.merged_at.is_none() || t.merge_note().is_some())
+        .collect();
+    let mut merged: Vec<MergedPr> = open
+        .iter()
+        .filter(|t| t.pr.merged_at.is_some())
+        .map(MergedPr::from_tracked)
+        .collect();
+    for row in &inventory.merged_prs {
+        if !open.iter().any(|t| row.number == Some(t.pr.number))
+            && !merged.iter().any(|m| m.number == row.number)
         {
-            prs.push(pr.clone());
+            merged.push(row.clone());
         }
     }
     for tracked in plans.iter().filter_map(|p| p.cached_pr.as_ref()) {
-        let pr = tracked.value();
-        let fields = crate::pull_requests::Pr::read(&pr);
-        if let Some(old) = prs
-            .iter_mut()
-            .find(|p| crate::pull_requests::Pr::read(p).number == fields.number)
-        {
-            *old = pr;
-        } else if fields.merged_at.is_some() {
-            prs.push(pr);
+        // A cached PR is the freshest picture of its number on either list.
+        if let Some(old) = open.iter_mut().find(|t| t.pr.number == tracked.pr.number) {
+            old.clone_from(tracked);
+        }
+        let row = MergedPr::from_tracked(tracked);
+        if let Some(old) = merged.iter_mut().find(|m| m.number == row.number) {
+            *old = row;
+        } else if tracked.pr.merged_at.is_some() {
+            merged.push(row);
         }
     }
-    prs
+    DashboardPrs { open, merged }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::already_mergeable;
+    use super::{already_mergeable, *};
+    use patchula_cache::State;
+
+    fn pull_request_json(number: u64) -> Value {
+        json!({
+            "node_id": format!("N{number}"), "number": number,
+            "html_url": format!("https://github.com/o/r/pull/{number}"),
+            "state": "open", "title": "chore(deps): bump serde",
+            "body": format!("Bumps.\n\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->",
+                "a".repeat(64), "b".repeat(64)),
+            "labels": [], "user": {"login": "patchula[bot]"},
+            "head": {"ref": "patchula/serde-2.x", "sha": "s", "repo": {"full_name": "o/r"}},
+            "base": {"ref": "main", "repo": {"full_name": "o/r"}}
+        })
+    }
+    fn pull_request(number: u64) -> model::PullRequest {
+        serde_json::from_value(pull_request_json(number)).expect("a complete REST pull request")
+    }
+
+    /// A row written before `MergedPr` — a whole REST pull object with the
+    /// `patchula_merge` key smuggled in — decodes into the same row.
+    #[tokio::test]
+    async fn history_rows_written_as_rest_pulls_still_decode() {
+        #[derive(Serialize, Deserialize)]
+        struct OldHistory {
+            actor: String,
+            prs: Vec<Value>,
+        }
+        impl State for OldHistory {
+            const NAMESPACE: &'static str = "auto-merge-history";
+            const VERSION: u32 = 1;
+            type Scope = HistoryScope;
+        }
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache
+            .set_state(
+                &history_scope("o/r"),
+                &OldHistory {
+                    actor: "patchula[bot]".into(),
+                    prs: vec![
+                        json!({"number":42,"node_id":"N42",
+                            "html_url":"https://github.com/o/r/pull/42",
+                            "state":"closed","title":"chore(deps): bump serde",
+                            "merged_at":"2026-01-01T00:00:00Z",
+                            "patchula_merge":"merged by patchula (squash)",
+                            "user":{"login":"patchula[bot]"},"labels":[],
+                            "head":{"ref":"patchula/serde-2.x","sha":"s",
+                                "repo":{"full_name":"o/r"}},
+                            "base":{"ref":"main","repo":{"full_name":"o/r"}}}),
+                        // A row that is not an object is invisible, never
+                        // fatal — the same leeway `Vec<Value>` gave.
+                        json!("not a pull request"),
+                    ],
+                },
+            )
+            .await
+            .unwrap();
+        let rows = merged(&cache, "o/r").await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].number, Some(42));
+        assert_eq!(rows[0].title.as_deref(), Some("chore(deps): bump serde"));
+        assert_eq!(
+            rows[0].merge_note.as_deref(),
+            Some("merged by patchula (squash)")
+        );
+        // The dashboard's merged section renders the decoded row.
+        let inventory = Inventory {
+            merged_prs: rows,
+            ..Default::default()
+        };
+        let history = dashboard_history(&inventory, Vec::new(), &[]);
+        assert_eq!(history.merged.len(), 1);
+        assert_eq!(history.merged[0].number, Some(42));
+    }
+
+    /// Every field `same_head` compares is required in the type: a fresh
+    /// read missing `node_id` never reaches the comparison — where two
+    /// missing fields once compared equal, the decode now fails first.
+    #[test]
+    fn a_fresh_pr_missing_a_required_field_fails_closed() {
+        let full = pull_request_json(7);
+        for field in [
+            "node_id", "number", "state", "title", "labels", "head", "base",
+        ] {
+            let mut pr = full.clone();
+            pr.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<model::PullRequest>(pr).is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    /// The receipt comparison fails on any changed field, and a foreign or
+    /// closed PR is never the one the receipt saw.
+    #[test]
+    fn same_head_compares_every_receipt_field() {
+        let proof = pull_request(7);
+        assert!(same_head(&proof, &proof, "patchula[bot]", "o/r"));
+        let mut head_moved = pull_request(7);
+        head_moved.head.sha = "other".into();
+        assert!(!same_head(&head_moved, &proof, "patchula[bot]", "o/r"));
+        let mut node_moved = pull_request(7);
+        node_moved.node_id = "other".into();
+        assert!(!same_head(&node_moved, &proof, "patchula[bot]", "o/r"));
+        let mut base_moved = pull_request(7);
+        base_moved.base.branch = "release".into();
+        assert!(!same_head(&base_moved, &proof, "patchula[bot]", "o/r"));
+        let mut closed = pull_request(7);
+        closed.state = "closed".into();
+        assert!(!same_head(&closed, &proof, "patchula[bot]", "o/r"));
+        let mut merged = pull_request(7);
+        merged.merged_at = Some("2026-01-01T00:00:00Z".into());
+        assert!(!same_head(&merged, &proof, "patchula[bot]", "o/r"));
+        let mut foreign = pull_request(7);
+        foreign.head.repo = None;
+        assert!(!same_head(&foreign, &proof, "patchula[bot]", "o/r"));
+    }
 
     /// GitHub's refusal names the PR's merge state; only the states in which
     /// nothing required blocks the merge mean "mergeable now".

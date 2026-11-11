@@ -903,15 +903,22 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
                 patchula_update::Inventory::read(&github, &cache, &report.repositories[0], &config)
                     .await
                     .unwrap();
-            let prs = patchula_update::automerge::dashboard_history(
+            let history = patchula_update::automerge::dashboard_history(
                 &inventory,
-                inventory
-                    .pull_requests("demo/sandbox")
-                    .iter()
-                    .map(patchula_update::pull_requests::Tracked::value)
-                    .collect(),
+                inventory.pull_requests("demo/sandbox"),
                 &[],
             );
+            let prs: Vec<_> = history
+                .open
+                .iter()
+                .map(patchula_update::pull_requests::Tracked::value)
+                .chain(
+                    history
+                        .merged
+                        .iter()
+                        .filter_map(|m| serde_json::to_value(m).ok()),
+                )
+                .collect();
             let next_dashboard = patchula_update::dashboard::render(
                 &report.repositories[0],
                 &[],
