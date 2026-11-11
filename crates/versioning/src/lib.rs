@@ -9,7 +9,6 @@ mod extended;
 mod maven;
 mod nuget;
 mod rubygems;
-pub use maven::variant as maven_variant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ecosystem {
@@ -75,6 +74,10 @@ pub enum Error {
     Invalid(String),
     #[error("cannot safely preserve this compound requirement: {0}; use exact or widen")]
     Compound(String),
+    /// nodejs-semver reports every parse failure with this one message; a
+    /// declared requirement that is not an npm range surfaces it verbatim.
+    #[error("Invalid semantic version or range")]
+    Semver,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -92,6 +95,29 @@ pub trait Versioning: Send + Sync {
     fn matches(&self, range: &str, version: &Parsed) -> Result<bool>;
     fn classify(&self, current: &Parsed, target: &Parsed) -> Update;
     fn new_range(&self, current: &str, target: &str, policy: VersionPolicy) -> Result<String>;
+    /// The lowest version the requirement can name, to classify updates
+    /// when the current value is not a version: npm floors its declared
+    /// requirement; the other ranged schemes floor the resolved text's
+    /// first bound — a bracketed interval's first bound, or a range's
+    /// first alternative's first bound — and Cargo falls back to a loose
+    /// version. `declared` is the requirement as written, `current` the
+    /// value the evaluation resolved it to.
+    fn floor(&self, declared: &str, current: &str) -> Option<Parsed>;
+    /// Whether `candidate` is a release on `baseline`'s line: Maven keeps
+    /// the published variant, Docker keeps the tag's suffix and precision.
+    /// `baseline_text` and `candidate_text` are the source texts the parsed
+    /// versions came from.
+    fn same_release_line(
+        &self,
+        baseline: &Parsed,
+        baseline_text: &str,
+        candidate: &Parsed,
+        candidate_text: &str,
+    ) -> bool;
+    /// Whether `version` satisfies the requirement `requirement`. Unlike
+    /// [`Versioning::matches`], a requirement that does not parse is the
+    /// parser's own error, surfaced to the report verbatim.
+    fn satisfies(&self, requirement: &str, version: &Parsed) -> Result<bool>;
 }
 
 impl Versioning for Ecosystem {
@@ -361,6 +387,77 @@ impl Versioning for Ecosystem {
         }
         Ok(out)
     }
+    fn floor(&self, declared: &str, current: &str) -> Option<Parsed> {
+        if *self == Self::Npm {
+            return nodejs_semver::Range::parse(declared)
+                .ok()?
+                .min_version()
+                .and_then(|v| self.parse(&v.to_string()).ok());
+        }
+        if !self.supports_ranges() {
+            return None;
+        }
+        // A bracketed interval starts at its first bound that names a
+        // version: `[1.0,2.0)` at 1.0, `(,2.0)` at 2.0.
+        if matches!(self, Self::Maven | Self::Nuget) && current.trim_start().starts_with(['[', '('])
+        {
+            let first = current
+                .trim_start()
+                .trim_start_matches(['[', '('])
+                .split([']', ')'])
+                .next()?
+                .split(',')
+                .map(str::trim)
+                .find(|bound| !bound.is_empty())?;
+            return self.parse(first).ok();
+        }
+        // A range's lowest version only classifies the update; it is never
+        // reported as what is installed. `^5.4 || ^6.0` and `>=1.0 <2.0`
+        // start at their first alternative's first bound.
+        let first = current
+            .split([',', '|'])
+            .next()?
+            .trim()
+            .trim_start_matches(['=', '>', '<', '~', '^', '!', ' '])
+            .split_whitespace()
+            .next()?;
+        self.parse(first).ok().or_else(|| {
+            (*self == Self::Cargo)
+                .then(|| Self::Loose.parse(first).ok())
+                .flatten()
+        })
+    }
+    fn same_release_line(
+        &self,
+        baseline: &Parsed,
+        baseline_text: &str,
+        candidate: &Parsed,
+        candidate_text: &str,
+    ) -> bool {
+        match self {
+            // Keep the published variant: 33.x-android never becomes
+            // 33.x-jre.
+            Self::Maven => maven::variant(candidate_text) == maven::variant(baseline_text),
+            Self::Docker => {
+                // A floating 3.22 tag tracks the 3.22 line, not 3.22.0.
+                // Mixing precisions also turns date tags into bogus majors.
+                candidate.2 == baseline.2
+                    && candidate.1.as_ref().map(|v| v.release().len())
+                        == baseline.1.as_ref().map(|v| v.release().len())
+            }
+            _ => true,
+        }
+    }
+    fn satisfies(&self, requirement: &str, version: &Parsed) -> Result<bool> {
+        if *self == Self::Npm {
+            let range = nodejs_semver::Range::parse(requirement).map_err(|_| Error::Semver)?;
+            let Ok(version) = nodejs_semver::Version::parse(version.0.to_string()) else {
+                return Ok(false);
+            };
+            return Ok(range.satisfies(&version));
+        }
+        self.matches(requirement, version)
+    }
 }
 
 #[cfg(test)]
@@ -567,6 +664,169 @@ mod tests {
             Ecosystem::Pep440
                 .new_range("<2", "3.1.4", Preserve)
                 .is_err()
+        );
+    }
+
+    /// npm floors its declared requirement; every other ranged scheme floors
+    /// the resolved text's first bound, and the version-less schemes have no
+    /// floor at all.
+    #[test]
+    fn requirement_floors() {
+        let floor =
+            |scheme: Ecosystem, declared: &str, current: &str| scheme.floor(declared, current);
+        for (declared, current, expected) in [
+            ("^1.2.3", "^1.2.3", "1.2.3"),
+            (">=1.0 <2.0", ">=1.0 <2.0", "1.0.0"),
+            // The declared requirement is floored, not the resolved text.
+            ("^9.9.9", "1.0.0", "9.9.9"),
+        ] {
+            assert_eq!(
+                floor(Ecosystem::Npm, declared, current),
+                Ecosystem::Npm.parse(expected).ok(),
+                "{declared}"
+            );
+        }
+        for unparseable in ["latest", "not a range", "github:org/repo"] {
+            assert_eq!(floor(Ecosystem::Npm, unparseable, unparseable), None);
+        }
+        // A bracketed interval floors at its first bound that names a
+        // version; the resolved text is floored, not the declaration.
+        for (scheme, current, expected) in [
+            (Ecosystem::Maven, "[1.0,2.0)", "1.0"),
+            (Ecosystem::Maven, "(,2.0)", "2.0"),
+            (Ecosystem::Maven, "[1.0]", "1.0"),
+            (Ecosystem::Nuget, "[2.9.0,3.0)", "2.9.0"),
+        ] {
+            assert_eq!(
+                floor(scheme, "9.9.9", current),
+                scheme.parse(expected).ok(),
+                "{scheme:?} {current}"
+            );
+        }
+        // A range starts at its first alternative's first bound; Cargo
+        // falls back to a loose version when its requirement syntax is too
+        // short for semver.
+        for (scheme, current, expected) in [
+            (Ecosystem::Cargo, ">=1.2, <2", "1.2.0"),
+            (Ecosystem::Cargo, "2", "2.0.0"),
+            (Ecosystem::Pep440, ">=1.2", "1.2"),
+            (Ecosystem::Poetry, "^1.2 || ^3.0", "1.2"),
+            (Ecosystem::Rubygems, "~> 7.1", "7.1"),
+            (Ecosystem::Composer, "^3.0", "3.0"),
+            (Ecosystem::Hashicorp, "~> 1.2", "1.2"),
+            (Ecosystem::Nuget, ">=1.0", "1.0"),
+        ] {
+            assert_eq!(
+                floor(scheme, "9.9.9", current),
+                scheme.parse(expected).ok(),
+                "{scheme:?} {current}"
+            );
+        }
+        // Loose, Go and Docker compare one exact version: no floor.
+        for scheme in [Ecosystem::Loose, Ecosystem::Go, Ecosystem::Docker] {
+            assert_eq!(floor(scheme, "1.2.3", "1.2.3"), None);
+        }
+    }
+
+    /// A candidate outside the baseline's release line is not comparable:
+    /// Maven keeps its published variant, Docker the tag's suffix and
+    /// precision, and every other scheme has the one line.
+    #[test]
+    fn release_lines_are_compared_per_scheme() {
+        let same = |scheme: Ecosystem, baseline: &str, candidate: &str| {
+            let parsed = scheme.parse(baseline).unwrap();
+            let candidate_parsed = scheme.parse(candidate).unwrap();
+            scheme.same_release_line(&parsed, baseline, &candidate_parsed, candidate)
+        };
+        for (baseline, candidate, expected) in [
+            ("33.7.2-jre", "33.8.0-jre", true),
+            ("33.7.2-jre", "33.8.0-android", false),
+            ("33.7.2-jre", "34.0.0", false),
+            ("33.7.2", "33.8.0", true),
+            ("2.0-rc1", "2.1.0", true),
+        ] {
+            assert_eq!(
+                same(Ecosystem::Maven, baseline, candidate),
+                expected,
+                "{baseline} {candidate}"
+            );
+        }
+        for (baseline, candidate, expected) in [
+            ("3.20-alpine", "3.21-alpine", true),
+            ("3.20-alpine", "3.21.0-alpine", false),
+            ("3.20", "3.20.0", false),
+            ("3.20-alpine", "3.21-bookworm", false),
+            ("1.2.3", "1.2.4", true),
+            ("2024.01.01", "2024.02.02", true),
+        ] {
+            assert_eq!(
+                same(Ecosystem::Docker, baseline, candidate),
+                expected,
+                "{baseline} {candidate}"
+            );
+        }
+        for scheme in [
+            Ecosystem::Npm,
+            Ecosystem::Cargo,
+            Ecosystem::Loose,
+            Ecosystem::Go,
+            Ecosystem::Pep440,
+            Ecosystem::Poetry,
+            Ecosystem::Nuget,
+            Ecosystem::Rubygems,
+            Ecosystem::Composer,
+            Ecosystem::Hashicorp,
+        ] {
+            let (baseline, candidate) = if scheme == Ecosystem::Go {
+                ("v1.2.3", "v2.0.0")
+            } else {
+                ("1.2.3", "2.0.0")
+            };
+            let parsed = scheme.parse(baseline).unwrap();
+            let candidate_parsed = scheme.parse(candidate).unwrap();
+            assert!(scheme.same_release_line(&parsed, baseline, &candidate_parsed, candidate));
+        }
+    }
+
+    /// npm satisfies over the declared range with the parser's own error;
+    /// every other scheme answers through `matches`.
+    #[test]
+    fn satisfies_surfaces_the_requirement_error() {
+        let npm = Ecosystem::Npm;
+        for (range, version, expected) in [
+            ("^1.2.3", "1.5.0", true),
+            ("^1.2.3", "2.0.0", false),
+            ("1.x || >=2.5.0", "2.6.0", true),
+        ] {
+            assert_eq!(
+                npm.satisfies(range, &npm.parse(version).unwrap()).unwrap(),
+                expected,
+                "{range} {version}"
+            );
+        }
+        for unparseable in ["not a range", "latest"] {
+            let error = npm
+                .satisfies(unparseable, &npm.parse("1.0.0").unwrap())
+                .unwrap_err();
+            assert_eq!(error.to_string(), "Invalid semantic version or range");
+        }
+        for (scheme, range, version, expected) in [
+            (Ecosystem::Cargo, ">=1.0", "1.5.0", true),
+            (Ecosystem::Maven, "[1.0,2.0)", "1.5", true),
+            (Ecosystem::Maven, "[1.0,2.0)", "2.5", false),
+        ] {
+            assert_eq!(
+                scheme
+                    .satisfies(range, &scheme.parse(version).unwrap())
+                    .unwrap(),
+                expected,
+                "{scheme:?} {range} {version}"
+            );
+        }
+        assert!(
+            Ecosystem::Cargo
+                .satisfies("<1", &Ecosystem::Cargo.parse("1.5.0").unwrap())
+                .is_ok()
         );
     }
 }
