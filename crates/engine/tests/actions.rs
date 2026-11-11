@@ -498,3 +498,169 @@ async fn a_failed_release_catalog_batch_falls_back_per_package() {
     );
     check_transcript();
 }
+
+/// A commit pin's version comment is the resolved value: the report says
+/// `pinned-commit`, and the tag catalog drives the update lanes.
+#[tokio::test]
+async fn a_commit_pin_with_a_version_comment_reports_pinned_commit() {
+    let pin = "b".repeat(40);
+    let fake = sandbox(files(&format!(
+        "on: push\njobs:\n  t:\n    steps:\n      - uses: actions/checkout@{pin} # v4.2.1\n"
+    )));
+    tag(&fake.github, "actions/checkout", "v4.2.1", &"d".repeat(40));
+    tag(&fake.github, "actions/checkout", "v4.3.0", &"e".repeat(40));
+    commit(&fake.github, "actions/checkout", "v4.2.1", &"d".repeat(40));
+    commit(&fake.github, "actions/checkout", "v4.3.0", &"e".repeat(40));
+    let report = engine(fake.clone())
+        .await
+        .lookup_at(
+            Options {
+                repositories: vec!["demo/app".into()],
+                ..Default::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = lookup(&report);
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = &repo.package_files[0].dependencies[0];
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_eq!(
+        resolution.kind,
+        patchula_words::ResolutionKind::PinnedCommit
+    );
+    assert_eq!(resolution.version, "v4.2.1");
+    check_transcript();
+}
+
+/// A setup action's `with:` tool input resolves through its release catalog
+/// (`release-line`); a toolchain constraint resolves through the newest
+/// matching release (`supported-range`).
+#[tokio::test]
+async fn tool_and_toolchain_resolutions_report_their_kinds() {
+    let fake = sandbox(BTreeMap::from([
+        (
+            "patchula.pkl".to_owned(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"github-actions\"; \"terraform\" }\n"
+                .to_owned(),
+        ),
+        (
+            ".github/workflows/ci.yml".to_owned(),
+            "on: push\njobs:\n  t:\n    steps:\n      - uses: golangci/golangci-lint-action@v8\n        with:\n          version: 'v2.1.6'\n"
+                .to_owned(),
+        ),
+        (
+            "main.tf".to_owned(),
+            "terraform {\n  required_version = \">= 1.5\"\n}\n".to_owned(),
+        ),
+    ]));
+    for repo in [
+        "golangci/golangci-lint-action",
+        "golangci/golangci-lint",
+        "hashicorp/terraform",
+    ] {
+        fake.github.add_repository(repo, false);
+    }
+    tag(
+        &fake.github,
+        "golangci/golangci-lint-action",
+        "v8.0.0",
+        &"f".repeat(40),
+    );
+    tag(&fake.github, "golangci/golangci-lint", "v2.1.6", "");
+    tag(&fake.github, "golangci/golangci-lint", "v2.2.0", "");
+    tag(&fake.github, "hashicorp/terraform", "v1.5.0", "");
+    tag(&fake.github, "hashicorp/terraform", "v1.6.0", "");
+    commit(
+        &fake.github,
+        "golangci/golangci-lint-action",
+        "v8",
+        &"f".repeat(40),
+    );
+    commit(
+        &fake.github,
+        "golangci/golangci-lint-action",
+        "v8.0.0",
+        &"f".repeat(40),
+    );
+    let report = engine(fake.clone())
+        .await
+        .lookup_at(
+            Options {
+                repositories: vec!["demo/app".into()],
+                ..Default::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = lookup(&report);
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let resolution = |name: &str| {
+        repo.package_files
+            .iter()
+            .flat_map(|f| &f.dependencies)
+            .find(|d| d.name == name)
+            .unwrap_or_else(|| panic!("no {name} dependency: {repo:?}"))
+            .metadata
+            .as_ref()
+            .and_then(|m| m.resolution.as_ref())
+            .unwrap_or_else(|| panic!("no resolution recorded for {name}"))
+            .kind
+    };
+    assert_eq!(
+        resolution("golangci/golangci-lint"),
+        patchula_words::ResolutionKind::ReleaseLine
+    );
+    assert_eq!(
+        resolution("hashicorp/terraform"),
+        patchula_words::ResolutionKind::SupportedRange
+    );
+    check_transcript();
+}
+
+/// A toolchain pin whose catalog cannot re-resolve it is `declared`, not
+/// `supported-range`: the resolution kind says how the current value was
+/// resolved, not what kind the dependency is.
+#[tokio::test]
+async fn a_toolchain_pin_without_a_catalog_resolution_reports_declared() {
+    let fake = sandbox(BTreeMap::from([
+        (
+            "patchula.pkl".to_owned(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"cargo\" }\n"
+                .to_owned(),
+        ),
+        ("rust-toolchain".to_owned(), "1.75.0\n".to_owned()),
+    ]));
+    let report = engine(fake.clone())
+        .await
+        .lookup_at(
+            Options {
+                repositories: vec!["demo/app".into()],
+                ..Default::default()
+            },
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let repo = lookup(&report);
+    let dep = repo
+        .package_files
+        .iter()
+        .flat_map(|f| &f.dependencies)
+        .find(|d| d.name == "rust")
+        .unwrap_or_else(|| panic!("no rust toolchain dependency: {repo:?}"));
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_eq!(resolution.kind, patchula_words::ResolutionKind::Declared);
+    assert_eq!(resolution.version, "1.75.0");
+    check_transcript();
+}
