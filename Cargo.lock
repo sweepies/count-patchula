@@ -2544,6 +2544,7 @@ dependencies = [
  "patchula-notes",
  "patchula-process",
  "patchula-report",
+ "patchula-testkit",
  "patchula-versioning",
  "patchula-words",
  "reqwest",

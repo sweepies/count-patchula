@@ -37,3 +37,4 @@ patchula-words = { path = "../words" }
 tokio = { workspace = true, features = ["test-util"] }
 patchula-http = { path = "../http" }
 patchula-datasource = { path = "../datasource" }
+patchula-testkit = { path = "../testkit" }
