@@ -39,6 +39,9 @@ mod npm;
 mod nuget;
 mod precommit;
 mod proposal;
+pub use proposal::{
+    Advisories, Edits, Lock, Pin, Proposing, Range, ShortTags, Unversioned, Written,
+};
 mod pyproject;
 pub mod roles;
 mod terraform;
@@ -236,26 +239,6 @@ impl Dependency {
     /// The package as the Count looks it up, registry included.
     pub fn id(&self) -> PackageId {
         PackageId::new(self.source, self.registry.clone(), &self.package)
-    }
-    /// The version a committed lockfile holds for a direct dependency whose
-    /// lock the Count can move to a chosen version: Cargo.lock, uv.lock,
-    /// poetry.lock, Gemfile.lock and composer.lock. A release inside the
-    /// declared range reaches such a dependency through its lockfile alone.
-    pub fn locked(&self) -> Option<&str> {
-        let descriptor = ecosystem(self.manager);
-        (descriptor.preserves_ranges() && descriptor.movable_lockfile(self))
-            .then_some(self.resolved.as_deref())
-            .flatten()
-    }
-    /// Whether this dependency's ecosystem keeps its declared ranges behind
-    /// a committed lockfile: `versions = "preserve"` is its policy.
-    pub fn preserves_ranges(&self) -> bool {
-        ecosystem(self.manager).preserves_ranges()
-    }
-    /// Whether this dependency's committed lockfile records its resolved
-    /// version for update's lockfile job to move to a chosen version.
-    pub fn movable_lockfile(&self) -> bool {
-        ecosystem(self.manager).movable_lockfile(self)
     }
     /// The kinds rules select this dependency by: its own, plus
     /// `reference-data` for a package on the reference data list.
@@ -465,18 +448,9 @@ pub(crate) trait Ecosystem {
     fn more<'a>(&self, _files: &'a Files) -> Option<PathPredicate<'a>> {
         None
     }
-    /// Whether this ecosystem's manifests keep their declared ranges behind
-    /// a committed lockfile: `versions = "preserve"` is its built-in policy
-    /// and a release the range already allows is a lockfile move, not a
-    /// manifest edit.
-    fn preserves_ranges(&self) -> bool {
-        false
-    }
-    /// Whether `dep`'s committed lockfile records its resolved version for
-    /// the Count to move to a chosen version.
-    fn movable_lockfile(&self, _dep: &Dependency) -> bool {
-        false
-    }
+    /// What lookup, the engine and update must know to propose for `dep`:
+    /// the proposal facts, required so a new manager states every one.
+    fn proposing(&self, dep: &Dependency) -> Proposing;
     /// The source a package only a lockfile records is looked up in, when
     /// this ecosystem's lockfile readers emit `Locked` entries.
     fn locked_source(&self) -> Option<Source> {
@@ -898,7 +872,7 @@ fn requirements_name(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     /// The schema's built-in `versions = "preserve"` rule names the managers
-    /// whose descriptors declare `preserves_ranges`; the two must agree.
+    /// whose descriptors declare `lock.keeps_ranges`; the two must agree.
     #[test]
     fn pkl_preserve_rule_matches_descriptors() {
         use super::Manager;
@@ -922,7 +896,32 @@ mod tests {
         let descriptors: std::collections::BTreeSet<Manager> = Manager::ALL
             .iter()
             .copied()
-            .filter(|manager| super::ecosystem(*manager).preserves_ranges())
+            .filter(|manager| {
+                let dep = super::Dependency {
+                    manager: *manager,
+                    file: "manifest".into(),
+                    location: super::Location {
+                        start: 0,
+                        end: 1,
+                        line: 1,
+                        column: 1,
+                        pointer: String::new(),
+                    },
+                    form: super::EditForm::Scalar(super::Syntax::Bare),
+                    name: "example".into(),
+                    package: "example".into(),
+                    kind: super::DependencyKind::Production,
+                    current: "1.0.0".into(),
+                    resolved: None,
+                    digest: None,
+                    source: super::Source::Npm,
+                    scheme: super::Scheme::Semver,
+                    extract: None,
+                    included_by: None,
+                    registry: None,
+                };
+                super::ecosystem(*manager).proposing(&dep).lock.keeps_ranges
+            })
             .collect();
         assert_eq!(declared, descriptors);
     }

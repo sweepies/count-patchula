@@ -355,14 +355,53 @@ pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
+    fn proposing(&self, dep: &Dependency) -> Proposing {
+        Proposing {
+            range: Range::Installed,
+            runtime_toolchain: false,
+            written: Written::Range,
+            keeps_satisfied: false,
+            unversioned: Unversioned {
+                looked_up: false,
+                opaque: false,
+            },
+            short_tags: ShortTags::Fixed,
+            selector_resolved: false,
+            resolved_via_listing: dep.kind == DependencyKind::Tool,
+            pin: Pin {
+                commit: false,
+                needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
+                    && matches!(
+                        dep.kind,
+                        DependencyKind::Action
+                            | DependencyKind::ReusableWorkflow
+                            | DependencyKind::ContainerImage
+                            | DependencyKind::Chart
+                    ),
+                from_catalog: false,
+            },
+            lock: Lock {
+                keeps_ranges: false,
+                movable: dep.source == Source::Go,
+                transitive_movable: dep.kind == DependencyKind::Transitive
+                    && dep.source == Source::Crates,
+                reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
+                    && dep.resolved.is_some()
+                    && dep.source == Source::Go,
+            },
+            edits: Edits::Manifest,
+            advisories: if dep.kind == DependencyKind::Toolchain && dep.package == "go" {
+                Advisories::GoStdlib
+            } else {
+                Advisories::BySource
+            },
+        }
+    }
     fn selected(&self, _config: &Config, path: &str) -> bool {
         path.rsplit('/').next() == Some("go.mod")
     }
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Go, path).registry
-    }
-    fn movable_lockfile(&self, dep: &Dependency) -> bool {
-        dep.source == Source::Go
     }
     fn declared_form(
         &self,

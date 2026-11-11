@@ -431,7 +431,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         let deps = extract(&files);
         let shared = deps.iter().find(|d| d.name == "shared").unwrap();
         assert_eq!(shared.resolved.as_deref(), Some(expected), "{edge}");
-        assert_eq!(shared.locked(), Some(expected));
+        assert_eq!(
+            shared.proposing().lock.locked(shared.resolved.as_deref()),
+            Some(expected)
+        );
     }
     // A manifest the lock does not know has no locked version at all.
     let files = read_files([

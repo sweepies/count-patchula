@@ -43,7 +43,11 @@ impl Pinned {
             };
             if dep.manager != manager
                 || !under(&dep.file, directory)
-                || dep.locked().is_none()
+                || dep
+                    .proposing()
+                    .lock
+                    .locked(dep.resolved.as_deref())
+                    .is_none()
                 || dep.resolved.as_deref() != *current
             {
                 continue;

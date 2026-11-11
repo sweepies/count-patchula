@@ -68,6 +68,25 @@ Pkl, evaluated in process with `pklr`; see [configuration](/guide/configuration/
 Async runtime: tokio. HTTP: reqwest with HTTP/2 and rustls. Errors and
 diagnostics: miette. Terminal UI: ratatui, only on interactive terminals.
 
+## Proposal facts
+
+Everything lookup, the engine and update need to know about a declaration to
+propose for it — whether its ref pins to a commit, whether a range declares a
+supported runtime rather than an installed version, whether its lockfile can
+move — is a fact its ecosystem's descriptor states. Callers read
+`Dependency::proposing()` (`crates/manager/src/proposal.rs`), a `Proposing`
+struct of named fact fields computed from the dependency, never stored on it.
+The descriptors implement the required `Ecosystem::proposing` hook; lookup
+holds the policy that consumes the facts.
+
+A new manager adds a `Manager` variant in `words`, a descriptor type in
+`manager`, and its arm in `ecosystem()`, which is an exhaustive match.
+`proposing` has no default body and `Proposing` has no `Default`, so the
+descriptor does not compile until it states every fact. The compiler closes
+the manager axis; the oracle in `proposal.rs`, which keeps the predicates the
+facts replaced verbatim under `#[cfg(test)]`, closes the kind and source axes
+by asserting equality over every `Manager × DependencyKind × Source`.
+
 ## Scope
 
 GitHub only. Out of scope: other platforms, onboarding PRs, hosted services,

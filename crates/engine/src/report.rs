@@ -116,7 +116,7 @@ impl Engine {
             }
         }
         if let Some(eval) = eval
-            && dep.tagged_action()
+            && dep.proposing().pin.commit
             && !dep.needs.ignored
         {
             for proposal in &mut proposals {
@@ -314,7 +314,7 @@ impl Engine {
                 reason: Some(missed.reason),
             });
         }
-        if dep.report_only() {
+        if dep.proposing().edits == patchula_manager::Edits::ReportOnly {
             // Only copier update applies a template: report the
             // newest eligible tag and propose nothing to edit.
             let rank = |kind: UpdateKind| match kind {
@@ -379,7 +379,7 @@ impl Engine {
             .as_ref()
             .and_then(|key| lookups.catalogs.get(key))
             .and_then(|c| c.as_ref().ok());
-        if dep.tagged_action() && catalog.is_some_and(|c| c.versions.is_empty()) {
+        if dep.proposing().pin.commit && catalog.is_some_and(|c| c.versions.is_empty()) {
             report.warnings.push(format!(
                 "{}: registry returned an empty tag catalog; version lookup is unavailable",
                 dep.name
@@ -393,13 +393,13 @@ impl Engine {
             })
         });
         let resolution = resolved.as_ref().or(dep.resolved.as_ref()).map(|version| {
-            let kind = if dep.tagged_action() {
+            let kind = if dep.proposing().pin.commit {
                 if dep.digest.is_some() {
                     ResolutionKind::PinnedCommit
                 } else {
                     ResolutionKind::FloatingRef
                 }
-            } else if dep.resolved_from_lockfile() {
+            } else if dep.proposing().lock.reported {
                 ResolutionKind::Lockfile
             } else if resolved.is_some()
                 && (matches!(dep.kind, DependencyKind::Tool)
@@ -452,7 +452,7 @@ impl Engine {
             },
             updates: proposals,
             metadata: Some(patchula_report::DependencyMetadata {
-                tag_digests: if dep.tagged_action() {
+                tag_digests: if dep.proposing().pin.commit {
                     catalog
                         .into_iter()
                         .flat_map(|c| &c.versions)

@@ -548,7 +548,13 @@ fn a_lock_only_update_without_a_committed_lockfile_plans_nothing_to_do() {
         .unwrap()
         .extract(&patchula_manager::all_read(&files))
         .unwrap();
-    assert_eq!(extraction.dependencies[0].locked(), None);
+    assert_eq!(
+        extraction.dependencies[0]
+            .proposing()
+            .lock
+            .locked(extraction.dependencies[0].resolved.as_deref()),
+        None
+    );
     let update = patchula_report::Update {
         new_value: None,
         new_version: Some("13.2.1".into()),
