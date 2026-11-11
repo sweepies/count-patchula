@@ -726,67 +726,16 @@ impl Evaluator {
             }
             return Ok(Evaluation::default());
         }
-        let baseline = scheme.parse(&current).ok().or_else(|| {
-            if scheme == Ecosystem::Npm {
-                nodejs_semver::Range::parse(&dep.current)
-                    .ok()?
-                    .min_version()
-                    .and_then(|v| scheme.parse(&v.to_string()).ok())
-            } else {
-                None
-            }
-        });
+        let baseline = scheme
+            .parse(&current)
+            .ok()
+            .or_else(|| scheme.floor(&dep.current, &current));
         // Branch and opaque refs are preserved. Their digest is proposed through
         // digest_proposal after the engine resolves that same ref.
         if baseline.is_none() && (dep.proposing().unversioned.opaque || scheme == Ecosystem::Docker)
         {
             return Ok(Evaluation::default());
         }
-        let baseline = baseline.or_else(|| {
-            if !matches!(
-                scheme,
-                Ecosystem::Cargo
-                    | Ecosystem::Hashicorp
-                    | Ecosystem::Pep440
-                    | Ecosystem::Poetry
-                    | Ecosystem::Composer
-                    | Ecosystem::Rubygems
-                    | Ecosystem::Maven
-                    | Ecosystem::Nuget
-            ) {
-                return None;
-            }
-            // A bracketed interval starts at its first bound that names a
-            // version: `[1.0,2.0)` at 1.0, `(,2.0)` at 2.0.
-            if matches!(scheme, Ecosystem::Maven | Ecosystem::Nuget)
-                && current.trim_start().starts_with(['[', '('])
-            {
-                let first = current
-                    .trim_start()
-                    .trim_start_matches(['[', '('])
-                    .split([']', ')'])
-                    .next()?
-                    .split(',')
-                    .map(str::trim)
-                    .find(|bound| !bound.is_empty())?;
-                return scheme.parse(first).ok();
-            }
-            // A range's lowest version only classifies the update; it is never
-            // reported as what is installed. `^5.4 || ^6.0` and `>=1.0 <2.0`
-            // start at their first alternative's first bound.
-            let first = current
-                .split([',', '|'])
-                .next()?
-                .trim()
-                .trim_start_matches(['=', '>', '<', '~', '^', '!', ' '])
-                .split_whitespace()
-                .next()?;
-            scheme.parse(first).ok().or_else(|| {
-                (scheme == Ecosystem::Cargo)
-                    .then(|| Ecosystem::Loose.parse(first).ok())
-                    .flatten()
-            })
-        });
         let baseline = baseline
             .or_else(|| {
                 catalog
@@ -855,24 +804,13 @@ impl Evaluator {
                 // zero-filled baseline when no full tag matches the pinned SHA.
                 continue;
             }
-            if scheme == Ecosystem::Maven
-                && patchula_versioning::maven_variant(&normalized)
-                    != patchula_versioning::maven_variant(
-                        baseline.2.as_deref().unwrap_or(&dep.current),
-                    )
-            {
-                // Keep the published variant: 33.x-android never becomes 33.x-jre.
+            if !scheme.same_release_line(
+                &baseline,
+                baseline.2.as_deref().unwrap_or(&dep.current),
+                &parsed,
+                &normalized,
+            ) {
                 continue;
-            }
-            if scheme == Ecosystem::Docker {
-                // A floating 3.22 tag tracks the 3.22 line, not 3.22.0.
-                // Mixing precisions also turns date tags into bogus majors.
-                if parsed.2 != baseline.2
-                    || parsed.1.as_ref().map(|v| v.release().len())
-                        != baseline.1.as_ref().map(|v| v.release().len())
-                {
-                    continue;
-                }
             }
             let kind = if scheme == Ecosystem::Npm
                 && scheme.parse(&dep.current).is_err()
@@ -1112,7 +1050,11 @@ impl Evaluator {
                 &self.config.security.apply,
                 self.security_permitted.as_ref(),
             );
-            let range = nodejs_semver::Range::parse(&dep.current).map_err(|e| e.to_string())?;
+            // A declared value that is not an npm range at all is an
+            // evaluation error, before the candidates are looked at.
+            scheme
+                .satisfies(&dep.current, "0.0.0")
+                .map_err(|e| e.to_string())?;
             let mut selected: Option<(&Version, Parsed, &Effective<'_>)> = None;
             for v in &catalog.versions {
                 let effective = if fixes(&v.version).is_empty() {
@@ -1130,10 +1072,10 @@ impl Evaluator {
                 let Ok(parsed) = scheme.parse(&v.version) else {
                     continue;
                 };
-                let Ok(npm_version) = nodejs_semver::Version::parse(&v.version) else {
-                    continue;
-                };
-                if !range.satisfies(&npm_version) {
+                if !scheme
+                    .satisfies(&dep.current, &v.version)
+                    .map_err(|e| e.to_string())?
+                {
                     continue;
                 }
                 if dep.resolved.as_deref() != Some(v.version.as_str())

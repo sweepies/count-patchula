@@ -77,7 +77,11 @@ move — is a fact its ecosystem's descriptor states. Callers read
 `Dependency::proposing()` (`crates/manager/src/proposal.rs`), a `Proposing`
 struct of named fact fields computed from the dependency, never stored on it.
 The descriptors implement the required `Ecosystem::proposing` hook; lookup
-holds the policy that consumes the facts.
+holds the policy that consumes the facts. Facts about the version scheme
+rather than the declaration live one crate down, on `Versioning`
+(`crates/versioning/src/lib.rs`): a requirement's `floor`, whether a
+candidate stays on the `same_release_line`, and `satisfies` over the
+declared range.
 
 A new manager adds a `Manager` variant in `words`, a descriptor type in
 `manager`, and its arm in `ecosystem()`, which is an exhaustive match.

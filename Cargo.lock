@@ -2405,7 +2405,6 @@ name = "patchula-lookup"
 version = "0.8.1"
 dependencies = [
  "chrono",
- "nodejs-semver",
  "patchula-cache",
  "patchula-config",
  "patchula-datasource",

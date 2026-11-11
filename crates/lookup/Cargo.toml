@@ -12,7 +12,6 @@ workspace = true
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-nodejs-semver = "7.0.0"
 regex = "1.13.1"
 patchula-config = { path = "../config" }
 patchula-datasource = { path = "../datasource" }
