@@ -42,6 +42,7 @@ impl Transport for Fake {
             .and_then(|b| b.as_bytes())
             .and_then(|b| serde_json::from_slice(b).ok())
             .unwrap_or(Value::Null);
+        patchula_testkit::transcripts::record(&request, &body);
         let (status, value) = if path == "/graphql" {
             let query = body["query"].as_str().unwrap_or_default();
             if query == REPOSITORY_HEAD_QUERY {
@@ -98,6 +99,13 @@ fn base64_encode(content: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(content)
 }
 
+/// Hash this test's recorded requests and compare them with the snapshot;
+/// `PATCHULA_UPDATE_TRANSCRIPTS=1` rewrites it instead.
+fn check_transcript() {
+    let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transcripts.tsv");
+    patchula_testkit::transcripts::check(&snapshot);
+}
+
 /// The link's blob is the target's path; the scan must mark the manifest
 /// unreadable and never ask for that blob.
 #[tokio::test]
@@ -136,4 +144,5 @@ async fn a_symlinked_manifest_is_unreadable_on_github() {
         !fake.asked.lock().unwrap().contains(&link),
         "the link's blob was read"
     );
+    check_transcript();
 }

@@ -3,6 +3,7 @@
 
 mod mise;
 mod redact;
+pub mod transcripts;
 pub use mise::{Call, MiseFixture, MiseRecorder, MiseReplay, Outcome, Run};
 pub use redact::Redactor;
 
