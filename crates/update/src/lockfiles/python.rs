@@ -8,7 +8,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Plain,
     proof: Proof::DeclaredAndResolved,
     run: Run::Direct,
-    refresh: Refresh::Locks(&[Manager::Pyproject]),
     output: Output::Default,
 };
 
@@ -22,7 +21,7 @@ fn locks() -> patchula_manager::roles::LockNames {
 /// The interpreter both tools resolve against: the nearest `.python-version`,
 /// otherwise the repository mise pin or the runner default.
 fn python(
-    baseline: &BTreeMap<String, Blob>,
+    baseline: &BTreeMap<String, BaseFile>,
     directory: &str,
     versions: &BTreeMap<String, String>,
 ) -> Result<String, String> {
@@ -50,7 +49,7 @@ impl Runner {
         &self,
         context: context::Context<'_>,
         jobs: &[&Job],
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,

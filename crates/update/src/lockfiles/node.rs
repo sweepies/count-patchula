@@ -9,7 +9,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Plain,
     proof: Proof::DeclaredAndResolved,
     run: Run::Direct,
-    refresh: Refresh::Locks(&[Manager::Npm, Manager::Bun]),
     output: Output::Default,
 };
 
@@ -156,7 +155,7 @@ pub(super) fn dependencies(text: &str) -> Option<String> {
 
 impl Runner {
     /// Regenerate every Node lockfile committed in one directory.
-    pub(super) async fn node(&self, context: context::Context<'_>) -> Result<(), Error> {
+    pub(super) async fn node(&self, context: context::Context<'_>) -> Result<(), Failure> {
         // Operator registry credentials the entries allow tools to use, in
         // the run's own user configuration, gone when the tools finish.
         let _credentials = registry_credentials(context.driver, &self.registries)?;
@@ -179,7 +178,7 @@ impl Runner {
         }
         result
     }
-    async fn node_locks(&self, context: context::Context<'_>) -> Result<(), Error> {
+    async fn node_locks(&self, context: context::Context<'_>) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,
@@ -245,7 +244,7 @@ impl Runner {
     /// A manifest edit that changes recorded dependencies must change the lock.
     fn lock_unchanged(
         &self,
-        baseline: &BTreeMap<String, Blob>,
+        baseline: &BTreeMap<String, BaseFile>,
         root: &Path,
         directory: &str,
         leaf: &str,
@@ -276,7 +275,7 @@ impl Runner {
         before == after
     }
     /// Run an npm-family tool, which holds every tools entry's credentials.
-    async fn node_tool(&self, driver: &Path, mut call: Invocation) -> Result<Vec<u8>, Error> {
+    async fn node_tool(&self, driver: &Path, mut call: Invocation) -> Result<Vec<u8>, Failure> {
         call.credentials = credentials::scopes(self.registries.iter());
         call.secrets = credentials::secrets(self.registries.iter());
         self.held_tool(driver, call).await
@@ -288,7 +287,7 @@ impl Runner {
         versions: &BTreeMap<String, String>,
         maintenance: bool,
         public: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let version = context::version(versions, "bun")?;
         if bun_too_old(&version) {
             return Err(format!(
@@ -329,7 +328,7 @@ impl Runner {
         versions: &BTreeMap<String, String>,
         maintenance: bool,
         public: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let args = vec![
             if maintenance { "update" } else { "install" }.to_string(),
             "--prefix".into(),
@@ -364,7 +363,7 @@ impl Runner {
         versions: &BTreeMap<String, String>,
         maintenance: bool,
         public: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         // aube picks the lockfile it writes from the files it finds. Name the
         // committed lockfile explicitly so a second lockfile cannot redirect it.
         // It may hold registry credentials, which no later tool reads.
@@ -415,7 +414,7 @@ impl Runner {
         cwd: &Path,
         versions: &BTreeMap<String, String>,
         public: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let manifest = std::fs::read_to_string(cwd.join("package.json")).ok();
         let lock = std::fs::read_to_string(cwd.join("yarn.lock")).unwrap_or_default();
         if family(&lock) != Some(Family::Berry) {

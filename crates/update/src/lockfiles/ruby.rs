@@ -8,7 +8,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Plain,
     proof: Proof::DeclaredAndResolved,
     run: Run::Direct,
-    refresh: Refresh::Locks(&[Manager::Bundler]),
     output: Output::Default,
 };
 
@@ -48,7 +47,7 @@ impl Runner {
         &self,
         context: context::Context<'_>,
         jobs: &[&Job],
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,

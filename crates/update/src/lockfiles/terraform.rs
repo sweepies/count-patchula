@@ -9,13 +9,15 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Plain,
     proof: Proof::None,
     run: Run::Direct,
-    refresh: Refresh::Locks(&[Manager::Terraform]),
     output: Output::Default,
 };
 
 impl Runner {
     /// Regenerate the directory's provider lockfile.
-    pub(super) async fn terraform_lock(&self, context: context::Context<'_>) -> Result<(), Error> {
+    pub(super) async fn terraform_lock(
+        &self,
+        context: context::Context<'_>,
+    ) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,

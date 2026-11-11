@@ -13,7 +13,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Nix,
     proof: Proof::None,
     run: Run::Direct,
-    refresh: Refresh::LocksBesideManifest(&[Manager::Nix]),
     output: Output::Complete,
 };
 
@@ -126,7 +125,7 @@ impl Runner {
         cwd: Option<PathBuf>,
         args: Vec<String>,
         token: Option<&str>,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<Vec<u8>, Failure> {
         let conf = driver.join("nix-conf");
         std::fs::create_dir_all(&conf).map_err(|e| e.to_string())?;
         std::fs::write(conf.join("nix.conf"), "").map_err(|e| e.to_string())?;
@@ -184,7 +183,7 @@ impl Runner {
         &self,
         context: context::Context<'_>,
         jobs: &[&Job],
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,

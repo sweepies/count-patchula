@@ -4,6 +4,7 @@ mod caches;
 mod cargo;
 mod checkout;
 mod context;
+pub mod contract;
 mod credentials;
 mod dotnet;
 mod go;
@@ -18,141 +19,22 @@ mod ruby;
 mod terraform;
 mod tool;
 mod tools;
-use tool::{Install, Output, Proof, Refresh, Run, Tool, descriptor, descriptors, ecosystem};
+pub use contract::*;
+use tool::{Install, Output, Proof, Run, Tool, descriptor, descriptors};
 pub use tools::{bootstrap_mise, tools_dir};
 mod wrapper;
-use crate::{Blob, Plan, Snapshot, blob_sha, plan::unified};
-use futures_util::StreamExt;
-use patchula_cache::State;
 use patchula_config::{Config, NpmEngine};
+use patchula_manager::hash;
 use patchula_manager::roles::{lock_names, manifest_names};
-use patchula_manager::{Dependency, hash};
-use patchula_process::{Executor, Failure, SystemExecutor};
-use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
+use patchula_process::{Executor, SystemExecutor};
 use patchula_words::{Manager, Source};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    future::Future,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::Arc,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Ecosystem {
-    Node,
-    Cargo,
-    Go,
-    Terraform,
-    Mise,
-    Python,
-    GradleWrapper,
-    Dotnet,
-    Ruby,
-    Php,
-    Nix,
-    Apm,
-}
-/// What a lock job asks its ecosystem's tool to do.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Scope {
-    /// Regenerate the directory's lockfile(s) whole.
-    Directory,
-    /// Move `package` to `target`; `current` is what the declaration or
-    /// lock records, where the tool needs it.
-    Package {
-        package: String,
-        current: Option<String>,
-        target: Option<String>,
-    },
-}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Job {
-    pub ecosystem: Ecosystem,
-    pub directory: String,
-    /// What the run is asked to move.
-    pub scope: Scope,
-    /// The manifest is not edited, so the tool must be told the exact version.
-    /// Serialized as `lock_only`, the name the wire shape already has.
-    pub exact_version: bool,
-}
-impl Job {
-    /// The package a targeted job moves.
-    pub fn package(&self) -> Option<&str> {
-        match &self.scope {
-            Scope::Package { package, .. } => Some(package),
-            Scope::Directory => None,
-        }
-    }
-    /// What the declaration or lock records the package at.
-    pub fn current(&self) -> Option<&str> {
-        match &self.scope {
-            Scope::Package { current, .. } => current.as_deref(),
-            Scope::Directory => None,
-        }
-    }
-    /// What the job moves the package to.
-    pub fn target(&self) -> Option<&str> {
-        match &self.scope {
-            Scope::Package { target, .. } => target.as_deref(),
-            Scope::Directory => None,
-        }
-    }
-}
-// The wire shape is the old field layout: `package`, `current` and `target`
-// stay top-level so serialized job identities do not change.
-impl Serialize for Job {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let (package, current, target) = match &self.scope {
-            Scope::Directory => (None, None, None),
-            Scope::Package {
-                package,
-                current,
-                target,
-            } => (
-                Some(package.as_str()),
-                current.as_deref(),
-                target.as_deref(),
-            ),
-        };
-        let mut state = serializer.serialize_struct("Job", 6)?;
-        state.serialize_field("ecosystem", &self.ecosystem)?;
-        state.serialize_field("directory", &self.directory)?;
-        state.serialize_field("package", &package)?;
-        state.serialize_field("current", &current)?;
-        state.serialize_field("target", &target)?;
-        state.serialize_field("lock_only", &self.exact_version)?;
-        state.end()
-    }
-}
-impl<'de> Deserialize<'de> for Job {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct Fields {
-            ecosystem: Ecosystem,
-            directory: String,
-            package: Option<String>,
-            current: Option<String>,
-            target: Option<String>,
-            lock_only: bool,
-        }
-        let fields = Fields::deserialize(deserializer)?;
-        let scope = match fields.package {
-            Some(package) => Scope::Package {
-                package,
-                current: fields.current,
-                target: fields.target,
-            },
-            None => Scope::Directory,
-        };
-        Ok(Self {
-            ecosystem: fields.ecosystem,
-            directory: fields.directory,
-            scope,
-            exact_version: fields.lock_only,
-        })
-    }
-}
 
 /// Whether `path`, materialized for a run of `descriptor`'s ecosystem, could
 /// steer what its tools fetch: a manifest, lockfile or settings file of the
@@ -173,7 +55,7 @@ fn steers(descriptor: &Tool, path: &str) -> bool {
 /// verdict is not public. Fail closed.
 fn public_only(
     descriptor: &Tool,
-    baseline: &BTreeMap<String, Blob>,
+    baseline: &BTreeMap<String, BaseFile>,
     verdicts: &BTreeMap<String, bool>,
 ) -> bool {
     baseline
@@ -181,9 +63,6 @@ fn public_only(
         .all(|path| !steers(descriptor, path) || verdicts.get(path) == Some(&true))
 }
 
-fn directory(path: &str) -> &str {
-    path.rsplit_once('/').map_or("", |(p, _)| p)
-}
 fn under(path: &str, root: &str) -> bool {
     root.is_empty() || path.strip_prefix(root).is_some_and(|p| p.starts_with('/'))
 }
@@ -192,466 +71,12 @@ fn under(path: &str, root: &str) -> bool {
 fn within(path: &str, root: &str) -> bool {
     path == root || under(path, root)
 }
-/// A set of repository paths `upward` can look a candidate up in.
-pub(crate) trait Paths {
-    fn find(&self, path: &str) -> Option<&String>;
-}
-impl Paths for BTreeSet<String> {
-    fn find(&self, path: &str) -> Option<&String> {
-        self.get(path)
-    }
-}
-impl<V> Paths for BTreeMap<String, V> {
-    fn find(&self, path: &str) -> Option<&String> {
-        self.get_key_value(path).map(|(path, _)| path)
-    }
-}
-/// The repo files `names` names in `directory` or a directory above it,
-/// ordered root-first — by directory depth, then by `names` order (an
-/// earlier name loses to a later one in the same directory) — so applying
-/// them in order leaves the nearest, highest-precedence file winning. It
-/// walks up from `directory` and looks each candidate up, so its cost grows
-/// with the directory's depth, not with the size of the repository.
-/// `names` are leaf names, never paths.
-fn upward<'a>(paths: &'a impl Paths, directory: &str, names: &[&str]) -> Vec<&'a str> {
-    let mut dirs = vec![directory];
-    let mut dir = directory;
-    while !dir.is_empty() {
-        dir = self::directory(dir);
-        dirs.push(dir);
-    }
-    dirs.iter()
-        .rev()
-        .flat_map(|dir| {
-            names
-                .iter()
-                .filter_map(move |name| paths.find(&context::join(dir, name)))
-        })
-        .map(String::as_str)
-        .collect()
-}
-/// The directory holding the nearest file `names` names at or above
-/// `directory`, from `paths`.
-fn nearest_dir<'a>(paths: &'a impl Paths, directory: &str, names: &[&str]) -> Option<&'a str> {
-    upward(paths, directory, names)
-        .last()
-        .map(|path| self::directory(path))
-}
 /// The Node ecosystem's supported lockfile names, from the managers' roles.
 fn node_locks() -> Vec<&'static str> {
     [Manager::Npm, Manager::Bun]
         .iter()
         .flat_map(|manager| lock_names(*manager).supported.iter().copied())
         .collect()
-}
-
-/// The paths under `dir`, which sort together.
-fn subtree<'a>(paths: &'a BTreeSet<String>, dir: &'a str) -> impl Iterator<Item = &'a String> {
-    let prefix = if dir.is_empty() {
-        String::new()
-    } else {
-        format!("{dir}/")
-    };
-    paths
-        .range(prefix.clone()..)
-        .take_while(move |p| p.starts_with(&prefix))
-}
-pub(crate) fn job(
-    dep: &Dependency,
-    update: &Update,
-    snapshot: &Snapshot,
-) -> Result<Option<Job>, String> {
-    let root = match dep.manager {
-        Manager::Mise => {
-            // A lockfile records the configuration beside it and above it, never
-            // below: a nested mise.toml is locked by a mise.lock of its own.
-            // A task file is locked with the config that includes it.
-            let root = dep
-                .included_by
-                .as_deref()
-                .map_or_else(|| directory(&dep.file), directory);
-            if !patchula_manager::roles::lock_names(Manager::Mise)
-                .supported
-                .iter()
-                .any(|lock| snapshot.paths.contains(&context::join(root, lock)))
-            {
-                return Ok(None);
-            }
-            return Ok(Some(Job {
-                ecosystem: Ecosystem::Mise,
-                directory: root.into(),
-                scope: Scope::Package {
-                    package: dep.name.clone(),
-                    current: Some(dep.current.clone()),
-                    target: update.new_version.clone().or(update.new_value.clone()),
-                },
-                exact_version: false,
-            }));
-        }
-        // Node version files pin the runtime, which no lockfile records.
-        Manager::Npm | Manager::Bun
-            if matches!(
-                dep.file.rsplit('/').next(),
-                Some(".nvmrc" | ".node-version")
-            ) =>
-        {
-            return Ok(None);
-        }
-        Manager::Npm | Manager::Bun => {
-            let locks: Vec<&str> = [Manager::Npm, Manager::Bun]
-                .iter()
-                .flat_map(|manager| {
-                    let names = patchula_manager::roles::lock_names(*manager);
-                    names.supported.iter().chain(names.unsupported.iter())
-                })
-                .copied()
-                .collect();
-            let Some(root) = nearest_dir(&snapshot.paths, directory(&dep.file), &locks) else {
-                return Ok(None);
-            };
-            if [Manager::Npm, Manager::Bun].iter().any(|manager| {
-                patchula_manager::roles::lock_names(*manager)
-                    .unsupported
-                    .iter()
-                    .any(|lock| snapshot.paths.contains(&context::join(root, lock)))
-            }) {
-                return Err("unsupported lockfile format".into());
-            }
-            root
-        }
-        // `helm dependency update` downloads chart archives into the tree;
-        // a committed Chart.lock is not regenerated yet.
-        Manager::Helm => {
-            let lock = format!(
-                "{}Chart.lock",
-                dep.file.strip_suffix("Chart.yaml").unwrap_or("")
-            );
-            if snapshot.paths.contains(&lock) {
-                return Err("unsupported lockfile format: Chart.lock".into());
-            }
-            return Ok(None);
-        }
-        // apm.lock.yaml sits beside its apm.yml; APM reads no other name.
-        Manager::Apm => {
-            let root = directory(&dep.file);
-            if !patchula_manager::roles::manifest_names(Manager::Apm)
-                .iter()
-                .any(|name| dep.file.ends_with(name))
-                || !patchula_manager::roles::lock_names(Manager::Apm)
-                    .supported
-                    .iter()
-                    .any(|lock| snapshot.paths.contains(&context::join(root, lock)))
-            {
-                return Ok(None);
-            }
-            root
-        }
-        Manager::Bundler if dep.kind == patchula_words::DependencyKind::Toolchain => {
-            return Ok(None);
-        }
-        Manager::Bundler => {
-            let Some(root) = nearest_dir(
-                &snapshot.paths,
-                directory(&dep.file),
-                lock_names(Manager::Bundler).supported,
-            ) else {
-                return Ok(None);
-            };
-            root
-        }
-        Manager::Composer => {
-            let Some(root) = nearest_dir(
-                &snapshot.paths,
-                directory(&dep.file),
-                lock_names(Manager::Composer).supported,
-            ) else {
-                return Ok(None);
-            };
-            root
-        }
-        // Each flake input is moved by name; nix resolves its new revision.
-        Manager::Nix => {
-            return Ok(Some(Job {
-                ecosystem: Ecosystem::Nix,
-                directory: directory(&dep.file).into(),
-                scope: Scope::Package {
-                    package: dep.name.clone(),
-                    current: dep.digest.clone(),
-                    target: update.new_digest.clone(),
-                },
-                exact_version: false,
-            }));
-        }
-        // NuGet locks sit beside each project; a manifest under a directory
-        // with locks restores that directory's solution or project.
-        Manager::Nuget => {
-            let dir = directory(&dep.file);
-            let locked = dep.kind != patchula_words::DependencyKind::Toolchain
-                && !dep.file.ends_with("dotnet-tools.json")
-                && subtree(&snapshot.paths, dir).any(|p| {
-                    patchula_manager::roles::lock_names(Manager::Nuget)
-                        .supported
-                        .contains(&p.rsplit('/').next().unwrap_or(p))
-                });
-            if !locked {
-                return Ok(None);
-            }
-            return Ok(Some(Job {
-                ecosystem: Ecosystem::Dotnet,
-                directory: dir.into(),
-                scope: Scope::Directory,
-                exact_version: false,
-            }));
-        }
-        Manager::Gradle
-            if dep
-                .file
-                .ends_with("gradle/wrapper/gradle-wrapper.properties") =>
-        {
-            return Ok(Some(Job {
-                ecosystem: Ecosystem::GradleWrapper,
-                directory: directory(&dep.file).into(),
-                scope: Scope::Directory,
-                exact_version: false,
-            }));
-        }
-        // Gradle dependency locking writes per-configuration lockfiles that
-        // need the build itself to regenerate; hold such updates.
-        Manager::Gradle => {
-            if nearest_dir(
-                &snapshot.paths,
-                directory(&dep.file),
-                lock_names(Manager::Gradle).unsupported,
-            )
-            .is_some()
-            {
-                return Err("unsupported lockfile format: gradle.lockfile".into());
-            }
-            return Ok(None);
-        }
-        // Toolchain files pin a tool, which no lockfile records.
-        Manager::Cargo | Manager::Terraform
-            if matches!(
-                dep.file.rsplit('/').next(),
-                Some("rust-toolchain" | "rust-toolchain.toml" | ".terraform-version")
-            ) =>
-        {
-            return Ok(None);
-        }
-        Manager::Cargo => {
-            let lock = nearest_dir(
-                &snapshot.paths,
-                directory(&dep.file),
-                lock_names(Manager::Cargo).supported,
-            );
-            // A release the declaration already allows changes the lock and
-            // nothing else; with no committed lock there is nothing to change,
-            // and cargo would publish one it generated.
-            if lock.is_none() && update.new_value.is_none() {
-                return Ok(None);
-            }
-            lock.unwrap_or_else(|| directory(&dep.file))
-        }
-        Manager::Go => directory(&dep.file),
-        // `.python-version` pins the interpreter, which no lockfile records.
-        Manager::Pyproject if dep.file.ends_with(".python-version") => return Ok(None),
-        Manager::Pyproject => {
-            // Lockfiles of other Python tools sit beside the pyproject.toml
-            // too; leaving one stale would publish a manifest that disagrees
-            // with it. The closest lockfile governs the project, so one above a
-            // supported lock does not hold it.
-            let names = lock_names(Manager::Pyproject);
-            let supported = nearest_dir(&snapshot.paths, directory(&dep.file), names.supported);
-            if let Some(lock) =
-                nearest_dir(&snapshot.paths, directory(&dep.file), names.unsupported)
-                    .filter(|lock| supported.is_none_or(|root| lock.len() >= root.len()))
-            {
-                return Err(format!(
-                    "unsupported lockfile format: {}",
-                    names
-                        .unsupported
-                        .iter()
-                        .find(|leaf| snapshot.paths.contains(&context::join(lock, leaf)))
-                        .unwrap_or(&"lockfile")
-                ));
-            }
-            let Some(root) = supported else {
-                return Ok(None);
-            };
-            root
-        }
-        Manager::Terraform if dep.source == Source::Terraform => directory(&dep.file),
-        _ => return Ok(None),
-    };
-    let ecosystem = ecosystem(dep.manager).expect("job's dispatch maps every ecosystem it yields");
-    let targeted = dep.movable_lockfile();
-    Ok(Some(Job {
-        ecosystem,
-        directory: root.into(),
-        scope: if targeted {
-            Scope::Package {
-                package: dep.package.clone(),
-                current: Some(dep.resolved.clone().unwrap_or_else(|| dep.current.clone())),
-                target: Some(
-                    update
-                        .new_version
-                        .clone()
-                        .or(update.new_value.clone())
-                        .unwrap_or_else(|| dep.current.clone()),
-                ),
-            }
-        } else {
-            Scope::Directory
-        },
-        exact_version: targeted && update.new_value.is_none(),
-    }))
-}
-
-/// Keep the scheduled branch in desired names between windows, so ordinary
-/// dependency runs do not close an outstanding maintenance PR.
-pub fn maintenance(
-    repository: &Repository,
-    config: &Config,
-    snapshot: &Snapshot,
-    since: Option<chrono::DateTime<chrono::Utc>>,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<Option<Plan>, String> {
-    use chrono::Datelike;
-    if !config.lockfiles.refresh {
-        return Ok(None);
-    }
-    let mut jobs = BTreeSet::new();
-    for path in &snapshot.paths {
-        let leaf = path.rsplit('/').next().unwrap();
-        // First match wins, in the order the ecosystems were always claimed:
-        // a lock name two ecosystems could read goes to the earlier one.
-        let ecosystem = [
-            Ecosystem::Node,
-            Ecosystem::Cargo,
-            Ecosystem::Python,
-            Ecosystem::Dotnet,
-            Ecosystem::Ruby,
-            Ecosystem::Php,
-            Ecosystem::Nix,
-            Ecosystem::Apm,
-            Ecosystem::Mise,
-            Ecosystem::Go,
-            Ecosystem::Terraform,
-        ]
-        .into_iter()
-        .find(|ecosystem| {
-            descriptor(*ecosystem)
-                .refresh
-                .claims(config, leaf, directory(path), &snapshot.paths)
-        });
-        let Some(ecosystem) = ecosystem else {
-            continue;
-        };
-        jobs.insert(Job {
-            ecosystem,
-            directory: directory(path).into(),
-            scope: Scope::Directory,
-            exact_version: false,
-        });
-    }
-    if jobs.is_empty() {
-        return Ok(None);
-    }
-    let due = patchula_config::due(&config.maintenance_windows(), since, now);
-    let period = format!("{}-{:02}", now.iso_week().year(), now.iso_week().week());
-    let fingerprint = hash(
-        serde_json::to_string(&(period, &jobs, &config.lockfiles))
-            .unwrap()
-            .as_bytes(),
-    );
-    let mut plan = Plan::new(BranchAction {
-        repository: repository.repository.clone(),
-        branch: crate::branch_name(&config.prs.branch, "lock-file-maintenance")?,
-        base_commit: repository.commit.clone().ok_or("missing base")?,
-        status: BranchStatus::Planned,
-        reason: None,
-        message: format!("{} lock file maintenance", config.defaults.commit_prefix),
-        previous_commit: None,
-        commit: None,
-        verified: None,
-        lockfile_pending: false,
-        files: Vec::new(),
-    });
-    plan.identity = hash(b"lock-file-maintenance");
-    plan.fingerprint = fingerprint.clone();
-    plan.input_fingerprint = fingerprint;
-    plan.lock_jobs = jobs.into_iter().collect();
-    plan.public_only = snapshot.public_only.clone();
-    plan.maintenance = true;
-    if !due {
-        plan.hold(crate::plan::Hold::MaintenanceWindow);
-    }
-    Ok(Some(plan))
-}
-
-/// When a repository's lockfile maintenance last completed.
-#[derive(Serialize, Deserialize)]
-struct MaintenanceSuccess(i64);
-impl State for MaintenanceSuccess {
-    const NAMESPACE: &'static str = "maintenance-success";
-    const VERSION: u32 = 1;
-    type Scope = patchula_cache::RepositoryScope;
-}
-fn refresh_scope(repo: &str) -> patchula_cache::RepositoryScope {
-    patchula_cache::RepositoryScope {
-        repository: repo.into(),
-    }
-}
-pub async fn defer_completed_refresh(
-    cache: &patchula_cache::Cache,
-    plan: &mut Plan,
-    config: &Config,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<(), String> {
-    use chrono::Datelike;
-    if !plan.maintenance || plan.action().status != BranchStatus::Planned {
-        return Ok(());
-    }
-    if let Some(last) = cache
-        .state::<MaintenanceSuccess>(&refresh_scope(&plan.action().repository))
-        .await
-        .map_err(|e| e.to_string())?
-        && let Some(last) = chrono::DateTime::<chrono::Utc>::from_timestamp(last.0, 0)
-        && (last.iso_week() == now.iso_week()
-            || now - last < chrono::Duration::hours(i64::from(config.lockfiles.wait_hours)))
-    {
-        plan.hold(crate::plan::Hold::MaintenanceDone);
-    }
-    Ok(())
-}
-pub async fn record_refresh(
-    cache: &patchula_cache::Cache,
-    plans: &[Plan],
-    actions: &[patchula_report::PullRequestAction],
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<(), String> {
-    for plan in plans.iter().filter(|p| p.maintenance && p.lockfiles_ready) {
-        if plan.held(&crate::plan::Hold::LockfilesCurrent)
-            || actions.iter().any(|a| {
-                a.branch == plan.action().branch
-                    && matches!(
-                        a.status,
-                        patchula_report::PullRequestStatus::Created
-                            | patchula_report::PullRequestStatus::Updated
-                            | patchula_report::PullRequestStatus::Unchanged
-                    )
-            })
-        {
-            cache
-                .set_state(
-                    &refresh_scope(&plan.action().repository),
-                    &MaintenanceSuccess(now.timestamp()),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
 }
 
 #[derive(Clone)]
@@ -784,56 +209,9 @@ impl Runner {
             .collect();
         self
     }
-    /// Every plan's lockfiles, `concurrency` plans at a time, calling `done`
-    /// as each finishes. Each plan works in its own scratch tree; the base
-    /// blobs they add, the same for every plan, join `snapshot` afterwards.
-    pub async fn prepare_all(
-        &self,
-        plans: &mut [Plan],
-        snapshot: &mut Snapshot,
-        config: &Config,
-        concurrency: usize,
-        done: &(dyn Fn() + Sync),
-    ) {
-        type Task<'a> = std::pin::Pin<
-            Box<dyn std::future::Future<Output = BTreeMap<String, Blob>> + Send + 'a>,
-        >;
-        let tasks: Vec<Task<'_>> = plans
-            .iter_mut()
-            .map(|plan| -> Task<'_> {
-                Box::pin(async move {
-                    let added = self.prepare_plan(plan, config).await;
-                    done();
-                    added
-                })
-            })
-            .collect();
-        let added: Vec<BTreeMap<String, Blob>> = futures_util::stream::iter(tasks)
-            .buffer_unordered(concurrency.max(1))
-            .collect()
-            .await;
-        for (path, blob) in added.into_iter().flatten() {
-            snapshot.files.entry(path).or_insert(blob);
-        }
-    }
-    /// One plan's lockfiles, and the base blobs of the files they change.
-    async fn prepare_plan(&self, plan: &mut Plan, config: &Config) -> BTreeMap<String, Blob> {
-        if plan.action().status != BranchStatus::Planned || plan.lockfiles_ready {
-            return BTreeMap::new();
-        }
-        match self.generate(plan, config).await {
-            Ok(added) => added,
-            Err(error) => {
-                plan.lockfiles_failed(error);
-                BTreeMap::new()
-            }
-        }
-    }
-    async fn generate(
-        &self,
-        plan: &mut Plan,
-        config: &Config,
-    ) -> Result<BTreeMap<String, Blob>, Error> {
+    /// One branch's lockfile work: check `work`'s tree out, run its jobs'
+    /// tools in it and answer the files that differ from base.
+    async fn generate(&self, work: &Work<'_>, config: &Config) -> Result<Generated, Failure> {
         std::fs::create_dir_all(&self.cache).map_err(|e| e.to_string())?;
         self.prune_caches();
         let run = tempfile::Builder::new()
@@ -844,7 +222,7 @@ impl Runner {
         let driver = run.path().join("driver");
         std::fs::create_dir_all(&driver).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        let (baseline, cargo_configs) = self.checkout(plan, &root, &driver).await?;
+        let (baseline, cargo_configs) = self.checkout(work, &root, &driver).await?;
         // Backstop for the engine's refusal: every file the tools can
         // read and the engine would check was checked before any of them
         // runs, so a committed credential can never fetch into the shared
@@ -855,7 +233,7 @@ impl Runner {
             .iter()
             .map(|(path, blob)| (path, blob.content.as_str()))
             .chain(
-                plan.contents
+                work.edits
                     .iter()
                     .chain(cargo_configs.iter())
                     .map(|(path, text)| (path, text.as_str())),
@@ -869,11 +247,11 @@ impl Runner {
                 return Err(patchula_manager::credential_reason(path, &kind).into());
             }
         }
-        for (path, content) in &plan.contents {
+        for (path, content) in work.edits {
             write(&root, path, content)?;
         }
-        let groups: BTreeSet<_> = plan
-            .lock_jobs
+        let groups: BTreeSet<_> = work
+            .jobs
             .iter()
             .map(|j| (j.ecosystem, j.directory.clone()))
             .collect();
@@ -884,15 +262,15 @@ impl Runner {
             } else {
                 BTreeMap::new()
             };
-            let jobs: Vec<_> = plan
-                .lock_jobs
+            let jobs: Vec<_> = work
+                .jobs
                 .iter()
                 .filter(|j| j.ecosystem == ecosystem && j.directory == directory)
                 .collect();
             // Whether every file the run can read decided public-only, so
             // its tools may share the `public` cache partition. Fail
             // closed: any file without a verdict makes it not public.
-            let public = public_only(tool, &baseline, &plan.public_only);
+            let public = public_only(tool, &baseline, work.public_only);
             let context = context::Context {
                 driver: &driver,
                 root: &root,
@@ -900,7 +278,7 @@ impl Runner {
                 directory: &directory,
                 config,
                 versions: &versions,
-                maintenance: plan.maintenance,
+                maintenance: work.maintenance,
                 public,
             };
             match ecosystem {
@@ -918,7 +296,7 @@ impl Runner {
                 Ecosystem::Python => self.python_locks(context, &jobs).await?,
                 Ecosystem::GradleWrapper => self.gradle_wrapper(context).await?,
                 Ecosystem::Dotnet => {
-                    let edited = plan.contents.keys().any(|p| {
+                    let edited = work.edits.keys().any(|p| {
                         context.directory.is_empty()
                             || p.starts_with(&format!("{}/", context.directory))
                     }) && !context.maintenance;
@@ -933,57 +311,35 @@ impl Runner {
         // Only manifests and lockfiles can enter the API commit. Reject links,
         // unexpected writes and binary output rather than silently publishing it.
         let generated = collect(&root)?;
-        validate_targets(plan, config, &generated)?;
-        let mut contents = plan.contents.clone();
-        let mut deleted = BTreeSet::new();
-        let mut added = BTreeMap::new();
-        let all: BTreeSet<_> = baseline.keys().chain(generated.keys()).cloned().collect();
+        validate_targets(work, config, &generated)?;
         let mut files = BTreeMap::new();
+        let all: BTreeSet<_> = baseline.keys().chain(generated.keys()).cloned().collect();
         for path in all {
             let before = baseline.get(&path);
             let after = generated.get(&path);
             if before.map(|b| &b.content) == after {
                 continue;
             }
-            if !writable(&path) && plan.contents.get(&path) != after {
+            if !writable(&path) && work.edits.get(&path) != after {
                 return Err(format!("tool modified unexpected file {path}").into());
             }
             if path.rsplit('/').next() == Some("mise.lock")
-                && !plan
-                    .lock_jobs
+                && !work
+                    .jobs
                     .iter()
                     .any(|j| j.ecosystem == Ecosystem::Mise && j.directory == directory(&path))
             {
                 return Err(format!("tool modified unexpected mise lockfile {path}").into());
             }
-            let old = before.map_or("", |b| b.content.as_str());
-            let new = after.map_or("", String::as_str);
             files.insert(
-                path.clone(),
-                FileAction {
-                    path: path.clone(),
-                    blob_sha: before.map(|b| b.sha.clone()).unwrap_or_default(),
-                    diff: unified(&path, old, new),
+                path,
+                GeneratedFile {
+                    base: before.cloned(),
+                    content: after.cloned(),
                 },
             );
-            contents.insert(path.clone(), new.into());
-            if after.is_none() {
-                deleted.insert(path.clone());
-            }
-            added.insert(
-                path,
-                before.cloned().unwrap_or_else(|| Blob {
-                    sha: String::new(),
-                    mode: "100644".into(),
-                    content: String::new(),
-                }),
-            );
         }
-        plan.lockfiles_generated(contents, deleted, files.into_values().collect());
-        if plan.action().files.is_empty() {
-            plan.hold(crate::plan::Hold::LockfilesCurrent);
-        }
-        Ok(added)
+        Ok(Generated { files })
     }
     /// Evict aged and oversized tool-cache partitions, at most once an hour
     /// per cache root per process, without holding the generation up. Lock
@@ -1038,7 +394,7 @@ impl Runner {
         .map_err(|e| e.to_string())??;
         Ok((env, Some(hold)))
     }
-    async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Error> {
+    async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Failure> {
         let mut spec = self.command(driver);
         // A first use installs the tool inside this call, from scratch.
         if !self.installed(&call.tools) {
@@ -1113,14 +469,14 @@ impl Runner {
             .executor
             .run(spec)
             .await
-            .map_err(|failure| Error::Tool(ToolFailure { context, failure }))?;
+            .map_err(|failure| Failure::Tool { context, failure })?;
         self.record_use(&call.tools);
         Ok(output)
     }
     /// Run a tool that may hold registry credentials. When it does, a failure
     /// shows none of its output, which may quote what a private registry
     /// answered: failure reasons reach reports, dashboards and public pages.
-    async fn held_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Error> {
+    async fn held_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Failure> {
         let bin = call.bin.name();
         let held = !call.credentials.is_empty();
         let result = self.tool(driver, call).await;
@@ -1128,50 +484,20 @@ impl Runner {
             return result;
         }
         result.map_err(|_| {
-            Error::Text(format!(
+            Failure::Text(format!(
                 "{bin} failed while it held registry credentials, so its output is not shown"
             ))
         })
     }
 }
 
-/// A lockfile tool's process failure with what it ran, kept structured so
-/// the report renders it without reparsing prose.
-#[derive(Debug)]
-pub struct ToolFailure {
-    /// The binary that failed, such as `cargo`.
-    pub context: String,
-    pub failure: Failure,
-}
-impl std::fmt::Display for ToolFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.context, self.failure)
-    }
-}
-
-/// Why lockfile generation failed: a tool's process failure kept
-/// structured, or reason text.
-#[derive(Debug)]
-pub enum Error {
-    Tool(ToolFailure),
-    Text(String),
-}
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Tool(tool) => write!(f, "{tool}"),
-            Self::Text(text) => f.write_str(text),
-        }
-    }
-}
-impl From<String> for Error {
-    fn from(text: String) -> Self {
-        Self::Text(text)
-    }
-}
-impl From<&str> for Error {
-    fn from(text: &str) -> Self {
-        Self::Text(text.into())
+impl Generate for Runner {
+    fn generate<'a>(
+        &'a self,
+        work: &'a Work<'a>,
+        config: &'a Config,
+    ) -> Pin<Box<dyn Future<Output = Result<Generated, Failure>> + Send + 'a>> {
+        Box::pin(self.generate(work, config))
     }
 }
 
@@ -1200,35 +526,35 @@ struct Invocation {
 }
 
 fn validate_targets(
-    plan: &Plan,
+    work: &Work<'_>,
     config: &Config,
     files: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    if plan.changes.is_empty() {
+    if work.targets.is_empty() {
         return Ok(());
     }
     let extraction =
         patchula_manager::Scanner::new(config)?.extract(&patchula_manager::all_read(files))?;
     let paths: BTreeSet<String> = files.keys().cloned().collect();
-    for change in &plan.changes {
-        let leaf = change.file.rsplit('/').next().unwrap_or("");
+    for target in &work.targets {
+        let leaf = target.file.rsplit('/').next().unwrap_or("");
         // A lockfile-only change must have moved the lock to its exact target.
         if lock_names(Manager::Cargo).supported.contains(&leaf) {
             let lock = files
-                .get(&change.file)
+                .get(target.file)
                 .and_then(|text| toml_edit::Document::parse(text.as_str()).ok());
             let moved = lock.as_ref().is_some_and(|lock| {
                 lock.get("package")
                     .and_then(toml_edit::Item::as_array_of_tables)
                     .is_some_and(|packages| {
                         packages.iter().any(|p| {
-                            p.get("name").and_then(toml_edit::Item::as_str) == Some(&change.package)
+                            p.get("name").and_then(toml_edit::Item::as_str) == Some(target.package)
                                 && p.get("source")
                                     .and_then(toml_edit::Item::as_str)
                                     .is_some_and(patchula_manager::crates_io)
                                 && p.get("version")
                                     .and_then(toml_edit::Item::as_str)
-                                    .zip(change.version.as_deref())
+                                    .zip(target.version)
                                     .is_some_and(|(locked, requested)| {
                                         same_release(locked, requested)
                                     })
@@ -1238,8 +564,8 @@ fn validate_targets(
             if !moved {
                 return Err(format!(
                     "lockfile did not resolve {} to requested version {}",
-                    change.package,
-                    change.version.as_deref().unwrap_or("?")
+                    target.package,
+                    target.version.unwrap_or("?")
                 ));
             }
             continue;
@@ -1255,30 +581,30 @@ fn validate_targets(
                 )
             }) && manifest_names(*manager).contains(&leaf)
         });
-        if !manifest && !change.file.ends_with(".tf") {
+        if !manifest && !target.file.ends_with(".tf") {
             continue;
         }
         // A lockfile-only change leaves the declaration as it was, so the lock
         // alone has to show the target.
-        let declared = match (&change.value, &change.version) {
+        let declared = match (target.value, target.version) {
             (Some(value), _) => value,
-            (None, Some(_)) => &change.current,
+            (None, Some(_)) => target.current,
             (None, None) => continue,
         };
         // The registry is left out: it records where the lock says the package
         // came from, which the tool's own rewrite may state differently.
         let Some(dep) = extraction.dependencies.iter().find(|d| {
-            d.file == change.file && d.package == change.package && d.current == *declared
+            d.file == target.file && d.package == target.package && d.current == *declared
         }) else {
             return Err(format!(
                 "tool did not retain requested target {} in {}",
-                change.package, change.file
+                target.package, target.file
             ));
         };
         // pnpm and Yarn locks are not read back (aube-lock.yaml is), so the unchanged-lockfile rule
         // checks them instead. Every lock this runner reads must prove the target.
         let unread = matches!(dep.manager, Manager::Npm | Manager::Bun)
-            && nearest_dir(&paths, directory(&change.file), &node_locks()).is_some_and(|dir| {
+            && nearest_dir(&paths, directory(target.file), &node_locks()).is_some_and(|dir| {
                 ![Manager::Npm, Manager::Bun]
                     .iter()
                     .flat_map(|manager| lock_names(*manager).readable.iter().copied())
@@ -1289,7 +615,7 @@ fn validate_targets(
                 .is_some_and(|e| descriptor(e).proof == Proof::DeclaredAndResolved)
                 || (dep.source == Source::Terraform
                     && dep.kind == patchula_words::DependencyKind::Provider))
-            && let Some(version) = &change.version
+            && let Some(version) = target.version
             && !dep
                 .resolved
                 .as_deref()
@@ -1297,7 +623,7 @@ fn validate_targets(
         {
             return Err(format!(
                 "lockfile did not resolve {} to requested version {version}",
-                change.package
+                target.package
             ));
         }
     }
@@ -1305,7 +631,7 @@ fn validate_targets(
 }
 
 fn versions(
-    baseline: &BTreeMap<String, Blob>,
+    baseline: &BTreeMap<String, BaseFile>,
     directory: &str,
 ) -> Result<BTreeMap<String, String>, String> {
     let defaults = tool_defaults()?;
@@ -1365,12 +691,6 @@ fn check_tool_version(tool: &str, value: &str) -> Result<(), String> {
         return Err(format!("{tool}: unsupported tool version"));
     }
     Ok(())
-}
-/// Whether a locked version is the requested one. SemVer build metadata does
-/// not order versions, so a request without it matches any build: the advisory
-/// for `zstd-sys` fixes `2.1.2`, which the lock records as `2.1.2+zstd.1.5.7`.
-pub(crate) fn same_release(locked: &str, requested: &str) -> bool {
-    locked == requested || (!requested.contains('+') && locked.split('+').next() == Some(requested))
 }
 /// The pinned tool versions used when a repository does not pin its own,
 /// parsed once: the file is embedded, so it cannot change between calls.

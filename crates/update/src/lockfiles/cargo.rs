@@ -10,7 +10,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::None,
     proof: Proof::DeclaredAndResolved,
     run: Run::Rustup("rust"),
-    refresh: Refresh::Locks(&[Manager::Cargo]),
     output: Output::Default,
 };
 
@@ -62,7 +61,7 @@ impl Runner {
         context: context::Context<'_>,
         jobs: &[&Job],
         cargo_configs: &BTreeMap<String, String>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,
@@ -113,7 +112,7 @@ impl Runner {
         job: &Job,
         maintenance: bool,
         access: CargoAccess<'_>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let (env, credentials, secrets, public) = access;
         let update = |args: Vec<String>| {
             let mut all = vec![

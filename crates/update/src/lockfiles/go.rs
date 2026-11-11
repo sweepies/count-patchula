@@ -10,7 +10,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Plain,
     proof: Proof::Declared,
     run: Run::Direct,
-    refresh: Refresh::Manifests(&[Manager::Go]),
     output: Output::Default,
 };
 
@@ -49,7 +48,7 @@ impl Runner {
         &self,
         context: context::Context<'_>,
         jobs: &[&Job],
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,

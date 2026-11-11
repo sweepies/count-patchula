@@ -9,7 +9,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Mise,
     proof: Proof::None,
     run: Run::Direct,
-    refresh: Refresh::Locks(&[Manager::Mise]),
     output: Output::Default,
 };
 
@@ -276,7 +275,7 @@ impl Runner {
         &self,
         context: context::Context<'_>,
         jobs: &[&Job],
-    ) -> Result<(), Error> {
+    ) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,
@@ -451,12 +450,13 @@ impl Runner {
             ]);
         }
         command.args.extend(selected.iter().cloned());
-        self.executor.run(command).await.map_err(|failure| {
-            Error::Tool(ToolFailure {
+        self.executor
+            .run(command)
+            .await
+            .map_err(|failure| Failure::Tool {
                 context: "mise lock".into(),
                 failure,
-            })
-        })?;
+            })?;
         if std::fs::read_to_string(work.join("mise.toml")).map_err(|e| e.to_string())? != sanitized
         {
             return Err("mise lock modified the requested tool declarations".into());
@@ -521,6 +521,6 @@ impl Runner {
         {
             return Err("mise lock produced unsupported sidecar files".into());
         }
-        write(root, &lock_path, &generated).map_err(Error::from)
+        write(root, &lock_path, &generated).map_err(Failure::from)
     }
 }

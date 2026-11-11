@@ -314,12 +314,12 @@ impl Write<'_> {
         since: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<()> {
         let Some(mut maintenance) =
-            patchula_update::lockfiles::maintenance(repo, config, snapshot, since, self.now)
+            patchula_update::maintenance::maintenance(repo, config, snapshot, since, self.now)
                 .map_err(Error::Invalid)?
         else {
             return Ok(());
         };
-        patchula_update::lockfiles::defer_completed_refresh(
+        patchula_update::maintenance::defer_completed_refresh(
             &self.engine.cache,
             &mut maintenance,
             config,
@@ -437,11 +437,15 @@ impl Write<'_> {
     ) {
         if let Some(runner) = &self.engine.lockfiles {
             self.engine.progress.stage(Stage::Lockfiles, plans.len());
-            runner
-                .prepare_all(plans, snapshot, config, lockfile_concurrency(), &|| {
-                    self.engine.progress.advance(1)
-                })
-                .await;
+            patchula_update::lock_all(
+                runner,
+                plans,
+                snapshot,
+                config,
+                lockfile_concurrency(),
+                &|| self.engine.progress.advance(1),
+            )
+            .await;
         } else {
             for plan in plans.iter_mut() {
                 if plan.action().status == BranchStatus::Planned && !plan.lockfiles_ready {

@@ -10,12 +10,11 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     install: Install::Plain,
     proof: Proof::None,
     run: Run::Direct,
-    refresh: Refresh::LocksBesideManifest(&[Manager::Apm]),
     output: Output::Default,
 };
 
 impl Runner {
-    pub(super) async fn apm_lock(&self, context: context::Context<'_>) -> Result<(), Error> {
+    pub(super) async fn apm_lock(&self, context: context::Context<'_>) -> Result<(), Failure> {
         let context::Context {
             driver,
             root,
