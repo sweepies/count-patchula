@@ -32,25 +32,24 @@ pub fn maintenance(
             .unwrap()
             .as_bytes(),
     );
-    let mut plan = Plan::new(BranchAction {
-        repository: repository.repository.clone(),
-        branch: branch_name(&config.prs.branch, "lock-file-maintenance")?,
-        base_commit: repository.commit.clone().ok_or("missing base")?,
-        status: BranchStatus::Planned,
-        reason: None,
-        message: format!("{} lock file maintenance", config.defaults.commit_prefix),
-        previous_commit: None,
-        commit: None,
-        verified: None,
-        lockfile_pending: false,
-        files: Vec::new(),
-    });
-    plan.identity = hash(b"lock-file-maintenance");
-    plan.fingerprint = fingerprint.clone();
-    plan.input_fingerprint = fingerprint;
-    plan.lock_jobs = jobs.into_iter().collect();
-    plan.public_only = snapshot.public_only.clone();
-    plan.maintenance = true;
+    let mut plan = Plan::maintenance(
+        BranchAction {
+            repository: repository.repository.clone(),
+            branch: branch_name(&config.prs.branch, "lock-file-maintenance")?,
+            base_commit: repository.commit.clone().ok_or("missing base")?,
+            status: BranchStatus::Planned,
+            reason: None,
+            message: format!("{} lock file maintenance", config.defaults.commit_prefix),
+            previous_commit: None,
+            commit: None,
+            verified: None,
+            lockfile_pending: false,
+            files: Vec::new(),
+        },
+        jobs.into_iter().collect(),
+        fingerprint,
+        snapshot.public_only.clone(),
+    );
     if !due {
         plan.hold(Hold::MaintenanceWindow);
     }

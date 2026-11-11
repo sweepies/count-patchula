@@ -512,13 +512,13 @@ pub async fn reconcile(
         if !requested(plan, config) || plan.action().status != BranchStatus::Unchanged {
             continue;
         }
-        let Some(pr) = &mut plan.cached_pr else {
+        let Some(pr) = plan.restored_pr_mut() else {
             continue;
         };
         // Check policy independently of manual create/schedule/age permits.
         let proof = pr.clone();
         let allowed = policy_allows(repo, plan, now);
-        let pr = plan.cached_pr.as_mut().expect("restored receipt");
+        let pr = plan.restored_pr_mut().expect("restored receipt");
         let (status, reason) = if !allowed {
             (PullRequestStatus::Skipped, "auto-merge waiting: release age, schedule or lookup evidence does not permit merging".into())
         } else {

@@ -6840,14 +6840,16 @@ async fn checkout_fails_closed_on_unusual_modes_and_disagreements() {
     let runner =
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
     let mut snap3 = snapshot(&files);
-    let mut p = maintenance(&repo(), &config, &snap3, None, monday())
+    let p = maintenance(&repo(), &config, &snap3, None, monday())
         .unwrap()
         .unwrap();
-    p.add_file(FileAction {
-        path: "mise.toml".into(),
-        blob_sha: blob_sha("[tools]\nnode='22.0.0'\n"),
-        diff: String::new(),
-    });
+    let mut p = Draft::from(p)
+        .file(FileAction {
+            path: "mise.toml".into(),
+            blob_sha: blob_sha("[tools]\nnode='22.0.0'\n"),
+            diff: String::new(),
+        })
+        .build();
     prepare_one(&runner, &mut p, &mut snap3, &config).await;
     assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
     assert!(

@@ -1,7 +1,7 @@
 //! A `Plan` builder for tests, behind the `testing` feature: tests draft the
 //! plan they need instead of poking fields, so the fields can go private
 //! without touching them again.
-use super::{Change, Plan};
+use super::{Change, Kind, Plan};
 use crate::batch;
 use patchula_lockfiles as contract;
 use patchula_report::{BranchAction, FileAction};
@@ -27,17 +27,17 @@ impl Draft {
     }
     /// An ordinary update plan, not a maintenance one.
     pub fn update(mut self) -> Self {
-        self.plan.maintenance = false;
+        self.plan.kind = Kind::Update;
         self
     }
     /// A lockfile-maintenance plan.
     pub fn maintenance(mut self) -> Self {
-        self.plan.maintenance = true;
+        self.plan.kind = Kind::Maintenance;
         self
     }
     /// The batch PR, carrying `items`.
     pub fn batch(mut self, items: Vec<batch::Item>) -> Self {
-        self.plan.batch = Some(items);
+        self.plan.kind = Kind::Batch(items);
         self
     }
     /// Record `change` as one of the plan's updates.
@@ -62,7 +62,7 @@ impl Draft {
         file: FileAction,
     ) -> Self {
         self.plan.contents.insert(path.into(), content.into());
-        self.plan.add_file(file);
+        self.plan.action.files.push(file);
         self
     }
     /// A file the plan writes.
@@ -77,7 +77,7 @@ impl Draft {
     /// The report entry for a file the plan changes, as the planner records
     /// it.
     pub fn file(mut self, file: FileAction) -> Self {
-        self.plan.add_file(file);
+        self.plan.action.files.push(file);
         self
     }
     /// A path a lockfile run removed; the write drops it from the tree.

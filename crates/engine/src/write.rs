@@ -448,7 +448,7 @@ impl Write<'_> {
             .await;
         } else {
             for plan in plans.iter_mut() {
-                if plan.action().status == BranchStatus::Planned && !plan.lockfiles_ready() {
+                if plan.lock_work().is_some() {
                     plan.error("lockfile generation requires a disk cache or an injected runner");
                 }
             }

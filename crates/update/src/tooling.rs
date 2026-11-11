@@ -451,59 +451,59 @@ pub fn apply(
 ) -> Vec<ToolingWarning> {
     let mut warnings = BTreeMap::<ToolingRule, ToolingWarning>::new();
     for plan in plans.iter_mut() {
-        plan.tooling.clear();
-        if !crate::automerge::requested(plan, config) {
-            continue;
-        }
-        let files: Vec<&str> = plan
-            .action()
-            .files
-            .iter()
-            .map(|f| f.path.as_str())
-            .chain(plan.changes().iter().map(|c| c.file.as_str()))
-            .collect();
-        let mut holding = Vec::new();
-        if evidence.branch_checks == Some(false)
-            && evidence.ci.as_ref().is_some_and(|ci| !ci.runs(&files))
-        {
-            holding.push((
-                ToolingRule::MergeWithoutCi,
-                evidence.native.then_some(ToolingDetail::Native),
-            ));
-        }
-        if let Some(required) = evidence.required.filter(|r| evidence.native && !r.checks) {
-            holding.push((
-                ToolingRule::MergeWithoutRequiredChecks,
-                required.reviews.then_some(ToolingDetail::ReviewsOnly),
-            ));
-        }
-        if let Some(delivery) = &evidence.delivery
-            && evidence.branch_checks == Some(false)
-            && plan.changes().iter().any(|c| !c.advisories.is_empty())
-            && !delivery.ships(&files)
-        {
-            holding.push((
-                ToolingRule::SecurityMergeWithoutDelivery,
-                delivery.tags.then_some(ToolingDetail::TaggedRelease),
-            ));
-        }
-        for (rule, detail) in holding {
-            let silenced = config.warnings.quiet.get(rule.as_str()).cloned();
-            let entry = warnings.entry(rule).or_insert_with(|| ToolingWarning {
-                rule,
-                detail,
-                branches: Vec::new(),
-                silenced: silenced.clone(),
-            });
-            entry.branches.push(plan.action().branch.clone());
-            if silenced.is_none() {
-                plan.tooling.push(Callout {
+        let mut callouts = Vec::new();
+        if crate::automerge::requested(plan, config) {
+            let files: Vec<&str> = plan
+                .action()
+                .files
+                .iter()
+                .map(|f| f.path.as_str())
+                .chain(plan.changes().iter().map(|c| c.file.as_str()))
+                .collect();
+            let mut holding = Vec::new();
+            if evidence.branch_checks == Some(false)
+                && evidence.ci.as_ref().is_some_and(|ci| !ci.runs(&files))
+            {
+                holding.push((
+                    ToolingRule::MergeWithoutCi,
+                    evidence.native.then_some(ToolingDetail::Native),
+                ));
+            }
+            if let Some(required) = evidence.required.filter(|r| evidence.native && !r.checks) {
+                holding.push((
+                    ToolingRule::MergeWithoutRequiredChecks,
+                    required.reviews.then_some(ToolingDetail::ReviewsOnly),
+                ));
+            }
+            if let Some(delivery) = &evidence.delivery
+                && evidence.branch_checks == Some(false)
+                && plan.changes().iter().any(|c| !c.advisories.is_empty())
+                && !delivery.ships(&files)
+            {
+                holding.push((
+                    ToolingRule::SecurityMergeWithoutDelivery,
+                    delivery.tags.then_some(ToolingDetail::TaggedRelease),
+                ));
+            }
+            for (rule, detail) in holding {
+                let silenced = config.warnings.quiet.get(rule.as_str()).cloned();
+                let entry = warnings.entry(rule).or_insert_with(|| ToolingWarning {
                     rule,
                     detail,
-                    branch: branch.into(),
+                    branches: Vec::new(),
+                    silenced: silenced.clone(),
                 });
+                entry.branches.push(plan.action().branch.clone());
+                if silenced.is_none() {
+                    callouts.push(Callout {
+                        rule,
+                        detail,
+                        branch: branch.into(),
+                    });
+                }
             }
         }
+        plan.warn(callouts);
     }
     warnings.into_values().collect()
 }

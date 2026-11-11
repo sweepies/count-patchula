@@ -66,25 +66,32 @@ fn fingerprint(stage: Stage<'_>) -> String {
 #[derive(Debug)]
 pub struct Plan {
     action: BranchAction,
-    pub contents: BTreeMap<String, String>,
-    pub identity: String,
-    pub fingerprint: String,
-    pub changes: Vec<Change>,
-    pub retry: bool,
-    pub tree: Option<String>,
-    pub cached_pr: Option<crate::pull_requests::Tracked>,
-    pub input_fingerprint: String,
-    pub lock_jobs: Vec<contract::Job>,
-    pub lockfiles_ready: bool,
+    /// What the plan's PR carries; fixed at construction.
+    kind: Kind,
+    /// The hash of the branch's identity, as the ownership marker names it.
+    identity: String,
+    changes: Vec<Change>,
+    /// The fingerprint the plan's inputs produced, before generation or a
+    /// verified receipt replaced it.
+    input_fingerprint: String,
+    /// The files the write puts on the branch, by path.
+    contents: BTreeMap<String, String>,
+    /// Always the hash of the plan's current data, or the receipt's.
+    fingerprint: String,
     /// The snapshot's public-only verdicts, for the lockfile runs'
     /// cache-partition choice.
-    pub public_only: BTreeMap<String, bool>,
-    pub deleted: BTreeSet<String>,
-    pub maintenance: bool,
-    /// The batch PR's items; `None` for every other plan.
-    pub batch: Option<Vec<crate::batch::Item>>,
+    public_only: BTreeMap<String, bool>,
+    lock_jobs: Vec<contract::Job>,
+    lockfiles_ready: bool,
+    /// The paths a lockfile run removed; the write drops them from the tree.
+    deleted: BTreeSet<String>,
+    /// The PR a verified write receipt restored with this plan.
+    cached_pr: Option<crate::pull_requests::Tracked>,
+    /// The tree the plan's commit produced, once a write or receipt names it.
+    tree: Option<String>,
+    retry: bool,
     /// Tooling warnings shown on this PR.
-    pub tooling: Vec<crate::tooling::Callout>,
+    tooling: Vec<crate::tooling::Callout>,
     /// Why the plan is not written this run, if it is held; private so the
     /// status and reason it implies can only change through the named
     /// transitions on [`Plan`].
@@ -93,6 +100,19 @@ pub struct Plan {
     /// by every transition: the report reads the reason, the dashboard
     /// this typed form, so the two cannot disagree.
     failure: Option<crate::text::Failure>,
+}
+
+/// What a plan's pull request carries, fixed at construction: one update, a
+/// lockfile refresh, or the ticked updates the batch PR collects.
+#[derive(Debug)]
+pub enum Kind {
+    /// An update plan.
+    Update,
+    /// A lockfile-maintenance plan: it refreshes locks rather than
+    /// declarations.
+    Maintenance,
+    /// The batch PR's plan, carrying its items.
+    Batch(Vec<crate::batch::Item>),
 }
 
 /// Why a plan is not written this run. A plan has at most one: when several
@@ -167,6 +187,7 @@ impl Plan {
         Self {
             failure: action.reason.as_deref().map(crate::text::failure),
             action,
+            kind: Kind::Update,
             contents: BTreeMap::new(),
             identity: String::new(),
             fingerprint: String::new(),
@@ -179,8 +200,34 @@ impl Plan {
             lockfiles_ready: false,
             public_only: BTreeMap::new(),
             deleted: BTreeSet::new(),
-            maintenance: false,
-            batch: None,
+            tooling: Vec::new(),
+            hold: None,
+        }
+    }
+    /// The lockfile-maintenance plan: the refresh `jobs` its run owes and
+    /// the fingerprint the week's schedule produced for them.
+    pub(crate) fn maintenance(
+        action: BranchAction,
+        jobs: Vec<contract::Job>,
+        fingerprint: String,
+        public_only: BTreeMap<String, bool>,
+    ) -> Self {
+        Self {
+            failure: action.reason.as_deref().map(crate::text::failure),
+            action,
+            kind: Kind::Maintenance,
+            contents: BTreeMap::new(),
+            identity: hash(b"lock-file-maintenance"),
+            fingerprint: fingerprint.clone(),
+            changes: Vec::new(),
+            retry: false,
+            tree: None,
+            cached_pr: None,
+            input_fingerprint: fingerprint,
+            lockfiles_ready: jobs.is_empty(),
+            lock_jobs: jobs,
+            public_only,
+            deleted: BTreeSet::new(),
             tooling: Vec::new(),
             hold: None,
         }
@@ -232,22 +279,20 @@ impl Plan {
     pub fn lockfiles_ready(&self) -> bool {
         self.lockfiles_ready
     }
-    /// The snapshot's public-only verdicts, for the lockfile runs'
-    /// cache-partition choice.
-    pub fn public_only(&self) -> &BTreeMap<String, bool> {
-        &self.public_only
-    }
     /// The paths a lockfile run removed; the write drops them from the tree.
     pub fn deleted(&self) -> &BTreeSet<String> {
         &self.deleted
     }
     /// A lockfile-maintenance plan refreshes locks rather than declarations.
     pub fn is_maintenance(&self) -> bool {
-        self.maintenance
+        matches!(self.kind, Kind::Maintenance)
     }
     /// The batch PR's items; `None` for every other plan.
     pub fn batch_items(&self) -> Option<&[crate::batch::Item]> {
-        self.batch.as_deref()
+        match &self.kind {
+            Kind::Batch(items) => Some(items),
+            _ => None,
+        }
     }
     /// Tooling warnings shown on this PR.
     pub fn callouts(&self) -> &[crate::tooling::Callout] {
@@ -265,10 +310,39 @@ impl Plan {
     pub fn restored_pr(&self) -> Option<&crate::pull_requests::Tracked> {
         self.cached_pr.as_ref()
     }
-    /// The plan's update key: its branch and the targets it moves to, hashed
-    /// as the ownership marker names it.
+    /// The restored PR, for the auto-merge pass to update its merge note.
+    pub(crate) fn restored_pr_mut(&mut self) -> Option<&mut crate::pull_requests::Tracked> {
+        self.cached_pr.as_mut()
+    }
+    /// One PR's update: its branch and the targets it moves to, hashed as the
+    /// ownership marker names it. The branch makes the key unique per PR, so
+    /// groups on different branches that bump the same package to the same
+    /// version (one group per service in a monorepo) are batched, closed and
+    /// recreated independently. The key excludes current/base/file/message so
+    /// a closed update stays closed after a rebase, policy wording change or
+    /// new occurrence.
     pub fn update_key(&self) -> String {
-        crate::pull_requests::update_key(self)
+        if self.is_maintenance() {
+            return hash(format!("maintenance:{}", self.input_fingerprint).as_bytes());
+        }
+        let targets: BTreeSet<_> = self
+            .changes
+            .iter()
+            .map(|c| (&c.source, &c.package, &c.value, &c.version, &c.digest))
+            .collect();
+        hash(
+            serde_json::to_string(&(&self.action.branch, targets))
+                .expect("serializable targets")
+                .as_bytes(),
+        )
+    }
+    /// A rerun writes the plan again.
+    pub(crate) fn request_retry(&mut self) {
+        self.retry = true;
+    }
+    /// The tooling warnings this run puts on the plan's PR.
+    pub(crate) fn warn(&mut self, callouts: Vec<crate::tooling::Callout>) {
+        self.tooling = callouts;
     }
     /// `action.reason` and its dashboard `failure`, always set together.
     fn set_reason(&mut self, reason: Option<String>) {
@@ -365,7 +439,7 @@ impl Plan {
                 })
                 .collect(),
             public_only: &self.public_only,
-            maintenance: self.maintenance,
+            maintenance: self.is_maintenance(),
         })
     }
     /// A finished run's files join the plan, or its failure becomes the
@@ -432,10 +506,11 @@ impl Plan {
     pub(crate) fn record_head(&mut self, previous: Option<String>) {
         self.action.previous_commit = previous;
     }
-    /// The plan's commit is on its branch with `status`.
-    pub(crate) fn committed(&mut self, commit: String, status: BranchStatus) {
+    /// The plan's commit is on its branch with `status`, produced from `tree`.
+    pub(crate) fn committed(&mut self, commit: String, tree: String, status: BranchStatus) {
         self.action.commit = Some(commit);
         self.action.status = status;
+        self.tree = Some(tree);
         if self.action.lockfile_pending {
             self.set_reason(Some(
                 "lockfile pending: manifest-only test branch; regenerate before merging".into(),
@@ -488,25 +563,6 @@ impl Plan {
     }
     pub(crate) fn merged(&mut self) {
         self.action.status = BranchStatus::Merged;
-    }
-    pub fn rename_branch(&mut self, branch: String) {
-        self.action.branch = branch;
-    }
-    /// The extraction commit the plan's edits and write apply to.
-    pub fn retarget_base(&mut self, base_commit: String) {
-        self.action.base_commit = base_commit;
-    }
-    /// The commit message the write uses.
-    pub fn set_message(&mut self, message: String) {
-        self.action.message = message;
-    }
-    /// Whether the write is a manifest-only lockfile-pending test branch.
-    pub fn set_lockfile_pending(&mut self, pending: bool) {
-        self.action.lockfile_pending = pending;
-    }
-    /// A file the plan changes, as the planner records it.
-    pub fn add_file(&mut self, file: patchula_report::FileAction) {
-        self.action.files.push(file);
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -698,6 +754,7 @@ pub fn plan(
             &identity,
             branch,
             &items,
+            Kind::Update,
         )?);
     }
     Ok(plans)
@@ -725,6 +782,8 @@ fn keep(slot: &mut Option<Hold>, hold: Hold) {
 }
 
 /// One branch plan from its items: edits, lock jobs, message and changes.
+/// `kind` fixes what its PR carries; a batch sets each change's merge to
+/// `prs.batchMerge` and its message names the change count.
 #[allow(clippy::too_many_arguments)]
 fn build(
     repo: &Repository,
@@ -737,8 +796,9 @@ fn build(
     identity: &str,
     branch: String,
     items: &[Item<'_>],
+    kind: Kind,
 ) -> Result<Plan, String> {
-    let mut changes = BTreeMap::<String, Vec<Edit>>::new();
+    let mut file_edits = BTreeMap::<String, Vec<Edit>>::new();
     let mut hold = None;
     let mut pending = None;
     let mut lock_jobs = BTreeSet::new();
@@ -801,7 +861,10 @@ fn build(
             continue;
         }
         match patchula_manager::edits(dep, &blob.content, value, update.new_digest.as_deref()) {
-            Ok(edits) => changes.entry(dep.file.clone()).or_default().extend(edits),
+            Ok(edits) => file_edits
+                .entry(dep.file.clone())
+                .or_default()
+                .extend(edits),
             Err(error) => keep(&mut hold, Hold::Blocked(format!("{}: {error}", dep.file))),
         }
     }
@@ -812,23 +875,77 @@ fn build(
         );
     }
     let prefix = prefixes.first().unwrap_or(&config.defaults.commit_prefix);
-    let mut message = if items
+    let changes: BTreeSet<Change> = items
         .iter()
-        .all(|item| item.update.update_type == UpdateKind::Pin)
-    {
-        format!("{prefix} pin dependencies")
-    } else {
-        format!(
+        .map(|item| {
+            let u = item.update;
+            let p = u.policy.as_ref();
+            Change {
+                current_version: item.current_version.map(str::to_owned),
+                source: item.dep.source,
+                package: item.dep.package.clone(),
+                registry: item.dep.registry.clone(),
+                file: item.dep.file.clone(),
+                current: format!(
+                    "{}{}",
+                    item.dep.current,
+                    item.dep
+                        .digest
+                        .as_ref()
+                        .map(|d| format!("@{d}"))
+                        .unwrap_or_default()
+                ),
+                value: u.new_value.clone(),
+                version: u.new_version.clone(),
+                digest: u.new_digest.clone(),
+                kind: u.update_type,
+                // The batch is merged by a person unless explicitly
+                // configured otherwise.
+                merge: if matches!(kind, Kind::Batch(_)) {
+                    config.prs.batch_merge
+                } else {
+                    p.map_or(config.defaults.merge, |p| p.merge)
+                },
+                labels: p.map_or_else(|| config.defaults.labels.clone(), |p| p.labels.clone()),
+                release_notes: p.map_or(config.defaults.release_notes, |p| p.release_notes),
+                body_notes: p.map_or_else(
+                    || config.defaults.body_notes.clone(),
+                    |p| p.body_notes.clone(),
+                ),
+                advisories: item
+                    .advisories
+                    .iter()
+                    .filter(|a| u.fixes.contains(&a.id))
+                    .cloned()
+                    .collect(),
+                image: u.image.clone(),
+            }
+        })
+        .collect();
+    let mut message = match &kind {
+        Kind::Batch(_) => format!(
+            "{} batch of {} update{}",
+            config.defaults.commit_prefix,
+            changes.len(),
+            if changes.len() == 1 { "" } else { "s" }
+        ),
+        _ if items
+            .iter()
+            .all(|item| item.update.update_type == UpdateKind::Pin) =>
+        {
+            format!("{prefix} pin dependencies")
+        }
+        _ => format!(
             "{prefix} update {}",
             titles.into_iter().collect::<Vec<_>>().join(", ")
-        )
+        ),
     };
     if items.iter().any(|item| !item.update.fixes.is_empty()) {
         message.push_str(" [security]");
     }
     let mut contents = BTreeMap::new();
     let mut files = Vec::new();
-    for (path, edits) in changes {
+    for (path, edits) in file_edits {
         let blob = &snapshot.files[&path];
         match patchula_manager::apply(&blob.content, edits) {
             Ok(content) if content != blob.content => {
@@ -893,49 +1010,9 @@ fn build(
         lockfile_pending: pending.is_some(),
         files,
     };
-    let changes: BTreeSet<_> = items
-        .iter()
-        .map(|item| {
-            let u = item.update;
-            let p = u.policy.as_ref();
-            Change {
-                current_version: item.current_version.map(str::to_owned),
-                source: item.dep.source,
-                package: item.dep.package.clone(),
-                registry: item.dep.registry.clone(),
-                file: item.dep.file.clone(),
-                current: format!(
-                    "{}{}",
-                    item.dep.current,
-                    item.dep
-                        .digest
-                        .as_ref()
-                        .map(|d| format!("@{d}"))
-                        .unwrap_or_default()
-                ),
-                value: u.new_value.clone(),
-                version: u.new_version.clone(),
-                digest: u.new_digest.clone(),
-                kind: u.update_type,
-                merge: p.map_or(config.defaults.merge, |p| p.merge),
-                labels: p.map_or_else(|| config.defaults.labels.clone(), |p| p.labels.clone()),
-                release_notes: p.map_or(config.defaults.release_notes, |p| p.release_notes),
-                body_notes: p.map_or_else(
-                    || config.defaults.body_notes.clone(),
-                    |p| p.body_notes.clone(),
-                ),
-                advisories: item
-                    .advisories
-                    .iter()
-                    .filter(|a| u.fixes.contains(&a.id))
-                    .cloned()
-                    .collect(),
-                image: u.image.clone(),
-            }
-        })
-        .collect();
     Ok(Plan {
         action,
+        kind,
         contents,
         identity: hash(identity.as_bytes()),
         fingerprint: fingerprint.clone(),
@@ -948,8 +1025,6 @@ fn build(
         lock_jobs,
         public_only: snapshot.public_only.clone(),
         deleted: BTreeSet::new(),
-        maintenance: false,
-        batch: None,
         tooling: Vec::new(),
         failure: hold.as_ref().map(|hold| crate::text::failure(hold.text())),
         hold,
@@ -1249,22 +1324,24 @@ fn line(dep: &Dependency, reported: &patchula_report::Dependency, update: &Updat
     format!("{major}.x{variant}")
 }
 
-/// The batch branch: the approved targets of every batched update, applied to
-/// the current extraction. Targets the base already satisfies are complete.
+/// The batch branch: the approved targets of every batched `items`, applied to
+/// the current extraction. Targets the base already satisfies are complete,
+/// and an item left with no change leaves the batch.
 #[allow(clippy::too_many_arguments)]
 pub fn batch_plan(
     repo: &Repository,
     config: &Config,
     dependencies: &[Dependency],
     snapshot: &Snapshot,
-    targets: &[Change],
+    items: Vec<crate::batch::Item>,
     allow_pending: bool,
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Option<Plan>, String> {
     let evaluator = patchula_lookup::Evaluator::new(config)?;
+    let targets: Vec<Change> = items.iter().flat_map(|i| i.targets.clone()).collect();
     let mut pending = Vec::new();
-    for target in targets {
+    for target in &targets {
         let candidates: Vec<_> = dependencies
             .iter()
             .filter(|d| {
@@ -1339,7 +1416,7 @@ pub fn batch_plan(
     if pending.is_empty() {
         return Ok(None);
     }
-    let items: Vec<_> = pending
+    let planned: Vec<_> = pending
         .iter()
         .map(|(dep, update)| Item {
             dep,
@@ -1359,25 +1436,26 @@ pub fn batch_plan(
         now,
         "[\"batch\"]",
         branch,
-        &items,
+        &planned,
+        Kind::Batch(items),
     )?;
-    // The batch is merged by a person unless explicitly configured otherwise.
-    for change in &mut plan.changes {
-        change.merge = config.prs.batch_merge;
+    // An item whose targets produced no change — all applied or superseded —
+    // leaves the batch.
+    if let Kind::Batch(items) = &mut plan.kind {
+        let changes = &plan.changes;
+        items.retain(|i| {
+            i.targets.iter().any(|t| {
+                changes.iter().any(|c| {
+                    c.touches(
+                        &t.file,
+                        t.source,
+                        &t.package,
+                        t.registry.as_ref().map(Registry::recorded),
+                    )
+                })
+            })
+        });
     }
-    plan.set_message(format!(
-        "{} batch of {} update{}",
-        config.defaults.commit_prefix,
-        plan.changes.len(),
-        if plan.changes.len() == 1 { "" } else { "s" }
-    ));
-    plan.fingerprint = fingerprint(Stage::Built {
-        contents: &plan.contents,
-        message: &plan.action().message,
-        lockfile_pending: plan.action().lockfile_pending,
-        lock_jobs: &plan.lock_jobs,
-    });
-    plan.input_fingerprint.clone_from(&plan.fingerprint);
     Ok(Some(plan))
 }
 

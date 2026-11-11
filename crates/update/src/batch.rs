@@ -115,13 +115,12 @@ pub fn apply(
 ) -> Result<BTreeSet<String>, String> {
     let name = crate::branch_name(&config.prs.branch, "batch")?;
     let items = items(prs, actor, &repository.repository, &name);
-    let targets: Vec<_> = items.iter().flat_map(|i| i.targets.clone()).collect();
-    let Some(mut plan) = crate::plan::batch_plan(
+    let Some(plan) = crate::plan::batch_plan(
         repository,
         config,
         dependencies,
         snapshot,
-        &targets,
+        items,
         allow_pending,
         since,
         now,
@@ -138,22 +137,12 @@ pub fn apply(
             plan.action().branch
         ));
     }
-    let items: Vec<_> = items
-        .into_iter()
-        .filter(|i| {
-            i.targets.iter().any(|t| {
-                plan.changes().iter().any(|c| {
-                    c.touches(
-                        &t.file,
-                        t.source,
-                        &t.package,
-                        t.registry.as_ref().map(Registry::recorded),
-                    )
-                })
-            })
-        })
+    let origins: BTreeSet<_> = plan
+        .batch_items()
+        .unwrap_or_default()
+        .iter()
+        .map(|i| i.origin.clone())
         .collect();
-    let origins: BTreeSet<_> = items.iter().map(|i| i.origin.clone()).collect();
     // Batched plans stay desired so cleanup keeps their branches until their
     // PRs close as batched; a removed item resumes on the same branch.
     for p in plans
@@ -162,7 +151,6 @@ pub fn apply(
     {
         p.hold(crate::plan::Hold::Batched);
     }
-    plan.batch = Some(items);
     plans.push(plan);
     Ok(origins)
 }

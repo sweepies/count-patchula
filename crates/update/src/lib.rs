@@ -30,4 +30,4 @@ pub use write::{REF_UPDATE, apply_all, needs_requeue};
 
 pub mod pull_requests;
 pub mod tooling;
-pub use pull_requests::{BODY_LIMIT, Lifecycle, update_key};
+pub use pull_requests::{BODY_LIMIT, Lifecycle};

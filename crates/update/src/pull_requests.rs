@@ -61,27 +61,6 @@ pub(crate) fn recheck_hashed(recheck: Recheck) -> &'static str {
         Recheck::NextRun => "NextRun",
     }
 }
-/// One PR's update: its branch and the targets it moves to. The branch makes
-/// the key unique per PR, so groups on different branches that bump the same
-/// package to the same version (one group per service in a monorepo) are
-/// batched, closed and recreated independently. The key excludes
-/// current/base/file/message so a closed update stays closed after a rebase,
-/// policy wording change or new occurrence.
-pub fn update_key(plan: &Plan) -> String {
-    if plan.is_maintenance() {
-        return hash(format!("maintenance:{}", plan.input_fingerprint()).as_bytes());
-    }
-    let targets: BTreeSet<_> = plan
-        .changes()
-        .iter()
-        .map(|c| (&c.source, &c.package, &c.value, &c.version, &c.digest))
-        .collect();
-    hash(
-        serde_json::to_string(&(&plan.action().branch, targets))
-            .expect("serializable targets")
-            .as_bytes(),
-    )
-}
 /// Whether the Count should merge this plan itself once its checks pass:
 /// never while a lockfile is pending; maintenance plans follow the default
 /// policy, and every other plan merges only when all its changes opt in.
@@ -635,7 +614,9 @@ impl Lifecycle {
                     plan.hold(crate::plan::Hold::WaitingForBatch);
                     continue;
                 }
-                plan.retry |= checked(&pr.pr);
+                if checked(&pr.pr) {
+                    plan.request_retry();
+                }
                 continue;
             }
             // Security updates never queue behind ordinary ones. Nor does the
@@ -2139,7 +2120,7 @@ mod merge_tests {
         config.defaults.merge = true;
         assert!(!merge_requested(&plan, &config.defaults));
         let plan = crate::plan::testing::Draft::from(plan)
-            .change(change(true))
+            .changes(vec![change(true)])
             .build();
         assert!(merge_requested(&plan, &config.defaults));
         let plan = crate::plan::testing::Draft::from(plan)

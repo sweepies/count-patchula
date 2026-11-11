@@ -156,10 +156,7 @@ pub async fn apply_all(
     if dry_run {
         return;
     }
-    for plan in plans
-        .iter_mut()
-        .filter(|p| p.action().status == BranchStatus::Planned && !p.lockfiles_ready())
-    {
+    for plan in plans.iter_mut().filter(|p| p.lock_work().is_some()) {
         plan.error("lockfiles must be generated successfully before publication");
     }
     let Some(first) = plans
@@ -418,7 +415,6 @@ async fn apply_inner(
         .await
         .map_err(|e| e.to_string())?;
     let tree = tree.sha;
-    plan.tree = Some(tree.clone());
     let pending = if plan.action().lockfile_pending {
         "\n\nLockfile pending: manifest-only test branch; regenerate before merging."
     } else {
@@ -455,6 +451,6 @@ async fn apply_inner(
     } else {
         BranchStatus::Updated
     };
-    plan.committed(sha, status);
+    plan.committed(sha, tree, status);
     Ok(())
 }
