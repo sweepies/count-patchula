@@ -1,7 +1,6 @@
 //! The lockfile contract: the work a branch's lockfile jobs describe and
 //! what a run hands back, shared by update planning and the tool runtime
 //! that executes it. Nothing here knows `Plan` or `Snapshot`.
-#![forbid(unsafe_code)]
 use patchula_config::Config;
 use patchula_manager::Dependency;
 use patchula_manager::roles::{lock_names, manifest_names};
