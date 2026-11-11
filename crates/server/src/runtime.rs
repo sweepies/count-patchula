@@ -1131,7 +1131,11 @@ async fn check_candidate(client: &Client, work: &Work, bot: &str) -> Result<bool
             Err(patchula_github::Error::Status(404)) => continue,
             Err(_) => return Err(Error("check-event PR ownership lookup failed")),
         };
-        if patchula_update::pull_requests::value_owned_pr(&pr, bot, &work.repo) {
+        if serde_json::from_value::<patchula_github::model::PullRequest>(pr)
+            .ok()
+            .as_ref()
+            .is_some_and(|pr| patchula_update::pull_requests::owned_pr(pr, bot, &work.repo))
+        {
             return Ok(true);
         }
     }

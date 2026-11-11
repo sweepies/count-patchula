@@ -250,14 +250,37 @@ fn render_with(repo: &Repository) -> String {
         ),
     ];
     let prs: Vec<_> = [
-        (93, "patchula/zstd-safe-8.x", "chore(deps): update zstd-safe to 8.2.0 [security]"),
-        (85, "patchula/ctutils-0.x", "chore(deps): update ctutils to 0.4.4 [security]"),
-        (103, "patchula/astrojs-starlight-0.x", "chore(deps): update @astrojs/starlight to 0.42.7"),
+        (
+            93,
+            "patchula/zstd-safe-8.x",
+            "chore(deps): update zstd-safe to 8.2.0 [security]",
+        ),
+        (
+            85,
+            "patchula/ctutils-0.x",
+            "chore(deps): update ctutils to 0.4.4 [security]",
+        ),
+        (
+            103,
+            "patchula/astrojs-starlight-0.x",
+            "chore(deps): update @astrojs/starlight to 0.42.7",
+        ),
     ]
     .into_iter()
-    .map(|(number, branch, title)| json!({"number":number,"state":"open","title":title,"head":{"ref":branch}}))
+    .map(|(number, branch, title)| {
+        patchula_update::pull_requests::Tracked::from(
+            serde_json::from_value::<patchula_github::model::PullRequest>(
+                json!({"node_id":format!("N{number}"),"number":number,
+                "html_url":format!("https://github.com/demo/app/pull/{number}"),"state":"open",
+                "title":title,"labels":[],"user":{"login":"bot"},
+                "head":{"ref":branch,"sha":"h","repo":{"full_name":"demo/app"}},
+                "base":{"ref":"main","repo":{"full_name":"demo/app"}}}),
+            )
+            .unwrap(),
+        )
+    })
     .collect();
-    dashboard::render(repo, &plans, &prs, Recheck::NextRun, None)
+    dashboard::render(repo, &plans, &prs, &[], Recheck::NextRun, None)
 }
 
 /// The action targets are hashes; the snapshot keeps their place.

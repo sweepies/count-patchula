@@ -12,6 +12,23 @@ fn repository() -> Repository {
             }]}
         }]}]})).unwrap()
 }
+fn tracked(
+    number: u64,
+    state: &str,
+    branch: &str,
+    title: &str,
+) -> patchula_update::pull_requests::Tracked {
+    patchula_update::pull_requests::Tracked::from(
+        serde_json::from_value::<patchula_github::model::PullRequest>(
+            json!({"node_id":format!("N{number}"),"number":number,
+            "html_url":format!("https://github.com/demo/app/pull/{number}"),"state":state,
+            "title":title,"labels":[],"user":{"login":"bot"},
+            "head":{"ref":branch,"sha":"h","repo":{"full_name":"demo/app"}},
+            "base":{"ref":"main","repo":{"full_name":"demo/app"}}}),
+        )
+        .unwrap(),
+    )
+}
 #[test]
 fn a_held_update_says_when_it_becomes_eligible_and_not_when_its_catalog_was_fetched() {
     // Whether a catalog is reused, and when it was fetched, change from run to
@@ -29,7 +46,7 @@ fn a_held_update_says_when_it_becomes_eligible_and_not_when_its_catalog_was_fetc
             }))
             .unwrap(),
         );
-        dashboard::render(&repo, &[], &[], Recheck::NextRun, None)
+        dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None)
     };
     let first = render("2026-10-15T09:00:00Z", false);
     assert!(
@@ -57,7 +74,7 @@ fn a_failed_lookup_is_listed_once_under_its_dependency() {
         "datasource":"npm","kind":"network","message":"registry HTTP 503"
     }]))
     .unwrap();
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     assert_eq!(
         text.matches("Lookup failed (npm, network): registry HTTP 503")
             .count(),
@@ -70,7 +87,7 @@ fn a_failed_lookup_is_listed_once_under_its_dependency() {
 fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
     let repo = repository();
     let dep = &repo.package_files[0].dependencies[0];
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     let repo_target = text
         .lines()
         .find(|l| l.contains("\"recheck\""))
@@ -90,7 +107,7 @@ fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
         );
     assert_eq!(snapshot, include_str!("snapshots/dashboard.md"));
     assert_eq!(
-        dashboard::render(&repo, &[], &[], Recheck::Now, None),
+        dashboard::render(&repo, &[], &[], &[], Recheck::Now, None),
         text.replace("on the next run", "now")
     );
     let mut other = dep.clone();
@@ -105,9 +122,9 @@ fn dashboard_orders_pr_numbers_numerically_and_dependency_summaries_last() {
     let repo = repository();
     let prs: Vec<_> = [24, 3, 11]
         .into_iter()
-        .map(|number| json!({"number":number,"state":"open","title":format!("PR {number}")}))
+        .map(|number| tracked(number, "open", "patchula/other", &format!("PR {number}")))
         .collect();
-    let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &prs, &[], Recheck::NextRun, None);
     let positions: Vec<_> = [
         "## Open PRs",
         "- #3:",
@@ -126,7 +143,7 @@ fn dashboard_orders_pr_numbers_numerically_and_dependency_summaries_last() {
     reversed.reverse();
     assert_eq!(
         text,
-        dashboard::render(&repo, &[], &reversed, Recheck::NextRun, None)
+        dashboard::render(&repo, &[], &reversed, &[], Recheck::NextRun, None)
     );
 }
 
@@ -165,7 +182,7 @@ fn issue_discovery_checks_marker_author_and_ambiguity_never_title() {
 #[test]
 fn checkbox_parser_rejects_malformed_duplicate_fenced_foreign_and_wrong_repository_markers() {
     let repo = repository();
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     let line = text
         .lines()
         .find(|l| l.contains("\"recheck\""))
@@ -367,6 +384,7 @@ fn the_dashboard_hides_the_advertised_server_under_its_marker() {
         &repo,
         &[],
         &[],
+        &[],
         Recheck::Now,
         Some("https://patchula.acme.dev"),
     );
@@ -376,7 +394,14 @@ fn the_dashboard_hides_the_advertised_server_under_its_marker() {
     );
     assert_eq!(text.lines().filter(|l| *l == MARKER).count(), 1);
     assert_eq!(
-        patchula_update::advertise::find(&dashboard::render(&repo, &[], &[], Recheck::Now, None)),
+        patchula_update::advertise::find(&dashboard::render(
+            &repo,
+            &[],
+            &[],
+            &[],
+            Recheck::Now,
+            None
+        )),
         None
     );
 }
@@ -396,7 +421,7 @@ fn known_vulnerabilities_lead_the_dashboard_with_their_fix() {
         {"id":"GHSA-open","url":"https://osv.dev/vulnerability/GHSA-open"}
     ]))
     .unwrap();
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     let section = text.find("## Known vulnerabilities").unwrap();
     assert!(section < text.find("## Pending updates").unwrap());
     let row = "- **high**: `fixture` 1.0.0 in `package.json`: 2 advisories ([GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed), [GHSA-open](https://osv.dev/vulnerability/GHSA-open)). 1 fixed by the update to `1.0.5`; 1 no fixed release yet.\n";
@@ -417,7 +442,7 @@ fn template_notices_are_listed_without_a_branch_or_a_checkbox() {
         "compareUrl":"https://github.com/acme/template/compare/v1.4.0...v1.6.0"
     }]))
     .unwrap();
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     let section = text.find("## Template updates").unwrap();
     assert!(section > text.find("## Pending updates").unwrap());
     let row = "- template gh:acme/template: v1.4.0 → v1.6.0 available in .copier-answers.yml; run copier update to apply it ([compare](https://github.com/acme/template/compare/v1.4.0...v1.6.0))\n";
@@ -473,7 +498,7 @@ fn images_the_count_cant_vouch_for_follow_known_vulnerabilities() {
         "1",
         json!({"state":"no-sbom","silenced":"built from our own Wolfi base, scanned in CI"}),
     ));
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     let section = text.find("## Images the Count can't vouch for\n").unwrap();
     assert!(
         text.find("## Known vulnerabilities").unwrap() < section,
@@ -526,10 +551,10 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
         ),
     ];
     let prs = [
-        json!({"number":412,"state":"open","title":"Update fixture","head":{"ref":"patchula/fixture"}}),
-        json!({"number":7,"state":"closed","merged_at":null,"title":"Old","head":{"ref":"patchula/other"}}),
+        tracked(412, "open", "patchula/fixture", "Update fixture"),
+        tracked(7, "closed", "patchula/other", "Old"),
     ];
-    let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &prs, &[], Recheck::NextRun, None);
     let section = text
         .find("## Tooling warnings\n")
         .unwrap_or_else(|| panic!("{text}"));
@@ -549,13 +574,13 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
     repo.tooling.clear();
     repo.tooling
         .push(warning("merge-without-ci", None, Some("Buildkite")));
-    let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &prs, &[], Recheck::NextRun, None);
     assert!(
         text.contains("\n## Tooling warnings\n\n<details><summary>Silenced (1)</summary>"),
         "{text}"
     );
     repo.tooling.clear();
-    let text = dashboard::render(&repo, &[], &prs, Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &prs, &[], Recheck::NextRun, None);
     assert!(!text.contains("Tooling warnings"), "{text}");
 }
 
@@ -588,7 +613,7 @@ fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
         plan("left-pad", patchula_update::Hold::Concurrent),
         plan("is-odd", patchula_update::Hold::PerHour),
     ];
-    let text = dashboard::render(&repository(), &plans, &[], Recheck::NextRun, None);
+    let text = dashboard::render(&repository(), &plans, &[], &[], Recheck::NextRun, None);
     let pending = &text[text.find("## Pending updates").unwrap()..];
     for line in [
         "Create it now anyway: chore(deps): update left-pad to 2.0.0 (prs.concurrent limit reached)",
@@ -613,7 +638,7 @@ fn newer_versions_that_cannot_be_proposed_are_listed_with_their_reason() {
         "reason":"the constraint `^1 | ^2` cannot be rewritten to allow it without guessing"
     }]))
     .unwrap();
-    let text = dashboard::render(&repo, &[], &[], Recheck::NextRun, None);
+    let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     assert!(!text.contains("copier"), "{text}");
     let section = &text[text.find("## Newer versions not proposed").unwrap()..];
     assert!(
