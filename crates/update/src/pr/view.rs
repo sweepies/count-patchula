@@ -276,3 +276,6 @@ pub(crate) fn admit(
         hourly = hourly.saturating_add(1);
     }
 }
+
+#[cfg(test)]
+mod oracle;
