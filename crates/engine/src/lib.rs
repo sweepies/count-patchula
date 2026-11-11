@@ -12,7 +12,7 @@ use futures_util::{StreamExt, stream};
 use patchula_cache::{Cache, State};
 use patchula_config::{Config, PackageId};
 use patchula_datasource::{Client as Sources, Failure};
-use patchula_github::{Client as Github, Options as GithubOptions};
+use patchula_github::{Client as Github, Options as GithubOptions, model};
 use patchula_http::{Cached, MAX_CONCURRENCY, PhaseTrace, Transport};
 use patchula_lookup::{Evaluation, Evaluator};
 use patchula_manager::{Dependency, Extraction, Scanner};
@@ -324,18 +324,7 @@ impl State for EvaluatedConfig {
     const PER_BUILD: bool = true;
     type Scope = ConfigFilesScope;
 }
-#[derive(Clone, Deserialize)]
-struct Entry {
-    path: String,
-    sha: String,
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(default = "file_mode")]
-    mode: String,
-}
-fn file_mode() -> String {
-    "100644".into()
-}
+type Entry = model::TreeEntry;
 
 /// A catalog: whether the versions host may stand in, and the package.
 type LookupKey = (bool, PackageId);
@@ -362,6 +351,36 @@ impl Sent {
 }
 type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, Failure>>;
 pub const REPOSITORY_HEAD_QUERY: &str = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){isPrivate defaultBranchRef{name target{... on Commit{oid tree{oid}}}}}}";
+
+/// `REPOSITORY_HEAD_QUERY`'s `data`, shaped exactly like the selection set.
+/// `repository` and `defaultBranchRef` are nullable in the GraphQL schema —
+/// a repository the token cannot see or one with no commits — while `name`,
+/// the commit `target` and its `tree` are non-null once the ref exists.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryHead {
+    repository: Option<RepositoryHeadRepository>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryHeadRepository {
+    default_branch_ref: Option<RepositoryHeadRef>,
+}
+#[derive(Deserialize)]
+struct RepositoryHeadRef {
+    name: String,
+    target: RepositoryHeadCommit,
+}
+#[derive(Deserialize)]
+struct RepositoryHeadCommit {
+    oid: String,
+    tree: RepositoryHeadTree,
+}
+#[derive(Deserialize)]
+struct RepositoryHeadTree {
+    oid: String,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct LookupHint {
     catalogs: BTreeSet<LookupKey>,
@@ -929,19 +948,17 @@ impl Engine {
             })
             .collect()
     }
-    async fn json(&self, path: &str) -> Result<Value> {
-        Ok(serde_json::from_slice(&self.github.get(path).await?.body)?)
-    }
     async fn tree(&self, repo: &str, sha: &str) -> Result<Vec<Entry>> {
-        let value = self
-            .json(&format!("repos/{repo}/git/trees/{sha}?recursive=1"))
+        let tree = self
+            .github
+            .get_fresh::<model::Tree>(&format!("repos/{repo}/git/trees/{sha}?recursive=1"))
             .await?;
-        if value["truncated"].as_bool() != Some(false) {
+        if tree.truncated {
             return Err(Error::Invalid(
                 "repository tree is truncated; cannot guarantee complete extraction".into(),
             ));
         }
-        Ok(serde_json::from_value(value["tree"].clone())?)
+        Ok(tree.tree)
     }
     /// The repository view for `entries`: the shared selection-and-reading
     /// engine, its blob reads answered by GitHub batches — one `blobs`
@@ -997,49 +1014,38 @@ impl Engine {
             // measured warm path. Revalidate metadata and the hinted branch in
             // parallel; a rename retries only the newly authoritative branch.
             let metadata_path = format!("repos/{repo}");
-            let (metadata, head) = tokio::join!(self.json(&metadata_path), self.head(repo, &hint));
+            let (metadata, head) = tokio::join!(
+                self.github.get_fresh::<model::Repository>(&metadata_path),
+                self.head(repo, &hint)
+            );
             let metadata = metadata?;
-            let branch = metadata["default_branch"]
-                .as_str()
-                .ok_or_else(|| Error::Invalid("repository has no default branch".into()))?
-                .to_owned();
+            let branch = metadata.default_branch;
             let head = if branch == hint {
                 head?
             } else {
                 self.head(repo, &branch).await?
             };
-            let commit = head["commit"]["sha"]
-                .as_str()
-                .ok_or_else(|| Error::Invalid("branch has no commit".into()))?
-                .to_owned();
-            let tree = head["commit"]["commit"]["tree"]["sha"]
-                .as_str()
-                .ok_or_else(|| Error::Invalid("commit has no tree".into()))?
-                .to_owned();
+            let commit = head.commit.sha;
+            let tree = head
+                .commit
+                .commit
+                .map(|detail| detail.tree.sha)
+                .ok_or_else(|| Error::Invalid("commit has no tree".into()))?;
             (branch, commit, tree)
         } else {
             let (owner, name) = repo.split_once('/').expect("validated repository");
             let data = self
                 .github
-                .graphql::<Value>(
+                .graphql::<RepositoryHead>(
                     REPOSITORY_HEAD_QUERY,
                     serde_json::json!({"owner":owner,"name":name}),
                 )
                 .await?;
-            let head = &data["repository"]["defaultBranchRef"];
-            let branch = head["name"]
-                .as_str()
-                .ok_or_else(|| Error::Invalid("repository has no default branch".into()))?
-                .to_owned();
-            let commit = head["target"]["oid"]
-                .as_str()
-                .ok_or_else(|| Error::Invalid("branch has no commit".into()))?
-                .to_owned();
-            let tree = head["target"]["tree"]["oid"]
-                .as_str()
-                .ok_or_else(|| Error::Invalid("commit has no tree".into()))?
-                .to_owned();
-            (branch, commit, tree)
+            let head = data
+                .repository
+                .and_then(|repository| repository.default_branch_ref)
+                .ok_or_else(|| Error::Invalid("repository has no default branch".into()))?;
+            (head.name, head.target.oid, head.target.tree.oid)
         };
         self.cache
             .set_state(&hint_scope, &BranchHint(branch.clone()))
@@ -1135,7 +1141,7 @@ impl Engine {
             ..Work::empty(report, Some(config))
         })
     }
-    async fn head(&self, repo: &str, branch: &str) -> Result<Value> {
+    async fn head(&self, repo: &str, branch: &str) -> Result<model::BranchHead> {
         let mut url = self
             .github
             .api_url()
@@ -1145,7 +1151,7 @@ impl Engine {
             .expect("https URL")
             .pop_if_empty()
             .push(branch);
-        self.json(url.as_str()).await
+        Ok(self.github.get_fresh(url.as_str()).await?)
     }
     async fn extract(
         &self,

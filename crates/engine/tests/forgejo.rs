@@ -67,8 +67,8 @@ fn repository(config: &str, workflow: &str) -> Vec<Interaction> {
     interactions.push(github(
         "repos/demo/app/git/trees/tree?recursive=1",
         json!({"truncated":false,"tree":[
-            {"path":"patchula.pkl","type":"blob","sha":"config"},
-            {"path":".forgejo/workflows/ci.yml","type":"blob","sha":"workflow"}
+            {"path":"patchula.pkl","type":"blob","mode":"100644","sha":"config"},
+            {"path":".forgejo/workflows/ci.yml","type":"blob","mode":"100644","sha":"workflow"}
         ]}),
     ));
     for (sha, text) in [("config", config), ("workflow", workflow)] {
@@ -230,10 +230,13 @@ async fn forge_pins_follow_a_moved_tag_with_only_digest_updates_and_a_reused_cat
     ));
     // Warm: the tag list is within its release-age wait, but its commits are
     // the pins, so it is revalidated and the tag has moved again.
-    interactions.push(github("repos/demo/app", json!({"default_branch":"main"})));
+    interactions.push(github(
+        "repos/demo/app",
+        json!({"default_branch":"main","node_id":"demo/app-id"}),
+    ));
     interactions.push(github(
         "repos/demo/app/branches/main",
-        json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}}),
+        json!({"name":"main","commit":{"sha":"head","commit":{"message":"head","tree":{"sha":"tree"}}}}),
     ));
     interactions.push(tags(
         "code.forgejo.org",

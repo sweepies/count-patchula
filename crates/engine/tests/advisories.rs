@@ -106,8 +106,8 @@ async fn advisories_mark_fixing_updates_and_warm_runs_reuse_records() {
     interactions.push(github(
         "repos/demo/app/git/trees/tree?recursive=1",
         json!({"truncated":false,"tree":[
-            {"path":"patchula.pkl","type":"blob","sha":"config"},
-            {"path":"package.json","type":"blob","sha":"manifest"}
+            {"path":"patchula.pkl","type":"blob","mode":"100644","sha":"config"},
+            {"path":"package.json","type":"blob","mode":"100644","sha":"manifest"}
         ]}),
         200,
         "tree",
@@ -157,14 +157,14 @@ async fn advisories_mark_fixing_updates_and_warm_runs_reuse_records() {
     // reused under the release-age wait, but a vulnerable package is read again.
     interactions.push(github(
         "repos/demo/app",
-        json!({"default_branch":"main"}),
+        json!({"default_branch":"main","node_id":"demo/app-id"}),
         200,
         "meta",
         false,
     ));
     interactions.push(github(
         "repos/demo/app/branches/main",
-        json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}}),
+        json!({"name":"main","commit":{"sha":"head","commit":{"message":"head","tree":{"sha":"tree"}}}}),
         200,
         "head",
         false,
@@ -254,9 +254,9 @@ async fn a_vulnerable_lockfile_only_crate_is_reported_with_its_fix() {
     interactions.push(github(
         "repos/demo/app/git/trees/tree?recursive=1",
         json!({"truncated":false,"tree":[
-            {"path":"patchula.pkl","type":"blob","sha":"config"},
-            {"path":"Cargo.toml","type":"blob","sha":"manifest"},
-            {"path":"Cargo.lock","type":"blob","sha":"lock"}
+            {"path":"patchula.pkl","type":"blob","mode":"100644","sha":"config"},
+            {"path":"Cargo.toml","type":"blob","mode":"100644","sha":"manifest"},
+            {"path":"Cargo.lock","type":"blob","mode":"100644","sha":"lock"}
         ]}),
         200,
         "tree",
@@ -462,8 +462,8 @@ async fn only_an_osv_match_marks_an_image_rebuild_as_a_security_fix() {
     interactions.push(github(
         "repos/demo/app/git/trees/tree?recursive=1",
         json!({"truncated":false,"tree":[
-            {"path":"patchula.pkl","type":"blob","sha":"config"},
-            {"path":"Dockerfile","type":"blob","sha":"dockerfile"}
+            {"path":"patchula.pkl","type":"blob","mode":"100644","sha":"config"},
+            {"path":"Dockerfile","type":"blob","mode":"100644","sha":"dockerfile"}
         ]}),
         200,
         "tree",
@@ -626,8 +626,8 @@ async fn rebuild_with_many_advisories(
     interactions.push(github(
         "repos/demo/app/git/trees/tree?recursive=1",
         json!({"truncated":false,"tree":[
-            {"path":"patchula.pkl","type":"blob","sha":"config"},
-            {"path":"Dockerfile","type":"blob","sha":"dockerfile"}
+            {"path":"patchula.pkl","type":"blob","mode":"100644","sha":"config"},
+            {"path":"Dockerfile","type":"blob","mode":"100644","sha":"dockerfile"}
         ]}),
         200,
         "tree",
@@ -871,8 +871,8 @@ async fn an_osv_failure_marks_the_image_check_unreadable() {
     interactions.push(github(
         "repos/demo/app/git/trees/tree?recursive=1",
         json!({"truncated":false,"tree":[
-            {"path":"patchula.pkl","type":"blob","sha":"config"},
-            {"path":"Dockerfile","type":"blob","sha":"dockerfile"}
+            {"path":"patchula.pkl","type":"blob","mode":"100644","sha":"config"},
+            {"path":"Dockerfile","type":"blob","mode":"100644","sha":"dockerfile"}
         ]}),
         200,
         "tree",
@@ -1014,8 +1014,8 @@ async fn a_failed_manifest_read_is_a_lookup_failure() {
     interactions.push(github(
         "repos/demo/app/git/trees/tree?recursive=1",
         json!({"truncated":false,"tree":[
-            {"path":"patchula.pkl","type":"blob","sha":"config"},
-            {"path":"Dockerfile","type":"blob","sha":"dockerfile"}
+            {"path":"patchula.pkl","type":"blob","mode":"100644","sha":"config"},
+            {"path":"Dockerfile","type":"blob","mode":"100644","sha":"dockerfile"}
         ]}),
         200,
         "tree",

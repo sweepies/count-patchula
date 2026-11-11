@@ -94,7 +94,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     for repo in ["configured", "skipped"] {
         interactions.push(head(&format!("demo/{repo}"), Some("main")));
         let tree = if repo == "configured" {
-            json!([{"path":".github/patchula.pkl","type":"blob","sha":"bad-config"},{"path":"patchula.pkl","type":"blob","sha":"config"},{"path":"package.json","type":"blob","sha":"manifest"}])
+            json!([{"path":".github/patchula.pkl","type":"blob","mode":"100644","sha":"bad-config"},{"path":"patchula.pkl","type":"blob","mode":"100644","sha":"config"},{"path":"package.json","type":"blob","mode":"100644","sha":"manifest"}])
         } else {
             json!([])
         };
@@ -146,7 +146,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
     for repo in ["configured", "skipped"] {
         interactions.push(get(
             &format!("repos/demo/{repo}"),
-            json!({"default_branch":"main"}),
+            json!({"default_branch":"main","node_id":"demo/app-id"}),
             200,
             Some("meta"),
             None,
@@ -154,7 +154,7 @@ async fn discovered_config_precedence_skips_errors_and_cached_extraction() {
         ));
         interactions.push(get(
             &format!("repos/demo/{repo}/branches/main"),
-            json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}}),
+            json!({"name":"main","commit":{"sha":"head","commit":{"message":"head","tree":{"sha":"tree"}}}}),
             200,
             Some("head"),
             None,
@@ -258,10 +258,14 @@ async fn enterprise_api_url_drives_graphql_and_warm_branch_heads() {
                 json!({"truncated":false,"tree":[]}),
                 200,
             ),
-            ghe("repos/demo/warm", json!({"default_branch":"main"}), 200),
+            ghe(
+                "repos/demo/warm",
+                json!({"default_branch":"main","node_id":"demo/app-id"}),
+                200,
+            ),
             ghe(
                 "repos/demo/warm/branches/main",
-                json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}}),
+                json!({"name":"main","commit":{"sha":"head","commit":{"message":"head","tree":{"sha":"tree"}}}}),
                 200,
             ),
         ],
@@ -406,7 +410,7 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
             ),
             get(
                 "repos/demo/renamed",
-                json!({"default_branch":"next"}),
+                json!({"default_branch":"next","node_id":"demo/app-id"}),
                 200,
                 None,
                 None,
@@ -422,7 +426,7 @@ async fn cold_snapshot_and_warm_branch_rename_reuse_identical_commit() {
             ),
             get(
                 "repos/demo/renamed/branches/next",
-                json!({"commit":{"sha":"head","commit":{"tree":{"sha":"tree"}}}}),
+                json!({"name":"next","commit":{"sha":"head","commit":{"message":"head","tree":{"sha":"tree"}}}}),
                 200,
                 None,
                 None,
@@ -492,7 +496,7 @@ async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
     for (tree, blob, dependency) in [("tree", "blob", "old-dep"), ("tree2", "blob2", "new-dep")] {
         interactions.push(get(
             &format!("repos/demo/pipeline/git/trees/{tree}?recursive=1"),
-            json!({"truncated":false,"tree":[{"path":"package.json","type":"blob","sha":blob}]}),
+            json!({"truncated":false,"tree":[{"path":"package.json","type":"blob","mode":"100644","sha":blob}]}),
             200,
             None,
             None,
@@ -510,7 +514,7 @@ async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
     }
     interactions.push(get(
         "repos/demo/pipeline",
-        json!({"default_branch":"main"}),
+        json!({"default_branch":"main","node_id":"demo/app-id"}),
         200,
         None,
         None,
@@ -518,7 +522,7 @@ async fn warm_catalogs_wait_for_current_extraction_and_skip_removed_sources() {
     ));
     interactions.push(get(
         "repos/demo/pipeline/branches/main",
-        json!({"commit":{"sha":"head2","commit":{"tree":{"sha":"tree2"}}}}),
+        json!({"name":"main","commit":{"sha":"head2","commit":{"message":"head2","tree":{"sha":"tree2"}}}}),
         200,
         None,
         None,
@@ -614,15 +618,20 @@ async fn config_dir_maps_overrides_and_falls_back_with_batch_dedup() {
     )];
     for repo in repos {
         interactions.push(head(repo, Some("main")));
-        let mut tree = vec![json!({"path":"package.json","type":"blob","sha":"manifest"})];
+        let mut tree =
+            vec![json!({"path":"package.json","type":"blob","mode":"100644","sha":"manifest"})];
         if repo == "demo/github" {
             // Only patchula.pkl at the root invites the Count.
-            tree.push(json!({"path":".github/patchula.pkl","type":"blob","sha":"config"}));
+            tree.push(
+                json!({"path":".github/patchula.pkl","type":"blob","mode":"100644","sha":"config"}),
+            );
         } else if repo == "demo/root" {
-            tree.push(json!({"path":"patchula.pkl","type":"blob","sha":"config"}));
+            tree.push(json!({"path":"patchula.pkl","type":"blob","mode":"100644","sha":"config"}));
         } else if repo != "demo/skipped" {
             // Local overrides must bypass this invalid in-repository config.
-            tree.push(json!({"path":"patchula.pkl","type":"blob","sha":"bad-config"}));
+            tree.push(
+                json!({"path":"patchula.pkl","type":"blob","mode":"100644","sha":"bad-config"}),
+            );
         }
         interactions.push(get(
             &format!("repos/{repo}/git/trees/tree?recursive=1"),
