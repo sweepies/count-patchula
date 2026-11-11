@@ -659,7 +659,7 @@ pub struct Inventory {
     pub merge_settings: crate::automerge::Settings,
     /// The PRs this actor merged last, oldest first — the cached auto-merge
     /// history, not part of the GraphQL response.
-    pub merged_prs: Vec<Value>,
+    pub merged_prs: Vec<crate::automerge::MergedPr>,
     /// The default branch's head, for the freshness check and tooling.
     pub default_branch: DefaultBranch,
     /// Branch names whose `associatedPullRequests` or their `labels` were

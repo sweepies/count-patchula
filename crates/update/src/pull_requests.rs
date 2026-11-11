@@ -116,6 +116,7 @@ impl MergeNote {
         }
     }
     /// The note a written `patchula_merge` string reads back as.
+    #[allow(dead_code)] // resync is already gone with the typed automerge.
     fn from_text(text: &str) -> Self {
         match text {
             "auto-merge waiting for a later run with a verified receipt and passing checks" => {
@@ -210,6 +211,7 @@ impl Tracked {
     /// Fold mutations a `&mut Value` reader made back into the typed fields.
     /// A value that no longer decodes keeps the old fields: it cannot
     /// fabricate fields the type requires.
+    #[allow(dead_code)] // No `&mut Value` readers remain.
     pub(crate) fn resync(&mut self, mut value: Value) {
         if let Some(note) = value["patchula_merge"].take().as_str() {
             self.merge_note = Some(MergeNote::from_text(note));
@@ -465,11 +467,11 @@ impl Lifecycle {
             .retain(|a| !actions.iter().any(|m| m.branch == a.branch));
         self.actions.extend(actions);
     }
-    pub fn dashboard_prs(&self) -> Vec<Value> {
+    pub fn dashboard_prs(&self) -> Vec<Tracked> {
         self.prs
             .iter()
             .filter(|p| owned_pr(&p.pr, &self.actor, &self.repo))
-            .map(Tracked::value)
+            .cloned()
             .collect()
     }
     pub(crate) fn closed_for(&self, plan: &Plan) -> Option<&Tracked> {
@@ -2298,6 +2300,7 @@ pub(crate) struct Pr {
     /// The merge timestamp; `None` while open or closed unmerged.
     pub merged_at: Option<Value>,
     /// The body text, for hashing and marker reads.
+    #[allow(dead_code)]
     pub body: Option<String>,
     #[serde(default)]
     pub head: PrHead,
@@ -2309,6 +2312,7 @@ pub(crate) struct PrHead {
     pub branch: Option<String>,
     /// The head commit (`head.sha`).
     #[serde(default)]
+    #[allow(dead_code)]
     pub sha: Option<String>,
 }
 impl Pr {

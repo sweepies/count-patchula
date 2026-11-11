@@ -132,14 +132,6 @@ struct GithubSide {
     reference: Option<String>,
     sha: Option<String>,
 }
-/// The merged-PR fields the public API publishes.
-#[derive(Deserialize)]
-struct MergedPr {
-    number: Option<u64>,
-    title: Option<String>,
-    html_url: Option<String>,
-    merged_at: Option<String>,
-}
 /// The one repository field record() reads.
 #[derive(Deserialize)]
 struct RepoVisibility {
@@ -356,14 +348,14 @@ pub(crate) async fn record(
             .await
             .iter()
             .filter_map(|pr| {
-                let pr = MergedPr::deserialize(pr).ok()?;
                 Some(Merged {
                     number: pr.number?,
-                    title: pr.title,
-                    url: pr.html_url,
+                    title: pr.title.clone(),
+                    url: pr.html_url.clone(),
                     // A merge the Count made himself has no recorded time.
                     merged_at: pr
                         .merged_at
+                        .clone()
                         .filter(|at| DateTime::parse_from_rfc3339(at).is_ok()),
                 })
             })
@@ -447,11 +439,12 @@ async fn open_pulls(client: &Client, bot: &str, repo: &str) -> Option<Vec<Value>
             .ok()?;
         let pulls: Vec<Value> = serde_json::from_slice(&response.body).ok()?;
         let full = pulls.len() == 100;
-        owned.extend(
-            pulls
-                .into_iter()
-                .filter(|pr| patchula_update::pull_requests::value_owned_pr(pr, bot, repo)),
-        );
+        owned.extend(pulls.into_iter().filter(|pr| {
+            serde_json::from_value::<patchula_github::model::PullRequest>(pr.clone())
+                .ok()
+                .as_ref()
+                .is_some_and(|pull| patchula_update::pull_requests::owned_pr(pull, bot, repo))
+        }));
         if !full {
             break;
         }

@@ -4187,24 +4187,30 @@ async fn an_overfull_tail_drops_the_controls_but_keeps_ownership() {
 /// the dashboard.
 #[test]
 fn dashboard_history_hides_merges_the_count_did_not_record() {
-    let merged = |number: u64, note: Option<&str>| {
-        let mut pr = json!({"number":number,"state":"closed","merged_at":"2026-01-01T00:00:00Z"});
-        if let Some(note) = note {
-            pr["patchula_merge"] = json!(note);
+    let merged = |number: u64, noted: bool| {
+        let mut tracked = patchula_update::pull_requests::Tracked::from(
+            serde_json::from_value::<patchula_github::model::PullRequest>(json!({
+                "number":number,"node_id":format!("N{number}"),"html_url":"u",
+                "state":"closed","title":"t","merged_at":"2026-01-01T00:00:00Z",
+                "labels":[],"user":{"login":"bot"},"head":{"ref":"b","sha":"s"},"base":{"ref":"main"}
+            }))
+            .unwrap(),
+        );
+        if noted {
+            tracked.set_merge_note(Some(patchula_update::pull_requests::MergeNote::Native));
         }
-        pr
+        tracked
     };
-    let prs = vec![
-        merged(1, None),
-        merged(2, Some("native auto-merge enabled")),
-    ];
+    let prs = vec![merged(1, false), merged(2, true)];
     let history = patchula_update::automerge::dashboard_history(
         &patchula_update::Inventory::default(),
         prs,
         &[],
     );
-    assert_eq!(history.len(), 1);
-    assert_eq!(history[0]["number"], 2);
+    assert_eq!(history.open.len(), 1);
+    assert_eq!(history.open[0].pr.number, 2);
+    assert_eq!(history.merged.len(), 1);
+    assert_eq!(history.merged[0].number, Some(2));
 }
 
 /// An owned, signed ref outside the branch prefix whose tip carries the
