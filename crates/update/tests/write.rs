@@ -413,9 +413,8 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
                 json!({"sha":"base2","tree":{"sha":"base-tree"}}),
             );
         }
-        let (mut next, _) = make_plan("22.0.0");
-        next.retarget_base("base2".into());
-        let mut next = Draft::from(next).retry(true).build();
+        let (next, _) = make_plan("22.0.0");
+        let mut next = Draft::from(next).base("base2").retry(true).build();
         patchula_update::apply_all(
             &github,
             std::slice::from_mut(&mut next),
@@ -672,8 +671,8 @@ async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
         .repo_mut()
         .refs
         .insert("refs/heads/main".into(), "new-base".into());
-    let (mut second, _) = make_plan("22.0.0");
-    second.rename_branch("patchula/second".into());
+    let (second, _) = make_plan("22.0.0");
+    let second = Draft::from(second).branch("patchula/second").build();
     let mut plans = [plan, second];
     patchula_update::apply_all(
         &client(server.clone()).await,
@@ -1176,9 +1175,10 @@ async fn shared_base_write_trace_and_request_budget() {
     let github = client(server.clone()).await;
     let mut plans: Vec<_> = (0..12)
         .map(|n| {
-            let (mut p, _) = make_plan("22.0.0");
-            p.rename_branch(format!("patchula/tool-{n}-22.x"));
-            p
+            let (p, _) = make_plan("22.0.0");
+            Draft::from(p)
+                .branch(format!("patchula/tool-{n}-22.x"))
+                .build()
         })
         .collect();
     let started = tokio::time::Instant::now();
@@ -1257,9 +1257,11 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
     let plans = || {
         (0..17)
             .map(|n| {
-                let (mut p, _) = make_plan("22.0.0");
-                p.rename_branch(format!("patchula/tool-{n}-22.x"));
-                Draft::from(p).retry(true).build()
+                let (p, _) = make_plan("22.0.0");
+                Draft::from(p)
+                    .branch(format!("patchula/tool-{n}-22.x"))
+                    .retry(true)
+                    .build()
             })
             .collect::<Vec<_>>()
     };
@@ -1512,7 +1514,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 "base" | "conflicts" => {
                     s.repo_mut().move_base("base2");
                     repo.commit = Some("base2".into());
-                    next.retarget_base("base2".into());
+                    next = Draft::from(next).base("base2").build();
                 }
                 "obsolete" | "foreign-obsolete" => {
                     let mut commit = s.repo().commits[p.action().commit.as_ref().unwrap()].clone();
@@ -1618,9 +1620,9 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             &snapshot,
         )
         .await;
-        let (mut next, _) = make_plan("22.1.0");
+        let (next, _) = make_plan("22.1.0");
         repo.commit = Some("base2".into());
-        next.retarget_base("base2".into());
+        let mut next = Draft::from(next).base("base2").build();
         {
             let mut s = server.state();
             let mut base = s.repo().commits["base"].clone();
@@ -2039,11 +2041,13 @@ async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_
         s.settings.pr_page_size = Some(1);
     }
     let count = server.state().writes.len();
-    let (mut repeat, _) = make_plan("22.0.0");
-    repeat.set_message("build: different wording".into());
+    let (repeat, _) = make_plan("22.0.0");
     let mut row = repeat.changes()[0].clone();
     row.file = "other.toml".into();
-    let mut repeat = Draft::from(repeat).change(row).build();
+    let mut repeat = Draft::from(repeat)
+        .message("build: different wording")
+        .change(row)
+        .build();
     pr_cycle(
         &github,
         &repo,
@@ -2632,8 +2636,7 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
     let (next, _) = make_plan("22.1.0");
     let mut draft = Draft::from(next);
     draft.changes_mut()[0].merge = true;
-    let mut next = draft.build();
-    next.set_lockfile_pending(true);
+    let mut next = draft.lockfile_pending(true).build();
     pr_cycle(
         &github,
         &repo,

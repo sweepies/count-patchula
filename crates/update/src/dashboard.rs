@@ -4,7 +4,6 @@ use crate::{
     identity::{extracted_key, held_key, held_target, retry_key},
     markers,
     text::{self, code},
-    update_key,
 };
 use patchula_cache::{Cache, State};
 use patchula_config::{Config, Registry};
@@ -83,7 +82,7 @@ impl Controls {
     }
     pub fn apply(&mut self, plans: &mut [Plan], dependencies: &[patchula_manager::Dependency]) {
         for plan in plans {
-            let key = update_key(plan);
+            let key = plan.update_key();
             let permits: BTreeSet<_> = plan
                 .changes()
                 .iter()
@@ -150,7 +149,7 @@ impl Controls {
                 || self.create.contains(&key)
                 || self.recreate.contains(&key)
             {
-                plan.retry = true;
+                plan.request_retry();
             }
         }
     }
@@ -381,14 +380,14 @@ pub fn render(
                     None,
                     checkbox(
                         &format!("Bring back this update you closed: {}", titled(plan)),
-                        Action::Recreate(update_key(plan)),
+                        Action::Recreate(plan.update_key()),
                     ),
                 ));
         } else if let Some(reason) = &plan.action().reason {
             let row = if plan.overridable() {
                 checkbox(
                     &format!("Create it now anyway: {} ({})", titled(plan), safe(reason)),
-                    Action::Create(update_key(plan)),
+                    Action::Create(plan.update_key()),
                 )
             } else {
                 let failure = plan.failure().expect("every reason keeps its failure");

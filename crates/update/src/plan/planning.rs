@@ -671,6 +671,16 @@ fn cargo_change(package: &str, current: &str, version: &str) -> crate::plan::Cha
     }
 }
 
+/// One batch item carrying `targets`, as a ticked PR's marker held them.
+fn batched(targets: Vec<crate::plan::Change>) -> Vec<crate::batch::Item> {
+    vec![crate::batch::Item {
+        origin: "o".repeat(64),
+        number: None,
+        title: "batched".into(),
+        targets,
+    }]
+}
+
 /// A lock that already records the target, whatever build metadata its release
 /// carries, has nothing left to do: `zstd-sys` 2.1.2 is locked as
 /// `2.1.2+zstd.1.5.7`.
@@ -704,7 +714,7 @@ fn a_batched_lock_only_target_is_complete_once_the_lock_holds_the_release() {
             &config,
             &dependencies,
             &snapshot(&files),
-            &[cargo_change("zstd-sys", "2", version)],
+            batched(vec![cargo_change("zstd-sys", "2", version)]),
             false,
             None,
             monday(),
@@ -810,7 +820,7 @@ fn a_batch_moves_every_declaration_of_a_dependency_in_a_file() {
         &config,
         &dependencies,
         &snapshot(&files),
-        &[target],
+        batched(vec![target]),
         false,
         None,
         monday(),
@@ -865,7 +875,7 @@ fn a_batch_drops_a_target_older_than_the_current_version() {
             &config,
             &dependencies,
             &snapshot(&files),
-            &[target(version)],
+            batched(vec![target(version)]),
             false,
             None,
             monday(),
@@ -909,7 +919,7 @@ fn a_batch_measures_targets_against_the_locked_release() {
             &config,
             &dependencies,
             &snapshot(&files),
-            &[change],
+            batched(vec![change]),
             false,
             None,
             monday(),
@@ -1437,6 +1447,7 @@ mod goldens {
                 current_version: None,
                 advisories: &[],
             }],
+            Kind::Update,
         )
         .unwrap();
         assert_eq!(
@@ -1485,7 +1496,7 @@ mod goldens {
             &config,
             &dependencies,
             &snapshot(&files),
-            &[target],
+            batched(vec![target]),
             false,
             None,
             monday(),
@@ -1536,6 +1547,7 @@ mod goldens {
                     current_version: None,
                     advisories: &[],
                 }],
+                Kind::Update,
             )
             .unwrap()
         };
