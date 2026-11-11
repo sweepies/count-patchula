@@ -61,7 +61,7 @@ fn repository(config: &str, workflow: &str) -> Vec<Interaction> {
         Body::Json(
             json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
         ),
-        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"head","tree":{"oid":"tree"}}}}}}),
         None,
     )];
     interactions.push(github(

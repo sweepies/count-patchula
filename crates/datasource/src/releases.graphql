@@ -1,0 +1,16 @@
+query ReleasesQuery($owner: String!, $name: String!, $cursor: String) {
+    repository(owner: $owner, name: $name) {
+        releases(first: 100, after: $cursor, orderBy: { field: CREATED_AT, direction: DESC }) {
+            nodes {
+                tagName
+                publishedAt
+                isDraft
+                isPrerelease
+            }
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+        }
+    }
+}

@@ -72,7 +72,7 @@ fn head(repo: &str, branch: Option<&str>) -> Interaction {
             status: 200,
             headers: BTreeMap::new(),
             body: Body::Json(
-                json!({"data":{"repository": branch.map(|branch| json!({"isPrivate":false,"defaultBranchRef":{"name":branch,"target":{"oid":"head","tree":{"oid":"tree"}}}}))}}),
+                json!({"data":{"repository": branch.map(|branch| json!({"isPrivate":false,"defaultBranchRef":{"name":branch,"target":{"__typename":"Commit","oid":"head","tree":{"oid":"tree"}}}}))}}),
             ),
         },
     }
@@ -249,7 +249,7 @@ async fn enterprise_api_url_drives_graphql_and_warm_branch_heads() {
                     status: 200,
                     headers: BTreeMap::new(),
                     body: Body::Json(
-                        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+                        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"head","tree":{"oid":"tree"}}}}}}),
                     ),
                 },
             },

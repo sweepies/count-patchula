@@ -100,7 +100,7 @@ async fn advisories_mark_fixing_updates_and_warm_runs_reuse_records() {
             json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
         ),
         200,
-        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"head","tree":{"oid":"tree"}}}}}}),
         None,
     )];
     interactions.push(github(
@@ -248,7 +248,7 @@ async fn a_vulnerable_lockfile_only_crate_is_reported_with_its_fix() {
             json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
         ),
         200,
-        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"head","tree":{"oid":"tree"}}}}}}),
         None,
     )];
     interactions.push(github(
@@ -456,7 +456,7 @@ async fn only_an_osv_match_marks_an_image_rebuild_as_a_security_fix() {
             json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
         ),
         200,
-        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"head","tree":{"oid":"tree"}}}}}}),
         None,
     )];
     interactions.push(github(
@@ -620,7 +620,7 @@ async fn rebuild_with_many_advisories(
             json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
         ),
         200,
-        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"head","tree":{"oid":"tree"}}}}}}),
         None,
     )];
     interactions.push(github(
@@ -865,7 +865,7 @@ async fn an_osv_failure_marks_the_image_check_unreadable() {
             json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
         ),
         200,
-        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"head","tree":{"oid":"tree"}}}}}}),
         None,
     )];
     interactions.push(github(
@@ -1008,7 +1008,7 @@ async fn a_failed_manifest_read_is_a_lookup_failure() {
             json!({"query":patchula_engine::REPOSITORY_HEAD_QUERY,"variables":{"owner":"demo","name":"app"}}),
         ),
         200,
-        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"oid":"head","tree":{"oid":"tree"}}}}}}),
+        json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"head","tree":{"oid":"tree"}}}}}}),
         None,
     )];
     interactions.push(github(
