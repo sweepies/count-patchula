@@ -1497,7 +1497,8 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 "title" => s.repo_mut().prs.get_mut(&1).unwrap()["title"] = json!("Human title"),
                 "labels" => s.repo_mut().prs.get_mut(&1).unwrap()["labels"] = json!([]),
                 "merge" => {
-                    s.repo_mut().prs.get_mut(&1).unwrap()["auto_merge"] = json!({"enabled":true})
+                    s.repo_mut().prs.get_mut(&1).unwrap()["auto_merge"] =
+                        json!({"enabledAt":"2026-01-01T00:00:00Z"})
                 }
                 "closed" => s.repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed"),
                 "base" | "conflicts" => {
