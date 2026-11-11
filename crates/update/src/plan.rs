@@ -29,7 +29,7 @@ pub struct Blob {
 /// fingerprint covers its contents, message, pending flag and lock jobs; once the
 /// tools generate, it covers the generated contents, deleted set and
 /// message instead, so the two never collide.
-enum Stage<'a> {
+enum FingerprintStage<'a> {
     /// `build` and `batch_plan`, before the tools run.
     Built {
         contents: &'a BTreeMap<String, String>,
@@ -46,15 +46,15 @@ enum Stage<'a> {
 }
 /// The plan fingerprint: the exact bytes the commit's `Patchula-Plan`
 /// trailer and the write receipts hash.
-fn fingerprint(stage: Stage<'_>) -> String {
+fn fingerprint(stage: FingerprintStage<'_>) -> String {
     let json = match stage {
-        Stage::Built {
+        FingerprintStage::Built {
             contents,
             message,
             lockfile_pending,
             lock_jobs,
         } => serde_json::to_string(&(contents, message, lockfile_pending, lock_jobs)),
-        Stage::Generated {
+        FingerprintStage::Generated {
             contents,
             deleted,
             message,
@@ -62,6 +62,21 @@ fn fingerprint(stage: Stage<'_>) -> String {
     }
     .expect("serializable plan");
     hash(json.as_bytes())
+}
+
+/// Where a plan is in the lockfile lifecycle. The data each stage owns
+/// exists only while the plan is in it: jobs the tools still owe, the
+/// deletions a run produced, the PR a receipt restored.
+#[derive(Debug)]
+enum Stage {
+    /// From the planner. `jobs` is what the lockfile tools still owe; empty is ready.
+    Built { jobs: Vec<contract::Job> },
+    /// The tools ran: `contents` holds what they wrote, `deleted` what they removed.
+    Generated { deleted: BTreeSet<String> },
+    /// A verified receipt proved branch and PR already hold the plan.
+    Restored {
+        pr: Box<crate::pull_requests::Tracked>,
+    },
 }
 #[derive(Debug)]
 pub struct Plan {
@@ -81,12 +96,8 @@ pub struct Plan {
     /// The snapshot's public-only verdicts, for the lockfile runs'
     /// cache-partition choice.
     public_only: BTreeMap<String, bool>,
-    lock_jobs: Vec<contract::Job>,
-    lockfiles_ready: bool,
-    /// The paths a lockfile run removed; the write drops them from the tree.
-    deleted: BTreeSet<String>,
-    /// The PR a verified write receipt restored with this plan.
-    cached_pr: Option<crate::pull_requests::Tracked>,
+    /// Where the plan is in the lockfile lifecycle; owns the stage's data.
+    stage: Stage,
     /// The tree the plan's commit produced, once a write or receipt names it.
     tree: Option<String>,
     retry: bool,
@@ -194,12 +205,9 @@ impl Plan {
             changes: Vec::new(),
             retry: false,
             tree: None,
-            cached_pr: None,
+            stage: Stage::Built { jobs: Vec::new() },
             input_fingerprint: String::new(),
-            lock_jobs: Vec::new(),
-            lockfiles_ready: false,
             public_only: BTreeMap::new(),
-            deleted: BTreeSet::new(),
             tooling: Vec::new(),
             hold: None,
         }
@@ -222,13 +230,10 @@ impl Plan {
             changes: Vec::new(),
             retry: false,
             tree: None,
-            cached_pr: None,
-            input_fingerprint: fingerprint,
             // The tools always run for maintenance, even with no jobs.
-            lockfiles_ready: false,
-            lock_jobs: jobs,
+            stage: Stage::Built { jobs },
+            input_fingerprint: fingerprint,
             public_only,
-            deleted: BTreeSet::new(),
             tooling: Vec::new(),
             hold: None,
         }
@@ -270,19 +275,27 @@ impl Plan {
     }
     /// The lockfile work the plan asks a [`contract::Generate`] run for.
     pub fn lock_jobs(&self) -> &[contract::Job] {
-        &self.lock_jobs
+        match &self.stage {
+            Stage::Built { jobs } => jobs,
+            _ => &[],
+        }
     }
     /// Whether the plan still owes a lockfile run work.
     pub fn has_lock_jobs(&self) -> bool {
-        !self.lock_jobs.is_empty()
+        !self.lock_jobs().is_empty()
     }
-    /// Whether the plan's lockfiles already ran.
+    /// Whether the plan owes no lockfile work: the tools ran, none were
+    /// owed, or a verified receipt restored the plan.
     pub fn lockfiles_ready(&self) -> bool {
-        self.lockfiles_ready
+        !matches!(self.stage, Stage::Built { .. })
     }
     /// The paths a lockfile run removed; the write drops them from the tree.
     pub fn deleted(&self) -> &BTreeSet<String> {
-        &self.deleted
+        static NONE: BTreeSet<String> = BTreeSet::new();
+        match &self.stage {
+            Stage::Generated { deleted } => deleted,
+            _ => &NONE,
+        }
     }
     /// A lockfile-maintenance plan refreshes locks rather than declarations.
     pub fn is_maintenance(&self) -> bool {
@@ -309,11 +322,17 @@ impl Plan {
     }
     /// The PR a verified write receipt restored with this plan.
     pub fn restored_pr(&self) -> Option<&crate::pull_requests::Tracked> {
-        self.cached_pr.as_ref()
+        match &self.stage {
+            Stage::Restored { pr } => Some(pr),
+            _ => None,
+        }
     }
     /// The restored PR, for the auto-merge pass to update its merge note.
     pub(crate) fn restored_pr_mut(&mut self) -> Option<&mut crate::pull_requests::Tracked> {
-        self.cached_pr.as_mut()
+        match &mut self.stage {
+            Stage::Restored { pr } => Some(pr.as_mut()),
+            _ => None,
+        }
     }
     /// One PR's update: its branch and the targets it moves to, hashed as the
     /// ownership marker names it. The branch makes the key unique per PR, so
@@ -414,13 +433,16 @@ impl Plan {
     /// The lockfile work this plan asks a [`contract::Generate`] run for, or
     /// `None` when the plan is not planned or its lockfiles already ran.
     pub fn lock_work(&self) -> Option<contract::Work<'_>> {
-        if self.action.status != BranchStatus::Planned || self.lockfiles_ready {
+        if self.action.status != BranchStatus::Planned {
             return None;
         }
+        let Stage::Built { jobs } = &self.stage else {
+            return None;
+        };
         Some(contract::Work {
             repository: &self.action.repository,
             base_commit: &self.action.base_commit,
-            jobs: &self.lock_jobs,
+            jobs,
             edits: &self.contents,
             extracted: self
                 .action
@@ -540,10 +562,9 @@ impl Plan {
         self.action.commit = Some(commit.into());
         self.action.verified = Some(true);
         self.tree = Some(tree.into());
-        self.cached_pr = Some(pr);
+        self.stage = Stage::Restored { pr: Box::new(pr) };
         self.fingerprint = fingerprint.into();
         self.action.files = files;
-        self.lockfiles_ready = true;
     }
     /// Lockfile generation produced these files for the plan.
     pub(crate) fn lockfiles_generated(
@@ -553,14 +574,13 @@ impl Plan {
         files: Vec<patchula_report::FileAction>,
     ) {
         self.contents = contents;
-        self.deleted = deleted;
         self.action.files = files;
-        self.lockfiles_ready = true;
-        self.fingerprint = fingerprint(Stage::Generated {
+        self.fingerprint = fingerprint(FingerprintStage::Generated {
             contents: &self.contents,
-            deleted: &self.deleted,
+            deleted: &deleted,
             message: &self.action.message,
         });
+        self.stage = Stage::Generated { deleted };
     }
     pub(crate) fn merged(&mut self) {
         self.action.status = BranchStatus::Merged;
@@ -989,7 +1009,7 @@ fn build(
         );
     }
     let lock_jobs: Vec<_> = lock_jobs.into_iter().collect();
-    let fingerprint = fingerprint(Stage::Built {
+    let fingerprint = fingerprint(FingerprintStage::Built {
         contents: &contents,
         message: &message,
         lockfile_pending: pending.is_some(),
@@ -1012,6 +1032,14 @@ fn build(
         lockfile_pending: pending.is_some(),
         files,
     };
+    // A plan that owes the tools nothing is ready from the start.
+    let stage = if lock_jobs.is_empty() {
+        Stage::Generated {
+            deleted: BTreeSet::new(),
+        }
+    } else {
+        Stage::Built { jobs: lock_jobs }
+    };
     Ok(Plan {
         action,
         kind,
@@ -1021,12 +1049,9 @@ fn build(
         changes: changes.into_iter().collect(),
         retry: false,
         tree: None,
-        cached_pr: None,
+        stage,
         input_fingerprint: fingerprint.clone(),
-        lockfiles_ready: lock_jobs.is_empty(),
-        lock_jobs,
         public_only: snapshot.public_only.clone(),
-        deleted: BTreeSet::new(),
         tooling: Vec::new(),
         failure: hold.as_ref().map(|hold| crate::text::failure(hold.text())),
         hold,
@@ -1773,7 +1798,7 @@ mod fingerprint_bytes {
     #[test]
     fn built_and_generated_stages_hash_their_own_tuples() {
         let contents = BTreeMap::from([("package.json".to_owned(), "new".to_owned())]);
-        let built = fingerprint(Stage::Built {
+        let built = fingerprint(FingerprintStage::Built {
             contents: &contents,
             message: "chore: update fixture",
             lockfile_pending: false,
@@ -1783,7 +1808,7 @@ mod fingerprint_bytes {
             built,
             "3153cdda200d582ce0b46c6394ad36430b088494005a55f13f487acc6d8f1015"
         );
-        let generated = fingerprint(Stage::Generated {
+        let generated = fingerprint(FingerprintStage::Generated {
             contents: &contents,
             deleted: &BTreeSet::from(["old.lock".to_owned()]),
             message: "chore: update fixture",
@@ -1800,6 +1825,44 @@ mod tests {
     use super::*;
     use patchula_manager::{EditForm, Location, Syntax};
     use patchula_words::{DependencyKind, Manager, Scheme};
+
+    /// A restored plan owes no lockfile work, so a restored maintenance plan
+    /// is ready and `record_refresh` counts it, as before the stage existed.
+    #[test]
+    fn a_restored_maintenance_plan_is_ready() {
+        let mut plan = Plan::maintenance(
+            BranchAction {
+                repository: "o/r".into(),
+                branch: "patchula/lock-file-maintenance".into(),
+                base_commit: "base".into(),
+                status: BranchStatus::Planned,
+                reason: None,
+                message: "chore(deps): lock file maintenance".into(),
+                previous_commit: None,
+                commit: None,
+                verified: None,
+                lockfile_pending: false,
+                files: Vec::new(),
+            },
+            Vec::new(),
+            "fingerprint".into(),
+            BTreeMap::new(),
+        );
+        assert!(!plan.lockfiles_ready());
+        let pr = crate::pull_requests::Tracked::from(
+            serde_json::from_value::<patchula_github::model::PullRequest>(serde_json::json!({
+                "number":1,"node_id":"N1","html_url":"https://github.com/o/r/pull/1",
+                "title":"lock file maintenance","state":"open","body":"","labels":[],
+                "user":{"login":"bot"},
+                "head":{"ref":"patchula/lock-file-maintenance","sha":"c","repo":{"full_name":"o/r"}},
+                "base":{"ref":"main","repo":{"full_name":"o/r"}}}),
+            )
+            .unwrap(),
+        );
+        plan.restored("c", "t", "fingerprint", Vec::new(), pr);
+        assert!(plan.restored_pr().is_some());
+        assert!(plan.lockfiles_ready());
+    }
 
     fn dep() -> Dependency {
         Dependency {
