@@ -635,7 +635,10 @@ async fn an_unreadable_installation_listing_fails_the_batch() {
         })
         .respond(
             200,
-            json!({"repositories": [{"full_name":"owner/repo","private":false}, {}]}),
+            // A wrong-typed `private` once enqueued the repository as private;
+            // the listing now fails to decode.
+            json!({"repositories": [{"full_name":"owner/repo","private":false},
+                {"full_name":"owner/other","private":"no"}]}),
         );
     let transport: Arc<dyn Transport> = github.clone();
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
@@ -1562,6 +1565,36 @@ async fn check_events_verify_real_ownership_with_custom_branch_prefixes() {
             expected
         );
     }
+    patchula_testkit::transcripts::check(&transcripts());
+}
+
+#[tokio::test]
+async fn an_unreadable_check_event_pull_fails_the_lookup() {
+    // An undecodable pull once read as unowned and the event was dropped;
+    // the lookup now fails, and nothing runs on what it could not read.
+    let mut unreadable = pr();
+    unreadable.as_object_mut().unwrap().remove("state");
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let github = Arc::new(FakeGitHub::new("owner/repo"));
+    github
+        .state()
+        .repositories
+        .get_mut("owner/repo")
+        .unwrap()
+        .prs
+        .insert(1, unreadable);
+    let client =
+        Client::with_transport("offline-token", cache, Default::default(), github.clone()).unwrap();
+    let candidate = Work {
+        installation: 1,
+        repo: "owner/repo".into(),
+        check_prs: Some(std::collections::BTreeSet::from([1])),
+    };
+    let error = check_candidate(&client, &candidate, "patchula[bot]")
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.to_string(), "check-event PR ownership lookup failed");
     patchula_testkit::transcripts::check(&transcripts());
 }
 

@@ -365,18 +365,18 @@ async fn installation_credentials_use_installation_repository_listing() {
 
 #[tokio::test]
 async fn an_unreadable_repository_listing_fails_discovery() {
-    // One element without `full_name` used to fail only its own entry;
-    // the read now fails as a whole — a skipped repository would never
-    // be updated or reported.
+    // A missing `full_name` already failed the whole listing; a
+    // wrong-typed `private`, which the old reader never looked at, now
+    // fails it too.
     for (path, value, installation) in [
         (
             "user/repos?per_page=100",
-            json!([{"full_name":"demo/fine"},{"no_name":true}]),
+            json!([{"full_name":"demo/fine"},{"full_name":"demo/odd","private":"yes"}]),
             false,
         ),
         (
             "installation/repositories?per_page=100",
-            json!({"repositories":[{"full_name":"demo/fine"},{}],"total_count":2}),
+            json!({"repositories":[{"full_name":"demo/fine"},{"full_name":"demo/odd","private":"yes"}],"total_count":2}),
             true,
         ),
     ] {
