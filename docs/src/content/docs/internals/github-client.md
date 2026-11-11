@@ -86,9 +86,13 @@ they decode into, like `rest_pages` already was. A response that does not
 decode is an `Error::Decode`, which names the operation and the field path
 only: serde's message is never kept, because a type-mismatch message can
 quote response text that would reach dashboards and public pages.
-`patchula_github::model` holds the REST resource types the write path reads:
-deserialize only, unknown fields ignored, and `Option` only where GitHub's
-OpenAPI description documents null.
+`patchula_github::model` holds the REST resource types the lifecycle,
+dashboard, batch and server read: deserialize only, unknown fields ignored,
+and `Option` only where GitHub's OpenAPI description documents null.
+`model::Page<T>` decodes a list element by element: an element that fails
+marks the page incomplete and stays out of `items`, so a partial read blocks
+every action that depends on the whole set rather than silently acting on
+the readable subset.
 
 Static GraphQL documents — the inventory, status-check, ref-update,
 auto-merge, repository-head and releases operations — live as `.graphql`

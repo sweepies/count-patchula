@@ -656,8 +656,13 @@ pub(crate) fn classify(
         .and_then(|body| body.from.as_deref());
     let issue = payload.issue.as_ref();
     let null = Value::Null;
-    let pr = payload.pull_request.as_ref().unwrap_or(&null);
-    let owned = patchula_update::pull_requests::value_owned_pr(pr, bot, repo);
+    let pr = serde_json::from_value::<patchula_github::model::PullRequest>(
+        payload.pull_request.clone().unwrap_or(null),
+    )
+    .ok();
+    let owned = pr
+        .as_ref()
+        .is_some_and(|pr| patchula_update::pull_requests::owned_pr(pr, bot, repo));
     let trigger = match Trigger::of(event, action) {
         Some(t) if t.enabled(&settings.server.triggers) => match t {
             Trigger::Push => {
@@ -686,7 +691,7 @@ pub(crate) fn classify(
                     && before.is_some_and(|before| {
                         patchula_update::pull_requests::controls_edited(
                             before,
-                            pr["body"].as_str().unwrap_or(""),
+                            pr.as_ref().and_then(|pr| pr.body.as_deref()).unwrap_or(""),
                         )
                     })
             }

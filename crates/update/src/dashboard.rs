@@ -177,19 +177,12 @@ impl Controls {
                 }
             }
         }
-        for pr in inventory
-            .pull_requests(repo)
-            .iter()
-            .map(crate::pull_requests::Tracked::value)
-        {
+        for pr in inventory.pull_requests(repo) {
             result
                 .age_permits
-                .extend(pr_permits(crate::pull_requests::value_body(&pr)));
-            let fields = crate::pull_requests::Pr::read(&pr);
-            if (result.recheck || crate::pull_requests::value_checked(&pr))
-                && let Some(branch) = fields.head.branch.as_deref()
-            {
-                result.branches.insert(branch.into());
+                .extend(pr_permits(crate::pull_requests::body(&pr.pr)));
+            if result.recheck || crate::pull_requests::checked(&pr.pr) {
+                result.branches.insert(pr.pr.head.branch.clone());
             }
         }
         Ok(result)
@@ -312,78 +305,68 @@ pub fn issue(inventory: &Inventory) -> Result<Option<&crate::receipts::Issue>, S
 pub fn render(
     repo: &Repository,
     plans: &[Plan],
-    prs: &[Value],
+    prs: &[crate::pull_requests::Tracked],
+    merged: &[crate::automerge::MergedPr],
     recheck: Recheck,
     server: Option<&str>,
 ) -> String {
     // Keep the numeric PR identity separate from the rendered Markdown.
-    let fields: Vec<_> = prs.iter().map(crate::pull_requests::Pr::read).collect();
     let mut sections = BTreeMap::<String, BTreeSet<(Option<u64>, String)>>::new();
-    for (pr, fields) in prs
-        .iter()
-        .zip(&fields)
-        .filter(|(_, fields)| fields.merged_at.is_some())
-    {
-        if let Some(number) = fields.number {
+    for row in merged.iter().filter(|row| row.merged_at.is_some()) {
+        if let Some(number) = row.number {
             sections.entry("Merged".into()).or_default().insert((
                 Some(number),
                 format!(
                     "- #{number}: {} — {}\n",
-                    safe(fields.title.as_deref().unwrap_or("Update dependencies")),
-                    safe(crate::pull_requests::merge_note(pr).unwrap_or("merged"),)
+                    safe(row.title.as_deref().unwrap_or("Update dependencies")),
+                    safe(row.merge_note.as_deref().unwrap_or("merged"),)
                 ),
             ));
         }
     }
-    for (_, fields) in prs.iter().zip(&fields).filter(|(_, fields)| {
-        fields.state.as_deref() == Some("open")
+    for tracked in prs.iter().filter(|t| {
+        t.pr.state == "open"
             && !plans
                 .iter()
-                .any(|plan| fields.head.branch.as_deref() == Some(plan.action().branch.as_str()))
+                .any(|plan| t.pr.head.branch == plan.action().branch)
     }) {
-        if let Some(number) = fields.number {
-            sections
-                .entry("Open PRs: other".into())
-                .or_default()
-                .insert((
-                    Some(number),
-                    format!(
-                        "- #{number}: {}\n",
-                        safe(fields.title.as_deref().unwrap_or("Update dependencies"))
-                    ),
-                ));
-        }
+        sections
+            .entry("Open PRs: other".into())
+            .or_default()
+            .insert((
+                Some(tracked.pr.number),
+                format!("- #{}: {}\n", tracked.pr.number, safe(&tracked.pr.title)),
+            ));
     }
     for plan in plans {
         if plan.action().status == patchula_report::BranchStatus::Merged {
             continue;
         }
-        let open = prs.iter().zip(&fields).find(|(_, fields)| {
-            fields.state.as_deref() == Some("open")
-                && fields.head.branch.as_deref() == Some(plan.action().branch.as_str())
-        });
-        if let Some((pr, fields)) = open {
+        let open = prs
+            .iter()
+            .find(|t| t.pr.state == "open" && t.pr.head.branch == plan.action().branch);
+        if let Some(tracked) = open {
             let kinds: BTreeSet<_> = plan.changes.iter().map(|c| c.kind.as_str()).collect();
             let kind = if plan.maintenance {
                 "maintenance".into()
             } else {
                 kinds.into_iter().collect::<Vec<_>>().join(", ")
             };
-            if let Some(number) = fields.number {
-                sections
-                    .entry(format!("Open PRs: {kind}"))
-                    .or_default()
-                    .insert((
-                        Some(number),
-                        format!(
-                            "- #{number}: {}{}\n",
-                            titled(plan),
-                            crate::pull_requests::merge_note(pr)
-                                .map(|reason| format!(" — {}", safe(reason)))
-                                .unwrap_or_default()
-                        ),
-                    ));
-            }
+            sections
+                .entry(format!("Open PRs: {kind}"))
+                .or_default()
+                .insert((
+                    Some(tracked.pr.number),
+                    format!(
+                        "- #{}: {}{}\n",
+                        tracked.pr.number,
+                        titled(plan),
+                        tracked
+                            .merge_note()
+                            .map(|reason| format!(" — {}", safe(reason)))
+                            .unwrap_or_default()
+                    ),
+                ));
         } else if plan.held(&crate::plan::Hold::Batched) {
             // The batch PR is listed with the open PRs; these are its items.
             sections
@@ -647,16 +630,8 @@ pub fn render(
     for warning in &repo.tooling {
         let open: Vec<_> = prs
             .iter()
-            .zip(&fields)
-            .filter(|(_, fields)| {
-                fields.state.as_deref() == Some("open")
-                    && warning
-                        .branches
-                        .iter()
-                        .any(|b| fields.head.branch.as_deref() == Some(b.as_str()))
-            })
-            .filter_map(|(_, fields)| fields.number)
-            .map(|n| format!("#{n}"))
+            .filter(|t| t.pr.state == "open" && warning.branches.contains(&t.pr.head.branch))
+            .map(|t| format!("#{}", t.pr.number))
             .collect();
         let open = if open.is_empty() {
             String::new()
@@ -874,7 +849,7 @@ impl Fix {
 }
 fn fix_status(
     plans: &[Plan],
-    prs: &[Value],
+    prs: &[crate::pull_requests::Tracked],
     file: &str,
     dep: &Dependency,
     metadata: &patchula_report::DependencyMetadata,
@@ -896,13 +871,10 @@ fn fix_status(
             })
         })
         .collect();
-    let prs: Vec<_> = prs.iter().map(crate::pull_requests::Pr::read).collect();
     let open = |branch: &str| {
         prs.iter()
-            .find(|p| {
-                p.state.as_deref() == Some("open") && p.head.branch.as_deref() == Some(branch)
-            })
-            .and_then(|p| p.number)
+            .find(|t| t.pr.state == "open" && t.pr.head.branch == branch)
+            .map(|t| t.pr.number)
     };
     // A batched update is fixed by the batch PR, if that PR carries it.
     let batch = |key: &str| {
@@ -1210,14 +1182,11 @@ pub async fn reconcile(
         }
         number
     } else {
-        crate::pull_requests::Pr::read(
-            &client
-                .post::<Value>(&path, json!({"title":TITLE,"body":body}))
-                .await
-                .map_err(|e| e.to_string())?,
-        )
-        .number
-        .ok_or("missing created dashboard number")?
+        client
+            .post::<patchula_github::model::Issue>(&path, json!({"title":TITLE,"body":body}))
+            .await
+            .map_err(|e| e.to_string())?
+            .number
     };
     cache
         .set_state(
@@ -1378,10 +1347,16 @@ mod tests {
             title: "batched".into(),
             targets: vec![change()],
         }]);
-        let prs = vec![serde_json::json!({
-            "number": 7, "state": "open",
-            "head": {"ref": "patchula/batch"}, "body": ""
-        })];
+        let prs = vec![crate::pull_requests::Tracked::from(
+            serde_json::from_value::<patchula_github::model::PullRequest>(serde_json::json!({
+                "number": 7, "node_id": "N7", "state": "open",
+                "html_url": "https://github.com/o/r/pull/7", "title": "batch", "body": "",
+                "labels": [], "user": {"login": "bot"},
+                "head": {"ref": "patchula/batch", "sha": "h", "repo": {"full_name": "o/r"}},
+                "base": {"ref": "main", "repo": {"full_name": "o/r"}}
+            }))
+            .unwrap(),
+        )];
         let dep: patchula_report::Dependency = serde_json::from_value(serde_json::json!({
             "manager": "npm", "name": "shared", "package": "shared",
             "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},

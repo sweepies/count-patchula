@@ -864,7 +864,7 @@ fn typed(value: &Value) -> crate::webhook::Payload {
     crate::webhook::Payload::parse(value).unwrap()
 }
 fn pr() -> Value {
-    json!({"number":1,"body":format!("<!-- patchula:{} -->\n- [x] any wording <!-- patchula-recheck -->", json!({"version":1,"identity":"a".repeat(64),"update":"b".repeat(64)})),"user":{"login":"patchula[bot]"},"head":{"ref":"custom-deps/pkg-2.x","repo":{"full_name":"owner/repo"}},"base":{"repo":{"full_name":"owner/repo"}}})
+    json!({"number":1,"node_id":"PR_node1","html_url":"https://github.com/owner/repo/pull/1","state":"open","title":"Update","labels":[],"body":format!("<!-- patchula:{} -->\n- [x] any wording <!-- patchula-recheck -->", json!({"version":1,"identity":"a".repeat(64),"update":"b".repeat(64)})),"user":{"login":"patchula[bot]"},"head":{"ref":"custom-deps/pkg-2.x","sha":"a".repeat(40),"repo":{"full_name":"owner/repo"}},"base":{"ref":"main","repo":{"full_name":"owner/repo"}}})
 }
 fn signature(body: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(b"test-only-secret").unwrap();

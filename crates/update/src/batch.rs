@@ -8,7 +8,6 @@ use patchula_config::{Config, Registry};
 use patchula_manager::Dependency;
 use patchula_report::Repository;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -37,29 +36,28 @@ fn overlaps(item: &Item, targets: &[Change]) -> bool {
 /// Current items: the open batch PR's items without removed ones, plus every
 /// open update PR whose "Add to batch" box is ticked. A newly added update
 /// replaces an item for the same dependency, so its newer target wins.
-pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<Item> {
+pub fn items(
+    prs: &[pull_requests::Tracked],
+    actor: &str,
+    repo: &str,
+    batch_branch: &str,
+) -> Vec<Item> {
     let open: Vec<_> = prs
         .iter()
-        .map(|pr| (pr, pull_requests::Pr::read(pr)))
-        .filter(|(pr, fields)| {
-            fields.state.as_deref() == Some("open")
-                && pull_requests::value_owned_pr(pr, actor, repo)
-        })
+        .filter(|t| t.pr.state == "open" && pull_requests::owned_pr(&t.pr, actor, repo))
         .collect();
-    let batch = open
-        .iter()
-        .find(|(_, fields)| fields.head.branch.as_deref() == Some(batch_branch));
+    let batch = open.iter().find(|t| t.pr.head.branch == batch_branch);
     let mut items: Vec<Item> = batch
-        .and_then(|(pr, _)| {
+        .and_then(|t| {
             markers::section_json::<Vec<Item>>(
-                pull_requests::value_body(pr),
+                pull_requests::body(&t.pr),
                 markers::ITEMS,
                 markers::PAYLOAD,
             )
         })
         .unwrap_or_default();
-    if let Some((pr, _)) = batch {
-        let removed: BTreeSet<_> = markers::ticked_lines(pull_requests::value_body(pr))
+    if let Some(t) = batch {
+        let removed: BTreeSet<_> = markers::ticked_lines(pull_requests::body(&t.pr))
             .into_iter()
             .filter_map(|line| {
                 markers::line_end(line, markers::REMOVE, usize::MAX).map(str::to_owned)
@@ -67,18 +65,18 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
             .collect();
         items.retain(|item| !removed.contains(&item.origin));
     }
-    for (pr, fields) in &open {
-        if fields.head.branch.as_deref() == Some(batch_branch)
-            || !markers::ticked_lines(pull_requests::value_body(pr))
+    for t in &open {
+        if t.pr.head.branch == batch_branch
+            || !markers::ticked_lines(pull_requests::body(&t.pr))
                 .iter()
                 .any(|line| line.ends_with(markers::ADD))
         {
             continue;
         }
         let (Some(origin), Some(targets)) = (
-            pull_requests::marker_update(pull_requests::value_body(pr)),
+            pull_requests::marker_update(pull_requests::body(&t.pr)),
             markers::section_json::<Vec<Change>>(
-                pull_requests::value_body(pr),
+                pull_requests::body(&t.pr),
                 markers::TARGETS,
                 markers::PAYLOAD,
             ),
@@ -91,8 +89,8 @@ pub fn items(prs: &[Value], actor: &str, repo: &str, batch_branch: &str) -> Vec<
         items.retain(|item| item.origin != origin && !overlaps(item, &targets));
         items.push(Item {
             origin,
-            number: fields.number,
-            title: fields.title.clone().unwrap_or_default(),
+            number: Some(t.pr.number),
+            title: t.pr.title.clone(),
             targets,
         });
     }
@@ -109,7 +107,7 @@ pub fn apply(
     config: &Config,
     dependencies: &[Dependency],
     snapshot: &Snapshot,
-    prs: &[Value],
+    prs: &[pull_requests::Tracked],
     actor: &str,
     allow_pending: bool,
     since: Option<chrono::DateTime<chrono::Utc>>,
@@ -217,10 +215,18 @@ mod tests {
             image: None,
         }
     }
-    fn pr(number: u64, branch: &str, body: String) -> Value {
-        json!({"number":number,"title":format!("update {number}"),"state":"open","body":body,
-            "user":{"login":"bot"},"head":{"ref":branch,"repo":{"full_name":"o/r"}},
-            "base":{"repo":{"full_name":"o/r"}}})
+    fn pr(number: u64, branch: &str, body: String) -> pull_requests::Tracked {
+        pull_requests::Tracked::from(
+            serde_json::from_value::<patchula_github::model::PullRequest>(
+                json!({"number":number,"node_id":format!("N{number}"),
+                "html_url":"https://github.com/o/r/pull/1",
+                "title":format!("update {number}"),"state":"open","body":body,
+                "labels":[],"user":{"login":"bot"},
+                "head":{"ref":branch,"sha":"head","repo":{"full_name":"o/r"}},
+                "base":{"ref":"main","repo":{"full_name":"o/r"}}}),
+            )
+            .expect("a complete REST pull request"),
+        )
     }
     fn update_body(key: &str, targets: &[Change], ticked: bool) -> String {
         format!(

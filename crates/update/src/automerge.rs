@@ -675,6 +675,23 @@ mod tests {
         let history = dashboard_history(&inventory, Vec::new(), &[]);
         assert_eq!(history.merged.len(), 1);
         assert_eq!(history.merged[0].number, Some(42));
+        let repo: Repository = serde_json::from_value(json!({
+            "repository": "o/r", "status": "complete", "reason": null, "packageFiles": []
+        }))
+        .unwrap();
+        let text = crate::dashboard::render(
+            &repo,
+            &[],
+            &history.open,
+            &history.merged,
+            patchula_words::Recheck::NextRun,
+            None,
+        );
+        // The line the old `Vec<Value>` rendering produced for this row.
+        assert!(
+            text.contains("- #42: chore(deps): bump serde — merged by patchula (squash)\n"),
+            "{text}"
+        );
     }
 
     /// Every field `same_head` compares is required in the type: a fresh

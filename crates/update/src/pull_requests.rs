@@ -6,8 +6,7 @@ use patchula_github::{Client, model};
 use patchula_manager::hash;
 use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus};
 use patchula_words::{Recheck, Severity, ToolingDetail, ToolingRule, Update as UpdateKind};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const BODY_LIMIT: usize = 32_000;
@@ -115,17 +114,6 @@ impl MergeNote {
             Self::Reason(reason) => reason,
         }
     }
-    /// The note a written `patchula_merge` string reads back as.
-    #[allow(dead_code)] // resync is already gone with the typed automerge.
-    fn from_text(text: &str) -> Self {
-        match text {
-            "auto-merge waiting for a later run with a verified receipt and passing checks" => {
-                Self::Waiting
-            }
-            "native auto-merge enabled" => Self::Native,
-            reason => Self::Reason(reason.into()),
-        }
-    }
 }
 /// A pull request as the lifecycle carries it: the decoded REST object
 /// plus the Count's own merge note, for which GitHub's object has no
@@ -154,7 +142,6 @@ impl Tracked {
     }
     /// Mark the PR merged at `at` — the local edit applied after the
     /// Count's own merge answers.
-    #[allow(dead_code)] // Used by the auto-merge commit.
     pub(crate) fn mark_merged(&mut self, at: String) {
         self.pr.state = "closed".into();
         self.pr.merged_at = Some(at);
@@ -174,51 +161,6 @@ impl Tracked {
             .into_iter()
             .map(|name| model::Label { name })
             .collect();
-    }
-    /// The REST-shaped `Value` the interim `Value` readers below consume:
-    /// every field the type holds, plus the merge note under its old
-    /// `patchula_merge` key.
-    pub fn value(&self) -> Value {
-        let repo = |r: &Option<model::PullRequestRepository>| {
-            r.as_ref()
-                .map_or(Value::Null, |r| json!({"full_name": r.full_name}))
-        };
-        let mut value = json!({
-            "node_id": self.pr.node_id,
-            "number": self.pr.number,
-            "html_url": self.pr.html_url,
-            "state": self.pr.state,
-            "title": self.pr.title,
-            "body": self.pr.body,
-            "user": self.pr.user.as_ref().map(|u| json!({"login": u.login})),
-            "draft": self.pr.draft,
-            "labels": self.pr.labels.iter().map(|l| json!({"name": l.name})).collect::<Vec<_>>(),
-            "merged_at": self.pr.merged_at,
-            "auto_merge": self.pr.auto_merge.as_ref().map(|_| json!({})),
-            "mergeable": self.pr.mergeable,
-            "mergeable_state": self.pr.mergeable_state,
-            "created_at": self.pr.created_at,
-            "updated_at": self.pr.updated_at,
-            "head": {"ref": self.pr.head.branch, "sha": self.pr.head.sha,
-                "repo": repo(&self.pr.head.repo)},
-            "base": {"ref": self.pr.base.branch, "repo": repo(&self.pr.base.repo)},
-        });
-        if let Some(note) = self.merge_note() {
-            value["patchula_merge"] = json!(note);
-        }
-        value
-    }
-    /// Fold mutations a `&mut Value` reader made back into the typed fields.
-    /// A value that no longer decodes keeps the old fields: it cannot
-    /// fabricate fields the type requires.
-    #[allow(dead_code)] // No `&mut Value` readers remain.
-    pub(crate) fn resync(&mut self, mut value: Value) {
-        if let Some(note) = value["patchula_merge"].take().as_str() {
-            self.merge_note = Some(MergeNote::from_text(note));
-        }
-        if let Ok(pr) = serde_json::from_value::<model::PullRequest>(value) {
-            self.pr = pr;
-        }
     }
 }
 impl From<model::PullRequest> for Tracked {
@@ -2255,80 +2197,5 @@ mod tracked_tests {
         .unwrap();
         assert_eq!(tracked.pr.labels[0].name, "dependencies");
         assert_eq!(tracked.pr.user.unwrap().login, "patchula[bot]");
-    }
-}
-
-// The `Value` readers the automerge, dashboard, batch and server callers
-// still use; the commits that type those callers remove them.
-/// The note a PR object carries, if any.
-pub(crate) fn merge_note(pr: &Value) -> Option<&str> {
-    pr["patchula_merge"].as_str()
-}
-/// The body text of a pull-request `Value`; a missing or null `body`
-/// reads as empty.
-pub(crate) fn value_body(pr: &Value) -> &str {
-    pr["body"].as_str().unwrap_or("")
-}
-/// A `Value` PR belongs to the Count when its author is him, both ends
-/// live in the repository and the body carries his ownership marker.
-pub fn value_owned_pr(pr: &Value, actor: &str, repo: &str) -> bool {
-    pr["user"]["login"] == actor
-        && pr["head"]["repo"]["full_name"]
-            .as_str()
-            .is_some_and(|s| same_repository(s, repo))
-        && pr["base"]["repo"]["full_name"]
-            .as_str()
-            .is_some_and(|s| same_repository(s, repo))
-        && markers::ownership_marker(value_body(pr)).is_some()
-}
-/// A `Value` PR's re-check box is ticked exactly once.
-pub fn value_checked(pr: &Value) -> bool {
-    value_body(pr).matches(markers::RECHECK).count() == 1
-        && markers::ticked_lines(value_body(pr))
-            .iter()
-            .any(|line| line.ends_with(markers::RECHECK))
-}
-/// The pull-request fields the dashboard and batch read, decoded once per
-/// PR object rather than re-indexed at every use. Each field reads as the
-/// `Value` indexing it replaces did: a missing or mistyped field is absent.
-#[derive(Deserialize, Default)]
-pub(crate) struct Pr {
-    /// `open` or `closed`.
-    pub state: Option<String>,
-    pub number: Option<u64>,
-    pub title: Option<String>,
-    /// The merge timestamp; `None` while open or closed unmerged.
-    pub merged_at: Option<Value>,
-    /// The body text, for hashing and marker reads.
-    #[allow(dead_code)]
-    pub body: Option<String>,
-    #[serde(default)]
-    pub head: PrHead,
-}
-#[derive(Deserialize, Default)]
-pub(crate) struct PrHead {
-    /// The head branch's name (`head.ref`).
-    #[serde(rename = "ref", default)]
-    pub branch: Option<String>,
-    /// The head commit (`head.sha`).
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub sha: Option<String>,
-}
-impl Pr {
-    pub(crate) fn read(pr: &Value) -> Self {
-        fn field<T: serde::de::DeserializeOwned>(pr: &Value, key: &str) -> Option<T> {
-            pr.get(key)
-                .and_then(|value| Option::<T>::deserialize(value).ok())
-                .flatten()
-        }
-        Self {
-            state: field(pr, "state"),
-            number: field(pr, "number"),
-            title: field(pr, "title"),
-            merged_at: field(pr, "merged_at"),
-            body: field(pr, "body"),
-            head: field(pr, "head").unwrap_or_default(),
-        }
     }
 }
