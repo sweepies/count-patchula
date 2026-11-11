@@ -183,6 +183,29 @@ fn a_prerelease_only_fix_is_not_proposed_to_a_stable_baseline() {
     assert_eq!(evaluation.updates, Vec::new());
 }
 
+/// A GitLab CI ref that names a branch, not a tag, has no version to compare:
+/// it is never looked up. A version-shaped ref is.
+#[test]
+fn a_gitlab_forge_branch_ref_needs_no_lookup() {
+    for manager in [Manager::Gitlabci, Manager::GitlabciInclude] {
+        let mut dep = dep(manager, DependencyKind::Action);
+        dep.source = Source::ForgeTags;
+        dep.scheme = Scheme::Loose;
+        dep.current = "main".into();
+        dep.resolved = Some("main".into());
+        assert!(
+            !eval().needs_lookup(&dep),
+            "{manager:?} branch ref should not need a lookup"
+        );
+        dep.current = "v1.2.0".into();
+        dep.resolved = Some("v1.2.0".into());
+        assert!(
+            eval().needs_lookup(&dep),
+            "{manager:?} tag ref should need a lookup"
+        );
+    }
+}
+
 fn now() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .unwrap()

@@ -43,6 +43,10 @@ async fn report(tree: &std::path::Path, cassette: Cassette) -> patchula_report::
 }
 
 fn interaction(url: &str, accept: &str, body: serde_json::Value) -> Interaction {
+    raw(url, accept, Body::Json(body))
+}
+
+fn raw(url: &str, accept: &str, body: Body) -> Interaction {
     Interaction {
         request: RecordedRequest {
             method: "GET".into(),
@@ -53,7 +57,7 @@ fn interaction(url: &str, accept: &str, body: serde_json::Value) -> Interaction 
         response: RecordedResponse {
             status: 200,
             headers: Default::default(),
-            body: Body::Json(body),
+            body,
         },
     }
 }
@@ -155,4 +159,64 @@ async fn a_composer_version_recorded_by_its_lockfile_reports_declared() {
         .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
     assert_eq!(resolution.kind, patchula_words::ResolutionKind::Declared);
     assert_eq!(resolution.version, "2.5.0");
+}
+
+/// A `Cargo.lock` records where Cargo resolved the range, so the report says
+/// `lockfile` — the same kind as npm. The toolchain pin beside it is declared
+/// in a version file, not resolved by the lock, so it stays `declared`.
+#[tokio::test]
+async fn a_cargo_version_recorded_by_its_lockfile_reports_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"cargo\" }\n",
+            ),
+            (
+                "Cargo.toml",
+                "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n",
+            ),
+            (
+                "Cargo.lock",
+                "version = 3\n\n[[package]]\nname = \"demo\"\nversion = \"0.1.0\"\ndependencies = [\"serde\"]\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.219\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+            ),
+            ("rust-toolchain", "1.75.0\n"),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the crates.io sparse index format".into(),
+        interactions: vec![raw(
+            "https://index.crates.io/se/rd/serde",
+            "text/plain",
+            Body::Text(
+                "{\"vers\":\"1.0.219\",\"yanked\":false}\n{\"vers\":\"1.0.220\",\"yanked\":false}\n"
+                    .into(),
+            ),
+        )],
+    };
+    let report = report(&tree, cassette).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let resolution = |name: &str| {
+        let dep = repo
+            .package_files
+            .iter()
+            .flat_map(|f| &f.dependencies)
+            .find(|d| d.name == name)
+            .unwrap_or_else(|| panic!("no {name} dependency: {repo:?}"));
+        dep.metadata
+            .as_ref()
+            .and_then(|m| m.resolution.as_ref())
+            .unwrap_or_else(|| panic!("no resolution recorded for {name}: {dep:?}"))
+    };
+    let serde = resolution("serde");
+    assert_eq!(serde.kind, patchula_words::ResolutionKind::Lockfile);
+    assert_eq!(serde.version, "1.0.219");
+    let rust = resolution("rust");
+    assert_eq!(rust.kind, patchula_words::ResolutionKind::Declared);
+    assert_eq!(rust.version, "1.75.0");
 }

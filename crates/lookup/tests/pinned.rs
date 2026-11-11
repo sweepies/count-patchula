@@ -130,11 +130,17 @@ fn pinned_precommit_branch_rev_is_an_error() {
     dep.source = Source::GithubTags;
     dep.scheme = Scheme::Loose;
     let error = eval
-        .evaluate_at(&dep, &catalog(&["v4.5.0", "v5.0.0"]), chrono::Utc::now())
+        .evaluate_at(&dep, &catalog(&["v4.5.0", "v5.0.0"]), now())
         .err()
         .expect("a branch rev cannot classify");
     assert!(
         error.contains("cannot classify current value main"),
         "{error}"
     );
+}
+
+fn now() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc)
 }
