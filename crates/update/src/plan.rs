@@ -1605,3 +1605,6 @@ mod tests {
         assert!(plain.starts_with("left-pad-"), "{plain}");
     }
 }
+
+#[cfg(test)]
+mod planning;
