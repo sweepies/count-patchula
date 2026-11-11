@@ -129,10 +129,43 @@ fn with_typename(node: &Value, typename: &str) -> Value {
     node
 }
 
+/// The `PullRequestState` a stored PR answers on GraphQL: a merged pull
+/// is `MERGED`, never `CLOSED` — `CLOSED` is "closed without being
+/// merged" (`crates/github/graphql/schema.docs.graphql`,
+/// `PullRequestState`).
+fn pull_state(pr: &Value) -> &'static str {
+    if pr["state"] == "open" {
+        "OPEN"
+    } else if !pr["merged_at"].is_null() {
+        "MERGED"
+    } else {
+        "CLOSED"
+    }
+}
+
+/// A stored PR's `created_at` as a sortable instant; a seed without one
+/// sorts oldest.
+fn pull_created(pr: &Value) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(pr["created_at"].as_str()?)
+        .ok()
+        .map(|at| at.timestamp_millis())
+}
+
+/// The `Repository` a PR's `head.repo`/`base.repo` names, or null for a
+/// repository GitHub no longer holds — a deleted fork's head reads null.
+fn pull_repo(repo: &Value) -> Value {
+    if repo.is_null() {
+        Value::Null
+    } else {
+        json!({"__typename":"Repository","nameWithOwner":repo["full_name"]})
+    }
+}
+
 /// A `PullRequest` node for the GraphQL connections: the union of fields
-/// the `nodes` and `associatedPullRequests` answers carry, built from the
-/// stored REST object and stamped with `__typename` so the pruner's
-/// inline-fragment matching sees the node's type.
+/// the `nodes`, `pullRequests` and `associatedPullRequests` answers
+/// carry, built from the stored REST object and stamped with
+/// `__typename` so the pruner's inline-fragment matching sees the node's
+/// type.
 fn pull_node(pr: &Value, state: &State) -> Value {
     // `PullRequest.title` and `.body` are `String!`: GitHub answers the
     // empty string for a missing body, never null.
@@ -141,14 +174,13 @@ fn pull_node(pr: &Value, state: &State) -> Value {
     json!({"__typename":"PullRequest",
     "number":pr["number"],"id":pr["node_id"],"url":pr["html_url"],
     "title":title,"body":body,
-    "state":if pr["state"] == "open" {"OPEN"} else {"CLOSED"},
+    "state":pull_state(pr),
     "merged":!pr["merged_at"].is_null(),
+    "createdAt":pr["created_at"],
     "headRefName":pr["head"]["ref"],"headRefOid":pr["head"]["sha"],
     "baseRefName":pr["base"]["ref"],"author":graphql_author(pr),
-    "headRepository":{"__typename":"Repository",
-        "nameWithOwner":pr["head"]["repo"]["full_name"]},
-    "baseRepository":{"__typename":"Repository",
-        "nameWithOwner":pr["base"]["repo"]["full_name"]},
+    "headRepository":pull_repo(&pr["head"]["repo"]),
+    "baseRepository":pull_repo(&pr["base"]["repo"]),
     "labels":{"__typename":"LabelConnection","nodes":pr["labels"],
         "pageInfo":{"__typename":"PageInfo",
             "hasNextPage":state.settings.label_next_page == pr["number"].as_u64()}},
@@ -163,7 +195,8 @@ fn pull_node(pr: &Value, state: &State) -> Value {
 /// to one request.
 #[derive(Default)]
 pub struct Settings {
-    /// `pulls` listing page size; `None` means GitHub's 100.
+    /// `pulls` listing page size; `None` means the query's `per_page`
+    /// (GitHub's default is 30).
     pub pr_page_size: Option<usize>,
     /// Inventory `refs` connection page size.
     pub ref_page_size: Option<usize>,
@@ -318,6 +351,16 @@ impl Repository {
     }
 }
 
+/// What one route served: how many requests it answered and the response
+/// bytes it returned — the counts a listing measurement reports.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Traffic {
+    /// Requests answered on the route.
+    pub requests: usize,
+    /// Response body bytes the route served.
+    pub bytes: usize,
+}
+
 /// The server's state: REST-shaped JSON in GitHub's terms — an independent
 /// oracle, never the client's typed model.
 pub struct State {
@@ -338,6 +381,10 @@ pub struct State {
     pub writes: Vec<(String, Value)>,
     /// ReleaseNotes operation bodies, in arrival order.
     pub release_queries: Vec<Value>,
+    /// Per route — `"GET /repos/{repo}/pulls?state=all"` — how many
+    /// requests the server answered and how many body bytes it served,
+    /// since the state was made or the map last cleared.
+    pub traffic: BTreeMap<String, Traffic>,
     /// Server properties.
     pub settings: Settings,
     /// `(method, path, body)` of every request, in arrival order.
@@ -380,6 +427,7 @@ impl State {
             requests: Vec::new(),
             writes: Vec::new(),
             release_queries: Vec::new(),
+            traffic: BTreeMap::new(),
             settings: Settings::default(),
             log: Vec::new(),
             primary: String::new(),
@@ -553,10 +601,11 @@ pub struct FakeGitHub {
     transcript_checked: Arc<AtomicBool>,
 }
 
-/// A GraphQL argument: a variable lookup or a literal.
+/// A GraphQL argument: a variable lookup or a literal as JSON — enum
+/// names, ints, lists and `orderBy`-style objects all land here.
 enum Arg {
     Var(String),
-    Lit(String),
+    Lit(Value),
 }
 
 /// A GraphQL field, distilled to owned facts — routing needs no AST
@@ -678,8 +727,21 @@ impl GqlField {
             .find(|(arg, _)| arg == name)
             .and_then(|(_, value)| match value {
                 Arg::Var(var) => body["variables"][var.as_str()].as_str(),
-                Arg::Lit(text) => Some(text.as_str()),
+                Arg::Lit(text) => text.as_str(),
             })
+    }
+    /// This field's `name` argument resolved to its JSON value, for
+    /// arguments that are not strings — lists, ints, input objects. A
+    /// null answer (unset variable, literal null) is no argument.
+    fn arg_json(&self, name: &str, body: &Value) -> Option<Value> {
+        self.args
+            .iter()
+            .find(|(arg, _)| arg == name)
+            .map(|(_, value)| match value {
+                Arg::Var(var) => body["variables"][var.as_str()].clone(),
+                Arg::Lit(value) => value.clone(),
+            })
+            .filter(|value| !value.is_null())
     }
     /// Every unaliased field name in this field's subtree, its own name
     /// included when unaliased.
@@ -700,6 +762,28 @@ impl GqlField {
         let mut fields = Vec::new();
         gather(&self.selections, typename, &mut fields);
         fields
+    }
+}
+
+/// A literal GraphQL argument as JSON: strings, enums and booleans are
+/// their values, ints and floats their numbers, lists and input objects
+/// their JSON shapes. A variable nested inside a literal is null — the
+/// fake resolves variables only at the top level.
+fn arg_literal<'a>(value: &graphql_parser::query::Value<'a, &'a str>) -> Value {
+    use graphql_parser::query::Value as ArgValue;
+    match value {
+        ArgValue::Variable(_) | ArgValue::Null => Value::Null,
+        ArgValue::Int(number) => number.as_i64().map_or(Value::Null, |n| json!(n)),
+        ArgValue::Float(number) => json!(number),
+        ArgValue::String(text) => json!(text),
+        ArgValue::Boolean(flag) => json!(flag),
+        ArgValue::Enum(name) => json!(name),
+        ArgValue::List(items) => Value::Array(items.iter().map(arg_literal).collect()),
+        ArgValue::Object(map) => Value::Object(
+            map.iter()
+                .map(|(name, value)| ((*name).to_owned(), arg_literal(value)))
+                .collect(),
+        ),
     }
 }
 
@@ -751,8 +835,7 @@ fn selections<'a>(set: &'a graphql_parser::query::SelectionSet<'a, &'a str>) -> 
                             name.to_string(),
                             match value {
                                 ArgValue::Variable(var) => Arg::Var((*var).to_owned()),
-                                ArgValue::String(text) => Arg::Lit(text.clone()),
-                                _ => Arg::Lit(String::new()),
+                                other => Arg::Lit(arg_literal(other)),
                             },
                         )
                     })
@@ -979,6 +1062,65 @@ impl FakeGitHub {
             repo.blobs.insert(blob_sha(content), content.clone());
         }
     }
+    /// Seed `total` historical pull requests on the primary repository —
+    /// for the listing measurement and for tests that need a large
+    /// history. The mix is deterministic: every tenth pull is open, a
+    /// third of the rest is merged, every seventh is a foreign author's
+    /// (`octocat`) on a `topic/history-N` head; the actor's pulls sit on
+    /// `patchula/history-N`. `created_at` steps an hour back per pull
+    /// from now, so `sort=created` orders them and per-hour reads see a
+    /// real spread. Numbering continues past the pulls already present,
+    /// and only the open pulls' head branches exist.
+    pub fn seed_pulls(&self, total: u64) {
+        let mut state = self.state();
+        let actor = state.actor.clone();
+        let repo = state.repo_mut();
+        let name = repo.name.clone();
+        let base = repo.default_branch.clone();
+        let first = repo.prs.keys().max().copied().unwrap_or(0);
+        let now = chrono::Utc::now();
+        repo.trees
+            .entry("seed-tree".into())
+            .or_insert_with(|| json!([]));
+        for i in 1..=total {
+            let number = first + i;
+            let open = i % 10 == 0;
+            let merged = !open && i % 3 == 0;
+            let foreign = i % 7 == 0;
+            let created = now - chrono::Duration::hours((total - i) as i64);
+            let (login, head) = if foreign {
+                ("octocat", format!("topic/history-{i}"))
+            } else {
+                (actor.as_str(), format!("patchula/history-{i}"))
+            };
+            let sha = format!("history-{number}");
+            if open {
+                repo.refs.insert(format!("refs/heads/{head}"), sha.clone());
+                repo.commits.insert(
+                    sha.clone(),
+                    json!({"sha":sha,"tree":{"sha":"seed-tree"},
+                           "message":"seeded history","actor":login}),
+                );
+            }
+            repo.prs.insert(
+                number,
+                json!({"number":number,"node_id":format!("pr-{number}"),
+                    "html_url":format!("https://github.com/{name}/pull/{number}"),
+                    "state":if open {"open"} else {"closed"},
+                    "title":format!("history {number}"),"body":"",
+                    "head":{"ref":head,"sha":sha,"repo":{"full_name":name}},
+                    "base":{"ref":base,"repo":{"full_name":name}},
+                    "user":{"login":login},"labels":[],"auto_merge":null,
+                    "created_at":created.to_rfc3339(),
+                    "merged_at":if merged {
+                        json!((created + chrono::Duration::hours(1)).to_rfc3339())
+                    } else {
+                        Value::Null
+                    },
+                    "draft":false,"mergeable":true,"mergeable_state":"clean"}),
+            );
+        }
+    }
     /// The locked server state: arrange what the server holds and read what
     /// it recorded, in the same shapes the old fakes exposed.
     pub fn state(&self) -> MutexGuard<'_, State> {
@@ -999,6 +1141,12 @@ impl FakeGitHub {
     /// ReleaseNotes operation bodies, in arrival order.
     pub fn release_queries(&self) -> Vec<Value> {
         self.state().release_queries.clone()
+    }
+    /// Requests answered and response bytes served, keyed by
+    /// `"METHOD path?query"` — the route counts a listing measurement
+    /// reports. Clear through `state().traffic` to measure one run.
+    pub fn traffic(&self) -> BTreeMap<String, Traffic> {
+        self.state().traffic.clone()
     }
     /// Script a fault against requests matching `matcher`; finish with
     /// [`On::respond`], [`On::then_fail`] or [`On::mutate`].
@@ -1304,6 +1452,7 @@ impl FakeGitHub {
                         "pageInfo":{"__typename":"PageInfo",
                             "hasNextPage":false,"endCursor":null}}),
                 "refs" => self.refs_connection(repo, body, state),
+                "pullRequests" => self.pull_requests(child, repo, body, state),
                 "release" => {
                     if !release_logged {
                         state.release_queries.push(body.clone());
@@ -1369,6 +1518,137 @@ impl FakeGitHub {
                             "endCursor":next.to_string()}}});
         }
         object
+    }
+    /// `repository { pullRequests }` — the `PullRequestConnection` the
+    /// schema types (`schema.docs.graphql`, `Repository.pullRequests`).
+    /// Modeled arguments: `headRefName` (exact head ref filter),
+    /// `states` (`OPEN`/`CLOSED`/`MERGED`; `CLOSED` is closed-unmerged),
+    /// `first`/`after` (forward paging over an index cursor, as
+    /// `refs_connection` pages) and `orderBy` (`CREATED_AT` only — the
+    /// sole `IssueOrderField` the fake models — `ASC` or `DESC`; the
+    /// connection's natural order is `DESC`). `labels`, `baseRefName`,
+    /// `before`, `last` and any other argument are unmodeled and panic,
+    /// as does an `orderBy.field` that is not `CREATED_AT`.
+    fn pull_requests(
+        &self,
+        field: &GqlField,
+        repo: &Repository,
+        body: &Value,
+        state: &State,
+    ) -> Value {
+        for (name, _) in &field.args {
+            assert!(
+                matches!(
+                    name.as_str(),
+                    "headRefName" | "states" | "first" | "after" | "orderBy"
+                ),
+                "unmodeled pullRequests argument {name}"
+            );
+        }
+        // A null or unset variable leaves a nullable argument out; a
+        // non-string value is a GitHub validation error, never no filter.
+        let string_arg = |name: &str| {
+            field.arg_json(name, body).map(|value| {
+                value
+                    .as_str()
+                    .unwrap_or_else(|| panic!("pullRequests `{name}` is not a string: {value}"))
+                    .to_owned()
+            })
+        };
+        let head = string_arg("headRefName");
+        let states: Option<BTreeSet<String>> = field.arg_json("states", body).map(|states| {
+            states
+                .as_array()
+                .unwrap_or_else(|| panic!("pullRequests `states` is not a list: {states}"))
+                .iter()
+                .map(|state| {
+                    let name = state.as_str().unwrap_or_else(|| {
+                        panic!("pullRequests `states` element is not a name: {state}")
+                    });
+                    // `PullRequestState`: anything else is a validation error.
+                    assert!(
+                        matches!(name, "OPEN" | "CLOSED" | "MERGED"),
+                        "pullRequests `states` has no value {name:?}"
+                    );
+                    name.to_owned()
+                })
+                .collect()
+        });
+        // GitHub refuses a connection without `first`/`last`
+        // (MISSING_PAGINATION_BOUNDARIES) and a `first` outside 1-100.
+        let first = field
+            .arg_json("first", body)
+            .map(|first| {
+                first
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("pullRequests `first` is not a count: {first}"))
+                    as usize
+            })
+            .unwrap_or_else(|| panic!("pullRequests without `first`"));
+        assert!(
+            (1..=100).contains(&first),
+            "pullRequests `first` {first} is outside 1-100"
+        );
+        let after = string_arg("after")
+            .map(|cursor| {
+                cursor.parse::<usize>().unwrap_or_else(|_| {
+                    panic!("pullRequests `after` {cursor:?} is not a fake cursor")
+                })
+            })
+            .unwrap_or(0);
+        // `IssueOrder` requires both `field` and `direction`, and GitHub
+        // documents no order without `orderBy`, so the fake invents none.
+        let order = field
+            .arg_json("orderBy", body)
+            .unwrap_or_else(|| panic!("pullRequests without `orderBy`"));
+        let order = order
+            .as_object()
+            .unwrap_or_else(|| panic!("pullRequests `orderBy` is not an IssueOrder: {order}"));
+        assert!(
+            order.keys().all(|key| key == "field" || key == "direction"),
+            "pullRequests `orderBy` has an unknown key: {order:?}"
+        );
+        let order_field = order.get("field").and_then(Value::as_str);
+        assert_eq!(
+            order_field,
+            Some("CREATED_AT"),
+            "unmodeled pullRequests `orderBy.field`"
+        );
+        let descending = match order.get("direction").and_then(Value::as_str) {
+            Some("DESC") => true,
+            Some("ASC") => false,
+            direction => panic!("unmodeled pullRequests `orderBy.direction` {direction:?}"),
+        };
+        let mut prs: Vec<Value> = repo
+            .prs
+            .values()
+            .filter(|pr| {
+                head.as_deref().is_none_or(|head| pr["head"]["ref"] == head)
+                    && states
+                        .as_ref()
+                        .is_none_or(|states| states.contains(pull_state(pr)))
+            })
+            .cloned()
+            .collect();
+        prs.sort_by_key(|pr| (pull_created(pr), pr["number"].as_u64().unwrap_or(0)));
+        if descending {
+            prs.reverse();
+        }
+        let nodes: Vec<Value> = prs
+            .iter()
+            .skip(after)
+            .take(first)
+            .map(|pr| pull_node(pr, state))
+            .collect();
+        let served = nodes.len();
+        let more = after + served < prs.len();
+        json!({"__typename":"PullRequestConnection","nodes":nodes,"totalCount":prs.len(),
+        "pageInfo":{"__typename":"PageInfo","hasNextPage":more,
+            "endCursor":if served > 0 {
+                json!((after + served).to_string())
+            } else {
+                Value::Null
+            }}})
     }
     fn refs_connection(&self, repo: &Repository, body: &Value, state: &State) -> Value {
         let nodes: Vec<_> = repo
@@ -1596,33 +1876,90 @@ impl FakeGitHub {
         repo.prs.get_mut(&n).unwrap()["labels"] = json!(labels);
         response(200, json!(labels))
     }
-    fn list_pulls(&self, request: &Request, repo: &Repository, size: usize) -> Response {
-        let page = request
-            .url()
-            .query_pairs()
-            .find(|(k, _)| k == "page")
-            .and_then(|(_, p)| p.parse::<usize>().ok())
-            .unwrap_or(1);
-        let prs: Vec<_> = repo
+    /// `GET /repos/{repo}/pulls`, per GitHub's REST docs
+    /// (<https://docs.github.com/en/rest/pulls/pulls#list-pull-requests>):
+    /// `state` is `open` (the default), `closed` or `all` — `closed`
+    /// covers merged pulls, whose REST state is `closed`; `sort` is
+    /// `created` (the default, and the only sort the fake models);
+    /// `direction` is `desc` (the `created` default) or `asc`;
+    /// `per_page` defaults to 30 and caps at 100; `page` defaults to 1.
+    /// The `head`/`base` filters and every other parameter are unmodeled
+    /// and panic, so a caller the fake cannot answer truthfully fails
+    /// loudly instead of reading a plausible wrong listing.
+    fn list_pulls(
+        &self,
+        request: &Request,
+        repo: &Repository,
+        page_size: Option<usize>,
+    ) -> Response {
+        let mut state = "open".to_owned();
+        let mut descending = true;
+        let mut per_page = 30_usize;
+        let mut page = 1_usize;
+        for (key, value) in request.url().query_pairs() {
+            match key.as_ref() {
+                "state" => match value.as_ref() {
+                    "open" | "closed" | "all" => state = value.into_owned(),
+                    other => panic!("unmodeled pulls `state` {other:?}"),
+                },
+                "sort" => assert_eq!(value, "created", "unmodeled pulls `sort`"),
+                "direction" => match value.as_ref() {
+                    "desc" => descending = true,
+                    "asc" => descending = false,
+                    other => panic!("unmodeled pulls `direction` {other:?}"),
+                },
+                "per_page" => {
+                    per_page = value
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|size| *size > 0)
+                        .unwrap_or_else(|| panic!("unmodeled pulls `per_page` {value:?}"));
+                }
+                "page" => {
+                    page = value
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|page| *page > 0)
+                        .unwrap_or_else(|| panic!("unmodeled pulls `page` {value:?}"));
+                }
+                key => panic!("unmodeled pulls query parameter {key:?}"),
+            }
+        }
+        let size = page_size.unwrap_or(per_page.min(100));
+        let mut prs: Vec<Value> = repo
             .prs
             .values()
-            .rev()
-            .skip((page - 1) * size)
-            .take(size)
+            .filter(|pr| match state.as_str() {
+                "open" => pr["state"] == "open",
+                "closed" => pr["state"] == "closed",
+                _ => true,
+            })
             .cloned()
             .collect();
+        // `sort=created`: GitHub orders by `created_at`; the pull number
+        // breaks ties the way it does for same-second creations.
+        prs.sort_by_key(|pr| (pull_created(pr), pr["number"].as_u64().unwrap_or(0)));
+        if descending {
+            prs.reverse();
+        }
+        let total = prs.len();
+        let prs: Vec<Value> = prs.into_iter().skip((page - 1) * size).take(size).collect();
         let mut reply = response(200, json!(prs));
-        if page * size < repo.prs.len() {
-            reply.headers.insert(
-                "link",
-                format!(
-                    "<https://api.github.com/repos/{}/pulls?state=all&page={}>; rel=\"next\"",
-                    repo.name,
-                    page + 1
-                )
-                .parse()
-                .unwrap(),
-            );
+        if page * size < total {
+            // GitHub's `next` link repeats the request's whole query with
+            // only `page` advanced; the client follows it verbatim.
+            let mut next = request.url().clone();
+            let query: Vec<(String, String)> = request
+                .url()
+                .query_pairs()
+                .filter(|(key, _)| key != "page")
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .chain([("page".to_owned(), (page + 1).to_string())])
+                .collect();
+            next.query_pairs_mut().clear().extend_pairs(query);
+            reply
+                .headers
+                .insert("link", format!("<{next}>; rel=\"next\"").parse().unwrap());
         }
         reply
     }
@@ -1779,7 +2116,7 @@ impl FakeGitHub {
         if ctx.method == Method::GET && rest.starts_with("pulls/") {
             return self.pull_read(ctx, &full, state);
         }
-        let size = state.settings.pr_page_size.unwrap_or(100);
+        let page_size = state.settings.pr_page_size;
         let truncated = state.settings.truncated;
         let unsigned = state.settings.unsigned;
         let actor = state.actor.clone();
@@ -1817,7 +2154,7 @@ impl FakeGitHub {
             self.put_labels(rest, body, repo)
         } else if ctx.method == Method::GET {
             if rest == "pulls" {
-                self.list_pulls(request, repo, size)
+                self.list_pulls(request, repo, page_size)
             } else if rest == "branches" {
                 let branches: Vec<_> = repo
                     .refs
@@ -2074,6 +2411,19 @@ impl Transport for FakeGitHub {
                 reply
             }
         };
+        let route = format!(
+            "{} {}{}",
+            request.method(),
+            path,
+            request
+                .url()
+                .query()
+                .map(|query| format!("?{query}"))
+                .unwrap_or_default()
+        );
+        let route = state.traffic.entry(route).or_default();
+        route.requests += 1;
+        route.bytes += reply.body.len();
         Box::pin(async move {
             if !latency.is_zero() {
                 tokio::time::sleep(latency).await;
@@ -2297,6 +2647,552 @@ mod tests {
         );
     }
 
+    /// A request the fake will answer: GitHub requests carry a sensitive
+    /// bearer token; `body` becomes the JSON request body.
+    fn request(method: Method, path: &str, body: Option<Value>) -> Request {
+        let mut request = Request::new(
+            method,
+            format!("https://api.github.com{path}").parse().unwrap(),
+        );
+        let mut token = reqwest::header::HeaderValue::from_static("token");
+        token.set_sensitive(true);
+        request
+            .headers_mut()
+            .insert(reqwest::header::AUTHORIZATION, token);
+        if let Some(body) = body {
+            *request.body_mut() = Some(serde_json::to_vec(&body).unwrap().into());
+        }
+        request
+    }
+
+    /// A GraphQL POST body: `query` plus `variables`.
+    fn graphql(query: &str, variables: Value) -> Request {
+        request(
+            Method::POST,
+            "/graphql",
+            Some(json!({"query":query,"variables":variables})),
+        )
+    }
+
+    /// The pull numbers a `pulls` listing page answers, in order.
+    async fn listed(github: &FakeGitHub, query: &str) -> (Vec<u64>, Response) {
+        let reply = github
+            .send(request(
+                Method::GET,
+                &format!("/repos/acme/app/pulls{query}"),
+                None,
+            ))
+            .await
+            .unwrap();
+        let prs: Vec<Value> = serde_json::from_slice(&reply.body).unwrap();
+        let numbers = prs
+            .iter()
+            .map(|pr| pr["number"].as_u64().unwrap())
+            .collect();
+        (numbers, reply)
+    }
+
+    /// A stored REST pull for seeding: `created` is an RFC 3339 instant,
+    /// `merged` stamps `merged_at` an hour on.
+    fn stored_pr(number: u64, head: &str, login: &str, state: &str, created: &str) -> Value {
+        json!({"number":number,"node_id":format!("pr-{number}"),
+            "html_url":format!("https://github.com/acme/app/pull/{number}"),
+            "state":state,"title":format!("pull {number}"),"body":"",
+            "head":{"ref":head,"sha":format!("sha-{number}"),"repo":{"full_name":"acme/app"}},
+            "base":{"ref":"main","repo":{"full_name":"acme/app"}},
+            "user":{"login":login},"labels":[],"auto_merge":null,
+            "created_at":created,
+            "merged_at":Value::Null,
+            "draft":false,"mergeable":true,"mergeable_state":"clean"})
+    }
+
+    /// `state=closed` covers merged pulls (their REST state is `closed`);
+    /// the default is `open`, per GitHub's REST docs.
+    #[tokio::test]
+    async fn the_pulls_listing_filters_by_state() {
+        let github = FakeGitHub::new("acme/app");
+        {
+            let mut state = github.state();
+            let repo = state.repo_mut();
+            repo.prs.insert(
+                1,
+                stored_pr(
+                    1,
+                    "patchula/a",
+                    "patchula[bot]",
+                    "open",
+                    "2026-01-03T00:00:00Z",
+                ),
+            );
+            repo.prs.insert(
+                2,
+                stored_pr(
+                    2,
+                    "patchula/b",
+                    "patchula[bot]",
+                    "closed",
+                    "2026-01-02T00:00:00Z",
+                ),
+            );
+            let mut merged = stored_pr(
+                3,
+                "patchula/c",
+                "patchula[bot]",
+                "closed",
+                "2026-01-01T00:00:00Z",
+            );
+            merged["merged_at"] = json!("2026-01-01T01:00:00Z");
+            repo.prs.insert(3, merged);
+        }
+        assert_eq!(listed(&github, "").await.0, [1]);
+        assert_eq!(listed(&github, "?state=open").await.0, [1]);
+        assert_eq!(listed(&github, "?state=closed").await.0, [2, 3]);
+        assert_eq!(listed(&github, "?state=all").await.0, [1, 2, 3]);
+        github.transcript_checked.store(true, Ordering::Relaxed);
+    }
+
+    /// `sort=created&direction=desc` is newest first; `asc` reverses;
+    /// `per_page` sizes the page and the `Link` header walks it.
+    #[tokio::test]
+    async fn the_pulls_listing_orders_by_created_and_pages() {
+        let github = FakeGitHub::new("acme/app");
+        {
+            let mut state = github.state();
+            let repo = state.repo_mut();
+            // Numbers deliberately disagree with creation order.
+            repo.prs.insert(
+                1,
+                stored_pr(1, "b", "patchula[bot]", "closed", "2026-01-03T00:00:00Z"),
+            );
+            repo.prs.insert(
+                2,
+                stored_pr(2, "b", "patchula[bot]", "closed", "2026-01-01T00:00:00Z"),
+            );
+            repo.prs.insert(
+                3,
+                stored_pr(3, "b", "patchula[bot]", "closed", "2026-01-02T00:00:00Z"),
+            );
+        }
+        let (page, reply) =
+            listed(&github, "?state=all&sort=created&direction=desc&per_page=2").await;
+        assert_eq!(page, [1, 3]);
+        let link = reply.headers["link"].to_str().unwrap();
+        assert!(
+            link.contains("?state=all&sort=created&direction=desc&per_page=2&page=2>"),
+            "{link}"
+        );
+        assert_eq!(listed(&github, "?state=all&page=2&per_page=2").await.0, [2]);
+        assert_eq!(
+            listed(&github, "?state=all&direction=asc").await.0,
+            [2, 3, 1]
+        );
+        github.transcript_checked.store(true, Ordering::Relaxed);
+    }
+
+    /// A parameter the fake does not model — here GitHub's `head` filter —
+    /// must not silently serve an unfiltered listing.
+    #[test]
+    #[should_panic(expected = "unmodeled pulls query parameter \"head\"")]
+    fn an_unmodeled_pulls_parameter_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(request(
+            Method::GET,
+            "/repos/acme/app/pulls?head=acme:patchula%2Fa",
+            None,
+        )));
+    }
+
+    /// `sort` values other than `created` are unmodeled too.
+    #[test]
+    #[should_panic(expected = "unmodeled pulls `sort`")]
+    fn an_unmodeled_pulls_sort_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(request(
+            Method::GET,
+            "/repos/acme/app/pulls?sort=updated",
+            None,
+        )));
+    }
+
+    const CLOSED_PULLS: &str =
+        "query ClosedPulls($owner: String!, $name: String!, $head: String!, $after: String) {
+        repository(owner: $owner, name: $name) {
+            found: pullRequests(headRefName: $head, states: [CLOSED], first: 2, after: $after,
+                                orderBy: {field: CREATED_AT, direction: DESC}) {
+                pageInfo { hasNextPage endCursor }
+                nodes { id number url title body state merged createdAt
+                        headRefName headRefOid baseRefName
+                        author { __typename login }
+                        headRepository { nameWithOwner } baseRepository { nameWithOwner } }
+            }
+        }
+    }";
+
+    async fn closed_pulls(github: &FakeGitHub, head: &str, after: Value) -> Value {
+        let reply = github
+            .send(graphql(
+                CLOSED_PULLS,
+                json!({
+                    "owner":"acme","name":"app","head":head,"after":after,
+                }),
+            ))
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&reply.body).unwrap();
+        body["data"]["repository"]["found"].clone()
+    }
+
+    /// Several aliased `pullRequests` fields in one document each get
+    /// their own filter; `states: [CLOSED]` means closed-unmerged, so a
+    /// merged pull and another branch's pull stay out; `first`/`after`
+    /// page the branch's pulls.
+    #[tokio::test]
+    async fn pull_requests_filters_by_branch_state_and_pages() {
+        let github = FakeGitHub::new("acme/app");
+        {
+            let mut state = github.state();
+            let repo = state.repo_mut();
+            repo.prs.insert(
+                1,
+                stored_pr(
+                    1,
+                    "patchula/a",
+                    "patchula[bot]",
+                    "closed",
+                    "2026-01-01T00:00:00Z",
+                ),
+            );
+            repo.prs.insert(
+                2,
+                stored_pr(
+                    2,
+                    "patchula/a",
+                    "patchula[bot]",
+                    "closed",
+                    "2026-01-03T00:00:00Z",
+                ),
+            );
+            repo.prs.insert(
+                3,
+                stored_pr(
+                    3,
+                    "patchula/a",
+                    "patchula[bot]",
+                    "closed",
+                    "2026-01-02T00:00:00Z",
+                ),
+            );
+            let mut merged = stored_pr(
+                4,
+                "patchula/a",
+                "patchula[bot]",
+                "closed",
+                "2026-01-04T00:00:00Z",
+            );
+            merged["merged_at"] = json!("2026-01-04T01:00:00Z");
+            repo.prs.insert(4, merged);
+            repo.prs.insert(
+                5,
+                stored_pr(
+                    5,
+                    "patchula/b",
+                    "patchula[bot]",
+                    "closed",
+                    "2026-01-05T00:00:00Z",
+                ),
+            );
+            repo.prs.insert(
+                6,
+                stored_pr(
+                    6,
+                    "patchula/a",
+                    "patchula[bot]",
+                    "open",
+                    "2026-01-06T00:00:00Z",
+                ),
+            );
+        }
+        let first = closed_pulls(&github, "patchula/a", Value::Null).await;
+        // Newest closed-unmerged first; the merged and the open pull stay out.
+        assert_eq!(
+            first["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n["number"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert_eq!(first["pageInfo"]["hasNextPage"], true);
+        let cursor = first["pageInfo"]["endCursor"].as_str().unwrap().to_owned();
+        let node = &first["nodes"][0];
+        assert_eq!(node["state"], "CLOSED");
+        assert_eq!(node["merged"], false);
+        assert_eq!(node["createdAt"], "2026-01-03T00:00:00Z");
+        assert_eq!(node["id"], "pr-2");
+        assert_eq!(node["headRefName"], "patchula/a");
+        assert_eq!(
+            node["author"],
+            json!({"__typename":"Bot","login":"patchula"})
+        );
+        assert_eq!(node["headRepository"]["nameWithOwner"], "acme/app");
+        assert_eq!(node["baseRepository"]["nameWithOwner"], "acme/app");
+        let second = closed_pulls(&github, "patchula/a", json!(cursor)).await;
+        assert_eq!(
+            second["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n["number"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [1]
+        );
+        assert_eq!(second["pageInfo"]["hasNextPage"], false);
+        // A second alias in the same document filters independently.
+        let reply = github
+            .send(graphql(
+                "query($owner: String!, $name: String!) {
+                    repository(owner: $owner, name: $name) {
+                        a: pullRequests(headRefName: \"patchula/a\", states: [MERGED], first: 10, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number state } }
+                        b: pullRequests(headRefName: \"patchula/b\", states: [CLOSED], first: 10, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number state } }
+                    }
+                }",
+                json!({"owner":"acme","name":"app"}),
+            ))
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(body["data"]["repository"]["a"]["nodes"][0]["number"], 4);
+        assert_eq!(
+            body["data"]["repository"]["a"]["nodes"][0]["state"],
+            "MERGED"
+        );
+        assert_eq!(body["data"]["repository"]["b"]["nodes"][0]["number"], 5);
+        github.transcript_checked.store(true, Ordering::Relaxed);
+    }
+
+    /// A pull whose head fork is gone answers `headRepository: null`, as
+    /// GitHub does; the base repository still resolves.
+    #[tokio::test]
+    async fn pull_requests_reports_null_for_a_deleted_fork() {
+        let github = FakeGitHub::new("acme/app");
+        {
+            let mut state = github.state();
+            let mut pr = stored_pr(
+                1,
+                "patchula/a",
+                "patchula[bot]",
+                "closed",
+                "2026-01-01T00:00:00Z",
+            );
+            pr["head"]["repo"] = Value::Null;
+            state.repo_mut().prs.insert(1, pr);
+        }
+        let reply = github
+            .send(graphql(
+                "query($owner: String!, $name: String!) {
+                    repository(owner: $owner, name: $name) {
+                        pullRequests(headRefName: \"patchula/a\", states: [CLOSED], first: 10, orderBy: {field: CREATED_AT, direction: DESC}) {
+                            nodes { headRepository { nameWithOwner } baseRepository { nameWithOwner } }
+                        }
+                    }
+                }",
+                json!({"owner":"acme","name":"app"}),
+            ))
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&reply.body).unwrap();
+        let node = &body["data"]["repository"]["pullRequests"]["nodes"][0];
+        assert_eq!(node["headRepository"], Value::Null);
+        assert_eq!(node["baseRepository"]["nameWithOwner"], "acme/app");
+        github.transcript_checked.store(true, Ordering::Relaxed);
+    }
+
+    /// The connection's answer prunes to the selection: unselected node
+    /// and pageInfo fields stay absent, and an argument the fake does not
+    /// model is refused.
+    #[tokio::test]
+    async fn pull_requests_prunes_to_the_selection() {
+        let github = FakeGitHub::new("acme/app");
+        github.state().repo_mut().prs.insert(
+            1,
+            stored_pr(
+                1,
+                "patchula/a",
+                "patchula[bot]",
+                "closed",
+                "2026-01-01T00:00:00Z",
+            ),
+        );
+        let reply = github
+            .send(graphql(
+                "query($owner: String!, $name: String!) {
+                    repository(owner: $owner, name: $name) {
+                        pullRequests(first: 10, orderBy: {field: CREATED_AT, direction: DESC}) {
+                            nodes { number }
+                            pageInfo { hasNextPage }
+                        }
+                    }
+                }",
+                json!({"owner":"acme","name":"app"}),
+            ))
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&reply.body).unwrap();
+        let connection = &body["data"]["repository"]["pullRequests"];
+        assert_eq!(connection["nodes"], json!([{"number":1}]));
+        assert_eq!(connection["pageInfo"], json!({"hasNextPage":false}));
+        github.transcript_checked.store(true, Ordering::Relaxed);
+    }
+
+    /// `baseRefName` is a schema argument the fake does not model.
+    #[test]
+    #[should_panic(expected = "unmodeled pullRequests argument baseRefName")]
+    fn an_unmodeled_pull_requests_argument_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(graphql(
+            "query { repository(owner: \"acme\", name: \"app\") {
+                pullRequests(baseRefName: \"main\") { nodes { number } } } }",
+            json!({}),
+        )));
+    }
+
+    fn pull_requests_with(arguments: &str) -> Request {
+        graphql(
+            &format!(
+                "query {{ repository(owner: \"acme\", name: \"app\") {{
+                    pullRequests({arguments}) {{ nodes {{ number }} }} }} }}"
+            ),
+            json!({}),
+        )
+    }
+
+    /// GitHub refuses a connection without `first`/`last`.
+    #[test]
+    #[should_panic(expected = "pullRequests without `first`")]
+    fn pull_requests_without_first_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(pull_requests_with(
+            "orderBy: {field: CREATED_AT, direction: DESC}",
+        )));
+    }
+
+    /// GitHub refuses a `first` above 100.
+    #[test]
+    #[should_panic(expected = "outside 1-100")]
+    fn pull_requests_with_too_large_a_page_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(pull_requests_with(
+            "first: 101, orderBy: {field: CREATED_AT, direction: DESC}",
+        )));
+    }
+
+    /// A `PullRequestState` GitHub does not have is a validation error,
+    /// never an empty answer.
+    #[test]
+    #[should_panic(expected = "has no value \"CLOSE\"")]
+    fn pull_requests_with_an_unknown_state_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(pull_requests_with(
+            "states: [CLOSE], first: 10, orderBy: {field: CREATED_AT, direction: DESC}",
+        )));
+    }
+
+    /// GitHub documents no order without `orderBy`, so the fake invents none.
+    #[test]
+    #[should_panic(expected = "pullRequests without `orderBy`")]
+    fn pull_requests_without_an_order_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(pull_requests_with("first: 10")));
+    }
+
+    /// `IssueOrder.direction` is required.
+    #[test]
+    #[should_panic(expected = "unmodeled pullRequests `orderBy.direction`")]
+    fn pull_requests_with_a_partial_order_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(pull_requests_with(
+            "first: 10, orderBy: {field: CREATED_AT}",
+        )));
+    }
+
+    /// The `next` link repeats the whole query, so later pages keep the
+    /// caller's page size and direction.
+    #[tokio::test]
+    async fn the_pulls_next_link_keeps_the_query() {
+        let github = FakeGitHub::new("acme/app");
+        github.seed_pulls(150);
+        let reply = github
+            .send(request(
+                Method::GET,
+                "/repos/acme/app/pulls?state=all&sort=created&direction=asc&per_page=100",
+                None,
+            ))
+            .await
+            .unwrap();
+        let link = reply.headers["link"].to_str().unwrap().to_owned();
+        assert_eq!(
+            link,
+            "<https://api.github.com/repos/acme/app/pulls?state=all&sort=created&direction=asc&per_page=100&page=2>; rel=\"next\""
+        );
+        github.transcript_checked.store(true, Ordering::Relaxed);
+    }
+
+    /// `traffic` counts requests by route and the response bytes served.
+    #[tokio::test]
+    async fn traffic_counts_requests_and_response_bytes() {
+        let github = FakeGitHub::new("acme/app");
+        github.state().repo_mut().prs.insert(
+            1,
+            stored_pr(
+                1,
+                "patchula/a",
+                "patchula[bot]",
+                "open",
+                "2026-01-01T00:00:00Z",
+            ),
+        );
+        github.state().traffic.clear();
+        listed(&github, "?state=all").await;
+        listed(&github, "?state=open").await;
+        listed(&github, "?state=open").await;
+        let traffic = github.traffic();
+        let open = &traffic["GET /repos/acme/app/pulls?state=open"];
+        assert_eq!(open.requests, 2);
+        assert_eq!(
+            open.bytes,
+            traffic["GET /repos/acme/app/pulls?state=all"].bytes * 2
+        );
+        assert!(open.bytes > 0);
+        github.transcript_checked.store(true, Ordering::Relaxed);
+    }
+
+    /// `seed_pulls` fills a repository's history: open, closed and merged
+    /// pulls the listings then filter and page for real.
+    #[tokio::test]
+    async fn seeded_pulls_fill_the_listings() {
+        let github = FakeGitHub::new("acme/app");
+        github.seed_pulls(100);
+        {
+            let state = github.state();
+            let repo = state.repo();
+            assert_eq!(repo.prs.len(), 100);
+            let open = repo.prs.values().filter(|pr| pr["state"] == "open").count();
+            let merged = repo
+                .prs
+                .values()
+                .filter(|pr| !pr["merged_at"].is_null())
+                .count();
+            assert_eq!(open, 10);
+            assert_eq!(merged, 30);
+        }
+        // The newest hundred closed-or-open pulls fit the default page.
+        let (page, reply) = listed(&github, "?state=all").await;
+        assert_eq!(page.len(), 30);
+        assert!(reply.headers.get("link").is_some());
+        github.transcript_checked.store(true, Ordering::Relaxed);
+    }
+
     /// The installation listings lag a deletion: a deleted repository
     /// still lists, but every REST read answers 404 and GraphQL answers
     /// NOT_FOUND. `private` rides the listings and the repository read.
@@ -2311,21 +3207,6 @@ mod tests {
             .get_mut("acme/app")
             .unwrap()
             .deleted = true;
-        let request = |method: Method, path: &str, body: Option<Value>| {
-            let mut request = Request::new(
-                method,
-                format!("https://api.github.com{path}").parse().unwrap(),
-            );
-            let mut token = reqwest::header::HeaderValue::from_static("token");
-            token.set_sensitive(true);
-            request
-                .headers_mut()
-                .insert(reqwest::header::AUTHORIZATION, token);
-            if let Some(body) = body {
-                *request.body_mut() = Some(serde_json::to_vec(&body).unwrap().into());
-            }
-            request
-        };
         let listed = github
             .send(request(Method::GET, "/installation/repositories", None))
             .await
@@ -2346,13 +3227,9 @@ mod tests {
             assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
         }
         let reply = github
-            .send(request(
-                Method::POST,
-                "/graphql",
-                Some(
-                    json!({"query":"query { repository(owner:\"acme\", name:\"app\") { id } }",
-                           "variables":{}}),
-                ),
+            .send(graphql(
+                "query { repository(owner:\"acme\", name:\"app\") { id } }",
+                json!({}),
             ))
             .await
             .unwrap();
