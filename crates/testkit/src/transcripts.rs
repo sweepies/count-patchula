@@ -20,7 +20,10 @@ use std::{
     collections::BTreeMap,
     io::Write,
     path::Path,
-    sync::{Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// Set to `1` to rewrite the transcript snapshots instead of checking them.
@@ -33,6 +36,16 @@ thread_local! {
     /// order the fake answered them. Tests run one per thread, so the log
     /// is the test's transcript.
     static TRANSCRIPT: RefCell<Log> = const { RefCell::new(Log(Vec::new())) };
+    /// The check flags of every `FakeGitHub` created on this thread, marked
+    /// by [`check`]. A fake's `Drop` panics on a flag never marked, so a
+    /// test cannot drop its fake without its requests entering a checked
+    /// transcript.
+    static WATCHED: RefCell<Vec<Weak<AtomicBool>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A `FakeGitHub` registers its check flag on the thread that made it.
+pub(crate) fn watch(flag: &Arc<AtomicBool>) {
+    WATCHED.with(|watched| watched.borrow_mut().push(Arc::downgrade(flag)));
 }
 
 /// Record one request a fake is about to answer. Called from the fake's
@@ -177,6 +190,13 @@ fn update(path: &Path, test: &str, hash: &str) {
 /// is the snapshot file beside the test binary, conventionally
 /// `tests/transcripts.tsv` under the crate's manifest directory.
 pub fn check(path: &Path) {
+    // Every fake live on this thread counts as checked, including one a
+    // test's later scenario made, whose requests joined this transcript.
+    WATCHED.with(|watched| {
+        for flag in watched.borrow().iter().flat_map(Weak::upgrade) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    });
     let requests = TRANSCRIPT.with(|log| std::mem::take(&mut log.borrow_mut().0));
     let test = std::thread::current()
         .name()
