@@ -136,6 +136,13 @@ locks.
 
 **Warm writes.** Warm runs check [write receipts](/internals/cache/#write-receipts)
 against a fresh GraphQL inventory of heads and PRs, and an exact match skips
-history, tree and PR reads and tool runs. PR lifecycle, labels and auto-merge
+history, tree and PR reads and tool runs. A full write reads only the pull
+requests each decision needs: the open PRs, paged newest first; the PRs
+created in the last hour when `prs.perHour` is set, the same listing walked
+until a page ends older than the hour; and the closed PRs of exactly the
+branches a planned update could publish on, batched into GraphQL
+`pullRequests` reads paged per branch. A branch whose closed PRs cannot be
+read leaves its plan protected rather than recreating a PR its owner closed.
+PR lifecycle, labels and auto-merge
 are in [branches and PRs](/guide/pull-requests/) and
 [auto-merge](/guide/auto-merge/).

@@ -4311,3 +4311,327 @@ async fn a_marked_ref_outside_the_prefix_counts_as_obsolete_work() {
     .unwrap();
     assert_eq!(outcome, patchula_update::RestoreOutcome::Partial);
 }
+
+/// A closed pull request on the plan's branch, as `ClosedPulls` returns
+/// it: the stored PR `create_pull` writes, then flipped closed.
+fn seeded_closed(branch: &str, body: &str, created: &str) -> Value {
+    json!({"number":2,"node_id":"pr-seeded",
+        "html_url":"https://github.com/demo/app/pull/2",
+        "state":"closed","title":"seeded","body":body,
+        "head":{"ref":branch,"sha":"seeded-sha","repo":{"full_name":"demo/app"}},
+        "base":{"ref":"main","repo":{"full_name":"demo/app"}},
+        "user":{"login":"patchula[bot]"},"labels":[],"auto_merge":null,
+        "created_at":created,"merged_at":null,
+        "draft":false,"mergeable":true,"mergeable_state":"clean"})
+}
+/// His ownership marker's bytes with `update` as the key.
+fn marker_body(update: &str) -> String {
+    format!(
+        "<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{update}\"}} -->",
+        "a".repeat(64)
+    )
+}
+
+/// More than a hundred pull requests of history no longer widen the
+/// reads: the open listing pages the open pulls alone, the planned
+/// branch's `ClosedPulls` read finds the suppressor and the plan stays
+/// held by it.
+#[tokio::test(start_paused = true)]
+async fn a_hundred_pulls_of_history_narrow_to_open_and_planned_reads() {
+    let (config, repo) = pr_config();
+    let (mut first, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut first),
+        &snapshot,
+    )
+    .await;
+    // The owner closed his PR; 150 pulls of history surround it, fifteen
+    // of them open on branches no plan wants.
+    server.state().repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+    server.seed_pulls(150);
+    let (mut plan, _) = make_plan("22.0.0");
+    {
+        let mut state = server.state();
+        state.requests.clear();
+        state.traffic.clear();
+    }
+    patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut plan),
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    assert!(
+        plan.held(&patchula_update::Hold::ClosedByOwner),
+        "{:?}",
+        plan.action()
+    );
+    let state = server.state();
+    // One open page (fifteen open of 151 pulls), no whole-history listing
+    // — `prs.perHour` is unset — and one `ClosedPulls` request.
+    let listing = |needle: &str| -> usize {
+        state
+            .traffic
+            .iter()
+            .filter(|(route, _)| route.starts_with("GET /repos/demo/app/pulls?"))
+            .filter(|(route, _)| route.contains(needle))
+            .map(|(_, traffic)| traffic.requests)
+            .sum()
+    };
+    assert_eq!(listing("state=open"), 1, "{:?}", state.traffic);
+    assert_eq!(listing("state=all"), 0, "{:?}", state.traffic);
+    assert_eq!(
+        state.requests.iter().filter(|(m, _)| m == "POST").count(),
+        1
+    );
+    check_transcript();
+}
+
+/// A closed pull request whose head repository was deleted decodes with a
+/// null `headRepository`, is not his and does not suppress the plan.
+#[tokio::test(start_paused = true)]
+async fn a_closed_pull_on_a_deleted_head_repository_does_not_suppress() {
+    let (config, repo) = pr_config();
+    let (mut plan, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let mut pr = seeded_closed(
+        &plan.action().branch,
+        &marker_body(&plan.update_key()),
+        &chrono::Utc::now().to_rfc3339(),
+    );
+    pr["head"]["repo"] = Value::Null;
+    server.state().repo_mut().prs.insert(2, pr);
+    patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut plan),
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        plan.action().status,
+        BranchStatus::Planned,
+        "{:?}",
+        plan.action()
+    );
+    check_transcript();
+}
+
+/// A branch with more closed pull requests than a page holds pages on its
+/// own: the suppressor sits on the second page and still holds the plan.
+#[tokio::test(start_paused = true)]
+async fn a_branchs_closed_pulls_page_on_their_own() {
+    let (config, repo) = pr_config();
+    let (mut plan, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let now = chrono::Utc::now();
+    {
+        let mut state = server.state();
+        let repo = state.repo_mut();
+        // 120 newer closed pulls of others', then his suppressor oldest —
+        // it lands on the branch's second `ClosedPulls` page.
+        for i in 0..120_u64 {
+            let mut pr = seeded_closed(
+                &plan.action().branch,
+                "",
+                &(now + chrono::Duration::minutes(i as i64)).to_rfc3339(),
+            );
+            pr["number"] = json!(100 + i);
+            pr["user"]["login"] = json!("octocat");
+            repo.prs.insert(100 + i, pr);
+        }
+        let mut suppressor = seeded_closed(
+            &plan.action().branch,
+            &marker_body(&plan.update_key()),
+            &(now - chrono::Duration::hours(1)).to_rfc3339(),
+        );
+        suppressor["number"] = json!(2);
+        repo.prs.insert(2, suppressor);
+    }
+    server.state().requests.clear();
+    patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut plan),
+        &config,
+        now,
+        Default::default(),
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    assert!(
+        plan.held(&patchula_update::Hold::ClosedByOwner),
+        "{:?}",
+        plan.action()
+    );
+    assert_eq!(
+        server
+            .state()
+            .requests
+            .iter()
+            .filter(|(m, _)| m == "POST")
+            .count(),
+        2
+    );
+    check_transcript();
+}
+
+/// A null node in a branch's `ClosedPulls` page leaves the branch unread:
+/// the plan is protected, not admitted.
+#[tokio::test(start_paused = true)]
+async fn a_null_closed_pull_node_protects_the_plan() {
+    let (config, repo) = pr_config();
+    let (mut plan, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    server
+        .on(patchula_testkit::github::Matcher::Route {
+            method: reqwest::Method::POST,
+            path: "/graphql".into(),
+        })
+        .times(1)
+        .respond(
+            200,
+            json!({"data":{"repository":{"b0":{
+                "nodes":[null],
+                "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        );
+    patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut plan),
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    assert_eq!(plan.action().status, BranchStatus::Protected);
+    assert_eq!(
+        plan.action().reason.as_deref(),
+        Some("closed pull requests for this branch could not be read; left untouched")
+    );
+    check_transcript();
+}
+
+/// `prs.perHour`'s recent read counts owned creations whether they still
+/// stand or not: a pull request merged within the hour holds the plan.
+#[tokio::test(start_paused = true)]
+async fn a_pull_merged_within_the_hour_counts_against_per_hour() {
+    let (mut config, repo) = pr_config();
+    config.prs.per_hour = Some(1);
+    let (mut plan, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let now = chrono::Utc::now();
+    let mut pr = seeded_closed(
+        "patchula/other-1.x",
+        &marker_body(&"b".repeat(64)),
+        &(now - chrono::Duration::minutes(10)).to_rfc3339(),
+    );
+    pr["merged_at"] = json!((now - chrono::Duration::minutes(5)).to_rfc3339());
+    server.state().repo_mut().prs.insert(2, pr);
+    patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut plan),
+        &config,
+        now,
+        Default::default(),
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    assert!(
+        plan.held(&patchula_update::Hold::PerHour),
+        "{:?}",
+        plan.action()
+    );
+    assert!(
+        server
+            .state()
+            .traffic
+            .keys()
+            .any(|route| route.contains("state=all")),
+        "{:?}",
+        server.state().traffic
+    );
+    check_transcript();
+}
+
+/// An unreadable `ClosedPulls` page protects its plan while the run
+/// carries on: the other branch's read answered, its plan published.
+#[tokio::test(start_paused = true)]
+async fn an_unreadable_closed_branch_protects_its_plan_only() {
+    let (config, repo) = pr_config();
+    let (first, snapshot) = make_plan("22.0.0");
+    let (second, _) = make_plan("24.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    // `closed_reads` names the branches in plan order: `b0` is the first
+    // plan's, its page a null node; `b1` answers empty.
+    server
+        .on(patchula_testkit::github::Matcher::Route {
+            method: reqwest::Method::POST,
+            path: "/graphql".into(),
+        })
+        .times(1)
+        .respond(
+            200,
+            json!({"data":{"repository":{
+                "b0":{"nodes":[null],
+                    "pageInfo":{"hasNextPage":false,"endCursor":null}},
+                "b1":{"nodes":[],
+                    "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        );
+    let mut plans = vec![first, second];
+    let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        &mut plans,
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    assert_eq!(plans[0].action().status, BranchStatus::Protected);
+    patchula_update::apply_all(
+        &github,
+        &mut plans,
+        &snapshot,
+        "main",
+        "patchula[bot]",
+        config.prs.rebase,
+        false,
+    )
+    .await;
+    publish(&mut lifecycle, &github, &mut plans).await;
+    assert_eq!(plans[1].action().status, BranchStatus::Created);
+    check_transcript();
+}
