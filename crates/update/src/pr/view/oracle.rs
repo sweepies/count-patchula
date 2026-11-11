@@ -15,8 +15,9 @@ use patchula_words::{Source, Update};
 
 const ACTOR: &str = "patchula[bot]";
 const REPO: &str = "sweepies/count-patchula";
-const PLAN_BRANCH: &str = "patchula/serde-1.x";
-const OTHER_BRANCH: &str = "patchula/left-pad-1.x";
+const PLAN_A_BRANCH: &str = "patchula/serde-1.x";
+const PLAN_B_BRANCH: &str = "patchula/left-pad-1.x";
+const OTHER_BRANCH: &str = "patchula/unrelated-1.x";
 const OWNER: Owner<'static> = Owner {
     actor: ACTOR,
     repo: REPO,
@@ -26,6 +27,37 @@ fn now() -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2026-11-11T12:00:00Z")
         .expect("constant")
         .to_utc()
+}
+
+impl<'a> Pulls<'a> {
+    /// The view the old `pulls?state=all` listing supplied: the open PRs,
+    /// the hourly count of owned creations and, under every branch
+    /// [`closed_reads`] names, the listing's whole set of closed unmerged
+    /// PRs — which is what kept a closed PR carrying a plan's key on
+    /// another branch suppressing. The oracle's whole-history side,
+    /// against which the narrowed fill is checked.
+    fn from_listing(
+        all: &'a [Tracked],
+        plans: &[Plan],
+        controls: &Controls,
+        owner: Owner<'_>,
+        now: DateTime<Utc>,
+        complete: bool,
+    ) -> Self {
+        let mut pulls = Self::from_open(
+            all.iter().filter(|t| t.pr.state == "open").collect(),
+            Some(recent(all, owner, now)),
+            complete,
+        );
+        let closed: Vec<&Tracked> = all
+            .iter()
+            .filter(|t| t.pr.state == "closed" && t.pr.merged_at.is_none())
+            .collect();
+        for head in closed_reads(&pulls, plans, controls, owner) {
+            pulls.read_closed(head, Ok(closed.clone()));
+        }
+        pulls
+    }
 }
 
 /// Who authored the PR: the Count or anyone else.
@@ -41,10 +73,11 @@ enum PrState {
     Closed,
     Merged,
 }
-/// The PR's head branch: the plan's or another.
+/// The PR's head branch: one plan's or another's.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Head {
-    Plan,
+    PlanA,
+    PlanB,
     Other,
 }
 /// The PR's head repository: this one, a fork or deleted.
@@ -54,11 +87,12 @@ enum HeadRepo {
     Fork,
     Gone,
 }
-/// The ownership marker the body carries: none, the plan's key or another.
+/// The ownership marker the body carries: none, one plan's key or another.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Marked {
     None,
-    Plan,
+    PlanA,
+    PlanB,
     Other,
 }
 /// The closure marker ending the body, if any.
@@ -101,38 +135,52 @@ struct Shape {
     tick: Tick,
 }
 
-/// The shapes the oracle excludes: a closed PR carrying the plan's key on
-/// another head branch. Today's whole listing suppresses the plan on them;
-/// the narrowed closed read will not — the accepted behaviour change
-/// `closed_key_on_another_branch_suppresses_today` pins.
-const KEY_ON_OTHER_BRANCH: (PrState, Head, Marked) = (PrState::Closed, Head::Other, Marked::Plan);
+/// The shapes the oracle excludes: a closed, unmerged, owned and still
+/// suppressing PR carrying one plan's key anywhere but that plan's
+/// branch. The whole listing suppressed the keyed plan on them; the
+/// narrowed closed read does not — the accepted behaviour change the
+/// `*_no_longer_suppresses` tests pin.
+fn divergent(shape: &Shape) -> bool {
+    let foreign = match shape.marked {
+        Marked::PlanA => shape.head != Head::PlanA,
+        Marked::PlanB => shape.head != Head::PlanB,
+        _ => false,
+    };
+    shape.state == PrState::Closed
+        && shape.author == Author::Count
+        && shape.repo == HeadRepo::Same
+        && shape.closure == Closure::None
+        && shape.items == Items::Absent
+        && foreign
+}
 
-/// Every shape, minus the `KEY_ON_OTHER_BRANCH` family. The ninth axis is
-/// the re-check tick `checked` reads, which the design's list rolls into
+/// Every shape, minus the [`divergent`] family. The ninth axis is the
+/// re-check tick `checked` reads, which the design's list rolls into
 /// "marker"; the other eight are its enumeration.
 fn shapes() -> Vec<Shape> {
-    let mut out = Vec::with_capacity(2 * 3 * 2 * 3 * 3 * 3 * 2 * 2 * 2);
+    let mut out = Vec::with_capacity(2 * 3 * 3 * 3 * 4 * 3 * 2 * 2 * 2);
     for author in [Author::Count, Author::Other] {
         for state in [PrState::Open, PrState::Closed, PrState::Merged] {
-            for head in [Head::Plan, Head::Other] {
+            for head in [Head::PlanA, Head::PlanB, Head::Other] {
                 for repo in [HeadRepo::Same, HeadRepo::Fork, HeadRepo::Gone] {
-                    for marked in [Marked::None, Marked::Plan, Marked::Other] {
+                    for marked in [Marked::None, Marked::PlanA, Marked::PlanB, Marked::Other] {
                         for closure in [Closure::None, Closure::Obsolete, Closure::Batched] {
                             for items in [Items::Absent, Items::Present] {
                                 for created in [Created::Recent, Created::Older] {
                                     for tick in [Tick::Unticked, Tick::Recheck] {
-                                        if (state, head, marked) != KEY_ON_OTHER_BRANCH {
-                                            out.push(Shape {
-                                                author,
-                                                state,
-                                                head,
-                                                repo,
-                                                marked,
-                                                closure,
-                                                items,
-                                                created,
-                                                tick,
-                                            });
+                                        let shape = Shape {
+                                            author,
+                                            state,
+                                            head,
+                                            repo,
+                                            marked,
+                                            closure,
+                                            items,
+                                            created,
+                                            tick,
+                                        };
+                                        if !divergent(&shape) {
+                                            out.push(shape);
                                         }
                                     }
                                 }
@@ -161,9 +209,26 @@ fn fields(shape: &Shape) -> [u8; 9] {
     ]
 }
 /// How many values each field has, in `fields` order.
-const ARITY: [u8; 9] = [2, 3, 2, 3, 3, 3, 2, 2, 2];
+const ARITY: [u8; 9] = [2, 3, 3, 3, 4, 3, 2, 2, 2];
 
-fn body_for(shape: &Shape, plan_key: &str) -> String {
+/// The update keys the oracle's two plans carry — plan A's and plan B's.
+struct Keys {
+    a: String,
+    b: String,
+}
+/// The key `marked` names: `Other` is a key no plan holds.
+impl Keys {
+    fn marked(&self, marked: Marked) -> Option<String> {
+        match marked {
+            Marked::None => None,
+            Marked::PlanA => Some(self.a.clone()),
+            Marked::PlanB => Some(self.b.clone()),
+            Marked::Other => Some("b".repeat(64)),
+        }
+    }
+}
+
+fn body_for(shape: &Shape, keys: &Keys) -> String {
     let mut body = String::new();
     if shape.items == Items::Present {
         body.push_str(&markers::hidden(
@@ -182,16 +247,10 @@ fn body_for(shape: &Shape, plan_key: &str) -> String {
     }
     match shape.marked {
         Marked::None => body.push_str("a pull request body"),
-        Marked::Plan => {
+        _ => {
             body.push_str(&markers::ownership(&Marker::new(
                 "a".repeat(64),
-                plan_key.to_owned(),
-            )));
-        }
-        Marked::Other => {
-            body.push_str(&markers::ownership(&Marker::new(
-                "a".repeat(64),
-                "b".repeat(64),
+                keys.marked(shape.marked).expect("a marked body has a key"),
             )));
         }
     }
@@ -209,7 +268,7 @@ fn body_for(shape: &Shape, plan_key: &str) -> String {
     body
 }
 
-fn tracked(shape: &Shape, number: u64, plan_key: &str) -> Tracked {
+fn tracked(shape: &Shape, number: u64, keys: &Keys) -> Tracked {
     Tracked::from(model::PullRequest {
         node_id: format!("PR_node{number}"),
         number,
@@ -220,7 +279,7 @@ fn tracked(shape: &Shape, number: u64, plan_key: &str) -> Tracked {
         }
         .into(),
         title: format!("pull {number}"),
-        body: Some(body_for(shape, plan_key)),
+        body: Some(body_for(shape, keys)),
         user: Some(model::Actor {
             login: match shape.author {
                 Author::Count => ACTOR,
@@ -244,7 +303,8 @@ fn tracked(shape: &Shape, number: u64, plan_key: &str) -> Tracked {
         updated_at: None,
         head: model::PullRequestHead {
             branch: match shape.head {
-                Head::Plan => PLAN_BRANCH,
+                Head::PlanA => PLAN_A_BRANCH,
+                Head::PlanB => PLAN_B_BRANCH,
                 Head::Other => OTHER_BRANCH,
             }
             .into(),
@@ -265,11 +325,11 @@ fn tracked(shape: &Shape, number: u64, plan_key: &str) -> Tracked {
     })
 }
 
-/// The plan the whole oracle runs against: one update on `PLAN_BRANCH`.
-fn plan() -> Plan {
+/// One planned update on `branch`, updating `package` to `value`.
+fn plan_on(branch: &str, package: &str, value: &str) -> Plan {
     Draft::new(BranchAction {
         repository: REPO.into(),
-        branch: PLAN_BRANCH.into(),
+        branch: branch.into(),
         base_commit: "b".repeat(40),
         status: BranchStatus::Planned,
         reason: None,
@@ -282,13 +342,13 @@ fn plan() -> Plan {
     })
     .change(Change {
         source: Source::Crates,
-        package: "serde".into(),
+        package: package.into(),
         registry: None,
         file: "Cargo.toml".into(),
         current: "1.0.0".into(),
         current_version: None,
-        value: Some("1.0.1".into()),
-        version: Some("1.0.1".into()),
+        value: Some(value.into()),
+        version: Some(value.into()),
         digest: None,
         kind: Update::Minor,
         merge: false,
@@ -299,6 +359,22 @@ fn plan() -> Plan {
         image: None,
     })
     .build()
+}
+
+/// The two plans the oracle runs against: each on its own branch, each
+/// with its own update key.
+fn plans() -> Vec<Plan> {
+    vec![
+        plan_on(PLAN_A_BRANCH, "serde", "1.0.1"),
+        plan_on(PLAN_B_BRANCH, "left-pad", "1.0.1"),
+    ]
+}
+
+fn keys() -> Keys {
+    Keys {
+        a: plan_on(PLAN_A_BRANCH, "serde", "1.0.1").update_key(),
+        b: plan_on(PLAN_B_BRANCH, "left-pad", "1.0.1").update_key(),
+    }
 }
 
 /// What the dashboard ticked for the plan's key.
@@ -312,19 +388,21 @@ enum Ask {
     CreateNow,
 }
 
-fn controls(ask: Ask, key: &str, batched: bool) -> Controls {
+fn controls(ask: Ask, keys: &Keys, batched: bool) -> Controls {
     let mut controls = Controls::default();
-    match ask {
-        Ask::Planned => {}
-        Ask::BringBack => {
-            controls.recreate.insert(key.to_owned());
+    for key in [&keys.a, &keys.b] {
+        match ask {
+            Ask::Planned => {}
+            Ask::BringBack => {
+                controls.recreate.insert(key.clone());
+            }
+            Ask::CreateNow => {
+                controls.create.insert(key.clone());
+            }
         }
-        Ask::CreateNow => {
-            controls.create.insert(key.to_owned());
+        if batched {
+            controls.batched.insert(key.clone());
         }
-    }
-    if batched {
-        controls.batched.insert(key.to_owned());
     }
     controls
 }
@@ -400,24 +478,25 @@ fn outcome(plan: &Plan) -> (BranchStatus, Option<String>, Vec<bool>, bool) {
 }
 
 /// Assert the whole-history fill and the narrowed-read model decide
-/// identically for `history`, including which open PRs would close as
-/// obsolete.
+/// identically for `history` over the two planned plans — each plan's
+/// `active`/`hourly` fold and `closed_reads` spanning both branches —
+/// including which open PRs would close as obsolete.
 fn run(history: &[Shape], ask: Ask, limits: (Option<u32>, Option<u32>), batched: bool) {
-    let key = plan().update_key();
-    let controls = controls(ask, &key, batched);
+    let keys = keys();
+    let controls = controls(ask, &keys, batched);
     let config = config(limits.0, limits.1);
     let all: Vec<Tracked> = history
         .iter()
         .enumerate()
-        .map(|(i, s)| tracked(s, i as u64 + 1, &key))
+        .map(|(i, s)| tracked(s, i as u64 + 1, &keys))
         .collect();
     let context = format!("{history:?} {ask:?} {limits:?} batched={batched}");
 
-    let mut whole_plans = vec![plan()];
+    let mut whole_plans = plans();
     let whole = Pulls::from_listing(&all, &whole_plans, &controls, OWNER, now(), true);
     admit(&whole, &mut whole_plans, &controls, &config, OWNER);
 
-    let mut narrowed_plans = vec![plan()];
+    let mut narrowed_plans = plans();
     let narrowed_pulls = narrowed(
         &all,
         &narrowed_plans,
@@ -433,11 +512,11 @@ fn run(history: &[Shape], ask: Ask, limits: (Option<u32>, Option<u32>), batched:
     );
 
     assert_eq!(
-        outcome(&whole_plans[0]),
-        outcome(&narrowed_plans[0]),
+        whole_plans.iter().map(outcome).collect::<Vec<_>>(),
+        narrowed_plans.iter().map(outcome).collect::<Vec<_>>(),
         "{context}"
     );
-    let desired = BTreeSet::from([PLAN_BRANCH.to_owned()]);
+    let desired = BTreeSet::from([PLAN_A_BRANCH.to_owned(), PLAN_B_BRANCH.to_owned()]);
     let numbers = |pulls: &Pulls<'_>| -> Vec<u64> {
         obsolete(pulls, &desired, &controls, OWNER)
             .iter()
@@ -518,46 +597,106 @@ fn two_pr_histories_under_ticks_and_limits() {
     }
 }
 
-/// The one shape family the narrowed read decides differently — a closed
-/// PR carrying the plan's key on another branch. The whole listing the
-/// lifecycle reads today still suppresses the plan; the narrowed model
-/// does not, which is the behaviour change item 3 makes. This pins
-/// today's side; it flips when the closed read narrows.
-#[test]
-fn closed_key_on_another_branch_suppresses_today() {
-    let shape = Shape {
-        author: Author::Count,
-        state: PrState::Closed,
-        head: Head::Other,
-        repo: HeadRepo::Same,
-        marked: Marked::Plan,
-        closure: Closure::None,
-        items: Items::Absent,
-        created: Created::Older,
-        tick: Tick::Unticked,
-    };
-    let key = plan().update_key();
+/// One shape family the narrowed read decides differently — a closed PR
+/// carrying a plan's key on a branch that is not the plan's. The whole
+/// listing suppressed the keyed plan on it; the narrowed closed read does
+/// not, which is the accepted behaviour change these tests pin.
+fn run_divergent(shape: Shape, keyed: usize) {
+    let keys = keys();
     let controls = Controls::default();
     let config = config(None, None);
-    let all = vec![tracked(&shape, 1, &key)];
+    let all = vec![tracked(&shape, 1, &keys)];
 
-    let mut plans = vec![plan()];
-    let whole = Pulls::from_listing(&all, &plans, &controls, OWNER, now(), true);
-    admit(&whole, &mut plans, &controls, &config, OWNER);
+    let mut whole_plans = plans();
+    let whole = Pulls::from_listing(&all, &whole_plans, &controls, OWNER, now(), true);
+    admit(&whole, &mut whole_plans, &controls, &config, OWNER);
+    // The whole listing's set under every branch key found the keyed PR:
+    // the plan whose key it carried was held closed-by-owner.
     assert!(
-        plans[0].held(&Hold::ClosedByOwner),
-        "{:?}",
-        outcome(&plans[0])
+        whole_plans[keyed].held(&Hold::ClosedByOwner),
+        "{shape:?}: {:?}",
+        outcome(&whole_plans[keyed])
     );
 
-    let mut plans = vec![plan()];
-    let narrowed_pulls = narrowed(&all, &plans, &controls, false);
-    admit(&narrowed_pulls, &mut plans, &controls, &config, OWNER);
-    assert!(
-        !plans[0].held(&Hold::ClosedByOwner),
-        "{:?}",
-        outcome(&plans[0])
+    let mut narrowed_plans = plans();
+    let narrowed_pulls = narrowed(&all, &narrowed_plans, &controls, false);
+    admit(
+        &narrowed_pulls,
+        &mut narrowed_plans,
+        &controls,
+        &config,
+        OWNER,
     );
+    // The narrowed read answers only the plan's own branch: its key on
+    // another branch holds nothing, and no plan is protected.
+    for (i, plan) in narrowed_plans.iter().enumerate() {
+        assert!(
+            !plan.held(&Hold::ClosedByOwner) && plan.action().status == BranchStatus::Planned,
+            "{shape:?} plan {i}: {:?}",
+            outcome(plan)
+        );
+    }
+}
+
+/// The plan's key on a stranger branch: plan A is no longer held.
+#[test]
+fn a_closed_pull_with_plan_as_key_on_another_branch_no_longer_suppresses() {
+    run_divergent(
+        Shape {
+            author: Author::Count,
+            state: PrState::Closed,
+            head: Head::Other,
+            repo: HeadRepo::Same,
+            marked: Marked::PlanA,
+            closure: Closure::None,
+            items: Items::Absent,
+            created: Created::Older,
+            tick: Tick::Unticked,
+        },
+        0,
+    );
+}
+
+/// Plan B's key on plan A's branch: plan B is no longer held — the case a
+/// branch rename in the same week made real.
+#[test]
+fn a_closed_pull_on_plan_as_branch_carrying_plan_bs_key_suppresses_neither() {
+    run_divergent(
+        Shape {
+            author: Author::Count,
+            state: PrState::Closed,
+            head: Head::PlanA,
+            repo: HeadRepo::Same,
+            marked: Marked::PlanB,
+            closure: Closure::None,
+            items: Items::Absent,
+            created: Created::Older,
+            tick: Tick::Unticked,
+        },
+        1,
+    );
+}
+
+/// `prs.perHour` set and no recent read (`recent: None`) must never come
+/// out as capacity: `admit` reads the absent read as the limit reached
+/// and every non-bypass plan holds `PerHour`. Production always runs the
+/// read when the limit is configured; the fail-closed fold is pinned here.
+#[test]
+fn a_missing_recent_read_fails_closed_when_per_hour_is_set() {
+    let mut plans = plans();
+    let mut pulls = Pulls::from_open(Vec::new(), None, true);
+    pulls.read_closed(PLAN_A_BRANCH.to_owned(), Ok(Vec::new()));
+    pulls.read_closed(PLAN_B_BRANCH.to_owned(), Ok(Vec::new()));
+    admit(
+        &pulls,
+        &mut plans,
+        &Controls::default(),
+        &config(None, Some(1)),
+        OWNER,
+    );
+    for plan in &plans {
+        assert!(plan.held(&Hold::PerHour), "{:?}", outcome(plan));
+    }
 }
 
 /// A branch whose closed PRs were never read, or read incompletely, is
@@ -565,32 +704,73 @@ fn closed_key_on_another_branch_suppresses_today() {
 /// out as a created PR.
 #[test]
 fn an_unread_closed_branch_protects_the_plan() {
-    let mut plans = vec![plan()];
+    let mut unread = plans();
     let pulls = Pulls::from_open(Vec::new(), Some(0), true);
     admit(
         &pulls,
-        &mut plans,
+        &mut unread,
         &Controls::default(),
         &config(None, None),
         OWNER,
     );
-    assert_eq!(plans[0].action().status, BranchStatus::Protected);
-    assert_eq!(
-        plans[0].action().reason.as_deref(),
-        Some("closed pull requests for this branch could not be read; left untouched")
-    );
+    for plan in &unread {
+        assert_eq!(plan.action().status, BranchStatus::Protected);
+        assert_eq!(
+            plan.action().reason.as_deref(),
+            Some("closed pull requests for this branch could not be read; left untouched")
+        );
+    }
 
-    let mut plans = vec![plan()];
+    let mut partial = plans();
     let mut pulls = Pulls::from_open(Vec::new(), Some(0), true);
-    pulls.read_closed(PLAN_BRANCH.to_owned(), Err(Unread));
+    pulls.read_closed(PLAN_A_BRANCH.to_owned(), Err(Unread));
+    pulls.read_closed(PLAN_B_BRANCH.to_owned(), Ok(Vec::new()));
     admit(
         &pulls,
-        &mut plans,
+        &mut partial,
         &Controls::default(),
         &config(None, None),
         OWNER,
     );
-    assert_eq!(plans[0].action().status, BranchStatus::Protected);
+    assert_eq!(partial[0].action().status, BranchStatus::Protected);
+    assert_eq!(partial[1].action().status, BranchStatus::Planned);
+}
+
+/// A per-branch `Err(Unread)` inside a multi-branch run is per-branch:
+/// plan A is protected while plan B's branch read answered, so plan B is
+/// decided on its own merits — identical to its outcome with both reads.
+#[test]
+fn an_unreadable_branch_among_several_protects_only_its_plan() {
+    let keys = keys();
+    let controls = Controls::default();
+    let config = config(None, None);
+    // Plan B's branch carries B's closed suppressor; plan A's read failed.
+    let suppressor = Shape {
+        author: Author::Count,
+        state: PrState::Closed,
+        head: Head::PlanB,
+        repo: HeadRepo::Same,
+        marked: Marked::PlanB,
+        closure: Closure::None,
+        items: Items::Absent,
+        created: Created::Older,
+        tick: Tick::Unticked,
+    };
+    let all = vec![tracked(&suppressor, 1, &keys)];
+
+    let mut unread = plans();
+    let mut pulls = Pulls::from_open(Vec::new(), Some(0), true);
+    pulls.read_closed(PLAN_A_BRANCH.to_owned(), Err(Unread));
+    pulls.read_closed(PLAN_B_BRANCH.to_owned(), Ok(all.iter().collect()));
+    admit(&pulls, &mut unread, &controls, &config, OWNER);
+    assert_eq!(unread[0].action().status, BranchStatus::Protected);
+    assert!(unread[1].held(&Hold::ClosedByOwner));
+
+    // Plan B decides exactly as it does when plan A's branch read too.
+    let mut read = plans();
+    let narrowed_pulls = narrowed(&all, &read, &controls, false);
+    admit(&narrowed_pulls, &mut read, &controls, &config, OWNER);
+    assert_eq!(outcome(&unread[1]), outcome(&read[1]));
 }
 
 /// An unreadable element anywhere in the listing protects every planned
@@ -599,10 +779,11 @@ fn an_unread_closed_branch_protects_the_plan() {
 fn an_incomplete_listing_protects_every_planned_plan() {
     for mut pulls in [
         Pulls::from_open(Vec::new(), Some(0), false),
-        Pulls::from_listing(&[], &[plan()], &Controls::default(), OWNER, now(), false),
+        Pulls::from_listing(&[], &plans(), &Controls::default(), OWNER, now(), false),
     ] {
-        let mut plans = vec![plan()];
-        pulls.read_closed(PLAN_BRANCH.to_owned(), Ok(Vec::new()));
+        let mut plans = plans();
+        pulls.read_closed(PLAN_A_BRANCH.to_owned(), Ok(Vec::new()));
+        pulls.read_closed(PLAN_B_BRANCH.to_owned(), Ok(Vec::new()));
         admit(
             &pulls,
             &mut plans,
@@ -610,10 +791,12 @@ fn an_incomplete_listing_protects_every_planned_plan() {
             &config(None, None),
             OWNER,
         );
-        assert_eq!(plans[0].action().status, BranchStatus::Protected);
-        assert_eq!(
-            plans[0].action().reason.as_deref(),
-            Some("repository pull request list is incomplete; left untouched")
-        );
+        for plan in &plans {
+            assert_eq!(plan.action().status, BranchStatus::Protected);
+            assert_eq!(
+                plan.action().reason.as_deref(),
+                Some("repository pull request list is incomplete; left untouched")
+            );
+        }
     }
 }

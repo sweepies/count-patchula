@@ -1539,6 +1539,9 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             match origin {
                 "retry" => 4,
                 "pr" => 15,
+                // The held-back plan's branch has no open pull: one batched
+                // `ClosedPulls` read checks it before admission.
+                "create" => 17,
                 _ => 16,
             }
         );

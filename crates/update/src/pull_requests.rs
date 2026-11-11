@@ -4,12 +4,13 @@ use crate::pr::body::{
     Bodies, Closure, body_hash, closure, notes_key, same_owner, title, unticked, with_foreign,
 };
 use crate::pr::view;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use patchula_config::{Config, PackageId};
 use patchula_github::{Client, model};
 use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus};
 use patchula_words::Recheck;
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const BODY_LIMIT: usize = 32_000;
@@ -214,6 +215,214 @@ pub(crate) fn tracked_pr(pr: &crate::receipts::InventoryPr) -> Option<Tracked> {
         merge_note: None,
     })
 }
+/// `ClosedPulls.nodes[]` element — the `PullRequest` fields the closed
+/// read selects. Non-null unless the schema marks them nullable (`author`,
+/// the repositories); `createdAt` is `DateTime!` and stays verbatim.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClosedPull {
+    /// `PullRequest.id` — `ID!`; the `node_id` the closed receipt stores.
+    id: String,
+    /// `PullRequest.number` — `Int!`.
+    number: u64,
+    /// `PullRequest.url` — `URI!`.
+    url: String,
+    /// `PullRequest.title` — `String!`.
+    title: String,
+    /// `PullRequest.body` — `String!`.
+    body: String,
+    /// `PullRequest.state` — `PullRequestState!`; re-filtered on `CLOSED`.
+    state: String,
+    /// `PullRequest.merged` — `Boolean!`; re-filtered on `false`.
+    merged: bool,
+    /// `PullRequest.createdAt` — `DateTime!`.
+    created_at: String,
+    /// `PullRequest.headRefName` — `String!`; re-filtered on the branch.
+    head_ref_name: String,
+    /// `PullRequest.headRefOid` — `GitObjectID!`.
+    head_ref_oid: String,
+    /// `PullRequest.baseRefName` — `String!`.
+    base_ref_name: String,
+    /// `PullRequest.author` — `Actor`, nullable.
+    author: Option<crate::receipts::Actor>,
+    /// `PullRequest.headRepository` — `Repository`, nullable.
+    head_repository: Option<crate::receipts::NamedRepository>,
+    /// `PullRequest.baseRepository` — `Repository`, nullable.
+    base_repository: Option<crate::receipts::NamedRepository>,
+}
+impl ClosedPull {
+    /// The node projected onto `Tracked` the way `tracked_pr` projects the
+    /// inventory's: fields this read does not select stay unset.
+    fn tracked(self) -> Tracked {
+        Tracked::from(model::PullRequest {
+            node_id: self.id,
+            number: self.number,
+            html_url: self.url,
+            state: self.state.to_ascii_lowercase(),
+            title: self.title,
+            body: Some(self.body),
+            user: self.author.as_ref().map(|actor| model::Actor {
+                login: crate::receipts::actor_login(actor),
+            }),
+            draft: None,
+            labels: Vec::new(),
+            merged_at: None,
+            auto_merge: None,
+            mergeable: None,
+            mergeable_state: None,
+            created_at: Some(self.created_at),
+            updated_at: None,
+            head: model::PullRequestHead {
+                branch: self.head_ref_name,
+                sha: self.head_ref_oid,
+                repo: self.head_repository.map(|r| model::PullRequestRepository {
+                    full_name: r.name_with_owner,
+                }),
+            },
+            base: model::PullRequestBase {
+                branch: self.base_ref_name,
+                repo: self.base_repository.map(|r| model::PullRequestRepository {
+                    full_name: r.name_with_owner,
+                }),
+            },
+        })
+    }
+}
+/// The node selection every `ClosedPulls` alias carries.
+const CLOSED_NODE: &str = "id number url title body state merged createdAt \
+    headRefName headRefOid baseRefName \
+    author { __typename login } \
+    headRepository { nameWithOwner } baseRepository { nameWithOwner }";
+/// One alias' `pullRequests` connection decoded: the closed unmerged PRs
+/// that pass the client-side re-filter plus the next page's cursor.
+struct ClosedPage {
+    pulls: Vec<Tracked>,
+    next: Option<String>,
+}
+/// Decode `data.repository[alias]` — `None` when the alias is missing, the
+/// connection is malformed or a node is null or unreadable: the caller's
+/// `Err(Unread)`. Nodes decode element-wise; the `headRefName`/`CLOSED`/
+/// `!merged` re-filter drops a node the server should never have sent —
+/// the filter is trusted not to drop, never trusted to narrow.
+fn closed_page(data: &Value, alias: &str, head: &str) -> Option<ClosedPage> {
+    let connection = data.get("repository")?.get(alias)?;
+    let nodes = connection.get("nodes")?.as_array()?;
+    let mut pulls = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let pr = serde_json::from_value::<ClosedPull>(node.clone()).ok()?;
+        if pr.state == "CLOSED" && !pr.merged && pr.head_ref_name == head {
+            pulls.push(pr.tracked());
+        }
+    }
+    let info = connection.get("pageInfo")?;
+    let next = if info.get("hasNextPage")?.as_bool()? {
+        Some(info.get("endCursor")?.as_str()?.to_owned())
+    } else {
+        None
+    };
+    Some(ClosedPage { pulls, next })
+}
+/// Page `head`'s closed connection on its own from `cursor` until it is
+/// finished. `Ok(false)` marks the branch `Unread` — a missing alias, a
+/// null node or the page cap reached; a request error fails the whole
+/// repository as a listing failure does.
+async fn page_closed_branch(
+    client: &Client,
+    owner: &str,
+    name: &str,
+    head: &str,
+    mut cursor: String,
+    pulls: &mut Vec<Tracked>,
+) -> Result<bool, String> {
+    let query = format!(
+        "query ClosedPulls($owner: String!, $name: String!, $b0: String!, $after: String) {{ \
+            repository(owner: $owner, name: $name) {{ \
+                b0: pullRequests(headRefName: $b0, states: [CLOSED], first: 100, after: $after, \
+                                 orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
+                    pageInfo {{ hasNextPage endCursor }} nodes {{ {CLOSED_NODE} }} }} }} }}"
+    );
+    for _ in 0..client.max_pages() {
+        let data = client
+            .graphql::<Value>(
+                &query,
+                json!({"owner":owner,"name":name,"b0":head,"after":cursor}),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let Some(page) = closed_page(&data, "b0", head) else {
+            return Ok(false);
+        };
+        pulls.extend(page.pulls);
+        match page.next {
+            Some(next) => cursor = next,
+            None => return Ok(true),
+        }
+    }
+    Ok(false)
+}
+/// The closed unmerged PRs of each branch in `branches` — one `ClosedPulls`
+/// document per up to 25 of them, each alias a `pullRequests` connection
+/// filtered server-side on `headRefName`/`CLOSED` and paged on its own.
+/// A branch ends `Err(Unread)` on a null or unreadable node, a missing
+/// alias or an unfinished page — `admit` protects its plan — while a
+/// request failure propagates as a listing failure does.
+async fn closed_pulls(
+    client: &Client,
+    repo: &str,
+    branches: &[String],
+) -> Result<BTreeMap<String, Result<Vec<Tracked>, view::Unread>>, String> {
+    let (owner, name) = repo.split_once('/').ok_or("invalid repository")?;
+    let mut out = BTreeMap::new();
+    for chunk in branches.chunks(25) {
+        let parameters: String = (0..chunk.len())
+            .map(|i| format!(", $b{i}: String!"))
+            .collect();
+        let fields: String = (0..chunk.len())
+            .map(|i| {
+                format!(
+                    "b{i}: pullRequests(headRefName: $b{i}, states: [CLOSED], first: 100, \
+                     orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
+                     pageInfo {{ hasNextPage endCursor }} nodes {{ {CLOSED_NODE} }} }}"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let query = format!(
+            "query ClosedPulls($owner: String!, $name: String!{parameters}) {{ \
+                repository(owner: $owner, name: $name) {{ {fields} }} }}"
+        );
+        let mut variables = json!({"owner":owner, "name":name});
+        for (i, head) in chunk.iter().enumerate() {
+            variables[format!("b{i}")] = head.clone().into();
+        }
+        let data = client
+            .graphql::<Value>(&query, variables)
+            .await
+            .map_err(|e| e.to_string())?;
+        for (i, head) in chunk.iter().enumerate() {
+            let result = match closed_page(&data, &format!("b{i}"), head) {
+                Some(page) => {
+                    let mut pulls = page.pulls;
+                    match page.next {
+                        Some(cursor) => {
+                            if page_closed_branch(client, owner, name, head, cursor, &mut pulls)
+                                .await?
+                            {
+                                Ok(pulls)
+                            } else {
+                                Err(view::Unread)
+                            }
+                        }
+                        None => Ok(pulls),
+                    }
+                }
+                None => Err(view::Unread),
+            };
+            out.insert(head.clone(), result);
+        }
+    }
+    Ok(out)
+}
 /// The body text of a pull request; `None` reads as empty, as indexing a
 /// missing or null `body` did.
 pub(crate) fn body(pr: &model::PullRequest) -> &str {
@@ -303,8 +512,15 @@ pub struct Lifecycle {
     repo: String,
     actor: String,
     base: String,
+    /// The pull requests the reads supplied: the open ones, plus each
+    /// planned branch's closed unmerged PRs the `ClosedPulls` read
+    /// returned — enough for [`Self::closed_for`] to name a suppressor.
     pub(crate) prs: Vec<Tracked>,
-    /// Every element of the pulls listing decoded. `false` when one was
+    /// `branch → pull number` for each plan `admit` held `ClosedByOwner`:
+    /// the suppressor the view's `closed_for` named, recorded at admission
+    /// so the closed receipt's PR is that decision, not another search's.
+    suppressors: BTreeMap<String, u64>,
+    /// Every element of the reads decoded. `false` when one was
     /// unreadable: the set is then incomplete and every decision that
     /// depends on the whole set is blocked — per-plan decisions protect
     /// instead of creating, closing or holding, and `close_batched`
@@ -349,15 +565,12 @@ impl Lifecycle {
             .cloned()
             .collect()
     }
+    /// The closed unmerged PR `admit` held `plan` on — the same `Tracked`
+    /// the view's `closed_for` returned, so the closed receipt names the
+    /// PR the decision was made on.
     pub(crate) fn closed_for(&self, plan: &Plan) -> Option<&Tracked> {
-        let key = plan.update_key();
-        self.prs.iter().find(|p| {
-            owned_pr(&p.pr, &self.actor, &self.repo)
-                && p.pr.state == "closed"
-                && p.pr.merged_at.is_none()
-                && suppresses(&p.pr)
-                && marker_update(body(&p.pr)).is_some_and(|u| u == key)
-        })
+        let number = self.suppressors.get(plan.action().branch.as_str())?;
+        self.prs.iter().find(|t| t.pr.number == *number)
     }
     /// Authoritative inventory includes closed history and all pages. No cached
     /// decisions can suppress a newly closed PR or permit an over-budget create.
@@ -382,13 +595,13 @@ impl Lifecycle {
             .default_branch
             .as_deref()
             .ok_or("missing default branch")?;
-        // The listing decodes element-wise: a PR that fails stays out of
-        // `items` and marks the set incomplete — see `complete`.
+        // The open listing decodes element-wise: a PR that fails stays out
+        // of `items` and marks the set incomplete — see `complete`.
         let page = model::Page::<model::PullRequest>::decode(
             client
                 .rest_pages(
                     &format!(
-                        "repos/{repo}/pulls?state=all&sort=created&direction=desc&per_page=100"
+                        "repos/{repo}/pulls?state=open&sort=created&direction=desc&per_page=100"
                     ),
                     |_| false,
                 )
@@ -400,6 +613,7 @@ impl Lifecycle {
             actor: actor.into(),
             base: default_branch.into(),
             prs: page.items.into_iter().map(Tracked::from).collect(),
+            suppressors: BTreeMap::new(),
             complete: page.complete,
             actions: Vec::new(),
             notes: BTreeMap::new(),
@@ -412,23 +626,64 @@ impl Lifecycle {
             server: None,
         };
         let owner = view::Owner { actor, repo };
+        // The hourly count only exists when `prs.perHour` is set: the same
+        // listing URL as the old whole-history read, walked only until a
+        // page ends with a PR created before the last hour — an element
+        // without a readable `created_at` never stops the walk.
+        let mut recent = None;
+        if state.complete && config.prs.per_hour.is_some() {
+            let page = model::Page::<model::PullRequest>::decode(
+                client
+                    .rest_pages(
+                        &format!(
+                            "repos/{repo}/pulls?state=all&sort=created&direction=desc&per_page=100"
+                        ),
+                        |page: &[Value]| {
+                            page.last()
+                                .and_then(|pr| pr["created_at"].as_str())
+                                .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+                                .is_some_and(|at| at < now - Duration::hours(1))
+                        },
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?,
+            );
+            state.complete &= page.complete;
+            let recent_prs: Vec<Tracked> = page.items.into_iter().map(Tracked::from).collect();
+            recent = Some(view::recent(&recent_prs, owner, now));
+        }
+        // Which branches `admit` will ask closed PRs about, and which open
+        // owned PRs are obsolete, are decisions and live in the view; a
+        // degraded repository selects none, as it skipped them all before.
         let desired: BTreeSet<String> = plans.iter().map(|p| p.action().branch.clone()).collect();
-        // Which open owned PRs are obsolete is a decision and lives with
-        // the rest of them in the view; a degraded repository selects none,
-        // as it skipped them all before. The closures stay requests.
-        let obsolete: BTreeSet<u64> = if repository.degraded() {
-            BTreeSet::new()
-        } else {
-            view::obsolete(
-                &view::Pulls::from_listing(&state.prs, plans, controls, owner, now, state.complete),
-                &desired,
-                controls,
-                owner,
-            )
-            .into_iter()
-            .map(|tracked| tracked.pr.number)
-            .collect()
+        let (closed_branches, obsolete) = {
+            let pulls = view::Pulls::from_open(state.prs.iter().collect(), recent, state.complete);
+            let branches = if state.complete {
+                view::closed_reads(&pulls, plans, controls, owner)
+            } else {
+                Vec::new()
+            };
+            let obsolete: BTreeSet<u64> = if repository.degraded() {
+                BTreeSet::new()
+            } else {
+                view::obsolete(&pulls, &desired, controls, owner)
+                    .into_iter()
+                    .map(|tracked| tracked.pr.number)
+                    .collect()
+            };
+            (branches, obsolete)
         };
+        // The closed read supplies only the branches `closed_reads` named;
+        // its PRs join `prs` so the receipt path's `closed_for` still finds
+        // a held plan's suppressor.
+        let closed = if closed_branches.is_empty() {
+            BTreeMap::new()
+        } else {
+            closed_pulls(client, repo, &closed_branches).await?
+        };
+        for prs in closed.values().flatten() {
+            state.prs.extend(prs.iter().cloned());
+        }
         // The repository metadata does not change between pulls, so it is
         // fetched once for all obsolete PRs, on the first that needs it.
         let mut meta = None;
@@ -509,9 +764,40 @@ impl Lifecycle {
                 Some("superseded or already satisfied update".into()),
             ));
         }
-        let pulls =
-            view::Pulls::from_listing(&state.prs, plans, controls, owner, now, state.complete);
+        let mut pulls = view::Pulls::from_open(
+            state.prs.iter().filter(|t| t.pr.state == "open").collect(),
+            recent,
+            state.complete,
+        );
+        for (head, result) in &closed {
+            pulls.read_closed(
+                head.clone(),
+                result.as_ref().map_err(|_| view::Unread).map(|_| {
+                    state
+                        .prs
+                        .iter()
+                        .filter(|t| {
+                            t.pr.state == "closed"
+                                && t.pr.merged_at.is_none()
+                                && branch(&t.pr) == head.as_str()
+                        })
+                        .collect()
+                }),
+            );
+        }
         view::admit(&pulls, plans, controls, config, owner);
+        // Record which PR `admit`'s `closed_for` held each `ClosedByOwner`
+        // plan on: the receipt path's `closed_for` resolves by that number
+        // so it names the same PR the decision read.
+        for plan in plans.iter() {
+            if plan.held(&crate::plan::Hold::ClosedByOwner)
+                && let Ok(Some(suppressor)) = pulls.closed_for(plan, owner)
+            {
+                state
+                    .suppressors
+                    .insert(plan.action().branch.clone(), suppressor.pr.number);
+            }
+        }
         Ok(state)
     }
 
@@ -1043,5 +1329,68 @@ mod tracked_tests {
         .unwrap();
         assert_eq!(tracked.pr.labels[0].name, "dependencies");
         assert_eq!(tracked.pr.user.unwrap().login, "patchula[bot]");
+    }
+}
+
+#[cfg(test)]
+mod closed_pulls_tests {
+    use super::*;
+    use patchula_github::Network;
+    use std::path::Path;
+    use std::sync::Arc;
+
+    /// The recorded `sweepies/count-patchula` closed read: three real
+    /// branches' `ClosedPulls` aliases replay through the production
+    /// decoder and every returned pull projects onto `Tracked` — closed,
+    /// unmerged, on the requested branch, its GraphQL `id` the `node_id`.
+    /// Recording needs a `GITHUB_TOKEN`/`GH_TOKEN` and `PATCHULA_RECORD=1`.
+    #[tokio::test]
+    async fn closed_pulls_decode_the_recorded_repository() {
+        let recording = patchula_testkit::recording();
+        let token = if recording {
+            std::env::var(patchula_testkit::GITHUB_TOKEN_VAR)
+                .or_else(|_| std::env::var(patchula_testkit::GH_TOKEN_VAR))
+                .expect("fixture recording requires an existing GITHUB_TOKEN or GH_TOKEN")
+        } else {
+            "offline-test-credential".into()
+        };
+        let cache = patchula_cache::Cache::open(":memory:", Default::default())
+            .await
+            .unwrap();
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/github/closed-pulls.json");
+        let options = patchula_testkit::Options {
+            redactor: patchula_testkit::Redactor::default().with_literals([token.clone()]),
+            ..Default::default()
+        };
+        let transport =
+            patchula_testkit::from_env(&path, options, || Ok(Arc::new(Network::new()?))).unwrap();
+        let client = Client::with_transport(&token, cache, Default::default(), transport).unwrap();
+        let branches = [
+            "patchula/uv-0.x".to_owned(),
+            "patchula/node-24.x".to_owned(),
+            "patchula/batch".to_owned(),
+        ];
+        let read = closed_pulls(&client, "sweepies/count-patchula", &branches)
+            .await
+            .unwrap();
+        assert_eq!(read.len(), 3, "{read:?}");
+        for branch in &branches {
+            let pulls = read[branch]
+                .as_ref()
+                .unwrap_or_else(|_| panic!("{branch} unread"));
+            for tracked in pulls {
+                assert_eq!(tracked.pr.state, "closed");
+                assert!(tracked.pr.merged_at.is_none());
+                assert_eq!(tracked.pr.head.branch, *branch);
+                assert!(!tracked.pr.node_id.is_empty());
+            }
+        }
+        // The real repository keeps a closed unmerged pull on at least one
+        // of these branches, so the projection was exercised.
+        assert!(
+            read.values()
+                .any(|pulls| pulls.as_ref().is_ok_and(|p| !p.is_empty()))
+        );
     }
 }

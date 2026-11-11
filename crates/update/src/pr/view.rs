@@ -57,34 +57,6 @@ impl<'a> Pulls<'a> {
         }
     }
 
-    /// The view today's one `pulls?state=all` listing supplies: the open
-    /// PRs, the hourly count of owned creations and, under every branch
-    /// [`closed_reads`] names, the listing's whole set of closed unmerged
-    /// PRs — which is what keeps a closed PR carrying the plan's key on
-    /// another branch suppressing until the closed read narrows.
-    pub(crate) fn from_listing(
-        all: &'a [Tracked],
-        plans: &[Plan],
-        controls: &Controls,
-        owner: Owner<'_>,
-        now: DateTime<Utc>,
-        complete: bool,
-    ) -> Self {
-        let mut pulls = Self::from_open(
-            all.iter().filter(|t| t.pr.state == "open").collect(),
-            Some(recent(all, owner, now)),
-            complete,
-        );
-        let closed: Vec<&Tracked> = all
-            .iter()
-            .filter(|t| t.pr.state == "closed" && t.pr.merged_at.is_none())
-            .collect();
-        for head in closed_reads(&pulls, plans, controls, owner) {
-            pulls.read_closed(head, Ok(closed.clone()));
-        }
-        pulls
-    }
-
     /// Record what `head`'s closed read returned: the PRs, or `Unread` for
     /// a failed or incomplete read.
     pub(crate) fn read_closed(&mut self, head: String, prs: Result<Vec<&'a Tracked>, Unread>) {
@@ -176,7 +148,7 @@ pub(crate) fn obsolete<'a>(
 }
 
 /// Owned PRs created in the last hour, the count the recent read supplies.
-fn recent(all: &[Tracked], owner: Owner<'_>, now: DateTime<Utc>) -> u32 {
+pub(crate) fn recent(all: &[Tracked], owner: Owner<'_>, now: DateTime<Utc>) -> u32 {
     all.iter()
         .filter(|t| {
             owned_pr(&t.pr, owner.actor, owner.repo)

@@ -97,6 +97,7 @@ fn existing_pr(package: &str, number: u64, closed: bool) -> Value {
         "title":"Existing PR", "user":{"login":"patchula[bot]"},
         "head":{"ref":format!("patchula/{package}-2.x"),"sha":"old-commit","repo":{"full_name":"demo/sandbox"}},
         "base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},
+        "created_at":"2026-01-01T00:00:00Z",
         "labels":[],"auto_merge":null
     })
 }
