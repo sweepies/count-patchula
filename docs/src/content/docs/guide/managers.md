@@ -315,6 +315,9 @@ is skipped.
 ## Helm, pre-commit and devcontainers
 
 `helm` reads `Chart.yaml` dependencies from HTTPS and `oci://` repositories.
+An `oci://` chart is an image to the Count: its registry digest follows
+`imageDigests`, like a container image's, whether it is declared in
+`Chart.yaml`, Kustomize `helmCharts` or a Flux source.
 `pre-commit` updates each hook repository's `rev` on GitHub, GitLab, Codeberg
 and Gitea/Forgejo hosts, skipping `local` and `meta` hooks and bare commit pins.
 A `rev` is written as the tag is named (`v1.0` becomes `v1.1`, not `v1.1.0`),

@@ -800,6 +800,61 @@ fn runner_latest_is_floating_and_versioned_images_never_get_digests() {
     assert!(!eval.needs_digest(&deps[1], &p[0]));
 }
 
+/// An OCI Helm chart is an image, so its digest pin answers to
+/// `imageDigests`, not `actionDigests`.
+#[test]
+fn oci_charts_follow_the_image_digest_setting() {
+    let mut cfg = config("defaults");
+    let mut chart = dependency("app");
+    chart.manager = Manager::Helm;
+    chart.file = "Chart.yaml".into();
+    chart.kind = DependencyKind::Chart;
+    chart.source = Source::Oci;
+    chart.package = "ghcr.io/acme/charts/app".into();
+    let mut action = dependency("actions/checkout");
+    action.manager = Manager::GithubActions;
+    action.kind = DependencyKind::Action;
+    action.source = Source::GithubTags;
+    action.scheme = Scheme::Loose;
+    let catalog = catalog(&["1.0.0", "1.1.0"]);
+    let updates = |eval: &Evaluator, dep: &Dependency| {
+        let proposals = eval.propose(dep, &catalog).unwrap();
+        assert!(!proposals.is_empty());
+        proposals
+    };
+
+    cfg.defaults.action_digests = false;
+    let eval = Evaluator::new(&cfg).unwrap();
+    assert!(
+        updates(&eval, &chart)
+            .iter()
+            .all(|p| eval.needs_digest(&chart, p))
+    );
+    assert!(
+        eval.digest_proposal(&chart, &"a".repeat(64))
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        updates(&eval, &action)
+            .iter()
+            .all(|p| !eval.needs_digest(&action, p))
+    );
+
+    cfg.defaults.image_digests = false;
+    let eval = Evaluator::new(&cfg).unwrap();
+    assert!(
+        updates(&eval, &chart)
+            .iter()
+            .all(|p| !eval.needs_digest(&chart, p))
+    );
+    assert!(
+        eval.digest_proposal(&chart, &"a".repeat(64))
+            .unwrap()
+            .is_none()
+    );
+}
+
 #[test]
 fn mise_current_versions_resolve_from_the_listing_without_proposal_filters() {
     let cfg = config("renovate-migration");

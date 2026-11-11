@@ -284,7 +284,10 @@ impl Evaluator {
     fn effective(&self, dep: &Dependency, update: Update) -> Result<Effective<'_>> {
         let mut effective = Effective {
             policy: self.config.defaults.clone(),
-            digest: if dep.kind == DependencyKind::ContainerImage {
+            digest: if matches!(
+                dep.kind,
+                DependencyKind::ContainerImage | DependencyKind::Chart
+            ) {
                 self.config.defaults.image_digests
             } else {
                 self.config.defaults.action_digests

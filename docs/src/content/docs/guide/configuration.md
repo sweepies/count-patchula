@@ -81,7 +81,8 @@ starts out cautious:
 - versions are pinned exactly, except in Cargo, pyproject, Bundler and Composer,
   where a built-in rule keeps ranges and moves the lockfile for releases inside
   them (see [version policies](/guide/versioning/#version-policies)); GitHub
-  Actions and container images are pinned to digests;
+  Actions (`actionDigests`) and container images and OCI charts
+  (`imageDigests`) are pinned to digests;
 - every update gets its own PR with the `dependencies` label and a
   `chore(deps):` commit prefix (`fix(deps):` for [security fixes](/guide/security/#security-updates-go-first)),
   and release notes are included;
