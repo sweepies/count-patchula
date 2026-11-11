@@ -510,7 +510,7 @@ impl PrState {
         Self {
             number: json!(pr.number),
             title: json!(pr.title),
-            body_hash: crate::pull_requests::body_hash(crate::pull_requests::body(pr)),
+            body_hash: crate::pr::body::body_hash(crate::pull_requests::body(pr)),
             head: PrStateHead {
                 r#ref: json!(pr.head.branch),
                 sha: json!(pr.head.sha),
@@ -538,7 +538,7 @@ impl PrState {
         Self {
             number: json!(pr.number),
             title: json!(pr.title),
-            body_hash: crate::pull_requests::body_hash(&pr.body),
+            body_hash: crate::pr::body::body_hash(&pr.body),
             head: PrStateHead {
                 r#ref: json!(pr.head_ref_name),
                 sha: json!(pr.head_ref_oid),
@@ -872,10 +872,8 @@ pub async fn restore_inventory(
                     receipt.pr["node_id"].as_str() == Some(pr.id.as_str())
                         && pr.state == PullRequestState::CLOSED
                         && !pr.merged
-                        && crate::pull_requests::body_hash(&pr.body)
-                            == crate::pull_requests::body_hash(
-                                receipt.pr["body"].as_str().unwrap_or(""),
-                            )
+                        && crate::pr::body::body_hash(&pr.body)
+                            == crate::pr::body::body_hash(receipt.pr["body"].as_str().unwrap_or(""))
                         && pr.author.as_ref().map(actor_login).as_deref() == Some(actor)
                         && pr.head_repository.as_ref().is_some_and(|r| {
                             crate::pull_requests::same_repository(
