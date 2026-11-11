@@ -118,7 +118,7 @@ when this list is not empty.
 |---|---|
 | `source`, `kinds` | Where the dependency came from and its kinds, such as `devDependencies`, or `transitive` for a vulnerable package only a lockfile records |
 | `locations` | Byte offsets, line, column and a pointer into the file |
-| `resolution` | How `current.version` was found: `declared`, `lockfile`, `pinned-commit`, `floating-ref`, `release-line` or `supported-range` |
+| `resolution` | How `current.version` was found: `declared`, `lockfile`, `pinned-commit`, `floating-ref`, `release-line` or `supported-range`. `lockfile` covers every manager whose lockfile recorded the resolved version — npm, Bun, Cargo, Bundler, Composer, Pyproject, Go (a `require` version in `go.mod` is the version Go's resolution recorded) and Terraform providers |
 | `heldBack` | Updates waiting on release age, per update type, with when they become eligible |
 | `lookup` | When the lookup ran, whether a stored catalog view was reused (`catalog` with `fetchedAt` and `reused`), disabled update types, and versions rejected as deprecated or yanked |
 | `tagDigests` | For GitHub Actions, the commit each proposed tag points at |
