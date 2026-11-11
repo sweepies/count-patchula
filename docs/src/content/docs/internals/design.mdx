@@ -51,7 +51,9 @@ Pkl, evaluated in process with `pklr`; see [configuration](/guide/configuration/
   - manager/ per-ecosystem extraction and surgical edits, regex managers
   - lookup/ batch-wide deduplicated lookups, update classification, grouping
   - engine/ batch lookup and branch writing, shared by the CLI and server
-  - update/ branch plans, API commits, PRs, dashboard, lockfile tools
+  - update/ branch plans, API commits, PRs, dashboard
+  - lockfiles/ the lockfile contract between update and the tool runtime
+  - tools/ the real ecosystem tools that regenerate lockfiles, with the pinned tool store
   - github/ REST and GraphQL client, App tokens, rate-limit governor
   - cache/ SQLite: HTTP entries, release lists, typed state
   - http/ reqwest transport boundary, shared network pool

@@ -122,7 +122,7 @@ def main [--arch: string = "amd64"] {
     if $node.exit_code != 0 { print ($node.stderr | lines | last 10 | str join "\n") }
     check $"mise installs and runs node as 10001 \(($node.stdout | str trim)\) in (since $started)" ($node.exit_code == 0)
 
-    let dotnet = open crates/update/src/lockfiles/defaults.toml | get tools.dotnet
+    let dotnet = open crates/tools/src/lockfiles/defaults.toml | get tools.dotnet
     let started = date now
     let nuget = restore $image $volume $work $mise $dotnet "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1"
     if $nuget.exit_code != 0 { print ($nuget.stderr | lines | last 30 | str join "\n") }

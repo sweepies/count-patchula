@@ -4,7 +4,6 @@
 //! the inputs nix fetches land in the private store, which `prune` empties.
 use super::*;
 use serde_json::Value;
-use std::{future::Future, pin::Pin};
 
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[],
@@ -360,36 +359,38 @@ impl Runner {
     }
 }
 
-impl patchula_datasource::Flakes for Runner {
-    fn prefetch<'a>(
-        &'a self,
-        reference: &'a str,
-        token: Option<&'a str>,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, String>> + Send + 'a>> {
-        Box::pin(async move {
-            if !SCHEMES.iter().any(|s| reference.starts_with(s))
-                || reference
-                    .chars()
-                    .any(|c| c.is_whitespace() || c.is_control())
-            {
-                return Err(format!("flake reference {reference:?} is not fetched"));
-            }
-            let driver = tempfile::tempdir().map_err(|e| e.to_string())?;
-            self.nix(
-                driver.path(),
-                None,
-                vec![
-                    "flake".into(),
-                    "prefetch".into(),
-                    "--json".into(),
-                    "--refresh".into(),
-                    "--".into(),
-                    reference.into(),
-                ],
-                token,
-            )
-            .await
-            .map_err(|error| error.to_string())
-        })
+impl Runner {
+    /// `nix flake prefetch --json` for one flake reference, with this
+    /// runner's nix and private store; `token` is for github.com only. The
+    /// datasource's `Flakes` adapter calls it, so this crate never names
+    /// datasource.
+    pub async fn flake_prefetch(
+        &self,
+        reference: &str,
+        token: Option<&str>,
+    ) -> Result<Vec<u8>, String> {
+        if !SCHEMES.iter().any(|s| reference.starts_with(s))
+            || reference
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(format!("flake reference {reference:?} is not fetched"));
+        }
+        let driver = tempfile::tempdir().map_err(|e| e.to_string())?;
+        self.nix(
+            driver.path(),
+            None,
+            vec![
+                "flake".into(),
+                "prefetch".into(),
+                "--json".into(),
+                "--refresh".into(),
+                "--".into(),
+                reference.into(),
+            ],
+            token,
+        )
+        .await
+        .map_err(|error| error.to_string())
     }
 }

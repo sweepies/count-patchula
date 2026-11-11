@@ -1,0 +1,40 @@
+[package]
+name = "patchula-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+patchula-lockfiles = { path = "../lockfiles" }
+patchula-config = { path = "../config" }
+patchula-manager = { path = "../manager" }
+patchula-github = { path = "../github" }
+patchula-http = { path = "../http" }
+patchula-mise = { path = "../mise" }
+patchula-process = { path = "../process" }
+patchula-versioning = { path = "../versioning" }
+patchula-words = { path = "../words" }
+serde_json.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tempfile = "3"
+toml_edit = "0.25.17"
+roxmltree = "0.21.2"
+serde_yaml_ng = "0.10.0"
+base64 = "0.23"
+tracing = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+patchula-update = { path = "../update" }
+patchula-cache = { path = "../cache" }
+patchula-report = { path = "../report" }
+patchula-testkit = { path = "../testkit" }
+crc32fast = "1.5.2"
+tokio = { workspace = true, features = ["test-util"] }

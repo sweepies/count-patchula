@@ -19,7 +19,6 @@ pub use receipts::{
     save_receipts,
 };
 pub use settle::{Settlement, settle};
-pub mod lockfiles;
 mod plan;
 mod write;
 pub use plan::{

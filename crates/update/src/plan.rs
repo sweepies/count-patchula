@@ -1,6 +1,6 @@
-use crate::lockfiles::contract;
 use futures_util::StreamExt;
 use patchula_config::{Config, PackageId, Registry, split_package};
+use patchula_lockfiles as contract;
 use patchula_manager::{Dependency, Edit, hash};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
 use patchula_words::{Source, Update as UpdateKind};

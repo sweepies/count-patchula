@@ -104,7 +104,7 @@ pub enum Auth {
 }
 
 pub struct Engine {
-    lockfiles: Option<patchula_update::lockfiles::Runner>,
+    lockfiles: Option<patchula_tools::Runner>,
     /// The persistent tool caches' size cap in GiB, applied to the runner.
     lockfile_cache_gib: u64,
     github: Github,
@@ -386,7 +386,7 @@ impl Engine {
             transport.clone(),
         )?;
         let lockfiles = cache.workspace_dir().map(|path| {
-            patchula_update::lockfiles::Runner::new(path.into(), "")
+            patchula_tools::Runner::new(path.into(), "")
                 .with_credentials(credentials)
                 .with_registries(&tool_registries)
         });
@@ -451,8 +451,7 @@ impl Engine {
         )?;
         let tool_registries = http_options.credentials.clone();
         let lockfiles = cache.workspace_dir().map(|path| {
-            patchula_update::lockfiles::Runner::new(path.into(), token)
-                .with_registries(&tool_registries)
+            patchula_tools::Runner::new(path.into(), token).with_registries(&tool_registries)
         });
         Self::build(
             github,
@@ -469,7 +468,7 @@ impl Engine {
         concurrency: usize,
         transport: Arc<dyn Transport>,
         http_options: patchula_http::Options,
-        lockfiles: Option<patchula_update::lockfiles::Runner>,
+        lockfiles: Option<patchula_tools::Runner>,
     ) -> Result<Self> {
         if !(1..=MAX_CONCURRENCY).contains(&concurrency) {
             return Err(Error::Invalid("concurrency must be 1..100".into()));
@@ -481,7 +480,7 @@ impl Engine {
         let sources = Sources::new(github.clone(), http.clone(), cache.clone());
         let mut engine = Self {
             lockfiles,
-            lockfile_cache_gib: patchula_update::lockfiles::DEFAULT_CACHE_GIB,
+            lockfile_cache_gib: patchula_tools::DEFAULT_CACHE_GIB,
             github,
             http,
             sources,
@@ -506,10 +505,10 @@ impl Engine {
                 .sources
                 .clone()
                 .with_mise(runner.mise_lookup())
-                .with_nix(std::sync::Arc::new(runner.clone()));
+                .with_nix(std::sync::Arc::new(RunnerFlakes(runner.clone())));
         }
     }
-    pub fn with_lockfile_runner(mut self, mut runner: patchula_update::lockfiles::Runner) -> Self {
+    pub fn with_lockfile_runner(mut self, mut runner: patchula_tools::Runner) -> Self {
         runner.set_cache_limit(self.lockfile_cache_gib);
         self.lockfiles = Some(runner);
         self.look_up_mise_tools_with_runner();
@@ -576,11 +575,9 @@ impl Engine {
         };
         let lockfiles = cache.workspace_dir().map(|path| {
             let mut runner = match &auth {
-                Auth::Token(token) => patchula_update::lockfiles::Runner::new(path.into(), token),
-                Auth::Credentials(credentials) => {
-                    patchula_update::lockfiles::Runner::new(path.into(), "")
-                        .with_credentials(credentials.clone())
-                }
+                Auth::Token(token) => patchula_tools::Runner::new(path.into(), token),
+                Auth::Credentials(credentials) => patchula_tools::Runner::new(path.into(), "")
+                    .with_credentials(credentials.clone()),
             };
             // Set before `build` clones the runner into `sources` for Nix
             // lookups, so every copy shares the limit.
@@ -1370,6 +1367,21 @@ impl repository::Source for Remote<'_> {
         Ok(out)
     }
 }
+/// `Runner::flake_prefetch` as the datasource's `Flakes`: the tool crate
+/// cannot name datasource, so the engine adapts the runner here.
+struct RunnerFlakes(patchula_tools::Runner);
+impl patchula_datasource::Flakes for RunnerFlakes {
+    fn prefetch<'a>(
+        &'a self,
+        reference: &'a str,
+        token: Option<&'a str>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = std::result::Result<Vec<u8>, String>> + Send + 'a>,
+    > {
+        Box::pin(self.0.flake_prefetch(reference, token))
+    }
+}
+
 /// How many of a repository's branches regenerate their lockfiles at once:
 /// one per core, up to four, as the tools are CPU-bound and each batch of
 /// another installation runs its own.

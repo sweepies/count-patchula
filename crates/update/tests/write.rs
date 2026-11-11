@@ -1386,7 +1386,7 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
             assert_eq!(p.lock_jobs.len(), 1, "{lock}");
             assert_eq!(
                 p.lock_jobs[0].ecosystem,
-                patchula_update::lockfiles::Ecosystem::Node,
+                patchula_lockfiles::Ecosystem::Node,
                 "{lock}"
             );
         }
@@ -1820,10 +1820,10 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         p.changes[0].labels = vec!["dependencies".into()];
         if case == "generated" {
             p.fingerprint = "d".repeat(64);
-            p.lock_jobs.push(patchula_update::lockfiles::Job {
-                ecosystem: patchula_update::lockfiles::Ecosystem::Cargo,
+            p.lock_jobs.push(patchula_lockfiles::Job {
+                ecosystem: patchula_lockfiles::Ecosystem::Cargo,
                 directory: String::new(),
-                scope: patchula_update::lockfiles::Scope::Directory,
+                scope: patchula_lockfiles::Scope::Directory,
                 exact_version: false,
             });
             p.lockfiles_ready = true;
@@ -4145,10 +4145,10 @@ fn only_newly_ticked_controls_count_as_edits() {
 #[tokio::test(start_paused = true)]
 async fn ungenerated_lockfiles_fail_before_any_github_request() {
     let (mut p, snapshot) = make_plan("22.0.0");
-    p.lock_jobs = vec![patchula_update::lockfiles::Job {
-        ecosystem: patchula_update::lockfiles::Ecosystem::Node,
+    p.lock_jobs = vec![patchula_lockfiles::Job {
+        ecosystem: patchula_lockfiles::Ecosystem::Node,
         directory: String::new(),
-        scope: patchula_update::lockfiles::Scope::Directory,
+        scope: patchula_lockfiles::Scope::Directory,
         exact_version: false,
     }];
     p.lockfiles_ready = false;

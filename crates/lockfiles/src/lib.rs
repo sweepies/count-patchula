@@ -1,6 +1,7 @@
 //! The lockfile contract: the work a branch's lockfile jobs describe and
 //! what a run hands back, shared by update planning and the tool runtime
 //! that executes it. Nothing here knows `Plan` or `Snapshot`.
+#![forbid(unsafe_code)]
 use patchula_config::Config;
 use patchula_manager::Dependency;
 use patchula_manager::roles::{lock_names, manifest_names};
@@ -469,7 +470,7 @@ pub enum Refresh {
 impl Refresh {
     /// Whether `leaf` in `directory` is this ecosystem's maintenance work
     /// under `config`, given the snapshot's paths.
-    pub(crate) fn claims(
+    pub fn claims(
         &self,
         config: &Config,
         leaf: &str,
@@ -506,7 +507,7 @@ impl Refresh {
 /// How maintenance discovers `ecosystem`'s work; `job()` does not consult
 /// this — extraction already applied `config.managers` to the dependencies
 /// it reports, while maintenance sees raw paths.
-pub(crate) fn refresh(ecosystem: Ecosystem) -> Refresh {
+pub fn refresh(ecosystem: Ecosystem) -> Refresh {
     match ecosystem {
         Ecosystem::Node => Refresh::Locks(&[Manager::Npm, Manager::Bun]),
         Ecosystem::Cargo => Refresh::Locks(&[Manager::Cargo]),

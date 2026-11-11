@@ -5,7 +5,7 @@
 use patchula_mise::Query;
 use patchula_process::SystemExecutor;
 use patchula_testkit::MiseRecorder;
-use patchula_update::lockfiles::Runner;
+use patchula_tools::Runner;
 use std::{path::Path, sync::Arc};
 
 /// A registry shorthand, backends, a core tool and its LTS prefix, and the

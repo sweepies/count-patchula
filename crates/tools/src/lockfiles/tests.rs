@@ -1,14 +1,16 @@
 use super::*;
-use crate::maintenance::{MaintenanceSuccess, maintenance, record_refresh, refresh_scope};
-use crate::{Blob, Plan, Snapshot, blob_sha};
 use patchula_http::{Exchange, Transport};
 use patchula_process::{CommandSpec, Failure};
 use patchula_report::{BranchAction, BranchStatus, FileAction, Repository, Update};
+use patchula_update::maintenance::{
+    MaintenanceSuccess, maintenance, record_refresh, refresh_scope,
+};
+use patchula_update::{Blob, Plan, Snapshot, blob_sha};
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 /// One plan through the batch entry point, as the engine calls it.
 async fn prepare_one(runner: &Runner, plan: &mut Plan, snapshot: &mut Snapshot, config: &Config) {
-    crate::lock_all(
+    patchula_update::lock_all(
         runner,
         std::slice::from_mut(plan),
         snapshot,
@@ -585,7 +587,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
         })
         .collect();
     let finished = std::sync::atomic::AtomicUsize::new(0);
-    crate::lock_all(&runner, &mut plans, &mut snapshot, &config, 3, &|| {
+    patchula_update::lock_all(&runner, &mut plans, &mut snapshot, &config, 3, &|| {
         finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     })
     .await;
@@ -689,7 +691,7 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
         Arc::new(NoApi),
     )
     .unwrap();
-    crate::apply_all(
+    patchula_update::apply_all(
         &client,
         std::slice::from_mut(&mut p),
         &snapshot,
@@ -1558,7 +1560,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
             blob_sha: blob_sha(&old),
             diff: String::new(),
         });
-        p.changes.push(crate::Change {
+        p.changes.push(patchula_update::Change {
             registry: None,
             source: source.parse().unwrap(),
             package: package.into(),
@@ -1918,7 +1920,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
         blob_sha: blob_sha(old),
         diff: String::new(),
     });
-    p.changes.push(crate::Change {
+    p.changes.push(patchula_update::Change {
         registry: None,
         source: patchula_words::Source::Crates,
         package: "base64".into(),
@@ -1963,7 +1965,7 @@ fn provider_lock_drift_is_rejected_before_publication() {
     let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    p.changes.push(crate::Change {
+    p.changes.push(patchula_update::Change {
         registry: None,
         source: patchula_words::Source::Terraform,
         package: "hashicorp/aws".into(),
@@ -2497,8 +2499,8 @@ async fn mise_lock_records_every_request_a_multi_version_declaration_makes() {
     }
 }
 
-fn npm_change(value: &str) -> crate::plan::Change {
-    crate::plan::Change {
+fn npm_change(value: &str) -> patchula_update::Change {
+    patchula_update::Change {
         registry: None,
         source: patchula_words::Source::Npm,
         package: "fixture".into(),
@@ -3549,7 +3551,7 @@ fn a_vulnerable_transitive_crate_moves_through_its_lockfile_alone() {
         }]
     }]))
     .unwrap();
-    let plans = crate::plan(
+    let plans = patchula_update::plan(
         &repository,
         &config,
         &dependencies,
@@ -3612,7 +3614,7 @@ fn a_lock_resolves_a_target_that_names_no_build_metadata() {
     let mut plan = maintenance(&repo(), &config, &snapshot, None, monday())
         .unwrap()
         .unwrap();
-    plan.changes.push(crate::Change {
+    plan.changes.push(patchula_update::Change {
         registry: None,
         source: patchula_words::Source::Crates,
         package: "zstd-sys".into(),
@@ -3849,7 +3851,7 @@ async fn real_cargo_moves_a_locked_package_without_a_manifest_change() {
         }]
     }]))
     .unwrap();
-    let mut plans = crate::plan(
+    let mut plans = patchula_update::plan(
         &repository,
         &config,
         &[dep],
@@ -3972,7 +3974,7 @@ async fn flake_update(
         }]
     }]))
     .unwrap();
-    let mut plans = crate::plan(
+    let mut plans = patchula_update::plan(
         &repository,
         &config,
         &extraction.dependencies,
@@ -4128,7 +4130,6 @@ async fn flake_locks_that_escape_or_do_not_move_fail() {
 /// ssh and flag-like references never reach it.
 #[tokio::test]
 async fn flake_prefetch_runs_nix_only_for_remote_references() {
-    use patchula_datasource::Flakes;
     let files = flake(false);
     let executor = Arc::new(NixFake {
         inner: fixture(files.clone(), false, false),
@@ -4140,7 +4141,7 @@ async fn flake_prefetch_runs_nix_only_for_remote_references() {
     let temp = tempfile::tempdir().unwrap();
     let runner = Runner::new(temp.path().join("worktrees"), "").with_executor(executor.clone());
     let output = runner
-        .prefetch("github:NixOS/nixpkgs/nixos-unstable", Some("secret-token"))
+        .flake_prefetch("github:NixOS/nixpkgs/nixos-unstable", Some("secret-token"))
         .await
         .unwrap();
     assert!(output.starts_with(b"{\"hash\""));
@@ -4151,7 +4152,10 @@ async fn flake_prefetch_runs_nix_only_for_remote_references() {
         "--impure",
         "github:a/b c",
     ] {
-        assert!(runner.prefetch(refused, None).await.is_err(), "{refused}");
+        assert!(
+            runner.flake_prefetch(refused, None).await.is_err(),
+            "{refused}"
+        );
     }
     let calls = executor.calls.lock().unwrap();
     let [(args, env)] = calls.as_slice() else {
@@ -4526,7 +4530,7 @@ fn lock_only_plan(
         }]
     }]))
     .unwrap();
-    let mut plans = crate::plan(
+    let mut plans = patchula_update::plan(
         &repository,
         &config,
         &extraction.dependencies,
@@ -4763,7 +4767,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                 },
                 exact_version: true,
             }];
-            p.changes = vec![crate::plan::Change {
+            p.changes = vec![patchula_update::Change {
                 registry: None,
                 source: source.parse().unwrap(),
                 package: dep.package.clone(),

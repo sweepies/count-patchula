@@ -210,7 +210,7 @@ fn render_with(repo: &Repository) -> String {
         "0.23.1",
         None,
     );
-    base64.lockfiles_failed(patchula_update::lockfiles::Failure::Tool {
+    base64.lockfiles_failed(patchula_lockfiles::Failure::Tool {
         context: "cargo".into(),
         failure: process,
     });
