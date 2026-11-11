@@ -632,8 +632,7 @@ async fn a_toolchain_pin_without_a_catalog_resolution_reports_declared() {
     let fake = sandbox(BTreeMap::from([
         (
             "patchula.pkl".to_owned(),
-            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"cargo\" }\n"
-                .to_owned(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"cargo\" }\n".to_owned(),
         ),
         ("rust-toolchain".to_owned(), "1.75.0\n".to_owned()),
     ]));
