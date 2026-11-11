@@ -324,7 +324,7 @@ impl Evaluator {
         }
         // Peers express consumer compatibility, even when installed packages
         // use exact versions. Exact peer declarations still bump in place.
-        if dep.manager == Manager::Npm && dep.kind == DependencyKind::Peer {
+        if matches!(dep.manager, Manager::Npm | Manager::Bun) && dep.kind == DependencyKind::Peer {
             effective.policy.versions = if Ecosystem::Npm.parse(&dep.current).is_ok() {
                 VersionPolicy::Exact
             } else {
@@ -1021,7 +1021,7 @@ impl Evaluator {
                 } else if dep.exact_tag_ref() {
                     version.version.clone()
                 } else {
-                    let value = if dep.manager == Manager::Npm
+                    let value = if matches!(dep.manager, Manager::Npm | Manager::Bun)
                         && dep.kind == DependencyKind::Peer
                         && effective.policy.versions == VersionPolicy::Widen
                     {
@@ -1095,8 +1095,10 @@ impl Evaluator {
                     && !lock_only
                     && (dep.preserves_ranges()
                         || matches!(scheme, Ecosystem::Maven | Ecosystem::Nuget)
-                        || (matches!(dep.manager, Manager::Terraform | Manager::Npm)
-                            && dep.kind == DependencyKind::Toolchain))
+                        || (matches!(
+                            dep.manager,
+                            Manager::Terraform | Manager::Npm | Manager::Bun
+                        ) && dep.kind == DependencyKind::Toolchain))
                 {
                     // Lockfile maintenance is a separate, explicitly enabled operation.
                     continue 'tracks;
@@ -1252,8 +1254,10 @@ fn any<T: PartialEq>(values: &[T], value: T) -> bool {
 /// `.terraform-version` records one bare version — its scheme cannot express
 /// a range — so it is an installed-version pin proposed like any other.
 fn supported_runtime(dep: &Dependency) -> bool {
-    matches!(dep.manager, Manager::Npm | Manager::Terraform)
-        && dep.kind == DependencyKind::Toolchain
+    matches!(
+        dep.manager,
+        Manager::Npm | Manager::Bun | Manager::Terraform
+    ) && dep.kind == DependencyKind::Toolchain
         && Ecosystem::of(dep.scheme, dep.source).supports_ranges()
 }
 /// Whether `text` passes the `permitted` filter, when one is set.
@@ -1425,8 +1429,10 @@ impl Evaluator {
         dep: &Dependency,
         catalog: &Catalog,
     ) -> Result<Option<String>> {
-        if matches!(dep.manager, Manager::Terraform | Manager::Npm)
-            && dep.kind == DependencyKind::Toolchain
+        if matches!(
+            dep.manager,
+            Manager::Terraform | Manager::Npm | Manager::Bun
+        ) && dep.kind == DependencyKind::Toolchain
         {
             let scheme = Ecosystem::of(dep.scheme, dep.source);
             return Ok(catalog

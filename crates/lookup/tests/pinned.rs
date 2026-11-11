@@ -1,6 +1,5 @@
-//! Today's behaviour for probable bugs the per-manager proposal-facts move
-//! must keep: each `pinned_` test states what the code does now so the later
-//! fix PRs flip them deliberately.
+//! Proposal behaviour for the version files, Bun's npm rules and pre-commit
+//! branch revs that the per-manager proposal-facts move must keep.
 use patchula_datasource::{Catalog, Version};
 use patchula_lookup::Evaluator;
 use patchula_manager::{Dependency, EditForm, Location, Syntax};
@@ -100,24 +99,24 @@ fn version_files_update_like_pins() {
     }
 }
 
-/// Bug 2: the support-range and peer facts name `Manager::Npm` alone, so a
-/// bun-enabled repository's toolchain is treated as an installed requirement
-/// and its peers are rewritten to the exact target instead of widened. This
-/// pins current behaviour, not endorsed; see bug 2.
+/// Bun shares npm's files, so a bun-enabled repository's toolchain and peer
+/// declarations follow npm's rules: a toolchain range keeps the `preserve`
+/// default, and a ranged peer is widened rather than rewritten exact.
 #[test]
-fn pinned_bun_misses_npm_toolchain_and_peer_rules() {
+fn bun_follows_npm_toolchain_and_peer_rules() {
     let eval = Evaluator::new(&config()).unwrap();
     let mut toolchain = dependency("node");
     toolchain.manager = Manager::Bun;
     toolchain.kind = DependencyKind::Toolchain;
+    toolchain.source = Source::Mise;
     toolchain.current = "^20".into();
     toolchain.resolved = Some("20.1.0".into());
     let proposals = eval
         .propose(&toolchain, &catalog(&["20.1.0", "20.1.1", "21.0.0"]))
         .unwrap();
     assert!(
-        !proposals.is_empty(),
-        "a bun toolchain range is treated as an installed pin: {proposals:?}"
+        proposals.is_empty(),
+        "a bun toolchain range is a supported-runtime range: {proposals:?}"
     );
     let mut peer = dependency("react");
     peer.manager = Manager::Bun;
@@ -131,11 +130,7 @@ fn pinned_bun_misses_npm_toolchain_and_peer_rules() {
         .iter()
         .find(|p| p.new_version.as_deref() == Some("19.0.0"))
         .expect("the peer updates");
-    assert_eq!(
-        update.new_value.as_deref(),
-        Some("19.0.0"),
-        "npm would widen to `^18 || ^19.0.0`; bun is rewritten exact"
-    );
+    assert_eq!(update.new_value.as_deref(), Some("^18 || ^19.0.0"));
 }
 
 /// A pre-commit `rev` that names a branch is an opaque ref, as a GitHub

@@ -412,7 +412,12 @@ impl Engine {
                     || matches!(dep.manager, Manager::Npm | Manager::Bun | Manager::Terraform))
             {
                 ResolutionKind::Lockfile
-            } else if resolved.is_some() && matches!(dep.kind, DependencyKind::Tool) {
+            } else if resolved.is_some()
+                && (matches!(dep.kind, DependencyKind::Tool)
+                    || (dep.kind == DependencyKind::Toolchain
+                        && !patchula_versioning::Ecosystem::of(dep.scheme, dep.source)
+                            .supports_ranges()))
+            {
                 ResolutionKind::ReleaseLine
             } else if resolved.is_some() && dep.kind == DependencyKind::Toolchain {
                 ResolutionKind::SupportedRange
