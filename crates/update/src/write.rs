@@ -10,29 +10,30 @@ use patchula_report::BranchStatus;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// GitHub's Git Data GraphQL ref update, atomic across the branch refs it names.
+#[allow(dead_code)]
+mod ref_update {
+    use graphql_client::GraphQLQuery;
+
+    /// Scalars the generated variables resolve as `super::*`.
+    type GitObjectID = String;
+    type GitRefname = String;
+
+    /// `ref-update.graphql` — GitHub's Git Data ref update, atomic across
+    /// the branch refs it names — checked against the vendored schema.
+    #[derive(GraphQLQuery)]
+    #[graphql(
+        schema_path = "../github/graphql/schema.docs.graphql",
+        query_path = "src/ref-update.graphql",
+        response_derives = "Debug"
+    )]
+    pub struct RefUpdate;
+}
+pub(crate) use ref_update::ref_update::ResponseData as RefUpdates;
+
+/// The updateRefs document, exported for tests that compare request bodies.
 /// The default branch is never named: rulesets that require a pull request
 /// reject even a no-op update to it, so the base is checked when it is read.
-pub const REF_UPDATE: &str =
-    "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}";
-
-/// `updateRefs`'s `data`: the mutation acknowledges with its payload object.
-/// A null — or a `data` without it — is GitHub declining without errors and
-/// reads as no acknowledgement.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct RefUpdates {
-    update_refs: Option<RefUpdatesPayload>,
-}
-impl RefUpdates {
-    /// Whether GitHub answered the mutation with its payload object.
-    pub(crate) fn acknowledged(&self) -> bool {
-        self.update_refs.is_some()
-    }
-}
-/// The payload; the write reads only that it arrived.
-#[derive(Deserialize)]
-struct RefUpdatesPayload {}
+pub const REF_UPDATE: &str = ref_update::ref_update::QUERY;
 
 /// The `git-tree` fields a tree creation returns that the write reads: the
 /// OpenAPI `git-tree` schema's required `sha`.
@@ -233,7 +234,7 @@ pub async fn apply_all(
                 )
                 .await;
             let error = match result {
-                Ok(value) if value.acknowledged() => None,
+                Ok(value) if value.update_refs.is_some() => None,
                 Ok(_) => {
                     Some("GitHub did not acknowledge atomic batch ref publication; rerun".into())
                 }

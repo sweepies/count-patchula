@@ -4211,15 +4211,22 @@ async fn a_marked_ref_outside_the_prefix_counts_as_obsolete_work() {
     // branch outside the prefix obsolete, which defeats the fast path.
     let inventory = patchula_update::Inventory {
         actor: "patchula[bot]".into(),
-        refs: vec![json!({
-            "name": "renovate/other",
-            "target": {
-                "author": {"user": {"login": "patchula[bot]"}},
-                "committer": {"user": {"login": "web-flow"}},
-                "signature": {"isValid": true},
-                "message": "subject\n\nPatchula: v1"
-            }
-        })],
+        refs: patchula_update::Page::of(vec![
+            serde_json::from_value(json!({
+                "name": "renovate/other",
+                "target": {
+                    "__typename": "Commit",
+                    "oid": "abc",
+                    "tree": {"oid": "tree"},
+                    "author": {"user": {"login": "patchula[bot]"}},
+                    "committer": {"user": {"login": "web-flow"}},
+                    "signature": {"__typename": "GpgSignature", "isValid": true},
+                    "message": "subject\n\nPatchula: v1"
+                },
+                "associatedPullRequests": {"nodes": [], "pageInfo": {"hasNextPage": false}}
+            }))
+            .unwrap(),
+        ]),
         ..Default::default()
     };
     let outcome = patchula_update::restore_inventory(

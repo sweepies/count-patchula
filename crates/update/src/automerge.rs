@@ -86,13 +86,30 @@ async fn save_history(
         .map_err(|e| e.to_string())
 }
 
-pub const CHECKS_QUERY: &str = r#"query($owner:String!,$name:String!,$oid:GitObjectID!,$cursor:String){
- repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{
-  oid statusCheckRollup{contexts(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{
-   __typename ... on CheckRun{status conclusion} ... on StatusContext{state}
-  }}}
- }}}
-}"#;
+#[allow(dead_code)]
+mod checks {
+    use graphql_client::GraphQLQuery;
+
+    /// `GitObjectID` scalar the generated variables resolve as
+    /// `super::GitObjectID`.
+    type GitObjectID = String;
+
+    /// `checks.graphql`, checked against the vendored GitHub schema.
+    #[derive(GraphQLQuery)]
+    #[graphql(
+        schema_path = "../github/graphql/schema.docs.graphql",
+        query_path = "src/checks.graphql",
+        response_derives = "Debug"
+    )]
+    pub struct ChecksQuery;
+}
+use checks::checks_query::{
+    ChecksQueryRepositoryObject as ChecksObject,
+    ChecksQueryRepositoryObjectOnCommitStatusCheckRollupContextsNodes as ChecksContext,
+};
+
+/// The checks document, exported for tests that compare request bodies.
+pub const CHECKS_QUERY: &str = checks::checks_query::QUERY;
 
 #[derive(Clone, Debug, Default)]
 pub struct Settings {
@@ -102,19 +119,20 @@ pub struct Settings {
     pub delete_branch: bool,
 }
 impl Settings {
-    pub(crate) fn from_graphql(repo: &Value) -> Self {
+    /// The inventory `repository`'s merge settings — every flag is a
+    /// schema `Boolean!`/`ID!`.
+    pub(crate) fn from_graphql(repo: &crate::receipts::InventoryRepository) -> Self {
         Self {
-            repository_id: repo["id"].as_str().unwrap_or_default().into(),
-            native: repo["autoMergeAllowed"].as_bool() == Some(true),
-            method: method(
-                repo,
-                [
-                    "squashMergeAllowed",
-                    "mergeCommitAllowed",
-                    "rebaseMergeAllowed",
-                ],
-            ),
-            delete_branch: repo["deleteBranchOnMerge"].as_bool() == Some(true),
+            repository_id: repo.id.clone(),
+            native: repo.auto_merge_allowed,
+            method: [
+                (repo.squash_merge_allowed, "squash"),
+                (repo.merge_commit_allowed, "merge"),
+                (repo.rebase_merge_allowed, "rebase"),
+            ]
+            .into_iter()
+            .find_map(|(allowed, method)| allowed.then(|| method.into())),
+            delete_branch: repo.delete_branch_on_merge,
         }
     }
     pub(crate) fn from_rest(repo: &Value) -> Self {
@@ -182,37 +200,58 @@ fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
 }
 async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, String> {
     let (owner, name) = repo.split_once('/').ok_or("invalid repository")?;
-    let checks: Vec<Value> = client
+    let checks: Vec<Option<ChecksContext>> = client
         .graphql_pages(
             CHECKS_QUERY,
             json!({"owner":owner,"name":name,"oid":head}),
             |data| {
-                if data["repository"]["object"]["oid"] != head {
+                let object: Option<ChecksObject> =
+                    serde_json::from_value(data["repository"]["object"].clone())
+                        .map_err(|_| patchula_github::Error::Json)?;
+                let Some(ChecksObject::Commit(commit)) = object else {
+                    return Err(patchula_github::Error::Json);
+                };
+                if commit.oid != head {
                     return Err(patchula_github::Error::Json);
                 }
-                if data["repository"]["object"]["statusCheckRollup"].is_null() {
+                let Some(rollup) = commit.status_check_rollup else {
                     return Ok(GraphqlPage {
                         nodes: Vec::new(),
                         has_next_page: false,
                         end_cursor: None,
                     });
-                }
-                GraphqlPage::from_connection(&data, "/repository/object/statusCheckRollup/contexts")
+                };
+                let contexts = rollup.contexts;
+                Ok(GraphqlPage {
+                    nodes: contexts.nodes.unwrap_or_default(),
+                    has_next_page: contexts.page_info.has_next_page,
+                    end_cursor: contexts.page_info.end_cursor,
+                })
             },
             |_| false,
         )
         .await
         .map_err(|e| e.to_string())?;
+    // A null or unreadable context node reads as not-green, as it did when
+    // the nodes were `Value`s without a `__typename`.
     Ok(!checks.is_empty()
-        && checks.iter().all(|c| match c["__typename"].as_str() {
-            Some("CheckRun") => {
-                c["status"] == "COMPLETED"
-                    && matches!(
-                        c["conclusion"].as_str(),
-                        Some("SUCCESS" | "NEUTRAL" | "SKIPPED")
+        && checks.iter().all(|c| match c {
+            Some(ChecksContext::CheckRun(run)) => {
+                matches!(
+                    run.status,
+                    checks::checks_query::CheckStatusState::COMPLETED
+                ) && matches!(
+                    run.conclusion,
+                    Some(
+                        checks::checks_query::CheckConclusionState::SUCCESS
+                            | checks::checks_query::CheckConclusionState::NEUTRAL
+                            | checks::checks_query::CheckConclusionState::SKIPPED
                     )
+                )
             }
-            Some("StatusContext") => c["state"] == "SUCCESS",
+            Some(ChecksContext::StatusContext(context)) => {
+                matches!(context.state, checks::checks_query::StatusState::SUCCESS)
+            }
             _ => false,
         }))
 }
@@ -263,10 +302,18 @@ pub(crate) async fn enable_native(
 ) -> Result<Native, String> {
     let input = json!({"input":{"pullRequestId":id,"mergeMethod":method.to_uppercase(),"expectedHeadOid":head}});
     match client
-        .graphql::<Value>(crate::pull_requests::ENABLE_AUTO_MERGE, input)
+        .graphql::<crate::pull_requests::EnableAutoMergeData>(
+            crate::pull_requests::ENABLE_AUTO_MERGE,
+            input,
+        )
         .await
     {
-        Ok(result) if result["enablePullRequestAutoMerge"]["pullRequest"].is_object() => {
+        Ok(result)
+            if result
+                .enable_pull_request_auto_merge
+                .as_ref()
+                .is_some_and(|payload| payload.pull_request.is_some()) =>
+        {
             Ok(Native::Enabled)
         }
         Ok(_) => Err("GitHub did not acknowledge native auto-merge".into()),

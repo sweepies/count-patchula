@@ -134,9 +134,13 @@ fn with_typename(node: &Value, typename: &str) -> Value {
 /// stored REST object and stamped with `__typename` so the pruner's
 /// inline-fragment matching sees the node's type.
 fn pull_node(pr: &Value, state: &State) -> Value {
+    // `PullRequest.title` and `.body` are `String!`: GitHub answers the
+    // empty string for a missing body, never null.
+    let title = pr["title"].as_str().unwrap_or_default();
+    let body = pr["body"].as_str().unwrap_or_default();
     json!({"__typename":"PullRequest",
     "number":pr["number"],"id":pr["node_id"],"url":pr["html_url"],
-    "title":pr["title"],"body":pr["body"],
+    "title":title,"body":body,
     "state":if pr["state"] == "open" {"OPEN"} else {"CLOSED"},
     "merged":!pr["merged_at"].is_null(),
     "headRefName":pr["head"]["ref"],"headRefOid":pr["head"]["sha"],
@@ -1361,10 +1365,14 @@ impl FakeGitHub {
                     .collect();
                 json!({"__typename":"Ref","name":name,
                        "target":{"__typename":"Commit","oid":oid,
-                          "tree":{"__typename":"Tree","oid":commit["tree"]["sha"]},"message":commit["message"],
+                          "tree":{"__typename":"Tree","oid":commit["tree"]["sha"]},
+                          // `Commit.message` is `String!`.
+                          "message":commit["message"].as_str().unwrap_or_default(),
                           "author":{"__typename":"GitActor","user":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("patchula[bot]")}},
                           "committer":{"__typename":"GitActor","user":{"login":"web-flow"}},
-                          "signature":{"isValid":!state.settings.unsigned}},
+                          // `Commit.signature` is the `GitSignature`
+                          // interface; `GpgSignature` carries `isValid`.
+                          "signature":{"__typename":"GpgSignature","isValid":!state.settings.unsigned}},
                        "associatedPullRequests":{"__typename":"PullRequestConnection","nodes":prs,
                           "pageInfo":{"__typename":"PageInfo","hasNextPage":state.settings.pr_next_page.as_deref() == Some(name)}}})
             })

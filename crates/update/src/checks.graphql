@@ -1,0 +1,28 @@
+query ChecksQuery($owner: String!, $name: String!, $oid: GitObjectID!, $cursor: String) {
+    repository(owner: $owner, name: $name) {
+        object(oid: $oid) {
+            __typename
+            ... on Commit {
+                oid
+                statusCheckRollup {
+                    contexts(first: 100, after: $cursor) {
+                        pageInfo {
+                            hasNextPage
+                            endCursor
+                        }
+                        nodes {
+                            __typename
+                            ... on CheckRun {
+                                status
+                                conclusion
+                            }
+                            ... on StatusContext {
+                                state
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

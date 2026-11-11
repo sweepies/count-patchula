@@ -15,8 +15,8 @@ pub mod text;
 mod trailers;
 pub use cleanup::{cleanup, delete_owned, owned};
 pub use receipts::{
-    DefaultBranch, DefaultCommit, INVENTORY_QUERY, Inventory, RestoreOutcome, restore_inventory,
-    save_receipts,
+    DefaultBranch, DefaultCommit, INVENTORY_QUERY, Inventory, Issue, Page, RestoreOutcome,
+    restore_inventory, save_receipts,
 };
 pub use settle::{Settlement, settle};
 mod plan;
