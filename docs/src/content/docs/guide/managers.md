@@ -318,7 +318,9 @@ is skipped.
 `pre-commit` updates each hook repository's `rev` on GitHub, GitLab, Codeberg
 and Gitea/Forgejo hosts, skipping `local` and `meta` hooks and bare commit pins.
 A `rev` is written as the tag is named (`v1.0` becomes `v1.1`, not `v1.1.0`),
-since pre-commit checks it out by that name.
+since pre-commit checks it out by that name. pre-commit accepts any git ref
+as a `rev`, so a branch name or another ref that names no version is left
+alone: there is no version to look up, and no error.
 `devcontainer` reads the `image` and OCI `features`, whose version lives in the
 feature key (`ghcr.io/devcontainers/features/node:1`).
 
