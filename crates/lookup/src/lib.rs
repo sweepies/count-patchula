@@ -298,9 +298,7 @@ impl Evaluator {
         // Runtime constraints describe supported versions, rather than an
         // installed package version. Explicit rules can still
         // request exact pinning for a repository that wants it.
-        if (dep.manager == Manager::Terraform || dep.manager == Manager::Npm)
-            && dep.kind == DependencyKind::Toolchain
-        {
+        if supported_runtime(dep) {
             effective.policy.versions = VersionPolicy::Preserve;
         }
         let scheme = Ecosystem::of(dep.scheme, dep.source);
@@ -920,10 +918,7 @@ impl Evaluator {
             {
                 continue;
             }
-            if matches!(dep.manager, Manager::Npm | Manager::Terraform)
-                && dep.kind == DependencyKind::Toolchain
-                && effective.policy.versions == VersionPolicy::Preserve
-            {
+            if supported_runtime(dep) && effective.policy.versions == VersionPolicy::Preserve {
                 // A supported runtime interval is not an installed-version
                 // pin. Widening its ceiling needs compatibility evidence.
                 continue;
@@ -977,8 +972,7 @@ impl Evaluator {
                     .1;
                 if !effective.policy.active
                     || (!parsed.0.pre.is_empty() && baseline.0.pre.is_empty())
-                    || (matches!(dep.manager, Manager::Npm | Manager::Terraform)
-                        && dep.kind == DependencyKind::Toolchain
+                    || (supported_runtime(dep)
                         && effective.policy.versions == VersionPolicy::Preserve)
                 {
                     continue;
@@ -1252,6 +1246,15 @@ fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
 }
 fn any<T: PartialEq>(values: &[T], value: T) -> bool {
     values.is_empty() || values.contains(&value)
+}
+/// `engines.node` and Terraform's `required_version` declare a supported
+/// runtime range. A version file such as `.nvmrc`, `.node-version` or
+/// `.terraform-version` records one bare version — its scheme cannot express
+/// a range — so it is an installed-version pin proposed like any other.
+fn supported_runtime(dep: &Dependency) -> bool {
+    matches!(dep.manager, Manager::Npm | Manager::Terraform)
+        && dep.kind == DependencyKind::Toolchain
+        && Ecosystem::of(dep.scheme, dep.source).supports_ranges()
 }
 /// Whether `text` passes the `permitted` filter, when one is set.
 fn permitted_matches(permitted: Option<&Filter>, scheme: Ecosystem, text: &str) -> Result<bool> {
