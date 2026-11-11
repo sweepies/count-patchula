@@ -130,7 +130,9 @@ class Policy {
   /// `lts` keeps releases on the catalog's `lts` dist-tag line; `stable`,
   /// the default, selects the newest release the other rules allow.
   channel: ReleaseChannel = "stable"
+  /// Actions, reusable workflows and APM packages.
   actionDigests: Boolean = true
+  /// Container images and OCI Helm charts.
   imageDigests: Boolean = true
   merge: Boolean = false
   /// Nonempty groups share a PR; an empty string forces individual PRs.
