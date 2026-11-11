@@ -263,7 +263,7 @@ pub(crate) async fn enable_native(
 ) -> Result<Native, String> {
     let input = json!({"input":{"pullRequestId":id,"mergeMethod":method.to_uppercase(),"expectedHeadOid":head}});
     match client
-        .graphql(crate::pull_requests::ENABLE_AUTO_MERGE, input)
+        .graphql::<Value>(crate::pull_requests::ENABLE_AUTO_MERGE, input)
         .await
     {
         Ok(result) if result["enablePullRequestAutoMerge"]["pullRequest"].is_object() => {
@@ -317,7 +317,10 @@ async fn one(
     let number = fields.number.ok_or("missing PR number")?;
     let head = fields.head.sha.as_deref().ok_or("missing receipt head")?;
     let path = format!("repos/{}/pulls/{number}", repo.repository);
-    let fresh = client.get_fresh(&path).await.map_err(|e| e.to_string())?;
+    let fresh = client
+        .get_fresh::<Value>(&path)
+        .await
+        .map_err(|e| e.to_string())?;
     if !same_head(&fresh, pr, &inventory.actor, &repo.repository) {
         return Ok((
             PullRequestStatus::Protected,
@@ -342,7 +345,10 @@ async fn one(
     }
     // Recheck ownership/protections after pagination, then use a head lease on the
     // normal merge API. No admin/bypass option, direct base write or force merge.
-    let fresh = client.get_fresh(&path).await.map_err(|e| e.to_string())?;
+    let fresh = client
+        .get_fresh::<Value>(&path)
+        .await
+        .map_err(|e| e.to_string())?;
     if !same_head(&fresh, pr, &inventory.actor, &repo.repository)
         || fresh["draft"].as_bool() != Some(false)
         || fresh["mergeable"].as_bool() != Some(true)
@@ -354,7 +360,7 @@ async fn one(
         ));
     }
     let result = client
-        .put(
+        .put::<Value>(
             &format!("{path}/merge"),
             json!({"sha":head,"merge_method":method}),
         )

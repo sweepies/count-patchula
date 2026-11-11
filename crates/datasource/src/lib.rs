@@ -73,7 +73,7 @@ impl Error {
             Error::Http(CacheError::Transport(HttpError::Network))
             | Error::Github(GithubError::Transport) => LookupErrorKind::Network,
             Error::Http(CacheError::Document)
-            | Error::Github(GithubError::Json)
+            | Error::Github(GithubError::Json | GithubError::Decode { .. })
             | Error::Json(_)
             | Error::Mise(patchula_mise::Error::Unreadable(_)) => LookupErrorKind::Parse,
             Error::Github(GithubError::RateLimit) | Error::RateLimit(_) => {

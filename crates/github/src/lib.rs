@@ -5,6 +5,7 @@ pub mod app;
 mod blobs;
 mod credentials;
 mod governor;
+pub mod model;
 mod pagination;
 pub use blobs::blob_sha;
 pub use credentials::{Credentials, Token};
@@ -19,6 +20,7 @@ use reqwest::{
     Method, Request, StatusCode, Url,
     header::{self, HeaderValue},
 };
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{collections::HashSet, fmt, sync::Arc, time::Duration};
@@ -47,6 +49,14 @@ pub enum Error {
     RateLimit,
     #[error("GitHub response is invalid JSON")]
     Json,
+    /// A response did not decode into the type asked for. Carries only the
+    /// operation and the field path: serde's message is never kept, since a
+    /// type-mismatch message can quote a response value — PR body text —
+    /// and error text reaches dashboards and public pages. The path's map
+    /// keys come from the response too, so a segment that is not a plain
+    /// field name or index is replaced with `?`.
+    #[error("GitHub response for {operation} did not decode at {path}")]
+    Decode { operation: String, path: String },
     /// Carries GitHub's `errors[].message` values, joined and truncated; empty
     /// when GitHub sent none.
     #[error("GitHub GraphQL returned errors{}", graphql_detail(.0))]
@@ -389,39 +399,48 @@ impl Client {
 
     /// Authoritative read used for write preconditions. Always revalidates with
     /// the server; a 304 reuses only the representation the server validated.
-    pub async fn get_fresh(&self, path: &str) -> Result<Value> {
+    pub async fn get_fresh<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let response = self.get(path).await?;
-        serde_json::from_slice(&response.body).map_err(|_| Error::Json)
+        decode(&response.body, format!("GET {path}"))
     }
 
     /// Git Data writes do not enter the HTTP cache. Only documented rate-limit
     /// refusals are retried; transport/5xx failures may have written and must be
     /// reconciled by the next run rather than blindly repeated.
-    pub async fn post(&self, path: &str, body: Value) -> Result<Value> {
+    pub async fn post<T: DeserializeOwned>(&self, path: &str, body: Value) -> Result<T> {
         self.mutate(Method::POST, path, body).await
     }
 
-    pub async fn patch(&self, path: &str, body: Value) -> Result<Value> {
+    pub async fn patch<T: DeserializeOwned>(&self, path: &str, body: Value) -> Result<T> {
         self.mutate(Method::PATCH, path, body).await
     }
-    pub async fn put(&self, path: &str, body: Value) -> Result<Value> {
+    pub async fn put<T: DeserializeOwned>(&self, path: &str, body: Value) -> Result<T> {
         self.mutate(Method::PUT, path, body).await
     }
-    async fn mutate(&self, method: Method, path: &str, body: Value) -> Result<Value> {
-        let mut request = self.request(method, self.url(path)?);
+    async fn mutate<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Value,
+    ) -> Result<T> {
+        let mut request = self.request(method.clone(), self.url(path)?);
         request.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
         *request.body_mut() = Some(serde_json::to_vec(&body).map_err(|_| Error::Json)?.into());
+        let operation = format!("{method} {path}");
         let response = self.exchange(&request, false).await?;
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
         }
-        if response.body.is_empty() {
-            return Ok(Value::Null);
-        }
-        serde_json::from_slice(&response.body).map_err(|_| Error::Json)
+        // An empty body decodes as `null`, which `Value` takes as `Value::Null`.
+        let body = if response.body.is_empty() {
+            b"null".as_slice()
+        } else {
+            response.body.as_slice()
+        };
+        decode(body, operation)
     }
 
     /// Conditional GET whose cached body contains only caller-selected fields.
@@ -535,7 +554,7 @@ impl Client {
         Err(Error::Pagination)
     }
 
-    pub async fn graphql(&self, query: &str, variables: Value) -> Result<Value> {
+    pub async fn graphql<T: DeserializeOwned>(&self, query: &str, variables: Value) -> Result<T> {
         let url = self.url("graphql")?;
         let mut request = self.request(Method::POST, url);
         request.headers_mut().insert(
@@ -547,22 +566,157 @@ impl Client {
                 .map_err(|_| Error::Json)?
                 .into(),
         );
+        let operation = graphql_operation(query);
         let response = self.exchange(&request, false).await?;
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
         }
-        let json: Value = serde_json::from_slice(&response.body).map_err(|_| Error::Json)?;
+        let json: Value = decode(&response.body, operation.clone())?;
         if json
             .get("errors")
             .is_some_and(|errors| !errors.as_array().is_some_and(Vec::is_empty))
         {
             return Err(Error::Graphql(graphql_messages(&json)));
         }
-        json.get("data")
+        let data = json
+            .get("data")
             .filter(|data| !data.is_null())
-            .cloned()
-            .ok_or_else(|| Error::Graphql(String::new()))
+            .ok_or_else(|| Error::Graphql(String::new()))?;
+        serde_path_to_error::deserialize(data).map_err(|error| Error::Decode {
+            operation,
+            path: safe_path(error.path()),
+        })
     }
+}
+
+/// `path` with every segment that is not a field name or an index replaced
+/// by `?`, so a response's own keys cannot carry text into an error.
+fn safe_path(path: &serde_path_to_error::Path) -> String {
+    let segments: Vec<String> = path
+        .iter()
+        .map(|segment| match segment {
+            serde_path_to_error::Segment::Seq { index } => index.to_string(),
+            serde_path_to_error::Segment::Map { key }
+            | serde_path_to_error::Segment::Enum { variant: key }
+                if !key.is_empty()
+                    && key.len() <= 64
+                    && key.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                    && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
+            {
+                key.clone()
+            }
+            _ => "?".to_owned(),
+        })
+        .collect();
+    if segments.is_empty() {
+        ".".to_owned()
+    } else {
+        segments.join(".")
+    }
+}
+
+/// Decode a response body into `T`, naming only the operation and the field
+/// path on failure — never serde's message, which can quote response values.
+fn decode<T: DeserializeOwned>(body: &[u8], operation: String) -> Result<T> {
+    let mut deserializer = serde_json::Deserializer::from_slice(body);
+    let value =
+        serde_path_to_error::deserialize(&mut deserializer).map_err(|error| Error::Decode {
+            operation,
+            path: safe_path(error.path()),
+        })?;
+    // Content after the document is invalid JSON, as `from_slice` treated it.
+    deserializer.end().map_err(|_| Error::Json)?;
+    Ok(value)
+}
+
+/// The GraphQL operation `query` performs, for error context: its name when
+/// the document names it (`query ReleaseNotes`), else the operation kind and
+/// first root field (`mutation updateRefs`), else `graphql`.
+fn graphql_operation(query: &str) -> String {
+    fn skip(text: &str, mut at: usize) -> usize {
+        loop {
+            match text.as_bytes().get(at) {
+                Some(b'#') => {
+                    while matches!(text.as_bytes().get(at), Some(b) if *b != b'\n') {
+                        at += 1;
+                    }
+                }
+                Some(b) if b.is_ascii_whitespace() || *b == b',' => at += 1,
+                _ => return at,
+            }
+        }
+    }
+    /// The span of an identifier starting at `at`, if one starts there.
+    fn ident(text: &str, at: usize) -> Option<(usize, usize)> {
+        let bytes = text.as_bytes();
+        if !matches!(bytes.get(at), Some(b) if b.is_ascii_alphabetic() || *b == b'_') {
+            return None;
+        }
+        let mut end = at + 1;
+        while matches!(bytes.get(end), Some(b) if b.is_ascii_alphanumeric() || *b == b'_') {
+            end += 1;
+        }
+        Some((at, end))
+    }
+    /// The index just past the bracketed group starting at `at`, or the text's
+    /// end when it does not close. String literals are skipped.
+    fn past_brackets(text: &str, mut at: usize) -> usize {
+        let mut depth = 0usize;
+        let mut quoted = false;
+        let mut escaped = false;
+        while let Some(&b) = text.as_bytes().get(at) {
+            if escaped {
+                escaped = false;
+            } else {
+                match b {
+                    b'\\' if quoted => escaped = true,
+                    b'"' => quoted = !quoted,
+                    _ if quoted => {}
+                    b'(' | b'[' | b'{' => depth += 1,
+                    b')' | b']' | b'}' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            return at + 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            at += 1;
+        }
+        at
+    }
+    let at = skip(query, 0);
+    // The `{ field }` shorthand is an anonymous query.
+    if query.as_bytes().get(at) == Some(&b'{') {
+        return match ident(query, skip(query, at + 1)) {
+            Some((start, end)) => format!("query {}", &query[start..end]),
+            None => "query".into(),
+        };
+    }
+    let Some((start, end)) = ident(query, at) else {
+        return "graphql".into();
+    };
+    let kind = &query[start..end];
+    if !matches!(kind, "query" | "mutation" | "subscription") {
+        return "graphql".into();
+    }
+    let at = skip(query, end);
+    if let Some((start, end)) = ident(query, at) {
+        return format!("{kind} {}", &query[start..end]);
+    }
+    let at = if query.as_bytes().get(at) == Some(&b'(') {
+        past_brackets(query, at)
+    } else {
+        at
+    };
+    let at = skip(query, at);
+    if query.as_bytes().get(at) == Some(&b'{')
+        && let Some((start, end)) = ident(query, skip(query, at + 1))
+    {
+        return format!("{kind} {}", &query[start..end]);
+    }
+    kind.into()
 }
 
 /// How a GET treats what the cache holds.
@@ -645,6 +799,38 @@ pub(crate) fn join_api(base: &Url, path: &str) -> Result<Url> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_decode_path_keeps_field_names_and_masks_response_text() {
+        let error = decode::<std::collections::BTreeMap<String, Vec<u32>>>(
+            br#"{"x":[1],"secret token text":["oops"]}"#,
+            "GET probe".into(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            Error::Decode {
+                operation: "GET probe".into(),
+                path: "?.0".into()
+            }
+        );
+        let error = decode::<std::collections::BTreeMap<String, Vec<u32>>>(
+            br#"{"field_name":["oops"]}"#,
+            "GET probe".into(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("field_name.0"), "{error}");
+    }
+
+    #[test]
+    fn content_after_the_document_is_invalid_json() {
+        assert_eq!(
+            decode::<serde_json::Value>(br#"{"a":1} trailing"#, "GET probe".into()).unwrap_err(),
+            Error::Json
+        );
+        assert!(decode::<serde_json::Value>(br#" {"a":1} "#, "GET probe".into()).is_ok());
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -661,6 +847,31 @@ mod tests {
             Error::Graphql(String::new()).to_string(),
             "GitHub GraphQL returned errors"
         );
+    }
+
+    #[test]
+    fn graphql_operations_name_themselves_or_their_first_root_field() {
+        for (query, expected) in [
+            (
+                "query ReleaseNotes($owner:String!){repository(owner:$owner){x}}",
+                "query ReleaseNotes",
+            ),
+            (
+                "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){x}}",
+                "query repository",
+            ),
+            (
+                "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}",
+                "mutation updateRefs",
+            ),
+            ("query{viewer{login}}", "query viewer"),
+            ("{viewer{login}}", "query viewer"),
+            ("query FreshTagDigests { a }", "query FreshTagDigests"),
+            ("query", "query"),
+            ("not a query", "graphql"),
+        ] {
+            assert_eq!(graphql_operation(query), expected, "{query}");
+        }
     }
 
     struct NoTransport;

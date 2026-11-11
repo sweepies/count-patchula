@@ -32,7 +32,7 @@ pub(crate) fn all_ours(commits: &[Value], actor: &str) -> bool {
 /// A copied marker alone never authorizes deleting or replacing human work.
 pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Result<bool, String> {
     let tip = client
-        .get_fresh(&format!("repos/{repo}/commits/{head}"))
+        .get_fresh::<Value>(&format!("repos/{repo}/commits/{head}"))
         .await
         .map_err(|e| e.to_string())?;
     let message = tip["commit"]["message"].as_str().unwrap_or("");
@@ -40,7 +40,7 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
         return Ok(false);
     };
     let history = match client
-        .get_fresh(&format!(
+        .get_fresh::<Value>(&format!(
             "repos/{repo}/compare/{base}...{head}?per_page=100"
         ))
         .await
@@ -93,7 +93,7 @@ pub async fn cleanup(
         return Ok(Vec::new());
     }
     let metadata = client
-        .get_fresh(&format!("repos/{repo}"))
+        .get_fresh::<Value>(&format!("repos/{repo}"))
         .await
         .map_err(|e| e.to_string())?;
     if metadata["default_branch"] != default_branch {
@@ -144,7 +144,7 @@ pub async fn delete_owned(
     if branch == default_branch {
         return Err("refusing to delete default branch".into());
     }
-    let result = client.graphql(REF_UPDATE, json!({"input":{"repositoryId":node,"refUpdates":[
+    let result = client.graphql::<Value>(REF_UPDATE, json!({"input":{"repositoryId":node,"refUpdates":[
         {"name":format!("refs/heads/{branch}"),"beforeOid":head,"afterOid":"0000000000000000000000000000000000000000","force":true}
     ]}})).await.map_err(|e| e.to_string())?;
     if !result["updateRefs"].is_object() {

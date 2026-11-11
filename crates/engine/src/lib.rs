@@ -1021,7 +1021,7 @@ impl Engine {
             let (owner, name) = repo.split_once('/').expect("validated repository");
             let data = self
                 .github
-                .graphql(
+                .graphql::<Value>(
                     REPOSITORY_HEAD_QUERY,
                     serde_json::json!({"owner":owner,"name":name}),
                 )

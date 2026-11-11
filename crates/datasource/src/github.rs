@@ -141,7 +141,7 @@ impl Client {
             let query = format!("query({}){{{}}}", declarations.join(","), fields.join(" "));
             let data = self
                 .github
-                .graphql(&query, Value::Object(variables))
+                .graphql::<Value>(&query, Value::Object(variables))
                 .await?;
             Ok(stream::iter(pending.into_iter().enumerate())
                 .map(|(i, (package, scope, previous))| {
@@ -209,7 +209,10 @@ impl Client {
                     first
                 } else {
                     GraphqlPage::<Value>::from_connection(
-                        &self.github.graphql(RELEASES, variables.clone()).await?,
+                        &self
+                            .github
+                            .graphql::<Value>(RELEASES, variables.clone())
+                            .await?,
                         "/repository/releases",
                     )?
                 };
@@ -359,7 +362,7 @@ impl Client {
                 );
                 let data = self
                     .github
-                    .graphql(&query, Value::Object(variables))
+                    .graphql::<Value>(&query, Value::Object(variables))
                     .await?;
                 let mut result = Vec::new();
                 for (i, (sha, names, scope)) in chunk.iter().enumerate() {
@@ -450,7 +453,10 @@ impl Client {
             declarations.join(","),
             fields.join(" ")
         );
-        let data = self.github.graphql(&query, Value::Object(variables)).await;
+        let data = self
+            .github
+            .graphql::<Value>(&query, Value::Object(variables))
+            .await;
         let mut resolved = TagDigests::new();
         let mut missing = Vec::new();
         for (i, key) in chunk.iter().enumerate() {

@@ -169,7 +169,11 @@ impl Client {
             let query = format!(
                 "query ReleaseNotes({declarations}){{repository(owner:$owner,name:$name){{{fields}}}}}"
             );
-            let data = self.sources.github.graphql(&query, variables).await?;
+            let data = self
+                .sources
+                .github
+                .graphql::<Value>(&query, variables)
+                .await?;
             let repository = data["repository"]
                 .as_object()
                 .ok_or_else(|| Error::Notes("missing upstream repository".into()))?;
