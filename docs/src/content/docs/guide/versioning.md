@@ -81,6 +81,13 @@ per package, and a lockfile records it.
 npm and Bun stay `exact`, so installs are reproducible without
 relying on a lockfile alone; see [Exact npm versions](/renovate/departures/#npm-range-edits).
 
+`engines.node` and Terraform's `required_version` declare the runtimes a
+project supports rather than the one it installs, so they default to
+`preserve` too: a release the constraint allows changes nothing, and one past
+its ceiling is left alone. A version file such as `.nvmrc`, `.node-version`
+or `.terraform-version` pins the installed version and is updated like any
+other pin.
+
 Under `preserve` a release the declaration already allows does not edit the
 manifest. When the manifest has a committed lockfile, the update moves that
 lock to the new version and nothing else, so `tokio = "1"` locked at 1.39.0

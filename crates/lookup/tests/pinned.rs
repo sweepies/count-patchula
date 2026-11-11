@@ -53,15 +53,16 @@ fn catalog(values: &[&str]) -> Catalog {
     }
 }
 
-/// Bug 1: version files such as `.nvmrc` are `Toolchain` declarations, and
-/// toolchain rules only apply to support ranges — so the file pinning an
-/// installed runtime gets no update at all by default.
-/// pins current behaviour, not endorsed; see bug 1.
+/// Bug 1: a version file such as `.nvmrc` or `.terraform-version` records
+/// one bare version — the installed pin — so it is updated like any other
+/// pin. Only ranged runtime constraints (`engines.node`,
+/// `required_version`) keep the `preserve` default.
 #[test]
-fn pinned_version_files_get_no_update() {
+fn version_files_update_like_pins() {
     let eval = Evaluator::new(&config()).unwrap();
     let mut dep = dependency("node");
     dep.file = ".nvmrc".into();
+    dep.form = EditForm::Scalar(Syntax::Bare);
     dep.kind = DependencyKind::Toolchain;
     dep.source = Source::Mise;
     dep.scheme = Scheme::Loose;
@@ -70,10 +71,33 @@ fn pinned_version_files_get_no_update() {
     let proposals = eval
         .propose(&dep, &catalog(&["20.1.1", "20.2.0", "21.0.0"]))
         .unwrap();
-    assert!(
-        proposals.is_empty(),
-        "a version file gets no update by default: {proposals:?}"
-    );
+    for version in ["20.1.1", "20.2.0", "21.0.0"] {
+        let update = proposals
+            .iter()
+            .find(|p| p.new_version.as_deref() == Some(version))
+            .unwrap_or_else(|| panic!("a version file updates like a pin: {proposals:?}"));
+        assert_eq!(update.new_value.as_deref(), Some(version));
+    }
+
+    let mut dep = dependency("terraform");
+    dep.manager = Manager::Terraform;
+    dep.file = ".terraform-version".into();
+    dep.form = EditForm::Scalar(Syntax::Bare);
+    dep.kind = DependencyKind::Toolchain;
+    dep.source = Source::Mise;
+    dep.scheme = Scheme::Loose;
+    dep.current = "1.14.7".into();
+    dep.resolved = Some("1.14.7".into());
+    let proposals = eval
+        .propose(&dep, &catalog(&["1.14.8", "1.15.0", "2.0.0"]))
+        .unwrap();
+    for version in ["1.14.8", "1.15.0", "2.0.0"] {
+        let update = proposals
+            .iter()
+            .find(|p| p.new_version.as_deref() == Some(version))
+            .unwrap_or_else(|| panic!("a version file updates like a pin: {proposals:?}"));
+        assert_eq!(update.new_value.as_deref(), Some(version));
+    }
 }
 
 /// Bug 2: the support-range and peer facts name `Manager::Npm` alone, so a
