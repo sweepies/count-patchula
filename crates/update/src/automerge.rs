@@ -1,7 +1,8 @@
 //! Native auto-merge, or conservative later-run merging backed by write receipts.
 use crate::{
     Inventory, Plan,
-    pull_requests::{Tracked, body, body_hash, owned_pr},
+    pr::body::body_hash,
+    pull_requests::{Tracked, body, owned_pr},
 };
 use chrono::{DateTime, Utc};
 use patchula_cache::{Cache, State};

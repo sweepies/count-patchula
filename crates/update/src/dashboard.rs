@@ -1171,8 +1171,8 @@ pub async fn reconcile(
         let unchanged = previous
             .as_ref()
             .is_some_and(|r| r.number == number && r.actor == inventory.actor && r.hash == digest)
-            && crate::pull_requests::body_hash(current) == digest;
-        if !unchanged && crate::pull_requests::body_hash(current) != digest {
+            && crate::pr::body::body_hash(current) == digest;
+        if !unchanged && crate::pr::body::body_hash(current) != digest {
             client
                 .patch::<Value>(&format!("{path}/{number}"), json!({"body":body}))
                 .await
