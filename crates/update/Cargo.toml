@@ -21,6 +21,7 @@ patchula-versioning = { path = "../versioning" }
 patchula-lookup = { path = "../lookup" }
 patchula-lockfiles = { path = "../lockfiles" }
 futures-util = "0.3"
+graphql_client = { version = "0.16", default-features = false, features = ["graphql_query_derive"] }
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
