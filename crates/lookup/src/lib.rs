@@ -9,7 +9,7 @@ use patchula_datasource::{Catalog, Version};
 use patchula_manager::Dependency;
 use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy};
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
-use patchula_words::{DependencyKind, Manager, ReleaseChannel, Source, Update, VersionPolicy};
+use patchula_words::{DependencyKind, ReleaseChannel, Source, Update, VersionPolicy};
 use regex::Regex;
 use std::cmp::Ordering;
 
@@ -260,11 +260,7 @@ impl Evaluator {
             return false;
         }
         // A branch ref has no version to compare; only tags are looked up.
-        if dep.tagged_action()
-            || dep.manager == Manager::PreCommit
-            || matches!(dep.manager, Manager::Gitlabci | Manager::GitlabciInclude)
-                && dep.source == Source::ForgeTags
-        {
+        if dep.looked_up_only_as_version() {
             return Ecosystem::Loose
                 .parse(dep.resolved.as_deref().unwrap_or(&dep.current))
                 .is_ok();
@@ -298,7 +294,7 @@ impl Evaluator {
         // Runtime constraints describe supported versions, rather than an
         // installed package version. Explicit rules can still
         // request exact pinning for a repository that wants it.
-        if supported_runtime(dep) {
+        if dep.supports_runtime_range() {
             effective.policy.versions = VersionPolicy::Preserve;
         }
         let scheme = Ecosystem::of(dep.scheme, dep.source);
@@ -324,7 +320,7 @@ impl Evaluator {
         }
         // Peers express consumer compatibility, even when installed packages
         // use exact versions. Exact peer declarations still bump in place.
-        if matches!(dep.manager, Manager::Npm | Manager::Bun) && dep.kind == DependencyKind::Peer {
+        if dep.peer_range() {
             effective.policy.versions = if Ecosystem::Npm.parse(&dep.current).is_ok() {
                 VersionPolicy::Exact
             } else {
@@ -335,17 +331,7 @@ impl Evaluator {
     }
     pub fn needs_digest(&self, dep: &Dependency, proposal: &Proposal) -> bool {
         let update = proposal.update_type;
-        (dep.manager == Manager::Apm
-            || (dep.source == Source::Docker
-                || dep.source == Source::Oci
-                || dep.manager == Manager::GithubActions)
-                && matches!(
-                    dep.kind,
-                    DependencyKind::Action
-                        | DependencyKind::ReusableWorkflow
-                        | DependencyKind::ContainerImage
-                        | DependencyKind::Chart
-                ))
+        dep.needs_digest()
             && self
                 .effective(dep, update)
                 .map(|effective| effective.digest)
@@ -489,10 +475,7 @@ impl Evaluator {
         advisories: Advisories<'_>,
     ) -> Result<Option<Proposal>> {
         let (query, found) = advisories;
-        if dep.kind != DependencyKind::Transitive
-            || dep.source != Source::Crates
-            || self.ignored(dep)
-        {
+        if !dep.transitive_lock_movable() || self.ignored(dep) {
             return Ok(None);
         }
         let scheme = Ecosystem::of(dep.scheme, dep.source);
@@ -755,11 +738,7 @@ impl Evaluator {
         });
         // Branch and opaque refs are preserved. Their digest is proposed through
         // digest_proposal after the engine resolves that same ref.
-        if baseline.is_none()
-            && (dep.manager == Manager::GithubActions
-                || dep.manager == Manager::PreCommit
-                || scheme == Ecosystem::Docker)
-        {
+        if baseline.is_none() && (dep.opaque_when_unclassifiable() || scheme == Ecosystem::Docker) {
             return Ok(Evaluation::default());
         }
         let baseline = baseline.or_else(|| {
@@ -866,8 +845,7 @@ impl Evaluator {
             }
             // Only Actions float a short tag such as v4 along its release line;
             // an APM tag names one release.
-            if dep.manager == Manager::GithubActions
-                && dep.tagged_action()
+            if dep.short_tags_float()
                 && numeric_fields(&dep.current).is_some_and(|n| n < 3)
                 && numeric_prefix(&dep.current, &normalized)
             {
@@ -918,7 +896,8 @@ impl Evaluator {
             {
                 continue;
             }
-            if supported_runtime(dep) && effective.policy.versions == VersionPolicy::Preserve {
+            if dep.supports_runtime_range() && effective.policy.versions == VersionPolicy::Preserve
+            {
                 // A supported runtime interval is not an installed-version
                 // pin. Widening its ceiling needs compatibility evidence.
                 continue;
@@ -972,7 +951,7 @@ impl Evaluator {
                     .1;
                 if !effective.policy.active
                     || (!parsed.0.pre.is_empty() && baseline.0.pre.is_empty())
-                    || (supported_runtime(dep)
+                    || (dep.supports_runtime_range()
                         && effective.policy.versions == VersionPolicy::Preserve)
                 {
                     continue;
@@ -1009,7 +988,7 @@ impl Evaluator {
         'tracks: for chain in chains {
             let mut reported = false;
             for (_, version, normalized, kind, effective) in chain {
-                let new_value = if dep.manager == Manager::GithubActions {
+                let new_value = if dep.tag_at_declared_precision() {
                     action_value(
                         &dep.current,
                         if dep.kind == DependencyKind::Tool {
@@ -1021,8 +1000,7 @@ impl Evaluator {
                 } else if dep.exact_tag_ref() {
                     version.version.clone()
                 } else {
-                    let value = if matches!(dep.manager, Manager::Npm | Manager::Bun)
-                        && dep.kind == DependencyKind::Peer
+                    let value = if dep.peer_range()
                         && effective.policy.versions == VersionPolicy::Widen
                     {
                         if scheme
@@ -1047,8 +1025,7 @@ impl Evaluator {
                             };
                             format!("{} || ^{}.{}.{}", dep.current, target.0.major, minor, patch)
                         }
-                    } else if dep.manager == Manager::Terraform
-                        && dep.kind == DependencyKind::Provider
+                    } else if dep.keeps_satisfied_constraint()
                         && scheme
                             .matches(
                                 &dep.current,
@@ -1095,10 +1072,7 @@ impl Evaluator {
                     && !lock_only
                     && (dep.preserves_ranges()
                         || matches!(scheme, Ecosystem::Maven | Ecosystem::Nuget)
-                        || (matches!(
-                            dep.manager,
-                            Manager::Terraform | Manager::Npm | Manager::Bun
-                        ) && dep.kind == DependencyKind::Toolchain))
+                        || dep.runtime_toolchain())
                 {
                     // Lockfile maintenance is a separate, explicitly enabled operation.
                     continue 'tracks;
@@ -1106,9 +1080,7 @@ impl Evaluator {
                 let mut update = proposal(
                     (!lock_only).then_some(new_value),
                     Some(normalized),
-                    if effective.digest
-                        && (dep.manager == Manager::GithubActions || dep.tagged_action())
-                    {
+                    if effective.digest && dep.digest_from_catalog() {
                         version.digest.clone()
                     } else {
                         None
@@ -1249,17 +1221,6 @@ fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
 fn any<T: PartialEq>(values: &[T], value: T) -> bool {
     values.is_empty() || values.contains(&value)
 }
-/// `engines.node` and Terraform's `required_version` declare a supported
-/// runtime range. A version file such as `.nvmrc`, `.node-version` or
-/// `.terraform-version` records one bare version — its scheme cannot express
-/// a range — so it is an installed-version pin proposed like any other.
-fn supported_runtime(dep: &Dependency) -> bool {
-    matches!(
-        dep.manager,
-        Manager::Npm | Manager::Bun | Manager::Terraform
-    ) && dep.kind == DependencyKind::Toolchain
-        && Ecosystem::of(dep.scheme, dep.source).supports_ranges()
-}
 /// Whether `text` passes the `permitted` filter, when one is set.
 fn permitted_matches(permitted: Option<&Filter>, scheme: Ecosystem, text: &str) -> Result<bool> {
     match permitted {
@@ -1323,9 +1284,7 @@ impl Evaluator {
         dep: &Dependency,
         catalog: &Catalog,
     ) -> Result<Option<String>> {
-        if dep.manager != Manager::Mise
-            && !(dep.manager == Manager::GithubActions && dep.kind == DependencyKind::Tool)
-        {
+        if !dep.selector_resolved() {
             return Ok(None);
         }
         let scheme = Ecosystem::of(dep.scheme, dep.source);
@@ -1429,11 +1388,7 @@ impl Evaluator {
         dep: &Dependency,
         catalog: &Catalog,
     ) -> Result<Option<String>> {
-        if matches!(
-            dep.manager,
-            Manager::Terraform | Manager::Npm | Manager::Bun
-        ) && dep.kind == DependencyKind::Toolchain
-        {
+        if dep.runtime_toolchain() {
             let scheme = Ecosystem::of(dep.scheme, dep.source);
             return Ok(catalog
                 .versions
@@ -1446,10 +1401,10 @@ impl Evaluator {
                 .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
                 .map(|(_, version)| version.trim_start_matches('v').into()));
         }
-        if dep.manager == Manager::Mise || dep.kind == DependencyKind::Tool {
+        if dep.resolved_via_listing() {
             return self.resolved_tool_version(dep, catalog);
         }
-        if dep.manager != Manager::GithubActions || !dep.tagged_action() {
+        if !dep.short_tags_float() {
             return Ok(None);
         }
         let current = dep.resolved.as_deref().unwrap_or(&dep.current);
@@ -1483,6 +1438,7 @@ impl Evaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patchula_words::Manager;
 
     /// `extractor` caches the compiled pattern per distinct `extract` field:
     /// two lookups with the same pattern compile it once.

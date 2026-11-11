@@ -314,7 +314,7 @@ impl Engine {
                 reason: Some(missed.reason),
             });
         }
-        if dep.manager == Manager::Copier {
+        if dep.report_only() {
             // Only copier update applies a template: report the
             // newest eligible tag and propose nothing to edit.
             let rank = |kind: UpdateKind| match kind {
@@ -399,18 +399,7 @@ impl Engine {
                 } else {
                     ResolutionKind::FloatingRef
                 }
-            } else if !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                && dep.resolved.is_some()
-                // `movable_lockfile` names each declaration its committed
-                // lockfile records a resolved version for: Cargo.lock,
-                // uv.lock, poetry.lock, Gemfile.lock, composer.lock and
-                // go.mod's `require` versions. npm, Bun and Terraform's
-                // descriptors name no movable lock, but their parsers fill
-                // `resolved` only from a committed one: package-lock.json,
-                // bun.lock, aube-lock.yaml or .terraform.lock.hcl.
-                && (dep.movable_lockfile()
-                    || matches!(dep.manager, Manager::Npm | Manager::Bun | Manager::Terraform))
-            {
+            } else if dep.resolved_from_lockfile() {
                 ResolutionKind::Lockfile
             } else if resolved.is_some()
                 && (matches!(dep.kind, DependencyKind::Tool)

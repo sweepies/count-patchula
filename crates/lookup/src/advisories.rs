@@ -3,7 +3,7 @@ use patchula_config::split_package;
 use patchula_datasource::{Advisory, AdvisoryQuery, Event};
 use patchula_manager::Dependency;
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
-use patchula_words::{DependencyKind, Manager, Source};
+use patchula_words::Source;
 use std::cmp::Ordering;
 
 /// The OSV query for a dependency's current version, when OSV covers its
@@ -24,22 +24,10 @@ pub fn advisory_query(dep: &Dependency) -> Option<AdvisoryQuery> {
         Source::Nuget => ("NuGet", dep.package.clone()),
         Source::Rubygems => ("RubyGems", dep.package.clone()),
         Source::Packagist => ("Packagist", dep.package.clone()),
-        Source::GithubTags | Source::GithubReleases
-            if dep.manager == Manager::GithubActions
-                && matches!(
-                    dep.kind,
-                    DependencyKind::Action | DependencyKind::ReusableWorkflow
-                ) =>
-        {
+        Source::GithubTags | Source::GithubReleases if dep.github_actions_advisories() => {
             ("GitHub Actions", dep.package.clone())
         }
-        Source::Mise
-            if dep.manager == Manager::Go
-                && dep.kind == DependencyKind::Toolchain
-                && dep.package == "go" =>
-        {
-            ("Go", "stdlib".into())
-        }
+        Source::Mise if dep.go_stdlib_advisories() => ("Go", "stdlib".into()),
         _ => return None,
     };
     let version = match &dep.resolved {
