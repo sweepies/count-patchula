@@ -1053,7 +1053,7 @@ impl Evaluator {
             // A declared value that is not an npm range at all is an
             // evaluation error, before the candidates are looked at.
             scheme
-                .satisfies(&dep.current, &baseline)
+                .satisfies(&dep.current, "0.0.0")
                 .map_err(|e| e.to_string())?;
             let mut selected: Option<(&Version, Parsed, &Effective<'_>)> = None;
             for v in &catalog.versions {
@@ -1073,7 +1073,7 @@ impl Evaluator {
                     continue;
                 };
                 if !scheme
-                    .satisfies(&dep.current, &parsed)
+                    .satisfies(&dep.current, &v.version)
                     .map_err(|e| e.to_string())?
                 {
                     continue;

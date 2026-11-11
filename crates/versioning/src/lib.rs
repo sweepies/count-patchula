@@ -114,10 +114,12 @@ pub trait Versioning: Send + Sync {
         candidate: &Parsed,
         candidate_text: &str,
     ) -> bool;
-    /// Whether `version` satisfies the requirement `requirement`. Unlike
-    /// [`Versioning::matches`], a requirement that does not parse is the
-    /// parser's own error, surfaced to the report verbatim.
-    fn satisfies(&self, requirement: &str, version: &Parsed) -> Result<bool>;
+    /// Whether the release `candidate` (its source text, as the registry
+    /// published it) satisfies `requirement`. A candidate the scheme cannot
+    /// read does not satisfy it. Unlike [`Versioning::matches`], a
+    /// requirement that does not parse is the parser's own error, surfaced
+    /// to the report verbatim.
+    fn satisfies(&self, requirement: &str, candidate: &str) -> Result<bool>;
 }
 
 impl Versioning for Ecosystem {
@@ -448,15 +450,18 @@ impl Versioning for Ecosystem {
             _ => true,
         }
     }
-    fn satisfies(&self, requirement: &str, version: &Parsed) -> Result<bool> {
+    fn satisfies(&self, requirement: &str, candidate: &str) -> Result<bool> {
         if *self == Self::Npm {
             let range = nodejs_semver::Range::parse(requirement).map_err(|_| Error::Semver)?;
-            let Ok(version) = nodejs_semver::Version::parse(version.0.to_string()) else {
+            let Ok(version) = nodejs_semver::Version::parse(candidate) else {
                 return Ok(false);
             };
             return Ok(range.satisfies(&version));
         }
-        self.matches(requirement, version)
+        let Ok(version) = self.parse(candidate) else {
+            return Ok(false);
+        };
+        self.matches(requirement, &version)
     }
 }
 
@@ -797,17 +802,18 @@ mod tests {
             ("^1.2.3", "1.5.0", true),
             ("^1.2.3", "2.0.0", false),
             ("1.x || >=2.5.0", "2.6.0", true),
+            // nodejs-semver reads the published text: one `v` at most.
+            ("^1.2.3", "v1.2.3", true),
+            ("^1.2.3", "vv1.2.3", false),
         ] {
             assert_eq!(
-                npm.satisfies(range, &npm.parse(version).unwrap()).unwrap(),
+                npm.satisfies(range, version).unwrap(),
                 expected,
                 "{range} {version}"
             );
         }
         for unparseable in ["not a range", "latest"] {
-            let error = npm
-                .satisfies(unparseable, &npm.parse("1.0.0").unwrap())
-                .unwrap_err();
+            let error = npm.satisfies(unparseable, "1.0.0").unwrap_err();
             assert_eq!(error.to_string(), "Invalid semantic version or range");
         }
         for (scheme, range, version, expected) in [
@@ -816,17 +822,11 @@ mod tests {
             (Ecosystem::Maven, "[1.0,2.0)", "2.5", false),
         ] {
             assert_eq!(
-                scheme
-                    .satisfies(range, &scheme.parse(version).unwrap())
-                    .unwrap(),
+                scheme.satisfies(range, version).unwrap(),
                 expected,
                 "{scheme:?} {range} {version}"
             );
         }
-        assert!(
-            Ecosystem::Cargo
-                .satisfies("<1", &Ecosystem::Cargo.parse("1.5.0").unwrap())
-                .is_ok()
-        );
+        assert!(Ecosystem::Cargo.satisfies("<1", "1.5.0").is_ok());
     }
 }
