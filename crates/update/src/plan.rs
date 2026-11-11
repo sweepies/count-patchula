@@ -224,7 +224,8 @@ impl Plan {
             tree: None,
             cached_pr: None,
             input_fingerprint: fingerprint,
-            lockfiles_ready: jobs.is_empty(),
+            // The tools always run for maintenance, even with no jobs.
+            lockfiles_ready: false,
             lock_jobs: jobs,
             public_only,
             deleted: BTreeSet::new(),
@@ -940,7 +941,8 @@ fn build(
             titles.into_iter().collect::<Vec<_>>().join(", ")
         ),
     };
-    if items.iter().any(|item| !item.update.fixes.is_empty()) {
+    // A batch's message is only its count, whatever its items fix.
+    if !matches!(kind, Kind::Batch(_)) && items.iter().any(|item| !item.update.fixes.is_empty()) {
         message.push_str(" [security]");
     }
     let mut contents = BTreeMap::new();
