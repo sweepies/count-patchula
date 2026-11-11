@@ -143,11 +143,11 @@ impl Write<'_> {
                                     .any(|a| a.branch == p.action().branch)
                             })
                             .filter_map(|p| {
-                                p.cached_pr.as_ref().map(|pr| {
+                                p.cached_pr.as_ref().map(|tracked| {
                                     patchula_update::pull_requests::unchanged(
                                         &repo.repository,
                                         &p.action().branch,
-                                        pr,
+                                        &tracked.pr,
                                     )
                                 })
                             }),
@@ -346,13 +346,18 @@ impl Write<'_> {
         since: Option<chrono::DateTime<chrono::Utc>>,
     ) -> std::result::Result<(), StepFailure> {
         controls.apply(plans, dependencies);
+        let prs: Vec<_> = inventory
+            .pull_requests(&repo.repository)
+            .iter()
+            .map(patchula_update::pull_requests::Tracked::value)
+            .collect();
         match patchula_update::batch::apply(
             plans,
             repo,
             config,
             dependencies,
             snapshot,
-            &inventory.pull_requests(&repo.repository),
+            &prs,
             &inventory.actor,
             self.allow_lockfile_pending,
             since,

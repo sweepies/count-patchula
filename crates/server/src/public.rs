@@ -450,7 +450,7 @@ async fn open_pulls(client: &Client, bot: &str, repo: &str) -> Option<Vec<Value>
         owned.extend(
             pulls
                 .into_iter()
-                .filter(|pr| patchula_update::pull_requests::owned_pr(pr, bot, repo)),
+                .filter(|pr| patchula_update::pull_requests::value_owned_pr(pr, bot, repo)),
         );
         if !full {
             break;

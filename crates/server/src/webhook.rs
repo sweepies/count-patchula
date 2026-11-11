@@ -657,7 +657,7 @@ pub(crate) fn classify(
     let issue = payload.issue.as_ref();
     let null = Value::Null;
     let pr = payload.pull_request.as_ref().unwrap_or(&null);
-    let owned = patchula_update::pull_requests::owned_pr(pr, bot, repo);
+    let owned = patchula_update::pull_requests::value_owned_pr(pr, bot, repo);
     let trigger = match Trigger::of(event, action) {
         Some(t) if t.enabled(&settings.server.triggers) => match t {
             Trigger::Push => {

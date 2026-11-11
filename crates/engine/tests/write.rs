@@ -905,7 +905,11 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
                     .unwrap();
             let prs = patchula_update::automerge::dashboard_history(
                 &inventory,
-                inventory.pull_requests("demo/sandbox"),
+                inventory
+                    .pull_requests("demo/sandbox")
+                    .iter()
+                    .map(patchula_update::pull_requests::Tracked::value)
+                    .collect(),
                 &[],
             );
             let next_dashboard = patchula_update::dashboard::render(

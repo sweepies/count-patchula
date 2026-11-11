@@ -1,9 +1,9 @@
 //! Native auto-merge, or conservative later-run merging backed by write receipts.
-use crate::{Inventory, Plan, pull_requests::owned_pr};
+use crate::{Inventory, Plan, pull_requests::value_owned_pr};
 use chrono::{DateTime, Utc};
 use patchula_cache::{Cache, State};
 use patchula_config::Config;
-use patchula_github::{Client, GraphqlPage};
+use patchula_github::{Client, GraphqlPage, model};
 use patchula_report::{BranchStatus, PullRequestAction, PullRequestStatus, Repository};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -59,7 +59,7 @@ async fn save_history(
     let merged: Vec<_> = plans
         .iter()
         .filter(|p| p.action().status == BranchStatus::Merged)
-        .filter_map(|p| p.cached_pr.clone())
+        .filter_map(|p| p.cached_pr.clone().map(|t| t.value()))
         .collect();
     if merged.is_empty() {
         return Ok(());
@@ -135,26 +135,20 @@ impl Settings {
             delete_branch: repo.delete_branch_on_merge,
         }
     }
-    pub(crate) fn from_rest(repo: &Value) -> Self {
+    pub(crate) fn from_rest(repo: &model::Repository) -> Self {
         Self {
-            repository_id: repo["node_id"].as_str().unwrap_or_default().into(),
-            native: repo["allow_auto_merge"].as_bool() == Some(true),
-            method: method(
-                repo,
-                [
-                    "allow_squash_merge",
-                    "allow_merge_commit",
-                    "allow_rebase_merge",
-                ],
-            ),
-            delete_branch: repo["delete_branch_on_merge"].as_bool() == Some(true),
+            repository_id: repo.node_id.clone(),
+            native: repo.allow_auto_merge == Some(true),
+            method: [
+                (repo.allow_squash_merge, "squash"),
+                (repo.allow_merge_commit, "merge"),
+                (repo.allow_rebase_merge, "rebase"),
+            ]
+            .into_iter()
+            .find_map(|(allowed, method)| (allowed == Some(true)).then(|| method.into())),
+            delete_branch: repo.delete_branch_on_merge == Some(true),
         }
     }
-}
-fn method(repo: &Value, keys: [&str; 3]) -> Option<String> {
-    keys.into_iter()
-        .zip(["squash", "merge", "rebase"])
-        .find_map(|(key, method)| (repo[key].as_bool() == Some(true)).then(|| method.into()))
 }
 pub(crate) fn requested(plan: &Plan, config: &Config) -> bool {
     crate::pull_requests::merge_requested(plan, &config.defaults)
@@ -258,7 +252,7 @@ async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, String> 
 fn same_head(pr: &Value, proof: &Value, actor: &str, repo: &str) -> bool {
     let fields = crate::pull_requests::Pr::read(pr);
     let proof_fields = crate::pull_requests::Pr::read(proof);
-    owned_pr(pr, actor, repo)
+    value_owned_pr(pr, actor, repo)
         && fields.state.as_deref() == Some("open")
         && fields.merged_at.is_none()
         && pr["node_id"] == proof["node_id"]
@@ -296,7 +290,7 @@ fn already_mergeable(message: &str) -> bool {
 /// anything to merge: the caller's own merge rules apply.
 pub(crate) async fn enable_native(
     client: &Client,
-    id: &Value,
+    id: &str,
     method: &str,
     head: &Value,
 ) -> Result<Native, String> {
@@ -350,7 +344,14 @@ async fn one(
     // it falls through to the Count's own merge, behind the same gate.
     if settings.native {
         if pr["auto_merge"].is_null()
-            && enable_native(client, &pr["node_id"], method, &head_oid).await? == Native::Enabled
+            && enable_native(
+                client,
+                pr["node_id"].as_str().unwrap_or_default(),
+                method,
+                &head_oid,
+            )
+            .await?
+                == Native::Enabled
         {
             pr["auto_merge"] = json!({"enabled":true});
         }
@@ -467,20 +468,21 @@ pub async fn reconcile(
             continue;
         };
         // Check policy independently of manual create/schedule/age permits.
-        let proof = pr.clone();
+        let proof = pr.value();
         let allowed = policy_allows(repo, plan, now);
         let pr = plan.cached_pr.as_mut().expect("restored receipt");
+        let mut value = pr.value();
         let (status, reason) = if !allowed {
             (PullRequestStatus::Skipped, "auto-merge waiting: release age, schedule or lookup evidence does not permit merging".into())
         } else {
-            one(client, inventory, repo, pr)
+            one(client, inventory, repo, &mut value)
                 .await
                 .unwrap_or_else(|e| (PullRequestStatus::Error, format!("auto-merge: {e}")))
         };
-        crate::pull_requests::set_merge_note(
-            pr,
-            Some(crate::pull_requests::MergeNote::Reason(reason.clone())),
-        );
+        pr.resync(value);
+        pr.set_merge_note(Some(crate::pull_requests::MergeNote::Reason(
+            reason.clone(),
+        )));
         if status == PullRequestStatus::Merged {
             plan.merged();
         }
@@ -532,15 +534,16 @@ pub fn dashboard_history(inventory: &Inventory, mut prs: Vec<Value>, plans: &[Pl
             prs.push(pr.clone());
         }
     }
-    for pr in plans.iter().filter_map(|p| p.cached_pr.as_ref()) {
-        let fields = crate::pull_requests::Pr::read(pr);
+    for tracked in plans.iter().filter_map(|p| p.cached_pr.as_ref()) {
+        let pr = tracked.value();
+        let fields = crate::pull_requests::Pr::read(&pr);
         if let Some(old) = prs
             .iter_mut()
             .find(|p| crate::pull_requests::Pr::read(p).number == fields.number)
         {
-            old.clone_from(pr);
+            *old = pr;
         } else if fields.merged_at.is_some() {
-            prs.push(pr.clone());
+            prs.push(pr);
         }
     }
     prs

@@ -24,6 +24,17 @@ pub struct Repository {
     /// `node_id` — required; the repository's global node id, which the
     /// `updateRefs` mutation takes as `repositoryId`.
     pub node_id: String,
+    /// `allow_auto_merge` — whether native auto-merge is on; absent reads
+    /// as off, the `as_bool() == Some(true)` the indexing before this did.
+    pub allow_auto_merge: Option<bool>,
+    /// `allow_squash_merge` — same.
+    pub allow_squash_merge: Option<bool>,
+    /// `allow_merge_commit` — same.
+    pub allow_merge_commit: Option<bool>,
+    /// `allow_rebase_merge` — same.
+    pub allow_rebase_merge: Option<bool>,
+    /// `delete_branch_on_merge` — same.
+    pub delete_branch_on_merge: Option<bool>,
 }
 
 /// `GET /repos/{owner}/{repo}/git/ref/{ref}` — the OpenAPI `git-ref` schema.
@@ -157,6 +168,117 @@ pub struct BranchHeadCommit {
     /// single-branch read; a `branches` list element's `commit` holds just
     /// `sha` and `url`.
     pub commit: Option<CommitDetail>,
+}
+
+/// `GET`/`POST`/`PATCH /repos/{owner}/{repo}/pulls[/{n}]` — the OpenAPI
+/// `pull-request` schema, trimmed to the fields the lifecycle, receipts,
+/// dashboard, batch and server read. The GraphQL inventory projection of a
+/// PR also fills one; where the schema requires a field the projection
+/// cannot name, the field stays `Option` and its doc says so.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PullRequest {
+    /// `node_id` — required; the auto-merge mutations address a PR by it.
+    pub node_id: String,
+    /// `number` — required.
+    pub number: u64,
+    /// `html_url` — required.
+    pub html_url: String,
+    /// `state` — required; the schema enumerates `open` and `closed`. A
+    /// string, not an enum: an unfamiliar value reads as neither, the same
+    /// failure direction the raw comparisons had.
+    pub state: String,
+    /// `title` — required.
+    pub title: String,
+    /// `body` — `string`, nullable.
+    pub body: Option<String>,
+    /// `user` — `simple-user`, required by the schema. `Option` because
+    /// the inventory projection's `author` may be absent and GitHub can
+    /// answer `null` for a deleted account: either reads as unowned. A
+    /// malformed object fails the PR's decode.
+    #[serde(deserialize_with = "account")]
+    pub user: Option<Actor>,
+    /// `draft` — `boolean`, optional in the schema.
+    pub draft: Option<bool>,
+    /// `labels` — required array of `label`; the lifecycle reads `name`.
+    pub labels: Vec<Label>,
+    /// `merged_at` — `date-time`, nullable; `None` while open or closed
+    /// unmerged. Verbatim: readers only ask presence or parse it themselves.
+    pub merged_at: Option<String>,
+    /// `auto_merge` — `auto-merge` object or `null`; readers only ask
+    /// presence.
+    pub auto_merge: Option<AutoMerge>,
+    /// `mergeable` — `boolean`, nullable while GitHub computes it.
+    pub mergeable: Option<bool>,
+    /// `mergeable_state` — required `string` in the schema, but GitHub
+    /// answers `null` while mergeability is computed.
+    pub mergeable_state: Option<String>,
+    /// `created_at` — required `date-time` in the schema; `Option` because
+    /// the inventory projection cannot name it.
+    pub created_at: Option<String>,
+    /// `updated_at` — required `date-time` in the schema; `Option` for the
+    /// same reason as `created_at`.
+    pub updated_at: Option<String>,
+    /// `head` — required; the branch and repository the PR comes from.
+    pub head: PullRequestHead,
+    /// `base` — required; the branch and repository the PR targets.
+    pub base: PullRequestBase,
+}
+/// `pull-request.head` — the schema requires `label`, `ref`, `repo`,
+/// `sha` and `user`; only `ref`, `sha` and `repo.full_name` are read.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PullRequestHead {
+    /// `ref` — required; the head branch name.
+    #[serde(rename = "ref")]
+    pub branch: String,
+    /// `sha` — required; the head commit.
+    pub sha: String,
+    /// `repo` — `repository`, required by the schema, but GitHub answers
+    /// `null` when the head repository was deleted: absent reads as a
+    /// different repository, never as ours.
+    pub repo: Option<PullRequestRepository>,
+}
+/// `pull-request.base` — same shape as [`PullRequestHead`] minus `sha`,
+/// which no consumer reads.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PullRequestBase {
+    /// `ref` — required; the base branch name.
+    #[serde(rename = "ref")]
+    pub branch: String,
+    /// `repo` — `repository`, required by the schema; `Option` because the
+    /// inventory projection marks the base repository nullable too.
+    pub repo: Option<PullRequestRepository>,
+}
+/// The `repository` a pull-request head or base carries — the lifecycle
+/// reads `full_name` (required) to pin the PR to its repository.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PullRequestRepository {
+    /// `full_name` — required on `repository`: `owner/name`.
+    pub full_name: String,
+}
+/// A `label` on a pull request — the schema requires `name`, the only
+/// field readers ask for.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Label {
+    /// `name` — required.
+    pub name: String,
+}
+/// The `auto-merge` object on a pull request — readers ask only whether
+/// it is present, so the type holds nothing: any object decodes, a
+/// non-object fails the PR's decode.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AutoMerge {}
+/// `PUT /repos/{owner}/{repo}/pulls/{n}/merge` — the merge response.
+#[derive(Clone, Debug, Deserialize)]
+pub struct MergeResult {
+    /// `merged` — required.
+    pub merged: bool,
+}
+/// `POST`/`PATCH /repos/{owner}/{repo}/issues[/{n}]` — the OpenAPI `issue`
+/// schema, trimmed to the one field the dashboard reads.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Issue {
+    /// `number` — required.
+    pub number: u64,
 }
 
 /// One page of a list endpoint or connection: the decoded `items` and

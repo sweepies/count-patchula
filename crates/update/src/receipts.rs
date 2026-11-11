@@ -2,7 +2,7 @@
 use crate::{Lifecycle, Plan};
 use patchula_cache::{Cache, State};
 use patchula_config::{Config, Rebase};
-use patchula_github::{Client, Error as GithubError};
+use patchula_github::{Client, Error as GithubError, model};
 use patchula_manager::hash;
 use patchula_report::{BranchStatus, Repository};
 use patchula_words::Recheck;
@@ -394,7 +394,7 @@ pub struct Label {
     pub name: String,
 }
 /// `AutoMergeRequest.enabledAt` — `DateTime`, nullable.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoMergeRequest {
     pub enabled_at: Option<String>,
@@ -506,28 +506,31 @@ struct PrStateBase {
 impl PrState {
     /// From the REST view the write lifecycle stores — every scalar the
     /// receipt compares passes through verbatim, as before.
-    fn from_rest(pr: &Value) -> Self {
+    fn from_rest(pr: &model::PullRequest) -> Self {
         Self {
-            number: pr["number"].clone(),
-            title: pr["title"].clone(),
-            body_hash: crate::pull_requests::body_hash(pr["body"].as_str().unwrap_or("")),
+            number: json!(pr.number),
+            title: json!(pr.title),
+            body_hash: crate::pull_requests::body_hash(crate::pull_requests::body(pr)),
             head: PrStateHead {
-                r#ref: pr["head"]["ref"].clone(),
-                sha: pr["head"]["sha"].clone(),
-                repo: pr["head"]["repo"]["full_name"].clone(),
+                r#ref: json!(pr.head.branch),
+                sha: json!(pr.head.sha),
+                repo: pr
+                    .head
+                    .repo
+                    .as_ref()
+                    .map_or(Value::Null, |r| json!(r.full_name)),
             },
             base: PrStateBase {
-                r#ref: pr["base"]["ref"].clone(),
-                repo: pr["base"]["repo"]["full_name"].clone(),
+                r#ref: json!(pr.base.branch),
+                repo: pr
+                    .base
+                    .repo
+                    .as_ref()
+                    .map_or(Value::Null, |r| json!(r.full_name)),
             },
-            actor: pr["user"]["login"].clone(),
-            labels: pr["labels"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|l| l["name"].as_str().map(str::to_owned))
-                .collect(),
-            merge: !pr["auto_merge"].is_null(),
+            actor: pr.user.as_ref().map_or(Value::Null, |u| json!(u.login)),
+            labels: pr.labels.iter().map(|l| l.name.clone()).collect(),
+            merge: pr.auto_merge.is_some(),
         }
     }
     /// From an inventory `PullRequest` — the same fields, read typed.
@@ -606,34 +609,6 @@ fn not_restored(repository: &Repository, plans: &[Plan], reason: &str) -> Restor
     RestoreOutcome::Partial
 }
 
-/// The single boundary that still hands REST shape to the write lifecycle
-/// (G3 types that path): an inventory `PullRequest` becomes the REST object
-/// the lifecycle, receipts and dashboard share. `None` when the PR's label
-/// page is incomplete — an unverified pull must not settle.
-pub(crate) fn rest_pr(pr: &InventoryPr) -> Option<Value> {
-    let labels = pr.labels.as_ref()?;
-    if !labels.complete {
-        return None;
-    }
-    Some(json!({
-        "number": pr.number,
-        "node_id": pr.id,
-        "html_url": pr.url,
-        "title": pr.title,
-        "body": pr.body,
-        "state": "open",
-        "head": {"ref": pr.head_ref_name, "sha": pr.head_ref_oid,
-            "repo": {"full_name": pr.head_repository.as_ref().map(|r| &r.name_with_owner)}},
-        "base": {"ref": pr.base_ref_name,
-            "repo": {"full_name": pr.base_repository.as_ref().map(|r| &r.name_with_owner)}},
-        "user": {"login": pr.author.as_ref().map(actor_login)},
-        "labels": labels.items.iter()
-            .map(|l| l.as_ref().map_or(Value::Null, |l| json!({"name": l.name})))
-            .collect::<Vec<_>>(),
-        "auto_merge": pr.auto_merge_request,
-    }))
-}
-
 /// The default branch's head as `inventory.graphql` returns it: the fields
 /// the freshness check and tooling evidence read.
 #[derive(Debug, Default)]
@@ -693,16 +668,19 @@ pub struct Inventory {
     pub unsettled: BTreeSet<String>,
 }
 impl Inventory {
-    /// The open, bot-owned pull requests across all refs — converted to the
-    /// REST shape the lifecycle still consumes (see [`rest_pr`]).
-    pub fn pull_requests(&self, repo: &str) -> Vec<Value> {
+    /// The open, bot-owned pull requests across all refs — projected onto
+    /// the lifecycle's [`Tracked`] (see [`pull_requests::tracked_pr`]).
+    ///
+    /// [`pull_requests::tracked_pr`]: crate::pull_requests::tracked_pr
+    /// [`Tracked`]: crate::pull_requests::Tracked
+    pub fn pull_requests(&self, repo: &str) -> Vec<crate::pull_requests::Tracked> {
         self.refs
             .items
             .iter()
             .flatten()
             .flat_map(|r| r.associated_pull_requests.items.iter().flatten())
-            .filter_map(rest_pr)
-            .filter(|p| crate::pull_requests::owned_pr(p, &self.actor, repo))
+            .filter_map(crate::pull_requests::tracked_pr)
+            .filter(|p| crate::pull_requests::owned_pr(&p.pr, &self.actor, repo))
             .collect()
     }
     pub async fn read(
@@ -989,11 +967,11 @@ fn restore_write(
         return Err("pr-state-changed");
     }
     let node = prs.items[0].as_ref().ok_or("pr-state-incomplete")?;
-    let pr = rest_pr(node).ok_or("pr-state-incomplete")?;
-    if pr["user"]["login"] != actor {
+    let pr = crate::pull_requests::tracked_pr(node).ok_or("pr-state-incomplete")?;
+    if pr.pr.user.as_ref().map(|u| u.login.as_str()) != Some(actor) {
         return Err("actor-mismatch");
     }
-    if pr["head"]["sha"] != receipt.commit || PrState::from_inventory(node).value() != receipt.pr {
+    if pr.pr.head.sha != receipt.commit || PrState::from_inventory(node).value() != receipt.pr {
         return Err("pr-state-changed");
     }
     if receipt.base != plan.action().base_commit
@@ -1032,7 +1010,7 @@ pub(crate) async fn save_merge_states(
         if plan.action().status == BranchStatus::Merged {
             receipts.writes.remove(&plan.action().branch);
         } else if let Some(receipt) = receipts.writes.get_mut(&plan.action().branch) {
-            receipt.pr = PrState::from_rest(pr).value();
+            receipt.pr = PrState::from_rest(&pr.pr).value();
         }
     }
     cache
@@ -1052,9 +1030,8 @@ pub async fn save_receipts(
     for plan in plans {
         if plan.held(&crate::plan::Hold::ClosedByOwner)
             && let Some(pr) = lifecycle.closed_for(plan)
-            && pr["node_id"].is_string()
         {
-            let Some(actor) = pr["user"]["login"].as_str() else {
+            let Some(actor) = pr.pr.user.as_ref().map(|u| u.login.as_str()) else {
                 fallback(repository, plan, "missing-pr-author");
                 continue;
             };
@@ -1063,7 +1040,7 @@ pub async fn save_receipts(
                 ClosedReceipt {
                     actor: actor.into(),
                     intent: intent(plan, config, lifecycle.recheck, lifecycle.server.as_deref()),
-                    pr: json!({"node_id":pr["node_id"],"body":pr["body"]}),
+                    pr: json!({"node_id":pr.pr.node_id,"body":pr.pr.body}),
                 },
             );
         }
@@ -1093,15 +1070,15 @@ pub async fn save_receipts(
             lifecycle
                 .prs
                 .iter()
-                .find(|pr| pr["state"] == "open" && pr["head"]["ref"] == plan.action().branch)
+                .find(|pr| pr.pr.state == "open" && pr.pr.head.branch == plan.action().branch)
         }) else {
             continue;
         };
-        let Some(actor) = pr["user"]["login"].as_str() else {
+        let Some(actor) = pr.pr.user.as_ref().map(|u| u.login.as_str()) else {
             fallback(repository, plan, "missing-pr-author");
             continue;
         };
-        if pr["head"]["sha"] != *commit {
+        if pr.pr.head.sha != *commit {
             fallback(repository, plan, "pr-head-oid-changed");
             continue;
         }
@@ -1113,7 +1090,7 @@ pub async fn save_receipts(
                 tree: tree.clone(),
                 base: plan.action().base_commit.clone(),
                 intent: intent(plan, config, lifecycle.recheck, lifecycle.server.as_deref()),
-                pr: PrState::from_rest(pr).value(),
+                pr: PrState::from_rest(&pr.pr).value(),
                 fingerprint: plan.fingerprint.clone(),
                 files: plan.action().files.clone(),
             },
@@ -1138,7 +1115,7 @@ mod tests {
 
     #[test]
     fn pr_state_golden() {
-        let pr = serde_json::json!({
+        let pr = serde_json::from_value::<model::PullRequest>(serde_json::json!({
             "number": 17,
             "node_id": "PR_node17",
             "html_url": "https://github.com/acme/repo/pull/17",
@@ -1150,7 +1127,8 @@ mod tests {
             "user": { "login": "patchula[bot]" },
             "labels": [{ "name": "automerge" }, { "name": "dependencies" }],
             "auto_merge": { "enabled_at": "2025-01-01T00:00:00Z" },
-        });
+        }))
+        .unwrap();
         // Frozen receipt bytes — captured from the Value-based `pr_state`
         // before the typed-inventory refactor.
         assert_eq!(
