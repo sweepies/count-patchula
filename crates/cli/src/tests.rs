@@ -169,7 +169,7 @@ impl Transport for Fake {
             } else if path.ends_with("/git/commits") {
                 (
                     201,
-                    json!({"sha":"new-commit","verification":{"verified":true}}),
+                    json!({"sha":"new-commit","message":body["message"],"tree":{"sha":"updated-tree"},"verification":{"verified":true}}),
                 )
             } else {
                 panic!("unexpected write {path}");
@@ -204,7 +204,10 @@ impl Transport for Fake {
                 json!({"encoding":"base64","content":STANDARD.encode(content)}),
             )
         } else if path.ends_with("/git/commits/base") {
-            (200, json!({"tree":{"sha":"base-tree"}}))
+            (
+                200,
+                json!({"sha":"base","message":"base","tree":{"sha":"base-tree"},"verification":{"verified":true}}),
+            )
         } else if path.ends_with("/git/ref/heads/main") {
             (200, json!({"object":{"sha":"base"}}))
         } else if path.contains("/git/ref/heads/") {
@@ -212,7 +215,7 @@ impl Transport for Fake {
         } else if path.ends_with("/branches/main") {
             (
                 200,
-                json!({"commit":{"sha":"base","commit":{"tree":{"sha":"base-tree"}}}}),
+                json!({"name":"main","commit":{"sha":"base","commit":{"message":"base","tree":{"sha":"base-tree"}}}}),
             )
         } else {
             panic!("unexpected read {path}");

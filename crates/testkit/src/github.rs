@@ -60,6 +60,29 @@ pub fn json(status: u16, body: Value) -> Response {
     response(status, body)
 }
 
+/// A stored commit as GitHub's REST schemas serve it: `git-commit` requires
+/// `sha`, `message` and `verification`, and its content object requires
+/// `message` — terse seeds name only the fields a test steers, so the server
+/// fills the rest the way GitHub always does. `tree` stays seeded: a read of
+/// a commit without one fails the way a missing tree always did.
+fn commit_answer(sha: &str, commit: &Value) -> Value {
+    let mut answer = commit.clone();
+    let object = answer.as_object_mut().unwrap();
+    object.entry("sha").or_insert_with(|| json!(sha));
+    object.entry("message").or_insert_with(|| json!(""));
+    object
+        .entry("verification")
+        .or_insert_with(|| json!({"verified":true}));
+    answer
+}
+
+/// The `commit` schema's `author`/`committer` accounts for a stored commit:
+/// GitHub maps them to users — `actor`/`committer_login` steering fields —
+/// with the bot's own authorship as the default.
+fn commit_author(commit: &Value, key: &str, default: &str) -> Value {
+    json!({"login":commit.get(key).and_then(Value::as_str).unwrap_or(default)})
+}
+
 /// The git blob sha for `content` — the same formula the client proves.
 fn blob_sha(content: &str) -> String {
     use sha1::Digest;
@@ -1583,10 +1606,11 @@ impl FakeGitHub {
                 response(200, json!(branches))
             } else if rest == format!("branches/{}", repo.default_branch) {
                 let oid = repo.refs[&format!("refs/heads/{}", repo.default_branch)].clone();
-                let tree = repo.commits.get(&oid).map(|c| c["tree"]["sha"].clone());
+                let commit = repo.commits.get(&oid).cloned().unwrap_or(json!({}));
                 response(
                     200,
-                    json!({"commit":{"sha":oid,"commit":{"tree":{"sha":tree}}}}),
+                    json!({"name":repo.default_branch,
+                           "commit":{"sha":oid,"commit":commit_answer(&oid, &commit)}}),
                 )
             } else if let Some(reference) = rest.strip_prefix("commits/") {
                 let oid = repo
@@ -1595,7 +1619,13 @@ impl FakeGitHub {
                     .or_else(|| repo.refs.get(&format!("refs/tags/{reference}")))
                     .map_or(reference, String::as_str);
                 match repo.commits.get(oid) {
-                    Some(commit) => response(200, json!({"sha":oid,"commit":commit})),
+                    Some(commit) => response(
+                        200,
+                        json!({"sha":oid,
+                        "commit":commit_answer(oid, commit),
+                        "author":commit_author(commit, "actor", "patchula[bot]"),
+                        "committer":commit_author(commit, "committer_login", "web-flow")}),
+                    ),
                     None => response(404, json!({"message":"not found"})),
                 }
             } else if rest.is_empty() {
@@ -1617,7 +1647,7 @@ impl FakeGitHub {
                 }
             } else if let Some(sha) = rest.strip_prefix("git/commits/") {
                 match repo.commits.get(sha) {
-                    Some(commit) => response(200, commit.clone()),
+                    Some(commit) => response(200, commit_answer(sha, commit)),
                     None => response(404, json!({"message":"not found"})),
                 }
             } else if let Some(sha) = rest.strip_prefix("git/trees/") {
@@ -1729,7 +1759,7 @@ impl FakeGitHub {
                         .iter()
                         .map(|sha| {
                             let commit = &repo.commits[*sha];
-                            json!({"sha":sha,"author":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("patchula[bot]")},"committer":{"login":commit.get("committer_login").and_then(Value::as_str).unwrap_or("web-flow")},"commit":commit})
+                            json!({"sha":sha,"author":commit_author(commit, "actor", "patchula[bot]"),"committer":commit_author(commit, "committer_login", "web-flow"),"commit":commit_answer(sha, commit)})
                         })
                         .collect()
                 };
