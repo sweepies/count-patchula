@@ -2493,6 +2493,7 @@ dependencies = [
 name = "patchula-testkit"
 version = "0.8.1"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "graphql-parser",
  "patchula-http",
