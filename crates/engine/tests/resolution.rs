@@ -630,3 +630,63 @@ async fn a_version_file_pin_reports_release_line() {
     assert_eq!(resolution.kind, patchula_words::ResolutionKind::ReleaseLine);
     assert_eq!(resolution.version, "20.1.0");
 }
+
+/// `engines.node` is a runtime constraint, not an installed pin: the tool
+/// listing resolves it to the newest release it admits and reports
+/// `supported-range`, the other side of the version-file boundary.
+#[tokio::test]
+async fn an_engines_node_constraint_reports_supported_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\n",
+            ),
+            (
+                "package.json",
+                r#"{"engines":{"node":">=20.1.0 <21"},"dependencies":{}}"#,
+            ),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "No HTTP: the tool listing comes from the mise replay".into(),
+        interactions: vec![],
+    };
+    let runs = vec![Run {
+        args: vec![
+            "ls-remote".into(),
+            "--json".into(),
+            "--prerelease".into(),
+            "--".into(),
+            "node".into(),
+        ],
+        result: Outcome::Output(json!([
+            {"version": "20.1.0"},
+            {"version": "20.1.1"},
+            {"version": "21.0.0"}
+        ])),
+    }];
+    let report = report_with_mise(&tree, cassette, runs).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = repo
+        .package_files
+        .iter()
+        .flat_map(|f| &f.dependencies)
+        .find(|d| d.name == "node")
+        .unwrap_or_else(|| panic!("no node dependency: {repo:?}"));
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_eq!(
+        resolution.kind,
+        patchula_words::ResolutionKind::SupportedRange
+    );
+    assert_eq!(resolution.version, "20.1.1");
+}

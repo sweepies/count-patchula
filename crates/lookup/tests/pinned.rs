@@ -1,6 +1,5 @@
-//! Today's behaviour for probable bugs the per-manager proposal-facts move
-//! must keep: each `pinned_` test states what the code does now so the later
-//! fix PRs flip them deliberately.
+//! Proposal behaviour for the version files, Bun's npm rules and pre-commit
+//! branch revs that the per-manager proposal-facts move must keep.
 use patchula_datasource::{Catalog, Version};
 use patchula_lookup::Evaluator;
 use patchula_manager::{Dependency, EditForm, Location, Syntax};
