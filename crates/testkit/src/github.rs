@@ -638,8 +638,19 @@ fn prune_fields(
                 }
             }
             GqlSelection::Fragment { on, selections } => {
+                // A node the fake forgot to type would silently lose every
+                // fragment field and read as "no data"; fail loudly instead.
                 let applies = on.as_deref().is_none_or(|condition| {
-                    answer.get("__typename").and_then(Value::as_str) == Some(condition)
+                    let typename = answer
+                        .get("__typename")
+                        .and_then(Value::as_str)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "the fake answered a node without __typename under `... on {condition}`: {}",
+                                Value::Object(answer.clone())
+                            )
+                        });
+                    typename == condition
                 });
                 if applies {
                     prune_fields(answer, selections, pruned);
@@ -719,8 +730,8 @@ fn selections<'a>(set: &'a graphql_parser::query::SelectionSet<'a, &'a str>) -> 
     use graphql_parser::query::{Selection, TypeCondition, Value as ArgValue};
     set.items
         .iter()
-        .filter_map(|selection| match selection {
-            Selection::Field(field) => Some(GqlSelection::Field(GqlField {
+        .map(|selection| match selection {
+            Selection::Field(field) => GqlSelection::Field(GqlField {
                 key: field.alias.unwrap_or(field.name).to_owned(),
                 name: field.name.to_owned(),
                 args: field
@@ -738,18 +749,21 @@ fn selections<'a>(set: &'a graphql_parser::query::SelectionSet<'a, &'a str>) -> 
                     })
                     .collect(),
                 selections: selections(&field.selection_set),
-            })),
+            }),
             // `... on Commit` keeps its type condition: resolvers build the
             // whole answer, and the pruner keeps the fragment's fields only
             // on a matching `__typename`.
-            Selection::InlineFragment(fragment) => Some(GqlSelection::Fragment {
+            Selection::InlineFragment(fragment) => GqlSelection::Fragment {
                 on: fragment
                     .type_condition
                     .as_ref()
                     .map(|TypeCondition::On(name)| (*name).to_owned()),
                 selections: selections(&fragment.selection_set),
-            }),
-            Selection::FragmentSpread(_) => None,
+            },
+            Selection::FragmentSpread(spread) => panic!(
+                "the fake does not model named fragment spreads (`...{}`); inline the fragment",
+                spread.fragment_name
+            ),
         })
         .collect()
 }
@@ -1348,8 +1362,8 @@ impl FakeGitHub {
                 json!({"__typename":"Ref","name":name,
                        "target":{"__typename":"Commit","oid":oid,
                           "tree":{"__typename":"Tree","oid":commit["tree"]["sha"]},"message":commit["message"],
-                          "author":{"__typename":"CommitAuthor","user":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("patchula[bot]")}},
-                          "committer":{"__typename":"CommitAuthor","user":{"login":"web-flow"}},
+                          "author":{"__typename":"GitActor","user":{"login":commit.get("actor").and_then(Value::as_str).unwrap_or("patchula[bot]")}},
+                          "committer":{"__typename":"GitActor","user":{"login":"web-flow"}},
                           "signature":{"isValid":!state.settings.unsigned}},
                        "associatedPullRequests":{"__typename":"PullRequestConnection","nodes":prs,
                           "pageInfo":{"__typename":"PageInfo","hasNextPage":state.settings.pr_next_page.as_deref() == Some(name)}}})
@@ -2205,11 +2219,15 @@ mod tests {
             prune(&blob, &selections),
             json!({"__typename":"Blob","text":"x"})
         );
-        // An object without `__typename` answers no conditional fragment.
-        assert_eq!(
-            prune(&json!({"oid":"abc","text":"x"}), &selections),
-            json!({})
-        );
+    }
+
+    /// A node the fake forgot to type would lose every fragment field and
+    /// read as "no data", so the pruner refuses it instead.
+    #[test]
+    #[should_panic(expected = "without __typename")]
+    fn an_untyped_node_under_a_fragment_fails_loudly() {
+        let selections = select("{ ... on Commit { oid } }");
+        prune(&json!({"oid":"abc"}), &selections);
     }
 
     #[test]
