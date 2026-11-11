@@ -1545,49 +1545,80 @@ impl FakeGitHub {
                 "unmodeled pullRequests argument {name}"
             );
         }
-        let head = field.arg("headRefName", body).map(str::to_owned);
+        // A null or unset variable leaves a nullable argument out; a
+        // non-string value is a GitHub validation error, never no filter.
+        let string_arg = |name: &str| {
+            field.arg_json(name, body).map(|value| {
+                value
+                    .as_str()
+                    .unwrap_or_else(|| panic!("pullRequests `{name}` is not a string: {value}"))
+                    .to_owned()
+            })
+        };
+        let head = string_arg("headRefName");
         let states: Option<BTreeSet<String>> = field.arg_json("states", body).map(|states| {
             states
                 .as_array()
                 .unwrap_or_else(|| panic!("pullRequests `states` is not a list: {states}"))
                 .iter()
                 .map(|state| {
-                    state
-                        .as_str()
-                        .unwrap_or_else(|| {
-                            panic!("pullRequests `states` element is not a name: {state}")
-                        })
-                        .to_owned()
+                    let name = state.as_str().unwrap_or_else(|| {
+                        panic!("pullRequests `states` element is not a name: {state}")
+                    });
+                    // `PullRequestState`: anything else is a validation error.
+                    assert!(
+                        matches!(name, "OPEN" | "CLOSED" | "MERGED"),
+                        "pullRequests `states` has no value {name:?}"
+                    );
+                    name.to_owned()
                 })
                 .collect()
         });
-        let first = field.arg_json("first", body).map(|first| {
-            first
-                .as_u64()
-                .unwrap_or_else(|| panic!("pullRequests `first` is not a count: {first}"))
-                as usize
-        });
-        let after = field
-            .arg("after", body)
+        // GitHub refuses a connection without `first`/`last`
+        // (MISSING_PAGINATION_BOUNDARIES) and a `first` outside 1-100.
+        let first = field
+            .arg_json("first", body)
+            .map(|first| {
+                first
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("pullRequests `first` is not a count: {first}"))
+                    as usize
+            })
+            .unwrap_or_else(|| panic!("pullRequests without `first`"));
+        assert!(
+            (1..=100).contains(&first),
+            "pullRequests `first` {first} is outside 1-100"
+        );
+        let after = string_arg("after")
             .map(|cursor| {
                 cursor.parse::<usize>().unwrap_or_else(|_| {
                     panic!("pullRequests `after` {cursor:?} is not a fake cursor")
                 })
             })
             .unwrap_or(0);
-        let mut descending = true;
-        if let Some(order) = field.arg_json("orderBy", body) {
-            let order_field = order["field"].as_str().unwrap_or("CREATED_AT");
-            assert_eq!(
-                order_field, "CREATED_AT",
-                "unmodeled pullRequests `orderBy.field` {order_field}"
-            );
-            match order["direction"].as_str().unwrap_or("DESC") {
-                "DESC" => descending = true,
-                "ASC" => descending = false,
-                direction => panic!("unmodeled pullRequests `orderBy.direction` {direction}"),
-            }
-        }
+        // `IssueOrder` requires both `field` and `direction`, and GitHub
+        // documents no order without `orderBy`, so the fake invents none.
+        let order = field
+            .arg_json("orderBy", body)
+            .unwrap_or_else(|| panic!("pullRequests without `orderBy`"));
+        let order = order
+            .as_object()
+            .unwrap_or_else(|| panic!("pullRequests `orderBy` is not an IssueOrder: {order}"));
+        assert!(
+            order.keys().all(|key| key == "field" || key == "direction"),
+            "pullRequests `orderBy` has an unknown key: {order:?}"
+        );
+        let order_field = order.get("field").and_then(Value::as_str);
+        assert_eq!(
+            order_field,
+            Some("CREATED_AT"),
+            "unmodeled pullRequests `orderBy.field`"
+        );
+        let descending = match order.get("direction").and_then(Value::as_str) {
+            Some("DESC") => true,
+            Some("ASC") => false,
+            direction => panic!("unmodeled pullRequests `orderBy.direction` {direction:?}"),
+        };
         let mut prs: Vec<Value> = repo
             .prs
             .values()
@@ -1603,16 +1634,15 @@ impl FakeGitHub {
         if descending {
             prs.reverse();
         }
-        let size = first.unwrap_or(usize::MAX);
         let nodes: Vec<Value> = prs
             .iter()
             .skip(after)
-            .take(size)
+            .take(first)
             .map(|pr| pull_node(pr, state))
             .collect();
         let served = nodes.len();
         let more = after + served < prs.len();
-        json!({"__typename":"PullRequestConnection","nodes":nodes,
+        json!({"__typename":"PullRequestConnection","nodes":nodes,"totalCount":prs.len(),
         "pageInfo":{"__typename":"PageInfo","hasNextPage":more,
             "endCursor":if served > 0 {
                 json!((after + served).to_string())
@@ -1916,17 +1946,20 @@ impl FakeGitHub {
         let prs: Vec<Value> = prs.into_iter().skip((page - 1) * size).take(size).collect();
         let mut reply = response(200, json!(prs));
         if page * size < total {
-            reply.headers.insert(
-                "link",
-                format!(
-                    "<https://api.github.com/repos/{}/pulls?state={}&page={}>; rel=\"next\"",
-                    repo.name,
-                    state,
-                    page + 1
-                )
-                .parse()
-                .unwrap(),
-            );
+            // GitHub's `next` link repeats the request's whole query with
+            // only `page` advanced; the client follows it verbatim.
+            let mut next = request.url().clone();
+            let query: Vec<(String, String)> = request
+                .url()
+                .query_pairs()
+                .filter(|(key, _)| key != "page")
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .chain([("page".to_owned(), (page + 1).to_string())])
+                .collect();
+            next.query_pairs_mut().clear().extend_pairs(query);
+            reply
+                .headers
+                .insert("link", format!("<{next}>; rel=\"next\"").parse().unwrap());
         }
         reply
     }
@@ -2744,7 +2777,10 @@ mod tests {
             listed(&github, "?state=all&sort=created&direction=desc&per_page=2").await;
         assert_eq!(page, [1, 3]);
         let link = reply.headers["link"].to_str().unwrap();
-        assert!(link.contains("state=all&page=2"), "{link}");
+        assert!(
+            link.contains("?state=all&sort=created&direction=desc&per_page=2&page=2>"),
+            "{link}"
+        );
         assert_eq!(listed(&github, "?state=all&page=2&per_page=2").await.0, [2]);
         assert_eq!(
             listed(&github, "?state=all&direction=asc").await.0,
@@ -2917,8 +2953,8 @@ mod tests {
             .send(graphql(
                 "query($owner: String!, $name: String!) {
                     repository(owner: $owner, name: $name) {
-                        a: pullRequests(headRefName: \"patchula/a\", states: [MERGED]) { nodes { number state } }
-                        b: pullRequests(headRefName: \"patchula/b\", states: [CLOSED]) { nodes { number state } }
+                        a: pullRequests(headRefName: \"patchula/a\", states: [MERGED], first: 10, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number state } }
+                        b: pullRequests(headRefName: \"patchula/b\", states: [CLOSED], first: 10, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number state } }
                     }
                 }",
                 json!({"owner":"acme","name":"app"}),
@@ -2956,7 +2992,7 @@ mod tests {
             .send(graphql(
                 "query($owner: String!, $name: String!) {
                     repository(owner: $owner, name: $name) {
-                        pullRequests(headRefName: \"patchula/a\", states: [CLOSED]) {
+                        pullRequests(headRefName: \"patchula/a\", states: [CLOSED], first: 10, orderBy: {field: CREATED_AT, direction: DESC}) {
                             nodes { headRepository { nameWithOwner } baseRepository { nameWithOwner } }
                         }
                     }
@@ -2992,7 +3028,7 @@ mod tests {
             .send(graphql(
                 "query($owner: String!, $name: String!) {
                     repository(owner: $owner, name: $name) {
-                        pullRequests(first: 10) {
+                        pullRequests(first: 10, orderBy: {field: CREATED_AT, direction: DESC}) {
                             nodes { number }
                             pageInfo { hasNextPage }
                         }
@@ -3019,6 +3055,87 @@ mod tests {
                 pullRequests(baseRefName: \"main\") { nodes { number } } } }",
             json!({}),
         )));
+    }
+
+    fn pull_requests_with(arguments: &str) -> Request {
+        graphql(
+            &format!(
+                "query {{ repository(owner: \"acme\", name: \"app\") {{
+                    pullRequests({arguments}) {{ nodes {{ number }} }} }} }}"
+            ),
+            json!({}),
+        )
+    }
+
+    /// GitHub refuses a connection without `first`/`last`.
+    #[test]
+    #[should_panic(expected = "pullRequests without `first`")]
+    fn pull_requests_without_first_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(pull_requests_with(
+            "orderBy: {field: CREATED_AT, direction: DESC}",
+        )));
+    }
+
+    /// GitHub refuses a `first` above 100.
+    #[test]
+    #[should_panic(expected = "outside 1-100")]
+    fn pull_requests_with_too_large_a_page_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(pull_requests_with(
+            "first: 101, orderBy: {field: CREATED_AT, direction: DESC}",
+        )));
+    }
+
+    /// A `PullRequestState` GitHub does not have is a validation error,
+    /// never an empty answer.
+    #[test]
+    #[should_panic(expected = "has no value \"CLOSE\"")]
+    fn pull_requests_with_an_unknown_state_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(pull_requests_with(
+            "states: [CLOSE], first: 10, orderBy: {field: CREATED_AT, direction: DESC}",
+        )));
+    }
+
+    /// GitHub documents no order without `orderBy`, so the fake invents none.
+    #[test]
+    #[should_panic(expected = "pullRequests without `orderBy`")]
+    fn pull_requests_without_an_order_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(pull_requests_with("first: 10")));
+    }
+
+    /// `IssueOrder.direction` is required.
+    #[test]
+    #[should_panic(expected = "unmodeled pullRequests `orderBy.direction`")]
+    fn pull_requests_with_a_partial_order_panics() {
+        let github = FakeGitHub::new("acme/app");
+        drop(github.send(pull_requests_with(
+            "first: 10, orderBy: {field: CREATED_AT}",
+        )));
+    }
+
+    /// The `next` link repeats the whole query, so later pages keep the
+    /// caller's page size and direction.
+    #[tokio::test]
+    async fn the_pulls_next_link_keeps_the_query() {
+        let github = FakeGitHub::new("acme/app");
+        github.seed_pulls(150);
+        let reply = github
+            .send(request(
+                Method::GET,
+                "/repos/acme/app/pulls?state=all&sort=created&direction=asc&per_page=100",
+                None,
+            ))
+            .await
+            .unwrap();
+        let link = reply.headers["link"].to_str().unwrap().to_owned();
+        assert_eq!(
+            link,
+            "<https://api.github.com/repos/acme/app/pulls?state=all&sort=created&direction=asc&per_page=100&page=2>; rel=\"next\""
+        );
+        github.transcript_checked.store(true, Ordering::Relaxed);
     }
 
     /// `traffic` counts requests by route and the response bytes served.
