@@ -1170,7 +1170,7 @@ pub async fn reconcile(
                 .number
                 .ok_or("missing dashboard number")?;
             client
-                .patch(&format!("{path}/{number}"), json!({"state":"closed"}))
+                .patch::<Value>(&format!("{path}/{number}"), json!({"state":"closed"}))
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -1195,7 +1195,7 @@ pub async fn reconcile(
             && crate::pull_requests::body_hash(current) == digest;
         if !unchanged && crate::pull_requests::body_hash(current) != digest {
             client
-                .patch(&format!("{path}/{number}"), json!({"body":body}))
+                .patch::<Value>(&format!("{path}/{number}"), json!({"body":body}))
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -1203,7 +1203,7 @@ pub async fn reconcile(
     } else {
         crate::pull_requests::Pr::read(
             &client
-                .post(&path, json!({"title":TITLE,"body":body}))
+                .post::<Value>(&path, json!({"title":TITLE,"body":body}))
                 .await
                 .map_err(|e| e.to_string())?,
         )

@@ -79,6 +79,17 @@ and content-creation limit. A mutation document must start with the
 installation's engine has its own client, so the server's batches for
 different installations pace their writes separately.
 
+## Typed responses
+
+`get_fresh`, `post`, `patch`, `put` and `graphql` are generic over the type
+they decode into, like `rest_pages` already was. A response that does not
+decode is an `Error::Decode`, which names the operation and the field path
+only: serde's message is never kept, because a type-mismatch message can
+quote response text that would reach dashboards and public pages.
+`patchula_github::model` holds the REST resource types the write path reads:
+deserialize only, unknown fields ignored, and `Option` only where GitHub's
+OpenAPI description documents null.
+
 ## Rate limits
 
 The library's default in-flight cap is **4**, shared by REST and GraphQL;

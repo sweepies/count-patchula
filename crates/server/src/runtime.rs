@@ -1124,7 +1124,7 @@ async fn check_candidate(client: &Client, work: &Work, bot: &str) -> Result<bool
     };
     for number in numbers {
         let pr = match client
-            .get_fresh(&format!("repos/{}/pulls/{number}", work.repo))
+            .get_fresh::<serde_json::Value>(&format!("repos/{}/pulls/{number}", work.repo))
             .await
         {
             Ok(pr) => pr,

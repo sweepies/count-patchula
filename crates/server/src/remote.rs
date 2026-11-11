@@ -528,7 +528,7 @@ impl Api {
         })?;
         for repo in repositories {
             let permission = match client
-                .get_fresh(&format!("repos/{repo}/collaborators/{login}/permission"))
+                .get_fresh::<serde_json::Value>(&format!("repos/{repo}/collaborators/{login}/permission"))
                 .await
             {
                 Ok(value) => value["permission"].as_str().map(str::to_owned),

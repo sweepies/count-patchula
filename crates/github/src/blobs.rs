@@ -155,7 +155,7 @@ impl Client {
         for (i, sha) in shas.iter().enumerate() {
             variables[format!("o{i}")] = sha.clone().into();
         }
-        let data = match self.graphql(&query, variables).await {
+        let data = match self.graphql::<Value>(&query, variables).await {
             Ok(data) => data,
             Err(Error::Status(status @ (401 | 403))) => return Err(Error::Status(status)),
             Err(Error::Graphql(_) | Error::Status(_) | Error::RateLimit | Error::Transport) => {

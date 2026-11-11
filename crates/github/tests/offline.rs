@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use patchula_cache::{Cache, Options as CacheOptions};
-use patchula_github::{Client, Error, GraphqlPage, Options, blob_sha};
+use patchula_github::{Client, Error, GraphqlPage, Options, blob_sha, model};
 use patchula_http::{Exchange, Response, Transport};
 use patchula_testkit::{Options as FixtureOptions, Replay};
 use serde_json::{Value, json};
@@ -505,7 +505,7 @@ async fn pagination_rejects_loops_and_cross_origin_links() {
 async fn graphql_errors_and_uncached_304s_fail_safely_and_rest_redirects_are_governed() {
     let (_directory, client, replay) = client("graphql-errors", Options::default()).await;
     let error = client
-        .graphql(QUERY, json!({"cursor":null}))
+        .graphql::<Value>(QUERY, json!({"cursor":null}))
         .await
         .unwrap_err();
     assert_eq!(
@@ -593,7 +593,7 @@ async fn clones_share_one_concurrency_cap_for_rest_and_graphql() {
                 client.get(&format!("repos/test/{i}")).await.unwrap();
             } else {
                 client
-                    .graphql("query { viewer { login } }", json!({}))
+                    .graphql::<Value>("query { viewer { login } }", json!({}))
                     .await
                     .unwrap();
             }
@@ -636,7 +636,7 @@ async fn credentials_are_partitioned_in_cache_and_errors_hide_credentials_and_bo
             .await
             .unwrap_err(),
         other
-            .graphql("sensitive query body", Value::Null)
+            .graphql::<Value>("sensitive query body", Value::Null)
             .await
             .unwrap_err(),
     ] {
@@ -681,24 +681,142 @@ async fn mutations_share_serial_cooldown_but_graphql_queries_do_not() {
     let github = Client::with_transport("offline", cache, Default::default(), transport).unwrap();
     let started = tokio::time::Instant::now();
     github
-        .post("repos/demo/app/git/trees", json!({}))
+        .post::<Value>("repos/demo/app/git/trees", json!({}))
         .await
         .unwrap();
     github
-        .post("repos/demo/app/git/trees", json!({}))
+        .post::<Value>("repos/demo/app/git/trees", json!({}))
         .await
         .unwrap();
     assert!(started.elapsed() >= Duration::from_secs(1));
     let started = tokio::time::Instant::now();
     github
-        .graphql("query{viewer{login}}", json!({}))
+        .graphql::<Value>("query{viewer{login}}", json!({}))
         .await
         .unwrap();
     assert!(started.elapsed() < Duration::from_secs(1));
-    let (a, b) = tokio::join!(github.post("a", json!({})), github.post("b", json!({})));
+    let (a, b) = tokio::join!(github.post::<Value>("a", json!({})), github.post::<Value>("b", json!({})));
     a.unwrap();
     b.unwrap();
     assert_eq!(observer.maximum.load(Ordering::SeqCst), 1);
+}
+
+/// Answers each request with the body its path maps to.
+struct Json(BTreeMap<&'static str, &'static str>);
+impl Transport for Json {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        let body = self.0[request.url().path()].as_bytes().to_vec();
+        Box::pin(async move {
+            Ok(Response {
+                status: reqwest::StatusCode::OK,
+                headers: reqwest::header::HeaderMap::new(),
+                body,
+                stale: None,
+            })
+        })
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Data {
+    viewer: model::Actor,
+}
+
+async fn json_client(bodies: BTreeMap<&'static str, &'static str>) -> (tempfile::TempDir, Client) {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = Cache::open(
+        directory.path().join("cache.sqlite"),
+        CacheOptions::default(),
+    )
+    .await
+    .unwrap();
+    let client =
+        Client::with_transport(TOKEN, cache, Options::default(), Arc::new(Json(bodies))).unwrap();
+    (directory, client)
+}
+
+#[tokio::test]
+async fn typed_responses_decode_through_the_generic_methods() {
+    let (_directory, client) = json_client(BTreeMap::from([
+        (
+            "/repos/o/r/git/ref/heads/main",
+            r#"{"ref":"refs/heads/main","object":{"type":"commit","sha":"abc","url":"u"}}"#,
+        ),
+        (
+            "/trees",
+            r#"[{"path":"src/x.rs","mode":"100644","type":"blob","sha":"def"}]"#,
+        ),
+        ("/graphql", r#"{"data":{"viewer":{"login":"patchula[bot]"}}}"#),
+        ("/repos/o/r/empty", ""),
+    ]))
+    .await;
+    let reference = client
+        .get_fresh::<model::GitRef>("repos/o/r/git/ref/heads/main")
+        .await
+        .unwrap();
+    assert_eq!(reference.object.sha, "abc");
+    let entries = client
+        .rest_pages::<model::TreeEntry>("trees?per_page=2", |_| false)
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].kind, "blob");
+    assert_eq!(entries[0].path, "src/x.rs");
+    let data = client
+        .graphql::<Data>("query{viewer{login}}", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(data.viewer.login, "patchula[bot]");
+    // An empty body still decodes as `Value::Null`.
+    assert_eq!(
+        client
+            .post::<Value>("repos/o/r/empty", json!({}))
+            .await
+            .unwrap(),
+        Value::Null
+    );
+}
+
+#[tokio::test]
+async fn a_decode_error_names_operation_and_field_path_but_never_the_value() {
+    // `truncated` wants a boolean and `viewer` a struct; each got a string a
+    // serde type-mismatch message would quote, and that text must not leak.
+    let (_directory, client) = json_client(BTreeMap::from([
+        (
+            "/repos/o/r/git/trees/abc",
+            r#"{"tree":[],"truncated":"sensitive-body-text"}"#,
+        ),
+        ("/graphql", r#"{"data":{"viewer":"sensitive-body-text"}}"#),
+    ]))
+    .await;
+    let error = client
+        .get_fresh::<model::Tree>("repos/o/r/git/trees/abc")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        Error::Decode {
+            operation: "GET repos/o/r/git/trees/abc".into(),
+            path: "truncated".into()
+        }
+    );
+    let error = client
+        .graphql::<Data>("query{viewer{login}}", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        Error::Decode {
+            operation: "query viewer".into(),
+            path: "viewer".into()
+        }
+    );
+    for output in [format!("{error}"), format!("{error:?}")] {
+        assert!(output.contains("query viewer"), "{output}");
+        assert!(output.contains("viewer"), "{output}");
+        assert!(!output.contains("sensitive-body-text"), "{output}");
+        assert!(!output.contains("expected struct"), "{output}");
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -719,10 +837,10 @@ async fn content_hour_budget_fails_before_sending_when_wait_exceeds_budget() {
     )
     .unwrap();
     for _ in 0..500 {
-        github.post("content", json!({})).await.unwrap();
+        github.post::<Value>("content", json!({})).await.unwrap();
     }
     assert_eq!(
-        github.post("content", json!({})).await.unwrap_err(),
+        github.post::<Value>("content", json!({})).await.unwrap_err(),
         Error::RateLimit
     );
     assert_eq!(github.stats().await.requests, 500);

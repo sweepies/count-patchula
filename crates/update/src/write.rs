@@ -199,7 +199,7 @@ pub async fn apply_all(
                 continue;
             }
             let result = client
-                .graphql(
+                .graphql::<Value>(
                     REF_UPDATE,
                     json!({"input":{"repositoryId":base.node_id,"refUpdates":refs}}),
                 )
@@ -394,7 +394,7 @@ async fn apply_inner(
         else {json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","content":content})}
     }).collect();
     let tree = client
-        .post(
+        .post::<Value>(
             &format!("repos/{repo}/git/trees"),
             json!({"base_tree":tree_sha,"tree":blobs}),
         )
@@ -419,7 +419,7 @@ async fn apply_inner(
     );
     // App bot signing requires GitHub-supplied authorship and signature.
     let commit = client
-        .post(
+        .post::<Value>(
             &format!("repos/{repo}/git/commits"),
             json!({"message":message,"tree":tree,"parents":[plan.action().base_commit]}),
         )

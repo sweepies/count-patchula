@@ -389,7 +389,7 @@ impl Lifecycle {
             // Refresh the pull immediately before editing to catch user changes.
             let number = pr["number"].as_u64().ok_or("missing PR number")?;
             let fresh = client
-                .get_fresh(&format!("repos/{repo}/pulls/{number}"))
+                .get_fresh::<Value>(&format!("repos/{repo}/pulls/{number}"))
                 .await
                 .map_err(|e| e.to_string())?;
             if !owned_pr(&fresh, actor, repo) || fresh["head"]["sha"] != sha {
@@ -412,7 +412,7 @@ impl Lifecycle {
             if meta.is_none() {
                 meta = Some(
                     client
-                        .get_fresh(&format!("repos/{repo}"))
+                        .get_fresh::<Value>(&format!("repos/{repo}"))
                         .await
                         .map_err(|e| e.to_string())?,
                 );
@@ -424,7 +424,7 @@ impl Lifecycle {
             // The default branch's head is a lease on each closure: a base
             // that moved while earlier PRs closed must stop the next one.
             let head = client
-                .get_fresh(&format!("repos/{repo}/branches/{default_branch}"))
+                .get_fresh::<Value>(&format!("repos/{repo}/branches/{default_branch}"))
                 .await
                 .map_err(|e| e.to_string())?;
             if head["commit"]["sha"] != base {
@@ -435,7 +435,7 @@ impl Lifecycle {
             text.push_str("\n\n");
             text.push_str(markers::OBSOLETE);
             client
-                .patch(
+                .patch::<Value>(
                     &format!("repos/{repo}/pulls/{number}"),
                     json!({"state":"closed","body":text}),
                 )
@@ -648,7 +648,7 @@ impl Lifecycle {
             .collect();
         for target in targets {
             let path = format!("repos/{}/pulls/{target}", self.repo);
-            let fresh = client.get_fresh(&path).await.map_err(|e| e.to_string())?;
+            let fresh = client.get_fresh::<Value>(&path).await.map_err(|e| e.to_string())?;
             if fresh["state"] != "open"
                 || !owned_pr(&fresh, &self.actor, &self.repo)
                 || !markers::ownership_marker(body(&fresh))
@@ -662,12 +662,12 @@ impl Lifecycle {
             text.push_str("\n\n");
             text.push_str(markers::BATCHED);
             let closed = client
-                .patch(&path, json!({"state":"closed","body":text}))
+                .patch::<Value>(&path, json!({"state":"closed","body":text}))
                 .await
                 .map_err(|e| e.to_string())?;
             let mut reason = format!("moved to the batch PR #{number}");
             if let Err(error) = client
-                .post(
+                .post::<Value>(
                     &format!("repos/{}/issues/{target}/comments", self.repo),
                     json!({"body":format!("Moved to the batch PR #{number}. Tick this update's box there to bring it back.")}),
                 )
@@ -697,13 +697,13 @@ impl Lifecycle {
             }
             let number = pr["number"].as_u64().ok_or("missing PR number")?;
             let path = format!("repos/{}/pulls/{number}", self.repo);
-            let fresh = client.get_fresh(&path).await.map_err(|e| e.to_string())?;
+            let fresh = client.get_fresh::<Value>(&path).await.map_err(|e| e.to_string())?;
             if fresh["state"] != "open" || !owned_pr(&fresh, &self.actor, &self.repo) {
                 continue;
             }
             if checked(&fresh) {
                 *pr = client
-                    .patch(&path, json!({"body":untick(body(&fresh))}))
+                    .patch::<Value>(&path, json!({"body":untick(body(&fresh))}))
                     .await
                     .map_err(|e| e.to_string())?;
             }
@@ -741,7 +741,7 @@ impl Lifecycle {
             let mut attempt = 0;
             let fresh = loop {
                 let fresh = client
-                    .get_fresh(&format!("{path}/{number}"))
+                    .get_fresh::<Value>(&format!("{path}/{number}"))
                     .await
                     .map_err(|e| e.to_string())?;
                 if !owned_pr(&fresh, &self.actor, &self.repo)
@@ -793,7 +793,7 @@ impl Lifecycle {
                 (fresh, PullRequestStatus::Unchanged)
             } else {
                 let updated = client
-                    .patch(
+                    .patch::<Value>(
                         &format!("{path}/{number}"),
                         json!({"title":title,"body":text,"base":self.base}),
                     )
@@ -802,7 +802,7 @@ impl Lifecycle {
                 (updated, PullRequestStatus::Updated)
             }
         } else {
-            let created = client.post(&path,json!({"title":title,"body":text,"head":plan.action().branch,"base":self.base,"maintainer_can_modify":false})).await.map_err(|e|e.to_string())?;
+            let created = client.post::<Value>(&path,json!({"title":title,"body":text,"head":plan.action().branch,"base":self.base,"maintainer_can_modify":false})).await.map_err(|e|e.to_string())?;
             (created, PullRequestStatus::Created)
         };
         let number = pr["number"].as_u64().ok_or("missing created PR number")?;
@@ -827,7 +827,7 @@ impl Lifecycle {
         if !labels.is_subset(&existing) {
             let labels: BTreeSet<_> = labels.union(&existing).cloned().collect();
             client
-                .put(
+                .put::<Value>(
                     &format!("repos/{}/issues/{number}/labels", self.repo),
                     json!({"labels":labels}),
                 )
@@ -846,7 +846,7 @@ impl Lifecycle {
         if merge && !enabled {
             if self.merge_settings.is_none() {
                 let meta = client
-                    .get_fresh(&format!("repos/{}", self.repo))
+                    .get_fresh::<Value>(&format!("repos/{}", self.repo))
                     .await
                     .map_err(|e| e.to_string())?;
                 self.merge_settings = Some(crate::automerge::Settings::from_rest(&meta));
@@ -872,7 +872,7 @@ impl Lifecycle {
         } else if !merge && enabled {
             let id = pr["node_id"].as_str().ok_or("missing PR node ID")?;
             client
-                .graphql(DISABLE_AUTO_MERGE, json!({"input":{"pullRequestId":id}}))
+                .graphql::<Value>(DISABLE_AUTO_MERGE, json!({"input":{"pullRequestId":id}}))
                 .await
                 .map_err(|e| e.to_string())?;
         }

@@ -262,7 +262,7 @@ impl Inventory {
         let mut refs_done = false;
         let mut issues_done = false;
         for _ in 0..1000 {
-            let data = client.graphql(INVENTORY_QUERY, json!({"owner":owner,"name":name,
+            let data = client.graphql::<Value>(INVENTORY_QUERY, json!({"owner":owner,"name":name,
                 "prefix":"refs/heads/","closed":closed_ids,"cursor":cursor,"issueCursor":issue_cursor}))
                 .await.map_err(|e| e.to_string())?;
             let branch = DefaultBranch::read(&data["repository"]["defaultBranchRef"]);

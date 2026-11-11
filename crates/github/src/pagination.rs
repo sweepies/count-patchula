@@ -1,4 +1,4 @@
-use crate::{Client, Error, Response, Result};
+use crate::{Client, Error, Response, Result, decode};
 use reqwest::{Url, header};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -20,7 +20,7 @@ impl Client {
         mut stop: impl FnMut(&[T]) -> bool,
     ) -> Result<Vec<T>> {
         self.rest_pages_with(path, |response| {
-            let page: Vec<T> = serde_json::from_slice(&response.body).map_err(|_| Error::Json)?;
+            let page: Vec<T> = decode(&response.body, format!("GET {path}"))?;
             let done = stop(&page);
             Ok((page, done))
         })
@@ -37,7 +37,7 @@ impl Client {
         mut stop: impl FnMut(&[T]) -> bool,
     ) -> Result<Vec<T>> {
         self.rest_pages_with(path, |response| {
-            let body: Value = serde_json::from_slice(&response.body).map_err(|_| Error::Json)?;
+            let body: Value = decode(&response.body, format!("GET {path}"))?;
             let page = entries(&body)?;
             let done = stop(&page);
             Ok((page, done))
@@ -93,7 +93,7 @@ impl Client {
         let mut result = Vec::new();
         for _ in 0..self.0.options.max_pages {
             let page = extract(
-                self.graphql(query, Value::Object(variables.clone()))
+                self.graphql::<Value>(query, Value::Object(variables.clone()))
                     .await?,
             )?;
             let done = stop(&page.nodes);
