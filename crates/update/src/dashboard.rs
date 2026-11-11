@@ -161,8 +161,7 @@ impl Controls {
     ) -> Result<Self, String> {
         let mut result = Self::default();
         if dashboard_enabled && let Some(issue) = issue(inventory)? {
-            let fields = crate::pull_requests::Pr::read(issue);
-            for action in checked_actions(fields.body.as_deref().unwrap_or("")) {
+            for action in checked_actions(&issue.body) {
                 match action {
                     Action::Recheck(t) if t == hash(repo.as_bytes()) => result.recheck = true,
                     Action::Recheck(_) => {}
@@ -282,13 +281,20 @@ fn checkbox(label: &str, action: Action) -> String {
         serde_json::to_string(&action).expect("action")
     )
 }
-pub fn issue(inventory: &Inventory) -> Result<Option<&Value>, String> {
-    let mut issues = inventory.issues.iter().filter(|i| {
-        crate::receipts::actor_login(&i["author"]).as_deref() == Some(&inventory.actor)
-            && crate::pull_requests::Pr::read(i)
-                .body
-                .as_deref()
-                .is_some_and(markers::dashboard)
+/// The repository's dashboard issue, typed: `issue` is bot-authored and
+/// carries the dashboard marker, and at most one may exist. An unreadable
+/// issue page proves neither absence nor uniqueness, so it is an error.
+pub fn issue(inventory: &Inventory) -> Result<Option<&crate::receipts::Issue>, String> {
+    if !inventory.issues.complete {
+        return Err("incomplete issue inventory".into());
+    }
+    let mut issues = inventory.issues.items.iter().flatten().filter(|i| {
+        i.author
+            .as_ref()
+            .map(crate::receipts::actor_login)
+            .as_deref()
+            == Some(inventory.actor.as_str())
+            && markers::dashboard(&i.body)
     });
     let result = issues.next();
     if issues.next().is_some() {
@@ -1166,11 +1172,11 @@ pub async fn reconcile(
     let path = format!("repos/{}/issues", repo.repository);
     if !config.prs.dashboard {
         if let Some(existing) = existing {
-            let number = crate::pull_requests::Pr::read(existing)
-                .number
-                .ok_or("missing dashboard number")?;
             client
-                .patch::<Value>(&format!("{path}/{number}"), json!({"state":"closed"}))
+                .patch::<Value>(
+                    &format!("{path}/{}", existing.number),
+                    json!({"state":"closed"}),
+                )
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -1186,9 +1192,8 @@ pub async fn reconcile(
         .await
         .map_err(|e| e.to_string())?;
     let number = if let Some(existing) = existing {
-        let fields = crate::pull_requests::Pr::read(existing);
-        let number = fields.number.ok_or("missing dashboard number")?;
-        let current = fields.body.as_deref().unwrap_or("");
+        let number = existing.number as u64;
+        let current = existing.body.as_str();
         let unchanged = previous
             .as_ref()
             .is_some_and(|r| r.number == number && r.actor == inventory.actor && r.hash == digest)

@@ -234,6 +234,13 @@ impl Client {
         self.0.options.concurrency
     }
 
+    /// The request cap `graphql_pages` applies to a connection walk, for a
+    /// caller that paginates more than one connection in a single document
+    /// and so drives the cursor loop itself.
+    pub fn max_pages(&self) -> usize {
+        self.0.options.max_pages
+    }
+
     /// The current token, for a tool that makes its own GitHub requests and is
     /// handed it explicitly. Refreshable credentials renew it.
     pub async fn token(&self) -> Result<String> {

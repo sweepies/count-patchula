@@ -142,7 +142,7 @@ pub async fn delete_owned(
     let result = client.graphql::<crate::write::RefUpdates>(REF_UPDATE, json!({"input":{"repositoryId":node,"refUpdates":[
         {"name":format!("refs/heads/{branch}"),"beforeOid":head,"afterOid":"0000000000000000000000000000000000000000","force":true}
     ]}})).await.map_err(|e| e.to_string())?;
-    if !result.acknowledged() {
+    if result.update_refs.is_none() {
         return Err("missing deletion acknowledgement".into());
     }
     Ok(())

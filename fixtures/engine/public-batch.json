@@ -20,7 +20,7 @@
         "body": {
           "format": "json",
           "value": {
-            "query": "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){isPrivate defaultBranchRef{name target{... on Commit{oid tree{oid}}}}}}",
+            "query": "query RepositoryHeadQuery($owner: String!, $name: String!) {\n    repository(owner: $owner, name: $name) {\n        isPrivate\n        defaultBranchRef {\n            name\n            target {\n                __typename\n                ... on Commit {\n                    oid\n                    tree {\n                        oid\n                    }\n                }\n            }\n        }\n    }\n}\n",
             "variables": {
               "name": "usage",
               "owner": "jdx"
@@ -109,6 +109,7 @@
                 "defaultBranchRef": {
                   "name": "main",
                   "target": {
+                    "__typename": "Commit",
                     "oid": "6e8e0c17f661d6e74ffbf28e6373eddd34b69626",
                     "tree": {
                       "oid": "ac840f88bed46e0705fe5ec08f79e55e0b128ac8"
@@ -140,7 +141,7 @@
         "body": {
           "format": "json",
           "value": {
-            "query": "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){isPrivate defaultBranchRef{name target{... on Commit{oid tree{oid}}}}}}",
+            "query": "query RepositoryHeadQuery($owner: String!, $name: String!) {\n    repository(owner: $owner, name: $name) {\n        isPrivate\n        defaultBranchRef {\n            name\n            target {\n                __typename\n                ... on Commit {\n                    oid\n                    tree {\n                        oid\n                    }\n                }\n            }\n        }\n    }\n}\n",
             "variables": {
               "name": "mr-boxington",
               "owner": "jdx"
@@ -229,6 +230,7 @@
                 "defaultBranchRef": {
                   "name": "main",
                   "target": {
+                    "__typename": "Commit",
                     "oid": "b6acd5b4491e11fad5e9c4e3a0e941175f80c6e6",
                     "tree": {
                       "oid": "479ed6da859b838c5021459c75cf746cb5140be1"

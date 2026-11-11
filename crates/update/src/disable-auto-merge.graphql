@@ -1,0 +1,7 @@
+mutation DisableAutoMerge($input: DisablePullRequestAutoMergeInput!) {
+    disablePullRequestAutoMerge(input: $input) {
+        pullRequest {
+            id
+        }
+    }
+}

@@ -111,28 +111,34 @@ impl Transport for Fake {
             } else if body["query"] == patchula_engine::REPOSITORY_HEAD_QUERY {
                 (
                     200,
-                    json!({"data":{"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base","tree":{"oid":"base-tree"}}}}}}),
+                    json!({"data":{"repository":{"isPrivate":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"base","tree":{"oid":"base-tree"}}}}}}),
                 )
             } else if body["query"] == "query{viewer{login}}" {
                 (200, json!({"data":{"viewer":{"login":"patchula[bot]"}}}))
             } else if body["query"] == patchula_update::INVENTORY_QUERY {
                 let prs = self.prs.lock().unwrap();
                 let nodes: Vec<_> = prs.iter().filter(|p|p["state"] == "open").map(|p|json!({
-                    "name":p["head"]["ref"],"target":{"oid":p["head"]["sha"],"tree":{"oid":"updated-tree"},"signature":{"isValid":true}},
+                    "__typename":"Ref","name":p["head"]["ref"],
+                    "target":{"__typename":"Commit","oid":p["head"]["sha"],"tree":{"oid":"updated-tree"},"message":"","signature":{"__typename":"GpgSignature","isValid":true}},
                     "associatedPullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{
-                        "number":p["number"],"id":p["node_id"],"url":p["html_url"],"title":p["title"],"body":p["body"],
+                        "__typename":"PullRequest",
+                        "number":p["number"],"id":p["node_id"],"url":p["html_url"],
+                        "title":p["title"].as_str().unwrap_or_default(),
+                        "body":p["body"].as_str().unwrap_or_default(),
+                        "state":"OPEN","merged":false,
                         "headRefName":p["head"]["ref"],"headRefOid":p["head"]["sha"],"baseRefName":p["base"]["ref"],"author":Self::graphql_author(p),
                         "headRepository":{"nameWithOwner":"demo/sandbox"},"baseRepository":{"nameWithOwner":"demo/sandbox"},
                         "labels":{"nodes":p["labels"],"pageInfo":{"hasNextPage":false}},"autoMergeRequest":p["auto_merge"]
                     }]}
                 })).collect();
                 let closed: Vec<_> = prs.iter().filter(|p|body["variables"]["closed"].as_array().unwrap().contains(&p["node_id"])).map(|p|json!({
-                    "id":p["node_id"],"state":if p["state"] == "closed" {"CLOSED"} else {"OPEN"},"merged":false,"body":p["body"],
+                    "__typename":"PullRequest","id":p["node_id"],"number":p["number"],"state":if p["state"] == "closed" {"CLOSED"} else {"OPEN"},"merged":false,"headRefName":p["head"]["ref"],
+                    "body":p["body"].as_str().unwrap_or_default(),
                     "author":Self::graphql_author(p),"headRepository":{"nameWithOwner":"demo/sandbox"},"baseRepository":{"nameWithOwner":"demo/sandbox"}
                 })).collect();
                 (
                     200,
-                    json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":closed,"repository":{"defaultBranchRef":{"name":"main","target":{"oid":"base"}},"refs":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}},"issues":{"nodes":*self.issues.lock().unwrap(),"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+                    json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":closed,"repository":{"id":"repo-id","autoMergeAllowed":true,"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":false,"deleteBranchOnMerge":false,"defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"base"}},"refs":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}},"issues":{"nodes":*self.issues.lock().unwrap(),"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
                 )
             } else {
                 assert_eq!(body["query"], patchula_update::REF_UPDATE);
@@ -156,7 +162,7 @@ impl Transport for Fake {
                 self.prs.lock().unwrap().push(pr.clone());
                 (201, pr)
             } else if path.ends_with("/issues") {
-                let issue = json!({"number":100,"id":"dashboard-id","title":body["title"],"body":body["body"],"state":"OPEN","author":{"__typename":"Bot","login":"patchula"}});
+                let issue = json!({"number":100,"id":"dashboard-id","title":body["title"].as_str().unwrap_or_default(),"body":body["body"].as_str().unwrap_or_default(),"state":"OPEN","author":{"__typename":"Bot","login":"patchula"}});
                 self.issues.lock().unwrap().push(issue.clone());
                 (201, issue)
             } else if path.ends_with("/git/blobs") {
@@ -245,7 +251,7 @@ fn existing_pr(package: &str, number: u64, closed: bool) -> Value {
         .collect::<String>();
     let marker = json!({"version":1,"identity":"0".repeat(64),"update":update});
     json!({
-        "number":number,"node_id":format!("closed-{number}"),
+        "number":number,"node_id":format!("closed-{number}"),"html_url":format!("https://github.com/demo/sandbox/pull/{number}"),
         "state":if closed {"closed"} else {"open"},"merged_at":null,
         "body":format!("<!-- patchula:{marker} -->"),
         "title":"Existing PR", "user":{"login":"patchula[bot]"},

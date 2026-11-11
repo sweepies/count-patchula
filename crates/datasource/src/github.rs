@@ -17,7 +17,26 @@ enum Head<'a> {
 pub(crate) fn release_counts(draft: bool, prerelease: bool) -> bool {
     !draft && !prerelease
 }
-const RELEASES: &str = "query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){releases(first:100,after:$cursor,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}";
+#[allow(dead_code)]
+mod releases {
+    use graphql_client::GraphQLQuery;
+
+    /// `DateTime` scalar the generated types resolve as `super::DateTime`.
+    /// The release walk stays `Value`-typed, so the alias is enough.
+    type DateTime = String;
+
+    /// `releases.graphql`, checked against the vendored GitHub schema. The
+    /// release walk stays `Value`-typed: the same connection feeds the
+    /// fingerprint and the page loop below.
+    #[derive(GraphQLQuery)]
+    #[graphql(
+        schema_path = "../github/graphql/schema.docs.graphql",
+        query_path = "src/releases.graphql",
+        response_derives = "Debug"
+    )]
+    pub struct ReleasesQuery;
+}
+const RELEASES: &str = releases::releases_query::QUERY;
 const GIT_OBJECT_FIELDS: &str = "oid __typename ... on Tag{tagger{date} target{__typename ... on Commit{oid} ... on Tag{target{__typename ... on Commit{oid}}}}}";
 pub type TagDigests = BTreeMap<(String, String), std::result::Result<String, Failure>>;
 

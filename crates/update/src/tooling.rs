@@ -323,7 +323,7 @@ impl Evidence {
         let branch_checks = branch
             .history
             .as_ref()
-            .map(|commits| commits.iter().any(|c| c.rollup));
+            .map(|commits| commits.items.iter().flatten().any(|c| c.rollup()));
         Self {
             ci,
             branch_checks,
@@ -336,30 +336,35 @@ impl Evidence {
 
 /// Required checks and reviews from active rulesets and classic protection.
 fn required(branch: &crate::receipts::DefaultBranch) -> Option<Required> {
-    let rules = &branch.rules;
-    let nodes = rules["nodes"].as_array()?;
+    let rules = branch.rules.as_ref()?;
     let mut result = Required {
-        checks: nodes.iter().any(|r| {
-            r["type"] == "REQUIRED_STATUS_CHECKS"
-                && r["parameters"]["requiredStatusChecks"]
-                    .as_array()
-                    .is_some_and(|c| !c.is_empty())
+        checks: rules.items.iter().flatten().any(|r| {
+            r.rule_type == crate::receipts::RepositoryRuleType::REQUIRED_STATUS_CHECKS
+                && matches!(
+                    &r.parameters,
+                    Some(crate::receipts::RuleParameters::RequiredStatusChecksParameters(p))
+                        if !p.required_status_checks.is_empty()
+                )
         }),
-        reviews: nodes.iter().any(|r| {
-            r["type"] == "PULL_REQUEST"
-                && r["parameters"]["requiredApprovingReviewCount"]
-                    .as_u64()
-                    .is_some_and(|n| n > 0)
+        reviews: rules.items.iter().flatten().any(|r| {
+            r.rule_type == crate::receipts::RepositoryRuleType::PULL_REQUEST
+                && matches!(
+                    &r.parameters,
+                    Some(crate::receipts::RuleParameters::PullRequestParameters(p))
+                        if p.required_approving_review_count > 0
+                )
         }),
     };
-    let classic = &branch.ref_update_rule;
-    result.checks |= classic["requiredStatusCheckContexts"]
-        .as_array()
-        .is_some_and(|c| !c.is_empty());
-    result.reviews |= classic["requiredApprovingReviewCount"]
-        .as_u64()
-        .is_some_and(|n| n > 0);
-    if !result.checks && rules["pageInfo"]["hasNextPage"].as_bool() != Some(false) {
+    if let Some(classic) = &branch.ref_update_rule {
+        result.checks |= classic
+            .required_status_check_contexts
+            .as_ref()
+            .is_some_and(|c| !c.is_empty());
+        result.reviews |= classic
+            .required_approving_review_count
+            .is_some_and(|n| n > 0);
+    }
+    if !result.checks && !rules.complete {
         return None;
     }
     Some(result)
@@ -655,8 +660,13 @@ mod tests {
     #[test]
     fn required_checks_come_from_rulesets_or_classic_protection() {
         let head = |nodes: Value, more: bool, classic: Value| crate::receipts::DefaultBranch {
-            rules: json!({"nodes": nodes, "pageInfo": {"hasNextPage": more}}),
-            ref_update_rule: classic,
+            rules: Some(
+                serde_json::from_value::<crate::receipts::Page<crate::receipts::Rule>>(
+                    json!({"nodes": nodes, "pageInfo": {"hasNextPage": more}}),
+                )
+                .unwrap(),
+            ),
+            ref_update_rule: serde_json::from_value(classic).unwrap(),
             ..Default::default()
         };
         let none = Required {
@@ -665,7 +675,7 @@ mod tests {
         };
         assert_eq!(
             required(&crate::receipts::DefaultBranch {
-                rules: Value::Null,
+                rules: None,
                 ..Default::default()
             }),
             None
@@ -677,7 +687,7 @@ mod tests {
         assert_eq!(required(&head(json!([]), true, Value::Null)), None);
         assert_eq!(
             required(&head(
-                json!([{"type":"PULL_REQUEST","parameters":{"requiredApprovingReviewCount":1}}]),
+                json!([{"type":"PULL_REQUEST","parameters":{"__typename":"PullRequestParameters","requiredApprovingReviewCount":1}}]),
                 false,
                 Value::Null
             )),
@@ -699,7 +709,7 @@ mod tests {
         );
         assert_eq!(
             required(&head(
-                json!([{"type":"REQUIRED_STATUS_CHECKS","parameters":{"requiredStatusChecks":[{"context":"ci"}]}}]),
+                json!([{"type":"REQUIRED_STATUS_CHECKS","parameters":{"__typename":"RequiredStatusChecksParameters","requiredStatusChecks":[{"context":"ci"}]}}]),
                 false,
                 Value::Null
             )),
@@ -920,9 +930,18 @@ mod tests {
     fn checks_and_protection_come_from_the_inventory() {
         let inventory = Inventory {
             default_branch: crate::receipts::DefaultBranch {
-                history: Some(vec![crate::receipts::DefaultCommit { rollup: false }]),
-                rules: json!({"nodes": [], "pageInfo": {"hasNextPage": false}}),
-                ref_update_rule: Value::Null,
+                history: Some(crate::receipts::Page::of(vec![
+                    crate::receipts::DefaultCommit {
+                        status_check_rollup: None,
+                    },
+                ])),
+                rules: Some(
+                    serde_json::from_value::<crate::receipts::Page<crate::receipts::Rule>>(
+                        json!({"nodes": [], "pageInfo": {"hasNextPage": false}}),
+                    )
+                    .unwrap(),
+                ),
+                ref_update_rule: None,
                 ..Default::default()
             },
             ..Default::default()

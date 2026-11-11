@@ -350,36 +350,35 @@ impl Sent {
     }
 }
 type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, Failure>>;
-pub const REPOSITORY_HEAD_QUERY: &str = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){isPrivate defaultBranchRef{name target{... on Commit{oid tree{oid}}}}}}";
+#[allow(dead_code)]
+mod repository_head {
+    use graphql_client::GraphQLQuery;
 
-/// `REPOSITORY_HEAD_QUERY`'s `data`, shaped exactly like the selection set.
-/// `repository` and `defaultBranchRef` are nullable in the GraphQL schema —
-/// a repository the token cannot see or one with no commits — while `name`,
-/// the commit `target` and its `tree` are non-null once the ref exists.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RepositoryHead {
-    repository: Option<RepositoryHeadRepository>,
+    /// `GitObjectID` scalar the generated types resolve as
+    /// `super::GitObjectID`.
+    type GitObjectID = String;
+
+    /// `repository-head.graphql`, checked against the vendored GitHub
+    /// schema. `repository` and `defaultBranchRef` are nullable — a
+    /// repository the token cannot see or one with no commits — while
+    /// `name`, a commit `target` and its `tree` are non-null once the ref
+    /// exists.
+    #[derive(GraphQLQuery)]
+    #[graphql(
+        schema_path = "../github/graphql/schema.docs.graphql",
+        query_path = "src/repository-head.graphql",
+        response_derives = "Debug"
+    )]
+    pub struct RepositoryHeadQuery;
 }
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RepositoryHeadRepository {
-    default_branch_ref: Option<RepositoryHeadRef>,
-}
-#[derive(Deserialize)]
-struct RepositoryHeadRef {
-    name: String,
-    target: RepositoryHeadCommit,
-}
-#[derive(Deserialize)]
-struct RepositoryHeadCommit {
-    oid: String,
-    tree: RepositoryHeadTree,
-}
-#[derive(Deserialize)]
-struct RepositoryHeadTree {
-    oid: String,
-}
+use repository_head::repository_head_query::{
+    RepositoryHeadQueryRepositoryDefaultBranchRefTarget as HeadTarget,
+    ResponseData as RepositoryHead,
+};
+
+/// The repository-head document, exported for tests that compare request
+/// bodies.
+pub const REPOSITORY_HEAD_QUERY: &str = repository_head::repository_head_query::QUERY;
 
 #[derive(Default, Serialize, Deserialize)]
 struct LookupHint {
@@ -1045,7 +1044,10 @@ impl Engine {
                 .repository
                 .and_then(|repository| repository.default_branch_ref)
                 .ok_or_else(|| Error::Invalid("repository has no default branch".into()))?;
-            (head.name, head.target.oid, head.target.tree.oid)
+            let Some(HeadTarget::Commit(target)) = head.target else {
+                return Err(Error::Invalid("default branch head is not a commit".into()));
+            };
+            (head.name, target.oid, target.tree.oid)
         };
         self.cache
             .set_state(&hint_scope, &BranchHint(branch.clone()))

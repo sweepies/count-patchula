@@ -11,8 +11,41 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const BODY_LIMIT: usize = 32_000;
-pub const ENABLE_AUTO_MERGE: &str = "mutation($input:EnablePullRequestAutoMergeInput!){enablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
-const DISABLE_AUTO_MERGE: &str = "mutation($input:DisablePullRequestAutoMergeInput!){disablePullRequestAutoMerge(input:$input){pullRequest{id}}}";
+
+#[allow(dead_code)]
+mod auto_merge {
+    use graphql_client::GraphQLQuery;
+
+    /// `GitObjectID` scalar the generated variables resolve as
+    /// `super::GitObjectID`.
+    type GitObjectID = String;
+
+    /// `enable-auto-merge.graphql`, checked against the vendored GitHub
+    /// schema. One operation per document: a `query` body carries the whole
+    /// file, so two operations here would ask GitHub to run both.
+    #[derive(GraphQLQuery)]
+    #[graphql(
+        schema_path = "../github/graphql/schema.docs.graphql",
+        query_path = "src/enable-auto-merge.graphql",
+        response_derives = "Debug"
+    )]
+    pub struct EnableAutoMerge;
+    /// The sibling mutation in its own document.
+    #[derive(GraphQLQuery)]
+    #[graphql(
+        schema_path = "../github/graphql/schema.docs.graphql",
+        query_path = "src/disable-auto-merge.graphql",
+        response_derives = "Debug"
+    )]
+    pub struct DisableAutoMerge;
+}
+pub(crate) use auto_merge::disable_auto_merge::ResponseData as DisableAutoMergeData;
+pub(crate) use auto_merge::enable_auto_merge::ResponseData as EnableAutoMergeData;
+
+/// The enable-auto-merge document, exported for tests that compare request
+/// bodies.
+pub const ENABLE_AUTO_MERGE: &str = auto_merge::enable_auto_merge::QUERY;
+const DISABLE_AUTO_MERGE: &str = auto_merge::disable_auto_merge::QUERY;
 
 /// How the re-check timing reads in PR bodies and the dashboard.
 pub(crate) fn recheck_timing(recheck: Recheck) -> &'static str {
@@ -878,7 +911,10 @@ impl Lifecycle {
         } else if !merge && enabled {
             let id = pr["node_id"].as_str().ok_or("missing PR node ID")?;
             client
-                .graphql::<Value>(DISABLE_AUTO_MERGE, json!({"input":{"pullRequestId":id}}))
+                .graphql::<DisableAutoMergeData>(
+                    DISABLE_AUTO_MERGE,
+                    json!({"input":{"pullRequestId":id}}),
+                )
                 .await
                 .map_err(|e| e.to_string())?;
         }

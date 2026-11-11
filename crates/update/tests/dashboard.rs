@@ -132,17 +132,33 @@ fn dashboard_orders_pr_numbers_numerically_and_dependency_summaries_last() {
 
 #[test]
 fn issue_discovery_checks_marker_author_and_ambiguity_never_title() {
+    let issue = |number: i64, title: &str, login: &str, typename: &str| {
+        serde_json::from_value(
+            json!({"id":format!("i{number}"),"number":number,"title":title,
+            "body":MARKER,"state":"OPEN","author":{"__typename":typename,"login":login}}),
+        )
+        .unwrap()
+    };
     let mut inventory = Inventory {
         actor: "patchula[bot]".into(),
         ..Default::default()
     };
-    inventory.issues = vec![
-        json!({"number":1,"title":"Count Patchula's dependency dashboard","body":MARKER,"author":{"__typename":"User","login":"human"}}),
-    ];
+    inventory.issues = patchula_update::Page::of(vec![issue(
+        1,
+        "Count Patchula's dependency dashboard",
+        "human",
+        "User",
+    )]);
     assert!(dashboard::issue(&inventory).unwrap().is_none());
-    inventory.issues.push(json!({"number":2,"title":"Renamed by owner","body":MARKER,"author":{"__typename":"Bot","login":"patchula"}}));
-    assert_eq!(dashboard::issue(&inventory).unwrap().unwrap()["number"], 2);
-    inventory.issues.push(inventory.issues[1].clone());
+    inventory.issues = patchula_update::Page::of(vec![
+        issue(1, "Count Patchula's dependency dashboard", "human", "User"),
+        issue(2, "Renamed by owner", "patchula", "Bot"),
+    ]);
+    assert_eq!(dashboard::issue(&inventory).unwrap().unwrap().number, 2);
+    inventory.issues = patchula_update::Page::of(vec![
+        issue(2, "Renamed by owner", "patchula", "Bot"),
+        issue(3, "Renamed by owner", "patchula", "Bot"),
+    ]);
     assert!(dashboard::issue(&inventory).is_err());
 }
 
@@ -190,7 +206,13 @@ fn checkbox_parser_rejects_malformed_duplicate_fenced_foreign_and_wrong_reposito
     ] {
         let inventory = Inventory {
             actor: "patchula[bot]".into(),
-            issues: vec![json!({"body":content,"author":{"__typename":"Bot","login":author}})],
+            issues: patchula_update::Page::of(vec![
+                serde_json::from_value(
+                    json!({"id":"i1","number":1,"title":"dashboard","body":content,
+                       "state":"OPEN","author":{"__typename":"Bot","login":author}}),
+                )
+                .unwrap(),
+            ]),
             ..Default::default()
         };
         assert_eq!(
@@ -237,11 +259,18 @@ fn pr_checkbox_requires_bot_author_same_repository_and_a_valid_ownership_marker(
             "fenced" => format!("```md\n{checkbox}\n```\n{ownership}"),
             _ => format!("{checkbox}\n{ownership}"),
         };
-        let pr = json!({"body":body,"headRefName":"patchula/fixture","author":{"__typename":"Bot","login":if case == "foreign" {"other"} else {"patchula"}},
+        let pr = json!({"number":7,"id":"pr-7","url":"https://github.com/demo/app/pull/7",
+            "title":"Update","body":body,"headRefName":"patchula/fixture","headRefOid":"oid",
+            "baseRefName":"main","author":{"__typename":"Bot","login":if case == "foreign" {"other"} else {"patchula"}},
             "headRepository":{"nameWithOwner":if case == "fork" {"other/app"} else {"demo/app"}},"baseRepository":{"nameWithOwner":"demo/app"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false}}});
         let inventory = Inventory {
             actor: "patchula[bot]".into(),
-            refs: vec![json!({"associatedPullRequests":{"nodes":[pr]}})],
+            refs: patchula_update::Page::of(vec![
+                serde_json::from_value(json!({"name":"patchula/fixture","target":null,
+                    "associatedPullRequests":{"nodes":[pr],"pageInfo":{"hasNextPage":false}}}))
+                .unwrap(),
+            ]),
+            issues: patchula_update::Page::of(vec![]),
             ..Default::default()
         };
         let controls = dashboard::Controls::read(&inventory, "demo/app", true).unwrap();
@@ -260,17 +289,24 @@ impl patchula_http::Transport for InventoryPages {
             serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
         assert_eq!(input["query"], patchula_update::INVENTORY_QUERY);
         *self.0.lock().unwrap() += 1;
-        let page = |cursor: &serde_json::Value, pages: usize, prefix: &str| {
+        let page = |cursor: &serde_json::Value, pages: usize, node: serde_json::Value| {
             let offset = cursor
                 .as_str()
                 .map(|c| c.parse::<usize>().unwrap())
                 .unwrap_or(0);
-            json!({"nodes":[{"name":format!("{prefix}{offset}")}],"pageInfo":{"hasNextPage":offset + 1 < pages,"endCursor":(offset+1).to_string()}})
+            json!({"nodes":[node],"pageInfo":{"hasNextPage":offset + 1 < pages,"endCursor":(offset+1).to_string()}})
+        };
+        let n = |v: &serde_json::Value| {
+            v.as_str()
+                .and_then(|c| c.parse::<usize>().ok())
+                .unwrap_or(0)
         };
         let value = json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":[],"repository":{
-            "defaultBranchRef":{"name":"main","target":{"oid":"base"}},
-            "refs":page(&input["variables"]["cursor"],2,"ref"),
-            "issues":page(&input["variables"]["issueCursor"],3,"issue")
+            "id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,
+            "mergeCommitAllowed":false,"rebaseMergeAllowed":false,"deleteBranchOnMerge":false,
+            "defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"base"}},
+            "refs":page(&input["variables"]["cursor"],2,json!({"name":format!("ref{}",n(&input["variables"]["cursor"])),"target":null,"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}})),
+            "issues":page(&input["variables"]["issueCursor"],3,json!({"id":format!("i{}",n(&input["variables"]["issueCursor"])),"number":n(&input["variables"]["issueCursor"]),"title":"t","body":"b","state":"OPEN"}))
         }}});
         Box::pin(async move {
             Ok(patchula_http::Response {
@@ -305,18 +341,22 @@ async fn shared_inventory_follows_each_connection_without_duplicating_finished_p
     assert_eq!(
         inventory
             .refs
+            .items
             .iter()
-            .map(|r| r["name"].as_str().unwrap())
+            .flatten()
+            .map(|r| r.name.as_str())
             .collect::<Vec<_>>(),
         ["ref0", "ref1"]
     );
     assert_eq!(
         inventory
             .issues
+            .items
             .iter()
-            .map(|r| r["name"].as_str().unwrap())
+            .flatten()
+            .map(|i| i.title.as_str())
             .collect::<Vec<_>>(),
-        ["issue0", "issue1", "issue2"]
+        ["t", "t", "t"]
     );
     assert_eq!(*fake.0.lock().unwrap(), 3);
 }

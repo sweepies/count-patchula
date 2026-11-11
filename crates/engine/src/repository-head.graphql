@@ -1,0 +1,17 @@
+query RepositoryHeadQuery($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+        isPrivate
+        defaultBranchRef {
+            name
+            target {
+                __typename
+                ... on Commit {
+                    oid
+                    tree {
+                        oid
+                    }
+                }
+            }
+        }
+    }
+}
