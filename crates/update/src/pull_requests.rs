@@ -1,6 +1,7 @@
 use crate::Plan;
 use crate::markers;
-use chrono::{DateTime, Duration, Utc};
+use crate::pr::view;
+use chrono::{DateTime, Utc};
 use patchula_config::{Config, PackageId};
 use patchula_github::{Client, model};
 use patchula_manager::hash;
@@ -252,7 +253,7 @@ pub(crate) fn body_hash(text: &str) -> String {
     // content hash as write receipts, without treating transport newlines as edits.
     hash(text.replace("\r\n", "\n").as_bytes())
 }
-fn branch(pr: &model::PullRequest) -> &str {
+pub(crate) fn branch(pr: &model::PullRequest) -> &str {
     &pr.head.branch
 }
 /// Whether two GitHub repository names name the same repository: repository
@@ -260,7 +261,7 @@ fn branch(pr: &model::PullRequest) -> &str {
 pub fn same_repository(name: &str, other: &str) -> bool {
     name.eq_ignore_ascii_case(other)
 }
-fn same_repo(pr: &model::PullRequest, repo: &str) -> bool {
+pub(crate) fn same_repo(pr: &model::PullRequest, repo: &str) -> bool {
     pr.head
         .repo
         .as_ref()
@@ -319,7 +320,7 @@ pub fn controls_edited(before: &str, after: &str) -> bool {
     after.difference(&before).next().is_some()
 }
 /// Batched closures and batch PRs never suppress an update.
-fn suppresses(pr: &model::PullRequest) -> bool {
+pub(crate) fn suppresses(pr: &model::PullRequest) -> bool {
     let body = body(pr);
     !markers::closed(body, markers::OBSOLETE)
         && !markers::closed(body, markers::BATCHED)
@@ -457,18 +458,29 @@ impl Lifecycle {
             batched: controls.batched.clone(),
             server: None,
         };
-        let desired: BTreeSet<_> = plans.iter().map(|p| p.action().branch.as_str()).collect();
+        let owner = view::Owner { actor, repo };
+        let desired: BTreeSet<String> = plans.iter().map(|p| p.action().branch.clone()).collect();
+        // Which open owned PRs are obsolete is a decision and lives with
+        // the rest of them in the view; a degraded repository selects none,
+        // as it skipped them all before. The closures stay requests.
+        let obsolete: BTreeSet<u64> = if repository.degraded() {
+            BTreeSet::new()
+        } else {
+            view::obsolete(
+                &view::Pulls::from_listing(&state.prs, plans, controls, owner, now, state.complete),
+                &desired,
+                controls,
+                owner,
+            )
+            .into_iter()
+            .map(|tracked| tracked.pr.number)
+            .collect()
+        };
         // The repository metadata does not change between pulls, so it is
         // fetched once for all obsolete PRs, on the first that needs it.
         let mut meta = None;
         for pr in &mut state.prs {
-            if repository.degraded()
-                || pr.pr.state != "open"
-                || !owned_pr(&pr.pr, actor, repo)
-                || desired.contains(branch(&pr.pr))
-                || markers::ownership_marker(body(&pr.pr))
-                    .is_some_and(|m| state.batched.contains(&m.update))
-            {
+            if !obsolete.contains(&pr.pr.number) {
                 continue;
             }
             let name = branch(&pr.pr).to_owned();
@@ -547,96 +559,9 @@ impl Lifecycle {
                 Some("superseded or already satisfied update".into()),
             ));
         }
-        let owned: Vec<_> = state
-            .prs
-            .iter()
-            .filter(|p| owned_pr(&p.pr, actor, repo))
-            .collect();
-        let mut active = owned.iter().filter(|p| p.pr.state == "open").count() as u32;
-        let mut hourly = owned
-            .iter()
-            .filter(|p| {
-                p.pr.created_at
-                    .as_deref()
-                    .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-                    .is_some_and(|t| t >= now - Duration::hours(1))
-            })
-            .count() as u32;
-        if !state.complete {
-            // Every per-plan decision reads the whole listing: an unreadable
-            // PR could hide the open, closed or recent pull a decision needs,
-            // so no planned plan may create, update or hold.
-            for plan in plans
-                .iter_mut()
-                .filter(|p| p.action().status == BranchStatus::Planned)
-            {
-                plan.protect("repository pull request list is incomplete; left untouched");
-            }
-            return Ok(state);
-        }
-        for plan in plans
-            .iter_mut()
-            .filter(|p| p.action().status == BranchStatus::Planned)
-        {
-            let name = &plan.action().branch;
-            let existing: Vec<_> = state
-                .prs
-                .iter()
-                .filter(|p| p.pr.state == "open" && branch(&p.pr) == name && same_repo(&p.pr, repo))
-                .collect();
-            if existing.len() > 1
-                || existing
-                    .first()
-                    .is_some_and(|p| !owned_pr(&p.pr, actor, repo))
-            {
-                plan.protect("unowned or ambiguous open PR for branch");
-                continue;
-            }
-            let key = plan.update_key();
-            if existing.is_empty()
-                && !controls.recreate.contains(&key)
-                && owned.iter().any(|p| {
-                    p.pr.state == "closed"
-                        && p.pr.merged_at.is_none()
-                        && suppresses(&p.pr)
-                        && markers::ownership_marker(body(&p.pr)).is_some_and(|m| m.update == key)
-                })
-            {
-                plan.hold(crate::plan::Hold::ClosedByOwner);
-                continue;
-            }
-            if let Some(pr) = existing.first() {
-                // A newer target must not take over a PR that just moved into
-                // the batch; it gets its own PR once that one closes.
-                if markers::ownership_marker(body(&pr.pr))
-                    .is_some_and(|m| state.batched.contains(&m.update))
-                {
-                    plan.hold(crate::plan::Hold::WaitingForBatch);
-                    continue;
-                }
-                if checked(&pr.pr) {
-                    plan.request_retry();
-                }
-                continue;
-            }
-            // Security updates never queue behind ordinary ones. Nor does the
-            // batch PR: it replaces the open PRs it carries, which still count
-            // until it exists, so holding it would keep them open for good.
-            let bypass = controls.create.contains(&key)
-                || controls.recreate.contains(&key)
-                || plan.batch_items().is_some()
-                || plan.changes().iter().any(|c| !c.advisories.is_empty());
-            if !bypass && config.prs.concurrent.is_some_and(|n| active >= n) {
-                plan.hold(crate::plan::Hold::Concurrent);
-                continue;
-            }
-            if !bypass && config.prs.per_hour.is_some_and(|n| hourly >= n) {
-                plan.hold(crate::plan::Hold::PerHour);
-                continue;
-            }
-            active = active.saturating_add(1);
-            hourly = hourly.saturating_add(1);
-        }
+        let pulls =
+            view::Pulls::from_listing(&state.prs, plans, controls, owner, now, state.complete);
+        view::admit(&pulls, plans, controls, config, owner);
         Ok(state)
     }
 

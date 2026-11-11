@@ -20,6 +20,7 @@ pub use receipts::{
 };
 pub use settle::{Settlement, settle};
 mod plan;
+mod pr;
 #[cfg(feature = "testing")]
 pub use plan::testing;
 mod write;
