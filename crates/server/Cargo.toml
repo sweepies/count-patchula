@@ -18,6 +18,7 @@ patchula-github = { path = "../github" }
 patchula-http = { path = "../http" }
 patchula-report = { path = "../report" }
 patchula-update = { path = "../update" }
+patchula-tools = { path = "../tools" }
 patchula-words = { path = "../words" }
 tokio = { workspace = true, features = ["net", "signal"] }
 serde.workspace = true

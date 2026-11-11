@@ -1,0 +1,19 @@
+[package]
+name = "patchula-lockfiles"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+patchula-config = { path = "../config" }
+patchula-manager = { path = "../manager" }
+patchula-report = { path = "../report" }
+patchula-words = { path = "../words" }
+patchula-process = { path = "../process" }
+serde.workspace = true

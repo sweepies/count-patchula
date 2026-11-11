@@ -47,7 +47,7 @@ async fn public_multi_repo_report_cold_and_warm() {
     let mise_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mise/public-batch.json");
     let tools = dir.path().join("cache.sqlite");
-    let probe = patchula_update::lockfiles::Runner::new(tools.clone(), &token);
+    let probe = patchula_tools::Runner::new(tools.clone(), &token);
     let executor: Arc<dyn Executor> = if recording {
         Arc::new(MiseRecorder::new(
             &mise_path,

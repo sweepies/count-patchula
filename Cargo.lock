@@ -2192,6 +2192,7 @@ dependencies = [
  "patchula-report",
  "patchula-server",
  "patchula-testkit",
+ "patchula-tools",
  "patchula-update",
  "patchula-words",
  "ratatui",
@@ -2275,6 +2276,7 @@ dependencies = [
  "patchula-process",
  "patchula-report",
  "patchula-testkit",
+ "patchula-tools",
  "patchula-update",
  "patchula-versioning",
  "patchula-words",
@@ -2324,6 +2326,18 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "patchula-lockfiles"
+version = "0.8.1"
+dependencies = [
+ "patchula-config",
+ "patchula-manager",
+ "patchula-process",
+ "patchula-report",
+ "patchula-words",
+ "serde",
 ]
 
 [[package]]
@@ -2446,6 +2460,7 @@ dependencies = [
  "patchula-github",
  "patchula-http",
  "patchula-report",
+ "patchula-tools",
  "patchula-update",
  "patchula-words",
  "reqwest",
@@ -2481,14 +2496,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "patchula-tools"
+version = "0.8.1"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "crc32fast",
+ "patchula-cache",
+ "patchula-config",
+ "patchula-github",
+ "patchula-http",
+ "patchula-lockfiles",
+ "patchula-manager",
+ "patchula-mise",
+ "patchula-process",
+ "patchula-report",
+ "patchula-testkit",
+ "patchula-update",
+ "patchula-versioning",
+ "patchula-words",
+ "reqwest",
+ "roxmltree",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "tokio",
+ "toml_edit",
+ "tracing",
+]
+
+[[package]]
 name = "patchula-update"
 version = "0.8.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
- "chrono-tz",
- "crc32fast",
- "cron",
  "futures-util",
  "globset",
  "patchula-cache",
@@ -2496,9 +2538,9 @@ dependencies = [
  "patchula-datasource",
  "patchula-github",
  "patchula-http",
+ "patchula-lockfiles",
  "patchula-lookup",
  "patchula-manager",
- "patchula-mise",
  "patchula-notes",
  "patchula-process",
  "patchula-report",
@@ -2506,13 +2548,10 @@ dependencies = [
  "patchula-versioning",
  "patchula-words",
  "reqwest",
- "roxmltree",
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "tempfile",
  "tokio",
- "toml_edit",
  "tracing",
 ]
 

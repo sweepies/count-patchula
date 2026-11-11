@@ -370,13 +370,11 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
     }
     let dir = cache_dir(store.cache.as_deref()).map_err(|e| (1, e))?;
     if days.is_none() {
-        patchula_update::lockfiles::bootstrap_mise(&patchula_update::lockfiles::tools_dir(
-            &dir.join("worktrees"),
-        ))
-        .await
-        .map_err(|e| (1, miette::miette!("{e}")))?;
+        patchula_tools::bootstrap_mise(&patchula_tools::tools_dir(&dir.join("worktrees")))
+            .await
+            .map_err(|e| (1, miette::miette!("{e}")))?;
     }
-    let mut runner = patchula_update::lockfiles::Runner::new(dir.join("worktrees"), "");
+    let mut runner = patchula_tools::Runner::new(dir.join("worktrees"), "");
     if let Some(mise_data) = user::mise_data() {
         runner = runner.with_seed(mise_data);
     }

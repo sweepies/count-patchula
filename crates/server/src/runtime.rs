@@ -94,8 +94,8 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     // The image has no mise of its own: the first start installs the pinned
     // one into the tool store, and later starts find it there.
     if let Some(workspace) = cache.workspace_dir() {
-        let tools = patchula_update::lockfiles::tools_dir(workspace);
-        match patchula_update::lockfiles::bootstrap_mise(&tools).await {
+        let tools = patchula_tools::tools_dir(workspace);
+        match patchula_tools::bootstrap_mise(&tools).await {
             Ok(Some(mise)) => {
                 tracing::info!(target: "patchula_server", mise = %mise.display(), "lockfile tools run with this mise");
             }

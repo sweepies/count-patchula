@@ -1,9 +1,9 @@
 //! Scheduled lockfile maintenance: a refresh plan over the lockfiles the
 //! enabled ecosystems claim, held between windows or after a completed run.
-use crate::lockfiles::contract::refresh_jobs;
 use crate::{Hold, Plan, Snapshot, branch_name};
 use patchula_cache::State;
 use patchula_config::Config;
+use patchula_lockfiles::refresh_jobs;
 use patchula_manager::hash;
 use patchula_report::{BranchAction, BranchStatus, Repository};
 use serde::{Deserialize, Serialize};
@@ -59,13 +59,13 @@ pub fn maintenance(
 
 /// When a repository's lockfile maintenance last completed.
 #[derive(Serialize, Deserialize)]
-pub(crate) struct MaintenanceSuccess(pub(crate) i64);
+pub struct MaintenanceSuccess(pub i64);
 impl State for MaintenanceSuccess {
     const NAMESPACE: &'static str = "maintenance-success";
     const VERSION: u32 = 1;
     type Scope = patchula_cache::RepositoryScope;
 }
-pub(crate) fn refresh_scope(repo: &str) -> patchula_cache::RepositoryScope {
+pub fn refresh_scope(repo: &str) -> patchula_cache::RepositoryScope {
     patchula_cache::RepositoryScope {
         repository: repo.into(),
     }

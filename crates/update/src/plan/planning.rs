@@ -4,10 +4,10 @@
 //! the lockfile contract freezes: `Job`'s wire shape and set order, the
 //! built and maintenance fingerprints, the maintenance `update_key` and the
 //! report reasons `job()` errors and generation failures produce. The
-//! tool-run tests stay in `crate::lockfiles::tests`.
+//! tool-run tests stay in patchula-tools' `lockfiles::tests`.
 use super::*;
-use crate::lockfiles::contract::{self, Ecosystem, Job, Scope};
 use crate::maintenance::{defer_completed_refresh, maintenance, record_refresh};
+use patchula_lockfiles::{self as contract, Ecosystem, Job, Scope};
 use patchula_words::Manager;
 
 /// `job()` over a snapshot's path set, as callers hold it.
@@ -1522,7 +1522,7 @@ mod goldens {
             files: Vec::new(),
         };
         let mut plan = Plan::new(action());
-        plan.lockfiles_failed(crate::lockfiles::contract::Failure::Text(
+        plan.lockfiles_failed(patchula_lockfiles::Failure::Text(
             "the fixture failed".into(),
         ));
         assert_eq!(plan.action().status, BranchStatus::Error);
@@ -1531,7 +1531,7 @@ mod goldens {
             Some("lockfile generation failed: the fixture failed")
         );
         let mut plan = Plan::new(action());
-        plan.lockfiles_failed(crate::lockfiles::contract::Failure::Tool {
+        plan.lockfiles_failed(patchula_lockfiles::Failure::Tool {
             context: "cargo".into(),
             failure: patchula_process::Failure::Io("disk full".into()),
         });

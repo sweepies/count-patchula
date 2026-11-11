@@ -469,7 +469,7 @@ pub enum Refresh {
 impl Refresh {
     /// Whether `leaf` in `directory` is this ecosystem's maintenance work
     /// under `config`, given the snapshot's paths.
-    pub(crate) fn claims(
+    pub fn claims(
         &self,
         config: &Config,
         leaf: &str,
@@ -506,7 +506,7 @@ impl Refresh {
 /// How maintenance discovers `ecosystem`'s work; `job()` does not consult
 /// this — extraction already applied `config.managers` to the dependencies
 /// it reports, while maintenance sees raw paths.
-pub(crate) fn refresh(ecosystem: Ecosystem) -> Refresh {
+pub fn refresh(ecosystem: Ecosystem) -> Refresh {
     match ecosystem {
         Ecosystem::Node => Refresh::Locks(&[Manager::Npm, Manager::Bun]),
         Ecosystem::Cargo => Refresh::Locks(&[Manager::Cargo]),

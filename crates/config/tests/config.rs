@@ -462,7 +462,7 @@ fn the_repositorys_own_config_keeps_the_schema_policy() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|p| p == "crates/update/src/lockfiles/defaults.toml"),
+            .any(|p| p == "crates/tools/src/lockfiles/defaults.toml"),
         "{files}"
     );
     defaults["files"].take();
@@ -481,7 +481,7 @@ fn the_repositorys_own_config_keeps_the_schema_policy() {
     );
     assert_eq!(
         unlisted["select"]["files"],
-        serde_json::json!(["crates/update/src/lockfiles/defaults.toml"])
+        serde_json::json!(["crates/tools/src/lockfiles/defaults.toml"])
     );
     assert_eq!(unlisted["apply"]["active"].as_bool(), Some(false));
     assert!(

@@ -47,18 +47,18 @@ run = [{ task = "test:unit" }, { task = "test:tools" }]
 ["test:unit"]
 description = "Test the workspace through mbx, without the real lockfile tool tests"
 usage = '''
-flag "--part <part>" default="all" help="all, or one half for CI: update (patchula-update, the slowest suite) or others (every other crate)" {
+flag "--part <part>" default="all" help="all, or one half for CI: update (the lockfile side: patchula-update, patchula-tools and patchula-lockfiles, the slowest half) or others (every other crate)" {
   choices "all" "update" "others"
 }
 '''
-run = 'cargo test {% if usage.part == "update" %}-p patchula-update{% elif usage.part == "others" %}--workspace --exclude patchula-update{% else %}--workspace{% endif %} --locked --no-fail-fast -- --skip lockfiles::tests::real_'
+run = 'cargo test {% if usage.part == "update" %}-p patchula-update -p patchula-tools -p patchula-lockfiles{% elif usage.part == "others" %}--workspace --exclude patchula-update --exclude patchula-tools --exclude patchula-lockfiles{% else %}--workspace{% endif %} --locked --no-fail-fast -- --skip lockfiles::tests::real_'
 
 ["test:tools"]
 description = "Run the tests that drive the real lockfile tools"
-run = "cargo test --locked -p patchula-update --lib --no-fail-fast -- lockfiles::tests::real_"
+run = "cargo test --locked -p patchula-tools --lib --no-fail-fast -- lockfiles::tests::real_"
 
 # The lockfile engines these tests run, matching
-# crates/update/src/lockfiles/defaults.toml. Task-scoped so a development
+# crates/tools/src/lockfiles/defaults.toml. Task-scoped so a development
 # `mise install` does not fetch them. The Count moves a tool here and in
 # defaults.toml on one branch (patchula.pkl), and a unit test keeps the two
 # equal.
@@ -214,7 +214,7 @@ run = ["cargo test --locked -p patchula-datasource --test recorded refresh_publi
 
 ["fixtures:record-mise"]
 description = "Record what the pinned mise lists for the tools in fixtures/mise; needs the network, a mise on PATH and GH_TOKEN"
-run = ["cargo run --locked -p patchula-update --example record_mise_listings", "mise run fixtures:check"]
+run = ["cargo run --locked -p patchula-tools --example record_mise_listings", "mise run fixtures:check"]
 
 ["fixtures:record-lookup"]
 description = "Record the public source and multi-repository lookup fixtures"

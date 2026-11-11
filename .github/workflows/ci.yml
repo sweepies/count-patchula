@@ -234,8 +234,9 @@ jobs:
       # The scanner is a dev binary, so it reuses the build above.
       - run: mise run fixtures:check
 
-  # patchula-update's suite takes about a minute on its own, so it runs beside
-  # the other crates instead of after them.
+  # The lockfile side (patchula-update, patchula-tools, patchula-lockfiles)
+  # takes about a minute on its own, so it runs beside the other crates
+  # instead of after them.
   test:
     name: "Tests: unit (${{ matrix.part }})"
     needs: changes
