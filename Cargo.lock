@@ -2520,6 +2520,7 @@ dependencies = [
  "patchula-github",
  "patchula-http",
  "patchula-report",
+ "patchula-testkit",
  "patchula-tools",
  "patchula-update",
  "patchula-words",

@@ -1,6 +1,7 @@
 use super::*;
 use axum::{body::Body, http::Request};
 use hmac::{Hmac, KeyInit, Mac};
+use patchula_testkit::github::FakeGitHub;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use tower::ServiceExt;
@@ -556,7 +557,8 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     let directory = tempfile::tempdir().unwrap();
     let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
     let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
-    let transport: Arc<dyn Transport> = Arc::new(DiscoveryAndMissingRepository);
+    let github = deleted_repo();
+    let transport: Arc<dyn Transport> = github.clone();
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let runner = Engines {
         app: App::new(
@@ -619,9 +621,27 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     let ran = cache.repository("owner/repo").await.unwrap().unwrap();
     assert!(ran.private);
     assert!(ran.ran_at.is_some());
+    patchula_testkit::transcripts::check(&transcripts());
 }
 
-struct DiscoveryAndMissingRepository;
+/// A repository the installation lists but GitHub no longer has: the
+/// listings lag a deletion, so discovery enqueues it and every read 404s.
+fn deleted_repo() -> Arc<FakeGitHub> {
+    let github = Arc::new(FakeGitHub::new("owner/repo"));
+    github
+        .state()
+        .repositories
+        .get_mut("owner/repo")
+        .unwrap()
+        .deleted = true;
+    github
+}
+
+/// The transcript snapshot shared by every server test that drives a
+/// FakeGitHub.
+fn transcripts() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transcripts.tsv")
+}
 
 #[derive(Default)]
 struct StartupTransport {
@@ -647,7 +667,31 @@ impl Transport for StartupTransport {
                     stale: None,
                 });
             }
-            DiscoveryAndMissingRepository.send(request).await
+            let (status, value) = match request.url().path() {
+                "/app/installations/1/access_tokens" => (
+                    reqwest::StatusCode::CREATED,
+                    json!({"token":"offline-test-token", "expires_at":(Utc::now() + chrono::Duration::hours(1)).to_rfc3339()}),
+                ),
+                "/installation/repositories" => (
+                    reqwest::StatusCode::OK,
+                    json!({"repositories":[{"full_name":"owner/repo","private":false}]}),
+                ),
+                "/graphql" => (
+                    reqwest::StatusCode::NOT_FOUND,
+                    json!({"message":"Not Found"}),
+                ),
+                path if path.starts_with("/repos/owner/repo") => (
+                    reqwest::StatusCode::NOT_FOUND,
+                    json!({"message":"Not Found"}),
+                ),
+                path => panic!("unexpected offline request: {path}"),
+            };
+            Ok(patchula_http::Response {
+                status,
+                headers: Default::default(),
+                body: serde_json::to_vec(&value).unwrap(),
+                stale: None,
+            })
         })
     }
 }
@@ -805,38 +849,6 @@ async fn database_busy_has_a_stable_error_kind_and_does_not_consume_the_delivery
         .unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(cache.queue_len().await.unwrap(), 0);
-}
-
-impl Transport for DiscoveryAndMissingRepository {
-    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
-        let (status, value) = match request.url().path() {
-            "/app/installations/1/access_tokens" => (
-                reqwest::StatusCode::CREATED,
-                json!({"token":"offline-test-token", "expires_at":(Utc::now() + chrono::Duration::hours(1)).to_rfc3339()}),
-            ),
-            "/installation/repositories" => (
-                reqwest::StatusCode::OK,
-                json!({"repositories":[{"full_name":"owner/repo","private":false}]}),
-            ),
-            "/graphql" => (
-                reqwest::StatusCode::NOT_FOUND,
-                json!({"message":"Not Found"}),
-            ),
-            path if path.starts_with("/repos/owner/repo") => (
-                reqwest::StatusCode::NOT_FOUND,
-                json!({"message":"Not Found"}),
-            ),
-            path => panic!("unexpected offline request: {path}"),
-        };
-        Box::pin(async move {
-            Ok(patchula_http::Response {
-                status,
-                headers: Default::default(),
-                body: serde_json::to_vec(&value).unwrap(),
-                stale: None,
-            })
-        })
-    }
 }
 
 fn settings() -> Settings {
@@ -1462,21 +1474,6 @@ fn only_names_the_report_writer_makes_are_reports() {
     }
 }
 
-struct PrDetails(Value);
-impl Transport for PrDetails {
-    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
-        assert_eq!(request.url().path(), "/repos/owner/repo/pulls/1");
-        let body = serde_json::to_vec(&self.0).unwrap();
-        Box::pin(async move {
-            Ok(patchula_http::Response {
-                status: reqwest::StatusCode::OK,
-                headers: Default::default(),
-                body,
-                stale: None,
-            })
-        })
-    }
-}
 #[tokio::test]
 async fn check_events_verify_real_ownership_with_custom_branch_prefixes() {
     let mut cases = vec![(pr(), true)];
@@ -1489,15 +1486,23 @@ async fn check_events_verify_real_ownership_with_custom_branch_prefixes() {
     let mut fork = pr();
     fork["head"]["repo"]["full_name"] = json!("other/repo");
     cases.push((fork, false));
+    // Every case's fake answers the one pull read from its own state; all
+    // of them stay alive for the shared transcript check.
+    let mut fakes = Vec::new();
     for (pr, expected) in cases {
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        let client = Client::with_transport(
-            "offline-token",
-            cache,
-            Default::default(),
-            Arc::new(PrDetails(pr)),
-        )
-        .unwrap();
+        let github = Arc::new(FakeGitHub::new("owner/repo"));
+        github
+            .state()
+            .repositories
+            .get_mut("owner/repo")
+            .unwrap()
+            .prs
+            .insert(1, pr);
+        let client =
+            Client::with_transport("offline-token", cache, Default::default(), github.clone())
+                .unwrap();
+        fakes.push(github);
         let candidate = Work {
             installation: 1,
             repo: "owner/repo".into(),
@@ -1510,6 +1515,7 @@ async fn check_events_verify_real_ownership_with_custom_branch_prefixes() {
             expected
         );
     }
+    patchula_testkit::transcripts::check(&transcripts());
 }
 
 #[tokio::test]
@@ -1671,7 +1677,8 @@ async fn a_dropped_remote_run_discards_its_engine() {
 #[tokio::test]
 async fn remote_modes_share_the_engine_slot_and_report_failures() {
     let directory = tempfile::tempdir().unwrap();
-    let transport: Arc<dyn Transport> = Arc::new(DiscoveryAndMissingRepository);
+    let github = deleted_repo();
+    let transport: Arc<dyn Transport> = github.clone();
     let runner = Engines {
         app: lookup_app(transport.clone(), 1),
         transport,
@@ -1707,6 +1714,7 @@ async fn remote_modes_share_the_engine_slot_and_report_failures() {
         1,
         "only the real run writes a report file"
     );
+    patchula_testkit::transcripts::check(&transcripts());
 }
 
 #[tokio::test]

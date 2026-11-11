@@ -1,9 +1,8 @@
 use super::*;
 use axum::body::Body;
-use axum::http::HeaderMap;
 use patchula_cache::{Options as CacheOptions, queue::Work};
 use patchula_config::settings::Settings;
-use patchula_http::Transport;
+use patchula_testkit::github::{FakeGitHub, Matcher};
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -33,46 +32,73 @@ fn owned(number: u64, branch: &str) -> Value {
         "auto_merge": null})
 }
 
-/// GitHub's view of each repository and the PRs open in it.
-struct GitHub;
-impl Transport for GitHub {
-    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
-        let (status, body) = match request.url().path() {
-            "/repos/acme/app" => (200, json!({"private": false})),
-            "/repos/acme/secret" => (200, json!({"private": true})),
-            "/repos/acme/late" | "/repos/acme/stranger" => (200, json!({"private": false})),
-            "/repos/acme/app/pulls" => {
-                let mut human = owned(9, "feature");
-                human["user"]["login"] = json!("someone");
-                (
-                    200,
-                    json!([
-                        owned(5, "patchula/serde-2.x"),
-                        owned(6, "patchula/held"),
-                        human
-                    ]),
-                )
-            }
-            "/repos/acme/app/pulls/5" => {
-                let mut pr = owned(5, "patchula/serde-2.x");
-                pr["mergeable"] = json!(true);
-                pr["mergeable_state"] = json!("clean");
-                (200, pr)
-            }
-            _ => (500, json!({"message": "Server Error"})),
-        };
-        Box::pin(async move {
-            Ok(patchula_http::Response {
-                status: reqwest::StatusCode::from_u16(status).unwrap(),
-                headers: HeaderMap::default(),
-                body: serde_json::to_vec(&body).unwrap(),
-                stale: None,
-            })
-        })
+/// GitHub's view of each repository and the PRs open in acme/app, on the
+/// shared fake: acme/secret is private, acme/broken's reads fail, and the
+/// open-pulls lists of every repository but acme/app are down. The open
+/// pulls list itself is scripted in the order the old fake gave — the
+/// run's record saw them that way and the responses pin it.
+fn github() -> Arc<FakeGitHub> {
+    let github = Arc::new(FakeGitHub::new("acme/app"));
+    for name in ["acme/secret", "acme/broken", "acme/late", "acme/stranger"] {
+        github.add_repository(name, false);
     }
+    {
+        let mut state = github.state();
+        state.repositories.get_mut("acme/secret").unwrap().private = true;
+        let mut mergeable = owned(5, "patchula/serde-2.x");
+        mergeable["mergeable"] = json!(true);
+        mergeable["mergeable_state"] = json!("clean");
+        state
+            .repositories
+            .get_mut("acme/app")
+            .unwrap()
+            .prs
+            .insert(5, mergeable);
+    }
+    let mut human = owned(9, "feature");
+    human["user"]["login"] = json!("someone");
+    github
+        .on(Matcher::Route {
+            method: reqwest::Method::GET,
+            path: "/repos/acme/app/pulls".into(),
+        })
+        .respond(
+            200,
+            json!([
+                owned(5, "patchula/serde-2.x"),
+                owned(6, "patchula/held"),
+                human
+            ]),
+        );
+    github
+        .on(Matcher::PullRead {
+            repo: "acme/app".into(),
+            number: Some(6),
+        })
+        .respond(500, json!({"message": "Server Error"}));
+    github
+        .on(Matcher::RepoRead {
+            repo: "acme/broken".into(),
+        })
+        .respond(500, json!({"message": "Server Error"}));
+    for repo in ["acme/secret", "acme/broken", "acme/late", "acme/stranger"] {
+        github
+            .on(Matcher::Route {
+                method: reqwest::Method::GET,
+                path: format!("/repos/{repo}/pulls"),
+            })
+            .respond(500, json!({"message": "Server Error"}));
+    }
+    github
 }
 
-async fn recorded() -> Cache {
+/// The transcript snapshot shared by every server test that drives a
+/// FakeGitHub.
+fn transcripts() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transcripts.tsv")
+}
+
+async fn recorded(github: &Arc<FakeGitHub>) -> Cache {
     let cache = Cache::open(":memory:", CacheOptions::default())
         .await
         .unwrap();
@@ -84,7 +110,7 @@ async fn recorded() -> Cache {
         "offline-test-token",
         cache.clone(),
         patchula_github::Options::default(),
-        Arc::new(GitHub),
+        github.clone(),
     )
     .unwrap();
     record(
@@ -166,7 +192,8 @@ async fn get(router: &Router, path: &str) -> (StatusCode, Option<HeaderValue>, V
 
 #[tokio::test]
 async fn anyone_reads_what_the_last_run_left_of_public_repositories() {
-    let cache = recorded().await;
+    let github = github();
+    let cache = recorded(&github).await;
     cache
         .set_state(
             &DashboardScope {
@@ -180,7 +207,7 @@ async fn anyone_reads_what_the_last_run_left_of_public_repositories() {
         "offline-test-token",
         cache.clone(),
         patchula_github::Options::default(),
-        Arc::new(GitHub),
+        github,
     )
     .unwrap();
     record(
@@ -288,11 +315,13 @@ async fn anyone_reads_what_the_last_run_left_of_public_repositories() {
         assert_eq!(origin.unwrap(), "*");
         assert_eq!(error["errorKind"], "unknown-repository");
     }
+    patchula_testkit::transcripts::check(&transcripts());
 }
 
 #[tokio::test]
 async fn settings_hide_repositories_or_the_whole_api() {
-    let cache = recorded().await;
+    let github = github();
+    let cache = recorded(&github).await;
     let only = routes(Public {
         cache: cache.clone(),
         settings: Reload::new(settings(
@@ -313,6 +342,7 @@ async fn settings_hide_repositories_or_the_whole_api() {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(error["errorKind"], "disabled");
     }
+    patchula_testkit::transcripts::check(&transcripts());
 }
 
 #[test]
@@ -424,11 +454,12 @@ async fn only_a_private_repository_is_stored_without_what_credentials_found() {
         .map(|repo| (repo.to_owned(), false))
         .to_vec();
     cache.repositories_added(1, known).await.unwrap();
+    let github = github();
     let client = Client::with_transport(
         "offline-test-token",
         cache.clone(),
         patchula_github::Options::default(),
-        Arc::new(GitHub),
+        github,
     )
     .unwrap();
     record(
@@ -459,4 +490,5 @@ async fn only_a_private_repository_is_stored_without_what_credentials_found() {
         secret.contains(chart) && !secret.contains("1.1.0"),
         "{secret}"
     );
+    patchula_testkit::transcripts::check(&transcripts());
 }

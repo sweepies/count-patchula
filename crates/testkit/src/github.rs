@@ -223,8 +223,12 @@ pub struct Repository {
     /// `user/repos` and `installation/repositories` list repositories the
     /// token sees; upstreams seeded only for reads stay off them.
     pub installed: bool,
-    /// GraphQL `isPrivate`.
+    /// REST `private`, GraphQL `isPrivate` and the discovery listings'
+    /// `private`.
     pub private: bool,
+    /// Every read answers 404 — the repository was deleted after the
+    /// installation listed it, and the listings lag the deletion.
+    pub deleted: bool,
     /// The default branch's name.
     pub default_branch: String,
     /// Head sha of the default branch.
@@ -289,6 +293,7 @@ impl Repository {
             node_id: format!("{name}-id"),
             installed: false,
             private: false,
+            deleted: false,
             default_branch: "main".into(),
             base: String::new(),
             refs: BTreeMap::new(),
@@ -1208,6 +1213,21 @@ impl FakeGitHub {
         response(200, json!({"data":data}))
     }
     fn graphql_query(&self, field: &GqlField, body: &Value, state: &mut State) -> FieldAnswer {
+        if field.name == "repository" {
+            let name = field
+                .arg("owner", body)
+                .zip(field.arg("name", body))
+                .map(|(owner, name)| format!("{owner}/{name}"));
+            if name.is_some_and(|name| {
+                state
+                    .repositories
+                    .get(&name)
+                    .is_some_and(|repo| repo.deleted)
+            }) {
+                return FieldAnswer::Errors(json!([{"type":"NOT_FOUND",
+                            "message":"Could not resolve to a Repository."}]));
+            }
+        }
         FieldAnswer::Data(match field.name.as_str() {
             "viewer" => json!({"__typename":viewer_typename(&state.actor),"login":state.actor}),
             "nodes" => self.closed_prs(body, state),
@@ -1661,7 +1681,9 @@ impl FakeGitHub {
             .strip_prefix("/repos/")
             .and_then(|rest| rest.strip_suffix("/installation"))
         {
-            let found = state.repositories.contains_key(spec) && state.repositories[spec].installed;
+            let found = state.repositories.contains_key(spec)
+                && state.repositories[spec].installed
+                && !state.repositories[spec].deleted;
             return Some(if found && let Some(id) = state.installations.first() {
                 response(200, json!({"id":id}))
             } else {
@@ -1693,7 +1715,7 @@ impl FakeGitHub {
                 .repositories
                 .values()
                 .filter(|repo| repo.installed)
-                .map(|repo| json!({"full_name":repo.name}))
+                .map(|repo| json!({"full_name":repo.name,"private":repo.private}))
                 .collect();
             return Some(response(200, json!(repos)));
         }
@@ -1702,7 +1724,7 @@ impl FakeGitHub {
                 .repositories
                 .values()
                 .filter(|repo| repo.installed)
-                .map(|repo| json!({"full_name":repo.name}))
+                .map(|repo| json!({"full_name":repo.name,"private":repo.private}))
                 .collect();
             return Some(response(
                 200,
@@ -1748,6 +1770,9 @@ impl FakeGitHub {
         let full = format!("{owner}/{name}");
         if !state.repositories.contains_key(&full) {
             panic!("unexpected read {path}")
+        }
+        if state.repositories[&full].deleted {
+            return response(404, json!({"message":"Not Found"}));
         }
         // Pull reads take the whole state — read lag and `mutate` rules run
         // at the request's point.
@@ -1831,6 +1856,7 @@ impl FakeGitHub {
                 response(
                     200,
                     json!({"node_id":repo.node_id,"default_branch":repo.default_branch,
+                           "private":repo.private,
                            "allow_auto_merge":repo.merge.auto_merge,
                            "allow_squash_merge":repo.merge.squash,
                            "allow_merge_commit":repo.merge.merge_commit,
@@ -2269,5 +2295,71 @@ mod tests {
             ),
             json!({"autoMergeRequest":null})
         );
+    }
+
+    /// The installation listings lag a deletion: a deleted repository
+    /// still lists, but every REST read answers 404 and GraphQL answers
+    /// NOT_FOUND. `private` rides the listings and the repository read.
+    #[tokio::test]
+    async fn a_deleted_repository_lists_but_never_reads() {
+        let github = FakeGitHub::new("acme/app");
+        github
+            .state
+            .lock()
+            .unwrap()
+            .repositories
+            .get_mut("acme/app")
+            .unwrap()
+            .deleted = true;
+        let request = |method: Method, path: &str, body: Option<Value>| {
+            let mut request = Request::new(
+                method,
+                format!("https://api.github.com{path}").parse().unwrap(),
+            );
+            let mut token = reqwest::header::HeaderValue::from_static("token");
+            token.set_sensitive(true);
+            request
+                .headers_mut()
+                .insert(reqwest::header::AUTHORIZATION, token);
+            if let Some(body) = body {
+                *request.body_mut() = Some(serde_json::to_vec(&body).unwrap().into());
+            }
+            request
+        };
+        let listed = github
+            .send(request(Method::GET, "/installation/repositories", None))
+            .await
+            .unwrap();
+        assert_eq!(listed.status, StatusCode::OK);
+        let body: Value = serde_json::from_slice(&listed.body).unwrap();
+        assert_eq!(
+            body["repositories"],
+            json!([{"full_name":"acme/app","private":false}])
+        );
+        for path in [
+            "/repos/acme/app",
+            "/repos/acme/app/pulls",
+            "/repos/acme/app/branches",
+            "/repos/acme/app/git/ref/heads/main",
+        ] {
+            let reply = github.send(request(Method::GET, path, None)).await.unwrap();
+            assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+        }
+        let reply = github
+            .send(request(
+                Method::POST,
+                "/graphql",
+                Some(
+                    json!({"query":"query { repository(owner:\"acme\", name:\"app\") { id } }",
+                           "variables":{}}),
+                ),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(reply.status, StatusCode::OK);
+        let body: Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(body["errors"][0]["type"], "NOT_FOUND");
+        // This is the fake's own test: nothing to check a transcript against.
+        github.transcript_checked.store(true, Ordering::Relaxed);
     }
 }
