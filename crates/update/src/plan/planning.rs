@@ -1403,6 +1403,105 @@ mod goldens {
         );
     }
 
+    /// An update plan's `update_key` — the hash the PR ownership marker
+    /// carries for the branch and its targets — is pinned for fixed inputs.
+    #[test]
+    fn an_update_plans_update_key_is_frozen() {
+        let config = config();
+        let evaluator = patchula_lookup::Evaluator::new(&config).unwrap();
+        let files = BTreeMap::from([(
+            "package.json".to_string(),
+            "{\"dependencies\":{\"dep\":\"1.0.0\"}}\n".to_string(),
+        )]);
+        let dep = mkdep(
+            Manager::Npm,
+            "package.json",
+            patchula_words::DependencyKind::Production,
+        );
+        let update = update();
+        let plan = build(
+            &repo(),
+            &config,
+            &evaluator,
+            &snapshot(&files),
+            false,
+            None,
+            monday(),
+            "golden",
+            "patchula/golden".into(),
+            &[Item {
+                dep: &dep,
+                update: &update,
+                current_version: None,
+                advisories: &[],
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            crate::update_key(&plan),
+            "15b8ee4e4771104763996d169c7b732b4a162bf1fa7fc90f5c7737972d3872f3"
+        );
+    }
+
+    /// The batch plan's fingerprint — the built-stage hash the trailer and
+    /// the write receipts carry — and its `update_key` are pinned for fixed
+    /// inputs.
+    #[test]
+    fn a_batch_plans_fingerprint_and_update_key_are_frozen() {
+        let workflow = "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4.1.0\n";
+        let files = BTreeMap::from([(
+            ".github/workflows/ci.yml".to_string(),
+            workflow.to_string(),
+        )]);
+        let config = config();
+        let dependencies = patchula_manager::Scanner::new(&config)
+            .unwrap()
+            .extract(&patchula_manager::all_read(&files))
+            .unwrap()
+            .dependencies
+            .into_iter()
+            .filter(|d| d.package == "actions/checkout")
+            .collect::<Vec<_>>();
+        let target = crate::plan::Change {
+            registry: None,
+            source: dependencies[0].source,
+            package: dependencies[0].package.clone(),
+            file: ".github/workflows/ci.yml".into(),
+            current: dependencies[0].current.clone(),
+            current_version: None,
+            value: Some("v4.2.0".into()),
+            version: Some("4.2.0".into()),
+            digest: None,
+            kind: patchula_words::Update::Minor,
+            merge: false,
+            labels: Vec::new(),
+            release_notes: false,
+            body_notes: Vec::new(),
+            advisories: Vec::new(),
+            image: None,
+        };
+        let plan = crate::plan::batch_plan(
+            &repo(),
+            &config,
+            &dependencies,
+            &snapshot(&files),
+            &[target],
+            false,
+            None,
+            monday(),
+        )
+        .unwrap()
+        .expect("a batch plan");
+        assert_eq!(
+            plan.fingerprint,
+            "7b4481e59fd80abacc94f9b8e9d0b1b9ebd8c3bf8a67730a9565d72d36389f34"
+        );
+        assert_eq!(
+            crate::update_key(&plan),
+            "e6336e6849029ee6bc95f8f5ce7751b009895228b45b809be41efab34a8cb9f8"
+        );
+    }
+
     /// Every `job()` error reaches the report as the pending reason the
     /// branch is held with, naming the lockfile it could not handle.
     #[test]
