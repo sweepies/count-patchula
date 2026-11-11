@@ -90,6 +90,18 @@ quote response text that would reach dashboards and public pages.
 deserialize only, unknown fields ignored, and `Option` only where GitHub's
 OpenAPI description documents null.
 
+Static GraphQL documents — the inventory, status-check, ref-update,
+auto-merge, repository-head and releases operations — live as `.graphql`
+files beside the code that issues them. `graphql_client`'s `GraphQLQuery`
+derive checks each against the vendored schema at
+`crates/github/graphql/schema.docs.graphql` and generates the response types:
+a schema-required field generates a plain field, a nullable one an `Option`,
+and interface and union selections generate enums decoded on `__typename`,
+which the document must therefore select. `mise run github:schema` refreshes
+the vendored schema. Dynamic documents — the alias batches that read many
+objects in one query — keep hand-written response types, since generated
+code cannot name them.
+
 ## Rate limits
 
 The library's default in-flight cap is **4**, shared by REST and GraphQL;
