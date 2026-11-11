@@ -281,6 +281,49 @@ pub struct Issue {
     pub number: u64,
 }
 
+/// `GET /user/installations` — the `installations` array of the response,
+/// the OpenAPI `installation` schema trimmed to the field consumers read.
+#[derive(Clone, Debug, Deserialize)]
+pub struct UserInstallations {
+    /// `installations` — required.
+    pub installations: Vec<UserInstallation>,
+}
+
+/// One `installation` of a `GET /user/installations` page.
+#[derive(Clone, Debug, Deserialize)]
+pub struct UserInstallation {
+    /// `id` — required.
+    pub id: u64,
+}
+
+/// `GET /repos/{owner}/{repo}/collaborators/{username}/permission` — the
+/// `repository-collaborator-permission` schema, trimmed to the check.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CollaboratorPermission {
+    /// `permission` — required: `admin`, `write`, `read`, `none` or a
+    /// custom role name.
+    pub permission: String,
+}
+
+/// `GET /installation/repositories` — the installations listing's
+/// `repositories` array.
+#[derive(Clone, Debug, Deserialize)]
+pub struct InstallationRepositories {
+    /// `repositories` — required.
+    pub repositories: Vec<ListedRepository>,
+}
+
+/// A repository as `GET /user/repos` and `GET /installation/repositories`
+/// list it — the `repository` schema, trimmed to the fields consumers read.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ListedRepository {
+    /// `full_name` — required.
+    pub full_name: String,
+    /// `private` — required upstream, kept `Option` for the caller's
+    /// fail-closed default: a missing flag means private, never public.
+    pub private: Option<bool>,
+}
+
 /// One page of a list endpoint or connection: the decoded `items` and
 /// whether the set is `complete`. An incomplete page is data, not an
 /// error — callers decide what it blocks. An element that fails stays out
@@ -377,6 +420,31 @@ mod tests {
         assert!(Page::<BranchHead>::decode(vec![]).complete);
         assert!(
             Page::<BranchHead>::decode(vec![json!({"name":"ok","commit":{"sha":"05"}})]).complete
+        );
+    }
+
+    #[test]
+    fn required_fields_refuse_to_default() {
+        // An installation without `id` cannot authorize anything.
+        assert!(serde_json::from_value::<UserInstallation>(json!({})).is_err());
+        // A permission answer without `permission` cannot grant anything.
+        assert!(serde_json::from_value::<CollaboratorPermission>(json!({})).is_err());
+        // A listed repository without `full_name` names nothing to run.
+        assert!(serde_json::from_value::<ListedRepository>(json!({})).is_err());
+        assert!(
+            serde_json::from_value::<ListedRepository>(json!({"full_name":"a/b"})).is_ok(),
+            "private is absent-tolerant for the caller's fail-closed default"
+        );
+        assert_eq!(
+            serde_json::from_value::<ListedRepository>(json!({"full_name":"a/b","private":false}))
+                .unwrap()
+                .private,
+            Some(false)
+        );
+        // A wrong-typed `private` is unreadable, not silently private or public.
+        assert!(
+            serde_json::from_value::<ListedRepository>(json!({"full_name":"a/b","private":"yes"}))
+                .is_err()
         );
     }
 }

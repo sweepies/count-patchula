@@ -87,8 +87,9 @@ decode is an `Error::Decode`, which names the operation and the field path
 only: serde's message is never kept, because a type-mismatch message can
 quote response text that would reach dashboards and public pages.
 `patchula_github::model` holds the REST resource types the lifecycle,
-dashboard, batch and server read: deserialize only, unknown fields ignored,
-and `Option` only where GitHub's OpenAPI description documents null.
+dashboard, batch, server and discovery listings read: deserialize only,
+unknown fields ignored, and `Option` only where GitHub's OpenAPI description
+documents null or a missing field must fail closed.
 `model::Page<T>` decodes a list element by element: an element that fails
 marks the page incomplete and stays out of `items`, so a partial read blocks
 every action that depends on the whole set rather than silently acting on

@@ -1,7 +1,7 @@
 use super::*;
 use axum::{body::Body, http::Request};
 use hmac::{Hmac, KeyInit, Mac};
-use patchula_testkit::github::FakeGitHub;
+use patchula_testkit::github::{FakeGitHub, Matcher};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use tower::ServiceExt;
@@ -621,6 +621,56 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     let ran = cache.repository("owner/repo").await.unwrap().unwrap();
     assert!(ran.private);
     assert!(ran.ran_at.is_some());
+    patchula_testkit::transcripts::check(&transcripts());
+}
+
+#[tokio::test]
+async fn an_unreadable_installation_listing_fails_the_batch() {
+    use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
+    let github = Arc::new(FakeGitHub::new("owner/repo"));
+    github
+        .on(Matcher::Route {
+            method: reqwest::Method::GET,
+            path: "/installation/repositories".into(),
+        })
+        .respond(
+            200,
+            // A wrong-typed `private` once enqueued the repository as private;
+            // the listing now fails to decode.
+            json!({"repositories": [{"full_name":"owner/repo","private":false},
+                {"full_name":"owner/other","private":"no"}]}),
+        );
+    let transport: Arc<dyn Transport> = github.clone();
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+    let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+    let runner = Engines {
+        app: App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            reqwest::Url::parse("https://api.github.com/").unwrap(),
+        )
+        .unwrap(),
+        transport,
+        cache,
+        engines: Mutex::new(BTreeMap::new()),
+        recheck: None,
+        bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
+    };
+    let error = runner
+        .run(
+            &[Work::repository(1, "")],
+            &settings(),
+            &Attribution::reason("startup discovery"),
+        )
+        .await
+        .err()
+        .unwrap();
+    // A skipped element would drop a repository the sweep owes a run.
+    assert_eq!(error.to_string(), "invalid installation repository");
     patchula_testkit::transcripts::check(&transcripts());
 }
 
@@ -1515,6 +1565,36 @@ async fn check_events_verify_real_ownership_with_custom_branch_prefixes() {
             expected
         );
     }
+    patchula_testkit::transcripts::check(&transcripts());
+}
+
+#[tokio::test]
+async fn an_unreadable_check_event_pull_fails_the_lookup() {
+    // An undecodable pull once read as unowned and the event was dropped;
+    // the lookup now fails, and nothing runs on what it could not read.
+    let mut unreadable = pr();
+    unreadable.as_object_mut().unwrap().remove("state");
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let github = Arc::new(FakeGitHub::new("owner/repo"));
+    github
+        .state()
+        .repositories
+        .get_mut("owner/repo")
+        .unwrap()
+        .prs
+        .insert(1, unreadable);
+    let client =
+        Client::with_transport("offline-token", cache, Default::default(), github.clone()).unwrap();
+    let candidate = Work {
+        installation: 1,
+        repo: "owner/repo".into(),
+        check_prs: Some(std::collections::BTreeSet::from([1])),
+    };
+    let error = check_candidate(&client, &candidate, "patchula[bot]")
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.to_string(), "check-event PR ownership lookup failed");
     patchula_testkit::transcripts::check(&transcripts());
 }
 

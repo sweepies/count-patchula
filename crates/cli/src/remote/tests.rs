@@ -14,6 +14,8 @@ struct Fake {
     pending: Mutex<u32>,
     polls: Mutex<u32>,
     revoked: Vec<&'static str>,
+    /// Answer the issues listing with an element that cannot decode.
+    broken_issues: bool,
 }
 impl Transport for Fake {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
@@ -42,20 +44,26 @@ impl Transport for Fake {
             ("GET", issues) if issues.starts_with(ISSUES) => {
                 let page: usize = issues[ISSUES.len()..].parse().unwrap();
                 // A full first page of other items, then the markers.
-                let items = if page == 1 {
+                let items: Vec<Value> = if page == 1 {
                     vec![json!({"user": {"type": "User", "login": "human"}, "body": ""}); 100]
                 } else {
-                    vec![
-                        // Anyone can write a marker; only the server's own bot counts.
-                        json!({"user": {"type": "User", "login": "human"},
+                    // An unreadable item ahead of the server's own marker:
+                    // skipping it once discovered the marker behind it.
+                    let broken = self.broken_issues.then(|| json!({"user": {"type": "Bot"}}));
+                    broken
+                        .into_iter()
+                        .chain([
+                            // Anyone can write a marker; only the server's own bot counts.
+                            json!({"user": {"type": "User", "login": "human"},
                             "body": "<!-- patchula-server:https://evil.acme.dev -->"}),
-                        json!({"user": {"type": "Bot", "login": "other[bot]"},
+                            json!({"user": {"type": "Bot", "login": "other[bot]"},
                             "body": "<!-- patchula-server:https://evil.acme.dev -->"}),
-                        json!({"user": {"type": "Bot", "login": "imposter[bot]"},
+                            json!({"user": {"type": "Bot", "login": "imposter[bot]"},
                             "body": format!("<!-- patchula-server:{SERVER} -->")}),
-                        json!({"user": {"type": "Bot", "login": "patchula[bot]"},
+                            json!({"user": {"type": "Bot", "login": "patchula[bot]"},
                             "body": format!("table\n<!-- patchula-server:{SERVER} -->\n")}),
-                    ]
+                        ])
+                        .collect()
                 };
                 (200, json!(items))
             }
@@ -398,6 +406,21 @@ async fn no_is_remembered_and_runs_here() {
     .await
     .unwrap();
     assert_eq!(choices(dir.path()), json!({}));
+}
+
+#[tokio::test]
+async fn an_unreadable_issues_page_discovers_nothing() {
+    // An element that cannot decode abandons the page: a partial read must
+    // not skip past a marker it could not see.
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(Fake {
+        broken_issues: true,
+        ..Fake::default()
+    });
+    assert_eq!(
+        discover(&services(fake, dir.path()), "acme/app").await,
+        None
+    );
 }
 
 #[tokio::test]
