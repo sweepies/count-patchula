@@ -256,6 +256,7 @@ impl Rule {
 
 /// The builder [`FakeGitHub::on`] returns: finish with [`On::respond`],
 /// [`On::then_fail`] or [`On::mutate`].
+#[must_use = "a fault rule does nothing until `respond`, `then_fail` or `mutate` arms it"]
 pub struct On<'a> {
     fake: &'a FakeGitHub,
     matcher: Matcher,
@@ -992,7 +993,7 @@ impl FakeGitHub {
                 self.list_pulls(request, state)
             } else if rest.starts_with("pulls/") {
                 self.pull_read(ctx, state)
-            } else if rest.starts_with(&format!("branches/{}", state.default_branch)) {
+            } else if rest == format!("branches/{}", state.default_branch) {
                 response(200, json!({"commit":{"sha":state.base}}))
             } else if rest == "branches" {
                 let branches: Vec<_> = state
