@@ -32,7 +32,7 @@ tracing = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
-patchula-update = { path = "../update" }
+patchula-update = { path = "../update", features = ["testing"] }
 patchula-cache = { path = "../cache" }
 patchula-report = { path = "../report" }
 patchula-testkit = { path = "../testkit" }

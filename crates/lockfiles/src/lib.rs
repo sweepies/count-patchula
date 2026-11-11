@@ -627,7 +627,7 @@ pub struct Work<'a> {
     pub base_commit: &'a str,
     /// The lockfile jobs the plan recorded.
     pub jobs: &'a [Job],
-    /// The plan's manifest edits, as `plan.contents` holds them.
+    /// The plan's manifest edits, as `plan.contents()` holds them.
     pub edits: &'a BTreeMap<String, String>,
     /// `(path, blob sha)` of each extracted file, for the checkout to agree.
     pub extracted: Vec<(&'a str, &'a str)>,

@@ -115,7 +115,7 @@ async fn save_history(
     let merged: Vec<_> = plans
         .iter()
         .filter(|p| p.action().status == BranchStatus::Merged)
-        .filter_map(|p| p.cached_pr.clone())
+        .filter_map(|p| p.restored_pr().cloned())
         .collect();
     if merged.is_empty() {
         return Ok(());
@@ -215,10 +215,10 @@ fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
     }
     // Windows decide when updates are proposed, not when they merge: a PR whose
     // checks pass after its window still merges.
-    if plan.maintenance {
+    if plan.is_maintenance() {
         return true;
     }
-    plan.changes.iter().all(|c| {
+    plan.changes().iter().all(|c| {
         let mut updates = repo
             .package_files
             .iter()
@@ -585,7 +585,7 @@ pub fn dashboard_history(inventory: &Inventory, prs: Vec<Tracked>, plans: &[Plan
             merged.push(row.clone());
         }
     }
-    for tracked in plans.iter().filter_map(|p| p.cached_pr.as_ref()) {
+    for tracked in plans.iter().filter_map(|p| p.restored_pr()) {
         // A cached PR is the freshest picture of its number on either list.
         if let Some(old) = open.iter_mut().find(|t| t.pr.number == tracked.pr.number) {
             old.clone_from(tracked);

@@ -77,7 +77,7 @@ pub async fn defer_completed_refresh(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), String> {
     use chrono::Datelike;
-    if !plan.maintenance || plan.action().status != BranchStatus::Planned {
+    if !plan.is_maintenance() || plan.action().status != BranchStatus::Planned {
         return Ok(());
     }
     if let Some(last) = cache
@@ -98,7 +98,10 @@ pub async fn record_refresh(
     actions: &[patchula_report::PullRequestAction],
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), String> {
-    for plan in plans.iter().filter(|p| p.maintenance && p.lockfiles_ready) {
+    for plan in plans
+        .iter()
+        .filter(|p| p.is_maintenance() && p.lockfiles_ready())
+    {
         if plan.held(&Hold::LockfilesCurrent)
             || actions.iter().any(|a| {
                 a.branch == plan.action().branch

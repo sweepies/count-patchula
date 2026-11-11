@@ -85,7 +85,7 @@ impl Controls {
         for plan in plans {
             let key = update_key(plan);
             let permits: BTreeSet<_> = plan
-                .changes
+                .changes()
                 .iter()
                 .flat_map(|c| {
                     dependencies
@@ -111,7 +111,7 @@ impl Controls {
                 self.branch_permits
                     .insert(plan.action().branch.clone(), permits);
             }
-            let age_click = plan.changes.iter().any(|c| {
+            let age_click = plan.changes().iter().any(|c| {
                 dependencies
                     .iter()
                     .filter(|d| {
@@ -346,8 +346,8 @@ pub fn render(
             .iter()
             .find(|t| t.pr.state == "open" && t.pr.head.branch == plan.action().branch);
         if let Some(tracked) = open {
-            let kinds: BTreeSet<_> = plan.changes.iter().map(|c| c.kind.as_str()).collect();
-            let kind = if plan.maintenance {
+            let kinds: BTreeSet<_> = plan.changes().iter().map(|c| c.kind.as_str()).collect();
+            let kind = if plan.is_maintenance() {
                 "maintenance".into()
             } else {
                 kinds.into_iter().collect::<Vec<_>>().join(", ")
@@ -807,7 +807,7 @@ fn details(output: &str, indent: &str) -> String {
 /// A plan's title, with the names of its packages as code.
 fn titled(plan: &Plan) -> String {
     let message = plan.action().message.as_str();
-    let mut names: Vec<_> = plan.changes.iter().map(|c| c.package.as_str()).collect();
+    let mut names: Vec<_> = plan.changes().iter().map(|c| c.package.as_str()).collect();
     names.sort_by_key(|n| std::cmp::Reverse(n.len()));
     names.dedup();
     match names
@@ -864,7 +864,7 @@ fn fix_status(
     let matching: Vec<&Plan> = plans
         .iter()
         .filter(|plan| {
-            plan.changes.iter().any(|c| {
+            plan.changes().iter().any(|c| {
                 c.touches(file, metadata.source, &dep.package, dep.registry.as_deref())
                     && ((update.new_version.is_some() && c.version == update.new_version)
                         || (update.new_value.is_some() && c.value == update.new_value))
@@ -881,15 +881,14 @@ fn fix_status(
         plans
             .iter()
             .find(|plan| {
-                plan.batch
-                    .as_ref()
+                plan.batch_items()
                     .is_some_and(|items| items.iter().any(|item| item.origin == key))
             })
             .and_then(|plan| open(&plan.action().branch))
     };
     let number = matching.iter().find_map(|plan| {
         if plan.held(&crate::plan::Hold::Batched) {
-            batch(&crate::pull_requests::update_key(plan))
+            batch(&plan.update_key())
         } else {
             open(&plan.action().branch)
         }
@@ -1336,17 +1335,19 @@ mod tests {
             advisories: Vec::new(),
             image: None,
         };
-        let mut held = Plan::new(action("patchula/shared-1.x"));
-        held.changes = vec![change()];
-        held.identity = "shared".into();
+        let mut held = crate::plan::testing::Draft::new(action("patchula/shared-1.x"))
+            .change(change())
+            .identity("shared")
+            .build();
         held.hold(crate::plan::Hold::Batched);
-        let mut carrier = Plan::new(action("patchula/batch"));
-        carrier.batch = Some(vec![crate::batch::Item {
-            origin: crate::pull_requests::update_key(&held),
-            number: None,
-            title: "batched".into(),
-            targets: vec![change()],
-        }]);
+        let carrier = crate::plan::testing::Draft::new(action("patchula/batch"))
+            .batch(vec![crate::batch::Item {
+                origin: held.update_key(),
+                number: None,
+                title: "batched".into(),
+                targets: vec![change()],
+            }])
+            .build();
         let prs = vec![crate::pull_requests::Tracked::from(
             serde_json::from_value::<patchula_github::model::PullRequest>(serde_json::json!({
                 "number": 7, "node_id": "N7", "state": "open",

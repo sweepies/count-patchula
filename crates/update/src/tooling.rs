@@ -460,7 +460,7 @@ pub fn apply(
             .files
             .iter()
             .map(|f| f.path.as_str())
-            .chain(plan.changes.iter().map(|c| c.file.as_str()))
+            .chain(plan.changes().iter().map(|c| c.file.as_str()))
             .collect();
         let mut holding = Vec::new();
         if evidence.branch_checks == Some(false)
@@ -479,7 +479,7 @@ pub fn apply(
         }
         if let Some(delivery) = &evidence.delivery
             && evidence.branch_checks == Some(false)
-            && plan.changes.iter().any(|c| !c.advisories.is_empty())
+            && plan.changes().iter().any(|c| !c.advisories.is_empty())
             && !delivery.ships(&files)
         {
             holding.push((
@@ -720,7 +720,7 @@ mod tests {
         );
     }
     fn plan(branch: &str, advisory: bool) -> Plan {
-        let mut plan = Plan::new(patchula_report::BranchAction {
+        crate::plan::testing::Draft::new(patchula_report::BranchAction {
             repository: "demo/app".into(),
             branch: branch.into(),
             base_commit: "base".into(),
@@ -732,9 +732,9 @@ mod tests {
             verified: None,
             lockfile_pending: false,
             files: Vec::new(),
-        });
-        plan.identity = branch.into();
-        plan.changes = vec![crate::Change {
+        })
+        .identity(branch)
+        .change(crate::Change {
             registry: None,
             source: patchula_words::Source::Npm,
             package: "lodash".into(),
@@ -761,9 +761,9 @@ mod tests {
                 .into_iter()
                 .collect(),
             image: None,
-        }];
-        plan.lockfiles_ready = true;
-        plan
+        })
+        .lockfiles_ready(true)
+        .build()
     }
 
     fn config() -> Config {
@@ -785,7 +785,7 @@ mod tests {
     }
 
     fn rules(plan: &Plan) -> Vec<(ToolingRule, Option<ToolingDetail>)> {
-        plan.tooling.iter().map(|c| (c.rule, c.detail)).collect()
+        plan.callouts().iter().map(|c| (c.rule, c.detail)).collect()
     }
 
     #[test]
@@ -807,7 +807,7 @@ mod tests {
                 (ToolingRule::MergeWithoutRequiredChecks, None)
             ]
         );
-        assert_eq!(plans[0].tooling[0].branch, "main");
+        assert_eq!(plans[0].callouts()[0].branch, "main");
         assert_eq!(warnings.len(), 3);
         assert_eq!(warnings[0].rule, ToolingRule::MergeWithoutCi);
         assert_eq!(warnings[0].branches, ["patchula/fix", "patchula/plain"]);
@@ -816,10 +816,13 @@ mod tests {
 
     #[test]
     fn nothing_warns_for_updates_that_wait_for_a_person() {
-        let mut plans = vec![plan("patchula/fix", true)];
-        plans[0].changes[0].merge = false;
+        let mut plans = vec![{
+            let mut draft = crate::plan::testing::Draft::from(plan("patchula/fix", true));
+            draft.changes_mut()[0].merge = false;
+            draft.build()
+        }];
         assert!(apply(&bare(), &config(), "main", &mut plans).is_empty());
-        assert!(plans[0].tooling.is_empty());
+        assert!(plans[0].callouts().is_empty());
     }
 
     #[test]
@@ -839,7 +842,7 @@ mod tests {
         ] {
             let mut plans = vec![plan("patchula/fix", true)];
             assert!(apply(&unknown, &config(), "main", &mut plans).is_empty());
-            assert!(plans[0].tooling.is_empty());
+            assert!(plans[0].callouts().is_empty());
         }
     }
 

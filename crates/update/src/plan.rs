@@ -198,6 +198,78 @@ impl Plan {
     pub fn failure(&self) -> Option<&crate::text::Failure> {
         self.failure.as_ref()
     }
+    /// The updates this branch carries.
+    pub fn changes(&self) -> &[Change] {
+        &self.changes
+    }
+    /// The files the write puts on the branch, by path.
+    pub fn contents(&self) -> &BTreeMap<String, String> {
+        &self.contents
+    }
+    /// The hash of the branch's identity, as the ownership marker names it.
+    pub fn identity(&self) -> &str {
+        &self.identity
+    }
+    /// The plan fingerprint: the exact bytes the commit's `Patchula-Plan`
+    /// trailer and the write receipts hash.
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
+    /// The fingerprint the plan's inputs produced, before generation or a
+    /// verified receipt replaced it.
+    pub fn input_fingerprint(&self) -> &str {
+        &self.input_fingerprint
+    }
+    /// The lockfile work the plan asks a [`contract::Generate`] run for.
+    pub fn lock_jobs(&self) -> &[contract::Job] {
+        &self.lock_jobs
+    }
+    /// Whether the plan still owes a lockfile run work.
+    pub fn has_lock_jobs(&self) -> bool {
+        !self.lock_jobs.is_empty()
+    }
+    /// Whether the plan's lockfiles already ran.
+    pub fn lockfiles_ready(&self) -> bool {
+        self.lockfiles_ready
+    }
+    /// The snapshot's public-only verdicts, for the lockfile runs'
+    /// cache-partition choice.
+    pub fn public_only(&self) -> &BTreeMap<String, bool> {
+        &self.public_only
+    }
+    /// The paths a lockfile run removed; the write drops them from the tree.
+    pub fn deleted(&self) -> &BTreeSet<String> {
+        &self.deleted
+    }
+    /// A lockfile-maintenance plan refreshes locks rather than declarations.
+    pub fn is_maintenance(&self) -> bool {
+        self.maintenance
+    }
+    /// The batch PR's items; `None` for every other plan.
+    pub fn batch_items(&self) -> Option<&[crate::batch::Item]> {
+        self.batch.as_deref()
+    }
+    /// Tooling warnings shown on this PR.
+    pub fn callouts(&self) -> &[crate::tooling::Callout] {
+        &self.tooling
+    }
+    /// Whether a rerun writes the plan again.
+    pub fn retry(&self) -> bool {
+        self.retry
+    }
+    /// The tree the plan's commit produced, once a write or receipt names it.
+    pub fn tree(&self) -> Option<&str> {
+        self.tree.as_deref()
+    }
+    /// The PR a verified write receipt restored with this plan.
+    pub fn restored_pr(&self) -> Option<&crate::pull_requests::Tracked> {
+        self.cached_pr.as_ref()
+    }
+    /// The plan's update key: its branch and the targets it moves to, hashed
+    /// as the ownership marker names it.
+    pub fn update_key(&self) -> String {
+        crate::pull_requests::update_key(self)
+    }
     /// `action.reason` and its dashboard `failure`, always set together.
     fn set_reason(&mut self, reason: Option<String>) {
         self.failure = reason.as_deref().map(crate::text::failure);
@@ -1737,3 +1809,5 @@ mod tests {
 
 #[cfg(test)]
 mod planning;
+#[cfg(feature = "testing")]
+pub mod testing;

@@ -20,6 +20,8 @@ pub use receipts::{
 };
 pub use settle::{Settlement, settle};
 mod plan;
+#[cfg(feature = "testing")]
+pub use plan::testing;
 mod write;
 pub use plan::{
     Blob, Change, Hold, Plan, Snapshot, blob_sha, branch_name, lock_all, plan, unified,

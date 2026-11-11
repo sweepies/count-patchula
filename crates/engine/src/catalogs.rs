@@ -237,7 +237,7 @@ impl Engine {
             ) {
                 for plan in plans {
                     let dependencies: BTreeSet<_> = plan
-                        .changes
+                        .changes()
                         .iter()
                         .flat_map(|change| {
                             repo.dependencies
@@ -256,9 +256,7 @@ impl Engine {
                     controls
                         .branches
                         .insert(plan.action().branch.clone(), dependencies.clone());
-                    controls
-                        .targets
-                        .insert(patchula_update::update_key(&plan), dependencies);
+                    controls.targets.insert(plan.update_key(), dependencies);
                 }
             }
             for file in &repo.report.package_files {

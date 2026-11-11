@@ -158,7 +158,7 @@ fn plan(
     version: &str,
     reason: Option<&str>,
 ) -> Plan {
-    let mut plan = Plan::new(BranchAction {
+    patchula_update::testing::Draft::new(BranchAction {
         repository: "sweepies/count-patchula".into(),
         branch: branch.into(),
         base_commit: "base".into(),
@@ -174,9 +174,9 @@ fn plan(
         verified: None,
         lockfile_pending: false,
         files: Vec::new(),
-    });
-    plan.identity = branch.into();
-    plan.changes = vec![Change {
+    })
+    .identity(branch)
+    .change(Change {
         registry: None,
         source: patchula_words::Source::Crates,
         package: package.into(),
@@ -193,8 +193,8 @@ fn plan(
         body_notes: Vec::new(),
         advisories: Vec::new(),
         image: None,
-    }];
-    plan
+    })
+    .build()
 }
 
 fn render() -> String {
