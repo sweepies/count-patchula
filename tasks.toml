@@ -89,14 +89,6 @@ run = 'hk check --from-ref "${usage_from_ref?}" --to-ref HEAD --no-progress --sa
 description = "Install the pre-commit hook, which runs hk through mise"
 run = "hk install --mise"
 
-["github:schema"]
-description = "Refresh the vendored GitHub GraphQL schema the static queries check against"
-tools = { curl = "8.17.0" }
-run = [
-  'printf "# GitHub public GraphQL schema (dotcom, fpt).\n# Downloaded from https://docs.github.com/public/fpt/schema.docs.graphql on %s.\n# Refresh with `mise run github:schema`.\n" "$(date -u +%F)" > crates/github/graphql/schema.docs.graphql',
-  "curl -fsSL https://docs.github.com/public/fpt/schema.docs.graphql >> crates/github/graphql/schema.docs.graphql",
-]
-
 ["fixtures:check"]
 description = "Reject possible secrets in all HTTP cassettes"
 run = "cargo run --quiet --locked -p patchula-testkit --bin fixtures -- fixtures"

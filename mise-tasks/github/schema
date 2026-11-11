@@ -1,0 +1,16 @@
+#!/usr/bin/env nu
+#MISE description="Refresh the vendored GitHub GraphQL schema the static queries check against"
+
+const SOURCE = "https://docs.github.com/public/fpt/schema.docs.graphql"
+const TARGET = "crates/github/graphql/schema.docs.graphql"
+
+def main [] {
+  let schema = http get --raw $SOURCE | decode utf-8
+  let today = date now | format date "%Y-%m-%d"
+  let header = [
+    "# GitHub public GraphQL schema (dotcom, fpt)."
+    $"# Downloaded from ($SOURCE) on ($today)."
+    "# Refresh with `mise run github:schema`."
+  ] | str join "\n"
+  $"($header)\n($schema)" | save --force $TARGET
+}
