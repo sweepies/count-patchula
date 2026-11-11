@@ -1,9 +1,10 @@
 //! How the report names each way a current version was resolved: the
-//! lockfile's entry for npm and Cargo, the declared value for every other
-//! manager a lockfile resolved. The remaining kinds are pinned by the
-//! actions tests (`floating-ref` for a branch ref, `pinned-commit` for a
-//! commit pin, `release-line` for a tool, `supported-range` for a toolchain
-//! constraint).
+//! lockfile's entry for every manager whose lockfile records the resolved
+//! version (npm, Bun, Cargo, Bundler, Composer, Pyproject, Go, Terraform),
+//! the declared value for every other manager. The remaining kinds are
+//! pinned by the actions tests (`floating-ref` for a branch ref,
+//! `pinned-commit` for a commit pin, `release-line` for a tool,
+//! `supported-range` for a toolchain constraint).
 use patchula_cache::Cache;
 use patchula_engine::{Engine, Options};
 use patchula_testkit::{
@@ -115,11 +116,10 @@ async fn an_npm_version_recorded_by_its_lockfile_reports_lockfile() {
     assert_eq!(resolution.version, "1.3.0");
 }
 
-/// Every other lockfile-resolved manager reports the same version as
-/// `declared` today: the `lockfile` resolution names npm and Cargo alone.
-/// This is today's wire, not necessarily the right one.
+/// A `composer.lock` records where Composer resolved the declaration, so the
+/// report says `lockfile`, as for npm and Cargo.
 #[tokio::test]
-async fn a_composer_version_recorded_by_its_lockfile_reports_declared() {
+async fn a_composer_version_recorded_by_its_lockfile_reports_lockfile() {
     let dir = tempfile::tempdir().unwrap();
     let tree = dir.path().join("tree");
     write(
@@ -157,8 +157,251 @@ async fn a_composer_version_recorded_by_its_lockfile_reports_declared() {
         .as_ref()
         .and_then(|m| m.resolution.as_ref())
         .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
-    assert_eq!(resolution.kind, patchula_words::ResolutionKind::Declared);
+    assert_eq!(resolution.kind, patchula_words::ResolutionKind::Lockfile);
     assert_eq!(resolution.version, "2.5.0");
+}
+
+/// A `bun.lock` records where Bun resolved the declaration, so the report
+/// says `lockfile`, as for npm's `package-lock.json`.
+#[tokio::test]
+async fn a_bun_version_recorded_by_its_lockfile_reports_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"bun\" }\n",
+            ),
+            ("package.json", r#"{"dependencies":{"left-pad":"^1.0.0"}}"#),
+            (
+                "bun.lock",
+                r#"{"lockfileVersion":1,"workspaces":{"":{"name":"app"}},"packages":{"left-pad":["left-pad@1.3.0","https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",{},"sha512-x"]}}"#,
+            ),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the npm registry metadata format".into(),
+        interactions: vec![interaction(
+            "https://registry.npmjs.org/left-pad",
+            "application/json",
+            json!({
+                "versions": {"1.0.0": {}, "1.3.0": {}, "1.3.1": {}, "1.4.0": {}},
+                "dist-tags": {"latest": "1.4.0"},
+            }),
+        )],
+    };
+    let report = report(&tree, cassette).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = &repo.package_files[0].dependencies[0];
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_eq!(resolution.kind, patchula_words::ResolutionKind::Lockfile);
+    assert_eq!(resolution.version, "1.3.0");
+}
+
+/// A `Gemfile.lock` records where Bundler resolved the requirement, so the
+/// report says `lockfile`.
+#[tokio::test]
+async fn a_gem_version_recorded_by_its_lockfile_reports_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"bundler\" }\n",
+            ),
+            (
+                "Gemfile",
+                "source \"https://rubygems.org\"\ngem \"rake\", \"~> 13.0\"\n",
+            ),
+            (
+                "Gemfile.lock",
+                "GEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.2.0)\n\nDEPENDENCIES\n  rake (~> 13.0)\n",
+            ),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the rubygems.org versions format".into(),
+        interactions: vec![interaction(
+            "https://rubygems.org/api/v1/versions/rake.json",
+            "application/json",
+            json!([
+                {"number": "13.2.1", "platform": "ruby", "created_at": "2026-01-01T00:00:00Z"},
+                {"number": "13.2.0", "platform": "ruby", "created_at": "2025-12-01T00:00:00Z"},
+                {"number": "13.0.0", "platform": "ruby", "created_at": "2025-01-01T00:00:00Z"}
+            ]),
+        )],
+    };
+    let report = report(&tree, cassette).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = &repo.package_files[0].dependencies[0];
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_eq!(resolution.kind, patchula_words::ResolutionKind::Lockfile);
+    assert_eq!(resolution.version, "13.2.0");
+}
+
+/// A `uv.lock` records where uv resolved the requirement, so the report says
+/// `lockfile`.
+#[tokio::test]
+async fn a_pypi_version_recorded_by_its_lockfile_reports_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"pyproject\" }\n",
+            ),
+            (
+                "pyproject.toml",
+                "[project]\nname = \"demo\"\nversion = \"0.1.0\"\ndependencies = [\"requests>=2.0\"]\n",
+            ),
+            (
+                "uv.lock",
+                "version = 1\n\n[[package]]\nname = \"requests\"\nversion = \"2.32.3\"\nsource = { registry = \"https://pypi.org/simple\" }\n",
+            ),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the PyPI JSON API format".into(),
+        interactions: vec![interaction(
+            "https://pypi.org/pypi/requests/json",
+            "application/json",
+            json!({"releases": {
+                "2.32.3": [{"upload_time_iso_8601": "2025-12-01T00:00:00Z"}],
+                "2.33.0": [{"upload_time_iso_8601": "2026-01-01T00:00:00Z"}]
+            }}),
+        )],
+    };
+    let report = report(&tree, cassette).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = &repo.package_files[0].dependencies[0];
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_eq!(resolution.kind, patchula_words::ResolutionKind::Lockfile);
+    assert_eq!(resolution.version, "2.32.3");
+}
+
+/// A `require` version in `go.mod` is the version Go's resolution recorded,
+/// so the report says `lockfile`. The `go` directive declares a language
+/// version instead, and stays `declared`.
+#[tokio::test]
+async fn a_go_version_recorded_by_go_mod_reports_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"go\" }\n",
+            ),
+            (
+                "go.mod",
+                "module example.com/app\n\ngo 1.23\n\nrequire github.com/acme/lib v1.2.0\n",
+            ),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the Go module proxy list format".into(),
+        interactions: vec![raw(
+            "https://proxy.golang.org/github.com/acme/lib/@v/list",
+            "text/plain",
+            Body::Text("v1.2.0\nv1.2.1\nv1.3.0\n".into()),
+        )],
+    };
+    let report = report(&tree, cassette).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let resolution = |name: &str| {
+        let dep = repo
+            .package_files
+            .iter()
+            .flat_map(|f| &f.dependencies)
+            .find(|d| d.name == name)
+            .unwrap_or_else(|| panic!("no {name} dependency: {repo:?}"));
+        dep.metadata
+            .as_ref()
+            .and_then(|m| m.resolution.as_ref())
+            .unwrap_or_else(|| panic!("no resolution recorded for {name}: {dep:?}"))
+    };
+    let lib = resolution("github.com/acme/lib");
+    assert_eq!(lib.kind, patchula_words::ResolutionKind::Lockfile);
+    assert_eq!(lib.version, "v1.2.0");
+    let directive = resolution("go");
+    assert_eq!(directive.kind, patchula_words::ResolutionKind::Declared);
+    assert_eq!(directive.version, "1.23");
+}
+
+/// A `.terraform.lock.hcl` records where Terraform resolved the provider
+/// constraint, so the report says `lockfile`.
+#[tokio::test]
+async fn a_provider_version_recorded_by_terraform_lock_reports_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"terraform\" }\n",
+            ),
+            (
+                "versions.tf",
+                "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \">= 6.59\"\n    }\n  }\n}\n",
+            ),
+            (
+                ".terraform.lock.hcl",
+                "provider \"registry.terraform.io/hashicorp/aws\" {\n  version     = \"6.59.0\"\n  constraints = \">= 6.59\"\n  hashes = [\n    \"h1:abc\",\n  ]\n}\n",
+            ),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the Terraform registry versions format".into(),
+        interactions: vec![interaction(
+            "https://registry.terraform.io/v1/providers/hashicorp/aws/versions",
+            "application/json",
+            json!({"versions": [
+                {"version": "6.60.0"},
+                {"version": "6.59.1"},
+                {"version": "6.59.0"}
+            ]}),
+        )],
+    };
+    let report = report(&tree, cassette).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = &repo.package_files[0].dependencies[0];
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_eq!(resolution.kind, patchula_words::ResolutionKind::Lockfile);
+    assert_eq!(resolution.version, "6.59.0");
 }
 
 /// A `Cargo.lock` records where Cargo resolved the range, so the report says
@@ -219,4 +462,101 @@ async fn a_cargo_version_recorded_by_its_lockfile_reports_lockfile() {
     let rust = resolution("rust");
     assert_eq!(rust.kind, patchula_words::ResolutionKind::Declared);
     assert_eq!(rust.version, "1.75.0");
+}
+
+/// Without its committed lockfile a lock-capable manager records no resolved
+/// version, so the report carries no `resolution` at all — the
+/// `dep.resolved.is_some()` guard means it can never say `lockfile`.
+#[tokio::test]
+async fn a_gem_without_its_lockfile_records_no_resolution() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"bundler\" }\n",
+            ),
+            (
+                "Gemfile",
+                "source \"https://rubygems.org\"\ngem \"rake\", \"~> 13.0\"\n",
+            ),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the rubygems.org versions format".into(),
+        interactions: vec![interaction(
+            "https://rubygems.org/api/v1/versions/rake.json",
+            "application/json",
+            json!([
+                {"number": "13.2.1", "platform": "ruby", "created_at": "2026-01-01T00:00:00Z"},
+                {"number": "13.2.0", "platform": "ruby", "created_at": "2025-12-01T00:00:00Z"},
+                {"number": "13.0.0", "platform": "ruby", "created_at": "2025-01-01T00:00:00Z"}
+            ]),
+        )],
+    };
+    let report = report(&tree, cassette).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = &repo.package_files[0].dependencies[0];
+    assert!(
+        dep.metadata
+            .as_ref()
+            .and_then(|m| m.resolution.as_ref())
+            .is_none(),
+        "a gem with no committed lockfile must never report `lockfile`: {dep:?}"
+    );
+}
+
+/// npm's `packageManager` field is a tool declaration whose `resolved` is the
+/// value the manifest itself names, so the Tool exclusion keeps the report at
+/// `declared` — never `lockfile`.
+#[tokio::test]
+async fn a_package_manager_tool_reports_declared_never_lockfile() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    write(
+        &tree,
+        &[
+            (
+                "patchula.pkl",
+                "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing { \"npm\" }\n",
+            ),
+            (
+                "package.json",
+                r#"{"packageManager":"pnpm@9.0.0","dependencies":{}}"#,
+            ),
+        ],
+    );
+    let cassette = Cassette {
+        schema_version: 1,
+        provenance: "Simulated from the npm registry metadata format".into(),
+        interactions: vec![interaction(
+            "https://registry.npmjs.org/pnpm",
+            "application/json",
+            json!({
+                "versions": {"9.0.0": {}, "9.0.1": {}, "10.0.0": {}},
+                "dist-tags": {"latest": "10.0.0"},
+            }),
+        )],
+    };
+    let report = report(&tree, cassette).await;
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, patchula_report::Status::Complete, "{repo:?}");
+    let dep = repo
+        .package_files
+        .iter()
+        .flat_map(|f| &f.dependencies)
+        .find(|d| d.name == "pnpm")
+        .unwrap_or_else(|| panic!("no pnpm dependency: {repo:?}"));
+    let resolution = dep
+        .metadata
+        .as_ref()
+        .and_then(|m| m.resolution.as_ref())
+        .unwrap_or_else(|| panic!("no resolution recorded: {dep:?}"));
+    assert_ne!(resolution.kind, patchula_words::ResolutionKind::Lockfile);
+    assert_eq!(resolution.kind, patchula_words::ResolutionKind::Declared);
+    assert_eq!(resolution.version, "9.0.0");
 }
