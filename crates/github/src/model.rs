@@ -79,10 +79,13 @@ pub struct Commit {
     pub sha: String,
     /// `commit` — required; the commit's content object.
     pub commit: CommitDetail,
-    /// `author` — nullable in the `commit` schema: the git author need not
-    /// map to a GitHub account.
+    /// `author` — nullable in the `commit` schema, and `oneOf` a user or an
+    /// empty object (a deleted account): both read as `None`, since the git
+    /// author need not map to a GitHub account.
+    #[serde(deserialize_with = "account")]
     pub author: Option<Actor>,
-    /// `committer` — nullable in the `commit` schema for the same reason.
+    /// `committer` — the same shape and reading as `author`.
+    #[serde(deserialize_with = "account")]
     pub committer: Option<Actor>,
 }
 
@@ -147,7 +150,8 @@ pub struct BranchHeadCommit {
 
 /// One page of a list endpoint or connection: the decoded `items` and
 /// whether the set is `complete`. An incomplete page is data, not an
-/// error — callers decide what it blocks.
+/// error — callers decide what it blocks. An element that fails stays out
+/// of `items`; `complete` is what records it.
 #[derive(Clone, Debug)]
 pub struct Page<T> {
     /// The elements that decoded.
@@ -174,10 +178,45 @@ impl<T: DeserializeOwned> Page<T> {
     }
 }
 
+/// A `simple-user` that may be `null` or `{}` (a deleted account): either
+/// reads as no account.
+fn account<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Actor>, D::Error> {
+    let value = Option::<serde_json::Map<String, Value>>::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(map) if map.is_empty() => Ok(None),
+        Some(map) => Actor::deserialize(Value::Object(map))
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_deleted_account_author_reads_as_no_account() {
+        let commit = |author: Value| -> Commit {
+            serde_json::from_value(serde_json::json!({
+                "sha": "abc",
+                "commit": {"tree": {"sha": "t"}, "message": "m"},
+                "author": author,
+                "committer": null,
+            }))
+            .unwrap()
+        };
+        assert!(commit(serde_json::json!({})).author.is_none());
+        assert!(commit(Value::Null).author.is_none());
+        assert_eq!(
+            commit(serde_json::json!({"login": "octocat", "id": 1}))
+                .author
+                .unwrap()
+                .login,
+            "octocat"
+        );
+    }
 
     #[test]
     fn a_page_decodes_element_wise_and_marks_unreadable_ones_incomplete() {

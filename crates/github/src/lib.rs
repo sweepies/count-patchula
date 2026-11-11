@@ -52,7 +52,9 @@ pub enum Error {
     /// A response did not decode into the type asked for. Carries only the
     /// operation and the field path: serde's message is never kept, since a
     /// type-mismatch message can quote a response value — PR body text —
-    /// and error text reaches dashboards and public pages.
+    /// and error text reaches dashboards and public pages. The path's map
+    /// keys come from the response too, so a segment that is not a plain
+    /// field name or index is replaced with `?`.
     #[error("GitHub response for {operation} did not decode at {path}")]
     Decode { operation: String, path: String },
     /// Carries GitHub's `errors[].message` values, joined and truncated; empty
@@ -582,8 +584,34 @@ impl Client {
             .ok_or_else(|| Error::Graphql(String::new()))?;
         serde_path_to_error::deserialize(data).map_err(|error| Error::Decode {
             operation,
-            path: error.path().to_string(),
+            path: safe_path(error.path()),
         })
+    }
+}
+
+/// `path` with every segment that is not a field name or an index replaced
+/// by `?`, so a response's own keys cannot carry text into an error.
+fn safe_path(path: &serde_path_to_error::Path) -> String {
+    let segments: Vec<String> = path
+        .iter()
+        .map(|segment| match segment {
+            serde_path_to_error::Segment::Seq { index } => index.to_string(),
+            serde_path_to_error::Segment::Map { key }
+            | serde_path_to_error::Segment::Enum { variant: key }
+                if !key.is_empty()
+                    && key.len() <= 64
+                    && key.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                    && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') =>
+            {
+                key.clone()
+            }
+            _ => "?".to_owned(),
+        })
+        .collect();
+    if segments.is_empty() {
+        ".".to_owned()
+    } else {
+        segments.join(".")
     }
 }
 
@@ -591,10 +619,14 @@ impl Client {
 /// path on failure — never serde's message, which can quote response values.
 fn decode<T: DeserializeOwned>(body: &[u8], operation: String) -> Result<T> {
     let mut deserializer = serde_json::Deserializer::from_slice(body);
-    serde_path_to_error::deserialize(&mut deserializer).map_err(|error| Error::Decode {
-        operation,
-        path: error.path().to_string(),
-    })
+    let value =
+        serde_path_to_error::deserialize(&mut deserializer).map_err(|error| Error::Decode {
+            operation,
+            path: safe_path(error.path()),
+        })?;
+    // Content after the document is invalid JSON, as `from_slice` treated it.
+    deserializer.end().map_err(|_| Error::Json)?;
+    Ok(value)
 }
 
 /// The GraphQL operation `query` performs, for error context: its name when
@@ -767,6 +799,38 @@ pub(crate) fn join_api(base: &Url, path: &str) -> Result<Url> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_decode_path_keeps_field_names_and_masks_response_text() {
+        let error = decode::<std::collections::BTreeMap<String, Vec<u32>>>(
+            br#"{"x":[1],"secret token text":["oops"]}"#,
+            "GET probe".into(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            Error::Decode {
+                operation: "GET probe".into(),
+                path: "?.0".into()
+            }
+        );
+        let error = decode::<std::collections::BTreeMap<String, Vec<u32>>>(
+            br#"{"field_name":["oops"]}"#,
+            "GET probe".into(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("field_name.0"), "{error}");
+    }
+
+    #[test]
+    fn content_after_the_document_is_invalid_json() {
+        assert_eq!(
+            decode::<serde_json::Value>(br#"{"a":1} trailing"#, "GET probe".into()).unwrap_err(),
+            Error::Json
+        );
+        assert!(decode::<serde_json::Value>(br#" {"a":1} "#, "GET probe".into()).is_ok());
+    }
+
     use super::*;
     use serde_json::json;
 
