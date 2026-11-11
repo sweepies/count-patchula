@@ -619,14 +619,15 @@ pub struct Target<'a> {
     pub version: Option<&'a str>,
 }
 
-/// What a lockfile run produced: every path that differs from base.
+/// What a lockfile run produced: every path that differs from base, keyed
+/// by path, so the merge sees each path once and in path order whatever
+/// generated it.
 pub struct Generated {
-    pub files: Vec<GeneratedFile>,
+    pub files: BTreeMap<String, GeneratedFile>,
 }
 
 /// One path the run left different from the base commit.
 pub struct GeneratedFile {
-    pub path: String,
     /// The file at base; `None` when the run created it.
     pub base: Option<BaseFile>,
     /// The file after the run; `None` when the run deleted it.

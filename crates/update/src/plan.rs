@@ -314,24 +314,24 @@ impl Plan {
         let mut deleted = BTreeSet::new();
         let mut added = Vec::new();
         let mut files = Vec::new();
-        for file in generated.files {
+        for (path, file) in generated.files {
             let old = file.base.as_ref().map_or("", |b| b.content.as_str());
             let new = file.content.as_deref().unwrap_or("");
             files.push(FileAction {
-                path: file.path.clone(),
+                path: path.clone(),
                 blob_sha: file
                     .base
                     .as_ref()
                     .map(|b| b.sha.clone())
                     .unwrap_or_default(),
-                diff: unified(&file.path, old, new),
+                diff: unified(&path, old, new),
             });
-            contents.insert(file.path.clone(), new.into());
+            contents.insert(path.clone(), new.into());
             if file.content.is_none() {
-                deleted.insert(file.path.clone());
+                deleted.insert(path.clone());
             }
             added.push((
-                file.path,
+                path,
                 file.base.map_or_else(
                     || Blob {
                         sha: String::new(),

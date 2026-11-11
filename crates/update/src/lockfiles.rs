@@ -312,7 +312,7 @@ impl Runner {
         // unexpected writes and binary output rather than silently publishing it.
         let generated = collect(&root)?;
         validate_targets(work, config, &generated)?;
-        let mut files = Vec::new();
+        let mut files = BTreeMap::new();
         let all: BTreeSet<_> = baseline.keys().chain(generated.keys()).cloned().collect();
         for path in all {
             let before = baseline.get(&path);
@@ -331,11 +331,13 @@ impl Runner {
             {
                 return Err(format!("tool modified unexpected mise lockfile {path}").into());
             }
-            files.push(GeneratedFile {
+            files.insert(
                 path,
-                base: before.cloned(),
-                content: after.cloned(),
-            });
+                GeneratedFile {
+                    base: before.cloned(),
+                    content: after.cloned(),
+                },
+            );
         }
         Ok(Generated { files })
     }
