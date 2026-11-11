@@ -1344,7 +1344,7 @@ mod goldens {
                 exact_version: false,
             },
         ];
-        let built = fingerprint(Stage::Built {
+        let built = fingerprint(FingerprintStage::Built {
             contents: &contents,
             message: "chore(deps): update tokio to 1.40.0",
             lockfile_pending: false,

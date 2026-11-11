@@ -1,11 +1,36 @@
 //! A `Plan` builder for tests, behind the `testing` feature: tests draft the
 //! plan they need instead of poking fields, so the fields can go private
 //! without touching them again.
-use super::{Change, Kind, Plan};
+use super::{Change, Kind, Plan, Stage};
 use crate::batch;
 use patchula_lockfiles as contract;
 use patchula_report::{BranchAction, FileAction};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// The draft's lockfile jobs, moving the plan to `Built` when a later stage
+/// was drafted — the plan owes the tools again.
+fn owed(plan: &mut Plan) -> &mut Vec<contract::Job> {
+    if !matches!(plan.stage, Stage::Built { .. }) {
+        plan.stage = Stage::Built { jobs: Vec::new() };
+    }
+    match &mut plan.stage {
+        Stage::Built { jobs } => jobs,
+        _ => unreachable!(),
+    }
+}
+/// The draft's deleted set, moving the plan to `Generated` when an earlier
+/// stage was drafted — the tools' output replaces what they still owed.
+fn removed(plan: &mut Plan) -> &mut BTreeSet<String> {
+    if !matches!(plan.stage, Stage::Generated { .. }) {
+        plan.stage = Stage::Generated {
+            deleted: BTreeSet::new(),
+        };
+    }
+    match &mut plan.stage {
+        Stage::Generated { deleted } => deleted,
+        _ => unreachable!(),
+    }
+}
 
 /// A plan under construction. `build` returns the plan exactly as drafted:
 /// nothing is recomputed, so an explicit or absent fingerprint reaches
@@ -82,30 +107,34 @@ impl Draft {
     }
     /// A path a lockfile run removed; the write drops it from the tree.
     pub fn delete(mut self, path: impl Into<String>) -> Self {
-        self.plan.deleted.insert(path.into());
+        removed(&mut self.plan).insert(path.into());
         self
     }
     /// The draft's deleted set, for a test that edits it in place.
     pub fn deleted_mut(&mut self) -> &mut BTreeSet<String> {
-        &mut self.plan.deleted
+        removed(&mut self.plan)
     }
     /// A lockfile job the plan still owes.
     pub fn lock_job(mut self, job: contract::Job) -> Self {
-        self.plan.lock_jobs.push(job);
+        owed(&mut self.plan).push(job);
         self
     }
     /// The plan's whole lockfile job set.
     pub fn lock_jobs(mut self, jobs: Vec<contract::Job>) -> Self {
-        self.plan.lock_jobs = jobs;
+        *owed(&mut self.plan) = jobs;
         self
     }
     /// The draft's lockfile jobs, for a test that edits one in place.
     pub fn lock_jobs_mut(&mut self) -> &mut Vec<contract::Job> {
-        &mut self.plan.lock_jobs
+        owed(&mut self.plan)
     }
     /// Whether the plan's lockfiles already ran.
     pub fn lockfiles_ready(mut self, ready: bool) -> Self {
-        self.plan.lockfiles_ready = ready;
+        if ready {
+            removed(&mut self.plan);
+        } else {
+            owed(&mut self.plan);
+        }
         self
     }
     /// An explicit plan fingerprint; unset, the draft keeps what it was made
