@@ -209,7 +209,10 @@ impl Client {
                     first
                 } else {
                     GraphqlPage::<Value>::from_connection(
-                        &self.github.graphql::<Value>(RELEASES, variables.clone()).await?,
+                        &self
+                            .github
+                            .graphql::<Value>(RELEASES, variables.clone())
+                            .await?,
                         "/repository/releases",
                     )?
                 };
@@ -450,7 +453,10 @@ impl Client {
             declarations.join(","),
             fields.join(" ")
         );
-        let data = self.github.graphql::<Value>(&query, Value::Object(variables)).await;
+        let data = self
+            .github
+            .graphql::<Value>(&query, Value::Object(variables))
+            .await;
         let mut resolved = TagDigests::new();
         let mut missing = Vec::new();
         for (i, key) in chunk.iter().enumerate() {

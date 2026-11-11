@@ -695,7 +695,10 @@ async fn mutations_share_serial_cooldown_but_graphql_queries_do_not() {
         .await
         .unwrap();
     assert!(started.elapsed() < Duration::from_secs(1));
-    let (a, b) = tokio::join!(github.post::<Value>("a", json!({})), github.post::<Value>("b", json!({})));
+    let (a, b) = tokio::join!(
+        github.post::<Value>("a", json!({})),
+        github.post::<Value>("b", json!({}))
+    );
     a.unwrap();
     b.unwrap();
     assert_eq!(observer.maximum.load(Ordering::SeqCst), 1);
@@ -746,7 +749,10 @@ async fn typed_responses_decode_through_the_generic_methods() {
             "/trees",
             r#"[{"path":"src/x.rs","mode":"100644","type":"blob","sha":"def"}]"#,
         ),
-        ("/graphql", r#"{"data":{"viewer":{"login":"patchula[bot]"}}}"#),
+        (
+            "/graphql",
+            r#"{"data":{"viewer":{"login":"patchula[bot]"}}}"#,
+        ),
         ("/repos/o/r/empty", ""),
     ]))
     .await;
@@ -840,7 +846,10 @@ async fn content_hour_budget_fails_before_sending_when_wait_exceeds_budget() {
         github.post::<Value>("content", json!({})).await.unwrap();
     }
     assert_eq!(
-        github.post::<Value>("content", json!({})).await.unwrap_err(),
+        github
+            .post::<Value>("content", json!({}))
+            .await
+            .unwrap_err(),
         Error::RateLimit
     );
     assert_eq!(github.stats().await.requests, 500);

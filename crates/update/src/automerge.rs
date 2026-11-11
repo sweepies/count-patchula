@@ -317,7 +317,10 @@ async fn one(
     let number = fields.number.ok_or("missing PR number")?;
     let head = fields.head.sha.as_deref().ok_or("missing receipt head")?;
     let path = format!("repos/{}/pulls/{number}", repo.repository);
-    let fresh = client.get_fresh::<Value>(&path).await.map_err(|e| e.to_string())?;
+    let fresh = client
+        .get_fresh::<Value>(&path)
+        .await
+        .map_err(|e| e.to_string())?;
     if !same_head(&fresh, pr, &inventory.actor, &repo.repository) {
         return Ok((
             PullRequestStatus::Protected,
@@ -342,7 +345,10 @@ async fn one(
     }
     // Recheck ownership/protections after pagination, then use a head lease on the
     // normal merge API. No admin/bypass option, direct base write or force merge.
-    let fresh = client.get_fresh::<Value>(&path).await.map_err(|e| e.to_string())?;
+    let fresh = client
+        .get_fresh::<Value>(&path)
+        .await
+        .map_err(|e| e.to_string())?;
     if !same_head(&fresh, pr, &inventory.actor, &repo.repository)
         || fresh["draft"].as_bool() != Some(false)
         || fresh["mergeable"].as_bool() != Some(true)

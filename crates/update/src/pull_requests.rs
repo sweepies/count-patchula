@@ -648,7 +648,10 @@ impl Lifecycle {
             .collect();
         for target in targets {
             let path = format!("repos/{}/pulls/{target}", self.repo);
-            let fresh = client.get_fresh::<Value>(&path).await.map_err(|e| e.to_string())?;
+            let fresh = client
+                .get_fresh::<Value>(&path)
+                .await
+                .map_err(|e| e.to_string())?;
             if fresh["state"] != "open"
                 || !owned_pr(&fresh, &self.actor, &self.repo)
                 || !markers::ownership_marker(body(&fresh))
@@ -697,7 +700,10 @@ impl Lifecycle {
             }
             let number = pr["number"].as_u64().ok_or("missing PR number")?;
             let path = format!("repos/{}/pulls/{number}", self.repo);
-            let fresh = client.get_fresh::<Value>(&path).await.map_err(|e| e.to_string())?;
+            let fresh = client
+                .get_fresh::<Value>(&path)
+                .await
+                .map_err(|e| e.to_string())?;
             if fresh["state"] != "open" || !owned_pr(&fresh, &self.actor, &self.repo) {
                 continue;
             }
