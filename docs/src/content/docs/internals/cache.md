@@ -93,7 +93,10 @@ Opening the cache deletes per-build rows written by any other version.
 Values are JSON. A stored value that fails to decode is a miss, logged at
 debug level; database errors remain errors. Each call site owns its value and
 scope types, so a change to a stored shape bumps `VERSION` or `NAMESPACE`
-rather than silently reusing entries written for the old one.
+rather than silently reusing entries written for the old one. The exception
+is a shape that reads both ways: auto-merge history rows went from whole REST
+pull requests to the five fields its readers use, and each shape decodes as
+the other, so they stay at version 1.
 
 ## Schema and corruption
 
