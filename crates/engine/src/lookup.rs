@@ -262,7 +262,7 @@ impl Engine {
         let versions = eval.needs_lookup(dep);
         let forge = eval.needs_forge_catalog(dep);
         let digest_policy = eval.digest_policy_applies(dep);
-        let current_ref = (dep.tagged_action()
+        let current_ref = (dep.proposing().pin.commit
             && dep.source == Source::GithubTags
             && !(dep.digest.is_some() && dep.resolved.is_none())
             && digest_policy
@@ -710,7 +710,7 @@ impl Engine {
                             );
                         }
                     }
-                    if dep.tagged_action() {
+                    if dep.proposing().pin.commit {
                         for proposal in &evaluation.updates {
                             if eval.needs_digest(&dep.dependency, proposal)
                                 && let Some(reference) = proposal

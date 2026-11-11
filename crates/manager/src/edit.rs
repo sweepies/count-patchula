@@ -25,7 +25,7 @@ pub fn edits(
     if descriptor.inventory_only(dep, raw) {
         return Ok(Vec::new());
     }
-    let replacement = if dep.tagged_action() {
+    let replacement = if dep.proposing().pin.commit {
         if value.is_empty()
             || value.contains([' ', '\t', '\r', '\n', '\0', '\'', '"', '#', '@', '\\'])
             || digest.is_some_and(|d| d.len() != 40 || !d.bytes().all(|b| b.is_ascii_hexdigit()))

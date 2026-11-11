@@ -6,7 +6,7 @@ pub mod images;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use patchula_config::{Config, Filter, Patterns, Policy, Rule};
 use patchula_datasource::{Catalog, Version};
-use patchula_manager::Dependency;
+use patchula_manager::{Dependency, Range, ShortTags, Written};
 use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy};
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
 use patchula_words::{DependencyKind, ReleaseChannel, Source, Update, VersionPolicy};
@@ -260,7 +260,7 @@ impl Evaluator {
             return false;
         }
         // A branch ref has no version to compare; only tags are looked up.
-        if dep.looked_up_only_as_version() {
+        if dep.proposing().unversioned.looked_up {
             return Ecosystem::Loose
                 .parse(dep.resolved.as_deref().unwrap_or(&dep.current))
                 .is_ok();
@@ -270,7 +270,7 @@ impl Evaluator {
     /// A forge action's digest comes only from its tag catalog, so the catalog
     /// is needed whenever its tag pin can change, even with version updates off.
     pub fn needs_forge_catalog(&self, dep: &Dependency) -> bool {
-        dep.tagged_action()
+        dep.proposing().pin.commit
             && dep.source == Source::ForgeTags
             && !(dep.digest.is_some() && dep.resolved.is_none())
             && Ecosystem::Loose
@@ -294,7 +294,7 @@ impl Evaluator {
         // Runtime constraints describe supported versions, rather than an
         // installed package version. Explicit rules can still
         // request exact pinning for a repository that wants it.
-        if dep.supports_runtime_range() {
+        if dep.proposing().range == Range::Support {
             effective.policy.versions = VersionPolicy::Preserve;
         }
         let scheme = Ecosystem::of(dep.scheme, dep.source);
@@ -320,7 +320,7 @@ impl Evaluator {
         }
         // Peers express consumer compatibility, even when installed packages
         // use exact versions. Exact peer declarations still bump in place.
-        if dep.peer_range() {
+        if dep.proposing().range == Range::Peer {
             effective.policy.versions = if Ecosystem::Npm.parse(&dep.current).is_ok() {
                 VersionPolicy::Exact
             } else {
@@ -331,7 +331,7 @@ impl Evaluator {
     }
     pub fn needs_digest(&self, dep: &Dependency, proposal: &Proposal) -> bool {
         let update = proposal.update_type;
-        dep.needs_digest()
+        dep.proposing().pin.needs_digest
             && self
                 .effective(dep, update)
                 .map(|effective| effective.digest)
@@ -420,7 +420,7 @@ impl Evaluator {
         let Some(mut proposal) = self.digest_proposal(dep, new_digest)? else {
             return Ok(None);
         };
-        if dep.tagged_action()
+        if dep.proposing().pin.commit
             && let Some(catalog) = catalog
         {
             let mut target = dep.clone();
@@ -475,7 +475,7 @@ impl Evaluator {
         advisories: Advisories<'_>,
     ) -> Result<Option<Proposal>> {
         let (query, found) = advisories;
-        if !dep.transitive_lock_movable() || self.ignored(dep) {
+        if !dep.proposing().lock.transitive_movable || self.ignored(dep) {
             return Ok(None);
         }
         let scheme = Ecosystem::of(dep.scheme, dep.source);
@@ -738,7 +738,8 @@ impl Evaluator {
         });
         // Branch and opaque refs are preserved. Their digest is proposed through
         // digest_proposal after the engine resolves that same ref.
-        if baseline.is_none() && (dep.opaque_when_unclassifiable() || scheme == Ecosystem::Docker) {
+        if baseline.is_none() && (dep.proposing().unversioned.opaque || scheme == Ecosystem::Docker)
+        {
             return Ok(Evaluation::default());
         }
         let baseline = baseline.or_else(|| {
@@ -845,7 +846,7 @@ impl Evaluator {
             }
             // Only Actions float a short tag such as v4 along its release line;
             // an APM tag names one release.
-            if dep.short_tags_float()
+            if dep.proposing().short_tags == ShortTags::Floating
                 && numeric_fields(&dep.current).is_some_and(|n| n < 3)
                 && numeric_prefix(&dep.current, &normalized)
             {
@@ -896,7 +897,8 @@ impl Evaluator {
             {
                 continue;
             }
-            if dep.supports_runtime_range() && effective.policy.versions == VersionPolicy::Preserve
+            if dep.proposing().range == Range::Support
+                && effective.policy.versions == VersionPolicy::Preserve
             {
                 // A supported runtime interval is not an installed-version
                 // pin. Widening its ceiling needs compatibility evidence.
@@ -951,7 +953,7 @@ impl Evaluator {
                     .1;
                 if !effective.policy.active
                     || (!parsed.0.pre.is_empty() && baseline.0.pre.is_empty())
-                    || (dep.supports_runtime_range()
+                    || (dep.proposing().range == Range::Support
                         && effective.policy.versions == VersionPolicy::Preserve)
                 {
                     continue;
@@ -988,91 +990,96 @@ impl Evaluator {
         'tracks: for chain in chains {
             let mut reported = false;
             for (_, version, normalized, kind, effective) in chain {
-                let new_value = if dep.tag_at_declared_precision() {
-                    action_value(
-                        &dep.current,
-                        if dep.kind == DependencyKind::Tool {
-                            &normalized
-                        } else {
-                            &version.version
-                        },
-                    )
-                } else if dep.exact_tag_ref() {
-                    version.version.clone()
-                } else {
-                    let value = if dep.peer_range()
-                        && effective.policy.versions == VersionPolicy::Widen
-                    {
-                        if scheme
-                            .matches(
-                                &dep.current,
-                                &scheme.parse(&normalized).map_err(|e| e.to_string())?,
-                            )
-                            .unwrap_or(false)
+                let new_value = match dep.proposing().written {
+                    Written::TagAtPrecision => action_value(&dep.current, &version.version),
+                    Written::VersionAtPrecision => action_value(&dep.current, &normalized),
+                    Written::Tag => version.version.clone(),
+                    Written::Range => {
+                        let value = if dep.proposing().range == Range::Peer
+                            && effective.policy.versions == VersionPolicy::Widen
+                        {
+                            if scheme
+                                .matches(
+                                    &dep.current,
+                                    &scheme.parse(&normalized).map_err(|e| e.to_string())?,
+                                )
+                                .unwrap_or(false)
+                            {
+                                dep.current.clone()
+                            } else {
+                                let target =
+                                    scheme.parse(&normalized).map_err(|e| e.to_string())?;
+                                let minor = if target.0.major == 0 {
+                                    target.0.minor
+                                } else {
+                                    0
+                                };
+                                let patch = if target.0.major == 0 && minor == 0 {
+                                    target.0.patch
+                                } else {
+                                    0
+                                };
+                                format!(
+                                    "{} || ^{}.{}.{}",
+                                    dep.current, target.0.major, minor, patch
+                                )
+                            }
+                        } else if dep.proposing().keeps_satisfied
+                            && scheme
+                                .matches(
+                                    &dep.current,
+                                    &scheme.parse(&normalized).map_err(|e| e.to_string())?,
+                                )
+                                .unwrap_or(false)
                         {
                             dep.current.clone()
                         } else {
-                            let target = scheme.parse(&normalized).map_err(|e| e.to_string())?;
-                            let minor = if target.0.major == 0 {
-                                target.0.minor
-                            } else {
-                                0
-                            };
-                            let patch = if target.0.major == 0 && minor == 0 {
-                                target.0.patch
-                            } else {
-                                0
-                            };
-                            format!("{} || ^{}.{}.{}", dep.current, target.0.major, minor, patch)
-                        }
-                    } else if dep.keeps_satisfied_constraint()
-                        && scheme
-                            .matches(
+                            match scheme.new_range(
                                 &dep.current,
-                                &scheme.parse(&normalized).map_err(|e| e.to_string())?,
-                            )
-                            .unwrap_or(false)
-                    {
-                        dep.current.clone()
-                    } else {
-                        match scheme.new_range(&dep.current, &normalized, effective.policy.versions)
-                        {
-                            Ok(value) => value,
-                            // The lookup worked; the declaration is what cannot be edited.
-                            Err(patchula_versioning::Error::Compound(_)) => {
-                                // Report the newest release once, then try the older
-                                // ones the same track displaced.
-                                if !reported {
-                                    reported = true;
-                                    not_proposed.push(NotProposed {
+                                &normalized,
+                                effective.policy.versions,
+                            ) {
+                                Ok(value) => value,
+                                // The lookup worked; the declaration is what cannot be edited.
+                                Err(patchula_versioning::Error::Compound(_)) => {
+                                    // Report the newest release once, then try the older
+                                    // ones the same track displaced.
+                                    if !reported {
+                                        reported = true;
+                                        not_proposed.push(NotProposed {
                                     version: normalized,
                                     reason: format!(
                                         "the constraint `{}` cannot be rewritten to allow it without guessing",
                                         dep.current
                                     ),
                                 });
+                                    }
+                                    continue;
                                 }
-                                continue;
+                                Err(e) => return Err(e.to_string()),
                             }
-                            Err(e) => return Err(e.to_string()),
-                        }
-                    };
-                    // Preserve aliases and packageManager identity via extraction
-                    // location metadata, while current/newValue describe the version.
-                    value
+                        };
+                        // Preserve aliases and packageManager identity via extraction
+                        // location metadata, while current/newValue describe the version.
+                        value
+                    }
                 };
                 // A release the declared range already allows leaves the manifest
                 // alone. With a committed lockfile it still moves the lock to the
                 // target; without one there is nothing to change.
                 let in_range = new_value == dep.current;
                 let lock_only = in_range
-                    && dep.locked().is_some()
+                    && dep
+                        .proposing()
+                        .lock
+                        .locked(dep.resolved.as_deref())
+                        .is_some()
                     && effective.policy.versions != VersionPolicy::Exact;
                 if in_range
                     && !lock_only
-                    && (dep.preserves_ranges()
+                    && (dep.proposing().lock.keeps_ranges
                         || matches!(scheme, Ecosystem::Maven | Ecosystem::Nuget)
-                        || dep.runtime_toolchain())
+                        || dep.proposing().runtime_toolchain)
                 {
                     // Lockfile maintenance is a separate, explicitly enabled operation.
                     continue 'tracks;
@@ -1080,7 +1087,7 @@ impl Evaluator {
                 let mut update = proposal(
                     (!lock_only).then_some(new_value),
                     Some(normalized),
-                    if effective.digest && dep.digest_from_catalog() {
+                    if effective.digest && dep.proposing().pin.from_catalog {
                         version.digest.clone()
                     } else {
                         None
@@ -1284,7 +1291,7 @@ impl Evaluator {
         dep: &Dependency,
         catalog: &Catalog,
     ) -> Result<Option<String>> {
-        if !dep.selector_resolved() {
+        if !dep.proposing().selector_resolved {
             return Ok(None);
         }
         let scheme = Ecosystem::of(dep.scheme, dep.source);
@@ -1388,7 +1395,7 @@ impl Evaluator {
         dep: &Dependency,
         catalog: &Catalog,
     ) -> Result<Option<String>> {
-        if dep.runtime_toolchain() {
+        if dep.proposing().runtime_toolchain {
             let scheme = Ecosystem::of(dep.scheme, dep.source);
             return Ok(catalog
                 .versions
@@ -1401,10 +1408,10 @@ impl Evaluator {
                 .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
                 .map(|(_, version)| version.trim_start_matches('v').into()));
         }
-        if dep.resolved_via_listing() {
+        if dep.proposing().resolved_via_listing {
             return self.resolved_tool_version(dep, catalog);
         }
-        if !dep.short_tags_float() {
+        if dep.proposing().short_tags != ShortTags::Floating {
             return Ok(None);
         }
         let current = dep.resolved.as_deref().unwrap_or(&dep.current);

@@ -24,10 +24,14 @@ pub fn advisory_query(dep: &Dependency) -> Option<AdvisoryQuery> {
         Source::Nuget => ("NuGet", dep.package.clone()),
         Source::Rubygems => ("RubyGems", dep.package.clone()),
         Source::Packagist => ("Packagist", dep.package.clone()),
-        Source::GithubTags | Source::GithubReleases if dep.github_actions_advisories() => {
+        Source::GithubTags | Source::GithubReleases
+            if dep.proposing().advisories == patchula_manager::Advisories::GithubAction =>
+        {
             ("GitHub Actions", dep.package.clone())
         }
-        Source::Mise if dep.go_stdlib_advisories() => ("Go", "stdlib".into()),
+        Source::Mise if dep.proposing().advisories == patchula_manager::Advisories::GoStdlib => {
+            ("Go", "stdlib".into())
+        }
         _ => return None,
     };
     let version = match &dep.resolved {

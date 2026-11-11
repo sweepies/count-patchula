@@ -203,6 +203,35 @@ pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
+    fn proposing(&self, dep: &Dependency) -> Proposing {
+        Proposing {
+            range: Range::Installed,
+            runtime_toolchain: false,
+            written: Written::Tag,
+            keeps_satisfied: false,
+            unversioned: Unversioned {
+                looked_up: matches!(dep.source, Source::GithubTags | Source::ForgeTags),
+                opaque: false,
+            },
+            short_tags: ShortTags::Fixed,
+            selector_resolved: false,
+            resolved_via_listing: dep.kind == DependencyKind::Tool,
+            pin: Pin {
+                commit: matches!(dep.source, Source::GithubTags | Source::ForgeTags),
+                needs_digest: true,
+                from_catalog: matches!(dep.source, Source::GithubTags | Source::ForgeTags),
+            },
+            lock: Lock {
+                keeps_ranges: false,
+                movable: false,
+                transitive_movable: dep.kind == DependencyKind::Transitive
+                    && dep.source == Source::Crates,
+                reported: false,
+            },
+            edits: Edits::Manifest,
+            advisories: Advisories::BySource,
+        }
+    }
     fn selected(&self, _config: &Config, path: &str) -> bool {
         matches!(
             path.rsplit('/').next().unwrap_or(path),

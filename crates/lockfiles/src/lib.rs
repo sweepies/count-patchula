@@ -446,7 +446,7 @@ pub fn job(
         | Manager::Regex => return Ok(None),
     };
     let ecosystem = ecosystem(dep.manager).expect("job's dispatch maps every ecosystem it yields");
-    let targeted = dep.movable_lockfile();
+    let targeted = dep.proposing().lock.movable;
     Ok(Some(Job {
         ecosystem,
         directory: root.into(),

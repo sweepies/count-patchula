@@ -656,6 +656,56 @@ pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
+    fn proposing(&self, dep: &Dependency) -> Proposing {
+        Proposing {
+            range: Range::Installed,
+            runtime_toolchain: false,
+            written: if dep.kind == DependencyKind::Tool {
+                Written::VersionAtPrecision
+            } else {
+                Written::TagAtPrecision
+            },
+            keeps_satisfied: false,
+            unversioned: Unversioned {
+                looked_up: matches!(dep.source, Source::GithubTags | Source::ForgeTags),
+                opaque: true,
+            },
+            short_tags: if matches!(dep.source, Source::GithubTags | Source::ForgeTags) {
+                ShortTags::Floating
+            } else {
+                ShortTags::Fixed
+            },
+            selector_resolved: dep.kind == DependencyKind::Tool,
+            resolved_via_listing: dep.kind == DependencyKind::Tool,
+            pin: Pin {
+                commit: matches!(dep.source, Source::GithubTags | Source::ForgeTags),
+                needs_digest: matches!(
+                    dep.kind,
+                    DependencyKind::Action
+                        | DependencyKind::ReusableWorkflow
+                        | DependencyKind::ContainerImage
+                        | DependencyKind::Chart
+                ),
+                from_catalog: true,
+            },
+            lock: Lock {
+                keeps_ranges: false,
+                movable: false,
+                transitive_movable: dep.kind == DependencyKind::Transitive
+                    && dep.source == Source::Crates,
+                reported: false,
+            },
+            edits: Edits::Manifest,
+            advisories: if matches!(
+                dep.kind,
+                DependencyKind::Action | DependencyKind::ReusableWorkflow
+            ) {
+                Advisories::GithubAction
+            } else {
+                Advisories::BySource
+            },
+        }
+    }
     fn selected(&self, _config: &Config, path: &str) -> bool {
         let leaf = path.rsplit('/').next().unwrap_or(path);
         ([
