@@ -1620,6 +1620,46 @@ async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkb
         fake.state().writes.clear();
         checkbox_run(&engine, &config, now).await;
         assert!(fake.state().writes.is_empty());
+        // A stale branch still forces real work on a recheck: a head that
+        // is marked but carries the old manifest must be rewritten, not
+        // merely re-read.
+        let branch = fake.state().repo().prs[&1]["head"]["ref"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        {
+            let mut state = fake.state();
+            let mut commit = state.repo().commits["commit-1"].clone();
+            commit["sha"] = json!("stale");
+            commit["tree"]["sha"] = json!("base-tree");
+            state.repo_mut().commits.insert("stale".into(), commit);
+            state
+                .repo_mut()
+                .refs
+                .insert(format!("refs/heads/{branch}"), "stale".into());
+        }
+        if origin == "dashboard" {
+            tick_dashboard(&fake, "recheck");
+        } else {
+            let mut state = fake.state();
+            let pr = state.repo_mut().prs.get_mut(&1).unwrap();
+            pr["body"] = json!(
+                pr["body"]
+                    .as_str()
+                    .unwrap()
+                    .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+            );
+        }
+        fake.state().writes.clear();
+        checkbox_run(&engine, &config, now).await;
+        assert!(
+            fake.state()
+                .writes
+                .iter()
+                .any(|(p, _)| p.ends_with("/git/commits")),
+            "{origin}: a stale branch must be rewritten on re-check"
+        );
+        assert_unticked(&fake);
     }
     check_transcript();
 }
@@ -2479,6 +2519,39 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
             .iter()
             .any(|(m, p, _)| m == "GET" && p.contains("/git/commits/")),
         "the tick must re-evaluate the branch"
+    );
+    // A stale branch still forces real work: a head that is marked but
+    // carries the old manifest makes the next tick write a new commit,
+    // not just re-read it.
+    let branch = fake.state().repo().prs[&1]["head"]["ref"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    {
+        let mut state = fake.state();
+        let mut commit = state.repo().commits["commit-1"].clone();
+        commit["sha"] = json!("stale");
+        commit["tree"]["sha"] = json!("base-tree");
+        state.repo_mut().commits.insert("stale".into(), commit);
+        state
+            .repo_mut()
+            .refs
+            .insert(format!("refs/heads/{branch}"), "stale".into());
+    }
+    let body = fake.state().repo_mut().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    fake.state().repo_mut().prs.get_mut(&1).unwrap()["body"] =
+        json!(body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check"));
+    fake.state().writes.clear();
+    checkbox_run(&engine, &config, now + chrono::Duration::minutes(3)).await;
+    assert!(
+        fake.state()
+            .writes
+            .iter()
+            .any(|(p, _)| p.ends_with("/git/commits")),
+        "a stale branch must be rewritten"
     );
     check_transcript();
 }
