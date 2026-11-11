@@ -70,6 +70,10 @@ discovery listings — share one in-memory fake,
 `patchula_testkit::github::FakeGitHub`, instead of per-test transport
 scripts. The fake answers the REST and GraphQL routes the client calls,
 applies writes to its state, and scripts faults through `on(Matcher)`.
+Its pulls listing honours `state`, `sort=created`, `direction`,
+`per_page` and `page` with GitHub's documented defaults and panics on
+parameters it does not model, and `repository.pullRequests` resolves
+`headRefName`/`states`/`orderBy` filtering with `first`/`after` paging.
 `Hosts` fronts it for a test's other endpoints — OSV, npm, registries —
 so one transport covers a whole run.
 
