@@ -426,7 +426,24 @@ pub fn job(
             root
         }
         Manager::Terraform if dep.source == Source::Terraform => directory(&dep.file),
-        _ => return Ok(None),
+        // Terraform sources outside the registry have no lock entry to regenerate.
+        Manager::Terraform => return Ok(None),
+        // No lockfile the Count generates.
+        Manager::GithubActions
+        | Manager::Dockerfile
+        | Manager::Compose
+        | Manager::Kubernetes
+        | Manager::Kustomize
+        | Manager::Flux
+        | Manager::HelmValues
+        | Manager::PreCommit
+        | Manager::Devcontainer
+        | Manager::Woodpecker
+        | Manager::Copier
+        | Manager::Maven
+        | Manager::Gitlabci
+        | Manager::GitlabciInclude
+        | Manager::Regex => return Ok(None),
     };
     let ecosystem = ecosystem(dep.manager).expect("job's dispatch maps every ecosystem it yields");
     let targeted = dep.movable_lockfile();
@@ -583,7 +600,22 @@ pub fn ecosystem(manager: Manager) -> Option<Ecosystem> {
         Manager::Go => Some(Ecosystem::Go),
         Manager::Pyproject => Some(Ecosystem::Python),
         Manager::Terraform => Some(Ecosystem::Terraform),
-        _ => None,
+        Manager::Helm
+        | Manager::GithubActions
+        | Manager::Dockerfile
+        | Manager::Compose
+        | Manager::Kubernetes
+        | Manager::Kustomize
+        | Manager::Flux
+        | Manager::HelmValues
+        | Manager::PreCommit
+        | Manager::Devcontainer
+        | Manager::Woodpecker
+        | Manager::Copier
+        | Manager::Maven
+        | Manager::Gitlabci
+        | Manager::GitlabciInclude
+        | Manager::Regex => None,
     }
 }
 
