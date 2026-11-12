@@ -3,6 +3,29 @@ use crate::{Cache, Result};
 use rusqlite::{OptionalExtension, params};
 use std::collections::BTreeSet;
 
+/// Who waits for the work; the smaller value runs first. A trigger that
+/// finds the repository already queued keeps the most urgent class, so a
+/// person never waits behind a sweep they did not cause.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Priority {
+    /// A dashboard or pull request checkbox, a closed pull request, a push.
+    Person = 0,
+    /// A completed check event naming owned pull request candidates.
+    Check = 1,
+    /// The scheduled sweep and installation discovery.
+    #[default]
+    Sweep = 2,
+}
+impl Priority {
+    /// What the queue stored; an unknown value waits behind all of them.
+    fn stored(value: i64) -> Self {
+        match value {
+            0 => Self::Person,
+            1 => Self::Check,
+            _ => Self::Sweep,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Work {
     pub installation: u64,
@@ -10,13 +33,24 @@ pub struct Work {
     pub repo: String,
     /// None runs unconditionally; Some verifies at least one owned PR first.
     pub check_prs: Option<BTreeSet<u64>>,
+    /// Who waits for the run; see [`Priority`].
+    pub priority: Priority,
 }
 impl Work {
+    /// Discovery and sweep work: it waits behind every person's trigger.
     pub fn repository(installation: u64, repo: impl Into<String>) -> Self {
         Self {
             installation,
             repo: repo.into(),
             check_prs: None,
+            priority: Priority::Sweep,
+        }
+    }
+    /// Work a person asked for directly; it runs before checks and sweeps.
+    pub fn person(installation: u64, repo: impl Into<String>) -> Self {
+        Self {
+            priority: Priority::Person,
+            ..Self::repository(installation, repo)
         }
     }
 }
@@ -142,8 +176,8 @@ impl Cache {
                     (Some(incoming), None) => Some(serde_json::to_string(incoming)?),
                     _ => None, // A push/checkbox/sweep takes precedence over check hints.
                 };
-                tx.execute("INSERT INTO server_work(installation,repo,available_at,check_prs) VALUES (?1,?2,?3,?4) ON CONFLICT(installation,repo) DO UPDATE SET generation=server_work.generation+1,check_prs=excluded.check_prs,available_at=MIN(server_work.available_at,excluded.available_at)",
-                    params![item.installation as i64, item.repo, now + coalesce_ms, checks])?;
+                tx.execute("INSERT INTO server_work(installation,repo,available_at,check_prs,priority) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(installation,repo) DO UPDATE SET generation=server_work.generation+1,check_prs=excluded.check_prs,available_at=MIN(server_work.available_at,excluded.available_at),priority=MIN(server_work.priority,excluded.priority)",
+                    params![item.installation as i64, item.repo, now + coalesce_ms, checks, item.priority as i64])?;
                 tx.execute("INSERT INTO server_work_causes SELECT installation,repo,generation,?3 FROM server_work WHERE installation=?1 AND repo=?2", params![item.installation as i64, item.repo, serde_json::to_string(&attribution)?])?;
             }
             tx.commit()?;
@@ -156,13 +190,13 @@ impl Cache {
     pub async fn claim_batch(&self, now: i64, limit: usize) -> Result<Vec<Claim>> {
         self.call(move |store| {
             let tx = store.conn.transaction()?;
-            let installation: Option<i64> = tx.query_row("SELECT installation FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation NOT IN (SELECT installation FROM server_work WHERE claimed IS NOT NULL) ORDER BY available_at,installation,repo LIMIT 1", [now], |r| r.get(0)).optional()?;
+            let installation: Option<i64> = tx.query_row("SELECT installation FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation NOT IN (SELECT installation FROM server_work WHERE claimed IS NOT NULL) ORDER BY priority,available_at,installation,repo LIMIT 1", [now], |r| r.get(0)).optional()?;
             let Some(installation) = installation else { return Ok(Vec::new()); };
             let rows = {
-                let mut query = tx.prepare("SELECT repo,generation,check_prs,requeues FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation=?2 ORDER BY available_at,repo LIMIT ?3")?;
-                let rows = query.query_map(params![now, installation, limit as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, i64>(3)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
-                rows.into_iter().map(|(repo, generation, checks, requeues)| Ok(Claim {
-                    work: Work { installation: installation as u64, repo, check_prs: checks.map(|text| serde_json::from_str(&text)).transpose()? }, requeues, generation, attribution: Attribution::default(),
+                let mut query = tx.prepare("SELECT repo,generation,check_prs,requeues,priority FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation=?2 ORDER BY priority,available_at,repo LIMIT ?3")?;
+                let rows = query.query_map(params![now, installation, limit as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
+                rows.into_iter().map(|(repo, generation, checks, requeues, priority)| Ok(Claim {
+                    work: Work { installation: installation as u64, repo, check_prs: checks.map(|text| serde_json::from_str(&text)).transpose()?, priority: Priority::stored(priority) }, requeues, generation, attribution: Attribution::default(),
                 })).collect::<Result<Vec<_>>>()?
             };
             let mut rows = rows;
@@ -351,6 +385,7 @@ mod tests {
             installation: 1,
             repo: "owner/repo".into(),
             check_prs: Some(BTreeSet::from([number])),
+            priority: Priority::Check,
         };
         cache.enqueue(None, vec![candidate(1)], 0, 0).await.unwrap();
         let claims = cache.claim_batch(0, 1).await.unwrap();
@@ -766,5 +801,153 @@ mod tests {
         let second = 100 + retry_delay_ms(1, "owner/repo", 2);
         assert!(cache.claim_batch(second - 1, 10).await.unwrap().is_empty());
         assert_eq!(cache.claim_batch(second, 10).await.unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn a_persons_work_runs_before_checks_and_the_sweep() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let check = |repo: &str| Work {
+            installation: 1,
+            repo: repo.into(),
+            check_prs: Some(BTreeSet::from([1])),
+            priority: Priority::Check,
+        };
+        // The sweep's row was queued first; a person's still claims ahead.
+        cache
+            .enqueue(
+                None,
+                vec![
+                    Work::repository(1, "owner/swept"),
+                    check("owner/checked"),
+                    Work::person(1, "owner/clicked"),
+                ],
+                0,
+                0,
+            )
+            .await
+            .unwrap();
+        let claims = cache.claim_batch(0, 10).await.unwrap();
+        let order: Vec<_> = claims.iter().map(|c| c.work.repo.as_str()).collect();
+        assert_eq!(order, ["owner/clicked", "owner/checked", "owner/swept"]);
+    }
+    #[tokio::test]
+    async fn a_persons_installation_runs_before_an_earlier_sweep() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        // The sweep queued at 0; the person's trigger came at 100.
+        cache
+            .enqueue(None, vec![Work::repository(1, "one/swept")], 0, 0)
+            .await
+            .unwrap();
+        cache
+            .enqueue(None, vec![Work::person(2, "two/clicked")], 100, 0)
+            .await
+            .unwrap();
+        let claims = cache.claim_batch(100, 10).await.unwrap();
+        assert_eq!(claims[0].work.installation, 2);
+        cache
+            .finish_work(Finish::Done.all(claims), 100, 0)
+            .await
+            .unwrap();
+        let claims = cache.claim_batch(100, 10).await.unwrap();
+        assert_eq!(claims[0].work.installation, 1);
+    }
+    #[tokio::test]
+    async fn an_upsert_keeps_the_more_urgent_class() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        // A person's trigger upgrades queued sweep work.
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        cache
+            .enqueue(None, vec![Work::person(1, "owner/repo")], 0, 0)
+            .await
+            .unwrap();
+        let claims = cache.claim_batch(0, 10).await.unwrap();
+        assert_eq!(claims[0].work.priority, Priority::Person);
+        // A sweep never downgrades queued person work, and a check event
+        // does not either.
+        cache.enqueue(None, work(), 5, 0).await.unwrap();
+        cache
+            .enqueue(
+                None,
+                vec![Work {
+                    installation: 1,
+                    repo: "owner/repo".into(),
+                    check_prs: Some(BTreeSet::from([1])),
+                    priority: Priority::Check,
+                }],
+                5,
+                0,
+            )
+            .await
+            .unwrap();
+        cache
+            .finish_work(Finish::Done.all(claims), 10, 0)
+            .await
+            .unwrap();
+        let claims = cache.claim_batch(10, 10).await.unwrap();
+        assert_eq!(claims[0].work.priority, Priority::Person);
+    }
+    /// A row's class is the most urgent trigger that ever queued it. A
+    /// retry, a requeue, a shutdown's release and a crash's recovery all
+    /// keep it: the reason the run is late does not change who is waiting.
+    #[tokio::test]
+    async fn a_retried_requeued_released_or_recovered_run_keeps_its_class() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache
+            .enqueue(None, vec![Work::person(1, "owner/repo")], 0, 0)
+            .await
+            .unwrap();
+        cache
+            .enqueue(None, vec![Work::repository(2, "other/swept")], 0, 0)
+            .await
+            .unwrap();
+        for finish in [Finish::Failed, Finish::Requeue] {
+            let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
+            assert_eq!(claims[0].work.installation, 1);
+            cache.finish_work(finish.all(claims), 0, 0).await.unwrap();
+        }
+        // However late its own backoff makes it, the person's work still
+        // outranks the sweep's whole installation.
+        let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
+        assert_eq!(claims[0].work.installation, 1);
+        assert_eq!(claims[0].work.priority, Priority::Person);
+        cache.release_work().await.unwrap();
+        let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
+        assert_eq!(claims[0].work.installation, 1);
+        cache.recover_work(0).await.unwrap();
+        let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
+        assert_eq!(claims[0].work.installation, 1);
+        assert_eq!(claims[0].work.priority, Priority::Person);
+    }
+    #[tokio::test]
+    async fn a_fresh_queue_is_at_schema_13() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let version = cache
+            .call(|store| {
+                Ok(store
+                    .conn
+                    .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(version, 13);
+    }
+    #[tokio::test]
+    async fn a_schema_12_queue_migrates_its_work_to_the_sweeps_class() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            for migration in &crate::store::MIGRATIONS[..12] {
+                conn.execute_batch(migration).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO server_work(installation,repo,available_at) VALUES (1,'owner/repo',0)",
+                [],
+            )
+            .unwrap();
+        }
+        let cache = Cache::open(&path, Default::default()).await.unwrap();
+        let claims = cache.claim_batch(0, 10).await.unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].work.priority, Priority::Sweep);
     }
 }

@@ -12,6 +12,7 @@ use axum::{
     routing::get,
 };
 use chrono::{DateTime, Utc};
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use patchula_cache::{
     Cache,
     repositories::{Row, Run},
@@ -288,10 +289,15 @@ pub(crate) fn withheld(report: &Report) -> Report {
 
 /// Most open PRs read for one repository.
 const PULL_PAGES: u32 = 10;
+/// Repositories recorded at once, and each repository's pull request reads
+/// in flight at once: the record only reads GitHub, so it fans out within
+/// bounds.
+const RECORD_FANOUT: usize = 4;
 
 /// Records every repository in a writing run's report, for a run that
 /// started at `started`. A repository whose visibility cannot be read is
-/// recorded as private, so it stays hidden. One the server has not listed
+/// recorded as private, so it stays hidden — as is one the run's inventory
+/// marked private. One the server has not listed
 /// yet is added if `member` confirms it belongs to the installation, so a run
 /// before the first discovery still shows.
 pub(crate) async fn record(
@@ -303,126 +309,163 @@ pub(crate) async fn record(
     started: DateTime<Utc>,
     member: &Member,
 ) {
+    // `Recorded` borrows the report, so a mapping closure cannot name its
+    // lifetimes; the futures go straight into the set instead.
+    let mut recording = FuturesUnordered::new();
+    for (index, repo) in recorded.report.repositories.iter().enumerate() {
+        while recording.len() == RECORD_FANOUT {
+            recording.next().await;
+        }
+        recording.push(record_repository(
+            cache,
+            client,
+            bot,
+            installation,
+            recorded,
+            index,
+            repo,
+            started,
+            member,
+        ));
+    }
+    while recording.next().await.is_some() {}
+}
+
+/// Records one repository of a writing run's report.
+#[allow(clippy::too_many_arguments)]
+async fn record_repository(
+    cache: &Cache,
+    client: &Client,
+    bot: &str,
+    installation: u64,
+    recorded: &Recorded<'_>,
+    index: usize,
+    repo: &patchula_report::Repository,
+    started: DateTime<Utc>,
+    member: &Member,
+) {
     let report = recorded.report;
     let actions = report.actions.as_ref();
-    for (index, repo) in report.repositories.iter().enumerate() {
-        let name = repo.repository.as_str();
-        let private = match client.get(&format!("repos/{name}")).await {
+    let name = repo.repository.as_str();
+    // The run's inventory already read the repository's visibility;
+    // without one the record reads it itself.
+    let private = match patchula_update::visibility(cache, name).await {
+        Some(private) => private,
+        None => match client.get(&format!("repos/{name}")).await {
             Ok(response) => serde_json::from_slice::<RepoVisibility>(&response.body)
                 .ok()
                 .and_then(|repo| repo.private)
                 .unwrap_or(true),
             Err(_) => true,
-        };
-        let pull_actions: Vec<_> = actions
-            .map(|a| a.pull_requests.as_slice())
-            .unwrap_or_default()
+        },
+    };
+    let pull_actions: Vec<_> = actions
+        .map(|a| a.pull_requests.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(|pr| pr.repository == name)
+        .collect();
+    let pulls = open_pulls(client, bot, name).await;
+    let pull_requests: Option<Vec<_>> = pulls.as_ref().map(|pulls| {
+        pulls
             .iter()
-            .filter(|pr| pr.repository == name)
-            .collect();
-        let pulls = open_pulls(client, bot, name).await;
-        let pull_requests: Option<Vec<_>> = pulls.as_ref().map(|pulls| {
-            pulls
-                .iter()
-                .filter_map(|pr| PullRequest::new(pr, &pull_actions))
-                .collect()
-        });
-        let branches = actions
-            .map(|a| a.branches.as_slice())
-            .unwrap_or_default()
-            .iter()
-            .filter(|b| b.repository == name)
-            .map(|b| Branch {
-                branch: &b.branch,
-                status: b.status,
-                reason: b.reason.as_deref(),
-                message: &b.message,
-                base_commit: &b.base_commit,
-                commit: b.commit.as_deref(),
-                lockfile_pending: b.lockfile_pending,
-                files: b.files.iter().map(|f| f.path.as_str()).collect(),
+            .filter_map(|pr| PullRequest::new(pr, &pull_actions))
+            .collect()
+    });
+    let branches = actions
+        .map(|a| a.branches.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(|b| b.repository == name)
+        .map(|b| Branch {
+            branch: &b.branch,
+            status: b.status,
+            reason: b.reason.as_deref(),
+            message: &b.message,
+            base_commit: &b.base_commit,
+            commit: b.commit.as_deref(),
+            lockfile_pending: b.lockfile_pending,
+            files: b.files.iter().map(|f| f.path.as_str()).collect(),
+        })
+        .collect();
+    let dashboard = patchula_update::dashboard::issue_number(cache, name).await;
+    let merged = patchula_update::automerge::merged(cache, name)
+        .await
+        .iter()
+        .filter_map(|pr| {
+            Some(Merged {
+                number: pr.number?,
+                title: pr.title.clone(),
+                url: pr.html_url.clone(),
+                // A merge the Count made himself has no recorded time.
+                merged_at: pr
+                    .merged_at
+                    .clone()
+                    .filter(|at| DateTime::parse_from_rfc3339(at).is_ok()),
             })
-            .collect();
-        let dashboard = patchula_update::dashboard::issue_number(cache, name).await;
-        let merged = patchula_update::automerge::merged(cache, name)
+        })
+        .collect();
+    // A private repository's run is stored without what credentials
+    // found, its warnings and lookup failures included.
+    let shown = if private {
+        &recorded.withheld.repositories[index]
+    } else {
+        repo
+    };
+    let package_files = &shown.package_files;
+    let dependencies = package_files.iter().flat_map(|f| &f.dependencies);
+    let summary = Summary {
+        status: repo.status,
+        reason: repo.reason.as_deref(),
+        default_branch: repo.default_branch.as_deref(),
+        dependencies: dependencies.clone().count(),
+        updates: dependencies.filter(|d| !d.updates.is_empty()).count(),
+        pull_requests: pull_requests.as_ref().map(Vec::len),
+        dashboard,
+    };
+    let snapshot = Snapshot {
+        repository: name,
+        ran_at: started.to_rfc3339(),
+        status: repo.status,
+        reason: repo.reason.as_deref(),
+        warnings: &shown.warnings,
+        lookup_failures: &shown.lookup_failures,
+        default_branch: repo.default_branch.as_deref(),
+        commit: repo.commit.as_deref(),
+        package_files,
+        branches,
+        pull_requests,
+        dashboard,
+        merged,
+    };
+    let (Ok(summary), Ok(snapshot)) = (serde_json::to_vec(&summary), serde_json::to_vec(&snapshot))
+    else {
+        return;
+    };
+    let run = Run {
+        installation,
+        repo: name.to_owned(),
+        private,
+        ran_at: started.timestamp(),
+        summary,
+        snapshot,
+    };
+    let known = match cache.repository(name).await {
+        Ok(row) => row.is_some_and(|row| row.installation == installation),
+        Err(_) => false,
+    };
+    if !known
+        && member(name.to_owned()).await
+        && let Err(error) = cache
+            .repositories_added(installation, vec![(name.to_owned(), private)])
             .await
-            .iter()
-            .filter_map(|pr| {
-                Some(Merged {
-                    number: pr.number?,
-                    title: pr.title.clone(),
-                    url: pr.html_url.clone(),
-                    // A merge the Count made himself has no recorded time.
-                    merged_at: pr
-                        .merged_at
-                        .clone()
-                        .filter(|at| DateTime::parse_from_rfc3339(at).is_ok()),
-                })
-            })
-            .collect();
-        // A private repository's run is stored without what credentials
-        // found, its warnings and lookup failures included.
-        let shown = if private {
-            &recorded.withheld.repositories[index]
-        } else {
-            repo
-        };
-        let package_files = &shown.package_files;
-        let dependencies = package_files.iter().flat_map(|f| &f.dependencies);
-        let summary = Summary {
-            status: repo.status,
-            reason: repo.reason.as_deref(),
-            default_branch: repo.default_branch.as_deref(),
-            dependencies: dependencies.clone().count(),
-            updates: dependencies.filter(|d| !d.updates.is_empty()).count(),
-            pull_requests: pull_requests.as_ref().map(Vec::len),
-            dashboard,
-        };
-        let snapshot = Snapshot {
-            repository: name,
-            ran_at: started.to_rfc3339(),
-            status: repo.status,
-            reason: repo.reason.as_deref(),
-            warnings: &shown.warnings,
-            lookup_failures: &shown.lookup_failures,
-            default_branch: repo.default_branch.as_deref(),
-            commit: repo.commit.as_deref(),
-            package_files,
-            branches,
-            pull_requests,
-            dashboard,
-            merged,
-        };
-        let (Ok(summary), Ok(snapshot)) =
-            (serde_json::to_vec(&summary), serde_json::to_vec(&snapshot))
-        else {
-            continue;
-        };
-        let run = Run {
-            installation,
-            repo: name.to_owned(),
-            private,
-            ran_at: started.timestamp(),
-            summary,
-            snapshot,
-        };
-        let known = match cache.repository(name).await {
-            Ok(row) => row.is_some_and(|row| row.installation == installation),
-            Err(_) => false,
-        };
-        if !known
-            && member(name.to_owned()).await
-            && let Err(error) = cache
-                .repositories_added(installation, vec![(name.to_owned(), private)])
-                .await
-        {
-            tracing::warn!(target: "patchula_server", repository = name, error_kind = error.kind(),
-                "cannot add the repository to the public API");
-        }
-        if let Err(error) = cache.repository_ran(run).await {
-            tracing::warn!(target: "patchula_server", repository = name, error_kind = error.kind(),
-                "cannot record the repository for the public API");
-        }
+    {
+        tracing::warn!(target: "patchula_server", repository = name, error_kind = error.kind(),
+            "cannot add the repository to the public API");
+    }
+    if let Err(error) = cache.repository_ran(run).await {
+        tracing::warn!(target: "patchula_server", repository = name, error_kind = error.kind(),
+            "cannot record the repository for the public API");
     }
 }
 
@@ -449,22 +492,24 @@ async fn open_pulls(client: &Client, bot: &str, repo: &str) -> Option<Vec<Value>
             break;
         }
     }
-    for pr in &mut owned {
-        let Some(number) = GithubPull::deserialize(&*pr)
-            .ok()
-            .and_then(|pull| pull.number)
-        else {
-            continue;
-        };
-        if let Some(full) = client
-            .get(&format!("repos/{repo}/pulls/{number}"))
-            .await
-            .ok()
-            .and_then(|response| serde_json::from_slice::<Value>(&response.body).ok())
-        {
-            *pr = full;
-        }
-    }
+    let owned = futures_util::stream::iter(owned)
+        .map(|pr| async move {
+            let Some(number) = GithubPull::deserialize(&pr)
+                .ok()
+                .and_then(|pull| pull.number)
+            else {
+                return pr;
+            };
+            client
+                .get(&format!("repos/{repo}/pulls/{number}"))
+                .await
+                .ok()
+                .and_then(|response| serde_json::from_slice::<Value>(&response.body).ok())
+                .unwrap_or(pr)
+        })
+        .buffered(RECORD_FANOUT)
+        .collect::<Vec<_>>()
+        .await;
     Some(owned)
 }
 

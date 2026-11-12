@@ -138,6 +138,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         transport: transport.clone(),
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         recheck: options.recheck,
         bot_login: bot.clone(),
         derived_url,
@@ -354,6 +355,10 @@ type EngineKey = (
 /// An installation's engine and the settings it was built from, once built.
 type Slot = Arc<Mutex<Option<(EngineKey, Engine)>>>;
 
+/// Public records running at once. A record reads GitHub and writes the
+/// cache but holds no queue claim, so it waits here instead of in the batch.
+const RECORD_PERMITS: u32 = 4;
+
 struct Engines {
     app: Arc<App>,
     transport: Arc<dyn Transport>,
@@ -361,6 +366,9 @@ struct Engines {
     /// Each installation's engine, behind its own lock: batches of different
     /// installations run at once, and a remote run waits only for its own.
     engines: Mutex<BTreeMap<u64, Slot>>,
+    /// Bounds the public records the worker does not await; a batch's
+    /// claims finish while its record is still running.
+    records: Arc<tokio::sync::Semaphore>,
     recheck: Option<patchula_words::Recheck>,
     bot_login: String,
     /// The server URL from the App's webhook URL, for `advertise`.
@@ -484,16 +492,34 @@ impl Batch for Engines {
                 discard_on_panic(&mut slot, outcome)?
             };
             if let (Ok(report), Some(withheld)) = (&result, withheld) {
-                crate::public::record(
-                    &self.cache,
-                    &client,
-                    &self.bot_login,
-                    id,
-                    &crate::public::Recorded { report, withheld },
-                    started,
-                    &self.member(id),
-                )
-                .await;
+                // The record runs past the batch's end so its reads never
+                // hold the batch's claims; the semaphore bounds how many
+                // run at once.
+                let (cache, client, bot, member) = (
+                    self.cache.clone(),
+                    client.clone(),
+                    self.bot_login.clone(),
+                    self.member(id),
+                );
+                let recorded = (report.clone(), withheld.clone());
+                let permits = self.records.clone();
+                tokio::spawn(async move {
+                    let _permit = permits.acquire_owned().await;
+                    let (report, withheld) = recorded;
+                    crate::public::record(
+                        &cache,
+                        &client,
+                        &bot,
+                        id,
+                        &crate::public::Recorded {
+                            report: &report,
+                            withheld,
+                        },
+                        started,
+                        &member,
+                    )
+                    .await;
+                });
             }
             let report = match &result {
                 Ok(report) => report.clone(),
@@ -529,6 +555,12 @@ impl Batch for Engines {
     }
 }
 impl Engines {
+    /// Every record task has finished. A record only needs a permit to
+    /// start, so all permits free means none is running.
+    #[cfg(test)]
+    async fn recordings_done(&self) {
+        let _ = self.records.acquire_many(RECORD_PERMITS).await;
+    }
     /// Asks GitHub whether a repository is in this App's installation `id`.
     fn member(&self, id: u64) -> impl Fn(String) -> BoxFuture<'static, bool> + Send + Sync + use<> {
         let app = self.app.clone();

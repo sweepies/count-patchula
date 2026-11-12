@@ -127,7 +127,12 @@ Batches of up to `workers` installations (4 by default) run at once, each
 installation one batch at a time, with up to `concurrency` repositories
 scanned in parallel in each. Each installation has its own GitHub rate limits,
 so they do not wait on each other; each batch runs its own lockfile tools,
-though, so lower `workers` on a small host. The first event opens a coalescing window
+though, so lower `workers` on a small host. Within an installation and across
+them, a person's work runs first — a push, a dashboard or pull request
+checkbox, or a closed pull request — then completed checks, then the sweep
+and discovery; a repository queued by more than one of these keeps the most
+urgent class, whatever runs first. A batch's claims finish before its public
+record writes, so recording never holds queue rows. The first event opens a coalescing window
 (`coalescingMs`), and events that arrive during a batch fold into one follow-up
 batch. Each repository finishes on its own: when one fails, only that one is
 retried, after a backoff that starts at a minute and doubles with each

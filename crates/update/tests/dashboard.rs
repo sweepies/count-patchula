@@ -319,7 +319,7 @@ impl patchula_http::Transport for InventoryPages {
                 .unwrap_or(0)
         };
         let value = json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":[],"repository":{
-            "id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,
+            "id":"repo-id","isPrivate":false,"autoMergeAllowed":false,"squashMergeAllowed":true,
             "mergeCommitAllowed":false,"rebaseMergeAllowed":false,"deleteBranchOnMerge":false,
             "defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"base"}},
             "refs":page(&input["variables"]["cursor"],2,json!({"name":format!("ref{}",n(&input["variables"]["cursor"])),"target":null,"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}})),
