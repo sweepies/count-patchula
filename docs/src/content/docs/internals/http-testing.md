@@ -89,11 +89,34 @@ scripted routes, so one knob times a whole run. Virtual elapsed time
 divided by that latency is the run's depth — the round trips on its
 critical path. Depth pins live beside the transcripts in `tests/depth.tsv`
 (a warm lookup, a no-op real run, and full writes of one and three plans),
-and each pin repeats its scenario: the file holds the depth the run still
-reaches, so a regression or an improvement fails the pin the way a changed
-request fails a transcript, while a send racing a wave's boundary may cost
-one extra wave before it does. `mise run transcripts:snapshot` rewrites
-both files.
+and each pin repeats its scenario, serialized against the other pins so a
+sibling's real work cannot steal a wave boundary: the file holds the
+depth a repetition reaches most often. A deterministic extra request
+moves every repetition off the pin and fails it the way a changed
+request fails a transcript; so does an improvement. `mise run
+transcripts:snapshot` rewrites both files.
+
+A repetition's elapsed time should divide exactly by the latency — the
+fake sleeps whole waves and the governor paces whole seconds — so a
+change costing less than a wave cannot hide inside the division. It does
+not always: a deadline now and then reaches the paused clock off the
+wave grid (a timer armed from real time slips past `latency` and
+resolves at an instant no boundary produced), which leaves that
+repetition's depth unreadable as whole waves. Such a sample is left out
+of the distribution, and more than a quarter of them fails too — a
+systematic sub-latency change rags most samples, which is what a strict
+assert would have caught. What remains is the pin's blind spot, bounded
+rather than removed: a send racing a wave's boundary can land on an
+earlier request's completion or co-fire with a sibling read and wander
+a wave, and under suite load a paced write can slip a second wave when
+a read escapes its pacing window — a rep further out fails outright —
+and a request that is only sometimes sequential can hide behind that
+slack, so fewer than a quarter of the repetitions left on the pin fails
+as well. And a write
+pin's depth is mostly the governor's one-second write pacing, not round
+trips — a read that fits inside a pacing window adds no wave. What depth
+never changes is the transcript's job: the request multiset still pins
+exactly which requests each test makes.
 
 ## mise
 
