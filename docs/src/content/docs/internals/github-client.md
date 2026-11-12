@@ -86,7 +86,7 @@ writes separately.
 
 ## Typed responses
 
-`get_fresh`, `post`, `patch`, `put` and `graphql` are generic over the type
+`get_fresh`, `get_immutable`, `post`, `patch`, `put` and `graphql` are generic over the type
 they decode into, like `rest_pages` already was. A response that does not
 decode is an `Error::Decode`, which names the operation and the field path
 only: serde's message is never kept, because a type-mismatch message can

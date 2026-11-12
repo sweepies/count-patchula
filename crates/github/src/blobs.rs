@@ -115,7 +115,7 @@ impl Client {
             .collect();
         let fetched: Vec<Result<(String, Vec<u8>)>> = stream::iter(rest)
             .map(|sha| async move {
-                let response = self.get_immutable(&path(repo, &sha)).await?;
+                let response = self.get_immutable_response(&path(repo, &sha)).await?;
                 Ok((sha, decode(&response.body)?))
             })
             .buffer_unordered(self.concurrency())

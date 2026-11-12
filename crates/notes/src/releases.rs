@@ -40,45 +40,68 @@ impl Client {
     /// Union selected tags before rendering so overlapping PR ranges cost one
     /// query per upstream (bounded to 100 aliases per request).
     pub async fn prepare_release_notes(&self, ranges: &[(PackageId, String, String)]) {
-        let mut repos: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        for (id, current, target) in ranges {
-            let (source, package) = (id.source, tag_name(id));
-            // A chart that lists its own changes needs no upstream releases.
-            if matches!(self.chart_sections(id, current, target).await, Ok(Some(_))) {
-                continue;
-            }
-            let Ok(Some(repository)) = self.notes_source_repository(id, target).await else {
-                continue;
-            };
-            let Some(repo) = repository.github.as_deref() else {
-                continue;
-            };
-            let Some((old, new)) = note_bounds(source, package, current, target, &repository)
-            else {
-                continue;
-            };
-            let Ok(catalog) = self.notes_list(repo, "releases").await else {
-                continue;
-            };
-            let mut candidates: Vec<_> = catalog
-                .releases
-                .into_iter()
-                .filter_map(|release| {
-                    let version =
-                        tag_version(&release.tag, package, &repository).and_then(parsed)?;
-                    (in_range(&version, &old, &new) && !hidden_prerelease(release.prerelease, &new))
-                        .then_some((version, release.tag))
-                })
-                .collect();
-            candidates.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
-            repos.entry(repo.to_ascii_lowercase()).or_default().extend(
-                candidates
-                    .into_iter()
-                    .take(NOTES_SECTIONS)
-                    .map(|(_, tag)| tag),
-            );
-        }
         use futures_util::{StreamExt, stream};
+        // Each range resolves to its upstream's selected tags, eight at a
+        // time; the per-repository sets merge afterwards, so their order
+        // does not matter.
+        let selected: Vec<BTreeMap<String, BTreeSet<String>>> =
+            stream::iter(ranges.iter().cloned())
+                .map(|(id, current, target)| async move {
+                    let mut selected = BTreeMap::new();
+                    let (source, package) = (id.source, tag_name(&id));
+                    // A chart that lists its own changes needs no upstream releases.
+                    if matches!(
+                        self.chart_sections(&id, &current, &target).await,
+                        Ok(Some(_))
+                    ) {
+                        return selected;
+                    }
+                    let Ok(Some(repository)) = self.notes_source_repository(&id, &target).await
+                    else {
+                        return selected;
+                    };
+                    let Some(repo) = repository.github.as_deref() else {
+                        return selected;
+                    };
+                    let Some((old, new)) =
+                        note_bounds(source, package, &current, &target, &repository)
+                    else {
+                        return selected;
+                    };
+                    let Ok(catalog) = self.notes_list(repo, "releases").await else {
+                        return selected;
+                    };
+                    let mut candidates: Vec<_> = catalog
+                        .releases
+                        .into_iter()
+                        .filter_map(|release| {
+                            let version =
+                                tag_version(&release.tag, package, &repository).and_then(parsed)?;
+                            (in_range(&version, &old, &new)
+                                && !hidden_prerelease(release.prerelease, &new))
+                            .then_some((version, release.tag))
+                        })
+                        .collect();
+                    candidates.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
+                    selected.insert(
+                        repo.to_ascii_lowercase(),
+                        candidates
+                            .into_iter()
+                            .take(NOTES_SECTIONS)
+                            .map(|(_, tag)| tag)
+                            .collect::<BTreeSet<String>>(),
+                    );
+                    selected
+                })
+                .buffer_unordered(8)
+                .collect()
+                .await;
+        let mut repos: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for selection in selected {
+            for (repo, tags) in selection {
+                repos.entry(repo).or_default().extend(tags);
+            }
+        }
         stream::iter(repos.into_iter().map(|(repo, tags)| async move {
             let _ = self
                 .release_bodies(&repo, &tags.into_iter().collect::<Vec<_>>())

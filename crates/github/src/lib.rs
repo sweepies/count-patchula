@@ -414,10 +414,16 @@ impl Client {
     /// A GET whose answer never changes, such as a Git blob by its SHA: a
     /// cached success is returned without asking GitHub again. The cache key
     /// carries the credential scope, so another credential never reads it.
-    pub async fn get_immutable(&self, path: &str) -> Result<Response> {
+    pub async fn get_immutable_response(&self, path: &str) -> Result<Response> {
         self.get_representation(path, None, Read::Immutable)
             .await?
             .ok_or(Error::MissingBody)
+    }
+
+    /// `get_immutable_response` decoded, as `get_fresh` decodes `get`.
+    pub async fn get_immutable<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let response = self.get_immutable_response(path).await?;
+        decode(&response.body, format!("GET {path}"))
     }
 
     /// Authoritative read used for write preconditions. Always revalidates with

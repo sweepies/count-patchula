@@ -218,6 +218,14 @@ impl Write<'_> {
             );
             None
         };
+        // The release-notes fetch fills the notes client's caches; the
+        // bodies rendered later are unchanged. It runs beside lockfile
+        // generation, cleanup and publication instead of behind them.
+        let notes = lifecycle.as_ref().map(|state| {
+            let ranges = state.note_ranges(&plans);
+            let sources = self.note_sources.clone();
+            tokio::spawn(async move { sources.prepare_release_notes(&ranges).await })
+        });
         if inventory.is_some() {
             self.lockfiles(&mut plans, &mut snapshot, &config).await;
         }
@@ -228,6 +236,11 @@ impl Write<'_> {
         match cleanup {
             Ok(actions) => self.branches.extend(actions),
             Err(failure) => {
+                // A dropped prefetch task would finish whenever the runtime
+                // reached it; wait so the reads it made are always the same.
+                if let Some(notes) = notes {
+                    let _ = notes.await;
+                }
                 failed(repo, failure);
                 return Ok(());
             }
@@ -248,6 +261,9 @@ impl Write<'_> {
         if let Some(inventory) = inventory
             && let Some(state) = lifecycle.as_mut()
         {
+            if let Some(notes) = notes {
+                let _ = notes.await;
+            }
             state
                 .publish_with_sources(&self.engine.github, &self.note_sources, &mut plans)
                 .await;

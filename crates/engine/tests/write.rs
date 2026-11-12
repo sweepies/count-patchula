@@ -1534,15 +1534,18 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             request_counts[0], request_counts[1],
             "{origin}: unrelated branches added requests"
         );
+        // A write's prepare sends only the two fresh precondition reads:
+        // the base commit and tree are immutable reads answered by the scan's
+        // own earlier fetch of this run's commit.
         assert_eq!(
             request_counts[0],
             match origin {
                 "retry" => 4,
-                "pr" => 15,
+                "pr" => 13,
                 // The held-back plan's branch has no open pull: one batched
                 // `ClosedPulls` read checks it before admission.
-                "create" => 17,
-                _ => 16,
+                "create" => 15,
+                _ => 14,
             }
         );
     }
