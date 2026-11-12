@@ -9,7 +9,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use hmac::{Hmac, KeyInit, Mac};
-use patchula_cache::{Cache, queue::Work};
+use patchula_cache::{
+    Cache,
+    queue::{Priority, Work},
+};
 use patchula_config::settings::{Settings, Triggers};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -646,6 +649,7 @@ pub(crate) fn classify(
                 installation: id,
                 repo: repo.to_ascii_lowercase(),
                 check_prs: Some(checks),
+                priority: Priority::Check,
             }]
         };
     }
@@ -700,7 +704,7 @@ pub(crate) fn classify(
         _ => false,
     };
     if trigger {
-        vec![Work::repository(id, repo.to_ascii_lowercase())]
+        vec![Work::person(id, repo.to_ascii_lowercase())]
     } else {
         Vec::new()
     }

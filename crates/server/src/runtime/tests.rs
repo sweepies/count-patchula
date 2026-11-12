@@ -1,6 +1,7 @@
 use super::*;
 use axum::{body::Body, http::Request};
 use hmac::{Hmac, KeyInit, Mac};
+use patchula_cache::queue::Priority;
 use patchula_testkit::github::{FakeGitHub, Matcher};
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -347,7 +348,7 @@ async fn repository_and_org_webhooks_resolve_installations_and_ping_does_no_work
     assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
     let claims = state.cache.claim_batch(i64::MAX, 10).await.unwrap();
     assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0].work, Work::repository(1, "owner/repo"));
+    assert_eq!(claims[0].work, Work::person(1, "owner/repo"));
     state
         .cache
         .finish_work(Finish::Done.all(claims), 0, 0)
@@ -571,6 +572,8 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -598,13 +601,14 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     let listed = cache.repository("owner/repo").await.unwrap().unwrap();
     assert_eq!((listed.private, listed.ran_at), (false, None));
     for _ in 0..2 {
-        assert!(
-            runner
-                .run(&[claims[0].work.clone()], &settings, &claims[0].attribution)
-                .await
-                .unwrap()
-                .failed()
-        );
+        let outcome = runner
+            .run(&[claims[0].work.clone()], &settings, &claims[0].attribution)
+            .await
+            .unwrap();
+        assert!(outcome.failed());
+        if let Some(job) = outcome.record {
+            runner.record(job).await;
+        }
     }
     let paths = std::fs::read_dir(directory.path())
         .unwrap()
@@ -617,6 +621,9 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         assert_eq!(actual.repositories[0].repository, "owner/repo");
         assert_eq!(actual.repositories[0].status, Status::Error);
     }
+    // The records run past each batch's end; both finish before the
+    // assertions and the transcript.
+    runner.recordings_done().await;
     // GitHub would not show the repository, so the public API hides it.
     let ran = cache.repository("owner/repo").await.unwrap().unwrap();
     assert!(ran.private);
@@ -655,6 +662,8 @@ async fn an_unreadable_installation_listing_fails_the_batch() {
         transport,
         cache,
         engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -777,6 +786,8 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
         transport: transport.clone(),
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -833,7 +844,7 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
         .unwrap();
     let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
     assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0].work, Work::repository(1, "owner/repo"));
+    assert_eq!(claims[0].work, Work::person(1, "owner/repo"));
     assert!(claims[0].attribution.reasons.contains("startup discovery"));
     assert!(claims[0].attribution.deliveries.contains("push"));
     assert!(
@@ -1022,7 +1033,7 @@ async fn signature_precedes_json_parse_and_duplicate_delivery_never_enqueues_twi
 fn every_trigger_and_switch_and_filters() {
     let settings = settings();
     let mut events = Vec::new();
-    events.push(("push", payload(), "push"));
+    events.push(("push", payload(), "push", Priority::Person));
     let mut dashboard = payload();
     dashboard["action"] = json!("edited");
     let checkbox = format!(
@@ -1032,29 +1043,49 @@ fn every_trigger_and_switch_and_filters() {
     dashboard["issue"] = json!({"user":{"login":"patchula[bot]"},"body":format!("{}\n{checkbox}", patchula_update::markers::DASHBOARD)});
     dashboard["changes"] =
         json!({"body":{"from":dashboard["issue"]["body"].as_str().unwrap().replace("[x]", "[ ]")}});
-    events.push(("issues", dashboard, "dashboard"));
+    events.push(("issues", dashboard, "dashboard", Priority::Person));
     let mut edited = payload();
     edited["action"] = json!("edited");
     edited["pull_request"] = pr();
     edited["changes"] =
         json!({"body":{"from":pr()["body"].as_str().unwrap().replace("[x]", "[ ]")}});
-    events.push(("pull_request", edited.clone(), "pullRequestEdited"));
+    events.push((
+        "pull_request",
+        edited.clone(),
+        "pullRequestEdited",
+        Priority::Person,
+    ));
     edited["action"] = json!("closed");
-    events.push(("pull_request", edited, "pullRequestClosed"));
+    events.push((
+        "pull_request",
+        edited,
+        "pullRequestClosed",
+        Priority::Person,
+    ));
     let mut install = payload();
     install["action"] = json!("created");
     install["repositories"] = json!([{"full_name":"owner/repo"}]);
-    events.push(("installation", install.clone(), "installation"));
+    events.push((
+        "installation",
+        install.clone(),
+        "installation",
+        Priority::Sweep,
+    ));
     install["action"] = json!("added");
     install["repositories_added"] = install["repositories"].clone();
-    events.push(("installation_repositories", install, "installation"));
+    events.push((
+        "installation_repositories",
+        install,
+        "installation",
+        Priority::Sweep,
+    ));
     for event in ["check_suite", "check_run"] {
         let mut checks = payload();
         checks["action"] = json!("completed");
         checks[event] = json!({"pull_requests":[{"number":1,"head":{"ref":"custom-deps/pkg","repo":{"id":100}},"base":{"repo":{"id":100}}}]});
-        events.push((event, checks, "checks"));
+        events.push((event, checks, "checks", Priority::Check));
     }
-    for (event, payload, switch) in events {
+    for (event, payload, switch, priority) in events {
         let work = crate::webhook::classify(event, &typed(&payload), &settings, "patchula[bot]");
         assert_eq!(
             work,
@@ -1062,6 +1093,7 @@ fn every_trigger_and_switch_and_filters() {
                 installation: 1,
                 repo: "owner/repo".into(),
                 check_prs: (switch == "checks").then(|| std::collections::BTreeSet::from([1])),
+                priority,
             }],
             "{event}"
         );
@@ -1626,6 +1658,7 @@ async fn check_events_verify_real_ownership_with_custom_branch_prefixes() {
             installation: 1,
             repo: "owner/repo".into(),
             check_prs: Some(std::collections::BTreeSet::from([1])),
+            priority: Priority::Check,
         };
         assert_eq!(
             check_candidate(&client, &candidate, "patchula[bot]")
@@ -1658,6 +1691,7 @@ async fn an_unreadable_check_event_pull_fails_the_lookup() {
         installation: 1,
         repo: "owner/repo".into(),
         check_prs: Some(std::collections::BTreeSet::from([1])),
+        priority: Priority::Check,
     };
     let error = check_candidate(&client, &candidate, "patchula[bot]")
         .await
@@ -1784,6 +1818,8 @@ async fn a_dropped_remote_run_discards_its_engine() {
         transport,
         cache: Cache::open(":memory:", Default::default()).await.unwrap(),
         engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -1833,6 +1869,8 @@ async fn remote_modes_share_the_engine_slot_and_report_failures() {
         transport,
         cache: Cache::open(":memory:", Default::default()).await.unwrap(),
         engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -1862,6 +1900,177 @@ async fn remote_modes_share_the_engine_slot_and_report_failures() {
         std::fs::read_dir(directory.path()).unwrap().count(),
         1,
         "only the real run writes a report file"
+    );
+    patchula_testkit::transcripts::check(&transcripts());
+}
+
+/// Answers through a `FakeGitHub` but parks the open-pulls listing — the
+/// record's — until released, so a test can hold a record in flight.
+struct RecordGate {
+    inner: Arc<FakeGitHub>,
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+impl Transport for RecordGate {
+    fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
+        Box::pin(async move {
+            if request.url().path().ends_with("/pulls") {
+                self.started.notify_one();
+                self.release.notified().await;
+            }
+            self.inner.send(request).await
+        })
+    }
+}
+
+/// The record is a task the worker never awaits: a failed repository's
+/// claim is released while its public record is still reading.
+#[tokio::test]
+async fn a_batch_releases_its_claim_before_recording() {
+    let github = deleted_repo();
+    let gate = Arc::new(RecordGate {
+        inner: github.clone(),
+        started: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let transport: Arc<dyn Transport> = gate.clone();
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    cache
+        .repositories_added(1, vec![("owner/repo".into(), true)])
+        .await
+        .unwrap();
+    cache
+        .enqueue(None, vec![Work::person(1, "owner/repo")], 0, 0)
+        .await
+        .unwrap();
+    let engines = Arc::new(Engines {
+        app: lookup_app(transport.clone(), 1),
+        transport,
+        cache: cache.clone(),
+        engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
+        recheck: None,
+        bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
+    });
+    let (stop, stopped) = watch::channel(false);
+    let worker = tokio::spawn(worker(
+        cache.clone(),
+        Reload::new(settings()),
+        engines.clone(),
+        stopped,
+    ));
+    // The deleted repository's run fails; its record parks on the pull
+    // listing the gate holds.
+    tokio::time::timeout(Duration::from_secs(5), gate.started.notified())
+        .await
+        .unwrap();
+    // The claim is already released: the work is claimable again while the
+    // record still reads.
+    let claims = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
+            if !claims.is_empty() {
+                break claims;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(claims[0].work.repo, "owner/repo");
+    gate.release.notify_one();
+    stop.send(true).unwrap();
+    worker.await.unwrap().unwrap();
+    engines.recordings_done().await;
+    assert!(
+        cache
+            .repository("owner/repo")
+            .await
+            .unwrap()
+            .unwrap()
+            .ran_at
+            .is_some()
+    );
+    patchula_testkit::transcripts::check(&transcripts());
+}
+
+/// The record reads a repository's visibility at record time: one recorded
+/// public is hidden once GitHub calls it private, even when the run that
+/// reports the change died before its inventory completed.
+#[tokio::test]
+async fn a_repository_made_private_is_recorded_private() {
+    let github = Arc::new(FakeGitHub::new("owner/repo"));
+    github.seed_files(
+        "main",
+        "base",
+        &BTreeMap::from([(
+            "patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing {}\nprs { dashboard = false }\n"
+                .into(),
+        )]),
+        vec![],
+    );
+    {
+        let mut state = github.state();
+        state.installations = vec![1];
+        state.repo_mut().installed = true;
+    }
+    let transport: Arc<dyn Transport> = github.clone();
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let runner = Engines {
+        app: lookup_app(transport.clone(), 1),
+        transport,
+        cache: cache.clone(),
+        engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
+        recheck: None,
+        bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
+    };
+    let settings = settings();
+    let attribution = Attribution::reason("push");
+    // A finished run records the repository publicly, as GitHub calls it.
+    let outcome = runner
+        .run(&[Work::person(1, "owner/repo")], &settings, &attribution)
+        .await
+        .unwrap();
+    if let Some(job) = outcome.record {
+        runner.record(job).await;
+    }
+    runner.recordings_done().await;
+    assert!(
+        !cache
+            .repository("owner/repo")
+            .await
+            .unwrap()
+            .unwrap()
+            .private
+    );
+    // Now GitHub calls it private and the next run dies inside the
+    // inventory; nothing may carry the earlier answer forward.
+    github.state().repo_mut().private = true;
+    github.inventory_fails();
+    let outcome = runner
+        .run(&[Work::person(1, "owner/repo")], &settings, &attribution)
+        .await
+        .unwrap();
+    assert!(outcome.failed());
+    if let Some(job) = outcome.record {
+        runner.record(job).await;
+    }
+    runner.recordings_done().await;
+    assert!(
+        cache
+            .repository("owner/repo")
+            .await
+            .unwrap()
+            .unwrap()
+            .private
     );
     patchula_testkit::transcripts::check(&transcripts());
 }
