@@ -43,9 +43,9 @@ enables them with `-vv` or `PATCHULA_LOG=debug`.
 ## Conditional reads
 
 Every REST GET looks up validators in SQLite and sends `If-None-Match` or
-`If-Modified-Since` when it has them, even after expiry. The one exception is
-a read whose answer cannot change, a Git blob by its SHA: `get_immutable`
-returns a cached success without a request. `blobs` reads many at once: those
+`If-Modified-Since` when it has them, even after expiry. The exception is a
+read whose answer cannot change, a Git blob, commit or tree named by its SHA:
+`get_immutable` returns a cached success without a request. `blobs` reads many at once: those
 the cache holds need no request, the rest go through GraphQL fifty to a query,
 and a blob counts from GraphQL only when its text hashes to the SHA asked for.
 Binary, truncated or mismatched blobs come through REST instead. Either way the
