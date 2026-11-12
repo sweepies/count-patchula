@@ -33,6 +33,7 @@ use std::{
 use tokio::{
     net::TcpListener,
     sync::{Mutex, watch},
+    task::JoinSet,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -139,6 +140,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: options.recheck,
         bot_login: bot.clone(),
         derived_url,
@@ -267,6 +269,18 @@ struct BatchOutcome {
     requeued: BTreeSet<String>,
     /// The batch failed before its repositories had results; every claim retries.
     whole: bool,
+    /// The batch's public record, spawned by the worker once the claims
+    /// finish so a record can never hold one.
+    record: Option<RecordJob>,
+}
+
+/// A batch's public record as a task not yet spawned: the report clone,
+/// the installation client and the membership check, owned and `Send`.
+struct RecordJob(BoxFuture<'static, ()>);
+impl std::fmt::Debug for RecordJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RecordJob(..)")
+    }
 }
 impl BatchOutcome {
     fn report(report: &Report) -> Self {
@@ -345,6 +359,19 @@ trait Batch: Send + Sync + 'static {
         settings: &'a Settings,
         attribution: &'a Attribution,
     ) -> BoxFuture<'a, Result<BatchOutcome, Error>>;
+    /// Spawns the batch's public record. Called only after the batch's
+    /// claims finish, so a bound may wait for a slot here without holding
+    /// queue rows; the default runs the record in place.
+    fn record<'a>(&'a self, job: RecordJob) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            job.0.await;
+        })
+    }
+    /// Waits out every record [`Batch::record`] spawned. The default
+    /// spawned none.
+    fn drain_records(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
 }
 /// What an installation engine was built from: the `http` settings and its
 /// registry credentials.
@@ -369,6 +396,8 @@ struct Engines {
     /// Bounds the public records the worker does not await; a batch's
     /// claims finish while its record is still running.
     records: Arc<tokio::sync::Semaphore>,
+    /// The spawned record tasks, so shutdown can drain them.
+    record_tasks: Mutex<JoinSet<()>>,
     recheck: Option<patchula_words::Recheck>,
     bot_login: String,
     /// The server URL from the App's webhook URL, for `advertise`.
@@ -377,6 +406,30 @@ struct Engines {
     signs_in: bool,
 }
 impl Batch for Engines {
+    fn record<'a>(&'a self, job: RecordJob) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            // The permit comes before the spawn, so at most RECORD_PERMITS
+            // records exist and the next batch waits here — past
+            // `finish_work` — for a slot instead of queueing report clones.
+            let Ok(permit) = self.records.clone().acquire_owned().await else {
+                return;
+            };
+            self.record_tasks.lock().await.spawn(async move {
+                let _permit = permit;
+                job.0.await;
+            });
+        })
+    }
+    fn drain_records(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let mut tasks = self.record_tasks.lock().await;
+            while let Some(joined) = tasks.join_next().await {
+                if let Err(error) = joined {
+                    tracing::warn!(target: "patchula_server", %error, "a public record task failed");
+                }
+            }
+        })
+    }
     fn run<'a>(
         &'a self,
         work: &'a [Work],
@@ -491,21 +544,18 @@ impl Batch for Engines {
                 .await;
                 discard_on_panic(&mut slot, outcome)?
             };
-            if let (Ok(report), Some(withheld)) = (&result, withheld) {
+            let record = if let (Ok(report), Some(withheld)) = (&result, withheld) {
                 // The record runs past the batch's end so its reads never
-                // hold the batch's claims; the semaphore bounds how many
-                // run at once.
+                // hold the batch's claims; the worker spawns it after the
+                // claims finish, bounded by the record permits.
                 let (cache, client, bot, member) = (
                     self.cache.clone(),
                     client.clone(),
                     self.bot_login.clone(),
                     self.member(id),
                 );
-                let recorded = (report.clone(), withheld.clone());
-                let permits = self.records.clone();
-                tokio::spawn(async move {
-                    let _permit = permits.acquire_owned().await;
-                    let (report, withheld) = recorded;
+                let report = report.clone();
+                Some(RecordJob(Box::pin(async move {
                     crate::public::record(
                         &cache,
                         &client,
@@ -519,8 +569,10 @@ impl Batch for Engines {
                         &member,
                     )
                     .await;
-                });
-            }
+                })))
+            } else {
+                None
+            };
             let report = match &result {
                 Ok(report) => report.clone(),
                 Err(_) => Report {
@@ -547,6 +599,7 @@ impl Batch for Engines {
             };
             output_report(&report, &settings.server).await?;
             let mut outcome = BatchOutcome::report(&report);
+            outcome.record = record;
             if result.is_err() {
                 outcome.error_kinds.insert("engine-error", 1);
             }
@@ -555,11 +608,10 @@ impl Batch for Engines {
     }
 }
 impl Engines {
-    /// Every record task has finished. A record only needs a permit to
-    /// start, so all permits free means none is running.
+    /// Every record task has finished.
     #[cfg(test)]
     async fn recordings_done(&self) {
-        let _ = self.records.acquire_many(RECORD_PERMITS).await;
+        self.drain_records().await;
     }
     /// Asks GitHub whether a repository is in this App's installation `id`.
     fn member(&self, id: u64) -> impl Fn(String) -> BoxFuture<'static, bool> + Send + Sync + use<> {
@@ -904,6 +956,9 @@ async fn workers(
 /// Repository names a batch log line lists at most.
 const LOGGED_REPOSITORIES: usize = 20;
 
+/// The bound on waiting out in-flight public records at shutdown.
+const RECORD_DRAIN: Duration = Duration::from_secs(30);
+
 async fn worker(
     cache: Cache,
     settings: Reload,
@@ -980,6 +1035,11 @@ async fn worker(
             )
             .await
             .map_err(|_| Error("queue completion failed"))?;
+        // The batch's public record spawns only now that its claims are
+        // finished: waiting for a record slot can never hold queue rows.
+        if let Some(job) = outcome.record {
+            runner.record(job).await;
+        }
     }
 }
 
@@ -998,7 +1058,7 @@ async fn run_until(
     let mut worker = tokio::spawn(workers(
         cache.clone(),
         webhook.settings.clone(),
-        runner,
+        runner.clone(),
         stopped,
     ));
     let accepting = webhook.accepting.clone();
@@ -1031,6 +1091,14 @@ async fn run_until(
         // Remote runs write branches too; let them finish like a batch.
         if let Some(api) = &api {
             api.drain().await;
+        }
+        // Public records hold no claims but still read GitHub; they get a
+        // bound of their own inside the shutdown deadline.
+        if tokio::time::timeout(RECORD_DRAIN, runner.drain_records())
+            .await
+            .is_err()
+        {
+            tracing::warn!(target: "patchula_server", "shutdown deadline left public records running; abandoning them");
         }
     })
     .await

@@ -175,8 +175,6 @@ struct Viewer {
 pub(crate) struct InventoryRepository {
     /// `Repository.id` — `ID!`.
     pub id: String,
-    /// `Repository.isPrivate` — `Boolean!`.
-    pub is_private: bool,
     /// `Repository.autoMergeAllowed` — `Boolean!`.
     pub auto_merge_allowed: bool,
     /// `Repository.squashMergeAllowed` — `Boolean!`.
@@ -454,29 +452,6 @@ fn receipts_scope(repo: &str, prefix: &str) -> ReceiptsScope {
         branch_prefix: prefix.into(),
     }
 }
-/// `Repository.isPrivate` as the run's inventory read it; the server's
-/// public record takes its visibility answer from here instead of reading
-/// the repository again.
-#[derive(Serialize, Deserialize)]
-struct Visibility {
-    private: bool,
-}
-impl State for Visibility {
-    const NAMESPACE: &'static str = "inventory-visibility";
-    const VERSION: u32 = 1;
-    type Scope = patchula_cache::RepositoryScope;
-}
-/// The repository's visibility the last inventory read saw, or `None` when
-/// no inventory has answered for it.
-pub async fn visibility(cache: &Cache, repo: &str) -> Option<bool> {
-    cache
-        .state::<Visibility>(&patchula_cache::RepositoryScope {
-            repository: repo.into(),
-        })
-        .await
-        .ok()?
-        .map(|visibility| visibility.private)
-}
 /// `server` is the advertised URL, which the PR body carries. Only a server
 /// joins the hash, so receipts written without one stay valid.
 fn intent(plan: &Plan, config: &Config, recheck: Recheck, server: Option<&str>) -> String {
@@ -686,8 +661,6 @@ pub struct Inventory {
     /// The PRs this actor merged last, oldest first — the cached auto-merge
     /// history, not part of the GraphQL response.
     pub merged_prs: Vec<crate::automerge::MergedPr>,
-    /// `Repository.isPrivate`, as the run's inventory read it.
-    pub private: bool,
     /// The default branch's head, for the freshness check and tooling.
     pub default_branch: DefaultBranch,
     /// Branch names whose `associatedPullRequests` or their `labels` were
@@ -749,7 +722,6 @@ impl Inventory {
                 )
                 .await?;
             let repository_data = data.repository.unwrap_or_default();
-            result.private = repository_data.is_private;
             result.merge_settings = crate::automerge::Settings::from_graphql(&repository_data);
             let branch = DefaultBranch::read(repository_data.default_branch_ref);
             if branch.name.as_deref() != repository.default_branch.as_deref()
@@ -830,16 +802,6 @@ impl Inventory {
                         result.unsettled.insert(r.name.clone());
                     }
                 }
-                cache
-                    .set_state(
-                        &patchula_cache::RepositoryScope {
-                            repository: repository.repository.clone(),
-                        },
-                        &Visibility {
-                            private: result.private,
-                        },
-                    )
-                    .await?;
                 return Ok(result);
             }
             if ref_nodes.len() + issue_nodes.len() > 100_000 {

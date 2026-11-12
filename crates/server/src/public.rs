@@ -296,8 +296,7 @@ const RECORD_FANOUT: usize = 4;
 
 /// Records every repository in a writing run's report, for a run that
 /// started at `started`. A repository whose visibility cannot be read is
-/// recorded as private, so it stays hidden — as is one the run's inventory
-/// marked private. One the server has not listed
+/// recorded as private, so it stays hidden. One the server has not listed
 /// yet is added if `member` confirms it belongs to the installation, so a run
 /// before the first discovery still shows.
 pub(crate) async fn record(
@@ -347,17 +346,12 @@ async fn record_repository(
     let report = recorded.report;
     let actions = report.actions.as_ref();
     let name = repo.repository.as_str();
-    // The run's inventory already read the repository's visibility;
-    // without one the record reads it itself.
-    let private = match patchula_update::visibility(cache, name).await {
-        Some(private) => private,
-        None => match client.get(&format!("repos/{name}")).await {
-            Ok(response) => serde_json::from_slice::<RepoVisibility>(&response.body)
-                .ok()
-                .and_then(|repo| repo.private)
-                .unwrap_or(true),
-            Err(_) => true,
-        },
+    let private = match client.get(&format!("repos/{name}")).await {
+        Ok(response) => serde_json::from_slice::<RepoVisibility>(&response.body)
+            .ok()
+            .and_then(|repo| repo.private)
+            .unwrap_or(true),
+        Err(_) => true,
     };
     let pull_actions: Vec<_> = actions
         .map(|a| a.pull_requests.as_slice())

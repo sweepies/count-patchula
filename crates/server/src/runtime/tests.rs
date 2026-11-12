@@ -573,6 +573,7 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -600,13 +601,14 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     let listed = cache.repository("owner/repo").await.unwrap().unwrap();
     assert_eq!((listed.private, listed.ran_at), (false, None));
     for _ in 0..2 {
-        assert!(
-            runner
-                .run(&[claims[0].work.clone()], &settings, &claims[0].attribution)
-                .await
-                .unwrap()
-                .failed()
-        );
+        let outcome = runner
+            .run(&[claims[0].work.clone()], &settings, &claims[0].attribution)
+            .await
+            .unwrap();
+        assert!(outcome.failed());
+        if let Some(job) = outcome.record {
+            runner.record(job).await;
+        }
     }
     let paths = std::fs::read_dir(directory.path())
         .unwrap()
@@ -661,6 +663,7 @@ async fn an_unreadable_installation_listing_fails_the_batch() {
         cache,
         engines: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -784,6 +787,7 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -1815,6 +1819,7 @@ async fn a_dropped_remote_run_discards_its_engine() {
         cache: Cache::open(":memory:", Default::default()).await.unwrap(),
         engines: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -1865,6 +1870,7 @@ async fn remote_modes_share_the_engine_slot_and_report_failures() {
         cache: Cache::open(":memory:", Default::default()).await.unwrap(),
         engines: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -1943,6 +1949,7 @@ async fn a_batch_releases_its_claim_before_recording() {
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
         bot_login: "patchula[bot]".into(),
         derived_url: None,
@@ -1986,6 +1993,84 @@ async fn a_batch_releases_its_claim_before_recording() {
             .unwrap()
             .ran_at
             .is_some()
+    );
+    patchula_testkit::transcripts::check(&transcripts());
+}
+
+/// The record reads a repository's visibility at record time: one recorded
+/// public is hidden once GitHub calls it private, even when the run that
+/// reports the change died before its inventory completed.
+#[tokio::test]
+async fn a_repository_made_private_is_recorded_private() {
+    let github = Arc::new(FakeGitHub::new("owner/repo"));
+    github.seed_files(
+        "main",
+        "base",
+        &BTreeMap::from([(
+            "patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing {}\nprs { dashboard = false }\n"
+                .into(),
+        )]),
+        vec![],
+    );
+    {
+        let mut state = github.state();
+        state.installations = vec![1];
+        state.repo_mut().installed = true;
+    }
+    let transport: Arc<dyn Transport> = github.clone();
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let runner = Engines {
+        app: lookup_app(transport.clone(), 1),
+        transport,
+        cache: cache.clone(),
+        engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
+        recheck: None,
+        bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
+    };
+    let settings = settings();
+    let attribution = Attribution::reason("push");
+    // A finished run records the repository publicly, as GitHub calls it.
+    let outcome = runner
+        .run(&[Work::person(1, "owner/repo")], &settings, &attribution)
+        .await
+        .unwrap();
+    if let Some(job) = outcome.record {
+        runner.record(job).await;
+    }
+    runner.recordings_done().await;
+    assert!(
+        !cache
+            .repository("owner/repo")
+            .await
+            .unwrap()
+            .unwrap()
+            .private
+    );
+    // Now GitHub calls it private and the next run dies inside the
+    // inventory; nothing may carry the earlier answer forward.
+    github.state().repo_mut().private = true;
+    github.inventory_fails();
+    let outcome = runner
+        .run(&[Work::person(1, "owner/repo")], &settings, &attribution)
+        .await
+        .unwrap();
+    assert!(outcome.failed());
+    if let Some(job) = outcome.record {
+        runner.record(job).await;
+    }
+    runner.recordings_done().await;
+    assert!(
+        cache
+            .repository("owner/repo")
+            .await
+            .unwrap()
+            .unwrap()
+            .private
     );
     patchula_testkit::transcripts::check(&transcripts());
 }

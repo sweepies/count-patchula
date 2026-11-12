@@ -32,7 +32,6 @@ query InventoryQuery(
     }
     repository(owner: $owner, name: $name) {
         id
-        isPrivate
         autoMergeAllowed
         squashMergeAllowed
         mergeCommitAllowed
