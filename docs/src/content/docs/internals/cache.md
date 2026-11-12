@@ -208,6 +208,12 @@ reconciliation. In behind mode a base move invalidates the receipt. At `-vv`,
 diagnostics report save and restore counts and the first failed condition per
 branch.
 
+Branch cleanup keeps a per-build `not-ours` entry per repository and commit
+OID whose message records no base: such a commit can never be the Count's,
+so its branch is not read again while it points there. Nothing else about
+ownership is cached; a compare, an author check or a signature check runs
+on every full write.
+
 ## Catalog views and release age
 
 Successful catalog views are stored as `catalog` state, scoped to the

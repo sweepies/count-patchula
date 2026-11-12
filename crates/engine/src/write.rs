@@ -222,7 +222,7 @@ impl Write<'_> {
             self.lockfiles(&mut plans, &mut snapshot, &config).await;
         }
         let cleanup = match (self.dry_run, repo.degraded(), inventory) {
-            (false, false, Some(inventory)) => self.cleanup(repo, &plans, &inventory.actor).await,
+            (false, false, Some(inventory)) => self.cleanup(repo, &plans, inventory).await,
             _ => Ok(Vec::new()),
         };
         match cleanup {
@@ -502,15 +502,16 @@ impl Write<'_> {
         &self,
         repo: &Repository,
         plans: &[Plan],
-        actor: &str,
+        inventory: &Inventory,
     ) -> std::result::Result<Vec<BranchAction>, StepFailure> {
         patchula_update::cleanup(
             &self.engine.github,
+            &self.engine.cache,
             &repo.repository,
             repo.commit.as_deref().expect("extracted commit"),
             repo.default_branch.as_deref().expect("configured branch"),
             plans,
-            actor,
+            inventory,
             self.dry_run,
         )
         .await
