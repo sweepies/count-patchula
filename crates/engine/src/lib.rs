@@ -1440,26 +1440,33 @@ fn validate_repo(repo: &str) -> Result<()> {
     let Some((owner, name)) = repo.split_once('/') else {
         return Err(Error::Invalid(format!("expected owner/repo, got {repo}")));
     };
-    if owner.is_empty()
-        || name.is_empty()
-        || [owner, name].iter().any(|s| {
-            !s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-                || matches!(*s, "." | "..")
-        })
-    {
+    if !repo_part(owner) || !repo_part(name) {
         return Err(Error::Invalid("invalid repository identity".into()));
     }
     Ok(())
 }
-/// A local directory reports as `local/<directory name>`.
+/// Whether `part` can be a repository's owner or name.
+fn repo_part(part: &str) -> bool {
+    !part.is_empty()
+        && !matches!(part, "." | "..")
+        && part
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+/// A local directory reports as `local/<directory name>`; a name that is
+/// not a valid repository name reports as `local/<hash of the name>` so the
+/// identity validates and stays the same on every run.
 fn local_name(dir: &std::path::Path) -> String {
     let name = dir
         .canonicalize()
         .ok()
         .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "directory".into());
-    format!("local/{name}")
+    if repo_part(&name) {
+        format!("local/{name}")
+    } else {
+        format!("local/{}", patchula_manager::hash(name.as_bytes()))
+    }
 }
 fn lookup_failure(dep: &Dependency, failure: &Failure, message: String) -> LookupFailure {
     LookupFailure {
