@@ -19,8 +19,6 @@ pub enum Error {
     #[error("{0}")]
     Refused(Cow<'static, str>),
 }
-pub type Result<T> = std::result::Result<T, Error>;
-
 /// The pure planner's closed error set: it names no GitHub or cache error,
 /// and every refusal it can raise is a variant here, its current text kept
 /// verbatim.

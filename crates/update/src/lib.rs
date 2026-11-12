@@ -15,7 +15,7 @@ mod settle;
 pub mod text;
 mod trailers;
 pub use cleanup::{cleanup, delete_owned, owned};
-pub use error::{Error, PlanError, Result};
+pub use error::{Error, PlanError};
 pub use receipts::{
     DefaultBranch, DefaultCommit, INVENTORY_QUERY, Inventory, Issue, Page, RestoreOutcome,
     restore_inventory, save_receipts,
@@ -29,7 +29,7 @@ mod write;
 pub use plan::{
     Blob, Change, Hold, Plan, Snapshot, blob_sha, branch_name, lock_all, plan, unified,
 };
-pub use write::{REF_UPDATE, apply_all, needs_requeue};
+pub use write::{REF_UPDATE, apply_all};
 
 pub mod pull_requests;
 pub mod tooling;

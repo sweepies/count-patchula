@@ -8,10 +8,11 @@ use patchula_words::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 6;
-/// The `actions` object's own version: 2 gave branches and pull requests
+pub const SCHEMA_VERSION: u32 = 7;
+/// The `actions` object's own version: 3 added `stale` pull request actions
+/// for publish races a rerun retries; 2 gave branches and pull requests
 /// their own statuses, with `stale` for branches.
-pub const ACTIONS_SCHEMA_VERSION: u32 = 2;
+pub const ACTIONS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -94,6 +95,9 @@ patchula_words::words!(
     Merged => "merged",
     /// Held; the reason says why.
     Skipped => "skipped",
+    /// The repository changed under the run, so the action's write did not
+    /// happen; a rerun retries it.
+    Stale => "stale",
     Protected => "protected",
     Error => "error",
 });
@@ -127,6 +131,10 @@ pub struct FileAction {
 pub enum Status {
     Complete,
     Skipped,
+    /// The repository changed under the run, so the run stopped before
+    /// writing against the stale view; a rerun retries it. Only a real run
+    /// reports it: it needs `actions` and is never a dry run.
+    Stale,
     Error,
 }
 
@@ -571,6 +579,17 @@ impl Report {
     }
 
     pub fn validate(&self) -> Result<(), Error> {
+        self.check(false)
+    }
+
+    /// The same rules while the report still awaits its `actions` — a `run`
+    /// attaches them and then calls `validate`, so the `stale` rule that
+    /// reads them waits for then.
+    pub fn validate_before_actions(&self) -> Result<(), Error> {
+        self.check(true)
+    }
+
+    fn check(&self, actions_pending: bool) -> Result<(), Error> {
         if self.schema_version != SCHEMA_VERSION {
             return Err(Error::Version(self.schema_version));
         }
@@ -615,6 +634,7 @@ impl Report {
                     pr.status,
                     PullRequestStatus::Protected
                         | PullRequestStatus::Error
+                        | PullRequestStatus::Stale
                         | PullRequestStatus::Skipped
                 ) && pr.reason.as_ref().is_none_or(String::is_empty)
                 {
@@ -690,7 +710,15 @@ impl Report {
             if repo.status != Status::Complete && repo.reason.as_ref().is_none_or(String::is_empty)
             {
                 return Err(Error::Invalid(
-                    "skipped/error repository needs a reason".into(),
+                    "skipped/stale/error repository needs a reason".into(),
+                ));
+            }
+            if repo.status == Status::Stale
+                && !actions_pending
+                && self.actions.as_ref().is_none_or(|actions| actions.dry_run)
+            {
+                return Err(Error::Invalid(
+                    "stale repository is only a real run's outcome".into(),
                 ));
             }
             let mut files = BTreeSet::new();
@@ -830,31 +858,67 @@ mod tests {
             ]
         );
     }
-    /// Version 6 gave branches and pull requests their own statuses: a status
-    /// only the other one has is not a report.
+    /// Version 6 gave branches and pull requests their own statuses, and 7
+    /// gave pull requests `stale` too: a status only the other one has is not
+    /// a report.
     #[test]
     fn branch_and_pull_request_statuses_are_their_own() {
         let report = |branch: &str, pr: &str| {
             format!(
-                r#"{{"schemaVersion":6,"repositories":[{{"repository":"o/r","status":"complete","reason":null,"packageFiles":[]}}],"actions":{{"schemaVersion":2,"dryRun":false,"branches":[{{"repository":"o/r","branch":"b","baseCommit":"c","status":"{branch}","reason":"why","message":"m","previousCommit":null,"commit":null,"verified":null,"lockfilePending":false,"files":[]}}],"pullRequests":[{{"repository":"o/r","branch":"b","number":1,"url":null,"status":"{pr}","reason":"why"}}]}}}}"#
+                r#"{{"schemaVersion":7,"repositories":[{{"repository":"o/r","status":"complete","reason":null,"packageFiles":[]}}],"actions":{{"schemaVersion":3,"dryRun":false,"branches":[{{"repository":"o/r","branch":"b","baseCommit":"c","status":"{branch}","reason":"why","message":"m","previousCommit":null,"commit":null,"verified":null,"lockfilePending":false,"files":[]}}],"pullRequests":[{{"repository":"o/r","branch":"b","number":1,"url":null,"status":"{pr}","reason":"why"}}]}}}}"#
             )
         };
         assert!(Report::from_json(report("stale", "closed").as_bytes()).is_ok());
         assert!(Report::from_json(report("closed", "closed").as_bytes()).is_err());
-        assert!(Report::from_json(report("stale", "stale").as_bytes()).is_err());
+        assert!(Report::from_json(report("stale", "stale").as_bytes()).is_ok());
         assert!(Report::from_json(report("deleted", "rebased").as_bytes()).is_err());
+    }
+
+    #[test]
+    fn a_stale_repository_is_a_real_run_with_a_reason() {
+        let report = |repo: serde_json::Value, actions: serde_json::Value| {
+            serde_json::json!({
+                "schemaVersion": 7,
+                "repositories": [repo],
+                "actions": actions,
+            })
+        };
+        let stale = serde_json::json!({
+            "repository": "o/r", "status": "stale",
+            "reason": "default branch moved since extraction; rerun",
+            "packageFiles": [],
+        });
+        let actions = serde_json::json!({"schemaVersion": 3, "dryRun": false, "branches": []});
+        let parse =
+            |value: &serde_json::Value| Report::from_json(&serde_json::to_vec(value).unwrap());
+        // A raced repository reports stale and round-trips with its reason.
+        let mut value = report(stale.clone(), actions.clone());
+        let parsed = parse(&value).unwrap();
+        assert_eq!(parsed.repositories[0].status, Status::Stale);
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+        // Without actions, or in a dry run, stale is not a report.
+        value["repositories"][0] = stale.clone();
+        value.as_object_mut().unwrap().remove("actions");
+        assert!(parse(&value).is_err());
+        value["actions"] = actions.clone();
+        value["actions"]["dryRun"] = serde_json::json!(true);
+        assert!(parse(&value).is_err());
+        // Stale names why, like every non-complete status.
+        value["actions"]["dryRun"] = serde_json::json!(false);
+        value["repositories"][0]["reason"] = serde_json::Value::Null;
+        assert!(parse(&value).is_err());
     }
 
     #[test]
     fn reject_future_schema_before_interpreting_payload() {
         assert!(matches!(
-            Report::from_json(br#"{"schemaVersion":7,"future":true}"#),
-            Err(Error::Version(7))
+            Report::from_json(br#"{"schemaVersion":8,"future":true}"#),
+            Err(Error::Version(8))
         ));
         assert!(
-            Report::from_json(br#"{"schemaVersion":6,"repositories":[],"typo":true}"#).is_err()
+            Report::from_json(br#"{"schemaVersion":7,"repositories":[],"typo":true}"#).is_err()
         );
-        for old in [1, 2, 3, 4, 5] {
+        for old in [1, 2, 3, 4, 5, 6] {
             let report = format!(r#"{{"schemaVersion":{old},"repositories":[]}}"#);
             assert!(matches!(
                 Report::from_json(report.as_bytes()),
@@ -866,8 +930,8 @@ mod tests {
     #[test]
     fn the_version_error_names_the_supported_schema() {
         assert_eq!(
-            Error::Version(7).to_string(),
-            format!("unsupported report schemaVersion 7; expected {SCHEMA_VERSION}")
+            Error::Version(8).to_string(),
+            format!("unsupported report schemaVersion 8; expected {SCHEMA_VERSION}")
         );
     }
 
@@ -891,7 +955,7 @@ mod tests {
 
     #[test]
     fn a_notice_reason_parses() {
-        let report = r#"{"schemaVersion":6,"repositories":[{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[],"notices":[{"manager":"composer","path":"composer.json","name":"acme/lib","package":"acme/lib","current":"^1 | ^2","available":"3.0.0","reason":"cannot be rewritten"}]}]}"#;
+        let report = r#"{"schemaVersion":7,"repositories":[{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[],"notices":[{"manager":"composer","path":"composer.json","name":"acme/lib","package":"acme/lib","current":"^1 | ^2","available":"3.0.0","reason":"cannot be rewritten"}]}]}"#;
         let parsed = Report::from_json(report.as_bytes()).unwrap();
         let notice = &parsed.repositories[0].notices[0];
         assert_eq!(notice.reason.as_deref(), Some("cannot be rewritten"));
@@ -942,9 +1006,9 @@ mod tests {
     #[test]
     fn action_versions_and_dry_run_states_are_validated() {
         let mut value = serde_json::json!({
-            "schemaVersion": 6,
+            "schemaVersion": 7,
             "repositories": [{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[]}],
-            "actions": {"schemaVersion":2,"dryRun":true,"branches":[{
+            "actions": {"schemaVersion":3,"dryRun":true,"branches":[{
                 "repository":"demo/app","branch":"patchula/example","baseCommit":"base",
                 "status":"planned","reason":null,"message":"update example","previousCommit":null,
                 "commit":null,"verified":null,"lockfilePending":false,"files":[]
@@ -952,9 +1016,9 @@ mod tests {
         });
         let parse = |v: &serde_json::Value| Report::from_json(&serde_json::to_vec(v).unwrap());
         parse(&value).unwrap();
-        value["actions"]["schemaVersion"] = serde_json::json!(3);
+        value["actions"]["schemaVersion"] = serde_json::json!(4);
         assert!(parse(&value).is_err());
-        value["actions"]["schemaVersion"] = serde_json::json!(2);
+        value["actions"]["schemaVersion"] = serde_json::json!(3);
         value["actions"]["branches"][0]["commit"] = serde_json::json!("unexpected-write");
         assert!(parse(&value).is_err());
         value["actions"]["branches"][0]["commit"] = serde_json::Value::Null;

@@ -136,11 +136,15 @@ repositories that failed together do not retry in step. A success resets it.
 A new event for the repository, such as a push that fixes it, runs it after the
 usual coalescing window instead of waiting out the backoff. A run that dies
 with the server or takes it down, such as by an OOM kill or a panic, counts as
-a failure; one cut short by a shutdown does not. If the default branch moves
-while a batch is writing, nothing is written to that branch, its action reports
-`stale`, and the repository is requeued for a minute later. A repository
-requeued three times in a row fails the next one instead, backing off like any
-other failure; a success or a failure resets the count.
+a failure; one cut short by a shutdown does not. If the repository changes
+while a batch is running — its default branch moves, a pull request the run
+is reconciling changes, or the write inventory disagrees with what the run
+read — the run stops rather than write against the stale view, reports the
+repository `stale` with the race as its reason, and the server requeues it
+for a minute later. A stale repository is not a failure and does not back
+off; a repository that both raced and errored is a failure, as before. A
+repository requeued three times in a row fails the next one instead, backing
+off like any other failure; a success or a failure resets the count.
 
 Queue rows survive restarts. SIGTERM stops new work, drains the running batches
 within `--shutdown-timeout-secs` (60 by default), and requeues the rest. A lock
@@ -246,9 +250,12 @@ it from the browser. Set `publicApi = false` to turn it off.
 
 `updates` counts dependencies with at least one update, `pullRequests` counts
 the Count's open PRs, and `dashboard` is the dependency dashboard's issue
-number. A repository that has not run yet has only `repository`,
-`ranAt: null` and `queued`. `queued` is `null`, or `{"at", "running"}` when
-work for the repository is waiting or in a batch.
+number. `status` is the last run's repository status — `complete`,
+`skipped`, `stale` or `error`, as in the [report](/reference/report/) — and
+`reason` says why a non-complete one ended that way. A repository that has
+not run yet has only `repository`, `ranAt: null` and `queued`. `queued` is
+`null`, or `{"at", "running"}` when work for the repository is waiting or in
+a batch.
 
 `GET /api/v1/repositories/{owner}/{repo}` returns everything from the last run:
 

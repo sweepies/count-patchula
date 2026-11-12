@@ -307,7 +307,9 @@ fn pull_request_paint(status: PullRequestStatus) -> Paint {
             Paint::Success
         }
         PullRequestStatus::Planned => Paint::AccentDim,
-        PullRequestStatus::Skipped | PullRequestStatus::Protected => Paint::Warning,
+        PullRequestStatus::Skipped | PullRequestStatus::Stale | PullRequestStatus::Protected => {
+            Paint::Warning
+        }
         PullRequestStatus::Error => Paint::Error,
         PullRequestStatus::Unchanged | PullRequestStatus::Closed => Paint::Dim,
     }
@@ -383,6 +385,10 @@ pub fn report(report: &Report, style: &Style) -> String {
                     format!("skipped: {}", repo.reason.as_deref().unwrap_or("no reason")),
                     Paint::Warning,
                 ),
+                Status::Stale => (
+                    format!("stale: {}", repo.reason.as_deref().unwrap_or("no reason")),
+                    Paint::Warning,
+                ),
                 Status::Error => (
                     format!("error: {}", repo.reason.as_deref().unwrap_or("no reason")),
                     Paint::Error,
@@ -399,6 +405,13 @@ pub fn report(report: &Report, style: &Style) -> String {
                 &mut out,
                 0,
                 &format!("skipped: {}", repo.reason.as_deref().unwrap_or("no reason")),
+                Paint::Warning,
+            );
+        } else if repo.status == Status::Stale {
+            style.wrap(
+                &mut out,
+                0,
+                &format!("stale: {}", repo.reason.as_deref().unwrap_or("no reason")),
                 Paint::Warning,
             );
         }

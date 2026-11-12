@@ -43,12 +43,6 @@ struct CreatedTree {
     sha: String,
 }
 
-/// Whether a branch's write should run again: its base went stale before
-/// anything was written.
-pub fn needs_requeue(action: &patchula_report::BranchAction) -> bool {
-    action.status == BranchStatus::Stale
-}
-
 /// A write that did not happen: an expected extraction race goes stale so a
 /// rerun retries it; anything else is the branch's error.
 fn refuse(plan: &mut Plan, error: &Error) {

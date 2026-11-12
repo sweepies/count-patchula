@@ -472,6 +472,16 @@ fn action(
         reason,
     }
 }
+/// The pull request status an error leaves on an action: a race — the
+/// repository changed under the run — goes stale so a rerun retries it, and
+/// anything else is the request's error. Publishing and auto-merge report a
+/// race the same way.
+pub(crate) fn failure_status(error: &Error) -> PullRequestStatus {
+    match error {
+        Error::Raced(_) => PullRequestStatus::Stale,
+        _ => PullRequestStatus::Error,
+    }
+}
 /// The update key recorded by a patchula PR's ownership marker.
 pub(crate) fn marker_update(text: &str) -> Option<String> {
     markers::ownership_marker(text).map(|m| m.update)
@@ -854,7 +864,7 @@ impl Lifecycle {
                     &self.repo,
                     &plan.action().branch,
                     None,
-                    PullRequestStatus::Error,
+                    failure_status(&error),
                     Some(error.to_string()),
                 ));
             }

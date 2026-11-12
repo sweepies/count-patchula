@@ -7,7 +7,7 @@ description: Every patchula command, argument and flag, generated from the CLI's
 
 Count Patchula vants to update your deps. A modern dependency updater with strong defaults.
 
-Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error; `lookup` and `apply` add 4 = a lookup failed; `apply` adds 3 = updates still waiting.
+Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error; `lookup` and `apply` add 4 = a lookup failed; `apply` adds 3 = updates still waiting; `run` adds 5 = a repository changed during the run; run again.
 
 
 ## Examples

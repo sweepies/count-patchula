@@ -61,7 +61,9 @@ An unavailable upstream is a warning; API, config and extraction failures are
 errors. The CLI writes the report to stdout, as text or with `--json` as
 JSON, and `-v` adds the counters and phase timings on stderr. It exits 1 for a batch failure or any
 per-repository error, and 2 for invalid config or options; `lookup` exits 4 when
-a lookup failed, while `run` reports failed lookups and exits 0. The [CLI
+a lookup failed, while `run` reports failed lookups and exits 0. A `run`
+where a repository changed underneath it — a race the update layer reports
+as `Error::Raced` — exits 5 instead, after an error has had its say. The [CLI
 reference](/reference/cli/) lists every exit code.
 
 ## Tests and measurements
@@ -126,6 +128,20 @@ update never names the default branch, because a no-op update of it is rejected
 by rulesets that require pull requests. A rejected update reports GitHub's
 GraphQL error messages. Writes never enter the read cache, and transport or server
 failures are not retried: the next run reconciles the ref.
+
+**Races.** Every step's outcome is one of three severities: an error, a
+stale, or a warning. The update layer types its races as `Error::Raced` —
+each names a state change observed mid-run, safe to rerun because the write
+stopped before mutating against the stale view or its mutations are
+idempotent on retry: the publish lease's base-head and metadata reads, the
+write inventory, the obsolete-PR refresh and closure leases, the cleanup
+metadata read, and the post-publish head read with its bounded replication
+retries. A race leaves its branch or pull request action `stale`; the first
+stale action lifts to the repository's `stale` status after errors and
+protections have had their say, since an error always outranks a race. A
+stale repository records no schedule turn, so the rerun still sees the
+window the raced run covered; on the server it is requeued, never retried
+with a backoff. Control and inventory reads use the same mapping.
 
 **Lockfiles.** Lockfiles are regenerated with the real tools through mise, in
 disposable trees backed by a persistent partial clone; see
