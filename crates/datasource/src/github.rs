@@ -425,18 +425,32 @@ impl Client {
     /// set keeps each key in one chunk, so the result never depends on
     /// which finishes first.
     pub async fn fresh_tag_digests(&self, keys: &BTreeSet<(String, String)>) -> TagDigests {
-        let keys: Vec<_> = keys.iter().cloned().collect();
+        // A query's cost grows with the repositories in it, not the tags:
+        // group the keys by repository and ask for eight at a time.
+        let mut by_repository = BTreeMap::<&str, Vec<(String, String)>>::new();
+        for key in keys {
+            by_repository
+                .entry(key.0.as_str())
+                .or_default()
+                .push(key.clone());
+        }
         // Owned chunks: a closure over borrowed slices is not general enough
         // for the server's boxed Send futures.
-        let chunks = stream::iter(keys.chunks(64).map(<[_]>::to_vec))
+        let groups: Vec<Vec<(String, String)>> = by_repository
+            .into_values()
+            .collect::<Vec<_>>()
+            .chunks(8)
+            .map(|group| group.concat())
+            .collect();
+        let chunks = stream::iter(groups)
             .map(|chunk| async move { self.fresh_tag_chunk(&chunk).await })
             .buffer_unordered(self.github.concurrency())
             .collect::<Vec<_>>()
             .await;
         chunks.into_iter().flatten().collect()
     }
-    /// One GraphQL query for up to 64 tags; a tag it does not resolve falls
-    /// back to the REST lookup, those side by side.
+    /// One GraphQL query for up to eight repositories' tags; a tag it does
+    /// not resolve falls back to the REST lookup, those side by side.
     async fn fresh_tag_chunk(&self, chunk: &[(String, String)]) -> TagDigests {
         let mut declarations = Vec::new();
         let mut fields = Vec::new();
@@ -1096,5 +1110,74 @@ mod tests {
         assert_eq!(github.stats().await.requests, 8);
         assert_eq!(github.stats().await.not_modified, 1);
         replay.assert_finished().unwrap();
+    }
+
+    /// The flat 64-key chunking the repository chunking replaced answers the
+    /// same digest map for every key: ten repositories of tags spread one
+    /// query into several without changing what each key resolves to.
+    #[tokio::test]
+    async fn tag_digest_chunks_by_repository_match_the_flat_chunking() {
+        use patchula_testkit::github::{FakeGitHub, Hosts};
+        let github = Arc::new(FakeGitHub::new("demo/app"));
+        let mut keys = BTreeSet::new();
+        for r in 0..10 {
+            let package = format!("upstream/r{r}");
+            github.add_repository(&package, false);
+            for t in 0..3 {
+                let sha = format!("{r:02x}{t:02x}{}", "0".repeat(36));
+                let mut state = github.state();
+                let repo = state.repositories.get_mut(&package).unwrap();
+                repo.refs.insert(format!("refs/tags/v{t}"), sha.clone());
+                repo.commits.insert(sha.clone(), json!({"sha": sha}));
+                drop(state);
+                keys.insert((package.clone(), format!("v{t}")));
+            }
+        }
+        {
+            let mut state = github.state();
+            let repo = state.repositories.get_mut("upstream/r0").unwrap();
+            repo.refs
+                .insert("refs/heads/branch-only".into(), "f".repeat(40));
+            repo.commits
+                .insert("f".repeat(40), json!({"sha": "f".repeat(40)}));
+        }
+        keys.insert(("upstream/r0".into(), "branch-only".into()));
+        keys.insert(("upstream/r0".into(), "gone".into()));
+        let hosts = Arc::new(Hosts::new(github.clone()));
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let client = Client::new(
+            patchula_github::Client::with_transport(
+                "offline",
+                cache.clone(),
+                Default::default(),
+                hosts.clone(),
+            )
+            .unwrap(),
+            crate::cached(cache.clone(), hosts.clone(), 4).unwrap(),
+            cache,
+        );
+        // The flat chunking this replaced: every key in one query.
+        let mut flat = TagDigests::new();
+        for chunk in keys.iter().cloned().collect::<Vec<_>>().chunks(64) {
+            flat.extend(client.fresh_tag_chunk(chunk).await);
+        }
+        let chunked = client.fresh_tag_digests(&keys).await;
+        assert_eq!(flat, chunked);
+        let queries = github
+            .log()
+            .iter()
+            .filter(|(_, _, body)| {
+                body["query"]
+                    .as_str()
+                    .is_some_and(|query| query.contains("FreshTagDigests"))
+            })
+            .count();
+        assert_eq!(
+            queries, 3,
+            "one flat document plus the same tags split across two"
+        );
+        patchula_testkit::transcripts::check(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transcripts.tsv"),
+        );
     }
 }

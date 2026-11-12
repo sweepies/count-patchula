@@ -42,6 +42,9 @@ pub(super) struct Plan {
     /// Mutable action refs whose current commit is read up front, and
     /// whether a manual retry revalidates each.
     current_refs: BTreeMap<DigestKey, bool>,
+    /// Each scanned repository's replacement lookup hint and the packages
+    /// it may name, written once the run's mutable tags are known.
+    hints: Vec<(LookupHintScope, LookupHint, BTreeSet<String>)>,
     /// OSV queries to ask, and whether a manual retry revalidates each.
     advisories: BTreeMap<patchula_datasource::AdvisoryQuery, bool>,
 }
@@ -120,6 +123,7 @@ impl Engine {
             if let Some(known) = self.cache.state::<LookupHint>(&scope).await? {
                 hint.catalogs.extend(known.catalogs);
                 hint.digests.extend(known.digests);
+                hint.tags.extend(known.tags);
             }
         }
         Ok(Discovery {
@@ -147,6 +151,7 @@ impl Engine {
         let repos = &discovery.repos;
         let overrides = &discovery.overrides;
         let hint_digests = discovery.hint.digests.clone();
+        let hint_tags = discovery.hint.tags.clone();
         let scans = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("extraction");
@@ -221,14 +226,19 @@ impl Engine {
         let prefetch = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("lookup.prefetch");
-            let digests = self
-                .digests(
+            // Hinted refs and the last run's mutable tags are read beside the
+            // head check; the tag batch's own REST fallbacks overlap too.
+            let (digests, tags) = tokio::join!(
+                self.digests(
                     hint_digests.into_iter().map(|key| (key, false)).collect(),
                     &self.sources,
                     false,
                     sent,
-                )
-                .await;
+                ),
+                self.sources.fresh_tag_digests(&hint_tags),
+            );
+            let mut digests = digests;
+            digests.extend(tags);
             (digests, micros(started))
         };
         let ((work, extraction), (digests, prefetch)) = tokio::join!(scans, prefetch);
@@ -388,7 +398,8 @@ impl Engine {
                 }
             }
         }
-        // Replace per-repository hints only after successful extraction.
+        // Replace per-repository hints only after successful extraction; the
+        // mutable tags join them after digest resolution names the set.
         for repo in work.iter() {
             if repo.evaluator.is_some() && repo.report.status == Status::Complete {
                 let catalogs = repo
@@ -411,12 +422,44 @@ impl Engine {
                     schema_hash: discovery.schema_hash.clone(),
                     credential_scope: discovery.credential_scope.clone(),
                 };
-                self.cache
-                    .set_state(&scope, &LookupHint { catalogs, digests })
-                    .await?;
+                let packages = repo
+                    .dependencies
+                    .iter()
+                    .map(|dep| dep.package.clone())
+                    .collect();
+                plan.hints.push((
+                    scope,
+                    LookupHint {
+                        catalogs,
+                        digests,
+                        tags: BTreeSet::new(),
+                    },
+                    packages,
+                ));
             }
         }
         Ok(plan)
+    }
+
+    /// Write the hints `plan_lookups` computed, with the mutable tag keys
+    /// `resolve_digests` returned. Hints are replaced after a successful
+    /// run's resolution, so a hint that outlives its run names only what a
+    /// later run still wants.
+    pub(super) async fn save_lookup_hints(
+        &self,
+        plan: &Plan,
+        tags: &BTreeSet<DigestKey>,
+    ) -> Result<()> {
+        for (scope, hint, packages) in &plan.hints {
+            let mut hint = hint.clone();
+            hint.tags = tags
+                .iter()
+                .filter(|(package, _)| packages.contains(package))
+                .cloned()
+                .collect();
+            self.cache.set_state(scope, &hint).await?;
+        }
+        Ok(())
     }
 
     /// Stage: fetch — aged catalogs, current-ref digests, and OSV advisories;
@@ -771,13 +814,14 @@ impl Engine {
     }
 
     /// Stage: resolve — catalog-carried digests, mutable-tag GraphQL, ref
-    /// digests, and image tag digests.
+    /// digests, and image tag digests. Returns the mutable tag keys this
+    /// run wanted, for the next run's prefetch hint.
     pub(super) async fn resolve_digests(
         &self,
         mut keys: EvalKeys,
         lookups: &mut Lookups,
         sent: &Mutex<BTreeSet<Sent>>,
-    ) -> Result<()> {
+    ) -> Result<BTreeSet<DigestKey>> {
         // The revalidated complete tag namespace already carries peeled target
         // commits. Reuse those for both current and proposed action tags instead
         // of adding a serial /commits/{tag} round trip after policy evaluation.
@@ -802,6 +846,20 @@ impl Engine {
                 carried.insert((package.clone(), reference.clone()));
             }
         }
+        // Every key the reused-catalog rule sends to the batched tag read is
+        // next run's prefetch hint, whether a prefetch answered it this run
+        // or the read below did: hinting only sent keys would drop the very
+        // keys the prefetch just resolved.
+        let hinted_tags: BTreeSet<DigestKey> = keys
+            .digests
+            .keys()
+            .filter(|(package, _)| {
+                lookups.evidence.iter().any(|(key, e)| {
+                    key.1.source == Source::GithubTags && key.1.name == *package && e.reused
+                })
+            })
+            .cloned()
+            .collect();
         // A ref under a manual retry is read again when only a prior run's
         // hint holds it; one a catalog fetched this run carries is fresh.
         keys.digests.retain(|key, revalidate| {
@@ -870,7 +928,7 @@ impl Engine {
         lookups.digests.extend(tags);
         lookups.digests.extend(refs);
         lookups.image_digests = image_digests;
-        Ok(())
+        Ok(hinted_tags)
     }
 
     /// Stage: images — SBOM reads for pinned digests and the OSV

@@ -293,7 +293,7 @@ impl State for LastRun {
 }
 impl State for LookupHint {
     const NAMESPACE: &'static str = "lookup-hint";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
     type Scope = LookupHintScope;
 }
 impl State for BranchHint {
@@ -381,10 +381,12 @@ use repository_head::repository_head_query::{
 /// bodies.
 pub const REPOSITORY_HEAD_QUERY: &str = repository_head::repository_head_query::QUERY;
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct LookupHint {
     catalogs: BTreeSet<LookupKey>,
     digests: BTreeSet<DigestKey>,
+    /// The mutable tag keys the last run's digest resolution wanted.
+    tags: BTreeSet<DigestKey>,
 }
 
 impl Engine {
@@ -786,9 +788,10 @@ impl Engine {
         drop(phase);
         let started = Instant::now();
         let phase = PhaseTrace::new("digest");
-        self.resolve_digests(eval_keys, &mut lookups, sent).await?;
+        let hinted_tags = self.resolve_digests(eval_keys, &mut lookups, sent).await?;
         let digest_time = micros(started);
         drop(phase);
+        self.save_lookup_hints(&plan, &hinted_tags).await?;
         let started = Instant::now();
         let phase = PhaseTrace::new("image");
         self.read_images(&work, &mut lookups, sent).await?;
@@ -1110,10 +1113,27 @@ impl Engine {
                 Some(config),
             ));
         }
-        let mut extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
-            .await
-            .map_err(|e| Error::Invalid(e.to_string()))?
-            .map_err(Error::Invalid)?;
+        // Extraction is a function of the config and the files it reads, so
+        // a checkout that leaves those as they were reuses the earlier
+        // result without scanning, keyed as the remote path's is.
+        let files_scope = FilesScope {
+            repository: repo.into(),
+            files_hash: patchula_manager::hash(&serde_json::to_vec(&files)?),
+            config_hash: patchula_manager::hash(&serde_json::to_vec(&config)?),
+        };
+        let mut extraction =
+            if let Some(saved) = self.cache.state::<FileExtraction>(&files_scope).await? {
+                self.extraction_hits.fetch_add(1, Ordering::Relaxed);
+                saved.0
+            } else {
+                let extraction = tokio::task::spawn_blocking(move || scanner.extract(&files))
+                    .await
+                    .map_err(|e| Error::Invalid(e.to_string()))?
+                    .map_err(Error::Invalid)?;
+                let saved = FileExtraction(extraction);
+                self.cache.set_state(&files_scope, &saved).await?;
+                saved.0
+            };
         extraction.skipped.extend(unsupported);
         extraction.warnings.extend(warnings);
         let mut report = repo_report(repo, Status::Complete, None);
