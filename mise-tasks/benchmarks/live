@@ -22,7 +22,10 @@ def main [--config: path, --cache: path, ...repositories: string] {
     error make --unspanned {msg: "name at least one repository"}
   }
   # Keep private run caches outside this repository; see internals/engine.md.
-  let cache = $cache | default (mktemp -d -t patchula-live.XXXXXX)
+  let cache = match $cache {
+    null => (mktemp -d -t patchula-live.XXXXXX)
+    $dir => $dir
+  }
   let bin = if ($env.PATCHULA_BIN? | is-not-empty) {
     [$env.PATCHULA_BIN]
   } else {
@@ -46,7 +49,7 @@ def main [--config: path, --cache: path, ...repositories: string] {
     let medians = $phases | columns | each {|phase|
       {
         phase: $phase
-        median_ms: ($phases | get $phase | compact | math median | math round -p 1)
+        median_ms: ($phases | get -o $phase | compact | math median | math round -p 1)
       }
     }
     print $"($repository): ($runs | length) warm runs"
