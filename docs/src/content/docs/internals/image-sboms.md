@@ -164,7 +164,9 @@ takes its ID out of the comparison.
 Measured on five pinned images (`debian:bookworm`, `ubuntu:24.04`,
 `alpine:3.20` at older digests, `node:22.11.0-bookworm-slim`, and a quay.io
 image whose old digest is gone), on the default `linux/amd64`, with
-`security.images` on and off, a cold cache, then warm:
+`security.images` on and off, a cold cache, then warm (the run predates
+`http.advisoryFreshnessSecs`, which now answers the batch locally inside its
+window):
 
 | | Requests, off | Requests, on | Time, off | Time, on |
 |---|---|---|---|---|

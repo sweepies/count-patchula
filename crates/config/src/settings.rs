@@ -124,6 +124,7 @@ pub struct Http {
     pub host_concurrency: BTreeMap<String, usize>,
     pub registry_freshness_secs: u64,
     pub go_freshness_secs: u64,
+    pub advisory_freshness_secs: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -166,6 +167,7 @@ impl Default for Settings {
                 host_concurrency: BTreeMap::new(),
                 registry_freshness_secs: 3600,
                 go_freshness_secs: 3600,
+                advisory_freshness_secs: 3600,
             },
             registries: BTreeMap::new(),
             lockfiles: Lockfiles { cache_gib: 20 },

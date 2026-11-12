@@ -254,7 +254,19 @@ impl Client {
     where
         S: State + FetchedAt + Send + 'static,
     {
-        if self.http.is_revalidating() {
+        self.fresh_state_within(scope, std::time::Duration::from_millis(FRESH_MS as u64))
+            .await
+    }
+    /// `fresh_state` with the caller's window; a zero window never reuses.
+    async fn fresh_state_within<S>(
+        &self,
+        scope: &S::Scope,
+        window: std::time::Duration,
+    ) -> Result<Option<S>>
+    where
+        S: State + FetchedAt + Send + 'static,
+    {
+        if window.is_zero() || self.http.is_revalidating() {
             return Ok(None);
         }
         let Some(saved) = self.cache.state::<S>(scope).await? else {
@@ -263,7 +275,8 @@ impl Client {
         let age = chrono::Utc::now()
             .timestamp_millis()
             .saturating_sub(saved.fetched_at());
-        Ok((0..FRESH_MS).contains(&age).then_some(saved))
+        let window = i64::try_from(window.as_millis()).unwrap_or(i64::MAX);
+        Ok((0..window).contains(&age).then_some(saved))
     }
     pub fn new(github: patchula_github::Client, http: Cached, cache: Cache) -> Self {
         Self {
