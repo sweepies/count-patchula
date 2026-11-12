@@ -37,12 +37,13 @@ pub(crate) fn all_ours(commits: &[Commit], actor: &str) -> bool {
         })
 }
 
-/// A head commit already proven not to be the Count's. The answer is a fact
-/// about the commit — no recorded base, a compare GitHub cannot answer, or
-/// commits in its history that are not the Count's — so it is keyed by the
-/// commit OID and never probed again. Positive answers are never stored: an
-/// owned branch is deleted by the same run, and while it lives the compare
-/// and signature checks run every time.
+/// A head commit whose message records no base, so it cannot be the
+/// Count's. Only that answer is stored: it depends on nothing but the
+/// immutable commit and this build's trailer parsing (hence per build), so
+/// it is keyed by the commit OID and not read again. A compare GitHub cannot
+/// answer, or history by another author, depends on the run's actor and on
+/// GitHub, and is probed every run; so are positive answers, whose branch the
+/// same run deletes.
 #[derive(Serialize, Deserialize)]
 struct NotOurs;
 #[derive(Serialize)]
@@ -53,6 +54,7 @@ struct NotOursScope {
 impl State for NotOurs {
     const NAMESPACE: &'static str = "not-ours";
     const VERSION: u32 = 1;
+    const PER_BUILD: bool = true;
     type Scope = NotOursScope;
 }
 
@@ -100,7 +102,8 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
 enum Probe {
     /// Only the compare and signature checks remain.
     Compare(String),
-    /// The full probe; a negative answer is kept in `not-ours` state.
+    /// The full probe; a tip with no recorded base is kept in `not-ours`
+    /// state.
     Full,
 }
 
@@ -197,19 +200,33 @@ pub async fn cleanup(
     // the rest of its batch but no deletion happens past it — the same
     // deletions and the same error as sequential probes produce.
     for chunk in work.chunks(8) {
+        // Each result says whether the commit is the Count's, and whether a
+        // negative answer came from the tip's message alone.
         let results = join_all(chunk.iter().map(|(r, probe)| {
             let head = r.commit.sha.as_str();
             async move {
                 match probe {
-                    Probe::Compare(base) => proven(client, repo, base, head, actor).await,
-                    Probe::Full => owned(client, repo, head, actor).await,
+                    Probe::Compare(base) => (proven(client, repo, base, head, actor).await, false),
+                    Probe::Full => {
+                        let tip = match client
+                            .get_fresh::<Commit>(&format!("repos/{repo}/commits/{head}"))
+                            .await
+                        {
+                            Ok(tip) => tip,
+                            Err(error) => return (Err(error.into()), false),
+                        };
+                        match recorded_base(&tip.commit.message) {
+                            None => (Ok(false), true),
+                            Some(base) => (proven(client, repo, base, head, actor).await, false),
+                        }
+                    }
                 }
             }
         }))
         .await;
-        for ((r, probe), result) in chunk.iter().zip(results) {
+        for ((r, _), (result, unrecorded)) in chunk.iter().zip(results) {
             if !result? {
-                if let Probe::Full = probe {
+                if unrecorded {
                     cache
                         .set_state::<NotOurs>(
                             &NotOursScope {
