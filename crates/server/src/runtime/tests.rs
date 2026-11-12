@@ -1199,9 +1199,13 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
                     "lockfilePending":false, "files":[]}));
             }
         }
-        let report: Report = serde_json::from_value(json!({"schemaVersion": 6,
-            "repositories":[{"repository":"owner/repo", "status":if errors {"error"} else {"complete"}, "packageFiles":[]}],
-            "actions":{"schemaVersion":2, "dryRun":false, "branches":branches,
+        // A stale repository requeues; a failure in the same batch outranks it.
+        let report: Report = serde_json::from_value(json!({"schemaVersion": 7,
+            "repositories":[{"repository":"owner/repo",
+                "status":if stale {"stale"} else if errors {"error"} else {"complete"},
+                "reason":if stale {"default branch moved since extraction; stale blob refusal, rerun"} else {"synthetic error"},
+                "packageFiles":[]}],
+            "actions":{"schemaVersion":3, "dryRun":false, "branches":branches,
                 "pullRequests":if errors {vec![json!({"repository":"owner/repo", "branch":"pr-error", "status":"error"})]} else {vec![]}}
         })).unwrap();
         let state = state().await;
@@ -1232,9 +1236,12 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
         });
         assert_eq!(failure.is_some(), errors);
         if let Some(failure) = failure {
-            assert_eq!(failure["error_count"], 3);
+            // A stale repository reports no repository-error kind of its own.
+            assert_eq!(failure["error_count"], if stale { 2 } else { 3 });
             let kinds = failure["error_kinds"].as_str().unwrap();
-            assert!(kinds.contains("repository-error\": 1"));
+            if !stale {
+                assert!(kinds.contains("repository-error\": 1"));
+            }
             assert!(kinds.contains("branch-error\": 1"));
             assert!(kinds.contains("pull-request-error\": 1"));
         }
@@ -1243,7 +1250,10 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
             .find(|event| event["message"] == "batch requeued");
         assert_eq!(requeue.is_some(), stale && !errors);
         if let Some(requeue) = requeue {
-            assert_eq!(requeue["reason"], "default branch moved; requeued");
+            assert_eq!(
+                requeue["reason"],
+                "repository changed during the run; requeued"
+            );
         }
         let finished = events
             .iter()
@@ -1272,9 +1282,11 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
 #[tokio::test]
 async fn the_fourth_requeue_in_a_row_is_a_failure_with_backoff() {
     use patchula_cache::queue::{RETRY_MS, retry_delay_ms};
-    let report: Report = serde_json::from_value(json!({"schemaVersion": 6,
-        "repositories":[{"repository":"owner/repo", "status":"complete", "packageFiles":[]}],
-        "actions":{"schemaVersion":2, "dryRun":false, "branches":[{
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 7,
+        "repositories":[{"repository":"owner/repo", "status":"stale",
+            "reason":"default branch moved since extraction; stale blob refusal, rerun",
+            "packageFiles":[]}],
+        "actions":{"schemaVersion":3, "dryRun":false, "branches":[{
             "repository":"owner/repo", "branch":"stale", "baseCommit":"base",
             "status":"stale",
             "reason":"default branch moved since extraction; stale blob refusal, rerun",
@@ -1328,7 +1340,7 @@ async fn the_fourth_requeue_in_a_row_is_a_failure_with_backoff() {
 
 #[tokio::test]
 async fn only_the_failing_repository_of_a_batch_is_retried() {
-    let report: Report = serde_json::from_value(json!({"schemaVersion": 6,
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 7,
         "repositories":[
             {"repository":"Owner/Broken", "status":"error", "packageFiles":[]},
             {"repository":"owner/fine", "status":"complete", "packageFiles":[]}

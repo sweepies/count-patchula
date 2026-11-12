@@ -131,3 +131,9 @@ build these files on one organization module.
 The cache, with HTTP validators, write receipts and the lockfile tools, is
 saved after every run and restored on the next, so later runs are much faster
 than the first.
+
+A run where a repository changed underneath it — a push moved the default
+branch while the Count was publishing, say — stops rather than write against
+the stale view and `patchula run` exits 5. The action fails the step on that
+exit, so the race shows as a failed workflow run instead of a green run that
+wrote nothing; the next scheduled run retries the repository.

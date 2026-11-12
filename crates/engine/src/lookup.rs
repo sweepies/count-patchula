@@ -1,6 +1,7 @@
 //! The lookup batch as stages: plan what each dependency needs, fetch it
 //! once for the whole batch, evaluate policy, resolve digests and read
 //! images. Report assembly lives in `report`.
+use super::write::failed;
 use super::*;
 use chrono::{DateTime, Utc};
 use std::sync::Mutex;
@@ -197,14 +198,12 @@ impl Engine {
                                         work.inventory = Some(inventory);
                                     }
                                     Err(error) => {
-                                        work.report.status = Status::Error;
-                                        work.report.reason = Some(error.to_string());
+                                        failed(&mut work.report, error.into());
                                     }
                                 }
                             }
                             Err(error) => {
-                                work.report.status = Status::Error;
-                                work.report.reason = Some(error.to_string());
+                                failed(&mut work.report, error.into());
                             }
                         }
                     }

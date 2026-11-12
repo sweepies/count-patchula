@@ -261,8 +261,8 @@ struct BatchOutcome {
     error_kinds: BTreeMap<&'static str, usize>,
     /// Repositories, lowercased, whose run failed and retries after a backoff.
     failed: BTreeSet<String>,
-    /// Repositories, lowercased, to run again because their default branch
-    /// moved while the run was writing.
+    /// Repositories, lowercased, to run again because the repository changed
+    /// under the run.
     requeued: BTreeSet<String>,
     /// The batch failed before its repositories had results; every claim retries.
     whole: bool,
@@ -272,17 +272,18 @@ impl BatchOutcome {
         use patchula_report::BranchStatus;
         let mut outcome = Self::default();
         for repo in &report.repositories {
-            if repo.status == Status::Error {
-                outcome.fail("repository-error", &repo.repository);
+            match repo.status {
+                Status::Error => outcome.fail("repository-error", &repo.repository),
+                Status::Stale => {
+                    outcome
+                        .requeued
+                        .insert(repo.repository.to_ascii_lowercase());
+                }
+                _ => {}
             }
         }
         if let Some(actions) = &report.actions {
             for branch in &actions.branches {
-                if patchula_update::needs_requeue(branch) {
-                    outcome
-                        .requeued
-                        .insert(branch.repository.to_ascii_lowercase());
-                }
                 let kind = match branch.status {
                     BranchStatus::Error => "branch-error",
                     BranchStatus::Protected => "branch-protected",
@@ -934,7 +935,7 @@ async fn worker(
                 retried = ?listed(&retried), "batch failed; failed repositories will be retried with backoff");
         }
         if !requeued.is_empty() {
-            tracing::warn!(target: "patchula_server", reason = "default branch moved; requeued",
+            tracing::warn!(target: "patchula_server", reason = "repository changed during the run; requeued",
                 installation = work[0].installation, requeued = ?listed(&requeued), "batch requeued");
         }
         tracing::info!(target: "patchula_server", installation = work[0].installation, entries = work.len(),

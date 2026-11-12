@@ -517,9 +517,12 @@ pub async fn reconcile(
         let (status, reason) = if !allowed {
             (PullRequestStatus::Skipped, "auto-merge waiting: release age, schedule or lookup evidence does not permit merging".into())
         } else {
-            one(client, inventory, repo, pr)
-                .await
-                .unwrap_or_else(|e| (PullRequestStatus::Error, format!("auto-merge: {e}")))
+            one(client, inventory, repo, pr).await.unwrap_or_else(|e| {
+                (
+                    crate::pull_requests::failure_status(&e),
+                    format!("auto-merge: {e}"),
+                )
+            })
         };
         pr.set_merge_note(Some(crate::pull_requests::MergeNote::Reason(
             reason.clone(),

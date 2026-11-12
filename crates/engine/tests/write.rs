@@ -2597,3 +2597,413 @@ async fn a_policy_that_cannot_evaluate_warns_the_dependency() {
     );
     check_transcript();
 }
+
+/// The schedule turn a completed run records, read through the same
+/// namespace and scope the engine writes — a stale run must leave it
+/// untouched so the rerun keeps the window.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Debug)]
+struct LastRun(i64);
+impl patchula_cache::State for LastRun {
+    const NAMESPACE: &'static str = "last-run";
+    const VERSION: u32 = 1;
+    type Scope = patchula_cache::RepositoryScope;
+}
+
+/// An owned open PR on `name` whose head is the signed `ours` commit — the
+/// obsolete-closure path's inspection target.
+fn owned_pr_seed(fake: &Sandbox, number: u64, name: &str, sha: &str) {
+    let mut state = fake.state();
+    let repo = state.repo_mut();
+    repo.refs.insert(format!("refs/heads/{name}"), sha.into());
+    repo.commits.insert(sha.into(), ours(sha));
+    repo.prs.insert(
+        number,
+        json!({"number":number,"node_id":format!("pr-{number}"),
+            "html_url":format!("https://github.com/demo/sandbox/pull/{number}"),
+            "state":"open","title":"stale update","body":format!("<!-- patchula:{} -->",
+                json!({"version":1,"identity":"0".repeat(64),"update":"1".repeat(64)})),
+            "head":{"ref":name,"sha":sha,"repo":{"full_name":"demo/sandbox"}},
+            "base":{"ref":"main","repo":{"full_name":"demo/sandbox"}},
+            "user":{"login":"patchula[bot]"},"labels":[],"auto_merge":null,
+            "created_at":"2026-01-01T00:00:00Z","merged_at":null,
+            "draft":false,"mergeable":true,"mergeable_state":"clean"}),
+    );
+}
+
+/// A caller-token engine over `fake`, whose cache the caller keeps so a
+/// stale run can be proved not to have recorded its schedule turn.
+async fn raced_engine(fake: &Arc<Sandbox>) -> (patchula_engine::Engine, Cache) {
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache.clone(), 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    (engine, cache)
+}
+
+/// One run must report the repository `stale` for `reason`, carry no
+/// `error` action and record no schedule turn; once `repair` settles the
+/// state the race disturbed, the next run must complete.
+async fn assert_stale_then_completes(
+    name: &str,
+    reason: &str,
+    engine: &patchula_engine::Engine,
+    cache: &Cache,
+    repair: impl FnOnce(),
+) {
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Default::default()
+    };
+    let scope = patchula_cache::RepositoryScope {
+        repository: "demo/sandbox".into(),
+    };
+    let turn = cache.state::<LastRun>(&scope).await.unwrap();
+    let report = engine.run(options(), false, false).await.unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Stale, "{name}: {repo:?}");
+    assert!(
+        repo.reason.as_deref().unwrap_or_default().contains(reason),
+        "{name}: {:?}",
+        repo.reason
+    );
+    let actions = report.actions.as_ref().unwrap();
+    assert!(
+        actions
+            .branches
+            .iter()
+            .all(|a| a.status != BranchStatus::Error)
+            && actions
+                .pull_requests
+                .iter()
+                .all(|a| a.status != patchula_report::PullRequestStatus::Error),
+        "{name}: {actions:?}"
+    );
+    assert_eq!(
+        cache.state::<LastRun>(&scope).await.unwrap(),
+        turn,
+        "{name}: a stale run must not record the schedule turn"
+    );
+    repair();
+    let report = engine.run(options(), false, false).await.unwrap();
+    assert_eq!(
+        report.repositories[0].status,
+        Status::Complete,
+        "{name}: {report:?}"
+    );
+}
+
+/// Every site the update layer reports `Error::Raced` makes the repository
+/// `stale`, not `error`: the branch's publish lease (`apply::prepare`), the
+/// write inventory, the obsolete-PR refresh and its closure lease, the
+/// cleanup metadata read, and the post-publish head read with its bounded
+/// replication retries.
+#[tokio::test(start_paused = true)]
+async fn races_under_the_run_are_stale_never_errors_and_the_rerun_completes() {
+    use github::Matcher;
+    // The publish lease: the default branch moved between the inventory
+    // and the branch write, so `prepare` refuses the whole plan set.
+    let fake = sandbox(base_files(), None, vec![]);
+    let (engine, cache) = raced_engine(&fake).await;
+    fake.github
+        .on(Matcher::Route {
+            method: reqwest::Method::GET,
+            path: "/repos/demo/sandbox/pulls".into(),
+        })
+        .times(1)
+        .mutate(|state, _| state.repo_mut().move_base("moved"));
+    assert_stale_then_completes(
+        "publish lease",
+        "default branch moved since extraction",
+        &engine,
+        &cache,
+        || {},
+    )
+    .await;
+
+    // The write inventory: the default branch moved between the
+    // extraction and the inventory read.
+    let fake = sandbox(base_files(), None, vec![]);
+    let (engine, cache) = raced_engine(&fake).await;
+    fake.github
+        .on(Matcher::Graphql("associatedPullRequests"))
+        .times(1)
+        .mutate(|state, _| state.repo_mut().move_base("moved"));
+    assert_stale_then_completes(
+        "write inventory",
+        "default branch changed since extraction",
+        &engine,
+        &cache,
+        || {},
+    )
+    .await;
+
+    // The obsolete-PR refresh: its head changed between the pulls listing
+    // and the fresh read closure inspects.
+    let fake = sandbox(base_files(), None, vec![]);
+    owned_pr_seed(&fake, 1, "patchula/old", "old-sha");
+    let (engine, cache) = raced_engine(&fake).await;
+    fake.github
+        .on(Matcher::PullRead {
+            repo: "demo/sandbox".into(),
+            number: Some(1),
+        })
+        .times(1)
+        .mutate(|state, hit| {
+            state
+                .repositories
+                .get_mut(hit.repo.as_deref().unwrap())
+                .unwrap()
+                .prs
+                .get_mut(&1)
+                .unwrap()["head"]["sha"] = json!("changed");
+        });
+    let repair = |fake: &Arc<Sandbox>| {
+        fake.github.state().repo_mut().prs.get_mut(&1).unwrap()["head"]["sha"] = json!("old-sha");
+    };
+    assert_stale_then_completes(
+        "obsolete PR refresh",
+        "obsolete PR changed during inspection",
+        &engine,
+        &cache,
+        || repair(&fake),
+    )
+    .await;
+
+    // The closure lease: the repository's default branch changed between
+    // the pulls read and the closure's metadata check.
+    let fake = sandbox(base_files(), None, vec![]);
+    owned_pr_seed(&fake, 1, "patchula/old", "old-sha");
+    let (engine, cache) = raced_engine(&fake).await;
+    fake.github
+        .on(Matcher::PullRead {
+            repo: "demo/sandbox".into(),
+            number: Some(1),
+        })
+        .times(1)
+        .mutate(|state, _| {
+            state.repo_mut().default_branch = "other".into();
+        });
+    let repair = |fake: &Arc<Sandbox>| {
+        fake.github.state().repo_mut().default_branch = "main".into();
+    };
+    assert_stale_then_completes(
+        "closure lease",
+        "default branch changed before PR closure",
+        &engine,
+        &cache,
+        || repair(&fake),
+    )
+    .await;
+
+    // The cleanup lease: the default branch changed between the branches
+    // listing and the metadata check before obsolete-branch deletion.
+    let fake = sandbox(base_files(), None, vec![]);
+    branch(&fake.github, "patchula/old", "old-sha");
+    let (engine, cache) = raced_engine(&fake).await;
+    fake.github
+        .on(Matcher::Route {
+            method: reqwest::Method::GET,
+            path: "/repos/demo/sandbox/branches".into(),
+        })
+        .times(1)
+        .mutate(|state, _| {
+            state.repo_mut().default_branch = "other".into();
+        });
+    let repair = |fake: &Arc<Sandbox>| {
+        fake.github.state().repo_mut().default_branch = "main".into();
+    };
+    assert_stale_then_completes(
+        "cleanup lease",
+        "default branch changed before cleanup",
+        &engine,
+        &cache,
+        || repair(&fake),
+    )
+    .await;
+
+    // The post-publish head read: a foreign push moved the PR's head to a
+    // commit the run cannot name, so it stops rather than describe someone
+    // else's commit.
+    let fake = sandbox(base_files(), None, vec![]);
+    let (engine, cache) = raced_engine(&fake).await;
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Default::default()
+    };
+    let report = engine.run(options(), false, false).await.unwrap();
+    assert_eq!(report.repositories[0].status, Status::Complete);
+    *fake.catalog.lock().unwrap() =
+        json!({"dist-tags":{"latest":"2.1.0"},"versions":{"1.0.0":{},"2.0.0":{},"2.1.0":{}}});
+    fake.github
+        .on(Matcher::PullRead {
+            repo: "demo/sandbox".into(),
+            number: None,
+        })
+        .times(1)
+        .mutate(|state, hit| {
+            state
+                .repositories
+                .get_mut(hit.repo.as_deref().unwrap())
+                .unwrap()
+                .prs
+                .get_mut(&hit.pull.unwrap())
+                .unwrap()["head"]["sha"] = json!("human-commit");
+        });
+    let repair = |fake: &Arc<Sandbox>| {
+        let mut state = fake.github.state();
+        let repo = state.repo_mut();
+        let head = repo.refs["refs/heads/patchula/fixture-2.x"].clone();
+        repo.prs.get_mut(&1).unwrap()["head"]["sha"] = json!(head);
+    };
+    assert_stale_then_completes(
+        "published head read",
+        "unexpected commit",
+        &engine,
+        &cache,
+        || repair(&fake),
+    )
+    .await;
+
+    // The bounded retries: replication never shows the published head, so
+    // the run stops after its retries rather than trusting the stale read.
+    let fake = sandbox(base_files(), None, vec![]);
+    let (engine, cache) = raced_engine(&fake).await;
+    let report = engine.run(options(), false, false).await.unwrap();
+    assert_eq!(report.repositories[0].status, Status::Complete);
+    *fake.catalog.lock().unwrap() =
+        json!({"dist-tags":{"latest":"2.1.0"},"versions":{"1.0.0":{},"2.0.0":{},"2.1.0":{}}});
+    fake.github.state().settings.pr_lag_reads = usize::MAX;
+    let repair = |fake: &Arc<Sandbox>| {
+        fake.github.state().settings.pr_lag_reads = 0;
+    };
+    assert_stale_then_completes(
+        "bounded retries",
+        "bounded retries",
+        &engine,
+        &cache,
+        || repair(&fake),
+    )
+    .await;
+    check_transcript();
+}
+
+/// A repository that raced keeps its schedule turn: the window `since`
+/// stays empty, so the next run still sees the cron time the raced run
+/// covered. With the turn recorded the second run's window — only the
+/// cron time in its last minute counts — would hold the update a day.
+#[tokio::test(start_paused = true)]
+async fn a_stale_run_keeps_the_schedule_window_for_its_rerun() {
+    use github::Matcher;
+    let mut files = base_files();
+    files.insert(
+        "patchula.pkl".into(),
+        "amends \"PatchulaConfig.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0; windows = new Listing { new Window { cron = new Listing { \"0 12 * * *\" }; zone = \"UTC\" } } }\nmanagers = new Listing { \"npm\" }\n".into(),
+    );
+    let fake = sandbox(files, None, vec![]);
+    let (engine, _cache) = raced_engine(&fake).await;
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Default::default()
+    };
+    let at = |text: &str| chrono::DateTime::parse_from_rfc3339(text).unwrap().to_utc();
+    fake.github
+        .on(Matcher::Route {
+            method: reqwest::Method::GET,
+            path: "/repos/demo/sandbox/pulls".into(),
+        })
+        .times(1)
+        .mutate(|state, _| state.repo_mut().move_base("moved"));
+    let report = engine
+        .run_at(options(), false, false, at("2026-10-15T12:00:30Z"))
+        .await
+        .unwrap();
+    assert_eq!(report.repositories[0].status, Status::Stale);
+    // Seconds later the noon window is still inside the previous-minute
+    // look-back only because the raced run recorded no turn; with the turn
+    // recorded its `since` would sit after the cron time and the update
+    // would wait a day.
+    let report = engine
+        .run_at(options(), false, false, at("2026-10-15T12:00:45Z"))
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Complete, "{repo:?}");
+    let actions = report.actions.as_ref().unwrap();
+    assert_eq!(actions.branches.len(), 1, "{actions:?}");
+    assert_eq!(actions.branches[0].status, BranchStatus::Created);
+    check_transcript();
+}
+
+/// A repository holding both a raced action and a failed action reports
+/// `error`: failures outrank the stale the race would otherwise leave.
+#[tokio::test(start_paused = true)]
+async fn an_error_outranks_a_raced_pull_request() {
+    use github::Matcher;
+    let mut files = base_files();
+    files.insert(
+        "package.json".into(),
+        "{\n  \"dependencies\": {\"fixture\": \"1.0.0\", \"other\": \"1.0.0\"}\n}\n".into(),
+    );
+    let fake = sandbox(files, None, vec![]);
+    let (engine, _cache) = raced_engine(&fake).await;
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Default::default()
+    };
+    // Both updates publish, one PR each: `patchula/fixture-2.x` is #1 and
+    // `patchula/other-2.x` is #2.
+    let report = engine.run(options(), false, false).await.unwrap();
+    assert_eq!(report.repositories[0].status, Status::Complete);
+    *fake.catalog.lock().unwrap() =
+        json!({"dist-tags":{"latest":"2.1.0"},"versions":{"1.0.0":{},"2.0.0":{},"2.1.0":{}}});
+    // The first pull read races; the second PR's update write fails.
+    fake.github
+        .on(Matcher::PullRead {
+            repo: "demo/sandbox".into(),
+            number: Some(1),
+        })
+        .times(1)
+        .mutate(|state, hit| {
+            state
+                .repositories
+                .get_mut(hit.repo.as_deref().unwrap())
+                .unwrap()
+                .prs
+                .get_mut(&hit.pull.unwrap())
+                .unwrap()["head"]["sha"] = json!("human-commit");
+        });
+    fake.github
+        .on(Matcher::Route {
+            method: reqwest::Method::PATCH,
+            path: "/repos/demo/sandbox/pulls/2".into(),
+        })
+        .times(1)
+        .then_fail(500);
+    let report = engine.run(options(), false, false).await.unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Error, "{repo:?}");
+    assert!(
+        repo.reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("pull request actions failed"),
+        "{:?}",
+        repo.reason
+    );
+    let actions = report.actions.as_ref().unwrap();
+    let statuses: Vec<_> = actions
+        .pull_requests
+        .iter()
+        .map(|a| (a.branch.as_str(), a.status))
+        .collect();
+    assert!(
+        statuses
+            .iter()
+            .any(|(_, s)| *s == patchula_report::PullRequestStatus::Stale)
+            && statuses
+                .iter()
+                .any(|(_, s)| *s == patchula_report::PullRequestStatus::Error),
+        "{statuses:?}"
+    );
+    check_transcript();
+}

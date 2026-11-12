@@ -828,7 +828,9 @@ impl Engine {
                 ]),
             }),
         };
-        report.validate()?;
+        // A `run` attaches `actions` after the writes and validates again;
+        // a repository that raced here is `stale` before that section exists.
+        report.validate_before_actions()?;
         Ok((report, work))
     }
 
@@ -1396,6 +1398,16 @@ fn lockfile_concurrency() -> usize {
 fn fail(repo: &mut patchula_report::Repository, reason: impl Into<String>) {
     if repo.status != Status::Error {
         repo.status = Status::Error;
+        repo.reason = Some(reason.into());
+    }
+}
+
+/// Mark a repository stale: it changed under the run, so the run stopped
+/// before writing against the old view and a rerun retries it. Only a
+/// still-complete repository can go stale — a failure outranks a later race.
+fn stale(repo: &mut patchula_report::Repository, reason: impl Into<String>) {
+    if repo.status == Status::Complete {
+        repo.status = Status::Stale;
         repo.reason = Some(reason.into());
     }
 }

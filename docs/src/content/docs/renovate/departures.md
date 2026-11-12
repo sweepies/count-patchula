@@ -103,6 +103,14 @@ missing, and behaviour that changes their pull requests. The
 - **The Count:** Does not read them. Each pip requirements file is listed as skipped with the reason, recommending a move to uv (`uv init --bare`, then `uv add -r requirements.txt`), whose `pyproject.toml` and `uv.lock` it maintains
 - **Why:** pip takes each package from whatever index a file's options, the files it includes and the environment name, which cannot be settled for certain from the repository; a guess could propose someone else's package of the same name
 
+### A run that lost a race exits 5 {#stale-runs}
+
+- **Renovate:** A repository that changes during a run is retried on a later run, and the run itself succeeds
+- **The Count:** The repository is reported `stale`, the server runs it again a minute later, and `patchula run` exits 5, so a scheduled GitHub Actions run fails its step
+- **Why:** A run that wrote nothing should not look green; the next scheduled run retries it
+
+See [GitHub Actions](/guide/github-actions/).
+
 ## What gets updated
 
 ### Indirect Go requirements {#indirect-go-requirements}

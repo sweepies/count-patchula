@@ -55,8 +55,8 @@ pub enum Finish {
     /// It failed, and runs again after a backoff that grows with each
     /// consecutive failure.
     Failed,
-    /// It must run again, without having failed: its default branch moved
-    /// while the run was writing.
+    /// It must run again, without having failed: the repository changed
+    /// under the run.
     Requeue,
 }
 impl Finish {

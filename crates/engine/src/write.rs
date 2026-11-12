@@ -1,6 +1,6 @@
 //! The write path as named steps over one repository's plans, one
 //! authoritative inventory and one shared reconciliation tail.
-use super::{Engine, Error, Result, Stage, Work, fail, lockfile_concurrency};
+use super::{Engine, Error, Result, Stage, Work, fail, lockfile_concurrency, stale};
 use patchula_config::Config;
 use patchula_manager::Dependency;
 use patchula_report::{
@@ -21,18 +21,33 @@ pub(super) struct Write<'a> {
 }
 
 /// A write step's failure, with the severity the report gives it declared
-/// once per step. `Repo` fails the repository; `Warning` leaves it complete.
-/// Either ends the repository's write here — a step whose failure must not
-/// end it carries the failure inside its result instead.
-enum StepFailure {
+/// once per step. `Repo` fails the repository; `Stale` marks it stale for
+/// the rerun that re-reads what changed; `Warning` leaves it complete.
+/// Any of them ends the repository's write here — a step whose failure must
+/// not end it carries the failure inside its result instead.
+pub(super) enum StepFailure {
     Repo(String),
+    Stale(String),
     Warning(String),
 }
 
+/// An update error's declared severity: a lost race with the repository is
+/// stale — nothing was written against the changed state and a rerun
+/// retries it — and anything else is the repository's failure.
+impl From<patchula_update::Error> for StepFailure {
+    fn from(error: patchula_update::Error) -> Self {
+        match error {
+            patchula_update::Error::Raced(reason) => Self::Stale(reason.into()),
+            error => Self::Repo(error.to_string()),
+        }
+    }
+}
+
 /// Applies a step's declared severity.
-fn failed(repo: &mut Repository, failure: StepFailure) {
+pub(super) fn failed(repo: &mut Repository, failure: StepFailure) {
     match failure {
         StepFailure::Repo(reason) => fail(repo, reason),
+        StepFailure::Stale(reason) => stale(repo, reason),
         StepFailure::Warning(reason) => repo.warnings.push(reason),
     }
 }
@@ -133,6 +148,16 @@ impl Write<'_> {
                         fail(repo, "auto-merge failed or was protected; inspect actions");
                     }
                     dashboard_failed(repo, &settlement);
+                    // A raced auto-merge still makes the repository stale
+                    // once failures have had their say: a rerun retries it.
+                    if let Some(reason) = settlement
+                        .merge_actions
+                        .iter()
+                        .find(|a| a.status == PullRequestStatus::Stale)
+                        .and_then(|a| a.reason.clone())
+                    {
+                        stale(repo, reason);
+                    }
                     self.pull_requests.extend(
                         plans
                             .iter()
@@ -253,6 +278,24 @@ impl Write<'_> {
                     "one or more branch actions failed or were protected; inspect actions",
                 );
             }
+        }
+        // Failures and protections have had their say; any action that lost a
+        // race with the repository still makes it stale for the rerun, and
+        // the first such action names what changed. `stale` itself never
+        // overrides a failure.
+        let stale_reason = plans
+            .iter()
+            .find(|p| p.action().status == BranchStatus::Stale)
+            .and_then(|p| p.action().reason.clone())
+            .or_else(|| {
+                self.pull_requests
+                    .iter()
+                    .filter(|a| a.repository == repo.repository)
+                    .find(|a| a.status == PullRequestStatus::Stale)
+                    .and_then(|a| a.reason.clone())
+            });
+        if let Some(reason) = stale_reason {
+            stale(repo, reason);
         }
         self.branches
             .extend(plans.into_iter().map(|p| p.into_action()));
@@ -397,7 +440,7 @@ impl Write<'_> {
             inventory,
         )
         .await
-        .map_err(|e| StepFailure::Repo(e.to_string()))
+        .map_err(StepFailure::from)
     }
 
     /// The REST lifecycle view for a full write: every open and closed pull
@@ -421,7 +464,7 @@ impl Write<'_> {
             &inventory.actor,
         )
         .await
-        .map_err(|e| StepFailure::Repo(e.to_string()))?;
+        .map_err(StepFailure::from)?;
         state.set_advertised_server(self.engine.advertised_server.clone());
         state.set_merge_settings(inventory.merge_settings.clone());
         Ok(state)
@@ -471,7 +514,7 @@ impl Write<'_> {
             self.dry_run,
         )
         .await
-        .map_err(|e| StepFailure::Repo(e.to_string()))
+        .map_err(StepFailure::from)
     }
 
     /// Publish the planned branches: trees, commits and the leased ref move.

@@ -201,6 +201,41 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
     patchula_testkit::transcripts::check(&snapshot);
 }
 
+/// A repository that changed under the run exits 5 — an error would be 1 —
+/// and once the change settles the same run exits 0.
+#[tokio::test(start_paused = true)]
+async fn a_raced_run_exits_five_and_completes_when_it_settles() {
+    let (github, hosts) = github();
+    let directory = tempfile::tempdir().unwrap();
+    let cache_path = directory.path().join("cache");
+    github
+        .on(patchula_testkit::github::Matcher::Route {
+            method: reqwest::Method::GET,
+            path: "/repos/demo/sandbox/pulls".into(),
+        })
+        .times(1)
+        .mutate(|state, _| state.repo_mut().move_base("moved"));
+    let args: Vec<_> = [
+        OsStr::new("run"),
+        OsStr::new("--json"),
+        OsStr::new("--cache"),
+        cache_path.as_os_str(),
+        OsStr::new("demo/sandbox"),
+    ]
+    .into();
+    let app = App::parse_from(&args).unwrap();
+    let services = Services {
+        token: Some("offline-installation".into()),
+        transport: Some(hosts.clone()),
+        ..Services::default()
+    };
+    assert_eq!(run(&app, &services).await.unwrap(), 5);
+    // The base stayed moved and consistent: the rerun writes the update.
+    assert_eq!(run(&app, &services).await.unwrap(), 0);
+    let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transcripts.tsv");
+    patchula_testkit::transcripts::check(&snapshot);
+}
+
 #[test]
 fn github_remotes_name_their_repository() {
     use super::github_repository;

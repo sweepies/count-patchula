@@ -3,11 +3,11 @@ title: "JSON report"
 description: "The JSON report printed by patchula lookup --json and patchula run --json: repositories, dependencies, updates and lookup failures."
 ---
 `patchula lookup --json` and `patchula run --json` print one report for the
-whole batch. This page describes schema version 6.
+whole batch. This page describes schema version 7.
 
 ```json
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "repositories": [{
     "repository": "owner/repo",
     "status": "complete",
@@ -31,10 +31,13 @@ whole batch. This page describes schema version 6.
 ```
 
 Readers should reject any other `schemaVersion`. Unknown fields are rejected
-too, so a new field means a new version. Version 6 split branch and pull
-request statuses, added the `stale` branch status and limited an image
-`state` to the ones in [security](/guide/security/), with the `actions`
-object at its own version 2; version 5 added a dependency's
+too, so a new field means a new version. Version 7 added the repository
+`stale` status for a repository that changed under the run, and `stale` as
+a pull request action status, with the `actions` object at its own version
+3; version 6 split branch and pull request statuses, added the `stale`
+branch status and limited an image `state` to the ones in
+[security](/guide/security/), with the `actions` object at its own version
+2; version 5 added a dependency's
 `registry`; version 4 added the `reason` of a notice that is not a template
 update; version 3 added an image rebuild's `image` check.
 
@@ -43,8 +46,8 @@ update; version 3 added an image rebuild's `image` check.
 | Field | |
 |---|---|
 | `repository` | `owner/name` |
-| `status` | `complete`, `skipped` or `error` |
-| `reason` | Why it was skipped or failed; null when complete |
+| `status` | `complete`, `skipped`, `stale` or `error` |
+| `reason` | Why it was skipped, raced or failed; null when complete |
 | `packageFiles` | Files with dependencies, each with a `path` and `dependencies` |
 | `warnings` | Optional. Files skipped, stale registry data and similar |
 | `skipped` | Optional. Declarations that are not read as versions, such as images built from variables: `manager`, `path`, `line`, `value` and `reason` |
@@ -54,6 +57,14 @@ update; version 3 added an image rebuild's `image` check.
 | `defaultBranch`, `commit` | Optional. The branch and commit that were read |
 
 A `complete` repository with no package files had nothing the Count supports.
+
+A `stale` repository is one that changed under the run — its default branch
+moved, a pull request it was reconciling changed, or its write inventory
+disagreed with what the run read — so the run stopped before writing against
+the stale view rather than report a failure. Only a real run reports it: the
+report carries `actions` and is never a dry run. The server runs the
+repository again, and `run` exits 5 when a repository went stale and none
+errored.
 
 ## Lookup failures
 
@@ -133,7 +144,7 @@ when this list is not empty.
 
 ```json
 "actions": {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "dryRun": true,
   "branches": [{
     "repository": "owner/repo",
@@ -164,7 +175,9 @@ A branch's status is one of `planned`, `created`, `updated`, `rebased`,
 `stale` means the default branch changed or moved after the Count read it, so
 nothing was written; the server runs the repository again. A pull request's
 status is one of `planned`, `created`, `updated`, `unchanged`, `closed`,
-`merged`, `skipped`, `protected` and `error`. A dry run never reports a write
+`merged`, `skipped`, `stale`, `protected` and `error`; `stale` means a
+publish race — the PR changed under the run, or its head did not show the
+published commit — so a rerun retries it. A dry run never reports a write
 (`created`, `updated`, `rebased`, `closed`, `merged` or `deleted`) and has no
 `commit`. A published branch has its `commit` and `verified: true`.
 

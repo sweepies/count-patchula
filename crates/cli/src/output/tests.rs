@@ -71,7 +71,7 @@ fn check(name: &str, actual: &str) {
 #[test]
 fn a_lookup_reads_plain_with_counts_first() {
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 7,
         "repositories": [repository("local/web-chat")]
     }))
     .unwrap();
@@ -108,10 +108,10 @@ fn a_run_lists_branches_and_pull_requests_per_repository() {
         broken[key] = json!([]);
     }
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 7,
         "repositories": [broken, repository("acme/web")],
         "actions": {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "dryRun": true,
             "branches": [
                 {"repository": "acme/web", "branch": "patchula/npm-lodash-4.x", "baseCommit": "abc",
@@ -145,10 +145,47 @@ fn a_run_lists_branches_and_pull_requests_per_repository() {
     check("run.txt", &text);
 }
 
+/// A raced repository warns with its `stale` reason, and the headline
+/// still describes the visit rather than a failure to read.
+#[test]
+fn a_stale_repository_warns_with_the_race_and_keeps_the_headline() {
+    let mut raced = repository("acme/api");
+    raced["status"] = json!("stale");
+    raced["reason"] = json!("default branch changed during the run; run again");
+    raced["packageFiles"] = json!([]);
+    for key in ["warnings", "skipped", "notices", "lookupFailures"] {
+        raced[key] = json!([]);
+    }
+    let report: Report = serde_json::from_value(json!({
+        "schemaVersion": 7,
+        "repositories": [raced, repository("acme/web")],
+        "actions": {
+            "schemaVersion": 3,
+            "dryRun": false,
+            "branches": [
+                {"repository": "acme/api", "branch": "patchula/npm-lodash-4.x", "baseCommit": "abc",
+                 "status": "stale", "reason": "default branch moved since extraction; stale blob refusal, rerun",
+                 "message": "fix(deps): update lodash to 4.17.21", "previousCommit": null, "commit": null,
+                 "verified": null, "lockfilePending": false, "files": []}
+            ],
+            "pullRequests": []
+        }
+    }))
+    .unwrap();
+    let text = report_text(&report);
+    assert!(!text.contains('\x1b'), "{text}");
+    assert!(
+        text.contains("stale: default branch changed during the run; run again"),
+        "{text}"
+    );
+    assert!(!text.contains("could not be read"), "{text}");
+    check("stale.txt", &text);
+}
+
 #[test]
 fn a_terminal_fits_rows_to_its_width_but_leaves_links_whole() {
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 7,
         "repositories": [repository("local/web-chat")]
     }))
     .unwrap();

@@ -32,6 +32,8 @@ const TOKEN_HELP: &str = "lookup/run requires PATCHULA_TOKEN, GITHUB_TOKEN or GH
 const LOG_VAR: &str = "PATCHULA_LOG";
 /// A lookup or apply finished, but some dependencies' lookups failed.
 const LOOKUP_FAILED: u8 = 4;
+/// A run finished, but a repository changed under it; a rerun retries it.
+const STALE: u8 = 5;
 const RECHECK_VAR: &str = "PATCHULA_RECHECK";
 const HOME_VAR: &str = "HOME";
 
@@ -531,8 +533,15 @@ async fn batch(
         .iter()
         .map(|repo| repo.lookup_failures.len())
         .sum();
+    let raced = report
+        .repositories
+        .iter()
+        .filter(|repo| repo.status == Status::Stale)
+        .count();
     Ok(if errors > 0 {
         1
+    } else if raced > 0 {
+        STALE
     } else if failures > 0 && run.is_none() {
         LOOKUP_FAILED
     } else {

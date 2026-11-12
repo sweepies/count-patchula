@@ -648,7 +648,6 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
             "case={case}: {:?}",
             plan.action()
         );
-        assert_eq!(patchula_update::needs_requeue(plan.action()), case == 2);
         assert!(
             !server
                 .state()
@@ -687,7 +686,7 @@ async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
     assert!(
         plans
             .iter()
-            .all(|plan| patchula_update::needs_requeue(plan.action()))
+            .all(|plan| plan.action().status == BranchStatus::Stale)
     );
     assert!(server.state().writes.is_empty());
     check_transcript();
@@ -1690,7 +1689,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
                 assert!(started.elapsed() >= std::time::Duration::from_millis(300));
             }
             "timeout" => {
-                assert_eq!(result.status, patchula_report::PullRequestStatus::Error);
+                assert_eq!(result.status, patchula_report::PullRequestStatus::Stale);
                 assert_eq!(reads, 7);
                 assert!(
                     result
@@ -1702,7 +1701,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
                 assert!(!result.reason.as_deref().unwrap().contains("moved"));
             }
             "foreign" => {
-                assert_eq!(result.status, patchula_report::PullRequestStatus::Error);
+                assert_eq!(result.status, patchula_report::PullRequestStatus::Stale);
                 assert_eq!(reads, 1);
                 assert!(
                     result
