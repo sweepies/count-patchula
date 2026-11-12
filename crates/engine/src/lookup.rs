@@ -151,7 +151,13 @@ impl Engine {
         let repos = &discovery.repos;
         let overrides = &discovery.overrides;
         let hint_digests = discovery.hint.digests.clone();
-        let hint_tags = discovery.hint.tags.clone();
+        // A pinned tag is also a hinted ref; the tracked ref read answers it.
+        let hint_tags: BTreeSet<DigestKey> = discovery
+            .hint
+            .tags
+            .difference(&hint_digests)
+            .cloned()
+            .collect();
         let scans = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("extraction");

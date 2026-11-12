@@ -425,23 +425,7 @@ impl Client {
     /// set keeps each key in one chunk, so the result never depends on
     /// which finishes first.
     pub async fn fresh_tag_digests(&self, keys: &BTreeSet<(String, String)>) -> TagDigests {
-        // A query's cost grows with the repositories in it, not the tags:
-        // group the keys by repository and ask for eight at a time.
-        let mut by_repository = BTreeMap::<&str, Vec<(String, String)>>::new();
-        for key in keys {
-            by_repository
-                .entry(key.0.as_str())
-                .or_default()
-                .push(key.clone());
-        }
-        // Owned chunks: a closure over borrowed slices is not general enough
-        // for the server's boxed Send futures.
-        let groups: Vec<Vec<(String, String)>> = by_repository
-            .into_values()
-            .collect::<Vec<_>>()
-            .chunks(8)
-            .map(|group| group.concat())
-            .collect();
+        let groups = tag_groups(keys);
         let chunks = stream::iter(groups)
             .map(|chunk| async move { self.fresh_tag_chunk(&chunk).await })
             .buffer_unordered(self.github.concurrency())
@@ -571,6 +555,44 @@ fn peel(value: &Value) -> Option<&Value> {
         value = value.get("target")?;
     }
     None
+}
+
+/// The most repositories one tag-digest document asks about.
+const REPOSITORIES_PER_QUERY: usize = 8;
+/// The most tags one tag-digest document asks about.
+const TAGS_PER_QUERY: usize = 64;
+
+/// Tag keys grouped into documents. A query's cost grows with the
+/// repositories in it, so a document asks about at most eight repositories
+/// and 64 tags; a repository with more tags is split across documents.
+/// Owned groups: a closure over borrowed slices is not general enough for
+/// the server's boxed Send futures.
+fn tag_groups(keys: &BTreeSet<(String, String)>) -> Vec<Vec<(String, String)>> {
+    let mut by_repository = BTreeMap::<&str, Vec<(String, String)>>::new();
+    for key in keys {
+        by_repository
+            .entry(key.0.as_str())
+            .or_default()
+            .push(key.clone());
+    }
+    let mut groups = Vec::new();
+    let (mut current, mut repositories) = (Vec::<(String, String)>::new(), 0);
+    for tags in by_repository.into_values() {
+        for piece in tags.chunks(TAGS_PER_QUERY) {
+            if repositories == REPOSITORIES_PER_QUERY
+                || current.len() + piece.len() > TAGS_PER_QUERY
+            {
+                groups.push(std::mem::take(&mut current));
+                repositories = 0;
+            }
+            current.extend_from_slice(piece);
+            repositories += 1;
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    groups
 }
 
 #[cfg(test)]
@@ -1115,6 +1137,22 @@ mod tests {
     /// The flat 64-key chunking the repository chunking replaced answers the
     /// same digest map for every key: ten repositories of tags spread one
     /// query into several without changing what each key resolves to.
+    #[test]
+    fn tag_documents_hold_at_most_eight_repositories_and_64_tags() {
+        let key = |r: usize, t: usize| (format!("o/r{r}"), format!("v{t}"));
+        // One repository with 100 tags splits; ten small ones fill by eight.
+        let mut keys: BTreeSet<_> = (0..100).map(|t| key(0, t)).collect();
+        keys.extend((1..=10).flat_map(|r| (0..2).map(move |t| key(r, t))));
+        let groups = tag_groups(&keys);
+        for group in &groups {
+            let repositories: BTreeSet<_> = group.iter().map(|(r, _)| r).collect();
+            assert!(repositories.len() <= 8 && group.len() <= 64, "{group:?}");
+        }
+        let all: Vec<_> = groups.into_iter().flatten().collect();
+        assert_eq!(all.len(), keys.len(), "no key in two documents");
+        assert_eq!(all.into_iter().collect::<BTreeSet<_>>(), keys);
+    }
+
     #[tokio::test]
     async fn tag_digest_chunks_by_repository_match_the_flat_chunking() {
         use patchula_testkit::github::{FakeGitHub, Hosts};
