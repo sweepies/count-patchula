@@ -299,13 +299,15 @@ fn pr_checkbox_requires_bot_author_same_repository_and_a_valid_ownership_marker(
     }
 }
 
-struct InventoryPages(std::sync::Mutex<usize>);
+/// Records `(document, issueFilter)` per request and answers canned pages:
+/// `refs` has two pages, `issues` three, over the stored `issue`/`ref`
+/// nodes. The filter is recorded, not applied — the differential suite
+/// proves the filtered set; this test proves the document sequence.
+struct InventoryPages(std::sync::Mutex<Vec<(String, serde_json::Value)>>);
 impl patchula_http::Transport for InventoryPages {
     fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
         let input: serde_json::Value =
             serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
-        assert_eq!(input["query"], patchula_update::INVENTORY_QUERY);
-        *self.0.lock().unwrap() += 1;
         let page = |cursor: &serde_json::Value, pages: usize, node: serde_json::Value| {
             let offset = cursor
                 .as_str()
@@ -318,13 +320,79 @@ impl patchula_http::Transport for InventoryPages {
                 .and_then(|c| c.parse::<usize>().ok())
                 .unwrap_or(0)
         };
-        let value = json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":[],"repository":{
-            "id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,
-            "mergeCommitAllowed":false,"rebaseMergeAllowed":false,"deleteBranchOnMerge":false,
-            "defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"base"}},
-            "refs":page(&input["variables"]["cursor"],2,json!({"name":format!("ref{}",n(&input["variables"]["cursor"])),"target":null,"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}})),
-            "issues":page(&input["variables"]["issueCursor"],3,json!({"id":format!("i{}",n(&input["variables"]["issueCursor"])),"number":n(&input["variables"]["issueCursor"]),"title":"t","body":"b","state":"OPEN"}))
-        }}});
+        let head = json!({"name":"main","target":{"oid":"base"}});
+        let refs = |input: &serde_json::Value| {
+            page(
+                &input["variables"]["cursor"],
+                2,
+                json!({"name":format!("ref{}",n(&input["variables"]["cursor"])),"target":null,"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}),
+            )
+        };
+        let issues = |input: &serde_json::Value| {
+            page(
+                &input["variables"]["issueCursor"],
+                3,
+                json!({"id":format!("i{}",n(&input["variables"]["issueCursor"])),"number":n(&input["variables"]["issueCursor"]),"title":"t","body":"b","state":"OPEN"}),
+            )
+        };
+        let query = input["query"].as_str().unwrap();
+        let (name, value) = if query == patchula_update::INVENTORY_QUERY {
+            // The first page asks for everything once.
+            (
+                "first",
+                json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":[],"repository":{
+                    "id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,
+                    "mergeCommitAllowed":false,"rebaseMergeAllowed":false,"deleteBranchOnMerge":false,
+                    "defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"base"}},
+                    "refs":refs(&input),
+                    "issues":issues(&input)
+                }}}),
+            )
+        } else if query == patchula_update::INVENTORY_NEXT_QUERY {
+            // Continuations carry every connection that still has a page,
+            // the actor and the default branch's head — nothing else.
+            (
+                "next",
+                json!({"data":{"viewer":{"login":"patchula[bot]"},"repository":{
+                    "defaultBranchRef":head,
+                    "refs":refs(&input),
+                    "issues":issues(&input)
+                }}}),
+            )
+        } else if query == patchula_update::INVENTORY_REFS_QUERY {
+            (
+                "refs",
+                json!({"data":{"viewer":{"login":"patchula[bot]"},"repository":{
+                    "defaultBranchRef":head,
+                    "refs":refs(&input)
+                }}}),
+            )
+        } else if query == patchula_update::INVENTORY_ISSUES_QUERY {
+            (
+                "issues",
+                json!({"data":{"viewer":{"login":"patchula[bot]"},"repository":{
+                    "defaultBranchRef":head,
+                    "issues":issues(&input)
+                }}}),
+            )
+        } else if query == patchula_update::INVENTORY_LAST_QUERY {
+            // The closing re-read of the first page's constants, sent when
+            // the walk paged: the same constants, no connections.
+            (
+                "last",
+                json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":[],"repository":{
+                    "id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,
+                    "mergeCommitAllowed":false,"rebaseMergeAllowed":false,"deleteBranchOnMerge":false,
+                    "defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"base"}}
+                }}}),
+            )
+        } else {
+            panic!("unexpected inventory document: {query}");
+        };
+        self.0
+            .lock()
+            .unwrap()
+            .push((name.into(), input["variables"]["issueFilter"].clone()));
         Box::pin(async move {
             Ok(patchula_http::Response {
                 status: reqwest::StatusCode::OK,
@@ -336,7 +404,7 @@ impl patchula_http::Transport for InventoryPages {
     }
 }
 #[tokio::test]
-async fn shared_inventory_follows_each_connection_without_duplicating_finished_pages() {
+async fn split_inventory_pages_each_connection_once_and_never_repeats_a_finished_one() {
     let fake = std::sync::Arc::new(InventoryPages(Default::default()));
     let cache = patchula_cache::Cache::open(":memory:", Default::default())
         .await
@@ -352,30 +420,58 @@ async fn shared_inventory_follows_each_connection_without_duplicating_finished_p
     let mut repo = repository();
     repo.commit = Some("base".into());
     repo.default_branch = Some("main".into());
-    let inventory = Inventory::read(&github, &cache, &repo, &config)
-        .await
-        .unwrap();
-    assert_eq!(
+    let read = || Inventory::read(&github, &cache, &repo, &config);
+    let names = |inventory: &Inventory| {
         inventory
             .refs
             .items
             .iter()
             .flatten()
-            .map(|r| r.name.as_str())
-            .collect::<Vec<_>>(),
-        ["ref0", "ref1"]
-    );
-    assert_eq!(
+            .map(|r| r.name.clone())
+            .collect::<Vec<String>>()
+    };
+    let titles = |inventory: &Inventory| {
         inventory
             .issues
             .items
             .iter()
             .flatten()
-            .map(|i| i.title.as_str())
-            .collect::<Vec<_>>(),
-        ["t", "t", "t"]
+            .map(|i| i.title.clone())
+            .collect::<Vec<String>>()
+    };
+    let filtered = || json!({"createdBy":"patchula[bot]"});
+    let sent = |fake: &InventoryPages| std::mem::take(&mut *fake.0.lock().unwrap());
+    // Cold, without a stored actor: the unfiltered first page leaves issues
+    // unfinished, so that connection restarts on the answer's actor — the
+    // one wasted page is the cold tax the hint buys back.
+    let inventory = read().await.unwrap();
+    assert_eq!(names(&inventory), ["ref0", "ref1"]);
+    assert_eq!(titles(&inventory), ["t", "t", "t"]);
+    assert_eq!(
+        sent(&fake),
+        [
+            ("first".to_string(), serde_json::Value::Null),
+            ("next".into(), filtered()),
+            ("issues".into(), filtered()),
+            ("issues".into(), filtered()),
+            ("last".into(), serde_json::Value::Null),
+        ]
     );
-    assert_eq!(*fake.0.lock().unwrap(), 3);
+    // Warm: the stored actor filters the first page, and one continuation
+    // carries both connections until `refs` finishes — three requests, not
+    // refs plus issues, then the closing re-read of the constants.
+    let inventory = read().await.unwrap();
+    assert_eq!(names(&inventory), ["ref0", "ref1"]);
+    assert_eq!(titles(&inventory), ["t", "t", "t"]);
+    assert_eq!(
+        sent(&fake),
+        [
+            ("first".to_string(), filtered()),
+            ("next".into(), filtered()),
+            ("issues".into(), filtered()),
+            ("last".into(), serde_json::Value::Null),
+        ]
+    );
 }
 #[test]
 fn the_dashboard_hides_the_advertised_server_under_its_marker() {

@@ -108,6 +108,22 @@ fn graphql_author(pr: &Value) -> Value {
     }
 }
 
+/// The REST login an issue `author` node implies for `filterBy.createdBy`:
+/// a `Bot`'s GraphQL `login` gains the `[bot]` suffix it omits, as the
+/// client's `actor_login` reads it; other typenames answer their `login`
+/// verbatim and a missing or malformed author matches nothing.
+fn issue_author_login(issue: &Value) -> Option<String> {
+    let author = &issue["author"];
+    let login = author["login"].as_str()?;
+    Some(
+        if author["__typename"] == "Bot" && !login.ends_with("[bot]") {
+            format!("{login}[bot]")
+        } else {
+            login.to_owned()
+        },
+    )
+}
+
 /// The `__typename` a user object reports: logins ending in `[bot]` answer
 /// `Bot`, others `User`.
 fn viewer_typename(login: &str) -> &'static str {
@@ -1445,12 +1461,7 @@ impl FakeGitHub {
                                              .map(|c| c["tree"]["sha"].clone())
                                              .unwrap_or(Value::Null)}}})
                     }),
-                "issues" => json!({"__typename":"IssueConnection",
-                        "nodes":repo.issues.values()
-                            .filter(|i| i["state"] == "OPEN")
-                            .map(|i| with_typename(i, "Issue")).collect::<Vec<_>>(),
-                        "pageInfo":{"__typename":"PageInfo",
-                            "hasNextPage":false,"endCursor":null}}),
+                "issues" => self.issues_connection(child, repo, body),
                 "refs" => self.refs_connection(repo, body, state),
                 "pullRequests" => self.pull_requests(child, repo, body, state),
                 "release" => {
@@ -1643,6 +1654,101 @@ impl FakeGitHub {
         let served = nodes.len();
         let more = after + served < prs.len();
         json!({"__typename":"PullRequestConnection","nodes":nodes,"totalCount":prs.len(),
+        "pageInfo":{"__typename":"PageInfo","hasNextPage":more,
+            "endCursor":if served > 0 {
+                json!((after + served).to_string())
+            } else {
+                Value::Null
+            }}})
+    }
+    /// `repository { issues }` — the `IssueConnection` the schema types
+    /// (`schema.docs.graphql`, `Repository.issues`). Modeled arguments:
+    /// `states` (`OPEN`/`CLOSED`), `filterBy` (`createdBy` only — the REST
+    /// login, so a `Bot` node matches its `[bot]`-suffixed name) and
+    /// `first`/`after` (forward paging over an index cursor, as
+    /// `pull_requests` pages). `labels`, `orderBy`, `before`, `last` and
+    /// any other argument are unmodeled and panic, as does a `filterBy`
+    /// key that is not `createdBy`.
+    fn issues_connection(&self, field: &GqlField, repo: &Repository, body: &Value) -> Value {
+        for (name, _) in &field.args {
+            assert!(
+                matches!(name.as_str(), "states" | "filterBy" | "first" | "after"),
+                "unmodeled issues argument {name}"
+            );
+        }
+        let states: Option<BTreeSet<String>> = field.arg_json("states", body).map(|states| {
+            states
+                .as_array()
+                .unwrap_or_else(|| panic!("issues `states` is not a list: {states}"))
+                .iter()
+                .map(|state| {
+                    let name = state.as_str().unwrap_or_else(|| {
+                        panic!("issues `states` element is not a name: {state}")
+                    });
+                    // `IssueState`: anything else is a validation error.
+                    assert!(
+                        matches!(name, "OPEN" | "CLOSED"),
+                        "issues `states` has no value {name:?}"
+                    );
+                    name.to_owned()
+                })
+                .collect()
+        });
+        let created_by = field.arg_json("filterBy", body).map(|filter| {
+            let filter = filter
+                .as_object()
+                .unwrap_or_else(|| panic!("issues `filterBy` is not an IssueFilters: {filter}"));
+            for key in filter.keys() {
+                assert_eq!(key, "createdBy", "unmodeled issues `filterBy` key {key}");
+            }
+            filter["createdBy"]
+                .as_str()
+                .unwrap_or_else(|| panic!("issues `filterBy.createdBy` is not a name: {filter:?}"))
+                .to_owned()
+        });
+        // GitHub refuses a connection without `first`/`last` and a `first`
+        // outside 1-100.
+        let first = field
+            .arg_json("first", body)
+            .map(|first| {
+                first
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("issues `first` is not a count: {first}"))
+                    as usize
+            })
+            .unwrap_or_else(|| panic!("issues without `first`"));
+        assert!(
+            (1..=100).contains(&first),
+            "issues `first` {first} is outside 1-100"
+        );
+        let after = field
+            .arg("after", body)
+            .map(|cursor| {
+                cursor
+                    .parse::<usize>()
+                    .unwrap_or_else(|_| panic!("issues `after` {cursor:?} is not a fake cursor"))
+            })
+            .unwrap_or(0);
+        let issues: Vec<&Value> = repo
+            .issues
+            .values()
+            .filter(|issue| {
+                states.as_ref().is_none_or(|states| {
+                    states.contains(issue["state"].as_str().unwrap_or_default())
+                }) && created_by.as_ref().is_none_or(|login| {
+                    issue_author_login(issue).as_deref() == Some(login.as_str())
+                })
+            })
+            .collect();
+        let nodes: Vec<Value> = issues
+            .iter()
+            .skip(after)
+            .take(first)
+            .map(|issue| with_typename(issue, "Issue"))
+            .collect();
+        let served = nodes.len();
+        let more = after + served < issues.len();
+        json!({"__typename":"IssueConnection","nodes":nodes,
         "pageInfo":{"__typename":"PageInfo","hasNextPage":more,
             "endCursor":if served > 0 {
                 json!((after + served).to_string())

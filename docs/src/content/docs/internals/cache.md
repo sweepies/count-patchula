@@ -208,6 +208,13 @@ reconciliation. In behind mode a base move invalidates the receipt. At `-vv`,
 diagnostics report save and restore counts and the first failed condition per
 branch.
 
+The inventory's issue walk filters `issues` by `filterBy.createdBy`, and the
+login it asks for is remembered per credential scope as `inventory-actor`
+state: the first page's `viewer.login` is stored as soon as it is read, even
+when the walk goes on to fail. A read whose answer's `viewer.login` does not
+match the stored hint retries unfiltered once, so a wrong or stale entry
+costs one request and never narrows the issue set wrongly.
+
 Branch cleanup keeps a per-build `not-ours` entry per repository and commit
 OID whose message records no base: such a commit can never be the Count's,
 so its branch is not read again while it points there. Nothing else about

@@ -2,9 +2,8 @@ query InventoryQuery(
     $owner: String!
     $name: String!
     $prefix: String!
-    $cursor: String
-    $issueCursor: String
     $closed: [ID!]!
+    $issueFilter: IssueFilters
 ) {
     viewer {
         login
@@ -76,7 +75,7 @@ query InventoryQuery(
                 requiredApprovingReviewCount
             }
         }
-        issues(states: [OPEN], first: 100, after: $issueCursor) {
+        issues(states: [OPEN], filterBy: $issueFilter, first: 100) {
             pageInfo {
                 hasNextPage
                 endCursor
@@ -93,7 +92,7 @@ query InventoryQuery(
                 }
             }
         }
-        refs(refPrefix: $prefix, first: 100, after: $cursor) {
+        refs(refPrefix: $prefix, first: 100) {
             pageInfo {
                 hasNextPage
                 endCursor
