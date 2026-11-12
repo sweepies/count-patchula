@@ -678,7 +678,18 @@ async fn mutations_share_serial_cooldown_but_graphql_queries_do_not() {
     });
     let observer = transport.clone();
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    let github = Client::with_transport("offline", cache, Default::default(), transport).unwrap();
+    // A burst of one keeps every write a second apart, as the budget is
+    // after a secondary-rate-limit answer.
+    let github = Client::with_transport(
+        "offline",
+        cache,
+        Options {
+            write_burst: 1,
+            ..Default::default()
+        },
+        transport,
+    )
+    .unwrap();
     let started = tokio::time::Instant::now();
     github
         .post::<Value>("repos/demo/app/git/trees", json!({}))

@@ -71,13 +71,18 @@ server failure may already have written, so the next run reconciles instead.
 
 Every REST request other than GET, HEAD and OPTIONS, and every GraphQL
 document whose text starts with `mutation` (or whose body cannot be parsed),
-runs one at a time across all clones of a client, with a one-second pause
-after each and at most 500 an hour, following GitHub's
+runs one at a time across all clones of a client, paced by a token bucket of
+`github.writeBurst` tokens (12 by default) refilling one a second — the
+first writes of a run go out without a pause, and no minute holds more than
+`writeBurst` + 60 (72 by default, at most 79) — and at most 500 an hour,
+inside GitHub's
 [best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)
-and content-creation limit. A mutation document must start with the
-`mutation` keyword, with no leading comment, or it is paced as a read. Each
-installation's engine has its own client, so the server's batches for
-different installations pace their writes separately.
+and content-creation limit. Any secondary-rate-limit answer cuts the budget
+to one token for the next hour, the one write a second GitHub asks for. A
+mutation document must start with the `mutation` keyword, with no leading
+comment, or it is paced as a read. Each installation's engine has its own
+client, so the server's batches for different installations pace their
+writes separately.
 
 ## Typed responses
 

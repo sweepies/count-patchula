@@ -78,6 +78,11 @@ pub struct Options {
     pub max_pages: usize,
     /// Fail instead of retrying early if a server-requested wait exceeds this.
     pub max_rate_wait: Duration,
+    /// Writes that go out unpaced: the write budget's token count, refilling
+    /// one a second. A minute holds at most `write_burst + 60` writes, so 1 to
+    /// 19 keeps it under GitHub's documented 80; a secondary-rate-limit answer
+    /// cuts it to one for an hour.
+    pub write_burst: usize,
     /// Supports GitHub Enterprise; HTTPS required, links must retain this origin.
     pub api_url: Url,
 }
@@ -89,6 +94,7 @@ impl Default for Options {
             max_retries: 3,
             max_pages: 1000,
             max_rate_wait: Duration::from_secs(3600),
+            write_burst: 12,
             api_url: Url::parse("https://api.github.com/").expect("static GitHub API URL"),
         }
     }
@@ -196,6 +202,7 @@ impl Client {
             || options.concurrency > patchula_http::MAX_CONCURRENCY
             || options.max_pages == 0
             || options.max_retries > 10
+            || !(1..=19).contains(&options.write_burst)
             || !valid_api_url(&options.api_url)
         {
             return Err(Error::Configuration);
@@ -213,7 +220,11 @@ impl Client {
     ) -> Self {
         let mut options = options;
         options.api_url = api_root(&options.api_url);
-        let governor = Governor::new(options.concurrency, options.max_rate_wait);
+        let governor = Governor::new(
+            options.concurrency,
+            options.max_rate_wait,
+            options.write_burst,
+        );
         Self(Arc::new(Inner {
             credentials,
             decoding: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -232,6 +243,11 @@ impl Client {
 
     pub fn concurrency(&self) -> usize {
         self.0.options.concurrency
+    }
+
+    /// The write budget's token count this client paces writes with.
+    pub fn write_burst(&self) -> usize {
+        self.0.options.write_burst
     }
 
     /// The request cap `graphql_pages` applies to a connection walk, for a
@@ -902,6 +918,14 @@ mod tests {
             },
             Options {
                 max_retries: 11,
+                ..Default::default()
+            },
+            Options {
+                write_burst: 0,
+                ..Default::default()
+            },
+            Options {
+                write_burst: 20,
                 ..Default::default()
             },
             Options {
