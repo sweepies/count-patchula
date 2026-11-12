@@ -414,7 +414,15 @@ impl Batch for Engines {
             let Ok(permit) = self.records.clone().acquire_owned().await else {
                 return;
             };
-            self.record_tasks.lock().await.spawn(async move {
+            let mut tasks = self.record_tasks.lock().await;
+            // Finished records stay in the set until joined; reap them here
+            // so a long-running server does not keep one entry per record.
+            while let Some(joined) = tasks.try_join_next() {
+                if let Err(error) = joined {
+                    tracing::warn!(target: "patchula_server", %error, "a public record task failed");
+                }
+            }
+            tasks.spawn(async move {
                 let _permit = permit;
                 job.0.await;
             });
