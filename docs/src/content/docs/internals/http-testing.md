@@ -83,6 +83,18 @@ beside the suite. `mise run transcripts:snapshot` rewrites the snapshots;
 a request change that leaves the snapshot stale fails the test, so a port
 that alters what a suite asks is a deliberate, reviewed diff.
 
+`settings.latency` sleeps a fixed time on Tokio's paused clock before the
+fake answers, and `Hosts::set_latency` charges the same latency on the
+scripted routes, so one knob times a whole run. Virtual elapsed time
+divided by that latency is the run's depth — the round trips on its
+critical path. Depth pins live beside the transcripts in `tests/depth.tsv`
+(a warm lookup, a no-op real run, and full writes of one and three plans),
+and each pin repeats its scenario: the file holds the depth the run still
+reaches, so a regression or an improvement fails the pin the way a changed
+request fails a transcript, while a send racing a wave's boundary may cost
+one extra wave before it does. `mise run transcripts:snapshot` rewrites
+both files.
+
 ## mise
 
 A subprocess has no HTTP cassette. mise lookups run through

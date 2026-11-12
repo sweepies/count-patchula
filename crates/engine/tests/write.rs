@@ -170,6 +170,16 @@ fn check_transcript() {
     let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/transcripts.tsv");
     patchula_testkit::transcripts::check(&snapshot);
 }
+
+/// Pin this test's run depths: each `elapsed` is a repetition's virtual
+/// time on the paused clock divided by the fake's per-request `latency` —
+/// the round trips on the run's critical path. The snapshot holds the
+/// depth the scenario still reaches; a send racing a wave's boundary may
+/// cost one extra wave before the pin fails.
+fn check_depth(latency: std::time::Duration, samples: Vec<std::time::Duration>) {
+    let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/depth.tsv");
+    patchula_testkit::transcripts::depth(&snapshot, latency, samples);
+}
 #[tokio::test]
 async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_receipts_warm() {
     let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
@@ -3008,5 +3018,154 @@ async fn an_error_outranks_a_raced_pull_request() {
                 .any(|(_, s)| *s == patchula_report::PullRequestStatus::Error),
         "{statuses:?}"
     );
+    check_transcript();
+}
+
+/// The latency every depth pin charges: 100 ms a request, a divisor of
+/// the governor's one-second write pacing, so virtual elapsed divides
+/// into whole depths.
+const DEPTH_LATENCY: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// How many times a depth pin repeats its scenario: an independent read
+/// can race a wave's boundary, so one measurement is not the run's depth.
+const DEPTH_SAMPLES: usize = 11;
+
+async fn depth_engine(fake: &Arc<Sandbox>) -> Engine {
+    fake.hosts.set_latency(DEPTH_LATENCY);
+    Engine::with_transport(
+        "offline-installation",
+        Cache::open(":memory:", Default::default()).await.unwrap(),
+        4,
+        fake.clone(),
+    )
+    .unwrap()
+    .with_versions_host(false)
+}
+
+/// A warm lookup's depth pin: the second and later runs' head check and
+/// catalog reads are the waves the latency counts.
+#[tokio::test(start_paused = true)]
+async fn depth_pin_warm_lookup() {
+    let fake = sandbox(base_files(), None, vec![]);
+    let engine = depth_engine(&fake).await;
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Default::default()
+    };
+    engine.lookup(options()).await.unwrap();
+    let mut samples = Vec::new();
+    for _ in 0..DEPTH_SAMPLES {
+        let started = tokio::time::Instant::now();
+        let warm = engine.lookup(options()).await.unwrap();
+        samples.push(started.elapsed());
+        assert_eq!(warm.repositories[0].status, Status::Complete);
+    }
+    check_depth(DEPTH_LATENCY, samples);
+    check_transcript();
+}
+
+/// A no-op real run's depth pin: the run after a write must only read.
+#[tokio::test(start_paused = true)]
+async fn depth_pin_noop_run() {
+    let fake = sandbox(base_files(), None, vec![]);
+    let engine = depth_engine(&fake).await;
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Default::default()
+    };
+    let first = engine.run(options(), false, false).await.unwrap();
+    assert_eq!(
+        first.actions.as_ref().unwrap().branches[0].status,
+        BranchStatus::Created
+    );
+    fake.state().writes.clear();
+    let mut samples = Vec::new();
+    for _ in 0..DEPTH_SAMPLES {
+        let started = tokio::time::Instant::now();
+        let report = engine.run(options(), false, false).await.unwrap();
+        samples.push(started.elapsed());
+        assert_eq!(report.repositories[0].status, Status::Complete);
+        assert!(
+            fake.state().writes.is_empty(),
+            "the no-op run wrote: {:?}",
+            fake.state().writes
+        );
+    }
+    check_depth(DEPTH_LATENCY, samples);
+    check_transcript();
+}
+
+/// A one-plan repository's full write: the run's latency counts its
+/// publish reads, its writes and the write pacing between them.
+#[tokio::test(start_paused = true)]
+async fn depth_pin_full_write_of_one_plan() {
+    // Every repetition's fake stays alive until the transcript check
+    // marks it: a FakeGitHub dropped unchecked panics.
+    let mut fakes = Vec::new();
+    let mut samples = Vec::new();
+    for _ in 0..DEPTH_SAMPLES {
+        let fake = sandbox(base_files(), None, vec![]);
+        fakes.push(fake.clone());
+        let engine = depth_engine(&fake).await;
+        let started = tokio::time::Instant::now();
+        let report = engine
+            .run(
+                Options {
+                    repositories: vec!["demo/sandbox".into()],
+                    ..Default::default()
+                },
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        samples.push(started.elapsed());
+        let actions = report.actions.as_ref().unwrap();
+        assert_eq!(actions.branches.len(), 1, "{actions:?}");
+        assert_eq!(actions.branches[0].status, BranchStatus::Created);
+    }
+    check_depth(DEPTH_LATENCY, samples);
+    check_transcript();
+}
+
+/// The same pin for three plans in one repository.
+#[tokio::test(start_paused = true)]
+async fn depth_pin_full_write_of_three_plans() {
+    let mut fakes = Vec::new();
+    let mut samples = Vec::new();
+    for _ in 0..DEPTH_SAMPLES {
+        let mut files = base_files();
+        let deps: BTreeMap<_, _> = (0..3).map(|i| (format!("fixture{i}"), "1.0.0")).collect();
+        files.insert(
+            "package.json".into(),
+            json!({"dependencies":deps}).to_string(),
+        );
+        let fake = sandbox(files, None, vec![]);
+        fakes.push(fake.clone());
+        let engine = depth_engine(&fake).await;
+        let started = tokio::time::Instant::now();
+        let report = engine
+            .run(
+                Options {
+                    repositories: vec!["demo/sandbox".into()],
+                    ..Default::default()
+                },
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        samples.push(started.elapsed());
+        let actions = report.actions.as_ref().unwrap();
+        assert_eq!(actions.branches.len(), 3, "{actions:?}");
+        assert!(
+            actions
+                .branches
+                .iter()
+                .all(|b| b.status == BranchStatus::Created),
+            "{actions:?}"
+        );
+    }
+    check_depth(DEPTH_LATENCY, samples);
     check_transcript();
 }

@@ -132,15 +132,15 @@ fn read_snapshot(path: &Path) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn verify(path: &Path, test: &str, hash: &str) {
+fn verify(path: &Path, test: &str, what: &str, value: &str) {
     match read_snapshot(path).remove(test) {
-        Some(expected) if expected == hash => {}
+        Some(expected) if expected == value => {}
         Some(expected) => panic!(
-            "request transcript for `{test}` changed\n  {} expects {expected}, got {hash}\nif the change is intended run `mise run transcripts:snapshot`",
+            "{what} for `{test}` changed\n  {} expects {expected}, got {value}\nif the change is intended run `mise run transcripts:snapshot`",
             path.display()
         ),
         None => panic!(
-            "no request transcript recorded for `{test}` in {}\nif the test is new run `mise run transcripts:snapshot`",
+            "no {what} recorded for `{test}` in {}\nif the test is new run `mise run transcripts:snapshot`",
             path.display()
         ),
     }
@@ -206,6 +206,65 @@ pub fn check(path: &Path) {
     if std::env::var_os(UPDATE_VAR).is_some_and(|value| value == "1") {
         update(path, &test, &hash);
     } else {
-        verify(path, &test, &hash);
+        verify(path, &test, "request transcript", &hash);
     }
+}
+
+/// How many waves a send may slip past the pinned depth: an independent
+/// read racing a wave's boundary can land exactly on an earlier request's
+/// completion, which the paused clock counts as one more sequential wave.
+const BOUNDARY_SLACK: u64 = 1;
+
+/// Compare this test's run depths with its snapshot line, or record them
+/// when `PATCHULA_UPDATE_TRANSCRIPTS` is set. Each `elapsed` is one
+/// repetition's virtual time on Tokio's paused clock divided by the fixed
+/// per-request `latency` the fake charged — the round trips on that run's
+/// critical path. The snapshot pins the scenario's achievable depth: every
+/// repetition's fastest must still reach it, so a regression or an
+/// improvement is a reviewed diff, while a send racing a wave's boundary
+/// may cost at most `BOUNDARY_SLACK` extra waves before the pin fails.
+/// `path` is the depth snapshot beside the transcripts, conventionally
+/// `tests/depth.tsv`.
+pub fn depth(
+    path: &Path,
+    latency: std::time::Duration,
+    samples: impl IntoIterator<Item = std::time::Duration>,
+) {
+    let depths: Vec<u64> = samples
+        .into_iter()
+        .map(|elapsed| (elapsed.as_nanos() / latency.as_nanos()) as u64)
+        .collect();
+    let (lo, hi) = (
+        *depths.iter().min().expect("a depth sample"),
+        *depths.iter().max().expect("a depth sample"),
+    );
+    let test = std::thread::current()
+        .name()
+        .expect("libtest runs each test on a thread named for it")
+        .to_owned();
+    if std::env::var_os(UPDATE_VAR).is_some_and(|value| value == "1") {
+        update(path, &test, &lo.to_string());
+        return;
+    }
+    let Some(expected) = read_snapshot(path).remove(&test) else {
+        panic!(
+            "no run depth recorded for `{test}` in {}\nif the test is new run `mise run transcripts:snapshot`",
+            path.display()
+        );
+    };
+    let expected: u64 = expected
+        .parse()
+        .unwrap_or_else(|_| panic!("malformed run depth {expected:?} in {}", path.display()));
+    assert_eq!(
+        lo,
+        expected,
+        "run depth for `{test}` changed\n  {} expects the scenario to reach {expected} waves, got depths {depths:?}\nif the change is intended run `mise run transcripts:snapshot`",
+        path.display()
+    );
+    assert!(
+        hi <= expected + BOUNDARY_SLACK,
+        "run depth for `{test}` slipped a boundary\n  {} expects at most {} waves, got depths {depths:?}\nif the change is intended run `mise run transcripts:snapshot`",
+        path.display(),
+        expected + BOUNDARY_SLACK
+    );
 }
