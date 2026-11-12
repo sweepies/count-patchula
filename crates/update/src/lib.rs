@@ -17,9 +17,11 @@ mod trailers;
 pub use cleanup::{cleanup, delete_owned, owned};
 pub use error::{Error, PlanError};
 pub use receipts::{
-    DefaultBranch, DefaultCommit, INVENTORY_QUERY, Inventory, Issue, Page, RestoreOutcome,
-    restore_inventory, save_receipts,
+    DefaultBranch, DefaultCommit, INVENTORY_ISSUES_QUERY, INVENTORY_NEXT_QUERY, INVENTORY_QUERY,
+    INVENTORY_REFS_QUERY, Inventory, Issue, Page, RestoreOutcome, restore_inventory, save_receipts,
 };
+#[cfg(feature = "testing")]
+pub use receipts::{LEGACY_INVENTORY_QUERY, read_legacy_inventory};
 pub use settle::{Settlement, settle};
 mod plan;
 mod pr;

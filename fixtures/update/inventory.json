@@ -1,0 +1,684 @@
+{
+  "schema_version": 1,
+  "provenance": "Recorded by patchula from the request URLs; never imported from other bots",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query InventoryQuery(\n    $owner: String!\n    $name: String!\n    $prefix: String!\n    $closed: [ID!]!\n    $issueFilter: IssueFilters\n) {\n    viewer {\n        login\n    }\n    nodes(ids: $closed) {\n        __typename\n        ... on PullRequest {\n            id\n            number\n            state\n            merged\n            body\n            headRefName\n            author {\n                __typename\n                login\n            }\n            headRepository {\n                nameWithOwner\n            }\n            baseRepository {\n                nameWithOwner\n            }\n        }\n    }\n    repository(owner: $owner, name: $name) {\n        id\n        autoMergeAllowed\n        squashMergeAllowed\n        mergeCommitAllowed\n        rebaseMergeAllowed\n        deleteBranchOnMerge\n        defaultBranchRef {\n            name\n            target {\n                __typename\n                oid\n                ... on Commit {\n                    history(first: 10) {\n                        nodes {\n                            statusCheckRollup {\n                                state\n                            }\n                        }\n                    }\n                }\n            }\n            rules(first: 100) {\n                pageInfo {\n                    hasNextPage\n                }\n                nodes {\n                    type\n                    parameters {\n                        __typename\n                        ... on RequiredStatusChecksParameters {\n                            requiredStatusChecks {\n                                context\n                            }\n                        }\n                        ... on PullRequestParameters {\n                            requiredApprovingReviewCount\n                        }\n                    }\n                }\n            }\n            refUpdateRule {\n                requiredStatusCheckContexts\n                requiredApprovingReviewCount\n            }\n        }\n        issues(states: [OPEN], filterBy: $issueFilter, first: 100) {\n            pageInfo {\n                hasNextPage\n                endCursor\n            }\n            nodes {\n                id\n                number\n                title\n                body\n                state\n                author {\n                    __typename\n                    login\n                }\n            }\n        }\n        refs(refPrefix: $prefix, first: 100) {\n            pageInfo {\n                hasNextPage\n                endCursor\n            }\n            nodes {\n                name\n                target {\n                    __typename\n                    ... on Commit {\n                        oid\n                        message\n                        tree {\n                            oid\n                        }\n                        author {\n                            user {\n                                login\n                            }\n                        }\n                        committer {\n                            user {\n                                login\n                            }\n                        }\n                        signature {\n                            __typename\n                            isValid\n                        }\n                    }\n                }\n                associatedPullRequests(states: [OPEN], first: 2) {\n                    pageInfo {\n                        hasNextPage\n                    }\n                    nodes {\n                        number\n                        id\n                        url\n                        title\n                        body\n                        headRefName\n                        headRefOid\n                        baseRefName\n                        author {\n                            __typename\n                            login\n                        }\n                        headRepository {\n                            nameWithOwner\n                        }\n                        baseRepository {\n                            nameWithOwner\n                        }\n                        labels(first: 100) {\n                            pageInfo {\n                                hasNextPage\n                            }\n                            nodes {\n                                name\n                            }\n                        }\n                        autoMergeRequest {\n                            enabledAt\n                        }\n                    }\n                }\n            }\n        }\n    }\n}\n",
+            "variables": {
+              "closed": [],
+              "cursor": null,
+              "issueCursor": null,
+              "issueFilter": null,
+              "name": "github-action",
+              "owner": "renovatebot",
+              "prefix": "refs/heads/"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Thu, 12 Nov 2026 16:26:32 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v4; format=json"
+          ],
+          "x-github-request-id": [
+            "CCBE:23B0A0:48DB98:6C68D2:6AF5E8B7"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4830"
+          ],
+          "x-ratelimit-reset": [
+            "1794500987"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "170"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "nodes": [],
+              "repository": {
+                "autoMergeAllowed": true,
+                "defaultBranchRef": {
+                  "name": "main",
+                  "refUpdateRule": {
+                    "requiredApprovingReviewCount": 0,
+                    "requiredStatusCheckContexts": [
+                      "e2e (example/renovate-config.js)",
+                      "lint",
+                      "release",
+                      "e2e (example/renovate-config.json)"
+                    ]
+                  },
+                  "rules": {
+                    "nodes": [],
+                    "pageInfo": {
+                      "hasNextPage": false
+                    }
+                  },
+                  "target": {
+                    "__typename": "Commit",
+                    "history": {
+                      "nodes": [
+                        {
+                          "statusCheckRollup": {
+                            "state": "PENDING"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        }
+                      ]
+                    },
+                    "oid": "9e4cad21de6d039b080dc3bd7c651788b7dd72a9"
+                  }
+                },
+                "deleteBranchOnMerge": true,
+                "id": "MDEwOlJlcG9zaXRvcnkyNTI3NTQ2MDM=",
+                "issues": {
+                  "nodes": [
+                    {
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "renovate"
+                      },
+                      "body": "This issue lists Renovate updates and detected dependencies. Read the [Dependency Dashboard](https://docs.renovatebot.com/key-concepts/dashboard/) docs to learn more.<br>[View this repository on the Mend.io Web Portal](https://developer.mend.io/github/renovatebot/github-action).\n\n## Abandoned Dependencies\n\nThe following dependencies have not received updates for an extended period and may be unmaintained.\n\n> [!NOTE]\n> Packages are marked as abandoned when they exceed the [`abandonmentThreshold`](https://docs.renovatebot.com/configuration-options/ since their last release. Unlike deprecated packages with official notices, abandonment is detected by release inactivity.\n> \n<details>\n<summary>View abandoned dependencies (2)</summary>\n\n| Datasource | Package | Last Updated |\n|------------|------|-------------|\n| github-actions | [hkusu/review-assign-action](https://redirect.github.com/hkusu/review-assign-action) | `2024-02-14` |\n| npm | [husky](https://redirect.github.com/typicode/husky) | `2024-11-18` |\n\n</details>\n\n\n## Pending Approval\n\nThe following branches are pending approval. To create them, click on a checkbox below.\n\n - [ ] <!-- approve-branch=renovate/typescript-7.x -->build(deps): update dependency typescript to v7\n - [ ] <!-- approve-branch=renovate/major-typesnode-26.x -->chore(deps): update dependency @types/node to v26\n - [ ] <!-- approve-branch=renovate/actions-checkout-7.x -->chore(deps): update dependency actions/checkout to v7\n - [ ] <!-- approve-branch=renovate/conventional-changelog-conventionalcommits-10.x -->chore(deps): update dependency conventional-changelog-conventionalcommits to v10\n - [ ] <!-- approve-branch=renovate/majornode-26.x -->chore(deps): update node.js to v26\n - [ ] <!-- approve-branch=renovate/pnpm-12.x -->chore(deps): update pnpm to v12\n - [ ] <!-- approve-branch=renovate/ubuntu-26.x -->ci(deps): update dependency ubuntu to v26\n - [ ] <!-- approve-all-pending-prs -->🔐 **Create all pending approval PRs at once** 🔐\n\n## Awaiting Schedule\n\nThe following updates are awaiting their schedule. To get an update now, click on a checkbox below.\n\n - [ ] <!-- unschedule-branch=renovate/lock-file-maintenance -->build(deps): lock file maintenance\n\n## Pending Status Checks\n\nThe following updates await pending status checks. To force their creation now, click on a checkbox below.\n\n - [ ] <!-- unpend-branch=renovate/tsconfig-node24-24.x -->chore(deps): update dependency @tsconfig/node24 to v24.0.6\n - [ ] <!-- unpend-branch=renovate/tsconfig-strictest-2.x -->chore(deps): update dependency @tsconfig/strictest to v2.0.9\n - [ ] <!-- unpend-branch=renovate/linters -->chore(deps): update linters (`oxfmt`, `oxlint`)\n\n## Detected Dependencies\n\n<details><summary>github-actions (3)</summary>\n<blockquote>\n\n<details><summary>.github/actions/setup-node/action.yml (4)</summary>\n\n - `actions/cache v6.1.0@55cc8345863c7cc4c66a329aec7e433d2d1c52a9`\n - `pnpm/action-setup v6.1.1@73e46992e05b19abd31f2f3c20e0e7370d762115`\n - `actions/setup-node v7.1.0@949feb2413d6458794dcd2491c4babbbce0c15c1`\n - `actions/cache v6.1.0@55cc8345863c7cc4c66a329aec7e433d2d1c52a9`\n\n</details>\n\n<details><summary>.github/workflows/build.yml (11)</summary>\n\n - `actions/checkout v7.0.1@3d3c42e5aac5ba805825da76410c181273ba90b1`\n - `actions/checkout v7.0.1@3d3c42e5aac5ba805825da76410c181273ba90b1`\n - `wagoid/commitlint-github-action v6.2.1@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed`\n - `actions/checkout v7.0.1@3d3c42e5aac5ba805825da76410c181273ba90b1`\n - `actions/checkout v7.0.1@3d3c42e5aac5ba805825da76410c181273ba90b1`\n - `zizmorcore/zizmor-action v0.8.1@45d7276c9ca790aabd705e31ca99c6185c3e76dd`\n - `actions/checkout v7.0.1@3d3c42e5aac5ba805825da76410c181273ba90b1`\n - `actions/checkout v7.0.1@3d3c42e5aac5ba805825da76410c181273ba90b1`\n - `actions/checkout v7.0.1@3d3c42e5aac5ba805825da76410c181273ba90b1`\n - `ghcr.io/zizmorcore/zizmor 1.32.0`\n - `ghcr.io/renovatebot/renovate 44.236.2@sha256:55deecada47b7a8b1bf07218c91fd62f380d374a2b87e08570af5bfcd63c34d8`\n\n</details>\n\n<details><summary>.github/workflows/pr-auto.yml (2)</summary>\n\n - `hkusu/review-assign-action v1.4.0@5bee595fdb9765d4a0bd35724b6302fa15569158`\n - `ubuntu 24.04` → [Updates: `26.04`]\n\n</details>\n\n</blockquote>\n</details>\n\n<details><summary>nodenv (1)</summary>\n<blockquote>\n\n<details><summary>.node-version (1)</summary>\n\n - `node 24.22.3` → [Updates: `26.13.1`]\n\n</details>\n\n</blockquote>\n</details>\n\n<details><summary>npm (1)</summary>\n<blockquote>\n\n<details><summary>package.json (25)</summary>\n\n - `@actions/core 3.0.1`\n - `@actions/exec 3.0.0`\n - `@commitlint/cli 21.2.4`\n - `@commitlint/config-conventional 21.2.4`\n - `@containerbase/oxlint-plugin 1.1.0`\n - `@semantic-release/git 11.0.1`\n - `@semantic-release/github 12.0.10`\n - `@semantic-release/npm 13.2.0`\n - `@tsconfig/node24 24.0.5` → [Updates: `24.0.6`]\n - `@tsconfig/strictest 2.0.8` → [Updates: `2.0.9`]\n - `@types/node 24.19.2` → [Updates: `26.6.6`]\n - `conventional-changelog-conventionalcommits 9.3.1` → [Updates: `10.4.1`]\n - `esbuild 0.28.2`\n - `husky 9.1.7`\n - `lint-staged 17.6.0`\n - `npm-run-all2 9.0.4`\n - `oxfmt 0.76.0` → [Updates: `0.78.0`]\n - `oxlint 1.91.0` → [Updates: `1.93.0`]\n - `oxlint-tsgolint 7.0.2006`\n - `rimraf 6.1.4`\n - `semantic-release 25.0.9`\n - `typescript 5.9.3` → [Updates: `7.0.2`]\n - `node >=24.11.0`\n - `pnpm ^10.0.0` → [Updates: `^12.0.0`]\n - `pnpm 10.34.9` → [Updates: `12.18.0`]\n\n</details>\n\n</blockquote>\n</details>\n\n<details><summary>regex (9)</summary>\n<blockquote>\n\n<details><summary>.github/workflows/build.yml (1)</summary>\n\n - `ghcr.io/renovatebot/renovate 44.236.2`\n\n</details>\n\n<details><summary>action.yml (1)</summary>\n\n - `ghcr.io/renovatebot/renovate 44`\n\n</details>\n\n<details><summary>README.md (1)</summary>\n\n - `ghcr.io/renovatebot/renovate 44.236.2`\n\n</details>\n\n<details><summary>README.md (31)</summary>\n\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v6.1.0` → [Updates: `v7.0.1`]\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `renovatebot/github-action v46.3.13`\n - `actions/checkout v7.0.1`\n - `actions/cache v6.1.0`\n - `renovatebot/github-action v46.3.13`\n - `actions/cache v6.1.0`\n - `renovatebot/github-action v46.3.13`\n\n</details>\n\n<details><summary>README.md (16)</summary>\n\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n - `renovatebot/github-action v46.3.13`\n\n</details>\n\n<details><summary>README.md (2)</summary>\n\n - `ghcr.io/renovatebot/renovate 44.236.2`\n - `ghcr.io/renovatebot/renovate 44.236.2`\n\n</details>\n\n<details><summary>src/docker.ts (1)</summary>\n\n - `ghcr.io/renovatebot/renovate 44`\n\n</details>\n\n<details><summary>tools/tsconfig.json (1)</summary>\n\n - `@tsconfig/node24 24`\n\n</details>\n\n<details><summary>tsconfig.json (1)</summary>\n\n - `@tsconfig/node24 24`\n\n</details>\n\n</blockquote>\n</details>\n\n---\n\n- [ ] <!-- manual job -->Check this box to trigger a request for Renovate to run again on this repository\n\n",
+                      "id": "MDU6SXNzdWU2MDk1ODgxNjY=",
+                      "number": 31,
+                      "state": "OPEN",
+                      "title": "Dependency Dashboard"
+                    },
+                    {
+                      "author": {
+                        "__typename": "User",
+                        "login": "viceice"
+                      },
+                      "body": "see https://github.com/renovatebot/renovate/issues/547\r\n\r\n**Idea:**\r\n* Add `command` option, which is `renovate` by default and can be `validate` for validation mode\r\n* Add optional `validateFiles` options for additional files to validate (colon / pipe separated glob patterns)",
+                      "id": "MDU6SXNzdWU5MzIzMzI5MDA=",
+                      "number": 548,
+                      "state": "OPEN",
+                      "title": "Add config validation option"
+                    },
+                    {
+                      "author": {
+                        "__typename": "User",
+                        "login": "HonkingGoose"
+                      },
+                      "body": "Split off from #722.\r\n\r\n> we probably should suggest pin and provide a regex manager to auto update as preset\r\n\r\nI like this idea, here's a really rough draft for it. 😄 \r\n\r\nTodo:\r\n\r\n- [ ] Decide on pinning to just a `v1.2.3` version, or to a full checksum\r\n- [ ] Create a [Regex Manager Preset](https://docs.renovatebot.com/presets-regexManagers/) to help users update their GitHub Action Renovate version\r\n- [ ] Link to the new Regex Manager Preset docs\r\n- [ ] Create Renovate config example in a `json` codeblock which uses the new preset\r\n\r\n@viceice wanted this to go in a seperate PR, so I'm making this issue to track the work.\r\n",
+                      "id": "I_kwDODxC6q85m90qi",
+                      "number": 756,
+                      "state": "OPEN",
+                      "title": "Update readme after \"update Renovate version\" regex preset is created"
+                    },
+                    {
+                      "author": {
+                        "__typename": "User",
+                        "login": "lazytesting"
+                      },
+                      "body": "This issue is maybe related to https://github.com/renovatebot/github-action/issues/794 but that one does not contains a solution and I still got a stable reproduction scenario.\r\n\r\n1. In the action config file I set:\r\n```\r\n with:\r\n          docker-cmd-file: example/entrypoint.sh\r\n```\r\n2. In the logs I see\r\n```\r\n/usr/bin/docker run --env LOG_LEVEL --env RENOVATE_TOKEN=*** --env RENOVATE_CONFIG_FILE=/github-action/renovate-config.js --volume /home/runner/work/test-renovate/test-renovate/example/renovate-config.js:/github-action/renovate-config.js --volume /home/runner/work/test-renovate/test-renovate/example/entrypoint.sh:/entrypoint.sh --user root --volume /tmp:/tmp --rm ghcr.io/renovatebot/renovate:37.175.3 /entrypoint.sh\r\n...some unrelevant log lines...\r\nDEBUG: CLI config \"config\": {\"repositories\": [\"/entrypoint.sh\"]}\r\n```\r\n\r\n3. It seems that the /entrypoint.sh argument for docker run is not running the custom entrypoints script\r\n4. I think renovate gets called with this argument, like this:\r\n```\r\nrenovate /entrypoint.sh\r\n```\r\nthis would explain why it sees a cli config with this value als repositories at least.\r\n\r\nI took the examples from this project and stripped it down to a minimal reproduction path.\r\ncode: https://github.com/lazytesting/test-renovate\r\naction run: https://github.com/lazytesting/test-renovate/actions/runs/7829422258/job/21361374380\r\n\r\nThe strange thing is that it seems to work in the e2e test github action of this project but I cannot see the difference.\r\n",
+                      "id": "I_kwDODxC6q85-qfAZ",
+                      "number": 817,
+                      "state": "OPEN",
+                      "title": "docker-cmd-file not working"
+                    },
+                    {
+                      "author": {
+                        "__typename": "User",
+                        "login": "palfrey"
+                      },
+                      "body": "Periodically we get a failed build because ghcr.io was a bit erratic. I suspect a retry of the pull with a few seconds delay would have worked.\ne.g.\n```\nUnable to find image 'ghcr.io/renovatebot/renovate:39' locally\n39: Pulling from renovatebot/renovate\ndocker: Get \"https://ghcr.io/v2/renovatebot/renovate/manifests/sha256:c186f5db05148fa5fd0bba339c09012762c31138163ebac947e782546d5158b0\": dial tcp 140.82.114.33:443: i/o timeout.\nSee 'docker run --help'.\nError: The process '/usr/bin/docker' failed with exit code 125\n```",
+                      "id": "I_kwDODxC6q86sf5S3",
+                      "number": 915,
+                      "state": "OPEN",
+                      "title": "Retry docker image pull on failure"
+                    },
+                    {
+                      "author": {
+                        "__typename": "User",
+                        "login": "int128"
+                      },
+                      "body": "## Background\nWe use this action for renovate-config-validator as well.\n\n```yaml\n    steps:\n      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\n      - run: |\n          echo \"$script\" > renovate-config-validator.sh\n          chmod +x renovate-config-validator.sh\n        env:\n          script: |\n            #!/bin/bash\n            set -eux -o pipefail\n            exec renovate-config-validator /workspace/renovate.*\n\n      - uses: renovatebot/github-action@a889a8abcb11ef7feaafaf5e483ea01d4bf7774e # v43.0.5\n        with:\n          token: ${{ secrets.GITHUB_TOKEN }}\n          docker-cmd-file: renovate-config-validator.sh\n          docker-volumes: ${{ github.workspace }}:/workspace\n```\n\n## Feature request\nIt would be nice if it can pass the docker command directly.\n\nFor example, if this action supports `docker-cmd`, the workflow would be like:\n\n```yaml\n      - uses: renovatebot/github-action@a889a8abcb11ef7feaafaf5e483ea01d4bf7774e # v43.0.5\n        with:\n          token: ${{ secrets.GITHUB_TOKEN }}\n          docker-cmd: renovate-config-validator /workspace/renovate.*\n          docker-volumes: ${{ github.workspace }}:/workspace\n```\n",
+                      "id": "I_kwDODxC6q87DOvrV",
+                      "number": 948,
+                      "state": "OPEN",
+                      "title": "Support `docker-cmd` option for renovate-config-validator"
+                    },
+                    {
+                      "author": {
+                        "__typename": "User",
+                        "login": "jamietanna"
+                      },
+                      "body": "As part of the next major version, we should introduce a change to the default user-agent header the Action configures.\n\nNow [`userAgent`](https://docs.renovatebot.com/self-hosted-configuration/ is templateable, we can use i.e.\n\n```\nRenovate/{{renovateVersion}} (https://github.com/renovatebot/github-action)\n```\n\nThis may aid with operators of registries, etc, who can then see better where Renovate-initiated traffic comes from.\n",
+                      "id": "I_kwDODxC6q88AAAABFoLb9A",
+                      "number": 1044,
+                      "state": "OPEN",
+                      "title": "feat!: change default User Agent"
+                    }
+                  ],
+                  "pageInfo": {
+                    "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNi0xNlQwODo1Njo0OVrPAAAAARaC2_Q=",
+                    "hasNextPage": false
+                  }
+                },
+                "mergeCommitAllowed": false,
+                "rebaseMergeAllowed": false,
+                "refs": {
+                  "nodes": [
+                    {
+                      "associatedPullRequests": {
+                        "nodes": [
+                          {
+                            "author": {
+                              "__typename": "Bot",
+                              "login": "pull"
+                            },
+                            "autoMergeRequest": null,
+                            "baseRefName": "main",
+                            "baseRepository": {
+                              "nameWithOwner": "Karinza38/github-action"
+                            },
+                            "body": "See [Commits](/Karinza38/github-action/pull/62/commits) and [Changes](/Karinza38/github-action/pull/62/files) for more details.\n\n-----\nCreated by [<img src=\"https://prod.download/pull-18h-svg\" valign=\"bottom\"/> **pull[bot]**](https://github.com/wei/pull) (v2.0.0-alpha.1)\n\n_Can you help keep this open source service alive? **[💖 Please sponsor : )](https://prod.download/pull-pr-sponsor)**_",
+                            "headRefName": "main",
+                            "headRefOid": "9e4cad21de6d039b080dc3bd7c651788b7dd72a9",
+                            "headRepository": {
+                              "nameWithOwner": "renovatebot/github-action"
+                            },
+                            "id": "PR_kwDONU9yns6Gf13m",
+                            "labels": {
+                              "nodes": [
+                                {
+                                  "name": ":arrow_heading_down: pull"
+                                }
+                              ],
+                              "pageInfo": {
+                                "hasNextPage": false
+                              }
+                            },
+                            "number": 62,
+                            "title": "[pull] main from renovatebot:main",
+                            "url": "https://github.com/Karinza38/github-action/pull/62"
+                          }
+                        ],
+                        "pageInfo": {
+                          "hasNextPage": false
+                        }
+                      },
+                      "name": "main",
+                      "target": {
+                        "__typename": "Commit",
+                        "author": {
+                          "user": {
+                            "login": "renovate[bot]"
+                          }
+                        },
+                        "committer": {
+                          "user": null
+                        },
+                        "message": "ci(deps): update ghcr.io/renovatebot/renovate docker tag to v44.236.2\n\n| datasource | package                      | from     | to       |\n| ---------- | ---------------------------- | -------- | -------- |\n| docker     | ghcr.io/renovatebot/renovate | 44.235.4 | 44.236.2 |",
+                        "oid": "9e4cad21de6d039b080dc3bd7c651788b7dd72a9",
+                        "signature": "[REDACTED]",
+                        "tree": {
+                          "oid": "f3ee301855319132b9e6d8ee38b16477c34fb81c"
+                        }
+                      }
+                    },
+                    {
+                      "associatedPullRequests": {
+                        "nodes": [],
+                        "pageInfo": {
+                          "hasNextPage": false
+                        }
+                      },
+                      "name": "release",
+                      "target": {
+                        "__typename": "Commit",
+                        "author": {
+                          "user": {
+                            "login": "github-actions[bot]"
+                          }
+                        },
+                        "committer": {
+                          "user": {
+                            "login": "github-actions[bot]"
+                          }
+                        },
+                        "message": "skip: merge (acc72df346ae9699374010ce0dcc3c12b74ae23a) [skip release]",
+                        "oid": "b1a44d76ce78cd524015416a4f39f1033fc29c7e",
+                        "signature": "[REDACTED]",
+                        "tree": {
+                          "oid": "bf9f57aa31bff430aeef3cdf28ec53fe3b5afb2a"
+                        }
+                      }
+                    }
+                  ],
+                  "pageInfo": {
+                    "endCursor": "Mg",
+                    "hasNextPage": false
+                  }
+                },
+                "squashMergeAllowed": true
+              },
+              "viewer": {
+                "login": "sweepies"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query InventoryQuery(\n    $owner: String!\n    $name: String!\n    $prefix: String!\n    $closed: [ID!]!\n    $issueFilter: IssueFilters\n) {\n    viewer {\n        login\n    }\n    nodes(ids: $closed) {\n        __typename\n        ... on PullRequest {\n            id\n            number\n            state\n            merged\n            body\n            headRefName\n            author {\n                __typename\n                login\n            }\n            headRepository {\n                nameWithOwner\n            }\n            baseRepository {\n                nameWithOwner\n            }\n        }\n    }\n    repository(owner: $owner, name: $name) {\n        id\n        autoMergeAllowed\n        squashMergeAllowed\n        mergeCommitAllowed\n        rebaseMergeAllowed\n        deleteBranchOnMerge\n        defaultBranchRef {\n            name\n            target {\n                __typename\n                oid\n                ... on Commit {\n                    history(first: 10) {\n                        nodes {\n                            statusCheckRollup {\n                                state\n                            }\n                        }\n                    }\n                }\n            }\n            rules(first: 100) {\n                pageInfo {\n                    hasNextPage\n                }\n                nodes {\n                    type\n                    parameters {\n                        __typename\n                        ... on RequiredStatusChecksParameters {\n                            requiredStatusChecks {\n                                context\n                            }\n                        }\n                        ... on PullRequestParameters {\n                            requiredApprovingReviewCount\n                        }\n                    }\n                }\n            }\n            refUpdateRule {\n                requiredStatusCheckContexts\n                requiredApprovingReviewCount\n            }\n        }\n        issues(states: [OPEN], filterBy: $issueFilter, first: 100) {\n            pageInfo {\n                hasNextPage\n                endCursor\n            }\n            nodes {\n                id\n                number\n                title\n                body\n                state\n                author {\n                    __typename\n                    login\n                }\n            }\n        }\n        refs(refPrefix: $prefix, first: 100) {\n            pageInfo {\n                hasNextPage\n                endCursor\n            }\n            nodes {\n                name\n                target {\n                    __typename\n                    ... on Commit {\n                        oid\n                        message\n                        tree {\n                            oid\n                        }\n                        author {\n                            user {\n                                login\n                            }\n                        }\n                        committer {\n                            user {\n                                login\n                            }\n                        }\n                        signature {\n                            __typename\n                            isValid\n                        }\n                    }\n                }\n                associatedPullRequests(states: [OPEN], first: 2) {\n                    pageInfo {\n                        hasNextPage\n                    }\n                    nodes {\n                        number\n                        id\n                        url\n                        title\n                        body\n                        headRefName\n                        headRefOid\n                        baseRefName\n                        author {\n                            __typename\n                            login\n                        }\n                        headRepository {\n                            nameWithOwner\n                        }\n                        baseRepository {\n                            nameWithOwner\n                        }\n                        labels(first: 100) {\n                            pageInfo {\n                                hasNextPage\n                            }\n                            nodes {\n                                name\n                            }\n                        }\n                        autoMergeRequest {\n                            enabledAt\n                        }\n                    }\n                }\n            }\n        }\n    }\n}\n",
+            "variables": {
+              "closed": [],
+              "cursor": null,
+              "issueCursor": null,
+              "issueFilter": {
+                "createdBy": "sweepies"
+              },
+              "name": "github-action",
+              "owner": "renovatebot",
+              "prefix": "refs/heads/"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Thu, 12 Nov 2026 16:26:33 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v4; format=json"
+          ],
+          "x-github-request-id": [
+            "CCBE:23B0A0:48E55E:6C77F4:6AF5E8B8"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4827"
+          ],
+          "x-ratelimit-reset": [
+            "1794500987"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "173"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "nodes": [],
+              "repository": {
+                "autoMergeAllowed": true,
+                "defaultBranchRef": {
+                  "name": "main",
+                  "refUpdateRule": {
+                    "requiredApprovingReviewCount": 0,
+                    "requiredStatusCheckContexts": [
+                      "e2e (example/renovate-config.js)",
+                      "lint",
+                      "release",
+                      "e2e (example/renovate-config.json)"
+                    ]
+                  },
+                  "rules": {
+                    "nodes": [],
+                    "pageInfo": {
+                      "hasNextPage": false
+                    }
+                  },
+                  "target": {
+                    "__typename": "Commit",
+                    "history": {
+                      "nodes": [
+                        {
+                          "statusCheckRollup": {
+                            "state": "PENDING"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        },
+                        {
+                          "statusCheckRollup": {
+                            "state": "SUCCESS"
+                          }
+                        }
+                      ]
+                    },
+                    "oid": "9e4cad21de6d039b080dc3bd7c651788b7dd72a9"
+                  }
+                },
+                "deleteBranchOnMerge": true,
+                "id": "MDEwOlJlcG9zaXRvcnkyNTI3NTQ2MDM=",
+                "issues": {
+                  "nodes": [],
+                  "pageInfo": {
+                    "endCursor": null,
+                    "hasNextPage": false
+                  }
+                },
+                "mergeCommitAllowed": false,
+                "rebaseMergeAllowed": false,
+                "refs": {
+                  "nodes": [
+                    {
+                      "associatedPullRequests": {
+                        "nodes": [
+                          {
+                            "author": {
+                              "__typename": "Bot",
+                              "login": "pull"
+                            },
+                            "autoMergeRequest": null,
+                            "baseRefName": "main",
+                            "baseRepository": {
+                              "nameWithOwner": "Karinza38/github-action"
+                            },
+                            "body": "See [Commits](/Karinza38/github-action/pull/62/commits) and [Changes](/Karinza38/github-action/pull/62/files) for more details.\n\n-----\nCreated by [<img src=\"https://prod.download/pull-18h-svg\" valign=\"bottom\"/> **pull[bot]**](https://github.com/wei/pull) (v2.0.0-alpha.1)\n\n_Can you help keep this open source service alive? **[💖 Please sponsor : )](https://prod.download/pull-pr-sponsor)**_",
+                            "headRefName": "main",
+                            "headRefOid": "9e4cad21de6d039b080dc3bd7c651788b7dd72a9",
+                            "headRepository": {
+                              "nameWithOwner": "renovatebot/github-action"
+                            },
+                            "id": "PR_kwDONU9yns6Gf13m",
+                            "labels": {
+                              "nodes": [
+                                {
+                                  "name": ":arrow_heading_down: pull"
+                                }
+                              ],
+                              "pageInfo": {
+                                "hasNextPage": false
+                              }
+                            },
+                            "number": 62,
+                            "title": "[pull] main from renovatebot:main",
+                            "url": "https://github.com/Karinza38/github-action/pull/62"
+                          }
+                        ],
+                        "pageInfo": {
+                          "hasNextPage": false
+                        }
+                      },
+                      "name": "main",
+                      "target": {
+                        "__typename": "Commit",
+                        "author": {
+                          "user": {
+                            "login": "renovate[bot]"
+                          }
+                        },
+                        "committer": {
+                          "user": null
+                        },
+                        "message": "ci(deps): update ghcr.io/renovatebot/renovate docker tag to v44.236.2\n\n| datasource | package                      | from     | to       |\n| ---------- | ---------------------------- | -------- | -------- |\n| docker     | ghcr.io/renovatebot/renovate | 44.235.4 | 44.236.2 |",
+                        "oid": "9e4cad21de6d039b080dc3bd7c651788b7dd72a9",
+                        "signature": "[REDACTED]",
+                        "tree": {
+                          "oid": "f3ee301855319132b9e6d8ee38b16477c34fb81c"
+                        }
+                      }
+                    },
+                    {
+                      "associatedPullRequests": {
+                        "nodes": [],
+                        "pageInfo": {
+                          "hasNextPage": false
+                        }
+                      },
+                      "name": "release",
+                      "target": {
+                        "__typename": "Commit",
+                        "author": {
+                          "user": {
+                            "login": "github-actions[bot]"
+                          }
+                        },
+                        "committer": {
+                          "user": {
+                            "login": "github-actions[bot]"
+                          }
+                        },
+                        "message": "skip: merge (acc72df346ae9699374010ce0dcc3c12b74ae23a) [skip release]",
+                        "oid": "b1a44d76ce78cd524015416a4f39f1033fc29c7e",
+                        "signature": "[REDACTED]",
+                        "tree": {
+                          "oid": "bf9f57aa31bff430aeef3cdf28ec53fe3b5afb2a"
+                        }
+                      }
+                    }
+                  ],
+                  "pageInfo": {
+                    "endCursor": "Mg",
+                    "hasNextPage": false
+                  }
+                },
+                "squashMergeAllowed": true
+              },
+              "viewer": {
+                "login": "sweepies"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

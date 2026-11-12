@@ -1,0 +1,88 @@
+query InventoryRefsQuery(
+    $owner: String!
+    $name: String!
+    $prefix: String!
+    $cursor: String
+) {
+    viewer {
+        login
+    }
+    repository(owner: $owner, name: $name) {
+        defaultBranchRef {
+            name
+            target {
+                __typename
+                oid
+            }
+        }
+        refs(refPrefix: $prefix, first: 100, after: $cursor) {
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+            nodes {
+                name
+                target {
+                    __typename
+                    ... on Commit {
+                        oid
+                        message
+                        tree {
+                            oid
+                        }
+                        author {
+                            user {
+                                login
+                            }
+                        }
+                        committer {
+                            user {
+                                login
+                            }
+                        }
+                        signature {
+                            __typename
+                            isValid
+                        }
+                    }
+                }
+                associatedPullRequests(states: [OPEN], first: 2) {
+                    pageInfo {
+                        hasNextPage
+                    }
+                    nodes {
+                        number
+                        id
+                        url
+                        title
+                        body
+                        headRefName
+                        headRefOid
+                        baseRefName
+                        author {
+                            __typename
+                            login
+                        }
+                        headRepository {
+                            nameWithOwner
+                        }
+                        baseRepository {
+                            nameWithOwner
+                        }
+                        labels(first: 100) {
+                            pageInfo {
+                                hasNextPage
+                            }
+                            nodes {
+                                name
+                            }
+                        }
+                        autoMergeRequest {
+                            enabledAt
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

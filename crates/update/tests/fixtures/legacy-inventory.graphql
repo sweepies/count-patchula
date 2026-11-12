@@ -1,0 +1,166 @@
+query InventoryQuery(
+    $owner: String!
+    $name: String!
+    $prefix: String!
+    $cursor: String
+    $issueCursor: String
+    $closed: [ID!]!
+) {
+    viewer {
+        login
+    }
+    nodes(ids: $closed) {
+        __typename
+        ... on PullRequest {
+            id
+            number
+            state
+            merged
+            body
+            headRefName
+            author {
+                __typename
+                login
+            }
+            headRepository {
+                nameWithOwner
+            }
+            baseRepository {
+                nameWithOwner
+            }
+        }
+    }
+    repository(owner: $owner, name: $name) {
+        id
+        autoMergeAllowed
+        squashMergeAllowed
+        mergeCommitAllowed
+        rebaseMergeAllowed
+        deleteBranchOnMerge
+        defaultBranchRef {
+            name
+            target {
+                __typename
+                oid
+                ... on Commit {
+                    history(first: 10) {
+                        nodes {
+                            statusCheckRollup {
+                                state
+                            }
+                        }
+                    }
+                }
+            }
+            rules(first: 100) {
+                pageInfo {
+                    hasNextPage
+                }
+                nodes {
+                    type
+                    parameters {
+                        __typename
+                        ... on RequiredStatusChecksParameters {
+                            requiredStatusChecks {
+                                context
+                            }
+                        }
+                        ... on PullRequestParameters {
+                            requiredApprovingReviewCount
+                        }
+                    }
+                }
+            }
+            refUpdateRule {
+                requiredStatusCheckContexts
+                requiredApprovingReviewCount
+            }
+        }
+        issues(states: [OPEN], first: 100, after: $issueCursor) {
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+            nodes {
+                id
+                number
+                title
+                body
+                state
+                author {
+                    __typename
+                    login
+                }
+            }
+        }
+        refs(refPrefix: $prefix, first: 100, after: $cursor) {
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+            nodes {
+                name
+                target {
+                    __typename
+                    ... on Commit {
+                        oid
+                        message
+                        tree {
+                            oid
+                        }
+                        author {
+                            user {
+                                login
+                            }
+                        }
+                        committer {
+                            user {
+                                login
+                            }
+                        }
+                        signature {
+                            __typename
+                            isValid
+                        }
+                    }
+                }
+                associatedPullRequests(states: [OPEN], first: 2) {
+                    pageInfo {
+                        hasNextPage
+                    }
+                    nodes {
+                        number
+                        id
+                        url
+                        title
+                        body
+                        headRefName
+                        headRefOid
+                        baseRefName
+                        author {
+                            __typename
+                            login
+                        }
+                        headRepository {
+                            nameWithOwner
+                        }
+                        baseRepository {
+                            nameWithOwner
+                        }
+                        labels(first: 100) {
+                            pageInfo {
+                                hasNextPage
+                            }
+                            nodes {
+                                name
+                            }
+                        }
+                        autoMergeRequest {
+                            enabledAt
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

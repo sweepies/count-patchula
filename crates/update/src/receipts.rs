@@ -32,6 +32,37 @@ mod inventory {
         response_derives = "Debug, PartialEq"
     )]
     pub struct InventoryQuery;
+
+    /// `inventory-next.graphql` — a continuation page carrying every
+    /// connection that still has a page, with the `viewer` and
+    /// default-branch head the per-page checks read.
+    #[derive(GraphQLQuery)]
+    #[graphql(
+        schema_path = "../github/graphql/schema.docs.graphql",
+        query_path = "src/inventory-next.graphql",
+        response_derives = "Debug, PartialEq"
+    )]
+    pub struct InventoryNextQuery;
+
+    /// `inventory-refs.graphql` — a `refs` continuation page, with the
+    /// same checks.
+    #[derive(GraphQLQuery)]
+    #[graphql(
+        schema_path = "../github/graphql/schema.docs.graphql",
+        query_path = "src/inventory-refs.graphql",
+        response_derives = "Debug, PartialEq"
+    )]
+    pub struct InventoryRefsQuery;
+
+    /// `inventory-issues.graphql` — an `issues` continuation page, with
+    /// the same checks.
+    #[derive(GraphQLQuery)]
+    #[graphql(
+        schema_path = "../github/graphql/schema.docs.graphql",
+        query_path = "src/inventory-issues.graphql",
+        response_derives = "Debug, PartialEq"
+    )]
+    pub struct InventoryIssuesQuery;
 }
 
 pub use inventory::inventory_query::{
@@ -39,8 +70,15 @@ pub use inventory::inventory_query::{
     PullRequestState, RepositoryRuleType,
 };
 
-/// The inventory document, exported for tests that compare request bodies.
+/// The first-page inventory document, exported for tests that compare
+/// request bodies.
 pub const INVENTORY_QUERY: &str = inventory::inventory_query::QUERY;
+/// The continuation document for the pages both connections still owe.
+pub const INVENTORY_NEXT_QUERY: &str = inventory::inventory_next_query::QUERY;
+/// The `refs`-only continuation document.
+pub const INVENTORY_REFS_QUERY: &str = inventory::inventory_refs_query::QUERY;
+/// The `issues`-only continuation document.
+pub const INVENTORY_ISSUES_QUERY: &str = inventory::inventory_issues_query::QUERY;
 
 /// `Connection.pageInfo` — `hasNextPage` is `Boolean!`, `endCursor` a
 /// nullable `String` (schema: `PageInfo`).
@@ -167,6 +205,32 @@ struct InventoryData {
 struct Viewer {
     /// `User.login` — `String!`.
     login: String,
+}
+/// A continuation document's `data`: `viewer` for the per-page actor
+/// check, the default branch's name and head OID for the race check, and
+/// the one connection the page continues.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContinuationData {
+    /// `Query.viewer` — `User!`.
+    viewer: Viewer,
+    /// `Query.repository` — `Repository`, nullable.
+    repository: Option<ContinuationRepository>,
+}
+/// `repository` as the continuations read it: the default branch for the
+/// race check plus the paged connections the request carried. A document
+/// asks only for the connections it continues, so fields default when the
+/// page omits them — a continuation that reads them then finds no nodes
+/// and fails closed.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct ContinuationRepository {
+    /// `Repository.defaultBranchRef` — `Ref`, nullable.
+    default_branch_ref: Option<DefaultBranchRef>,
+    /// `Repository.refs` — `RefConnection`, nullable.
+    refs: Option<Connection>,
+    /// `Repository.issues` — `IssueConnection!`.
+    issues: Connection,
 }
 /// `repository`'s scalar fields (`ID!`/`Boolean!`); its connections stay
 /// [`Connection`]s until each list is read.
@@ -446,6 +510,22 @@ impl State for Receipts {
     const VERSION: u32 = 1;
     type Scope = ReceiptsScope;
 }
+/// The `viewer.login` an inventory saw, remembered per credential: the next
+/// read's `issues` walk asks `filterBy.createdBy` for it. The answer's
+/// `viewer.login` proves or disproves the hint, so a wrong entry only costs
+/// one request and never narrows the set wrongly.
+#[derive(Serialize, Deserialize)]
+struct ActorHint(String);
+/// `ActorHint`'s scope: one entry per credential scope.
+#[derive(Serialize)]
+struct ActorScope {
+    credential_scope: String,
+}
+impl State for ActorHint {
+    const NAMESPACE: &'static str = "inventory-actor";
+    const VERSION: u32 = 1;
+    type Scope = ActorScope;
+}
 fn receipts_scope(repo: &str, prefix: &str) -> ReceiptsScope {
     ReceiptsScope {
         repository: repo.into(),
@@ -690,6 +770,18 @@ impl Inventory {
         repository: &Repository,
         config: &Config,
     ) -> Result<Self, Error> {
+        Self::read_documents(client, cache, repository, config, DOCUMENTS).await
+    }
+    /// A read over `documents`: the credential's remembered actor filters
+    /// the issue walk; a missing or disproven hint reads unfiltered instead
+    /// and the answer's `viewer.login` is stored for the next read.
+    async fn read_documents(
+        client: &Client,
+        cache: &Cache,
+        repository: &Repository,
+        config: &Config,
+        documents: Documents,
+    ) -> Result<Self, Error> {
         let receipts = cache
             .state::<Receipts>(&receipts_scope(&repository.repository, &config.prs.branch))
             .await?
@@ -704,111 +796,268 @@ impl Inventory {
             .repository
             .split_once('/')
             .ok_or(Error::Refused("invalid repository".into()))?;
-        let mut result = Self::default();
-        let mut cursor = Value::Null;
-        let mut issue_cursor = Value::Null;
-        let mut refs_done = false;
-        let mut issues_done = false;
-        let mut ref_cursors = std::collections::HashSet::new();
-        let mut issue_cursors = std::collections::HashSet::new();
-        let mut ref_nodes: Vec<Option<Value>> = Vec::new();
-        let mut issue_nodes: Vec<Option<Value>> = Vec::new();
-        for _ in 0..client.max_pages() {
-            let data = client
-                .graphql::<InventoryData>(
-                    INVENTORY_QUERY,
-                    json!({"owner":owner,"name":name,
-                        "prefix":"refs/heads/","closed":closed_ids,"cursor":cursor,"issueCursor":issue_cursor}),
-                )
-                .await?;
-            let repository_data = data.repository.unwrap_or_default();
-            result.merge_settings = crate::automerge::Settings::from_graphql(&repository_data);
-            let branch = DefaultBranch::read(repository_data.default_branch_ref);
-            if branch.name.as_deref() != repository.default_branch.as_deref()
-                || branch.oid.as_deref() != repository.commit.as_deref()
+        let scope = ActorScope {
+            credential_scope: client.credential_scope().into(),
+        };
+        let mut hint = cache.state::<ActorHint>(&scope).await?.map(|hint| hint.0);
+        for _ in 0..2 {
+            match Self::walk(
+                client,
+                repository,
+                owner,
+                name,
+                &closed_ids,
+                &documents,
+                hint.as_deref(),
+            )
+            .await
             {
-                return Err(Error::Raced(
-                    "default branch changed since extraction; rerun",
-                ));
-            }
-            let actor = data.viewer.login;
-            if !result.actor.is_empty() && result.actor != actor {
-                return Err(Error::Refused("inventory actor changed".into()));
-            }
-            result.actor = actor;
-            result.default_branch = branch;
-            result.closed = Page::nodes(
-                &data
-                    .nodes
-                    .ok_or(Error::Refused("missing closed inventory".into()))?,
-                false,
-            );
-            for (connection, done, next, visited, output) in [
-                (
-                    repository_data.refs.as_ref(),
-                    &mut refs_done,
-                    &mut cursor,
-                    &mut ref_cursors,
-                    &mut ref_nodes,
-                ),
-                (
-                    Some(&repository_data.issues),
-                    &mut issues_done,
-                    &mut issue_cursor,
-                    &mut issue_cursors,
-                    &mut issue_nodes,
-                ),
-            ] {
-                if *done {
-                    continue;
-                }
-                let (nodes, page_info) = connection
-                    .and_then(|c| c.nodes.as_ref().zip(c.page_info.as_ref()))
-                    .ok_or(GithubError::Pagination)?;
-                output.extend(nodes.iter().cloned());
-                if page_info.has_next_page {
-                    let end = page_info
-                        .end_cursor
-                        .clone()
-                        .filter(|c| !c.is_empty())
-                        .ok_or(Error::Refused("missing inventory cursor".into()))?;
-                    if !visited.insert(end.clone()) {
-                        return Err(Error::Refused("repeated inventory cursor".into()));
+                Ok(mut inventory) => {
+                    inventory.finish(cache, &repository.repository).await?;
+                    if hint.as_deref() != Some(inventory.actor.as_str()) {
+                        cache
+                            .set_state(&scope, &ActorHint(inventory.actor.clone()))
+                            .await?;
                     }
-                    *next = json!(end);
-                } else {
-                    *done = true;
+                    return Ok(inventory);
                 }
-            }
-            if refs_done && issues_done {
-                result.refs = Page::nodes(&ref_nodes, true);
-                result.issues = Page::nodes(&issue_nodes, true);
-                result.merged_prs =
-                    crate::automerge::load_history(cache, &repository.repository, &result.actor)
-                        .await?;
-                // Labels and associated pull requests come back only to their
-                // first page; anything past it — or unreadable — is invisible
-                // here, so the branch cannot settle from receipts.
-                for r in result.refs.items.iter().flatten() {
-                    let prs = &r.associated_pull_requests;
-                    let partial = !prs.complete
-                        || prs.items.iter().any(Option::is_none)
-                        || prs
-                            .items
-                            .iter()
-                            .flatten()
-                            .any(|pr| pr.labels.as_ref().is_none_or(|l| !l.complete));
-                    if partial {
-                        result.unsettled.insert(r.name.clone());
-                    }
-                }
-                return Ok(result);
-            }
-            if ref_nodes.len() + issue_nodes.len() > 100_000 {
-                return Err(Error::Refused("inventory page budget exceeded".into()));
+                Err(ReadFailure::WrongActor) => hint = None,
+                Err(ReadFailure::Error(error)) => return Err(error),
             }
         }
-        Err(Error::Refused("inventory page budget exceeded".into()))
+        Err(Error::Refused("inventory actor changed".into()))
+    }
+    /// The document walk itself: the first page asks for everything, then
+    /// each request continues every connection that still has a page — a
+    /// finished one is never sent again. `actor` is the stored login hint,
+    /// if any: the answer's `viewer.login` must confirm it or the issue set
+    /// cannot be trusted.
+    async fn walk(
+        client: &Client,
+        repository: &Repository,
+        owner: &str,
+        name: &str,
+        closed_ids: &[Value],
+        documents: &Documents,
+        actor: Option<&str>,
+    ) -> Result<Self, ReadFailure> {
+        // `createdBy` takes the REST login, which is what `viewer.login`
+        // reports; a null filter is no filter at all.
+        let mut filter = actor.map_or(Value::Null, |login| json!({"createdBy":login}));
+        let variables = |cursor: &Value, issue_cursor: &Value, filter: &Value| {
+            json!({"owner":owner,"name":name,"prefix":"refs/heads/",
+                "closed":closed_ids,"cursor":cursor,"issueCursor":issue_cursor,
+                "issueFilter":filter.clone()})
+        };
+        let data: InventoryData = client
+            .graphql(
+                documents.first,
+                variables(&Value::Null, &Value::Null, &filter),
+            )
+            .await?;
+        if actor.is_some_and(|hint| hint != data.viewer.login) {
+            return Err(ReadFailure::WrongActor);
+        }
+        let mut result = Self {
+            actor: data.viewer.login,
+            ..Self::default()
+        };
+        let repository_data = data.repository.unwrap_or_default();
+        result.merge_settings = crate::automerge::Settings::from_graphql(&repository_data);
+        let branch = DefaultBranch::read(repository_data.default_branch_ref);
+        Self::head_check(repository, branch.name.as_deref(), branch.oid.as_deref())?;
+        result.default_branch = branch;
+        result.closed = Page::nodes(
+            &data
+                .nodes
+                .ok_or(Error::Refused("missing closed inventory".into()))?,
+            false,
+        );
+        let mut refs = Walk::default();
+        let mut issues = Walk::default();
+        refs.page(repository_data.refs.as_ref())?;
+        issues.page(Some(&repository_data.issues))?;
+        // A first page read without a hint that left the issues connection
+        // unfinished now knows the actor: what remains is its issues, and
+        // cursors do not carry across filters, so the walk restarts on
+        // `createdBy` and the gathered unfiltered nodes go with it.
+        if actor.is_none() && !issues.done {
+            filter = json!({"createdBy": result.actor});
+            issues = Walk::default();
+        }
+        let mut pages = 1;
+        while !(refs.done && issues.done) {
+            pages += 1;
+            if pages > client.max_pages() {
+                return Err(Error::Refused("inventory page budget exceeded".into()).into());
+            }
+            let document = if !refs.done && !issues.done {
+                documents.next
+            } else if !refs.done {
+                documents.refs
+            } else {
+                documents.issues
+            };
+            let data: ContinuationData = client
+                .graphql(document, variables(&refs.next, &issues.next, &filter))
+                .await?;
+            let repository_data = Self::check(repository, &result, data)?;
+            if !refs.done {
+                refs.page(repository_data.refs.as_ref())?;
+            }
+            if !issues.done {
+                issues.page(Some(&repository_data.issues))?;
+            }
+        }
+        result.refs = Page::nodes(&refs.nodes, true);
+        result.issues = Page::nodes(&issues.nodes, true);
+        Ok(result)
+    }
+    /// The race check every page makes: the default branch's name and head
+    /// OID must still be what the scan saw.
+    fn head_check(
+        repository: &Repository,
+        name: Option<&str>,
+        oid: Option<&str>,
+    ) -> Result<(), Error> {
+        if name != repository.default_branch.as_deref() || oid != repository.commit.as_deref() {
+            return Err(Error::Raced(
+                "default branch changed since extraction; rerun",
+            ));
+        }
+        Ok(())
+    }
+    /// The per-page checks a continuation repeats — the actor must stay the
+    /// first page's actor and the default branch must not have moved —
+    /// returning the page's repository data.
+    fn check(
+        repository: &Repository,
+        result: &Inventory,
+        data: ContinuationData,
+    ) -> Result<ContinuationRepository, Error> {
+        if result.actor != data.viewer.login {
+            return Err(Error::Refused("inventory actor changed".into()));
+        }
+        let repository_data = data.repository.unwrap_or_default();
+        let head = repository_data.default_branch_ref.as_ref();
+        Self::head_check(
+            repository,
+            head.map(|h| h.name.as_str()),
+            head.and_then(|h| h.target.as_ref()).map(|t| t.oid.as_str()),
+        )?;
+        Ok(repository_data)
+    }
+    /// `merged_prs` and `unsettled`, read once the walk gathered every page.
+    async fn finish(&mut self, cache: &Cache, repo: &str) -> Result<(), Error> {
+        self.merged_prs = crate::automerge::load_history(cache, repo, &self.actor).await?;
+        // Labels and associated pull requests come back only to their
+        // first page; anything past it — or unreadable — is invisible
+        // here, so the branch cannot settle from receipts.
+        for r in self.refs.items.iter().flatten() {
+            let prs = &r.associated_pull_requests;
+            let partial = !prs.complete
+                || prs.items.iter().any(Option::is_none)
+                || prs
+                    .items
+                    .iter()
+                    .flatten()
+                    .any(|pr| pr.labels.as_ref().is_none_or(|l| !l.complete));
+            if partial {
+                self.unsettled.insert(r.name.clone());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `walk`'s failure: an inventory error, or a login hint the answer's
+/// `viewer.login` disproves.
+enum ReadFailure {
+    Error(Error),
+    WrongActor,
+}
+impl From<Error> for ReadFailure {
+    fn from(error: Error) -> Self {
+        Self::Error(error)
+    }
+}
+impl From<GithubError> for ReadFailure {
+    fn from(error: GithubError) -> Self {
+        Self::Error(error.into())
+    }
+}
+/// The documents a read walks: the first page asks everything once; each
+/// continuation asks every connection that still has a page.
+struct Documents {
+    first: &'static str,
+    next: &'static str,
+    refs: &'static str,
+    issues: &'static str,
+}
+const DOCUMENTS: Documents = Documents {
+    first: INVENTORY_QUERY,
+    next: INVENTORY_NEXT_QUERY,
+    refs: INVENTORY_REFS_QUERY,
+    issues: INVENTORY_ISSUES_QUERY,
+};
+
+/// The pre-split inventory document, kept so the differential test can
+/// build an `Inventory` exactly the way releases before the split did.
+#[cfg(feature = "testing")]
+pub const LEGACY_INVENTORY_QUERY: &str = include_str!("../tests/fixtures/legacy-inventory.graphql");
+/// The differential-test entry: the same walk over the pre-split document,
+/// which answers both connections on every page it is sent for.
+#[cfg(feature = "testing")]
+pub async fn read_legacy_inventory(
+    client: &Client,
+    cache: &Cache,
+    repository: &Repository,
+    config: &Config,
+) -> Result<Inventory, Error> {
+    Inventory::read_documents(
+        client,
+        cache,
+        repository,
+        config,
+        Documents {
+            first: LEGACY_INVENTORY_QUERY,
+            next: LEGACY_INVENTORY_QUERY,
+            refs: LEGACY_INVENTORY_QUERY,
+            issues: LEGACY_INVENTORY_QUERY,
+        },
+    )
+    .await
+}
+/// One connection's walk: the last cursor sent, the cursors already seen
+/// (a repeat fails rather than looping) and the nodes gathered so far.
+#[derive(Default)]
+struct Walk {
+    done: bool,
+    next: Value,
+    visited: std::collections::HashSet<String>,
+    nodes: Vec<Option<Value>>,
+}
+impl Walk {
+    /// Gather one page's nodes and the cursor for the next request.
+    fn page(&mut self, connection: Option<&Connection>) -> Result<(), Error> {
+        let (nodes, page_info) = connection
+            .and_then(|c| c.nodes.as_ref().zip(c.page_info.as_ref()))
+            .ok_or(GithubError::Pagination)?;
+        self.nodes.extend(nodes.iter().cloned());
+        if page_info.has_next_page {
+            let end = page_info
+                .end_cursor
+                .clone()
+                .filter(|c| !c.is_empty())
+                .ok_or(Error::Refused("missing inventory cursor".into()))?;
+            if !self.visited.insert(end.clone()) {
+                return Err(Error::Refused("repeated inventory cursor".into()));
+            }
+            self.next = json!(end);
+        } else {
+            self.done = true;
+        }
+        Ok(())
     }
 }
 

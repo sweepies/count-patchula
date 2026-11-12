@@ -1,0 +1,36 @@
+query InventoryIssuesQuery(
+    $owner: String!
+    $name: String!
+    $issueFilter: IssueFilters
+    $issueCursor: String
+) {
+    viewer {
+        login
+    }
+    repository(owner: $owner, name: $name) {
+        defaultBranchRef {
+            name
+            target {
+                __typename
+                oid
+            }
+        }
+        issues(states: [OPEN], filterBy: $issueFilter, first: 100, after: $issueCursor) {
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+            nodes {
+                id
+                number
+                title
+                body
+                state
+                author {
+                    __typename
+                    login
+                }
+            }
+        }
+    }
+}
