@@ -2,7 +2,8 @@
 #![forbid(unsafe_code)]
 
 use reqwest::{Request, StatusCode, header::HeaderMap};
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, task::Poll};
+use tracing::Instrument;
 
 /// Provenance for an answer served from the cache while the registry was
 /// rate limited: when the entry was fetched upstream.
@@ -103,22 +104,51 @@ impl Transport for Network {
             if !self.allowed(request.url()) {
                 return Err(Error::Network);
             }
-            let response = self
-                .client
-                .execute(request)
-                .await
-                .map_err(|_| Error::Network)?;
-            tracing::Span::current().record("protocol", tracing::field::debug(response.version()));
-            let status = response.status();
-            let headers = response.headers().clone();
-            let body = response.bytes().await.map_err(|_| Error::Network)?.to_vec();
-            Ok(Response {
-                status,
-                headers,
-                body,
-                stale: None,
-            })
+            // Bodies can be hundreds of megabytes: run the exchange on a
+            // runtime worker so reading and inflating them does not block the
+            // engine task. `Span::current` is the request's trace span, so
+            // `protocol` and the transport's own events keep landing on it.
+            let client = self.client.clone();
+            let exchange = AbortOnDrop(tokio::spawn(
+                async move {
+                    let response = client.execute(request).await.map_err(|_| Error::Network)?;
+                    tracing::Span::current()
+                        .record("protocol", tracing::field::debug(response.version()));
+                    let status = response.status();
+                    let headers = response.headers().clone();
+                    let body = Vec::from(response.bytes().await.map_err(|_| Error::Network)?);
+                    Ok(Response {
+                        status,
+                        headers,
+                        body,
+                        stale: None,
+                    })
+                }
+                .instrument(tracing::Span::current()),
+            ));
+            match exchange.await {
+                Ok(result) => result,
+                Err(join) if join.is_panic() => std::panic::resume_unwind(join.into_panic()),
+                Err(_) => Err(Error::Network),
+            }
         })
+    }
+}
+
+/// Abort a spawned task if the future owning it is dropped, so a cancelled
+/// send does not leave its exchange running on a worker nobody observes.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Future for AbortOnDrop<T> {
+    type Output = Result<T, tokio::task::JoinError>;
+    fn poll(mut self: Pin<&mut Self>, context: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(context)
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
