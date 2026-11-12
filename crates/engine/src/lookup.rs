@@ -987,17 +987,31 @@ impl Engine {
             }
         }
         image_sboms.extend(read_sboms(fallback_reads).await);
-        let image_queries: BTreeSet<_> = image_sboms
+        // A retried image asks OSV for its listings again, as it re-reads
+        // its SBOMs and digests.
+        let retried_images: BTreeSet<&str> = image_deps
             .iter()
-            .filter(|((package, digest, _), _)| {
-                image_pairs.contains(&(package.clone(), digest.clone()))
-            })
-            .filter_map(|(_, result)| match result {
-                Ok(patchula_datasource::ImageSbom::Found(sbom)) => Some(sbom.queries()),
-                _ => None,
-            })
-            .flatten()
+            .filter(|(.., revalidate)| *revalidate)
+            .map(|(package, ..)| package.as_str())
             .collect();
+        let (mut image_queries, mut retried_queries) = (BTreeSet::new(), BTreeSet::new());
+        for ((package, digest, _), result) in &image_sboms {
+            if !image_pairs.contains(&(package.clone(), digest.clone())) {
+                continue;
+            }
+            let Ok(patchula_datasource::ImageSbom::Found(sbom)) = result else {
+                continue;
+            };
+            let target = if retried_images.contains(package.as_str()) {
+                &mut retried_queries
+            } else {
+                &mut image_queries
+            };
+            target.extend(sbom.queries());
+        }
+        image_queries.retain(|query| !retried_queries.contains(query));
+        let image_queries_all: BTreeSet<_> =
+            image_queries.union(&retried_queries).cloned().collect();
         // Only an advisory one side of a replacement has and the other lacks
         // can be fixed or brought in, so only those records are read.
         // Each replacement is judged on its own repository's platforms.
@@ -1016,11 +1030,16 @@ impl Engine {
         // only a record read in full marks it a security fix. The most severe
         // few it fixes or brings in are read; when every fix read is
         // withdrawn, the next ones are read in rank order until one isn't.
-        let ((image_listing, image_found), osv_failure) = if image_queries.is_empty() {
+        let ((image_listing, image_found), osv_failure) = if image_queries_all.is_empty() {
             (Default::default(), None)
         } else {
             let read = async {
-                let listing = self.sources.advisory_listing(&image_queries).await?;
+                let (plain, retried) = tokio::join!(
+                    self.sources.advisory_listing(&image_queries),
+                    fresh_sources.advisory_listing(&retried_queries),
+                );
+                let mut listing = plain?;
+                listing.extend(retried?);
                 let mut fixes = Vec::new();
                 let mut wanted = BTreeSet::new();
                 for (package, old, new, platforms) in &replacements {
@@ -1074,7 +1093,6 @@ impl Engine {
                     }
                     fetched.extend(batch);
                 }
-                let mut listing = listing;
                 for ids in listing.values_mut() {
                     ids.retain(|(id, _)| !fetched.contains(id) || verified.contains(id));
                 }

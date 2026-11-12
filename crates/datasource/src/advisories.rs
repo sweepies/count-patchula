@@ -317,12 +317,21 @@ impl Client {
         listing: &AdvisoryListing,
         wanted: impl Fn(&str) -> bool,
     ) -> Result<BTreeMap<AdvisoryQuery, Vec<Arc<Advisory>>>> {
-        let wanted: BTreeMap<String, String> = listing
-            .values()
-            .flatten()
-            .filter(|(id, _)| wanted(id))
-            .cloned()
-            .collect();
+        // A listing reused inside its window and one fetched this run can
+        // name the same advisory at different modification times: the latest
+        // wins, so a record OSV says changed is read again.
+        let mut latest = BTreeMap::<String, String>::new();
+        for (id, modified) in listing.values().flatten().filter(|(id, _)| wanted(id)) {
+            latest
+                .entry(id.clone())
+                .and_modify(|seen| {
+                    if later(modified, seen) {
+                        seen.clone_from(modified);
+                    }
+                })
+                .or_insert_with(|| modified.clone());
+        }
+        let wanted = latest;
         let records: BTreeMap<String, Option<Arc<Advisory>>> = stream::iter(wanted)
             .map(|(id, modified)| async move {
                 let advisory = self.advisory(&id, &modified).await?;
@@ -372,6 +381,22 @@ impl Client {
         };
         self.cache.set_state(&scope, &stored).await?;
         Ok(stored.advisory.map(Arc::new))
+    }
+}
+
+/// Whether OSV modification time `a` is later than `b`. Both are RFC 3339;
+/// one that does not parse loses to one that does, and two that do not
+/// compare as text.
+fn later(a: &str, b: &str) -> bool {
+    use chrono::DateTime;
+    match (
+        DateTime::parse_from_rfc3339(a),
+        DateTime::parse_from_rfc3339(b),
+    ) {
+        (Ok(a), Ok(b)) => a > b,
+        (Ok(_), Err(_)) => true,
+        (Err(_), Ok(_)) => false,
+        (Err(_), Err(_)) => a > b,
     }
 }
 
@@ -470,6 +495,69 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    /// The latest modification time wins; one that does not parse loses.
+    #[test]
+    fn the_later_modification_wins() {
+        assert!(later("2026-11-12T00:00:00Z", "2026-11-01T00:00:00Z"));
+        assert!(!later("2026-11-01T00:00:00Z", "2026-11-12T00:00:00Z"));
+        assert!(later("2026-11-12T00:00:00.5Z", "2026-11-12T00:00:00Z"));
+        assert!(later("2026-11-01T00:00:00Z", "not a time"));
+        assert!(!later("", "2026-11-01T00:00:00Z"));
+    }
+
+    /// An OSV endpoint whose batch answers fewer results than queries.
+    struct Short;
+    impl Transport for Short {
+        fn send(&self, _: reqwest::Request) -> Exchange<'_> {
+            let response = Response {
+                status: reqwest::StatusCode::OK,
+                headers: Default::default(),
+                body: serde_json::to_vec(&json!({ "results": [] })).unwrap(),
+                stale: None,
+            };
+            Box::pin(async move { Ok(response) })
+        }
+    }
+
+    /// A batch that does not answer every query fails the listing and stores
+    /// nothing, so the next run asks again.
+    #[tokio::test(start_paused = true)]
+    async fn a_short_batch_stores_nothing() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let transport = Arc::new(Short);
+        let github = patchula_github::Client::with_transport(
+            "offline",
+            cache.clone(),
+            Default::default(),
+            transport.clone(),
+        )
+        .unwrap();
+        let http = patchula_http::Cached::with_options(
+            cache.clone(),
+            transport,
+            patchula_http::Options {
+                advisory_freshness_secs: 3600,
+                ..crate::http_options()
+            },
+        )
+        .unwrap();
+        let client = Client::new(github, http, cache.clone());
+        let q = query("npm", "lodash", "4.17.11");
+        assert!(
+            client
+                .advisory_listing(&BTreeSet::from([q.clone()]))
+                .await
+                .is_err()
+        );
+        assert!(
+            cache
+                .state::<StoredListing>(&ListingScope::of(&q))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// A listing inside its freshness window answers with no request.
