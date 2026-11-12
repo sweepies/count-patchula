@@ -456,6 +456,51 @@ async fn a_local_directory_without_config_is_skipped() {
     );
 }
 
+/// A directory name that is not a valid repository name still gets a
+/// stable identity: the checkout reports as `local/` plus a hash of the
+/// name, while a valid name keeps `local/<name>` unchanged.
+#[tokio::test]
+async fn a_directory_named_anything_is_looked_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let odd = dir.path().join("count patchula@t3-üñïcode");
+    std::fs::create_dir(&odd).unwrap();
+    write(&odd, "package.json", MANIFEST);
+    let named = dir.path().join("count-patchula");
+    std::fs::create_dir(&named).unwrap();
+    write(&named, "package.json", MANIFEST);
+    let cache = patchula_cache::Cache::open(":memory:", Default::default())
+        .await
+        .unwrap();
+    let engine = patchula_engine::Engine::with_transport(
+        "offline-token",
+        cache,
+        4,
+        std::sync::Arc::new(NoTransport),
+    )
+    .unwrap();
+    for (checkout, repository) in [
+        (
+            odd,
+            "local/0b4ab6c9dcf025d9fcc3edc10273ee8b27c9ca0622e77f3c828012287853bba6",
+        ),
+        (named, "local/count-patchula"),
+    ] {
+        let report = engine
+            .lookup_at(
+                patchula_engine::Options {
+                    local: Some(checkout),
+                    ..Default::default()
+                },
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+        let repo = &report.repositories[0];
+        assert_eq!(repo.status, patchula_report::Status::Skipped, "{repo:?}");
+        assert_eq!(repo.repository, repository, "{repo:?}");
+    }
+}
+
 /// A local checkout that commits registry credentials is refused: its
 /// lockfile tools would fetch what they buy into the shared public cache
 /// partition.
