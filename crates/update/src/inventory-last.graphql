@@ -1,0 +1,77 @@
+query InventoryLastQuery(
+    $owner: String!
+    $name: String!
+    $closed: [ID!]!
+) {
+    viewer {
+        login
+    }
+    nodes(ids: $closed) {
+        __typename
+        ... on PullRequest {
+            id
+            number
+            state
+            merged
+            body
+            headRefName
+            author {
+                __typename
+                login
+            }
+            headRepository {
+                nameWithOwner
+            }
+            baseRepository {
+                nameWithOwner
+            }
+        }
+    }
+    repository(owner: $owner, name: $name) {
+        id
+        autoMergeAllowed
+        squashMergeAllowed
+        mergeCommitAllowed
+        rebaseMergeAllowed
+        deleteBranchOnMerge
+        defaultBranchRef {
+            name
+            target {
+                __typename
+                oid
+                ... on Commit {
+                    history(first: 10) {
+                        nodes {
+                            statusCheckRollup {
+                                state
+                            }
+                        }
+                    }
+                }
+            }
+            rules(first: 100) {
+                pageInfo {
+                    hasNextPage
+                }
+                nodes {
+                    type
+                    parameters {
+                        __typename
+                        ... on RequiredStatusChecksParameters {
+                            requiredStatusChecks {
+                                context
+                            }
+                        }
+                        ... on PullRequestParameters {
+                            requiredApprovingReviewCount
+                        }
+                    }
+                }
+            }
+            refUpdateRule {
+                requiredStatusCheckContexts
+                requiredApprovingReviewCount
+            }
+        }
+    }
+}

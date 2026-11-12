@@ -1609,7 +1609,9 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         let s = server.state();
         assert_eq!(
             s.requests.len(),
-            if case == "pages" { 2 } else { 1 },
+            // The two pages, then the closing re-read of the first page's
+            // constants.
+            if case == "pages" { 3 } else { 1 },
             "{case}"
         );
         assert!(
@@ -1928,6 +1930,85 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
             [("POST".into(), "/graphql".into())]
         );
     }
+    check_transcript();
+}
+
+/// The split inventory gathers `nodes(ids:$closed)` from its first page
+/// alone, so a pull request the receipts still name closed can be reopened
+/// while the walk pages: the closing re-read sees it open and the plan
+/// takes the full-write path, as the last page's answer made it before.
+#[tokio::test(start_paused = true)]
+async fn a_pull_reopened_mid_walk_takes_the_full_write_path() {
+    let (config, repo) = pr_config();
+    let (mut first, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut first),
+        &snapshot,
+    )
+    .await;
+    server.state().repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+    let (mut next, _) = make_plan("22.0.0");
+    let lifecycle = patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut next),
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    assert_eq!(next.action().status, BranchStatus::Skipped);
+    patchula_update::save_receipts(&cache, &repo, &config, &[next], &lifecycle)
+        .await
+        .unwrap();
+    // One ref a page: the walk's first page still reports the pull request
+    // closed and the second page's request point reopens it.
+    server.state().settings.ref_page_size = Some(1);
+    server
+        .on(patchula_testkit::github::Matcher::Graphql(
+            "associatedPullRequests",
+        ))
+        .after(1)
+        .mutate(|state, _| {
+            state.repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("open");
+        });
+    server.state().requests.clear();
+    let (mut warm, _) = make_plan("22.0.0");
+    let inventory = patchula_update::Inventory::read(&github, &cache, &repo, &config)
+        .await
+        .unwrap();
+    let outcome = patchula_update::restore_inventory(
+        &cache,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut warm),
+        Default::default(),
+        None,
+        &inventory,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, patchula_update::RestoreOutcome::Partial);
+    assert_eq!(warm.action().status, BranchStatus::Planned);
+    // Two paged requests, then the closing re-read; a one-page walk stays
+    // one request.
+    assert_eq!(
+        server.state().requests,
+        [
+            ("POST".into(), "/graphql".into()),
+            ("POST".into(), "/graphql".into()),
+            ("POST".into(), "/graphql".into())
+        ]
+    );
     check_transcript();
 }
 

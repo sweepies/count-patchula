@@ -341,6 +341,46 @@ async fn an_unreadable_node_fails_closed_alike() {
     check_transcript();
 }
 
+/// A broken issue node authored by someone else — one GitHub could not
+/// project — never reaches the hinted read: `filterBy.createdBy` reports it
+/// foreign, so it cannot be the actor's dashboard and can hide nothing of
+/// the Count's. The unfiltered and legacy reads still refuse it as an
+/// incomplete issue inventory; an actor-authored broken node still fails
+/// closed in the filtered read too (`an_unreadable_node_fails_closed_alike`).
+#[tokio::test]
+async fn a_foreign_unreadable_issue_node_is_never_received() {
+    let server = fake();
+    seed_issue(&server, 1, &format!("dashboard\n{MARKER}"), actor_author());
+    server.state().repo_mut().issues.insert(
+        99,
+        json!({"id":"broken","state":"OPEN","author":{"__typename":"Bot","login":"renovate"}}),
+    );
+    let reads = reads(server.clone()).await.2;
+    // The node fails to decode wherever it is read unfiltered.
+    assert!(!reads.legacy.issues.complete && !reads.unfiltered.issues.complete);
+    for inventory in [&reads.legacy, &reads.unfiltered] {
+        assert_eq!(
+            dashboard::issue(inventory).unwrap_err().to_string(),
+            "incomplete issue inventory"
+        );
+    }
+    // The hinted read asks only for the actor's issues, so the foreign
+    // node is never sent: the connection is complete and holds the one
+    // dashboard.
+    assert!(reads.filtered.issues.complete);
+    assert_eq!(reads.filtered.issues.items.len(), 1);
+    assert_eq!(
+        dashboard::issue(&reads.filtered)
+            .unwrap()
+            .map(|issue| issue.number),
+        Some(1)
+    );
+    same_values(&reads.legacy, &reads.unfiltered);
+    same_values(&reads.legacy, &reads.filtered);
+    filtered_issues(&reads.legacy, &reads.filtered, &reads.legacy.actor);
+    check_transcript();
+}
+
 /// A stale hint — a login that is not `viewer.login` — costs one first-page
 /// read, then the walk retries unfiltered and stores the truth.
 #[tokio::test]

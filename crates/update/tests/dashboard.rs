@@ -375,6 +375,17 @@ impl patchula_http::Transport for InventoryPages {
                     "issues":issues(&input)
                 }}}),
             )
+        } else if query == patchula_update::INVENTORY_LAST_QUERY {
+            // The closing re-read of the first page's constants, sent when
+            // the walk paged: the same constants, no connections.
+            (
+                "last",
+                json!({"data":{"viewer":{"login":"patchula[bot]"},"nodes":[],"repository":{
+                    "id":"repo-id","autoMergeAllowed":false,"squashMergeAllowed":true,
+                    "mergeCommitAllowed":false,"rebaseMergeAllowed":false,"deleteBranchOnMerge":false,
+                    "defaultBranchRef":{"name":"main","target":{"__typename":"Commit","oid":"base"}}
+                }}}),
+            )
         } else {
             panic!("unexpected inventory document: {query}");
         };
@@ -443,11 +454,12 @@ async fn split_inventory_pages_each_connection_once_and_never_repeats_a_finished
             ("next".into(), filtered()),
             ("issues".into(), filtered()),
             ("issues".into(), filtered()),
+            ("last".into(), serde_json::Value::Null),
         ]
     );
     // Warm: the stored actor filters the first page, and one continuation
     // carries both connections until `refs` finishes — three requests, not
-    // refs plus issues.
+    // refs plus issues, then the closing re-read of the constants.
     let inventory = read().await.unwrap();
     assert_eq!(names(&inventory), ["ref0", "ref1"]);
     assert_eq!(titles(&inventory), ["t", "t", "t"]);
@@ -457,6 +469,7 @@ async fn split_inventory_pages_each_connection_once_and_never_repeats_a_finished
             ("first".to_string(), filtered()),
             ("next".into(), filtered()),
             ("issues".into(), filtered()),
+            ("last".into(), serde_json::Value::Null),
         ]
     );
 }

@@ -63,6 +63,18 @@ mod inventory {
         response_derives = "Debug, PartialEq"
     )]
     pub struct InventoryIssuesQuery;
+
+    /// `inventory-last.graphql` — the closing re-read of the fields the
+    /// first page answers once: the split walk gathers them from its first
+    /// page, so a walk that paged asks them again and the last answer
+    /// wins, as it did when every page carried them.
+    #[derive(GraphQLQuery)]
+    #[graphql(
+        schema_path = "../github/graphql/schema.docs.graphql",
+        query_path = "src/inventory-last.graphql",
+        response_derives = "Debug, PartialEq"
+    )]
+    pub struct InventoryLastQuery;
 }
 
 pub use inventory::inventory_query::{
@@ -79,6 +91,8 @@ pub const INVENTORY_NEXT_QUERY: &str = inventory::inventory_next_query::QUERY;
 pub const INVENTORY_REFS_QUERY: &str = inventory::inventory_refs_query::QUERY;
 /// The `issues`-only continuation document.
 pub const INVENTORY_ISSUES_QUERY: &str = inventory::inventory_issues_query::QUERY;
+/// The closing document a paged walk ends on.
+pub const INVENTORY_LAST_QUERY: &str = inventory::inventory_last_query::QUERY;
 
 /// `Connection.pageInfo` — `hasNextPage` is `Boolean!`, `endCursor` a
 /// nullable `String` (schema: `PageInfo`).
@@ -251,7 +265,9 @@ pub(crate) struct InventoryRepository {
     pub delete_branch_on_merge: bool,
     /// `Repository.defaultBranchRef` — `Ref`, nullable.
     pub default_branch_ref: Option<DefaultBranchRef>,
-    /// `Repository.issues` — `IssueConnection!`.
+    /// `Repository.issues` — `IssueConnection!`; documents that do not ask
+    /// for it (the closing read) decode to an empty, unreadable connection.
+    #[serde(default)]
     pub issues: Connection,
     /// `Repository.refs` — `RefConnection`, nullable.
     pub refs: Option<Connection>,
@@ -510,10 +526,11 @@ impl State for Receipts {
     const VERSION: u32 = 1;
     type Scope = ReceiptsScope;
 }
-/// The `viewer.login` an inventory saw, remembered per credential: the next
-/// read's `issues` walk asks `filterBy.createdBy` for it. The answer's
-/// `viewer.login` proves or disproves the hint, so a wrong entry only costs
-/// one request and never narrows the set wrongly.
+/// The `viewer.login` an inventory's first page reported, remembered per
+/// credential as soon as it is known — a walk that then fails still leaves
+/// it for the next read, which asks `filterBy.createdBy` for it. The
+/// answer's `viewer.login` proves or disproves the hint, so a wrong entry
+/// only costs one request and never narrows the set wrongly.
 #[derive(Serialize, Deserialize)]
 struct ActorHint(String);
 /// `ActorHint`'s scope: one entry per credential scope.
@@ -803,22 +820,21 @@ impl Inventory {
         for _ in 0..2 {
             match Self::walk(
                 client,
+                cache,
+                &scope,
                 repository,
-                owner,
-                name,
-                &closed_ids,
-                &documents,
-                hint.as_deref(),
+                Request {
+                    owner,
+                    name,
+                    closed_ids: &closed_ids,
+                    documents: &documents,
+                    actor: hint.as_deref(),
+                },
             )
             .await
             {
                 Ok(mut inventory) => {
                     inventory.finish(cache, &repository.repository).await?;
-                    if hint.as_deref() != Some(inventory.actor.as_str()) {
-                        cache
-                            .set_state(&scope, &ActorHint(inventory.actor.clone()))
-                            .await?;
-                    }
                     return Ok(inventory);
                 }
                 Err(ReadFailure::WrongActor) => hint = None,
@@ -829,32 +845,42 @@ impl Inventory {
     }
     /// The document walk itself: the first page asks for everything, then
     /// each request continues every connection that still has a page — a
-    /// finished one is never sent again. `actor` is the stored login hint,
-    /// if any: the answer's `viewer.login` must confirm it or the issue set
-    /// cannot be trusted.
+    /// finished one is never sent again. `request.actor` is the stored
+    /// login hint, if any: the answer's `viewer.login` must confirm it or
+    /// the issue set cannot be trusted.
     async fn walk(
         client: &Client,
+        cache: &Cache,
+        scope: &ActorScope,
         repository: &Repository,
-        owner: &str,
-        name: &str,
-        closed_ids: &[Value],
-        documents: &Documents,
-        actor: Option<&str>,
+        request: Request<'_>,
     ) -> Result<Self, ReadFailure> {
+        let actor = request.actor;
         // `createdBy` takes the REST login, which is what `viewer.login`
         // reports; a null filter is no filter at all.
         let mut filter = actor.map_or(Value::Null, |login| json!({"createdBy":login}));
         let variables = |cursor: &Value, issue_cursor: &Value, filter: &Value| {
-            json!({"owner":owner,"name":name,"prefix":"refs/heads/",
-                "closed":closed_ids,"cursor":cursor,"issueCursor":issue_cursor,
+            json!({"owner":request.owner,"name":request.name,
+                "prefix":"refs/heads/","closed":request.closed_ids,
+                "cursor":cursor,"issueCursor":issue_cursor,
                 "issueFilter":filter.clone()})
         };
         let data: InventoryData = client
             .graphql(
-                documents.first,
+                request.documents.first,
                 variables(&Value::Null, &Value::Null, &filter),
             )
             .await?;
+        // `viewer.login` is the credential's proven actor, so store the
+        // hint as soon as it is known: a walk that fails below leaves the
+        // next read no colder than this one, and a repository near the
+        // page budget cannot stay unfiltered forever.
+        if actor != Some(data.viewer.login.as_str()) {
+            cache
+                .set_state(scope, &ActorHint(data.viewer.login.clone()))
+                .await
+                .map_err(Error::Cache)?;
+        }
         if actor.is_some_and(|hint| hint != data.viewer.login) {
             return Err(ReadFailure::WrongActor);
         }
@@ -892,11 +918,11 @@ impl Inventory {
                 return Err(Error::Refused("inventory page budget exceeded".into()).into());
             }
             let document = if !refs.done && !issues.done {
-                documents.next
+                request.documents.next
             } else if !refs.done {
-                documents.refs
+                request.documents.refs
             } else {
-                documents.issues
+                request.documents.issues
             };
             let data: ContinuationData = client
                 .graphql(document, variables(&refs.next, &issues.next, &filter))
@@ -908,6 +934,39 @@ impl Inventory {
             if !issues.done {
                 issues.page(Some(&repository_data.issues))?;
             }
+            if refs.nodes.len() + issues.nodes.len() > 100_000 {
+                return Err(Error::Refused("inventory page budget exceeded".into()).into());
+            }
+        }
+        // A walk that paged ends on the closing read: the fields only the
+        // first page answered — `nodes(ids:$closed)`, the merge settings
+        // and the default branch's rules, history and update rule — are
+        // re-asked so the newest answer wins, as it did when every page
+        // carried them. The same actor and head checks hold it honest.
+        if pages > 1
+            && let Some(last) = request.documents.last
+        {
+            let data: InventoryData = client
+                .graphql(
+                    last,
+                    json!({"owner":request.owner,"name":request.name,
+                        "closed":request.closed_ids}),
+                )
+                .await?;
+            if result.actor != data.viewer.login {
+                return Err(Error::Refused("inventory actor changed".into()).into());
+            }
+            let repository_data = data.repository.unwrap_or_default();
+            result.merge_settings = crate::automerge::Settings::from_graphql(&repository_data);
+            let branch = DefaultBranch::read(repository_data.default_branch_ref);
+            Self::head_check(repository, branch.name.as_deref(), branch.oid.as_deref())?;
+            result.default_branch = branch;
+            result.closed = Page::nodes(
+                &data
+                    .nodes
+                    .ok_or(Error::Refused("missing closed inventory".into()))?,
+                false,
+            );
         }
         result.refs = Page::nodes(&refs.nodes, true);
         result.issues = Page::nodes(&issues.nodes, true);
@@ -986,19 +1045,33 @@ impl From<GithubError> for ReadFailure {
         Self::Error(error.into())
     }
 }
+/// The unchanging arguments of one walk's requests; only `actor` differs
+/// between a hinted first try and the unfiltered retry after `WrongActor`.
+struct Request<'a> {
+    owner: &'a str,
+    name: &'a str,
+    closed_ids: &'a [Value],
+    documents: &'a Documents,
+    actor: Option<&'a str>,
+}
 /// The documents a read walks: the first page asks everything once; each
-/// continuation asks every connection that still has a page.
+/// continuation asks every connection that still has a page. `last` is the
+/// closing re-read of the fields only the first page asks, sent when the
+/// walk took more than one request so the newest answer wins; `None` when
+/// `first` already re-read them on every page (the legacy document).
 struct Documents {
     first: &'static str,
     next: &'static str,
     refs: &'static str,
     issues: &'static str,
+    last: Option<&'static str>,
 }
 const DOCUMENTS: Documents = Documents {
     first: INVENTORY_QUERY,
     next: INVENTORY_NEXT_QUERY,
     refs: INVENTORY_REFS_QUERY,
     issues: INVENTORY_ISSUES_QUERY,
+    last: Some(INVENTORY_LAST_QUERY),
 };
 
 /// The pre-split inventory document, kept so the differential test can
@@ -1024,6 +1097,7 @@ pub async fn read_legacy_inventory(
             next: LEGACY_INVENTORY_QUERY,
             refs: LEGACY_INVENTORY_QUERY,
             issues: LEGACY_INVENTORY_QUERY,
+            last: None,
         },
     )
     .await
