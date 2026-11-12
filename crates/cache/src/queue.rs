@@ -678,6 +678,29 @@ mod tests {
             .unwrap();
         assert_eq!(claims[0].requeues, 0);
     }
+    /// A clean shutdown is not an outcome, so the streak survives it and a
+    /// restart cannot launder a requeue loop; a run that died with the
+    /// process counts as a failure and ends the streak.
+    #[tokio::test]
+    async fn release_keeps_the_requeue_streak_and_recovery_resets_it() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        let claims = cache.claim_batch(0, 10).await.unwrap();
+        cache
+            .finish_work(Finish::Requeue.all(claims), 0, 0)
+            .await
+            .unwrap();
+        cache.claim_batch(RETRY_MS, 10).await.unwrap();
+        cache.release_work().await.unwrap();
+        let claims = cache.claim_batch(RETRY_MS, 10).await.unwrap();
+        assert_eq!(claims[0].requeues, 1);
+        cache.recover_work(RETRY_MS).await.unwrap();
+        let claims = cache
+            .claim_batch(RETRY_MS + retry_delay_ms(1, "owner/repo", 1), 10)
+            .await
+            .unwrap();
+        assert_eq!(claims[0].requeues, 0);
+    }
     #[test]
     fn repositories_retry_apart_by_at_most_a_tenth_of_the_backoff() {
         for failures in 1..=8 {
