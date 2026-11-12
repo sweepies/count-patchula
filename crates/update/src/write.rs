@@ -1,4 +1,5 @@
 use crate::cleanup::{all_ours, recorded_base};
+use crate::error::Error;
 use crate::{Plan, Snapshot, blob_sha, trailers};
 use futures_util::{FutureExt, StreamExt, stream};
 use patchula_config::Rebase;
@@ -42,35 +43,18 @@ struct CreatedTree {
     sha: String,
 }
 
-/// Why a write did not happen.
-#[derive(Clone, Debug)]
-enum Refusal {
-    /// An expected extraction race: the default branch changed or moved, and
-    /// no write was attempted against the stale base. A rerun retries it.
-    Stale(&'static str),
-    Failed(String),
-}
-impl From<String> for Refusal {
-    fn from(error: String) -> Self {
-        Self::Failed(error)
-    }
-}
-impl From<&str> for Refusal {
-    fn from(error: &str) -> Self {
-        Self::Failed(error.into())
-    }
-}
-
 /// Whether a branch's write should run again: its base went stale before
 /// anything was written.
 pub fn needs_requeue(action: &patchula_report::BranchAction) -> bool {
     action.status == BranchStatus::Stale
 }
 
-fn refuse(plan: &mut Plan, refusal: Refusal) {
-    match refusal {
-        Refusal::Stale(reason) => plan.stale(reason),
-        Refusal::Failed(error) => plan.error(error),
+/// A write that did not happen: an expected extraction race goes stale so a
+/// rerun retries it; anything else is the branch's error.
+fn refuse(plan: &mut Plan, error: &Error) {
+    match error {
+        Error::Raced(reason) => plan.stale(*reason),
+        error => plan.error(error.to_string()),
     }
 }
 
@@ -99,36 +83,34 @@ async fn prepare(
     base_commit: &str,
     default_branch: &str,
     actor: &str,
-) -> Result<Base, Refusal> {
+) -> Result<Base, Error> {
     let metadata = client
         .get_fresh::<Repository>(&format!("repos/{repo}"))
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     if metadata.default_branch != default_branch {
-        return Err(Refusal::Stale(
+        return Err(Error::Raced(
             "default branch changed since extraction; rerun",
         ));
     }
     let head = client
         .get_fresh::<GitRef>(&ref_path(repo, default_branch))
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     if head.object.sha != base_commit {
-        return Err(Refusal::Stale(
+        return Err(Error::Raced(
             "default branch moved since extraction; stale blob refusal, rerun",
         ));
     }
     let base = client
         .get_fresh::<GitCommit>(&format!("repos/{repo}/git/commits/{base_commit}"))
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     let tree_sha = base.tree.sha;
     let tree = client
         .get_fresh::<Tree>(&format!("repos/{repo}/git/trees/{tree_sha}?recursive=1"))
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     if tree.truncated {
-        return Err("truncated tree; cannot validate extracted blobs".into());
+        return Err(Error::Refused(
+            "truncated tree; cannot validate extracted blobs".into(),
+        ));
     }
     Ok(Base {
         default_branch: default_branch.into(),
@@ -188,14 +170,14 @@ pub async fn apply_all(
                 if plan.action().status != BranchStatus::Planned {
                     return;
                 }
-                let result = match base {
-                    Ok(base) => apply_inner(client, plan, snapshot, rebase, base)
-                        .await
-                        .map_err(Refusal::Failed),
-                    Err(refusal) => Err(refusal.clone()),
-                };
-                if let Err(error) = result {
-                    refuse(plan, error);
+                match base {
+                    Ok(base) => {
+                        if let Err(error) = apply_inner(client, plan, snapshot, rebase, base).await
+                        {
+                            refuse(plan, &error);
+                        }
+                    }
+                    Err(error) => refuse(plan, error),
                 }
             }
             .boxed()
@@ -253,14 +235,16 @@ async fn apply_inner(
     snapshot: &Snapshot,
     rebase: Rebase,
     base: &Base,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let default_branch = &base.default_branch;
     let repo = plan.action().repository.clone();
     if repo != base.repository || plan.action().base_commit != base.commit {
-        return Err("mixed repositories or base commits in write batch".into());
+        return Err(Error::Refused(
+            "mixed repositories or base commits in write batch".into(),
+        ));
     }
     if plan.action().branch == *default_branch {
-        return Err("update branch equals default branch".into());
+        return Err(Error::Refused("update branch equals default branch".into()));
     }
     if plan.contents().len() != plan.action().files.len()
         || plan
@@ -269,7 +253,9 @@ async fn apply_inner(
             .iter()
             .any(|f| !plan.contents().contains_key(&f.path))
     {
-        return Err("plan contents and file preconditions differ".into());
+        return Err(Error::Refused(
+            "plan contents and file preconditions differ".into(),
+        ));
     }
     let tree_sha = &base.tree_sha;
     let entries = &base.entries;
@@ -277,12 +263,11 @@ async fn apply_inner(
         let blob = snapshot
             .files
             .get(&file.path)
-            .ok_or("missing extracted blob")?;
+            .ok_or(Error::Refused("missing extracted blob".into()))?;
         if file.blob_sha.is_empty() {
             if !blob.sha.is_empty() || entries.iter().any(|e| e.path == file.path) {
-                return Err(format!(
-                    "{}: expected new file is already present",
-                    file.path
+                return Err(Error::Refused(
+                    format!("{}: expected new file is already present", file.path).into(),
                 ));
             }
             continue;
@@ -293,9 +278,12 @@ async fn apply_inner(
                 e.path == file.path && e.sha == blob.sha && e.mode == blob.mode && e.kind == "blob"
             })
         {
-            return Err(format!(
-                "{}: stale blob SHA or contents; refusing all branch writes",
-                file.path
+            return Err(Error::Refused(
+                format!(
+                    "{}: stale blob SHA or contents; refusing all branch writes",
+                    file.path
+                )
+                .into(),
             ));
         }
     }
@@ -305,7 +293,7 @@ async fn apply_inner(
     {
         Ok(reference) => Some(reference.object.sha),
         Err(patchula_github::Error::Status(404)) => None,
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(e.into()),
     };
     plan.record_head(old.clone());
     let mut moved_base = false;
@@ -313,8 +301,7 @@ async fn apply_inner(
         let actor = base.actor.as_str();
         let existing_tip = client
             .get_fresh::<GitCommit>(&format!("repos/{repo}/git/commits/{old}"))
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
         let tip_message = existing_tip.message.as_str();
         if trailers::base(tip_message).is_none() {
             plan.protect("unmarked branch history; left untouched");
@@ -334,7 +321,7 @@ async fn apply_inner(
                 plan.protect("recorded branch base is not a commit here; left untouched");
                 return Ok(());
             }
-            result => result.map_err(|e| e.to_string())?,
+            result => result?,
         };
         let commits = &compare.commits;
         let total = compare.total_commits;
@@ -345,12 +332,17 @@ async fn apply_inner(
             );
             return Ok(());
         }
-        let latest = commits.last().ok_or("empty branch history")?;
+        let latest = commits
+            .last()
+            .ok_or(Error::Refused("empty branch history".into()))?;
         if latest.sha != *old {
-            return Err("branch history does not end at the observed head".into());
+            return Err(Error::Refused(
+                "branch history does not end at the observed head".into(),
+            ));
         }
         let message = latest.commit.message.as_str();
-        let parent = trailers::base(message).ok_or("missing patchula base marker")?;
+        let parent =
+            trailers::base(message).ok_or(Error::Refused("missing patchula base marker".into()))?;
         moved_base = parent != plan.action().base_commit;
         if !moved_base
             || rebase == Rebase::Conflicts && trailers::plan(message) == Some(plan.fingerprint())
@@ -360,10 +352,9 @@ async fn apply_inner(
                 .get_fresh::<Tree>(&format!(
                     "repos/{repo}/git/trees/{existing_tree}?recursive=1"
                 ))
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             if existing.truncated {
-                return Err("incomplete existing branch tree".into());
+                return Err(Error::Refused("incomplete existing branch tree".into()));
             }
             let existing_entries = &existing.tree;
             let contents_match = plan.contents().iter().all(|(p, c)| {
@@ -412,8 +403,7 @@ async fn apply_inner(
             &format!("repos/{repo}/git/trees"),
             json!({"base_tree":tree_sha,"tree":blobs}),
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     let tree = tree.sha;
     let pending = if plan.action().lockfile_pending {
         "\n\nLockfile pending: manifest-only test branch; regenerate before merging."
@@ -436,12 +426,11 @@ async fn apply_inner(
             &format!("repos/{repo}/git/commits"),
             json!({"message":message,"tree":tree,"parents":[plan.action().base_commit]}),
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     let verified = commit.verification.verified;
     plan.set_verified(Some(verified));
     if !verified {
-        return Err("GitHub returned an unverified Git Data commit; branch left untouched. Check App bot signing; createCommitOnBranch may be required".into());
+        return Err(Error::Refused("GitHub returned an unverified Git Data commit; branch left untouched. Check App bot signing; createCommitOnBranch may be required".into()));
     }
     let sha = commit.sha;
     let status = if old.is_none() {

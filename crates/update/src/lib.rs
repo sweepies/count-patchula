@@ -6,6 +6,7 @@ pub mod batch;
 mod body;
 mod cleanup;
 pub mod dashboard;
+mod error;
 pub mod identity;
 pub mod maintenance;
 pub mod markers;
@@ -14,6 +15,7 @@ mod settle;
 pub mod text;
 mod trailers;
 pub use cleanup::{cleanup, delete_owned, owned};
+pub use error::{Error, PlanError, Result};
 pub use receipts::{
     DefaultBranch, DefaultCommit, INVENTORY_QUERY, Inventory, Issue, Page, RestoreOutcome,
     restore_inventory, save_receipts,

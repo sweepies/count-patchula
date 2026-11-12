@@ -2,6 +2,7 @@
 //! receipts, in that order, over the run's one authoritative inventory.
 //! Both outcomes call it — plans settled from verified receipts and plans
 //! that went through the full write — so the two can never drift apart.
+use crate::error::Error;
 use crate::{Inventory, Lifecycle, Plan};
 use chrono::{DateTime, Utc};
 use patchula_cache::Cache;
@@ -17,7 +18,7 @@ pub struct Settlement {
     pub merge_actions: Vec<PullRequestAction>,
     /// The dashboard reconcile's failure, if any. The caller fails the
     /// repository after whatever earlier failure it checks first.
-    pub dashboard: Result<(), String>,
+    pub dashboard: Result<(), Error>,
     /// Non-fatal reconcile warnings, already prefixed for the report.
     pub warnings: Vec<String>,
 }

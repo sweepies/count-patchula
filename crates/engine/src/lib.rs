@@ -44,6 +44,8 @@ pub enum Error {
     #[error(transparent)]
     Cache(#[from] patchula_cache::Error),
     #[error(transparent)]
+    Update(#[from] patchula_update::Error),
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Report(#[from] patchula_report::Error),

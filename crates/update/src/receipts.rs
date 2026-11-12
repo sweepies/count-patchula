@@ -1,4 +1,5 @@
 //! Receipts are proof of previously verified writes, never proof from a marker alone.
+use crate::error::Error;
 use crate::{Lifecycle, Plan};
 use patchula_cache::{Cache, State};
 use patchula_config::{Config, Rebase};
@@ -688,11 +689,10 @@ impl Inventory {
         cache: &Cache,
         repository: &Repository,
         config: &Config,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, Error> {
         let receipts = cache
             .state::<Receipts>(&receipts_scope(&repository.repository, &config.prs.branch))
-            .await
-            .map_err(|e| e.to_string())?
+            .await?
             .unwrap_or_default();
         let closed_ids: Vec<_> = receipts
             .closed
@@ -703,7 +703,7 @@ impl Inventory {
         let (owner, name) = repository
             .repository
             .split_once('/')
-            .ok_or("invalid repository")?;
+            .ok_or(Error::Refused("invalid repository".into()))?;
         let mut result = Self::default();
         let mut cursor = Value::Null;
         let mut issue_cursor = Value::Null;
@@ -720,23 +720,29 @@ impl Inventory {
                     json!({"owner":owner,"name":name,
                         "prefix":"refs/heads/","closed":closed_ids,"cursor":cursor,"issueCursor":issue_cursor}),
                 )
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             let repository_data = data.repository.unwrap_or_default();
             result.merge_settings = crate::automerge::Settings::from_graphql(&repository_data);
             let branch = DefaultBranch::read(repository_data.default_branch_ref);
             if branch.name.as_deref() != repository.default_branch.as_deref()
                 || branch.oid.as_deref() != repository.commit.as_deref()
             {
-                return Err("default branch changed since extraction; rerun".into());
+                return Err(Error::Raced(
+                    "default branch changed since extraction; rerun",
+                ));
             }
             let actor = data.viewer.login;
             if !result.actor.is_empty() && result.actor != actor {
-                return Err("inventory actor changed".into());
+                return Err(Error::Refused("inventory actor changed".into()));
             }
             result.actor = actor;
             result.default_branch = branch;
-            result.closed = Page::nodes(&data.nodes.ok_or("missing closed inventory")?, false);
+            result.closed = Page::nodes(
+                &data
+                    .nodes
+                    .ok_or(Error::Refused("missing closed inventory".into()))?,
+                false,
+            );
             for (connection, done, next, visited, output) in [
                 (
                     repository_data.refs.as_ref(),
@@ -758,16 +764,16 @@ impl Inventory {
                 }
                 let (nodes, page_info) = connection
                     .and_then(|c| c.nodes.as_ref().zip(c.page_info.as_ref()))
-                    .ok_or_else(|| GithubError::Pagination.to_string())?;
+                    .ok_or(GithubError::Pagination)?;
                 output.extend(nodes.iter().cloned());
                 if page_info.has_next_page {
                     let end = page_info
                         .end_cursor
                         .clone()
                         .filter(|c| !c.is_empty())
-                        .ok_or("missing inventory cursor")?;
+                        .ok_or(Error::Refused("missing inventory cursor".into()))?;
                     if !visited.insert(end.clone()) {
-                        return Err("repeated inventory cursor".into());
+                        return Err(Error::Refused("repeated inventory cursor".into()));
                     }
                     *next = json!(end);
                 } else {
@@ -799,10 +805,10 @@ impl Inventory {
                 return Ok(result);
             }
             if ref_nodes.len() + issue_nodes.len() > 100_000 {
-                return Err("inventory page budget exceeded".into());
+                return Err(Error::Refused("inventory page budget exceeded".into()));
             }
         }
-        Err("inventory page budget exceeded".into())
+        Err(Error::Refused("inventory page budget exceeded".into()))
     }
 }
 
@@ -814,11 +820,10 @@ pub async fn restore_inventory(
     recheck: Recheck,
     server: Option<&str>,
     inventory: &Inventory,
-) -> Result<RestoreOutcome, String> {
+) -> Result<RestoreOutcome, Error> {
     let receipts = cache
         .state::<Receipts>(&receipts_scope(&repository.repository, &config.prs.branch))
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     let pending = plans
         .iter()
         .any(|p| p.action().status == BranchStatus::Planned);
@@ -992,13 +997,9 @@ pub(crate) async fn save_merge_states(
     repository: &Repository,
     config: &Config,
     plans: &[Plan],
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let scope = receipts_scope(&repository.repository, &config.prs.branch);
-    let Some(mut receipts) = cache
-        .state::<Receipts>(&scope)
-        .await
-        .map_err(|e| e.to_string())?
-    else {
+    let Some(mut receipts) = cache.state::<Receipts>(&scope).await? else {
         return Ok(());
     };
     for plan in plans {
@@ -1011,10 +1012,7 @@ pub(crate) async fn save_merge_states(
             receipt.pr = PrState::from_rest(&pr.pr).value();
         }
     }
-    cache
-        .set_state(&scope, &receipts)
-        .await
-        .map_err(|e| e.to_string())
+    Ok(cache.set_state(&scope, &receipts).await?)
 }
 
 pub async fn save_receipts(
@@ -1023,7 +1021,7 @@ pub async fn save_receipts(
     config: &Config,
     plans: &[Plan],
     lifecycle: &Lifecycle,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let mut receipts = Receipts::default();
     for plan in plans {
         if plan.held(&crate::plan::Hold::ClosedByOwner)
@@ -1099,8 +1097,7 @@ pub async fn save_receipts(
             &receipts_scope(&repository.repository, &config.prs.branch),
             &receipts,
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         count = receipts.writes.len() + receipts.closed.len(), writes = receipts.writes.len(),
         closed = receipts.closed.len(), "write receipts saved");

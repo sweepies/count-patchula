@@ -1,3 +1,4 @@
+use crate::error::PlanError;
 use futures_util::StreamExt;
 use patchula_config::{Config, PackageId, Registry, split_package};
 use patchula_lockfiles as contract;
@@ -650,7 +651,7 @@ pub fn blob_sha(content: &str) -> String {
     patchula_github::blob_sha(content.as_bytes())
 }
 /// Readable branch labels; repository planning resolves manager collisions.
-pub fn branch_name(prefix: &str, label: &str) -> Result<String, String> {
+pub fn branch_name(prefix: &str, label: &str) -> Result<String, PlanError> {
     let name = format!("{prefix}{}", label.to_ascii_lowercase());
     if name.len() > 240
         || name.starts_with('/')
@@ -663,7 +664,7 @@ pub fn branch_name(prefix: &str, label: &str) -> Result<String, String> {
             .split('/')
             .any(|s| s.is_empty() || s.starts_with('.') || s.ends_with(".lock"))
     {
-        return Err("prs.branch produces an invalid Git branch name".into());
+        return Err(PlanError::BranchName);
     }
     Ok(name)
 }
@@ -686,8 +687,8 @@ pub fn plan(
     allow_pending: bool,
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<Vec<Plan>, String> {
-    let evaluator = patchula_lookup::Evaluator::new(config)?;
+) -> Result<Vec<Plan>, PlanError> {
+    let evaluator = patchula_lookup::Evaluator::new(config).map_err(PlanError::Lookup)?;
     let mut package_names = PackageNames::new();
     for dep in dependencies {
         package_names
@@ -760,9 +761,7 @@ pub fn plan(
         }
         let branch = branch_name(&config.prs.branch, &label)?;
         if !names.insert(branch.clone()) {
-            return Err(
-                "branch name collision after manager disambiguation; set explicit groups".into(),
-            );
+            return Err(PlanError::BranchCollision);
         }
         plans.push(build(
             repo,
@@ -818,7 +817,7 @@ fn build(
     branch: String,
     items: &[Item<'_>],
     kind: Kind,
-) -> Result<Plan, String> {
+) -> Result<Plan, PlanError> {
     let mut file_edits = BTreeMap::<String, Vec<Edit>>::new();
     let mut hold = None;
     let mut pending = None;
@@ -872,7 +871,7 @@ fn build(
             continue;
         }
         let Some(blob) = snapshot.files.get(&dep.file) else {
-            return Err(format!("missing extracted file {}", dep.file));
+            return Err(PlanError::MissingExtractedFile(dep.file.clone()));
         };
         if !matches!(blob.mode.as_str(), "100644" | "100755") {
             keep(
@@ -1018,7 +1017,10 @@ fn build(
     let action = BranchAction {
         repository: repo.repository.clone(),
         branch,
-        base_commit: repo.commit.clone().ok_or("missing extraction commit")?,
+        base_commit: repo
+            .commit
+            .clone()
+            .ok_or(PlanError::MissingExtractionCommit)?,
         status: if hold.is_some() {
             BranchStatus::Skipped
         } else {
@@ -1364,8 +1366,8 @@ pub fn batch_plan(
     allow_pending: bool,
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<Option<Plan>, String> {
-    let evaluator = patchula_lookup::Evaluator::new(config)?;
+) -> Result<Option<Plan>, PlanError> {
+    let evaluator = patchula_lookup::Evaluator::new(config).map_err(PlanError::Lookup)?;
     let targets: Vec<Change> = items.iter().flat_map(|i| i.targets.clone()).collect();
     let mut pending = Vec::new();
     for target in &targets {
