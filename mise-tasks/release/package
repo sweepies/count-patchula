@@ -22,6 +22,18 @@ def main [...targets: string] {
     ^rustup target add $target.item
     ^cargo build --release --locked -p patchula-cli --target $target.item
     let bin = $"target/($target.item)/release/patchula"
+    # AWS_LC_SYS_NO_JITTER_ENTROPY keeps the jitter-entropy collector out of
+    # AWS-LC. The release binary is stripped on musl, so look in the crate's
+    # own archive, which keeps its symbols on every target: a jent_ symbol
+    # means the collector crept back in.
+    let archives = glob $"target/($target.item)/release/deps/libaws_lc_sys-*.rlib"
+    if ($archives | is-empty) {
+      error make --unspanned {msg: $"no aws-lc-sys archive for ($target.item) to check"}
+    }
+    let jitters = $archives | each {|archive| ^nm $archive | complete | get stdout | lines } | flatten | where {|line| $line =~ "jent_"}
+    if ($jitters | is-not-empty) {
+      error make --unspanned {msg: $"($target.item) links jitter-entropy code: ($jitters | first)"}
+    }
     if $target.index == 0 {
       with-env {PATCHULA_BIN: $bin} { ^mise run --force docs:cli }
       cp generated/patchula.usage.kdl target/dist/

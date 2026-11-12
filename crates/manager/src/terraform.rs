@@ -22,7 +22,7 @@ pub(super) fn documents(files: &Files) -> Result<BTreeMap<&str, Body>, String> {
 }
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     files: &BTreeMap<&str, Body>,
 ) -> Result<Vec<Dependency>, String> {
     let body = files.get(path).expect("selected HCL parsed once");
@@ -142,7 +142,7 @@ fn field<'a>(object: &'a Object, name: &str) -> Option<&'a Expression> {
 }
 fn add<'a>(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     name: &str,
     package: &str,
     version: &Expression,

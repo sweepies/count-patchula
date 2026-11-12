@@ -310,7 +310,7 @@ pub(super) fn extract(files: &Files, selected: impl Fn(&str) -> bool) -> Vec<Dep
         };
         out.push(super::gradle::maven(
             &definition.file,
-            text,
+            &crate::Lines::new(text),
             reference.package,
             reference.kind,
             definition.start,

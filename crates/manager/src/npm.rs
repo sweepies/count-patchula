@@ -50,7 +50,7 @@ fn registry(value: &str) -> bool {
 
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     manager: Manager,
     files: &BTreeMap<&str, Value<'_>>,
 ) -> Result<Vec<Dependency>, String> {
@@ -186,7 +186,7 @@ pub(super) fn extract(
 #[allow(clippy::too_many_arguments)]
 fn collect(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     manager: Manager,
     object: &Object<'_>,
     kind: DependencyKind,
@@ -309,7 +309,7 @@ fn resolved(
 /// `catalog` and named `catalogs` of package ranges for `catalog:` specifiers.
 pub(super) fn catalogs(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     manager: Manager,
 ) -> Result<Vec<Dependency>, String> {
     let locations = crate::yaml_locations::parse(text)?;
@@ -366,7 +366,7 @@ pub(super) fn catalogs(
 
 /// `.nvmrc` and `.node-version` pin Node with a single version, optionally
 /// `v`-prefixed. Aliases such as `lts/*` or `node` are not versions.
-pub(super) fn node_version(path: &str, text: &str, manager: Manager) -> Vec<Dependency> {
+pub(super) fn node_version(path: &str, text: &Lines<'_>, manager: Manager) -> Vec<Dependency> {
     let Some(token) = text.split_whitespace().next() else {
         return Vec::new();
     };

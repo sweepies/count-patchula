@@ -3,7 +3,7 @@
 use crate::*;
 use jsonc_parser::common::Ranged;
 
-pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     let root = crate::jsonc_ast_lenient(text).map_err(|e| {
         if e == "empty JSON" {
             "empty devcontainer.json".to_owned()

@@ -40,14 +40,14 @@ pub(super) fn repositories(
     }
     out
 }
-pub(super) struct Scan<'a> {
+pub(super) struct Scan<'a, 'b> {
     path: &'a str,
-    text: &'a str,
+    text: &'a Lines<'b>,
     manager: Manager,
     locations: &'a BTreeMap<String, Location>,
     out: Vec<Dependency>,
 }
-impl<'a> Scan<'a> {
+impl Scan<'_, '_> {
     fn location(&self, pointer: &str) -> Result<Location, String> {
         self.locations.get(pointer).cloned().ok_or_else(||format!("cannot locate YAML scalar {pointer}; aliased/template scalars need a concrete value"))
     }
@@ -156,7 +156,7 @@ impl<'a> Scan<'a> {
 pub(super) fn extract(
     manager: Manager,
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     documents: &[Value],
     locations: &BTreeMap<String, Location>,
     repos: &BTreeMap<(String, String), (String, bool)>,
@@ -401,7 +401,9 @@ pub(crate) fn prepare<'a>(
         let parsed = text
             .read()
             .map_err(|unread| unread.why().to_owned())
-            .and_then(|text| docs(text).and_then(|d| Ok((d, yaml_locations::parse(text)?))));
+            .and_then(|text| {
+                docs(text).and_then(|d| Ok((d, yaml_locations::parse(&Lines::new(text))?)))
+            });
         match parsed {
             Ok((docs, spans)) => {
                 documents.insert(path.as_str(), docs);

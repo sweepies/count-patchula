@@ -13,7 +13,7 @@ const SECTIONS: &[(&str, DependencyKind)] = &[
 
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
     let locations = yaml_locations::parse(text)?;
@@ -87,7 +87,7 @@ fn object(entry: &Value) -> Option<(&str, &'static str)> {
 
 fn dependency(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     entry: &str,
     location: &Location,
     kind: DependencyKind,

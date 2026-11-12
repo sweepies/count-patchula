@@ -47,7 +47,7 @@ fn location(src: &str) -> Result<(String, String), String> {
 
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
     let locations = yaml_locations::parse(text)?;

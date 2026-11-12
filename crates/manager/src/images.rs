@@ -49,7 +49,7 @@ pub(super) fn dependency(
     })
 }
 
-pub(super) fn dockerfile(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+pub(super) fn dockerfile(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     let arg = Regex::new(
         r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
     )

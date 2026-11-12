@@ -72,6 +72,7 @@ pub(crate) fn cargo(
         let Some(packages) = doc.get("package").and_then(Item::as_array_of_tables) else {
             continue;
         };
+        let lines = Lines::new(read_text(files, path));
         for package in packages {
             let (Some(name), Some(version)) = (
                 package.get("name").and_then(Item::as_str),
@@ -97,7 +98,7 @@ pub(crate) fn cargo(
                 version: text.into(),
                 syntax: Syntax::Toml,
                 location: Location::new(
-                    crate::read_text(files, path),
+                    &lines,
                     span.start,
                     span.end,
                     format!("/package/{name}@{text}"),
@@ -122,6 +123,7 @@ pub(crate) fn npm(
         let Some(packages) = root.as_object().and_then(|v| v.get_object("packages")) else {
             continue;
         };
+        let lines = Lines::new(read_text(files, path));
         for entry in &packages.properties {
             let key = entry.name.as_str();
             let Some((_, name)) = key.rsplit_once("node_modules/") else {
@@ -153,7 +155,7 @@ pub(crate) fn npm(
                 version: version.value.to_string(),
                 syntax: Syntax::Json,
                 location: Location::new(
-                    crate::read_text(files, path),
+                    &lines,
                     version.range.start,
                     version.range.end,
                     format!("/packages/{}", pointer_token(key)),
@@ -201,6 +203,7 @@ fn read(files: &Files) -> Result<Aube, String> {
         };
         let lock: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(text).map_err(|e| format!("{path}: {e}"))?;
+        let lines = Lines::new(text);
         let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
         let join = |importer: &str| match (dir, importer) {
             ("", ".") => "package.json".to_owned(),
@@ -263,7 +266,7 @@ fn read(files: &Files) -> Result<Aube, String> {
                         name.into(),
                         plain(version).into(),
                         Location::new(
-                            text,
+                            &lines,
                             start,
                             start + key.len(),
                             format!("/packages/{}", pointer_token(key)),

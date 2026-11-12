@@ -191,7 +191,7 @@ fn image_edits(
             return Err("image tag location mismatch".into());
         }
         if let Some(digest) = digest {
-            let locations = crate::yaml_locations::parse(text)?;
+            let locations = crate::yaml_locations::parse(&crate::Lines::new(text))?;
             let location = locations
                 .get(pointer)
                 .ok_or("adding a separate YAML digest field is not supported yet")?;
