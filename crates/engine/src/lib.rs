@@ -8,7 +8,7 @@ pub mod repository;
 pub mod settings;
 mod write;
 
-use futures_util::{StreamExt, TryStreamExt, stream};
+use futures_util::{StreamExt, stream};
 use patchula_cache::{Cache, State};
 use patchula_config::{Config, PackageId};
 use patchula_datasource::{Client as Sources, Failure};
@@ -694,15 +694,29 @@ impl Engine {
         // overlap each other's governor-paced writes — and the actions they
         // return join the report in the same sorted order they would in a
         // sequential pass, so the report is identical.
-        let mut written: Vec<(Work, write::Written)> = stream::iter(work)
+        //
+        // A repository's error does not cancel the others: dropping one
+        // mid-write could leave a published branch without its pull request.
+        // Every repository runs to the end, and the run fails with the first
+        // error in repository order, so which error it reports does not
+        // depend on timing.
+        let mut finished: Vec<(String, Result<(Work, write::Written)>)> = stream::iter(work)
             .map(|mut work| {
                 let write = &write;
-                async move { write.repository(&mut work).await.map(|done| (work, done)) }
+                async move {
+                    let name = work.report.repository.clone();
+                    let done = write.repository(&mut work).await.map(|done| (work, done));
+                    (name, done)
+                }
             })
             .buffer_unordered(self.concurrency)
-            .try_collect()
-            .await?;
-        written.sort_by(|a, b| a.0.report.repository.cmp(&b.0.report.repository));
+            .collect()
+            .await;
+        finished.sort_by(|a, b| a.0.cmp(&b.0));
+        let written: Vec<(Work, write::Written)> = finished
+            .into_iter()
+            .map(|(_, done)| done)
+            .collect::<Result<_>>()?;
         let mut work = Vec::with_capacity(written.len());
         let mut branches = Vec::new();
         let mut pull_requests = Vec::new();
