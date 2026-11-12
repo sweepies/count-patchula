@@ -83,6 +83,37 @@ beside the suite. `mise run transcripts:snapshot` rewrites the snapshots;
 a request change that leaves the snapshot stale fails the test, so a port
 that alters what a suite asks is a deliberate, reviewed diff.
 
+`settings.latency` sleeps a fixed time on Tokio's paused clock before the
+fake answers, and `Hosts::set_latency` charges the same latency on the
+scripted routes, so one knob times a whole run. Virtual elapsed time
+divided by that latency is the run's depth — the round trips on its
+critical path. Depth pins live beside the transcripts in `tests/depth.tsv`
+(a warm lookup, a no-op real run, and full writes of one and three plans)
+and the pin is exact: every repetition ends the pinned number of waves
+after it began, and an elapsed that does not divide by the latency fails
+too — a wobble means a wait reached the run without the clock seeing it,
+not noise to tolerate. A deterministic extra request moves the pin a wave
+and fails it the way a changed request fails a transcript; so does an
+improvement. `mise run transcripts:snapshot` rewrites both files.
+
+Exactness is a property of the runtime, not a tolerance in the check.
+Tokio's paused clock auto-advances when the runtime looks idle, and a
+wait on a `std::thread` is invisible to it: the cache serves SQLite
+through worker threads behind a channel, and while a reply was in
+flight the clock could jump — whether a later request landed before or
+after an earlier request's latency then depended on real scheduling,
+and a measured wave slipped either way. `patchula-cache`'s
+`paused-clock` feature, enabled only by the dev-dependencies of the
+crates whose tests pin depth, runs each cache call's send and reply
+wait inside `tokio::task::spawn_blocking`, which a current-thread
+runtime counts as work: the clock holds until the reply arrives, and
+every wait on the run's path is either a virtual timer on the latency
+grid or a held real wait. What depth never changes is the transcript's
+job: the request multiset still pins exactly which requests each test
+makes. And a write pin's depth is mostly the governor's one-second
+write pacing, not round trips — a read that fits inside a pacing
+window adds no wave.
+
 ## mise
 
 A subprocess has no HTTP cassette. mise lookups run through

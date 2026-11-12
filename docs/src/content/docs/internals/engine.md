@@ -81,6 +81,8 @@ mise run fixtures:check
 mise run lookup:release --config examples/renovate-migration.pkl \
   --cache /tmp/patchula-runner --concurrency 8 --json \
   owner/repo > /tmp/patchula-runner-report.json
+# Median phases of five warm `lookup -v` runs against live GitHub.
+mise run benchmarks:live --cache /tmp/patchula-runner owner/repo
 ```
 
 :::caution

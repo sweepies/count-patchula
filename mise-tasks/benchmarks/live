@@ -1,0 +1,72 @@
+#!/usr/bin/env nu
+#MISE description="Time warm `lookup -v` against live GitHub and registries: one warm-up, then five timed runs per repository, printing the median phases; report-only, needs GH_TOKEN"
+#USAGE arg "<repositories>" help="Repositories to look up, such as owner/repo, or . for the checkout" var=#true
+#USAGE flag "--config <file>" help="Config file every lookup evaluates"
+#USAGE flag "--cache <dir>" help="Private cache shared by the warm-up and timed runs; a temporary directory by default"
+
+# The verbose stderr line `patchula timings: extraction=12.34ms, ...`
+# parsed into a record of phase to milliseconds, or an empty record when a
+# run that succeeded printed no timings — a missing phase is tolerated and
+# simply absent from that run's row.
+def parse-timings []: string -> record {
+  let line = $in | lines | where {|line| $line starts-with "patchula timings:" } | first
+  if $line == null {
+    return {}
+  }
+  $line | str replace "patchula timings: " "" | split row ", " | reduce -f {} {|pair, acc|
+    let kv = $pair | split row "="
+    $acc | insert ($kv | first) (($kv | last) | str replace "ms" "" | into float)
+  }
+}
+
+def main [--config: path, --cache: path, ...repositories: string] {
+  if ($repositories | is-empty) {
+    error make --unspanned {msg: "name at least one repository"}
+  }
+  let bin = if ($env.PATCHULA_BIN? | is-not-empty) {
+    [$env.PATCHULA_BIN]
+  } else {
+    [cargo run --release --quiet --locked -p patchula-cli --]
+  }
+  # Keep private run caches outside this repository; see internals/engine.md.
+  # A cache the task made is removed again on the way out, pass or fail.
+  let temporary = $cache == null
+  let cache = match $cache {
+    null => (mktemp -d -t patchula-live.XXXXXX)
+    $dir => $dir
+  }
+  let lookup = {|repository|
+    let config = if $config == null { [] } else { [--config ($config | path expand --no-symlink)] }
+    ^($bin | first) ...($bin | skip 1) lookup --cache $cache -v ...$config $repository | complete
+  }
+  # A failed lookup reports its stderr tail, then fails the run.
+  let phases = {|repository, run|
+    if $run.exit_code != 0 {
+      print -e $"($repository): lookup exited ($run.exit_code)"
+      print -e ($run.stderr | lines | last 20 | str join "\n")
+      error make --unspanned {msg: $"($repository): lookup failed"}
+    }
+    $run.stderr | parse-timings
+  }
+  let out = try {
+    for repository in $repositories {
+      # The first run fills the registry and advisory caches; only the five
+      # warm runs after it are timed.
+      do $phases $repository (do $lookup $repository)
+      let runs = 1..5 | each {|_| do $lookup $repository }
+      let phases = $runs | each {|run| do $phases $repository $run }
+      let medians = $phases | columns | each {|phase|
+        let samples = $phases | get -o $phase | compact
+        {
+          phase: $phase
+          median_ms: (if ($samples | is-empty) { null } else { $samples | math median | math round -p 1 })
+        }
+      }
+      print $"($repository): ($runs | length) warm runs"
+      print ($medians | table)
+    }
+    "passed"
+  } catch {|e| $e.msg }
+  if $temporary { rm --recursive --force $cache }
+  if $out != "passed" { error make --unspanned {msg: $out} }
+}

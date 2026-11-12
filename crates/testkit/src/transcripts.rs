@@ -12,6 +12,14 @@
 //! snapshot pins is the multiset of requests and each request's content;
 //! order is only meaningful where the code under test issues requests
 //! sequentially, and there the multiset still pins the sequence's members.
+//!
+//! [`depth`] pins a different axis of the same fakes: when a test charges
+//! every request a fixed latency on Tokio's paused clock, a run's virtual
+//! elapsed time divided by the latency is its depth — the round trips on
+//! its critical path. The transcript pins which requests a run makes;
+//! the depth pin pins when they are sent, so a read that becomes
+//! sequential is a reviewed diff of a small number rather than a silent
+//! slowdown no request count can see.
 
 use serde_json::Value;
 use sha2::Digest as _;
@@ -132,15 +140,15 @@ fn read_snapshot(path: &Path) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn verify(path: &Path, test: &str, hash: &str) {
+fn verify(path: &Path, test: &str, what: &str, value: &str) {
     match read_snapshot(path).remove(test) {
-        Some(expected) if expected == hash => {}
+        Some(expected) if expected == value => {}
         Some(expected) => panic!(
-            "request transcript for `{test}` changed\n  {} expects {expected}, got {hash}\nif the change is intended run `mise run transcripts:snapshot`",
+            "{what} for `{test}` changed\n  {} expects {expected}, got {value}\nif the change is intended run `mise run transcripts:snapshot`",
             path.display()
         ),
         None => panic!(
-            "no request transcript recorded for `{test}` in {}\nif the test is new run `mise run transcripts:snapshot`",
+            "no {what} recorded for `{test}` in {}\nif the test is new run `mise run transcripts:snapshot`",
             path.display()
         ),
     }
@@ -206,6 +214,65 @@ pub fn check(path: &Path) {
     if std::env::var_os(UPDATE_VAR).is_some_and(|value| value == "1") {
         update(path, &test, &hash);
     } else {
-        verify(path, &test, &hash);
+        verify(path, &test, "request transcript", &hash);
     }
+}
+
+/// Compare this test's run depths with its snapshot line, or record the
+/// depth when `PATCHULA_UPDATE_TRANSCRIPTS` is set. Each `elapsed` is one
+/// repetition's virtual time on Tokio's paused clock divided by the fixed
+/// per-request `latency` the fake charged — the round trips on that run's
+/// critical path. Every wait on the run's path is either a timer the
+/// paused clock resolves on the latency grid or a real wait the blocking
+/// pool holds the clock for (the cache's worker threads under
+/// `paused-clock`), so a repetition ends the same whole number of waves
+/// after it began: the pin is exact. A repetition at any other depth, or
+/// one whose elapsed does not divide by `latency`, fails with the whole
+/// distribution — wobble means a wait reached the run unseen by the
+/// clock again, not noise to tolerate. `path` is the depth snapshot
+/// beside the transcripts, conventionally `tests/depth.tsv`.
+pub fn depth(
+    path: &Path,
+    latency: std::time::Duration,
+    samples: impl IntoIterator<Item = std::time::Duration>,
+) {
+    let test = std::thread::current()
+        .name()
+        .expect("libtest runs each test on a thread named for it")
+        .to_owned();
+    let mut depths = Vec::new();
+    let mut ragged = Vec::new();
+    for elapsed in samples {
+        if elapsed.as_nanos() % latency.as_nanos() == 0 {
+            depths.push((elapsed.as_nanos() / latency.as_nanos()) as u64);
+        } else {
+            ragged.push(elapsed);
+        }
+    }
+    let Some(&depth) = depths.first() else {
+        panic!("no repetition of `{test}` landed on the {latency:?} grid: {ragged:?}")
+    };
+    assert!(
+        ragged.is_empty() && depths.iter().all(|d| *d == depth),
+        "run depth for `{test}` did not stay on one wave\n  a repetition reads {depths:?} waves, with {ragged:?} off the {latency:?} grid\n  every wait on the run's path must be a virtual timer or a blocking-pool hold — find the real wait that is neither"
+    );
+    if std::env::var_os(UPDATE_VAR).is_some_and(|value| value == "1") {
+        update(path, &test, &depth.to_string());
+        return;
+    }
+    let Some(expected) = read_snapshot(path).remove(&test) else {
+        panic!(
+            "no run depth recorded for `{test}` in {}\nif the test is new run `mise run transcripts:snapshot`",
+            path.display()
+        );
+    };
+    let expected: u64 = expected
+        .parse()
+        .unwrap_or_else(|_| panic!("malformed run depth {expected:?} in {}", path.display()));
+    assert_eq!(
+        depth,
+        expected,
+        "run depth for `{test}` changed\n  {} expects {expected}, got {depth}\nif the change is intended run `mise run transcripts:snapshot`",
+        path.display()
+    );
 }

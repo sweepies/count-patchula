@@ -2455,6 +2455,10 @@ pub struct Hosts {
     github: Arc<FakeGitHub>,
     routes: Mutex<BTreeMap<String, Arc<Script>>>,
     log: Mutex<Vec<(String, String, Value)>>,
+    /// The scripted routes' share of the latency `set_latency` charges;
+    /// the fake's own answers charge `settings.latency`, which
+    /// `set_latency` writes too, so one knob times a whole run.
+    latency: Mutex<Duration>,
 }
 
 impl Hosts {
@@ -2464,7 +2468,16 @@ impl Hosts {
             github,
             routes: Mutex::new(BTreeMap::new()),
             log: Mutex::new(Vec::new()),
+            latency: Mutex::new(Duration::ZERO),
         }
+    }
+    /// Charge every request `latency`, slept on Tokio's paused clock:
+    /// GitHub's answers inside the fake and the scripted routes' alike.
+    /// A run's virtual elapsed time divided by this latency is its depth —
+    /// how many round trips lie on its critical path.
+    pub fn set_latency(&self, latency: Duration) {
+        self.github.state().settings.latency = latency;
+        *self.latency.lock().unwrap() = latency;
     }
     /// The GitHub the router fronts — state and fault rules as usual.
     pub fn github(&self) -> &FakeGitHub {
@@ -2521,8 +2534,14 @@ impl Transport for Hosts {
             .get(&host)
             .cloned()
             .unwrap_or_else(|| panic!("unscripted host {host}"));
+        let latency = *self.latency.lock().unwrap();
         let reply = route(&request, &body);
-        Box::pin(async move { Ok(reply) })
+        Box::pin(async move {
+            if !latency.is_zero() {
+                tokio::time::sleep(latency).await;
+            }
+            Ok(reply)
+        })
     }
 }
 

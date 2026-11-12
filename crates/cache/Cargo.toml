@@ -10,6 +10,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Dev-dependency of the crates whose tests pin run depth on Tokio's
+# paused clock; a normal build never resolves it.
+paused-clock = []
+
 [dependencies]
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 zstd = { version = "0.14.2", default-features = false }
