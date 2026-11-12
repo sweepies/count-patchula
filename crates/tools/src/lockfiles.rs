@@ -108,6 +108,16 @@ pub struct Runner {
     /// operator credentials but are not provably public-only: the hash of
     /// the GitHub credentials scope on the server, `local` for the CLI.
     installation: String,
+    /// Bounds the lockfile generations running at once across every
+    /// repository a run writes: one per core, up to four, as the tools are
+    /// CPU-bound and each batch of another installation runs its own.
+    runs: Arc<tokio::sync::Semaphore>,
+}
+
+/// How many lockfile generations the runner works at once, wherever they
+/// come from in the batch.
+fn lockfile_concurrency() -> usize {
+    std::thread::available_parallelism().map_or(1, |cores| cores.get().min(4))
 }
 
 /// The persistent tool caches' default size cap in GiB.
@@ -144,6 +154,7 @@ impl Runner {
             nix_install: Default::default(),
             cache_gib: DEFAULT_CACHE_GIB,
             installation: "local".into(),
+            runs: Arc::new(tokio::sync::Semaphore::new(lockfile_concurrency())),
         }
     }
     /// Borrow tool versions from this mise data directory, usually the user's
@@ -211,6 +222,14 @@ impl Runner {
     /// One branch's lockfile work: check `work`'s tree out, run its jobs'
     /// tools in it and answer the files that differ from base.
     async fn generate(&self, work: &Work<'_>, config: &Config) -> Result<Generated, Failure> {
+        // Repositories write side by side, and their plans too: the permit
+        // is the batch-wide cap on concurrent tool runs.
+        let _run = self
+            .runs
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("the run semaphore is never closed");
         std::fs::create_dir_all(&self.cache).map_err(|e| e.to_string())?;
         self.prune_caches();
         let run = tempfile::Builder::new()

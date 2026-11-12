@@ -11,15 +11,7 @@ use std::{future::Future, pin::Pin, sync::Mutex};
 
 /// One plan through the batch entry point, as the engine calls it.
 async fn prepare_one(runner: &Runner, plan: &mut Plan, snapshot: &mut Snapshot, config: &Config) {
-    patchula_update::lock_all(
-        runner,
-        std::slice::from_mut(plan),
-        snapshot,
-        config,
-        1,
-        &|| {},
-    )
-    .await;
+    patchula_update::lock_all(runner, std::slice::from_mut(plan), snapshot, config, &|| {}).await;
 }
 
 /// `job()` over a snapshot's path set, as callers hold it.
@@ -531,6 +523,8 @@ struct Overlap {
     inner: Arc<Fixture>,
     active: std::sync::atomic::AtomicUsize,
     most: std::sync::atomic::AtomicUsize,
+    /// How many tool calls must run at once before any proceeds.
+    target: usize,
 }
 impl Executor for Overlap {
     fn run(
@@ -538,16 +532,19 @@ impl Executor for Overlap {
         spec: CommandSpec,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
         use std::sync::atomic::Ordering;
+        let target = self.target;
         Box::pin(async move {
             let tool = !spec.args.iter().any(|arg| arg == "git");
             if tool {
                 let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
                 self.most.fetch_max(now, Ordering::SeqCst);
-                // Hold the tool until all three plans run one, so overlap
-                // never depends on how fast the runner sets up the next tree.
-                // Serialised or capped plans time out with `most` below 3.
+                // Hold the tool until `target` plans run one, so overlap
+                // never depends on how fast the runner sets up the next
+                // tree. Serialised or capped plans time out with `most`
+                // below `target`.
                 let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-                while self.most.load(Ordering::SeqCst) < 3 && tokio::time::Instant::now() < deadline
+                while self.most.load(Ordering::SeqCst) < target
+                    && tokio::time::Instant::now() < deadline
                 {
                     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 }
@@ -574,6 +571,8 @@ async fn plans_regenerate_lockfiles_side_by_side() {
         inner: fixture(files.clone(), false, false),
         active: Default::default(),
         most: Default::default(),
+        // Three plans side by side, capped by the runner's semaphore.
+        target: 3.min(lockfile_concurrency()),
     });
     let temp = tempfile::tempdir().unwrap();
     let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
@@ -592,7 +591,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
         })
         .collect();
     let finished = std::sync::atomic::AtomicUsize::new(0);
-    patchula_update::lock_all(&runner, &mut plans, &mut snapshot, &config, 3, &|| {
+    patchula_update::lock_all(&runner, &mut plans, &mut snapshot, &config, &|| {
         finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     })
     .await;
@@ -600,7 +599,10 @@ async fn plans_regenerate_lockfiles_side_by_side() {
     for plan in &plans {
         assert!(plan.lockfiles_ready(), "{:?}", plan.action());
     }
-    assert_eq!(executor.most.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(
+        executor.most.load(std::sync::atomic::Ordering::SeqCst),
+        executor.target
+    );
     assert!(snapshot.files.contains_key("go.sum"));
 }
 
