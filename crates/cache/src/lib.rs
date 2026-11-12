@@ -352,13 +352,15 @@ impl Cache {
             let index = self.next_reader.fetch_add(1, Ordering::Relaxed) % self.readers.len();
             let (reply, response) = oneshot::channel();
             let read = operation.clone();
-            self.readers[index]
-                .send(Box::new(move |store| {
+            match Self::dispatch(
+                &self.readers[index],
+                Box::new(move |store| {
                     let _ = reply.send(read(store));
-                }))
-                .await
-                .map_err(|_| Error::Worker)?;
-            match response.await.map_err(|_| Error::Worker)? {
+                }),
+                response,
+            )
+            .await
+            {
                 Ok(value) => return Ok(value),
                 Err(error) if store::is_corrupt(&error) => {
                     self.readers_valid.store(false, Ordering::Relaxed);
@@ -375,18 +377,53 @@ impl Cache {
     ) -> Result<T> {
         let (reply, response) = oneshot::channel();
         let readers_valid = self.readers_valid.clone();
-        self.jobs
-            .send(Box::new(move |store| {
+        Self::dispatch(
+            &self.jobs,
+            Box::new(move |store| {
                 let mut result = operation(store);
                 if result.as_ref().is_err_and(store::is_corrupt) {
                     readers_valid.store(false, Ordering::Relaxed);
                     result = store.recover().and_then(|()| operation(store));
                 }
                 let _ = reply.send(result);
-            }))
+            }),
+            response,
+        )
+        .await
+    }
+
+    /// Send `job` to a worker's channel and await its reply.
+    ///
+    /// Under `paused-clock` — the feature dev-dependencies of the crates
+    /// whose tests pin run depth enable — the send and the reply wait run
+    /// inside `tokio::task::spawn_blocking` instead. The workers are
+    /// `std::thread`s the runtime does not count as work, so a plain
+    /// `await` on the reply leaves Tokio's paused clock looking idle and
+    /// free to auto-advance: whether a later request then lands before or
+    /// after an earlier request's latency depends on real scheduling, and
+    /// a measured wave slips either way. A blocking task on a
+    /// current-thread runtime inhibits auto-advance, which holds the
+    /// clock still until the reply arrives and keeps a run's depth exact.
+    async fn dispatch<T: Send + 'static>(
+        channel: &mpsc::Sender<Job>,
+        job: Job,
+        response: oneshot::Receiver<Result<T>>,
+    ) -> Result<T> {
+        #[cfg(feature = "paused-clock")]
+        {
+            let channel = channel.clone();
+            tokio::task::spawn_blocking(move || -> Result<T> {
+                channel.blocking_send(job).map_err(|_| Error::Worker)?;
+                response.blocking_recv().map_err(|_| Error::Worker)?
+            })
             .await
-            .map_err(|_| Error::Worker)?;
-        response.await.map_err(|_| Error::Worker)?
+            .map_err(|_| Error::Worker)?
+        }
+        #[cfg(not(feature = "paused-clock"))]
+        {
+            channel.send(job).await.map_err(|_| Error::Worker)?;
+            response.await.map_err(|_| Error::Worker)?
+        }
     }
 
     pub async fn http_get(&self, key: &HttpKey) -> Result<Option<HttpEntry>> {

@@ -218,47 +218,19 @@ pub fn check(path: &Path) {
     }
 }
 
-/// How far a repetition may wander from the pinned depth: an independent
-/// send racing a wave's boundary can land on an earlier request's
-/// completion or co-fire with a sibling read, and under suite load a
-/// paced write can slip a second wave when a read escapes its pacing
-/// window — either way the paused clock counts it as whole waves.
-const BOUNDARY_SLACK: u64 = 2;
-
-/// The share of repetitions that must still land on the pin. The races
-/// that move a send a wave pay the slack in up to a third of a run's
-/// repetitions, so a quarter on the pin is what a stable scenario
-/// keeps: a deterministic extra wave moves every repetition off it and
-/// fails, as does an improvement — either way no quarter is left at
-/// the depth the snapshot holds. The same bound limits repetitions
-/// that end off the latency grid.
-const PIN_SHARE: usize = 4;
-
-/// Compare this test's run depths with its snapshot line, or record them
-/// when `PATCHULA_UPDATE_TRANSCRIPTS` is set. Each `elapsed` is one
+/// Compare this test's run depths with its snapshot line, or record the
+/// depth when `PATCHULA_UPDATE_TRANSCRIPTS` is set. Each `elapsed` is one
 /// repetition's virtual time on Tokio's paused clock divided by the fixed
 /// per-request `latency` the fake charged — the round trips on that run's
-/// critical path. The snapshot pins the depth the scenario reaches most
-/// often: the run's minimum wobbles a wave between quiet and loaded
-/// draws, so the pin is the mode, and a deterministic extra request
-/// still moves every repetition off it and fails the pin the way a
-/// changed request fails a transcript. Around the pin the slack is
-/// bounded two ways: a send racing a wave's boundary costs or saves at
-/// most `BOUNDARY_SLACK` waves — a rep further out is structural — and
-/// no fewer than a `PIN_SHARE`th of the repetitions may land on the
-/// pin, so a scenario where the slack is usual, not rare, fails.
-///
-/// A repetition's elapsed should divide exactly by the latency; the fake
-/// sleeps whole waves and the governor paces whole seconds. It does not
-/// always: a deadline now and then reaches the paused clock off the wave
-/// grid — a timer armed from `std::time::Instant` real time, outside
-/// latency's reach, resolves the wait at an instant no wave boundary
-/// produced. Such a sample's depth cannot be read as a whole number of
-/// waves, so it is left out of the distribution and bounded under the
-/// same `PIN_SHARE`: a systematic sub-latency change rags most samples
-/// and fails, which is what a per-sample assert would have caught.
-/// `path` is the depth snapshot beside the transcripts, conventionally
-/// `tests/depth.tsv`.
+/// critical path. Every wait on the run's path is either a timer the
+/// paused clock resolves on the latency grid or a real wait the blocking
+/// pool holds the clock for (the cache's worker threads under
+/// `paused-clock`), so a repetition ends the same whole number of waves
+/// after it began: the pin is exact. A repetition at any other depth, or
+/// one whose elapsed does not divide by `latency`, fails with the whole
+/// distribution — wobble means a wait reached the run unseen by the
+/// clock again, not noise to tolerate. `path` is the depth snapshot
+/// beside the transcripts, conventionally `tests/depth.tsv`.
 pub fn depth(
     path: &Path,
     latency: std::time::Duration,
@@ -268,33 +240,24 @@ pub fn depth(
         .name()
         .expect("libtest runs each test on a thread named for it")
         .to_owned();
-    let mut ragged = 0usize;
-    let mut count = 0usize;
-    let mut votes: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut depths = Vec::new();
+    let mut ragged = Vec::new();
     for elapsed in samples {
-        count += 1;
         if elapsed.as_nanos() % latency.as_nanos() == 0 {
-            *votes
-                .entry((elapsed.as_nanos() / latency.as_nanos()) as u64)
-                .or_default() += 1;
+            depths.push((elapsed.as_nanos() / latency.as_nanos()) as u64);
         } else {
-            ragged += 1;
+            ragged.push(elapsed);
         }
     }
-    let (&mode, _) = votes
-        .iter()
-        .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
-        .unwrap_or_else(|| {
-            panic!(
-                "no repetition of `{test}` landed on the {latency:?} grid — every sample ended off-grid"
-            )
-        });
-    let (&lo, &hi) = (
-        votes.keys().next().expect("a mode implies a minimum"),
-        votes.keys().next_back().expect("a mode implies a maximum"),
+    let Some(&depth) = depths.first() else {
+        panic!("no repetition of `{test}` landed on the {latency:?} grid: {ragged:?}")
+    };
+    assert!(
+        ragged.is_empty() && depths.iter().all(|d| *d == depth),
+        "run depth for `{test}` did not stay on one wave\n  a repetition reads {depths:?} waves, with {ragged:?} off the {latency:?} grid\n  every wait on the run's path must be a virtual timer or a blocking-pool hold — find the real wait that is neither"
     );
     if std::env::var_os(UPDATE_VAR).is_some_and(|value| value == "1") {
-        update(path, &test, &mode.to_string());
+        update(path, &test, &depth.to_string());
         return;
     }
     let Some(expected) = read_snapshot(path).remove(&test) else {
@@ -306,22 +269,10 @@ pub fn depth(
     let expected: u64 = expected
         .parse()
         .unwrap_or_else(|_| panic!("malformed run depth {expected:?} in {}", path.display()));
-    let at = votes.get(&expected).copied().unwrap_or_default();
-    let depths: Vec<u64> = votes.keys().copied().collect();
-    assert!(
-        lo >= expected.saturating_sub(BOUNDARY_SLACK) && hi <= expected + BOUNDARY_SLACK,
-        "run depth for `{test}` slipped a boundary\n  {} expects every repetition within a wave of {expected}, got depths {depths:?} ({ragged} off-grid)\nif the change is intended run `mise run transcripts:snapshot`",
+    assert_eq!(
+        depth,
+        expected,
+        "run depth for `{test}` changed\n  {} expects {expected}, got {depth}\nif the change is intended run `mise run transcripts:snapshot`",
         path.display()
-    );
-    assert!(
-        at * PIN_SHARE >= count - ragged,
-        "run depth for `{test}` left its pin in {} of {} readable repetitions\n  {} expects the scenario to reach {expected} waves most often, got {depths:?}\nif the change is intended run `mise run transcripts:snapshot`",
-        count - ragged - at,
-        count - ragged,
-        path.display()
-    );
-    assert!(
-        ragged * PIN_SHARE <= count,
-        "{ragged} of {count} repetitions of `{test}` ended off the {latency:?} grid\n  a stray off-grid deadline happens; this many is a sub-latency change hiding below a wave"
     );
 }

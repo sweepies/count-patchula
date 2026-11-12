@@ -88,35 +88,31 @@ fake answers, and `Hosts::set_latency` charges the same latency on the
 scripted routes, so one knob times a whole run. Virtual elapsed time
 divided by that latency is the run's depth — the round trips on its
 critical path. Depth pins live beside the transcripts in `tests/depth.tsv`
-(a warm lookup, a no-op real run, and full writes of one and three plans),
-and each pin repeats its scenario, serialized against the other pins so a
-sibling's real work cannot steal a wave boundary: the file holds the
-depth a repetition reaches most often. A deterministic extra request
-moves every repetition off the pin and fails it the way a changed
-request fails a transcript; so does an improvement. `mise run
-transcripts:snapshot` rewrites both files.
+(a warm lookup, a no-op real run, and full writes of one and three plans)
+and the pin is exact: every repetition ends the pinned number of waves
+after it began, and an elapsed that does not divide by the latency fails
+too — a wobble means a wait reached the run without the clock seeing it,
+not noise to tolerate. A deterministic extra request moves the pin a wave
+and fails it the way a changed request fails a transcript; so does an
+improvement. `mise run transcripts:snapshot` rewrites both files.
 
-A repetition's elapsed time should divide exactly by the latency — the
-fake sleeps whole waves and the governor paces whole seconds — so a
-change costing less than a wave cannot hide inside the division. It does
-not always: a deadline now and then reaches the paused clock off the
-wave grid (a timer armed from real time slips past `latency` and
-resolves at an instant no boundary produced), which leaves that
-repetition's depth unreadable as whole waves. Such a sample is left out
-of the distribution, and more than a quarter of them fails too — a
-systematic sub-latency change rags most samples, which is what a strict
-assert would have caught. What remains is the pin's blind spot, bounded
-rather than removed: a send racing a wave's boundary can land on an
-earlier request's completion or co-fire with a sibling read and wander
-a wave, and under suite load a paced write can slip a second wave when
-a read escapes its pacing window — a rep further out fails outright —
-and a request that is only sometimes sequential can hide behind that
-slack, so fewer than a quarter of the repetitions left on the pin fails
-as well. And a write
-pin's depth is mostly the governor's one-second write pacing, not round
-trips — a read that fits inside a pacing window adds no wave. What depth
-never changes is the transcript's job: the request multiset still pins
-exactly which requests each test makes.
+Exactness is a property of the runtime, not a tolerance in the check.
+Tokio's paused clock auto-advances when the runtime looks idle, and a
+wait on a `std::thread` is invisible to it: the cache serves SQLite
+through worker threads behind a channel, and while a reply was in
+flight the clock could jump — whether a later request landed before or
+after an earlier request's latency then depended on real scheduling,
+and a measured wave slipped either way. `patchula-cache`'s
+`paused-clock` feature, enabled only by the dev-dependencies of the
+crates whose tests pin depth, runs each cache call's send and reply
+wait inside `tokio::task::spawn_blocking`, which a current-thread
+runtime counts as work: the clock holds until the reply arrives, and
+every wait on the run's path is either a virtual timer on the latency
+grid or a held real wait. What depth never changes is the transcript's
+job: the request multiset still pins exactly which requests each test
+makes. And a write pin's depth is mostly the governor's one-second
+write pacing, not round trips — a read that fits inside a pacing
+window adds no wave.
 
 ## mise
 

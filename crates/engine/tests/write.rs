@@ -173,16 +173,12 @@ fn check_transcript() {
 
 /// Pin this test's run depths: each `elapsed` is a repetition's virtual
 /// time on the paused clock divided by the fake's per-request `latency` —
-/// the round trips on the run's critical path. The snapshot holds the
-/// depth the scenario reaches most often: a deterministic +1 moves every
-/// repetition off the pin and fails it, while a request that is only
-/// sometimes sequential can hide in the slack — a rep further than two
-/// waves from the pin is structural, and fewer than a quarter of the
-/// repetitions left on the pin fails too. A repetition whose elapsed
-/// ends off the latency grid (a deadline armed from real time slips past
-/// `latency`) is left out of the distribution and bounded the same way.
-/// The transcript multiset still pins which requests are made; depth
-/// only pins when they are sent.
+/// the round trips on the run's critical path. The pin is exact: every
+/// repetition must end the pinned number of waves after it began, and an
+/// elapsed off the latency grid fails too — a wobble means a real wait
+/// reached the run without the clock seeing it. The transcript multiset
+/// still pins which requests are made; depth only pins when they are
+/// sent.
 fn check_depth(latency: std::time::Duration, samples: Vec<std::time::Duration>) {
     let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/depth.tsv");
     patchula_testkit::transcripts::depth(&snapshot, latency, samples);
@@ -3033,14 +3029,10 @@ async fn an_error_outranks_a_raced_pull_request() {
 /// into whole depths.
 const DEPTH_LATENCY: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// How many times a depth pin repeats its scenario: an independent read
-/// can race a wave's boundary, so one measurement is not the run's depth.
+/// How many times a depth pin repeats its scenario: exactness makes one
+/// measurement the run's depth, but a once-in-a-while slip still shows
+/// in eleven.
 const DEPTH_SAMPLES: usize = 11;
-
-/// The depth pins take turns: parallel pins let real work in one test
-/// steal the wave boundary another is waiting on, which reads as a depth
-/// the scenario never took.
-static DEPTH_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn depth_engine(fake: &Arc<Sandbox>) -> Engine {
     fake.hosts.set_latency(DEPTH_LATENCY);
@@ -3101,13 +3093,16 @@ fn depth_sandbox(files: BTreeMap<String, String>) -> Arc<Sandbox> {
 /// batch and mutable-tag read are the waves the latency counts.
 #[tokio::test(start_paused = true)]
 async fn depth_pin_warm_lookup() {
-    let _gate = DEPTH_GATE.lock().await;
     let fake = depth_sandbox(depth_files());
     let engine = depth_engine(&fake).await;
     let options = || Options {
         repositories: vec!["demo/sandbox".into()],
         ..Default::default()
     };
+    // The first lookup's catalog is too fresh to leave the mutable-tag
+    // prefetch hint; the second is the first rep the tag read co-fires
+    // with the lookup wave — the steady state the pin measures.
+    engine.lookup(options()).await.unwrap();
     engine.lookup(options()).await.unwrap();
     let mut samples = Vec::new();
     for _ in 0..DEPTH_SAMPLES {
@@ -3124,7 +3119,6 @@ async fn depth_pin_warm_lookup() {
 /// A no-op real run's depth pin: the run after a write must only read.
 #[tokio::test(start_paused = true)]
 async fn depth_pin_noop_run() {
-    let _gate = DEPTH_GATE.lock().await;
     let fake = depth_sandbox(depth_files());
     let engine = depth_engine(&fake).await;
     let options = || Options {
@@ -3137,6 +3131,9 @@ async fn depth_pin_noop_run() {
         BranchStatus::Created
     );
     fake.state().writes.clear();
+    // The write's catalog was too fresh to leave the mutable-tag prefetch
+    // hint: one more run reaches the steady state the pin measures.
+    engine.run(options(), false, false).await.unwrap();
     let mut samples = Vec::new();
     for _ in 0..DEPTH_SAMPLES {
         fake.clear_log();
@@ -3158,7 +3155,6 @@ async fn depth_pin_noop_run() {
 /// publish reads, its writes and the write pacing between them.
 #[tokio::test(start_paused = true)]
 async fn depth_pin_full_write_of_one_plan() {
-    let _gate = DEPTH_GATE.lock().await;
     // Every repetition's fake stays alive until the transcript check
     // marks it: a FakeGitHub dropped unchecked panics.
     let mut fakes = Vec::new();
@@ -3191,7 +3187,6 @@ async fn depth_pin_full_write_of_one_plan() {
 /// The same pin for three plans in one repository.
 #[tokio::test(start_paused = true)]
 async fn depth_pin_full_write_of_three_plans() {
-    let _gate = DEPTH_GATE.lock().await;
     let mut fakes = Vec::new();
     let mut samples = Vec::new();
     for _ in 0..DEPTH_SAMPLES {
