@@ -25,6 +25,7 @@ base64 = "0.23"
 futures-util = "0.3"
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tracing = "0.1"
 
 [dev-dependencies]
 rsa = { version = "0.9", features = ["pem"] }

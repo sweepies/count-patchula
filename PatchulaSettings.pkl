@@ -8,6 +8,7 @@ concurrency: Int = 8
 /// CLI; flags and environment take precedence.
 recheck: "now" | "next-run"? = null
 http: Http = new {}
+github: Github = new {}
 /// Credentials for private registries, keyed by https URL prefix, such as
 /// "https://acme.jfrog.io/artifactory/api/helm/charts". A request under a
 /// prefix, matched by whole path segments, carries that entry's credentials;
@@ -30,6 +31,12 @@ class Http {
   goFreshnessSecs: Int = 3600
   /// Freshness seconds for OSV advisory listings; 0 asks OSV on every run.
   advisoryFreshnessSecs: Int = 3600
+}
+
+class Github {
+  /// Writes that go out unpaced before pacing to one a second, 1 to 20. A
+  /// secondary-rate-limit answer paces writes at one a second for an hour.
+  writeBurst: Int = 12
 }
 
 class Registry {

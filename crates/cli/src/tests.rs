@@ -119,13 +119,18 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
     use tracing_subscriber::{filter::Targets, prelude::*};
     let logs = LogWriter(Default::default());
     let writer = logs.clone();
-    let subscriber = tracing_subscriber::registry().with(
-        tracing_subscriber::fmt::layer()
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .with_filter(Targets::new().with_target("patchula", tracing::Level::DEBUG)),
-    );
-    let _guard = tracing::subscriber::set_default(subscriber);
+    // A global subscriber, not a scoped default: other tests exercise the same
+    // write path in parallel, and a callsite first registered on a thread with
+    // no dispatcher caches Interest::never — its events never reach a scoped
+    // subscriber afterwards.
+    let _ = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .with_filter(Targets::new().with_target("patchula", tracing::Level::DEBUG)),
+        )
+        .try_init();
     let (github, hosts) = github();
     let directory = tempfile::tempdir().unwrap();
     let cache_path = directory.path().join("nested/cache");

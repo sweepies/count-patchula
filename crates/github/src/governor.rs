@@ -40,18 +40,45 @@ struct Bucket {
 struct State {
     primary: BTreeMap<String, Bucket>,
     secondary_until: Option<Instant>,
+    /// Write capacity is one token until this instant, for the hour after a
+    /// secondary-rate-limit answer. It lives here rather than in `Content`
+    /// because `rate_limited` reports such an answer while the write it
+    /// answered still holds the content permit — nothing locks `state` and
+    /// then `content`.
+    content_throttled_until: Option<Instant>,
 }
 
-#[derive(Default)]
+/// The write budget: `burst` tokens refilling at one a second, one token per
+/// write taken when the write starts.
 struct Content {
-    next: Option<Instant>,
+    tokens: f64,
+    refilled_at: Instant,
+    burst: usize,
     hour: VecDeque<Instant>,
 }
-pub(super) struct ContentPermit<'a>(MutexGuard<'a, Content>);
-impl Drop for ContentPermit<'_> {
-    fn drop(&mut self) {
-        self.0.next = Some(Instant::now() + Duration::from_secs(1));
+
+impl Content {
+    fn new(burst: usize) -> Self {
+        Self {
+            tokens: burst as f64,
+            refilled_at: Instant::now(),
+            burst,
+            hour: VecDeque::new(),
+        }
     }
+    /// Top the bucket up for the time passed, capped at `capacity`; a smaller
+    /// capacity also drains what exceeds it.
+    fn refill(&mut self, capacity: usize, now: Instant) {
+        let accrued = now
+            .saturating_duration_since(self.refilled_at)
+            .as_secs_f64();
+        self.tokens = (self.tokens + accrued).min(capacity as f64);
+        self.refilled_at = now;
+    }
+}
+/// Held for the drop: the write stays in flight until the permit drops.
+pub(super) struct ContentPermit<'a> {
+    _guard: MutexGuard<'a, Content>,
 }
 
 pub(super) struct Governor {
@@ -66,10 +93,10 @@ pub(super) struct Governor {
 }
 
 impl Governor {
-    pub fn new(concurrency: usize, max_wait: Duration) -> Self {
+    pub fn new(concurrency: usize, max_wait: Duration, write_burst: usize) -> Self {
         Self {
             semaphore: Semaphore::new(concurrency),
-            content: Mutex::new(Content::default()),
+            content: Mutex::new(Content::new(write_burst)),
             state: Mutex::new(State::default()),
             max_wait,
             requests: AtomicU64::new(0),
@@ -79,26 +106,30 @@ impl Governor {
         }
     }
 
-    /// Serialize REST mutations and GraphQL mutations across all client clones.
-    /// GitHub recommends a one-second pause after mutations; also reserve the
-    /// documented 500 content requests/hour budget (one-second spacing <80/min).
+    /// Serialize REST mutations and GraphQL mutations across all client clones,
+    /// paced by a token bucket: `burst` tokens refilling one a second, one
+    /// token a write counted from the write's start — under the documented 80
+    /// content requests a minute — inside the documented 500 an hour. A
+    /// secondary-rate-limit answer cuts the budget to one token for an hour.
     pub async fn content(&self) -> Result<ContentPermit<'_>> {
         let started = Instant::now();
-        let mut state = self.content.lock().await;
-        let now = Instant::now();
-        while state
+        let mut content = self.content.lock().await;
+        let mut now = Instant::now();
+        while content
             .hour
             .front()
             .is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(3600))
         {
-            state.hour.pop_front();
+            content.hour.pop_front();
         }
-        let until = state
-            .next
+        let mut capacity = self.write_capacity(&content, now).await;
+        content.refill(capacity, now);
+        let until = (content.tokens < 1.0)
+            .then(|| now + Duration::from_secs_f64(1.0 - content.tokens))
             .into_iter()
             .chain(
-                (state.hour.len() >= 500)
-                    .then(|| *state.hour.front().expect("full hour") + Duration::from_secs(3600)),
+                (content.hour.len() >= 500)
+                    .then(|| *content.hour.front().expect("full hour") + Duration::from_secs(3600)),
             )
             .max();
         if let Some(until) = until {
@@ -106,13 +137,32 @@ impl Governor {
                 return Err(Error::RateLimit);
             }
             tokio::time::sleep_until(until).await;
+            now = Instant::now();
+            capacity = self.write_capacity(&content, now).await;
+            content.refill(capacity, now);
         }
-        state.hour.push_back(Instant::now());
+        content.tokens = (content.tokens - 1.0).max(0.0);
+        content.hour.push_back(now);
         self.wait_millis.fetch_add(
             started.elapsed().as_millis().min(u64::MAX as u128) as u64,
             Ordering::Relaxed,
         );
-        Ok(ContentPermit(state))
+        Ok(ContentPermit { _guard: content })
+    }
+
+    /// One token while a secondary-rate-limit answer's hour runs, else `burst`.
+    async fn write_capacity(&self, content: &Content, now: Instant) -> usize {
+        if self
+            .state
+            .lock()
+            .await
+            .content_throttled_until
+            .is_some_and(|until| until > now)
+        {
+            1
+        } else {
+            content.burst
+        }
     }
 
     pub fn request(&self) {
@@ -302,6 +352,11 @@ impl Governor {
         let mut state = self.state.lock().await;
         if secondary {
             state.secondary_until = Some(state.secondary_until.map_or(until, |old| old.max(until)));
+            state.content_throttled_until = Some(Instant::now() + Duration::from_secs(3600));
+            tracing::warn!(
+                target: "patchula_github",
+                "secondary rate limit: writes pace at one a second for the next hour"
+            );
         } else {
             let resource = text(response, "x-ratelimit-resource").unwrap_or(resource);
             let bucket = state.primary.entry(resource.into()).or_default();
@@ -354,7 +409,7 @@ mod tests {
     /// reset; it must not shorten the wait the rate-limit answer set.
     #[tokio::test]
     async fn a_spent_bucket_reset_only_moves_later() {
-        let governor = Governor::new(4, Duration::from_secs(3600));
+        let governor = Governor::new(4, Duration::from_secs(3600), 12);
         let soon = (epoch_seconds() + 10).to_string();
         // No reset header: the governor backs off a minute.
         let limited = response(403, &[("x-ratelimit-remaining", "0".into())]);
@@ -370,5 +425,115 @@ mod tests {
         let state = governor.state.lock().await;
         let reset = state.primary["core"].reset.unwrap();
         assert!(reset >= Instant::now() + Duration::from_secs(50));
+    }
+
+    /// The first `burst` writes of a run start at once; each write after
+    /// waits for a token, one a second from the last write's start.
+    #[tokio::test(start_paused = true)]
+    async fn writes_spend_the_budget_then_take_a_second_each() {
+        let governor = Governor::new(4, Duration::from_secs(3600), 12);
+        let started = Instant::now();
+        for _ in 0..12 {
+            drop(governor.content().await.unwrap());
+        }
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        drop(governor.content().await.unwrap());
+        assert_eq!(started.elapsed(), Duration::from_secs(1));
+        drop(governor.content().await.unwrap());
+        assert_eq!(started.elapsed(), Duration::from_secs(2));
+    }
+
+    /// A spent budget earns a token a second and never more than `burst`:
+    /// an idle hour cannot stockpile writes.
+    #[tokio::test(start_paused = true)]
+    async fn the_budget_refills_one_a_second_up_to_burst() {
+        let governor = Governor::new(4, Duration::from_secs(3600), 12);
+        for _ in 0..12 {
+            drop(governor.content().await.unwrap());
+        }
+        tokio::time::advance(Duration::from_secs(5)).await;
+        let started = Instant::now();
+        for _ in 0..5 {
+            drop(governor.content().await.unwrap());
+        }
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        drop(governor.content().await.unwrap());
+        assert_eq!(started.elapsed(), Duration::from_secs(1));
+        tokio::time::advance(Duration::from_secs(600)).await;
+        let started = Instant::now();
+        for _ in 0..12 {
+            drop(governor.content().await.unwrap());
+        }
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        drop(governor.content().await.unwrap());
+        assert_eq!(started.elapsed(), Duration::from_secs(1));
+    }
+
+    /// However writes arrive, a minute holds at most `burst + 60` of them —
+    /// under the documented eighty content requests a minute.
+    #[tokio::test(start_paused = true)]
+    async fn the_budget_keeps_writes_under_eighty_a_minute() {
+        const BURST: usize = 12;
+        let governor = Governor::new(4, Duration::from_secs(3600), BURST);
+        // A seeded generator, not a crate, so the arrivals are deterministic.
+        let mut bits = 0x9e3779b97f4a7c15_u64;
+        let mut next = move || {
+            bits ^= bits << 13;
+            bits ^= bits >> 7;
+            bits ^= bits << 17;
+            bits
+        };
+        let mut started = Vec::new();
+        for _ in 0..2_000 {
+            // Arrivals 0–1.999 s apart cluster writes against the refill.
+            tokio::time::advance(Duration::from_millis(next() % 2000)).await;
+            let permit = governor.content().await.unwrap();
+            started.push(Instant::now());
+            drop(permit);
+        }
+        for (i, at) in started.iter().enumerate() {
+            let minute = started[i..]
+                .iter()
+                .take_while(|t| t.duration_since(*at) < Duration::from_secs(60))
+                .count();
+            assert!(
+                minute <= BURST + 60,
+                "{minute} writes in the minute from {at:?}"
+            );
+        }
+    }
+
+    /// Any secondary-rate-limit answer cuts the budget to one token for the
+    /// next hour — the one write a second GitHub asks for.
+    #[tokio::test(start_paused = true)]
+    async fn a_secondary_limit_answer_throttles_writes_for_an_hour() {
+        let governor = Governor::new(4, Duration::from_secs(3600), 12);
+        assert!(
+            governor
+                .rate_limited("core", &response(429, &[]), 0)
+                .await
+                .unwrap()
+        );
+        let started = Instant::now();
+        let mut at = Vec::new();
+        for _ in 0..4 {
+            let permit = governor.content().await.unwrap();
+            at.push(started.elapsed());
+            drop(permit);
+        }
+        assert_eq!(at, [0, 1, 2, 3].map(Duration::from_secs));
+        // Still one a second at the hour's edge.
+        tokio::time::advance(Duration::from_secs(3596)).await;
+        let started = Instant::now();
+        drop(governor.content().await.unwrap());
+        drop(governor.content().await.unwrap());
+        assert_eq!(started.elapsed(), Duration::from_secs(1));
+        // The hour over, the budget refills at a token a second again.
+        tokio::time::advance(Duration::from_secs(14)).await;
+        let started = Instant::now();
+        for _ in 0..12 {
+            drop(governor.content().await.unwrap());
+        }
+        assert_eq!(started.elapsed(), Duration::ZERO);
     }
 }

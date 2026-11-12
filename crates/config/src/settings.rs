@@ -19,6 +19,7 @@ pub struct Settings {
     pub concurrency: usize,
     pub recheck: Option<patchula_words::Recheck>,
     pub http: Http,
+    pub github: Github,
     pub registries: BTreeMap<String, Registry>,
     pub lockfiles: Lockfiles,
     pub server: Server,
@@ -126,6 +127,13 @@ pub struct Http {
     pub go_freshness_secs: u64,
     pub advisory_freshness_secs: u64,
 }
+/// GitHub client settings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Github {
+    /// Writes that go out unpaced before pacing to one a second.
+    pub write_burst: usize,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Server {
@@ -169,6 +177,7 @@ impl Default for Settings {
                 go_freshness_secs: 3600,
                 advisory_freshness_secs: 3600,
             },
+            github: Github { write_burst: 12 },
             registries: BTreeMap::new(),
             lockfiles: Lockfiles { cache_gib: 20 },
             server: Server {
@@ -258,6 +267,9 @@ impl Settings {
         }
         if !(1..=100).contains(&self.http.default_host_concurrency) {
             return Err("defaultHostConcurrency must be 1..100");
+        }
+        if !(1..=20).contains(&self.github.write_burst) {
+            return Err("github.writeBurst must be 1..20");
         }
         if !(1..=1_000_000).contains(&self.lockfiles.cache_gib) {
             return Err("lockfiles.cacheGiB must be 1..1000000");

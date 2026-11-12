@@ -158,6 +158,7 @@ pub fn github_options(settings: &Settings) -> GithubOptions {
             .get("api.github.com")
             .copied()
             .unwrap_or(defaults.concurrency),
+        write_burst: settings.github.write_burst,
         ..defaults
     }
 }
