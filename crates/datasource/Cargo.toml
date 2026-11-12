@@ -35,3 +35,4 @@ graphql_client = { version = "0.16", default-features = false, features = ["grap
 patchula-process = { path = "../process" }
 patchula-testkit = { path = "../testkit" }
 tempfile = "3.27.0"
+tokio = { workspace = true, features = ["test-util"] }

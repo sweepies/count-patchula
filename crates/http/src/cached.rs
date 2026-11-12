@@ -28,6 +28,9 @@ pub struct Options {
     pub registry_freshness_secs: u64,
     /// Minimum freshness for public Go proxy lists/latest. Zero disables it.
     pub go_freshness_secs: u64,
+    /// Freshness window for the OSV advisory listings kept in cache state.
+    /// Zero lists every version on every run.
+    pub advisory_freshness_secs: u64,
     /// Bounded OCI 429 retries; waits above 60 seconds are returned to the caller.
     pub registry_retries: u32,
     /// Operator registry entries. A request under an entry's prefix carries
@@ -46,6 +49,7 @@ impl Default for Options {
             host_concurrency: BTreeMap::new(),
             registry_freshness_secs: 3600,
             go_freshness_secs: 3600,
+            advisory_freshness_secs: 3600,
             registry_retries: 3,
             credentials: Vec::new(),
             rules: Arc::new(NoRules),
@@ -309,6 +313,11 @@ impl Cached {
     /// Whether this handle is a scoped manual retry.
     pub fn is_revalidating(&self) -> bool {
         self.revalidating
+    }
+    /// The operator's OSV advisory-listing window, for the datasource's
+    /// `osv-listing` state. Zero means a listing is never reused.
+    pub fn advisory_freshness(&self) -> Duration {
+        Duration::from_secs(self.inner.options.advisory_freshness_secs)
     }
     pub fn new(
         cache: Cache,

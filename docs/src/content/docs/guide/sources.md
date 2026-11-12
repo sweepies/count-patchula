@@ -31,6 +31,10 @@ conditional. Unauthenticated registries honour their declared `max-age`. Go prox
 lists and validator-free OCI tag pages get a one-hour local freshness floor
 (`http.goFreshnessSecs` and `http.registryFreshnessSecs` in the
 [settings](/reference/settings/); `0` restores upstream behaviour), because those endpoints would otherwise be read on every run.
+OSV advisory listings get the same: `http.advisoryFreshnessSecs` (one hour by
+default) keeps a version's listed advisories local, so only stale or missing
+queries are posted. A new advisory for a version already in use can go unseen
+until the listing expires; `0` asks OSV on every run.
 
 GitHub histories are read in pieces:
 

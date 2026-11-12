@@ -42,6 +42,7 @@ server {
 | `http.hostConcurrency` | `Mapping<String, Int>` | none | per-host overrides, keyed by lowercase hostname |
 | `http.registryFreshnessSecs` | `Int` | `3600` | freshness floor for OCI tag lists without validators; `0` uses upstream policy |
 | `http.goFreshnessSecs` | `Int` | `3600` | freshness floor for Go proxy lists and `@latest`; `0` uses upstream policy |
+| `http.advisoryFreshnessSecs` | `Int` | `3600` | freshness floor for OSV advisory listings; `0` asks OSV on every run |
 | `registries` | `Mapping<String, Registry>` | none | [private registry](/guide/sources/#private-registries) credentials, keyed by https URL prefix |
 | `lockfiles.cacheGiB` | `Int` | `20` | GiB of package caches [lockfile tools](/guide/lockfiles/#tool-caches) share between runs, 1 to 1000000; least recently used private partitions go first, `public` last |
 

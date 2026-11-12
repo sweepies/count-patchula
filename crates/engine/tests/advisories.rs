@@ -153,8 +153,9 @@ async fn advisories_mark_fixing_updates_and_warm_runs_reuse_records() {
                 "ranges":[{"type":"SEMVER","events":[{"introduced":"0"},{"fixed":"4.17.21"}]}]}]
         }),
     ));
-    // Warm: conditional repository reads and one OSV query. The catalog would be
-    // reused under the release-age wait, but a vulnerable package is read again.
+    // Warm: conditional repository reads; the advisory listing stays inside
+    // its freshness window. The catalog would be reused under the release-age
+    // wait, but a vulnerable package is read again.
     interactions.push(github(
         "repos/demo/app",
         json!({"default_branch":"main","node_id":"demo/app-id"}),
@@ -178,7 +179,6 @@ async fn advisories_mark_fixing_updates_and_warm_runs_reuse_records() {
         Value::Null,
         Some("npm"),
     ));
-    interactions.push(osv_batch());
     let cassette = Cassette {
         schema_version: 1,
         provenance: "Simulated from the GitHub, npm and OSV.dev API documentation; advisory records trimmed from OSV.dev".into(),

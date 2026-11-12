@@ -28,6 +28,8 @@ class Http {
   /// Minimum freshness seconds for Go proxy lists and latest; 0 uses upstream
   /// policy.
   goFreshnessSecs: Int = 3600
+  /// Freshness seconds for OSV advisory listings; 0 asks OSV on every run.
+  advisoryFreshnessSecs: Int = 3600
 }
 
 class Registry {

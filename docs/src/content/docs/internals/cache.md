@@ -140,8 +140,8 @@ must initialise tracing for the warnings to show.
 
 ## Freshness floors
 
-Two settings keep validator-free catalogs from being downloaded on every run. The
-user-facing summary is in [sources](/guide/sources/#fetching-less).
+Three settings keep answers reusable past what upstream validators alone would
+allow. The user-facing summary is in [sources](/guide/sources/#fetching-less).
 
 - `http.registryFreshnessSecs` (3600) applies to OCI `tags/list` pages with
   neither ETag nor Last-Modified. After expiry every page is fetched again, so
@@ -150,11 +150,16 @@ user-facing summary is in [sources](/guide/sources/#fetching-less).
 - `http.goFreshnessSecs` (3600) applies to public `proxy.golang.org` `@v/list`
   and `@latest`, even when the upstream max-age is shorter. `.info` documents
   keep the upstream policy.
+- `http.advisoryFreshnessSecs` (3600) keeps the `(id, modified)` pairs OSV's
+  `querybatch` lists for each `{ecosystem, package, version}` as `osv-listing`
+  state. Inside the window the listing answers locally and only stale or
+  missing queries are posted; a failed batch stores nothing, and a
+  revalidation (an explicit recheck, dashboard tick or retry) always asks OSV.
 
 Zero restores upstream freshness at once, also on an existing cache. Floors
 count from the original fetch time and are never extended by reads. `no-cache`
-and `no-store` still apply. No other source gets a floor. New versions and
-deleted tags can go unseen for up to the window.
+and `no-store` still apply. No other source gets a floor. New versions,
+deleted tags and new advisories can go unseen for up to the window.
 
 ## Registry pull tokens
 

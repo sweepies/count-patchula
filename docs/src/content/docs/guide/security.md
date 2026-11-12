@@ -29,10 +29,14 @@ checked through the OS packages their SBOMs list; see
 [container image rebuilds](#container-image-rebuilds).
 
 Each run sends one batched query to OSV with the package names and versions,
-and nothing else from your repositories. Advisory details are kept in the cache
-and fetched again only when OSV reports them modified, so a warm run costs one
-request. If OSV cannot be reached, the run carries on without advisories and
-the report says why in a warning.
+and nothing else from your repositories. A version's listing is kept for
+`http.advisoryFreshnessSecs` (one hour by default; `0` asks OSV on every run),
+so a warm run inside the window sends no OSV query at all and one with only
+new versions posts just those. A new advisory for a version already in use
+can go unseen until its listing expires. Advisory details are kept in the
+cache and fetched again only when OSV reports them modified. If OSV cannot be
+reached, the run carries on without advisories and the report says why in a
+warning.
 
 ## Lockfile-only packages
 
@@ -158,8 +162,9 @@ index lists instead, on both digests.
 **Cost.** Manifests and SBOMs are addressed by digest, so each is read once
 and kept in the cache; of an SBOM only the OS packages are kept. A digest or
 cosign tag the registry lacks is asked about again a day later. A warm run
-costs one batched OSV query for all images, sent once the new digests are
-known, and a HEAD per cosign attestation tag, since those tags can move. OSV's
+costs one batched OSV query for the images past their listing freshness, sent
+once the new digests are known, and a HEAD per cosign attestation tag, since
+those tags can move. OSV's
 full record is read for the five most severe advisories a rebuild fixes and the
 five most severe it brings in, so the PR's table and its list of introduced
 advisories carry them; later ones are read only when every fix read so far is

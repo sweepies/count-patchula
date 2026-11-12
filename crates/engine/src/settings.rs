@@ -77,6 +77,7 @@ pub fn http_options(settings: &Settings) -> HttpOptions {
         host_concurrency: settings.http.host_concurrency.clone(),
         registry_freshness_secs: settings.http.registry_freshness_secs,
         go_freshness_secs: settings.http.go_freshness_secs,
+        advisory_freshness_secs: settings.http.advisory_freshness_secs,
         ..Default::default()
     }
 }

@@ -4855,80 +4855,82 @@
     },
     {
       "request": {
-        "method": "POST",
-        "url": "https://api.osv.dev/v1/querybatch",
+        "method": "GET",
+        "url": "https://registry.npmjs.org/is-number",
         "headers": {
           "accept": [
             "application/json"
-          ],
-          "content-type": [
-            "application/json"
           ]
         },
         "body": {
-          "format": "json",
-          "value": {
-            "queries": [
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "is-number"
-                },
-                "version": "6.0.0"
-              },
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "ms"
-                },
-                "version": "2.1.2"
-              }
-            ]
-          }
+          "format": "text",
+          "value": ""
         }
       },
       "response": {
-        "status": 200,
+        "status": 503,
         "headers": {
-          "alt-svc": [
-            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
-          ],
-          "content-length": [
-            "19"
-          ],
           "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Mon, 26 Oct 2026 04:24:55 GMT"
-          ],
-          "grpc-message": [
-            ""
-          ],
-          "grpc-status": [
-            "0"
-          ],
-          "server": [
-            "Google Frontend"
-          ],
-          "traceparent": [
-            "00-3c4d1103db42cc65dd641341efe8f1d1-75ac624049cd2876-00"
-          ],
-          "x-cloud-trace-context": [
-            "3c4d1103db42cc65dd641341efe8f1d1/8479260226687412342"
-          ],
-          "x-envoy-decorator-operation": [
-            "ingress QueryAffectedBatch"
+            "text/plain"
           ]
         },
         "body": {
-          "format": "json",
-          "value": {
-            "results": [
-              {},
-              {}
-            ]
-          }
+          "format": "text",
+          "value": "Service Unavailable"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://registry.npmjs.org/is-number",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "content-type": [
+            "text/plain"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": "Service Unavailable"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://registry.npmjs.org/is-number",
+        "headers": {
+          "accept": [
+            "application/json"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 503,
+        "headers": {
+          "content-type": [
+            "text/plain"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": "Service Unavailable"
         }
       }
     },
@@ -4975,410 +4977,6 @@
           "format": "json",
           "value": {
             "queries": [
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "is-number"
-                },
-                "version": "6.0.0"
-              },
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "ms"
-                },
-                "version": "2.1.2"
-              }
-            ]
-          }
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "alt-svc": [
-            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
-          ],
-          "content-length": [
-            "19"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Mon, 26 Oct 2026 04:24:55 GMT"
-          ],
-          "grpc-message": [
-            ""
-          ],
-          "grpc-status": [
-            "0"
-          ],
-          "server": [
-            "Google Frontend"
-          ],
-          "traceparent": [
-            "00-3c4d1103db42cc65dd641341efe8f1d1-75ac624049cd2876-00"
-          ],
-          "x-cloud-trace-context": [
-            "3c4d1103db42cc65dd641341efe8f1d1/8479260226687412342"
-          ],
-          "x-envoy-decorator-operation": [
-            "ingress QueryAffectedBatch"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "results": [
-              {},
-              {}
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://registry.npmjs.org/is-number",
-        "headers": {
-          "accept": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 503,
-        "headers": {
-          "content-type": [
-            "text/plain"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": "Service Unavailable"
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "POST",
-        "url": "https://api.osv.dev/v1/querybatch",
-        "headers": {
-          "accept": [
-            "application/json"
-          ],
-          "content-type": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "queries": [
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "is-number"
-                },
-                "version": "6.0.0"
-              },
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "ms"
-                },
-                "version": "2.1.2"
-              }
-            ]
-          }
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "alt-svc": [
-            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
-          ],
-          "content-length": [
-            "19"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Mon, 26 Oct 2026 04:24:55 GMT"
-          ],
-          "grpc-message": [
-            ""
-          ],
-          "grpc-status": [
-            "0"
-          ],
-          "server": [
-            "Google Frontend"
-          ],
-          "traceparent": [
-            "00-3c4d1103db42cc65dd641341efe8f1d1-75ac624049cd2876-00"
-          ],
-          "x-cloud-trace-context": [
-            "3c4d1103db42cc65dd641341efe8f1d1/8479260226687412342"
-          ],
-          "x-envoy-decorator-operation": [
-            "ingress QueryAffectedBatch"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "results": [
-              {},
-              {}
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://registry.npmjs.org/is-number",
-        "headers": {
-          "accept": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 503,
-        "headers": {
-          "content-type": [
-            "text/plain"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": "Service Unavailable"
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "POST",
-        "url": "https://api.osv.dev/v1/querybatch",
-        "headers": {
-          "accept": [
-            "application/json"
-          ],
-          "content-type": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "queries": [
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "is-number"
-                },
-                "version": "6.0.0"
-              },
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "ms"
-                },
-                "version": "2.1.2"
-              }
-            ]
-          }
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "alt-svc": [
-            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
-          ],
-          "content-length": [
-            "19"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Mon, 26 Oct 2026 04:24:55 GMT"
-          ],
-          "grpc-message": [
-            ""
-          ],
-          "grpc-status": [
-            "0"
-          ],
-          "server": [
-            "Google Frontend"
-          ],
-          "traceparent": [
-            "00-3c4d1103db42cc65dd641341efe8f1d1-75ac624049cd2876-00"
-          ],
-          "x-cloud-trace-context": [
-            "3c4d1103db42cc65dd641341efe8f1d1/8479260226687412342"
-          ],
-          "x-envoy-decorator-operation": [
-            "ingress QueryAffectedBatch"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "results": [
-              {},
-              {}
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://registry.npmjs.org/is-number",
-        "headers": {
-          "accept": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 503,
-        "headers": {
-          "content-type": [
-            "text/plain"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": "Service Unavailable"
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "POST",
-        "url": "https://api.osv.dev/v1/querybatch",
-        "headers": {
-          "accept": [
-            "application/json"
-          ],
-          "content-type": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "queries": [
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "is-number"
-                },
-                "version": "6.0.0"
-              },
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "ms"
-                },
-                "version": "2.1.2"
-              }
-            ]
-          }
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "alt-svc": [
-            "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
-          ],
-          "content-length": [
-            "19"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Mon, 26 Oct 2026 04:24:55 GMT"
-          ],
-          "grpc-message": [
-            ""
-          ],
-          "grpc-status": [
-            "0"
-          ],
-          "server": [
-            "Google Frontend"
-          ],
-          "traceparent": [
-            "00-3c4d1103db42cc65dd641341efe8f1d1-75ac624049cd2876-00"
-          ],
-          "x-cloud-trace-context": [
-            "3c4d1103db42cc65dd641341efe8f1d1/8479260226687412342"
-          ],
-          "x-envoy-decorator-operation": [
-            "ingress QueryAffectedBatch"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "results": [
-              {},
-              {}
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "POST",
-        "url": "https://api.osv.dev/v1/querybatch",
-        "headers": {
-          "accept": [
-            "application/json"
-          ],
-          "content-type": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "queries": [
-              {
-                "package": {
-                  "ecosystem": "npm",
-                  "name": "is-number"
-                },
-                "version": "6.0.0"
-              },
               {
                 "package": {
                   "ecosystem": "npm",
@@ -5428,7 +5026,6 @@
           "format": "json",
           "value": {
             "results": [
-              {},
               {}
             ]
           }
