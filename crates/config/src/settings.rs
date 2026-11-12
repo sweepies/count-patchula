@@ -268,8 +268,8 @@ impl Settings {
         if !(1..=100).contains(&self.http.default_host_concurrency) {
             return Err("defaultHostConcurrency must be 1..100");
         }
-        if !(1..=20).contains(&self.github.write_burst) {
-            return Err("github.writeBurst must be 1..20");
+        if !(1..=19).contains(&self.github.write_burst) {
+            return Err("github.writeBurst must be 1..19");
         }
         if !(1..=1_000_000).contains(&self.lockfiles.cache_gib) {
             return Err("lockfiles.cacheGiB must be 1..1000000");

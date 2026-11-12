@@ -79,8 +79,9 @@ pub struct Options {
     /// Fail instead of retrying early if a server-requested wait exceeds this.
     pub max_rate_wait: Duration,
     /// Writes that go out unpaced: the write budget's token count, refilling
-    /// one a second. 1 to 20, so a minute's writes stay under the documented
-    /// 80; a secondary-rate-limit answer cuts it to one for an hour.
+    /// one a second. A minute holds at most `write_burst + 60` writes, so 1 to
+    /// 19 keeps it under GitHub's documented 80; a secondary-rate-limit answer
+    /// cuts it to one for an hour.
     pub write_burst: usize,
     /// Supports GitHub Enterprise; HTTPS required, links must retain this origin.
     pub api_url: Url,
@@ -201,7 +202,7 @@ impl Client {
             || options.concurrency > patchula_http::MAX_CONCURRENCY
             || options.max_pages == 0
             || options.max_retries > 10
-            || !(1..=20).contains(&options.write_burst)
+            || !(1..=19).contains(&options.write_burst)
             || !valid_api_url(&options.api_url)
         {
             return Err(Error::Configuration);
@@ -242,6 +243,11 @@ impl Client {
 
     pub fn concurrency(&self) -> usize {
         self.0.options.concurrency
+    }
+
+    /// The write budget's token count this client paces writes with.
+    pub fn write_burst(&self) -> usize {
+        self.0.options.write_burst
     }
 
     /// The request cap `graphql_pages` applies to a connection walk, for a
@@ -919,7 +925,7 @@ mod tests {
                 ..Default::default()
             },
             Options {
-                write_burst: 21,
+                write_burst: 20,
                 ..Default::default()
             },
             Options {

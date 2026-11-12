@@ -74,7 +74,8 @@ document whose text starts with `mutation` (or whose body cannot be parsed),
 runs one at a time across all clones of a client, paced by a token bucket of
 `github.writeBurst` tokens (12 by default) refilling one a second — the
 first writes of a run go out without a pause, and no minute holds more than
-72 — and at most 500 an hour, inside GitHub's
+`writeBurst` + 60 (72 by default, at most 79) — and at most 500 an hour,
+inside GitHub's
 [best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)
 and content-creation limit. Any secondary-rate-limit answer cuts the budget
 to one token for the next hour, the one write a second GitHub asks for. A

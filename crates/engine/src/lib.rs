@@ -583,6 +583,7 @@ impl Engine {
                 cache.clone(),
                 GithubOptions {
                     concurrency: http_options.host_limit("api.github.com"),
+                    write_burst: github_options.write_burst,
                     ..Default::default()
                 },
                 transport.clone(),
@@ -1497,4 +1498,37 @@ fn skipped(skipped: &[patchula_manager::Skipped]) -> Vec<patchula_report::Skippe
             reason: s.reason.clone(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use patchula_http::{Exchange, Transport};
+
+    struct Never;
+    impl Transport for Never {
+        fn send(&self, _: reqwest::Request) -> Exchange<'_> {
+            panic!("construction issues no requests")
+        }
+    }
+
+    /// A token run, the CLI's, paces writes with the operator's
+    /// `github.writeBurst`, as a credentialed run does.
+    #[tokio::test]
+    async fn a_token_run_honours_the_write_burst() {
+        let mut settings = patchula_config::settings::Settings::default();
+        settings.github.write_burst = 1;
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine = Engine::from_settings(
+            &settings,
+            Vec::new(),
+            Auth::Token("t".into()),
+            4,
+            patchula_words::Recheck::NextRun,
+            cache,
+            Arc::new(Never),
+        )
+        .unwrap();
+        assert_eq!(engine.github.write_burst(), 1);
+    }
 }

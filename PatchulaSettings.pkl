@@ -34,8 +34,9 @@ class Http {
 }
 
 class Github {
-  /// Writes that go out unpaced before pacing to one a second, 1 to 20. A
-  /// secondary-rate-limit answer paces writes at one a second for an hour.
+  /// Writes that go out unpaced before pacing to one a second, 1 to 19, so a
+  /// minute holds at most writeBurst + 60 writes, under GitHub's documented 80.
+  /// A secondary-rate-limit answer paces writes at one a second for an hour.
   writeBurst: Int = 12
 }
 
