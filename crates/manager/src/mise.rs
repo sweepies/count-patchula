@@ -109,9 +109,9 @@ pub(super) fn task_files<'a>(
     found
 }
 
-struct Reader<'a> {
+struct Reader<'a, 'b> {
     path: &'a str,
-    text: &'a str,
+    text: &'a Lines<'b>,
     included_by: Option<&'a str>,
     out: Vec<Dependency>,
     skipped: &'a mut Vec<Skipped>,
@@ -120,7 +120,7 @@ struct Reader<'a> {
 /// `included_by` is the config that includes this file as a task file.
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     included_by: Option<&str>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
@@ -174,7 +174,7 @@ pub(super) fn extract(
     }
     Ok(reader.out)
 }
-impl Reader<'_> {
+impl Reader<'_, '_> {
     fn task_tools(&mut self, task: &toml_edit::Item, prefix: &str) {
         if let Some(tools) = task.get("tools").and_then(|v| v.as_table_like()) {
             self.tools_in(tools, prefix);

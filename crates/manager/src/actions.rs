@@ -13,7 +13,7 @@ pub(crate) fn version_comment(value: &str) -> bool {
 /// GitHub, so only files under `.forgejo/` resolve bare refs here.
 const FORGEJO_ACTIONS: &str = "data.forgejo.org";
 
-pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     let bare = path.starts_with(".forgejo/").then_some(FORGEJO_ACTIONS);
     let forge = path.starts_with(".forgejo/") || path.starts_with(".gitea/");
     let root: Value = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
@@ -114,7 +114,7 @@ pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String>
 }
 fn steps_extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     steps: &[Value],
     pointer: &str,
     bare: Option<&str>,
@@ -142,7 +142,7 @@ fn steps_extract(
 
 fn setup_input(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     reference: &str,
     step: &Value,
     pointer: &str,
@@ -262,7 +262,7 @@ fn locator_pattern(key: &str) -> Regex {
 #[allow(clippy::too_many_arguments)]
 fn add(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     reference: &str,
     key: Locator,
     pointer: &str,
@@ -401,7 +401,7 @@ fn repository(name: &str, bare: Option<&str>) -> Option<(String, String, Source)
 
 fn runners(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     value: &Value,
     pointer: &str,
     scope: &std::ops::Range<usize>,

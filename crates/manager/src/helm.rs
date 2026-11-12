@@ -3,7 +3,7 @@
 use crate::*;
 use patchula_config::join_package;
 
-pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     let locations = crate::yaml_locations::parse(text)?;
     let Some(document) = crate::yaml::docs(text)?.into_iter().next() else {
         return Ok(Vec::new());

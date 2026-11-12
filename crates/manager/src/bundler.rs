@@ -13,7 +13,7 @@ use regex::Regex;
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-fn ruby(path: &str, text: &str, start: usize, version: &str, pointer: &str) -> Dependency {
+fn ruby(path: &str, text: &Lines<'_>, start: usize, version: &str, pointer: &str) -> Dependency {
     Dependency {
         manager: Manager::Bundler,
         file: path.into(),
@@ -71,7 +71,7 @@ const NOT_FROM_A_SOURCE: &str =
 
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     files: &Files,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {

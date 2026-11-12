@@ -5,7 +5,7 @@ use crate::*;
 
 fn pin(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     manager: Manager,
     tool: &str,
     start: usize,
@@ -37,7 +37,7 @@ fn first_token(text: &str) -> Option<(usize, &str)> {
     Some((text.find(token)?, token))
 }
 
-pub(super) fn rust(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+pub(super) fn rust(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     if path.ends_with(".toml") || text.trim_start().starts_with('[') {
         let doc = toml_edit::Document::parse(text).map_err(|e| e.to_string())?;
         let Some(channel) = doc.get("toolchain").and_then(|t| t.get("channel")) else {
@@ -67,7 +67,7 @@ pub(super) fn rust(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
         .collect())
 }
 
-pub(super) fn terraform(path: &str, text: &str) -> Vec<Dependency> {
+pub(super) fn terraform(path: &str, text: &Lines<'_>) -> Vec<Dependency> {
     first_token(text)
         .and_then(|(start, v)| {
             let version = v.strip_prefix('v').unwrap_or(v);

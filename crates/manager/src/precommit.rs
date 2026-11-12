@@ -14,7 +14,7 @@ fn identity(url: &str) -> Option<(Source, String)> {
     crate::tag_source(&host.to_ascii_lowercase(), path)
 }
 
-pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     let locations = crate::yaml_locations::parse(text)?;
     let Some(document) = crate::yaml::docs(text)?.into_iter().next() else {
         return Ok(Vec::new());

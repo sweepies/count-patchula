@@ -25,7 +25,7 @@ fn template(text: &str, captures: &Captures<'_>) -> Result<String, String> {
 }
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     extractors: &[Extractor],
     npmrcs: &BTreeMap<&str, npm::Npmrc>,
 ) -> Result<Vec<Dependency>, String> {

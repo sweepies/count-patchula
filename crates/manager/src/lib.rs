@@ -67,14 +67,53 @@ pub struct Location {
     pub pointer: String,
 }
 impl Location {
-    pub(crate) fn new(text: &str, start: usize, end: usize, pointer: String) -> Self {
+    pub(crate) fn new(text: &Lines<'_>, start: usize, end: usize, pointer: String) -> Self {
+        let (line, column) = text.line_column(start);
         Self {
             start,
             end,
-            line: text[..start].bytes().filter(|b| *b == b'\n').count() + 1,
-            column: start - text[..start].rfind('\n').map_or(0, |n| n + 1) + 1,
+            line,
+            column,
             pointer,
         }
+    }
+}
+/// A file's text with the byte offset of each line's start, built once per
+/// file so a `Location` does not rescan the text for every dependency.
+/// Derefs to the text itself.
+pub(crate) struct Lines<'a> {
+    text: &'a str,
+    /// Byte offset of each line's first byte: 0, then one past each '\n'.
+    starts: Vec<usize>,
+}
+impl<'a> Lines<'a> {
+    pub(crate) fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            starts: std::iter::once(0)
+                .chain(text.match_indices('\n').map(|(n, _)| n + 1))
+                .collect(),
+        }
+    }
+    /// The byte offset the 1-indexed `line` starts at.
+    pub(crate) fn line_start(&self, line: usize) -> Option<usize> {
+        self.starts.get(line.checked_sub(1)?).copied()
+    }
+    /// The 1-indexed line and column of byte offset `at`.
+    pub(crate) fn line_column(&self, at: usize) -> (usize, usize) {
+        let line = self.starts.partition_point(|start| *start <= at);
+        (line, at - self.starts[line - 1] + 1)
+    }
+}
+impl std::ops::Deref for Lines<'_> {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.text
+    }
+}
+impl AsRef<str> for Lines<'_> {
+    fn as_ref(&self) -> &str {
+        self.text
     }
 }
 impl From<Location> for patchula_report::Location {
@@ -423,7 +462,7 @@ impl From<&str> for Text {
 pub(crate) type PathPredicate<'a> = Box<dyn Fn(&str) -> bool + 'a>;
 /// Extract one selected readable file into the extraction.
 pub(crate) type FileExtractor<'a> =
-    Box<dyn FnMut(&str, &str, &mut Extraction) -> Result<(), String> + 'a>;
+    Box<dyn FnMut(&str, &Lines<'_>, &mut Extraction) -> Result<(), String> + 'a>;
 /// A finishing step over the whole extraction.
 pub(crate) type Finisher<'a> = Box<dyn FnMut(&mut Extraction) -> Result<(), String> + 'a>;
 
@@ -765,12 +804,13 @@ impl Scanner {
                     continue;
                 }
             };
+            let text = Lines::new(text);
             for (manager, eco) in &mut prepared {
                 let Some(extract) = eco.extract.as_mut() else {
                     continue;
                 };
                 if self.selected(*manager, path) {
-                    extract(path, text, &mut result)?;
+                    extract(path, &text, &mut result)?;
                 }
             }
         }

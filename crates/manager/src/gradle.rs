@@ -14,7 +14,7 @@ pub(super) fn plugin(id: &str) -> String {
 }
 pub(super) fn maven(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     package: String,
     kind: DependencyKind,
     start: usize,
@@ -56,7 +56,7 @@ fn inner(text: &str, value: &Value) -> Option<(usize, String)> {
         .then(|| (span.start + 1, string.to_string()))
 }
 
-fn catalog(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+fn catalog(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     let doc = Document::parse(text).map_err(|e| e.to_string())?;
     let versions = doc.get("versions").and_then(Item::as_table_like);
     let mut claimed = BTreeSet::new();
@@ -159,9 +159,10 @@ fn catalog(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
     Ok(out)
 }
 
-fn script(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
-    // Commented-out declarations are not dependencies.
-    let text = &without_comments(path, text).ok_or(UNLEXED)?;
+fn script(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
+    // Commented-out declarations are not dependencies. Blanking keeps byte
+    // offsets, so `text` still locates what `stripped` matches.
+    let stripped = &without_comments(path, text).ok_or(UNLEXED)?;
     static COORDINATE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"["']([A-Za-z0-9_.-]+):([A-Za-z0-9_.-]+):([0-9][A-Za-z0-9_.+-]*)["']"#)
             .expect("coordinate pattern")
@@ -175,7 +176,7 @@ fn script(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
             .expect("notation pattern")
     });
     let mut out = Vec::new();
-    for c in NOTATION.captures_iter(text) {
+    for c in NOTATION.captures_iter(stripped) {
         let version = c.get(3).unwrap();
         if literal(version.as_str()) {
             let package = format!("{}:{}", &c[1], &c[2]);
@@ -190,7 +191,7 @@ fn script(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
             ));
         }
     }
-    for c in COORDINATE.captures_iter(text) {
+    for c in COORDINATE.captures_iter(stripped) {
         let version = c.get(3).unwrap();
         // A group and artifact name something; "2020-07-01T12:34:56Z" does not.
         let named = |s: &str| s.bytes().any(|b| b.is_ascii_alphabetic());
@@ -207,7 +208,7 @@ fn script(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
             ));
         }
     }
-    for c in PLUGIN.captures_iter(text) {
+    for c in PLUGIN.captures_iter(stripped) {
         let version = c.get(2).unwrap();
         if literal(version.as_str()) {
             out.push(maven(
@@ -229,7 +230,7 @@ const UNLEXED: &str = "a comment, string or template does not end, or braces do 
 
 /// The wrapper's distribution version. A recorded `distributionSha256Sum`
 /// is refreshed by the lockfile runner from Gradle's published checksum.
-fn wrapper(path: &str, text: &str) -> Vec<Dependency> {
+fn wrapper(path: &str, text: &Lines<'_>) -> Vec<Dependency> {
     static DISTRIBUTION: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
             r"(?m)^distributionUrl=.*/gradle-([0-9][0-9.]*(?:-rc-[0-9]+)?)-(?:bin|all)\.zip\s*$",
@@ -282,7 +283,7 @@ pub(super) fn selected(path: &str) -> bool {
         || path.ends_with("gradle/wrapper/gradle-wrapper.properties")
 }
 
-pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     if path.ends_with(".versions.toml") {
         catalog(path, text)
     } else if path.ends_with("gradle-wrapper.properties") {

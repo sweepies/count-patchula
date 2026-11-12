@@ -47,7 +47,7 @@ pub(crate) fn parsed<'a>(files: &'a Files, keep: impl Fn(&str) -> bool) -> Parse
 }
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     files: &BTreeMap<&str, Document<&str>>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
@@ -226,7 +226,7 @@ fn registry(p: &toml_edit::Table) -> bool {
 }
 fn walk(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     table: &dyn toml_edit::TableLike,
     pointer: &str,
     workspace: &BTreeMap<String, Item>,

@@ -17,7 +17,7 @@ use std::sync::LazyLock;
 
 fn package(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     name: &str,
     located: (usize, &str, Syntax),
     pointer: String,
@@ -47,7 +47,7 @@ fn pinned(version: &str) -> bool {
     !version.is_empty() && !version.contains(['$', '*', ' '])
 }
 
-fn msbuild(path: &str, text: &str) -> Vec<Dependency> {
+fn msbuild(path: &str, text: &Lines<'_>) -> Vec<Dependency> {
     static ITEM: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?s)<(PackageReference|PackageVersion|GlobalPackageReference)\b([^>]*?)(/?)>")
             .expect("item pattern")
@@ -139,7 +139,7 @@ fn inner(text: &str, value: &jsonc_parser::ast::StringLit) -> Option<usize> {
     (end - start == value.value.len() + 2 && !text[start..end].contains('\\')).then_some(start + 1)
 }
 
-fn tools(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+fn tools(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     let root = jsonc(text)?;
     let mut out = Vec::new();
     if let Some(tools) = root.as_object().and_then(|o| o.get_object("tools")) {
@@ -163,7 +163,7 @@ fn tools(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
     Ok(out)
 }
 
-fn sdk(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+fn sdk(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     let root = jsonc(text)?;
     let Some(version) = root
         .as_object()
@@ -236,7 +236,7 @@ pub(super) fn selected(path: &str) -> bool {
         || path.ends_with(".config/dotnet-tools.json")
 }
 
-pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     if path.ends_with("dotnet-tools.json") {
         tools(path, text)
     } else if path.ends_with("global.json") {

@@ -41,16 +41,16 @@ fn segment(part: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
 }
 
-struct Scan<'a> {
+struct Scan<'a, 'b> {
     path: &'a str,
-    text: &'a str,
+    text: &'a Lines<'b>,
     locations: &'a BTreeMap<String, Location>,
     aliases: &'a crate::yaml_locations::Aliases,
     seen: std::collections::BTreeSet<usize>,
     out: Vec<Dependency>,
     skipped: &'a mut Vec<Skipped>,
 }
-impl Scan<'_> {
+impl Scan<'_, '_> {
     /// Where a value is written, following aliases to their anchor. A value
     /// reached twice, through an anchor and its aliases, is only read once.
     fn locate(&mut self, pointer: &str) -> Option<Location> {
@@ -250,7 +250,7 @@ impl Scan<'_> {
 pub(super) fn extract(
     manager: Manager,
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     host: &str,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {

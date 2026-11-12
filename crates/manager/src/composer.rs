@@ -40,7 +40,7 @@ fn locked(lock: Option<&str>) -> BTreeMap<String, String> {
 
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     files: &Files,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {

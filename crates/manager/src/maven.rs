@@ -93,7 +93,7 @@ fn bare(segment: &str) -> &str {
     segment.split('#').next().unwrap_or(segment)
 }
 
-pub(super) fn extract(path: &str, text: &str) -> Result<Vec<Dependency>, String> {
+pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
     let leaves = leaves(text)?;
     let value = |l: &Leaf| &text[l.start..l.end];
     // project/properties/<name>

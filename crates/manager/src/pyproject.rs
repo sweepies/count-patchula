@@ -55,10 +55,10 @@ fn resolved(lock: Option<&Document<&str>>, package: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-struct Scan<'a> {
+struct Scan<'a, 'b> {
     path: &'a str,
-    text: &'a str,
-    lock: Option<Document<&'a str>>,
+    text: &'a Lines<'b>,
+    lock: Option<Document<&'b str>>,
     out: Vec<Dependency>,
     skipped: Vec<Skipped>,
 }
@@ -66,13 +66,13 @@ struct Scan<'a> {
 /// Why a package from git, a path, a URL or a workspace member is skipped.
 const NOT_FROM_AN_INDEX: &str = "comes from git, a path, a URL or a workspace member, not a package index, so it is not looked up on PyPI";
 
-impl Scan<'_> {
+impl Scan<'_, '_> {
     /// Report a package that does not come from an index, at `at`.
     fn skip(&mut self, at: usize, name: &str) {
         self.skipped.push(Skipped {
             manager: Manager::Pyproject,
             file: self.path.into(),
-            line: Some(self.text[..at.min(self.text.len())].matches('\n').count() + 1),
+            line: Some(self.text.line_column(at.min(self.text.len())).0),
             value: name.into(),
             reason: NOT_FROM_AN_INDEX.into(),
         });
@@ -192,7 +192,7 @@ impl Scan<'_> {
 
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     files: &Files,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
@@ -298,7 +298,7 @@ pub(super) fn extract(
 
 /// `.python-version` pins CPython with a numeric version; names such as
 /// `pypy3.10` or `system` are not CPython versions.
-fn python_version(path: &str, text: &str) -> Vec<Dependency> {
+fn python_version(path: &str, text: &Lines<'_>) -> Vec<Dependency> {
     let Some(token) = text.split_whitespace().next() else {
         return Vec::new();
     };

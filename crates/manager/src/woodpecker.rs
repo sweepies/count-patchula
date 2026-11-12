@@ -9,7 +9,7 @@ const SECTIONS: &[&str] = &["clone", "steps", "pipeline", "services"];
 
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
     let documents = yaml::docs(text)?;

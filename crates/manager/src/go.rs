@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn extract(
     path: &str,
-    text: &str,
+    text: &Lines<'_>,
     modules: &Modules,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {

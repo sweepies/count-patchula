@@ -3,7 +3,7 @@
 //! line and character column: yaml-rust2's index switches from characters to
 //! bytes after a block scalar holding non-ASCII text, which would misplace
 //! every later location.
-use crate::Location;
+use crate::{Lines, Location};
 use std::collections::BTreeMap;
 use yaml_rust2::{
     parser::{Event, MarkedEventReceiver, Parser},
@@ -25,19 +25,18 @@ enum Slot {
     /// `? [a, b]` or an alias, so no pointer names the value.
     Value(Option<String>),
 }
-struct Receiver<'a> {
-    text: &'a str,
-    lines: Vec<usize>,
+struct Receiver<'a, 'b> {
+    text: &'a Lines<'b>,
     doc: usize,
     stack: Vec<Frame>,
     locations: BTreeMap<String, Location>,
     anchors: BTreeMap<usize, String>,
     aliases: BTreeMap<String, String>,
 }
-impl Receiver<'_> {
+impl Receiver<'_, '_> {
     /// The byte offset of a 1-indexed line and 0-indexed character column.
     fn offset(&self, mark: Marker) -> Option<usize> {
-        let start = *self.lines.get(mark.line().checked_sub(1)?)?;
+        let start = self.text.line_start(mark.line())?;
         let line = &self.text[start..];
         let column = line
             .char_indices()
@@ -97,7 +96,7 @@ impl Receiver<'_> {
         None
     }
 }
-impl MarkedEventReceiver for Receiver<'_> {
+impl MarkedEventReceiver for Receiver<'_, '_> {
     fn on_event(&mut self, event: Event, mark: Marker) {
         match event {
             Event::DocumentEnd => self.doc += 1,
@@ -152,18 +151,17 @@ impl MarkedEventReceiver for Receiver<'_> {
         }
     }
 }
-pub(super) fn parse(text: &str) -> Result<BTreeMap<String, Location>, String> {
+pub(super) fn parse(text: &Lines<'_>) -> Result<BTreeMap<String, Location>, String> {
     Ok(parse_aliased(text)?.0)
 }
 /// Locations, and each alias's pointer mapped to the pointer of the node it
 /// refers to. Only managers that edit an anchor once for all its aliases
 /// resolve them; the rest leave aliased scalars unlocated.
-pub(super) fn parse_aliased(text: &str) -> Result<(BTreeMap<String, Location>, Aliases), String> {
+pub(super) fn parse_aliased(
+    text: &Lines<'_>,
+) -> Result<(BTreeMap<String, Location>, Aliases), String> {
     let mut receiver = Receiver {
         text,
-        lines: std::iter::once(0)
-            .chain(text.match_indices('\n').map(|(n, _)| n + 1))
-            .collect(),
         doc: 0,
         stack: Vec::new(),
         locations: BTreeMap::new(),
@@ -214,7 +212,7 @@ mod tests {
             "a: >\n  caf\u{e9} \u{2014} ok\n\nb: c\n",
             "a: \u{2192}\nb: c\n",
         ] {
-            let locations = super::parse(text).unwrap();
+            let locations = super::parse(&crate::Lines::new(text)).unwrap();
             let b = &locations["/0/b"];
             assert_eq!(&text[b.start..b.end], "c", "{text:?}");
         }
@@ -228,7 +226,7 @@ mod tests {
             "versions:\n  ? {a: b}\n  : 1.0\n  jackson: 2.15.0\n",
             "base: &k key\nversions:\n  *k : 1.0\n  jackson: 2.15.0\n",
         ] {
-            let locations = super::parse(text).unwrap();
+            let locations = super::parse(&crate::Lines::new(text)).unwrap();
             let jackson = &locations["/0/versions/jackson"];
             assert_eq!(&text[jackson.start..jackson.end], "2.15.0", "{text:?}");
             assert!(
