@@ -168,6 +168,14 @@ async fn client(fake: Arc<FakeGitHub>) -> Client {
     )
     .unwrap()
 }
+/// The run's inventory, read the way the engine reads it during the scan;
+/// cleanup consults it for the first `owned` step of every head it holds.
+async fn read_inventory(github: &Client, cache: &Cache) -> patchula_update::Inventory {
+    let (config, repo) = pr_config();
+    patchula_update::Inventory::read(github, cache, &repo, &config)
+        .await
+        .unwrap()
+}
 
 /// Hash this test's recorded GitHub requests and compare them with the
 /// snapshot; `PATCHULA_UPDATE_TRANSCRIPTS=1` rewrites it instead.
@@ -1059,19 +1067,32 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
             .refs
             .insert("refs/heads/patchula/human".into(), "human".into());
     }
+    let cache = github.cache();
+    let inventory = read_inventory(&github, &cache).await;
     let actions = patchula_update::cleanup(
         &github,
+        &cache,
         "demo/app",
         "base",
         "main",
         &[p],
-        "patchula[bot]",
+        &inventory,
         false,
     )
     .await
     .unwrap();
     assert_eq!(actions.len(), 1);
     assert_eq!(actions[0].branch, old);
+    // The inventory's copies of the two tips answered the tip reads; both
+    // commits recorded a base, so only the compare probes remain.
+    let probes = server
+        .requests()
+        .iter()
+        .filter(|(method, path)| {
+            method == "GET" && path.contains("/commits/") && !path.contains("/git/")
+        })
+        .count();
+    assert_eq!(probes, 0);
     assert_eq!(actions[0].status, BranchStatus::Deleted);
     let s = server.state();
     assert!(!s.repo().refs.contains_key(&format!("refs/heads/{old}")));
@@ -2218,13 +2239,16 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
                 patchula_report::PullRequestStatus::Closed
             }
         );
+        let cache = github.cache();
+        let inventory = read_inventory(&github, &cache).await;
         let cleanup = patchula_update::cleanup(
             &github,
+            &cache,
             "demo/app",
             "base",
             "main",
             &[],
-            "patchula[bot]",
+            &inventory,
             false,
         )
         .await
@@ -3096,13 +3120,16 @@ async fn no_ref_update_names_the_default_branch() {
             "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ));
     }
+    let cache = github.cache();
+    let inventory = read_inventory(&github, &cache).await;
     let actions = patchula_update::cleanup(
         &github,
+        &cache,
         "demo/app",
         "base",
         "main",
         &[],
-        "patchula[bot]",
+        &inventory,
         false,
     )
     .await
@@ -3139,19 +3166,22 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
             "Patchula-Base: base",
             "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ));
-        s.repo_mut().refs.insert(
-            "refs/heads/main".into(),
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
-        );
     }
+    let cache = github.cache();
+    let inventory = read_inventory(&github, &cache).await;
+    server.state().repo_mut().refs.insert(
+        "refs/heads/main".into(),
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+    );
     let before = ref_update_names(&server).len();
     let actions = patchula_update::cleanup(
         &github,
+        &cache,
         "demo/app",
         "base",
         "main",
         &[],
-        "patchula[bot]",
+        &inventory,
         false,
     )
     .await
@@ -3175,13 +3205,15 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         .repo_mut()
         .refs
         .insert("refs/heads/main".into(), "base".into());
+    let inventory = read_inventory(&github, &cache).await;
     let actions = patchula_update::cleanup(
         &github,
+        &cache,
         "demo/app",
         "base",
         "main",
         &[],
-        "patchula[bot]",
+        &inventory,
         false,
     )
     .await
@@ -3198,18 +3230,298 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         .repo_mut()
         .refs
         .insert("refs/heads/main".into(), "base".into());
+    let inventory = read_inventory(&github, &cache).await;
     let actions = patchula_update::cleanup(
         &github,
+        &cache,
         "demo/app",
         "base",
         "main",
         &[],
-        "patchula[bot]",
+        &inventory,
         false,
     )
     .await
     .unwrap();
     assert!(actions.iter().any(|a| a.status == BranchStatus::Deleted));
+    check_transcript();
+}
+
+/// `cleanup`'s candidate loop as it ran before the inventory answered the
+/// tip reads: every head was fetched, then compared, one at a time in list
+/// order, stopping at the first failed probe.
+async fn cleanup_as_before(
+    github: &Client,
+    repo: &str,
+    base: &str,
+    default_branch: &str,
+    plans: &[Plan],
+    actor: &str,
+) -> Result<Vec<patchula_report::BranchAction>, patchula_update::Error> {
+    let refs = github
+        .rest_pages::<patchula_github::model::BranchHead>(
+            &format!("repos/{repo}/branches?per_page=100"),
+            |_| false,
+        )
+        .await?;
+    let desired: BTreeSet<_> = plans.iter().map(|p| p.action().branch.as_str()).collect();
+    let candidates: Vec<_> = refs
+        .iter()
+        .filter(|r| r.name != default_branch && !desired.contains(r.name.as_str()))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let metadata = github
+        .get_fresh::<patchula_github::model::Repository>(&format!("repos/{repo}"))
+        .await?;
+    if metadata.default_branch != default_branch {
+        return Err(patchula_update::Error::Raced(
+            "default branch changed before cleanup; rerun",
+        ));
+    }
+    let current = github
+        .get_fresh::<patchula_github::model::GitRef>(&format!(
+            "repos/{repo}/git/ref/heads/{default_branch}"
+        ))
+        .await?;
+    if current.object.sha != base {
+        return Ok(Vec::new());
+    }
+    let mut actions = Vec::new();
+    for r in candidates {
+        let name = &r.name;
+        let head = &r.commit.sha;
+        if !patchula_update::owned(github, repo, head, actor).await? {
+            continue;
+        }
+        patchula_update::delete_owned(github, &metadata.node_id, default_branch, name, head)
+            .await?;
+        actions.push(patchula_report::BranchAction {
+            repository: repo.into(),
+            branch: name.clone(),
+            base_commit: base.into(),
+            status: BranchStatus::Deleted,
+            reason: Some("obsolete patchula update".into()),
+            message: String::new(),
+            previous_commit: Some(head.clone()),
+            commit: None,
+            verified: Some(true),
+            lockfile_pending: false,
+            files: Vec::new(),
+        });
+    }
+    Ok(actions)
+}
+
+/// Seed the branch list the cleanup differential drives: two owned
+/// branches, a human branch, a human commit wearing the Count's copied
+/// trailers, an unverifiable commit on a Count-named branch, and
+/// `patchula/moved` at `moved` — `"m-old"` for an inventory to hold,
+/// `"m-moved"` for the head it moved to.
+fn seed_cleanup_branches(server: &FakeGitHub, moved: &str) {
+    let trailers = "Patchula: v1\nPatchula-Branch: id\nPatchula-Base: base\nPatchula-Plan: fp";
+    let owned = |sha: &str| {
+        json!({"sha":sha,"tree":{"sha":"seed-tree"},
+               "message":format!("update\n\n{trailers}")})
+    };
+    let mut s = server.state();
+    let repo = s.repo_mut();
+    repo.trees.insert("seed-tree".into(), json!([]));
+    for (name, sha, commit) in [
+        ("patchula/owned-a", "owned-a", owned("owned-a")),
+        ("patchula/owned-b", "owned-b", owned("owned-b")),
+        (
+            "human/work",
+            "h1",
+            json!({"sha":"h1","tree":{"sha":"seed-tree"},"message":"human work",
+                   "actor":"human","committer_login":"human"}),
+        ),
+        (
+            "human/copied-marker",
+            "h2",
+            json!({"sha":"h2","tree":{"sha":"seed-tree"},
+                   "message":format!("update\n\n{trailers}"),
+                   "actor":"human","committer_login":"human"}),
+        ),
+        (
+            "patchula/foreign",
+            "f1",
+            json!({"sha":"f1","tree":{"sha":"seed-tree"},
+                   "message":format!("update\n\n{trailers}"),
+                   "verification":{"verified":false}}),
+        ),
+        ("patchula/moved", moved, owned("m-old")),
+        (
+            "-",
+            "m-moved",
+            json!({"sha":"m-moved","tree":{"sha":"seed-tree"},"message":"human work",
+                   "actor":"human","committer_login":"human"}),
+        ),
+    ] {
+        if name != "-" {
+            repo.refs.insert(format!("refs/heads/{name}"), sha.into());
+        }
+        repo.commits.insert(sha.into(), commit);
+    }
+}
+/// `GET /repos/{repo}/commits/{sha}` requests in the fake's log — the tip
+/// reads the probes used to pay per candidate.
+fn tip_reads(server: &FakeGitHub) -> usize {
+    server
+        .requests()
+        .iter()
+        .filter(|(method, path)| {
+            method == "GET" && path.contains("/commits/") && !path.contains("/git/")
+        })
+        .count()
+}
+#[tokio::test(start_paused = true)]
+async fn cleanup_deletes_the_same_branches_probing_only_heads_the_inventory_missed() {
+    let (_, _, _, snapshot) = setup("22.0.0", false);
+    // Before: a tip read for every one of the six candidates, in order.
+    let before_server = fake(&snapshot);
+    seed_cleanup_branches(&before_server, "m-moved");
+    let before_github = client(before_server.clone()).await;
+    let before = cleanup_as_before(
+        &before_github,
+        "demo/app",
+        "base",
+        "main",
+        &[],
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    assert_eq!(tip_reads(&before_server), 6);
+    let server = fake(&snapshot);
+    seed_cleanup_branches(&server, "m-old");
+    let github = client(server.clone()).await;
+    let cache = github.cache();
+    let inventory = read_inventory(&github, &cache).await;
+    // The head moved between the inventory and the branch listing: the
+    // inventory holds the old tip, so the new one is probed as before.
+    server
+        .state()
+        .repo_mut()
+        .refs
+        .insert("refs/heads/patchula/moved".into(), "m-moved".into());
+    let actions = patchula_update::cleanup(
+        &github,
+        &cache,
+        "demo/app",
+        "base",
+        "main",
+        &[],
+        &inventory,
+        false,
+    )
+    .await
+    .unwrap();
+    // The deleted set is the sequential probes': the two owned branches.
+    assert_eq!(actions, before);
+    // Only the moved head still needed its tip read.
+    assert_eq!(tip_reads(&server), 1);
+    // Its negative answer is kept: a second run skips it without probing.
+    let actions = patchula_update::cleanup(
+        &github,
+        &cache,
+        "demo/app",
+        "base",
+        "main",
+        &[],
+        &inventory,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(actions.is_empty());
+    assert_eq!(tip_reads(&server), 1);
+    check_transcript();
+}
+#[tokio::test(start_paused = true)]
+async fn a_probe_error_stops_cleanup_after_the_deletions_before_it() {
+    let (_, _, _, snapshot) = setup("22.0.0", false);
+    let seed = |moved: &str| {
+        let server = fake(&snapshot);
+        {
+            let mut s = server.state();
+            let repo = s.repo_mut();
+            repo.trees.insert("seed-tree".into(), json!([]));
+            for (name, sha) in [
+                ("patchula/a-owned", "a-owned"),
+                ("patchula/m-moved", moved),
+                ("patchula/z-owned", "z-owned"),
+            ] {
+                repo.refs.insert(format!("refs/heads/{name}"), sha.into());
+            }
+            let owned = |sha: &str| {
+                json!({"sha":sha,"tree":{"sha":"seed-tree"},
+                       "message":"update\n\nPatchula: v1\nPatchula-Branch: id\nPatchula-Base: base\nPatchula-Plan: fp"})
+            };
+            repo.commits.insert("a-owned".into(), owned("a-owned"));
+            repo.commits.insert("z-owned".into(), owned("z-owned"));
+            repo.commits.insert("m-old".into(), owned("m-old"));
+            repo.commits.insert(
+                "m-new".into(),
+                json!({"sha":"m-new","tree":{"sha":"seed-tree"},"message":"human work",
+                       "actor":"human","committer_login":"human"}),
+            );
+        }
+        server
+            .on(patchula_testkit::github::Matcher::Route {
+                method: reqwest::Method::GET,
+                path: "/repos/demo/app/commits/m-new".into(),
+            })
+            .respond(500, json!({"message":"probe boom"}));
+        server
+    };
+    // Before: the first candidate deletes, the moved head's probe fails,
+    // and the candidate after it is never probed or deleted.
+    let before_server = seed("m-new");
+    let before_github = client(before_server.clone()).await;
+    let before = cleanup_as_before(
+        &before_github,
+        "demo/app",
+        "base",
+        "main",
+        &[],
+        "patchula[bot]",
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    let refs = || before_server.state().repo().refs.clone();
+    assert!(refs().contains_key("refs/heads/patchula/z-owned"));
+    assert!(!refs().contains_key("refs/heads/patchula/a-owned"));
+    // Now: the same error after the same deletion, with the inventory
+    // holding the head the branch moved from.
+    let server = seed("m-old");
+    let github = client(server.clone()).await;
+    let cache = github.cache();
+    let inventory = read_inventory(&github, &cache).await;
+    server
+        .state()
+        .repo_mut()
+        .refs
+        .insert("refs/heads/patchula/m-moved".into(), "m-new".into());
+    let failure = patchula_update::cleanup(
+        &github,
+        &cache,
+        "demo/app",
+        "base",
+        "main",
+        &[],
+        &inventory,
+        false,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert_eq!(failure, before);
+    let refs = || server.state().repo().refs.clone();
+    assert!(refs().contains_key("refs/heads/patchula/z-owned"));
+    assert!(!refs().contains_key("refs/heads/patchula/a-owned"));
     check_transcript();
 }
 
