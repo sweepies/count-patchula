@@ -1270,6 +1270,63 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
 }
 
 #[tokio::test]
+async fn the_fourth_requeue_in_a_row_is_a_failure_with_backoff() {
+    use patchula_cache::queue::{RETRY_MS, retry_delay_ms};
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 6,
+        "repositories":[{"repository":"owner/repo", "status":"complete", "packageFiles":[]}],
+        "actions":{"schemaVersion":2, "dryRun":false, "branches":[{
+            "repository":"owner/repo", "branch":"stale", "baseCommit":"base",
+            "status":"stale",
+            "reason":"default branch moved since extraction; stale blob refusal, rerun",
+            "message":"", "lockfilePending":false, "files":[]}],
+            "pullRequests":[]}
+    }))
+    .unwrap();
+    let state = state().await;
+    state
+        .cache
+        .enqueue(None, vec![Work::repository(1, "owner/repo")], 0, 0)
+        .await
+        .unwrap();
+    let mut now = 0;
+    for requeues in 0..=MAX_REQUEUES {
+        let claims = state.cache.claim_batch(now, 10).await.unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].requeues, requeues);
+        let mut outcome = BatchOutcome::report(&report);
+        let finish = outcome.finish(&claims[0]);
+        if requeues < MAX_REQUEUES {
+            assert_eq!(finish, Finish::Requeue);
+            assert!(!outcome.failed());
+        } else {
+            assert_eq!(finish, Finish::Failed);
+            assert_eq!(outcome.error_kinds["requeue-limit"], 1);
+            assert!(outcome.failed());
+        }
+        state
+            .cache
+            .finish_work(finish.all(claims), now, 0)
+            .await
+            .unwrap();
+        now += RETRY_MS;
+    }
+    // The capped requeue is a first failure: it backs off at least a minute.
+    let at = now - RETRY_MS + retry_delay_ms(1, "owner/repo", 1);
+    assert!(
+        state
+            .cache
+            .claim_batch(at - 1, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let retry = state.cache.claim_batch(at, 10).await.unwrap();
+    assert_eq!(retry.len(), 1);
+    assert_eq!(retry[0].requeues, 0);
+    assert!(retry[0].attribution.reasons.contains("retry"));
+}
+
+#[tokio::test]
 async fn only_the_failing_repository_of_a_batch_is_retried() {
     let report: Report = serde_json::from_value(json!({"schemaVersion": 6,
         "repositories":[

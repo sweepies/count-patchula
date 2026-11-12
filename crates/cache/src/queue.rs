@@ -24,6 +24,8 @@ impl Work {
 pub struct Claim {
     pub work: Work,
     pub attribution: Attribution,
+    /// Runs of this repository that ended in a requeue, in a row.
+    pub requeues: i64,
     generation: i64,
 }
 
@@ -65,6 +67,9 @@ impl Finish {
 }
 /// The delay before a first retry, and before a requeued run.
 pub const RETRY_MS: i64 = 60_000;
+/// Requeues in a row a repository may take before the next one is a failure
+/// instead: a cause that never resolves then backs off like any failure.
+pub const MAX_REQUEUES: i64 = 3;
 /// The longest retry backoff.
 pub const MAX_RETRY_MS: i64 = 3_600_000;
 /// The backoff after `failures` consecutive failures: one minute, doubling up
@@ -154,10 +159,10 @@ impl Cache {
             let installation: Option<i64> = tx.query_row("SELECT installation FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation NOT IN (SELECT installation FROM server_work WHERE claimed IS NOT NULL) ORDER BY available_at,installation,repo LIMIT 1", [now], |r| r.get(0)).optional()?;
             let Some(installation) = installation else { return Ok(Vec::new()); };
             let rows = {
-                let mut query = tx.prepare("SELECT repo,generation,check_prs FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation=?2 ORDER BY available_at,repo LIMIT ?3")?;
-                let rows = query.query_map(params![now, installation, limit as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
-                rows.into_iter().map(|(repo, generation, checks)| Ok(Claim {
-                    work: Work { installation: installation as u64, repo, check_prs: checks.map(|text| serde_json::from_str(&text)).transpose()? }, generation, attribution: Attribution::default(),
+                let mut query = tx.prepare("SELECT repo,generation,check_prs,requeues FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation=?2 ORDER BY available_at,repo LIMIT ?3")?;
+                let rows = query.query_map(params![now, installation, limit as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, i64>(3)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
+                rows.into_iter().map(|(repo, generation, checks, requeues)| Ok(Claim {
+                    work: Work { installation: installation as u64, repo, check_prs: checks.map(|text| serde_json::from_str(&text)).transpose()? }, requeues, generation, attribution: Attribution::default(),
                 })).collect::<Result<Vec<_>>>()?
             };
             let mut rows = rows;
@@ -190,11 +195,11 @@ impl Cache {
                 let state: Option<(i64, i64)> = tx.query_row("SELECT generation,failures FROM server_work WHERE installation=?1 AND repo=?2 AND claimed=?3", key, |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
                 let Some((generation, failures)) = state else { continue };
                 let newer = generation != claim.generation;
-                let (failures, delay) = match finish {
+                let (failures, requeues, delay) = match finish {
                     Finish::Done => {
                         tx.execute("DELETE FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation<=?3", key)?;
                         tx.execute("DELETE FROM server_work WHERE installation=?1 AND repo=?2 AND generation=?3 AND claimed=?3", key)?;
-                        (0, coalesce_ms)
+                        (0, 0, coalesce_ms)
                     }
                     Finish::Failed | Finish::Requeue => {
                         // One `retry` cause per generation, however often it fails.
@@ -202,12 +207,13 @@ impl Cache {
                         tx.execute("INSERT INTO server_work_causes SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation=?3 AND attribution=?4)",
                             params![claim.work.installation as i64, claim.work.repo, claim.generation, retry])?;
                         let failures = failures + i64::from(*finish == Finish::Failed);
+                        let requeues = if *finish == Finish::Requeue { claim.requeues + 1 } else { 0 };
                         let delay = if newer { coalesce_ms } else if *finish == Finish::Failed { retry_delay_ms(claim.work.installation, &claim.work.repo, failures) } else { RETRY_MS };
-                        (failures, delay)
+                        (failures, requeues, delay)
                     }
                 };
-                tx.execute("UPDATE server_work SET claimed=NULL,available_at=?4,failures=?5 WHERE installation=?1 AND repo=?2 AND claimed=?3",
-                    params![claim.work.installation as i64, claim.work.repo, claim.generation, now + delay, failures])?;
+                tx.execute("UPDATE server_work SET claimed=NULL,available_at=?4,failures=?5,requeues=?6 WHERE installation=?1 AND repo=?2 AND claimed=?3",
+                    params![claim.work.installation as i64, claim.work.repo, claim.generation, now + delay, failures, requeues])?;
             }
             tx.commit()?;
             Ok(())
@@ -245,7 +251,7 @@ impl Cache {
                 let failures = failures + 1;
                 // Work that arrived during the run keeps the time its trigger set.
                 let at = now + retry_delay_ms(installation as u64, &repo, failures);
-                tx.execute("UPDATE server_work SET claimed=NULL,failures=?3,available_at=CASE WHEN generation=claimed THEN ?4 ELSE available_at END WHERE installation=?1 AND repo=?2",
+                tx.execute("UPDATE server_work SET claimed=NULL,failures=?3,requeues=0,available_at=CASE WHEN generation=claimed THEN ?4 ELSE available_at END WHERE installation=?1 AND repo=?2",
                     params![installation, repo, failures, at])?;
             }
             tx.commit()?;
@@ -629,6 +635,71 @@ mod tests {
                 .len(),
             1
         );
+    }
+    #[tokio::test]
+    async fn requeues_count_in_a_row_and_done_or_a_failure_resets_them() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        let mut now = 0;
+        for requeues in 0..MAX_REQUEUES {
+            let claims = cache.claim_batch(now, 10).await.unwrap();
+            assert_eq!(claims[0].requeues, requeues);
+            cache
+                .finish_work(Finish::Requeue.all(claims), now, 0)
+                .await
+                .unwrap();
+            now += RETRY_MS;
+        }
+        // Work that arrived during the last run survives the Done, reset.
+        let claims = cache.claim_batch(now, 10).await.unwrap();
+        assert_eq!(claims[0].requeues, MAX_REQUEUES);
+        cache.enqueue(None, work(), now, 0).await.unwrap();
+        cache
+            .finish_work(Finish::Done.all(claims), now, 0)
+            .await
+            .unwrap();
+        let claims = cache.claim_batch(now, 10).await.unwrap();
+        assert_eq!(claims[0].requeues, 0);
+        // A failure ends a streak too.
+        cache
+            .finish_work(Finish::Requeue.all(claims), now, 0)
+            .await
+            .unwrap();
+        now += RETRY_MS;
+        let claims = cache.claim_batch(now, 10).await.unwrap();
+        assert_eq!(claims[0].requeues, 1);
+        cache
+            .finish_work(Finish::Failed.all(claims), now, 0)
+            .await
+            .unwrap();
+        let claims = cache
+            .claim_batch(now + retry_delay_ms(1, "owner/repo", 1), 10)
+            .await
+            .unwrap();
+        assert_eq!(claims[0].requeues, 0);
+    }
+    /// A clean shutdown is not an outcome, so the streak survives it and a
+    /// restart cannot launder a requeue loop; a run that died with the
+    /// process counts as a failure and ends the streak.
+    #[tokio::test]
+    async fn release_keeps_the_requeue_streak_and_recovery_resets_it() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        cache.enqueue(None, work(), 0, 0).await.unwrap();
+        let claims = cache.claim_batch(0, 10).await.unwrap();
+        cache
+            .finish_work(Finish::Requeue.all(claims), 0, 0)
+            .await
+            .unwrap();
+        cache.claim_batch(RETRY_MS, 10).await.unwrap();
+        cache.release_work().await.unwrap();
+        let claims = cache.claim_batch(RETRY_MS, 10).await.unwrap();
+        assert_eq!(claims[0].requeues, 1);
+        cache.recover_work(RETRY_MS).await.unwrap();
+        let claims = cache
+            .claim_batch(RETRY_MS + retry_delay_ms(1, "owner/repo", 1), 10)
+            .await
+            .unwrap();
+        assert_eq!(claims[0].requeues, 0);
     }
     #[test]
     fn repositories_retry_apart_by_at_most_a_tenth_of_the_backoff() {

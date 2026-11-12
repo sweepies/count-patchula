@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
-use patchula_cache::{Cache, HttpEntry, HttpKey, Options, Release, State};
+use patchula_cache::{
+    Cache, HttpEntry, HttpKey, Options, Release, State,
+    queue::{Finish, RETRY_MS, Work},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -269,7 +272,7 @@ async fn migrates_previous_schema_without_discarding_http_or_release_data() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        11
+        12
     );
 }
 
@@ -512,5 +515,66 @@ async fn migration_rebuilds_github_release_lists_stored_with_prereleases() {
             r#"source-head@v1 {"source":"other","package":"owner/repo"}"#,
             r#"tag-catalog@v1 {"source":"github-releases","package":"owner/repo"}"#,
         ]
+    );
+}
+
+#[tokio::test]
+async fn migration_counts_requeues_on_new_and_eleven_schema_queues() {
+    // A fresh cache has the column and counts a first requeue.
+    let directory = tempfile::tempdir().unwrap();
+    let fresh = cache(&directory).await;
+    fresh
+        .enqueue(None, vec![Work::repository(1, "owner/repo")], 0, 0)
+        .await
+        .unwrap();
+    let claims = fresh.claim_batch(0, 1).await.unwrap();
+    assert_eq!(claims[0].requeues, 0);
+    fresh
+        .finish_work(Finish::Requeue.all(claims), 0, 0)
+        .await
+        .unwrap();
+    assert_eq!(fresh.claim_batch(RETRY_MS, 1).await.unwrap()[0].requeues, 1);
+
+    // A schema-11 cache gains it; queued rows count from zero.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("cache.sqlite");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    for migration in [
+        include_str!("../src/migrations/001.sql"),
+        include_str!("../src/migrations/002.sql"),
+        include_str!("../src/migrations/003.sql"),
+        include_str!("../src/migrations/004.sql"),
+        include_str!("../src/migrations/005.sql"),
+        include_str!("../src/migrations/006.sql"),
+        include_str!("../src/migrations/007.sql"),
+        include_str!("../src/migrations/008.sql"),
+        include_str!("../src/migrations/009.sql"),
+        include_str!("../src/migrations/010.sql"),
+        include_str!("../src/migrations/011.sql"),
+    ] {
+        conn.execute_batch(migration).unwrap();
+    }
+    conn.execute(
+        "INSERT INTO server_work(installation,repo,available_at) VALUES (1,'owner/repo',0)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let migrated = cache(&directory).await;
+    let claims = migrated.claim_batch(0, 1).await.unwrap();
+    assert_eq!(claims[0].requeues, 0);
+    migrated
+        .finish_work(Finish::Requeue.all(claims), 0, 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        migrated.claim_batch(RETRY_MS, 1).await.unwrap()[0].requeues,
+        1
+    );
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        12
     );
 }

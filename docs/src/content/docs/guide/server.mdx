@@ -138,7 +138,9 @@ usual coalescing window instead of waiting out the backoff. A run that dies
 with the server or takes it down, such as by an OOM kill or a panic, counts as
 a failure; one cut short by a shutdown does not. If the default branch moves
 while a batch is writing, nothing is written to that branch, its action reports
-`stale`, and the repository is requeued for a minute later.
+`stale`, and the repository is requeued for a minute later. A repository
+requeued three times in a row fails the next one instead, backing off like any
+other failure; a success or a failure resets the count.
 
 Queue rows survive restarts. SIGTERM stops new work, drains the running batches
 within `--shutdown-timeout-secs` (60 by default), and requeues the rest. A lock

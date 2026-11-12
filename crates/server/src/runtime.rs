@@ -12,7 +12,7 @@ use chrono::Utc;
 use futures_util::{FutureExt, future::BoxFuture};
 use patchula_cache::{
     Cache,
-    queue::{Attribution, Finish, Work},
+    queue::{Attribution, Claim, Finish, MAX_REQUEUES, Work},
 };
 use patchula_config::settings::Settings;
 use patchula_engine::Engine;
@@ -317,13 +317,19 @@ impl BatchOutcome {
         !self.error_kinds.is_empty()
     }
     /// How a claimed repository's run ended. Discovery and repositories the
-    /// batch skipped are done.
-    fn finish(&self, work: &Work) -> Finish {
-        let repo = work.repo.to_ascii_lowercase();
+    /// batch skipped are done. A requeue beyond the cap is a failure, so a
+    /// cause that never resolves backs off instead of retrying every minute.
+    fn finish(&mut self, claim: &Claim) -> Finish {
+        let repo = claim.work.repo.to_ascii_lowercase();
         if self.whole || self.failed.contains(&repo) {
             Finish::Failed
         } else if self.requeued.contains(&repo) {
-            Finish::Requeue
+            if claim.requeues >= MAX_REQUEUES {
+                self.fail("requeue-limit", &claim.work.repo);
+                Finish::Failed
+            } else {
+                Finish::Requeue
+            }
         } else {
             Finish::Done
         }
@@ -891,14 +897,14 @@ async fn worker(
         }
         tracing::info!(target: "patchula_server", installation = work[0].installation, entries = work.len(), reasons = ?attribution.reasons, delivery_ids = ?attribution.deliveries, "batch started");
         let result = runner.run(&work, &settings, &attribution).await;
-        let (outcome, error) = match result {
+        let (mut outcome, error) = match result {
             Ok(outcome) => (outcome, None),
             Err(error) => (BatchOutcome::whole("batch-operation"), Some(error)),
         };
         let finished: Vec<_> = claims
             .into_iter()
             .map(|claim| {
-                let finish = outcome.finish(&claim.work);
+                let finish = outcome.finish(&claim);
                 (claim, finish)
             })
             .collect();
