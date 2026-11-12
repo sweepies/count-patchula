@@ -300,7 +300,7 @@ impl Write<'_> {
             since,
             self.now,
         )
-        .map_err(StepFailure::Repo)
+        .map_err(|e| StepFailure::Repo(e.to_string()))
     }
 
     /// The lockfile-maintenance plan, when one is due. A cache or config
@@ -315,7 +315,7 @@ impl Write<'_> {
     ) -> Result<()> {
         let Some(mut maintenance) =
             patchula_update::maintenance::maintenance(repo, config, snapshot, since, self.now)
-                .map_err(Error::Invalid)?
+                .map_err(|e| Error::Invalid(e.to_string()))?
         else {
             return Ok(());
         };
@@ -325,8 +325,7 @@ impl Write<'_> {
             config,
             self.now,
         )
-        .await
-        .map_err(Error::Invalid)?;
+        .await?;
         plans.push(maintenance);
         Ok(())
     }
@@ -362,7 +361,7 @@ impl Write<'_> {
                 controls.batched = batched;
                 Ok(())
             }
-            Err(error) => Err(StepFailure::Repo(error)),
+            Err(error) => Err(StepFailure::Repo(error.to_string())),
         }
     }
 
@@ -398,7 +397,7 @@ impl Write<'_> {
             inventory,
         )
         .await
-        .map_err(StepFailure::Repo)
+        .map_err(|e| StepFailure::Repo(e.to_string()))
     }
 
     /// The REST lifecycle view for a full write: every open and closed pull
@@ -422,7 +421,7 @@ impl Write<'_> {
             &inventory.actor,
         )
         .await
-        .map_err(StepFailure::Repo)?;
+        .map_err(|e| StepFailure::Repo(e.to_string()))?;
         state.set_advertised_server(self.engine.advertised_server.clone());
         state.set_merge_settings(inventory.merge_settings.clone());
         Ok(state)
@@ -472,7 +471,7 @@ impl Write<'_> {
             self.dry_run,
         )
         .await
-        .map_err(StepFailure::Repo)
+        .map_err(|e| StepFailure::Repo(e.to_string()))
     }
 
     /// Publish the planned branches: trees, commits and the leased ref move.

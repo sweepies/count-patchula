@@ -1,5 +1,6 @@
 //! Scheduled lockfile maintenance: a refresh plan over the lockfiles the
 //! enabled ecosystems claim, held between windows or after a completed run.
+use crate::error::{Error, PlanError};
 use crate::{Hold, Plan, Snapshot, branch_name};
 use patchula_cache::State;
 use patchula_config::Config;
@@ -16,7 +17,7 @@ pub fn maintenance(
     snapshot: &Snapshot,
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<Option<Plan>, String> {
+) -> Result<Option<Plan>, PlanError> {
     use chrono::Datelike;
     if !config.lockfiles.refresh {
         return Ok(None);
@@ -36,7 +37,7 @@ pub fn maintenance(
         BranchAction {
             repository: repository.repository.clone(),
             branch: branch_name(&config.prs.branch, "lock-file-maintenance")?,
-            base_commit: repository.commit.clone().ok_or("missing base")?,
+            base_commit: repository.commit.clone().ok_or(PlanError::MissingBase)?,
             status: BranchStatus::Planned,
             reason: None,
             message: format!("{} lock file maintenance", config.defaults.commit_prefix),
@@ -74,15 +75,14 @@ pub async fn defer_completed_refresh(
     plan: &mut Plan,
     config: &Config,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     use chrono::Datelike;
     if !plan.is_maintenance() || plan.action().status != BranchStatus::Planned {
         return Ok(());
     }
     if let Some(last) = cache
         .state::<MaintenanceSuccess>(&refresh_scope(&plan.action().repository))
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
         && let Some(last) = chrono::DateTime::<chrono::Utc>::from_timestamp(last.0, 0)
         && (last.iso_week() == now.iso_week()
             || now - last < chrono::Duration::hours(i64::from(config.lockfiles.wait_hours)))
@@ -96,7 +96,7 @@ pub async fn record_refresh(
     plans: &[Plan],
     actions: &[patchula_report::PullRequestAction],
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     for plan in plans
         .iter()
         .filter(|p| p.is_maintenance() && p.lockfiles_ready())
@@ -117,8 +117,7 @@ pub async fn record_refresh(
                     &refresh_scope(&plan.action().repository),
                     &MaintenanceSuccess(now.timestamp()),
                 )
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
         }
     }
     Ok(())

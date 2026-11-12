@@ -2,6 +2,7 @@
 //! keeps the targets that were reviewed; the individual PR closes as batched,
 //! which never suppresses the update. Unticking, removing or closing the batch
 //! returns its updates to individual PRs.
+use crate::error::PlanError;
 use crate::markers;
 use crate::{Change, Plan, Snapshot, pull_requests};
 use patchula_config::{Config, Registry};
@@ -112,7 +113,7 @@ pub fn apply(
     allow_pending: bool,
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<BTreeSet<String>, String> {
+) -> Result<BTreeSet<String>, PlanError> {
     let name = crate::branch_name(&config.prs.branch, "batch")?;
     let items = items(prs, actor, &repository.repository, &name);
     let Some(plan) = crate::plan::batch_plan(
@@ -132,10 +133,7 @@ pub fn apply(
         .iter()
         .any(|p| p.action().branch == plan.action().branch)
     {
-        return Err(format!(
-            "{} is reserved for the batch PR; rename the update group",
-            plan.action().branch
-        ));
+        return Err(PlanError::BatchReserved(plan.action().branch.clone()));
     }
     let origins: BTreeSet<_> = plan
         .batch_items()
@@ -527,7 +525,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(
-            error,
+            error.to_string(),
             format!("{batch} is reserved for the batch PR; rename the update group")
         );
     }

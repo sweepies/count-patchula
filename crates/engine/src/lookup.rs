@@ -191,21 +191,20 @@ impl Engine {
                                                 &repo,
                                                 &inventory.actor,
                                             )
-                                            .await
-                                            .map_err(Error::Invalid)?,
+                                            .await?,
                                         );
                                         work.controls = controls;
                                         work.inventory = Some(inventory);
                                     }
                                     Err(error) => {
                                         work.report.status = Status::Error;
-                                        work.report.reason = Some(error);
+                                        work.report.reason = Some(error.to_string());
                                     }
                                 }
                             }
                             Err(error) => {
                                 work.report.status = Status::Error;
-                                work.report.reason = Some(error);
+                                work.report.reason = Some(error.to_string());
                             }
                         }
                     }
@@ -766,8 +765,7 @@ impl Engine {
                     &inventory.actor,
                     permits,
                 )
-                .await
-                .map_err(Error::Invalid)?;
+                .await?;
             }
         }
         Ok((keys, proposal_cpu_time))

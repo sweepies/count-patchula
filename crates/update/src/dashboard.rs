@@ -1,4 +1,5 @@
 //! A deterministic issue, discovered by ownership and marker rather than title.
+use crate::error::Error;
 use crate::{
     Inventory, Plan,
     identity::{extracted_key, held_key, held_target, retry_key},
@@ -153,11 +154,7 @@ impl Controls {
             }
         }
     }
-    pub fn read(
-        inventory: &Inventory,
-        repo: &str,
-        dashboard_enabled: bool,
-    ) -> Result<Self, String> {
+    pub fn read(inventory: &Inventory, repo: &str, dashboard_enabled: bool) -> Result<Self, Error> {
         let mut result = Self::default();
         if dashboard_enabled && let Some(issue) = issue(inventory)? {
             for action in checked_actions(&issue.body) {
@@ -226,11 +223,10 @@ pub async fn load_permits(
     cache: &Cache,
     repo: &str,
     actor: &str,
-) -> Result<BTreeSet<String>, String> {
+) -> Result<BTreeSet<String>, Error> {
     Ok(cache
         .state::<Permits>(&repository_scope(repo))
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
         .filter(|p| p.actor == actor)
         .map(|p| p.targets)
         .unwrap_or_default())
@@ -240,8 +236,8 @@ pub async fn save_permits(
     repo: &str,
     actor: &str,
     targets: BTreeSet<String>,
-) -> Result<(), String> {
-    cache
+) -> Result<(), Error> {
+    Ok(cache
         .set_state(
             &repository_scope(repo),
             &Permits {
@@ -249,8 +245,7 @@ pub async fn save_permits(
                 targets,
             },
         )
-        .await
-        .map_err(|e| e.to_string())
+        .await?)
 }
 /// Text for the page: neutralised first (see `text::inert`), then escaped so
 /// no Markdown or HTML in it takes effect.
@@ -280,9 +275,9 @@ fn checkbox(label: &str, action: Action) -> String {
 /// The repository's dashboard issue, typed: `issue` is bot-authored and
 /// carries the dashboard marker, and at most one may exist. An unreadable
 /// issue page proves neither absence nor uniqueness, so it is an error.
-pub fn issue(inventory: &Inventory) -> Result<Option<&crate::receipts::Issue>, String> {
+pub fn issue(inventory: &Inventory) -> Result<Option<&crate::receipts::Issue>, Error> {
     if !inventory.issues.complete {
-        return Err("incomplete issue inventory".into());
+        return Err(Error::Refused("incomplete issue inventory".into()));
     }
     let mut issues = inventory.issues.items.iter().flatten().filter(|i| {
         i.author
@@ -294,7 +289,9 @@ pub fn issue(inventory: &Inventory) -> Result<Option<&crate::receipts::Issue>, S
     });
     let result = issues.next();
     if issues.next().is_some() {
-        return Err("multiple bot-owned dependency dashboards; close duplicates".into());
+        return Err(Error::Refused(
+            "multiple bot-owned dependency dashboards; close duplicates".into(),
+        ));
     }
     Ok(result)
 }
@@ -1141,7 +1138,7 @@ pub async fn reconcile(
     config: &Config,
     inventory: &Inventory,
     body: String,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let existing = issue(inventory)?;
     let path = format!("repos/{}/issues", repo.repository);
     if !config.prs.dashboard {
@@ -1151,20 +1148,17 @@ pub async fn reconcile(
                     &format!("{path}/{}", existing.number),
                     json!({"state":"closed"}),
                 )
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
         }
         // A closed dashboard is no longer the repository's dashboard.
-        return cache
+        return Ok(cache
             .clear_state::<Receipt>(&repository_scope(&repo.repository))
-            .await
-            .map_err(|e| e.to_string());
+            .await?);
     }
     let digest = hash(body.as_bytes());
     let previous = cache
         .state::<Receipt>(&repository_scope(&repo.repository))
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     let number = if let Some(existing) = existing {
         let number = existing.number as u64;
         let current = existing.body.as_str();
@@ -1175,18 +1169,16 @@ pub async fn reconcile(
         if !unchanged && crate::pr::body::body_hash(current) != digest {
             client
                 .patch::<Value>(&format!("{path}/{number}"), json!({"body":body}))
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
         }
         number
     } else {
         client
             .post::<patchula_github::model::Issue>(&path, json!({"title":TITLE,"body":body}))
-            .await
-            .map_err(|e| e.to_string())?
+            .await?
             .number
     };
-    cache
+    Ok(cache
         .set_state(
             &repository_scope(&repo.repository),
             &Receipt {
@@ -1195,8 +1187,7 @@ pub async fn reconcile(
                 hash: digest,
             },
         )
-        .await
-        .map_err(|e| e.to_string())
+        .await?)
 }
 
 #[cfg(test)]

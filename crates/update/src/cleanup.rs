@@ -1,3 +1,4 @@
+use crate::error::Error;
 use crate::{Plan, REF_UPDATE, trailers};
 use patchula_github::{
     Client,
@@ -35,11 +36,10 @@ pub(crate) fn all_ours(commits: &[Commit], actor: &str) -> bool {
 
 /// Validate every commit since the recorded base, including author and signature.
 /// A copied marker alone never authorizes deleting or replacing human work.
-pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Result<bool, String> {
+pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Result<bool, Error> {
     let tip = client
         .get_fresh::<Commit>(&format!("repos/{repo}/commits/{head}"))
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     let Some(base) = recorded_base(&tip.commit.message) else {
         return Ok(false);
     };
@@ -52,7 +52,7 @@ pub async fn owned(client: &Client, repo: &str, head: &str, actor: &str) -> Resu
         // A recorded base GitHub cannot compare is no evidence of ownership:
         // the branch is not the Count's, and the run carries on.
         Err(patchula_github::Error::Status(404 | 422)) => return Ok(false),
-        result => result.map_err(|e| e.to_string())?,
+        result => result?,
     };
     Ok(history.total_commits == history.commits.len() as u64
         && history.commits.last().is_some_and(|c| c.sha == head)
@@ -71,14 +71,13 @@ pub async fn cleanup(
     plans: &[Plan],
     actor: &str,
     dry_run: bool,
-) -> Result<Vec<BranchAction>, String> {
+) -> Result<Vec<BranchAction>, Error> {
     if dry_run {
         return Ok(Vec::new());
     }
     let refs = client
         .rest_pages::<BranchHead>(&format!("repos/{repo}/branches?per_page=100"), |_| false)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     let desired: BTreeSet<_> = plans.iter().map(|p| p.action().branch.as_str()).collect();
     let candidates: Vec<_> = refs
         .iter()
@@ -89,17 +88,15 @@ pub async fn cleanup(
     }
     let metadata = client
         .get_fresh::<Repository>(&format!("repos/{repo}"))
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     if metadata.default_branch != default_branch {
-        return Err("default branch changed before cleanup; rerun".into());
+        return Err(Error::Raced("default branch changed before cleanup; rerun"));
     }
     // The deletions don't lease the default branch, so check here that the
     // plans still describe it; if it moved, the next run cleans up instead.
     let current = client
         .get_fresh::<GitRef>(&crate::write::ref_path(repo, default_branch))
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     if current.object.sha != base {
         return Ok(Vec::new());
     }
@@ -135,15 +132,15 @@ pub async fn delete_owned(
     default_branch: &str,
     branch: &str,
     head: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     if branch == default_branch {
-        return Err("refusing to delete default branch".into());
+        return Err(Error::Refused("refusing to delete default branch".into()));
     }
     let result = client.graphql::<crate::write::RefUpdates>(REF_UPDATE, json!({"input":{"repositoryId":node,"refUpdates":[
         {"name":format!("refs/heads/{branch}"),"beforeOid":head,"afterOid":"0000000000000000000000000000000000000000","force":true}
-    ]}})).await.map_err(|e| e.to_string())?;
+    ]}})).await?;
     if result.update_refs.is_none() {
-        return Err("missing deletion acknowledgement".into());
+        return Err(Error::Refused("missing deletion acknowledgement".into()));
     }
     Ok(())
 }

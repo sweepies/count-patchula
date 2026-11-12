@@ -1,4 +1,5 @@
 //! Native auto-merge, or conservative later-run merging backed by write receipts.
+use crate::error::Error;
 use crate::{
     Inventory, Plan,
     pr::body::body_hash,
@@ -88,11 +89,10 @@ pub(crate) async fn load_history(
     cache: &Cache,
     repo: &str,
     actor: &str,
-) -> Result<Vec<MergedPr>, String> {
+) -> Result<Vec<MergedPr>, Error> {
     Ok(cache
         .state::<History>(&history_scope(repo))
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
         .filter(|h| h.actor == actor)
         .map(|h| h.prs)
         .unwrap_or_default())
@@ -112,7 +112,7 @@ async fn save_history(
     repo: &str,
     inventory: &Inventory,
     plans: &[Plan],
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let merged: Vec<_> = plans
         .iter()
         .filter(|p| p.action().status == BranchStatus::Merged)
@@ -131,7 +131,7 @@ async fn save_history(
     if prs.len() > 20 {
         prs.drain(..prs.len() - 20);
     }
-    cache
+    Ok(cache
         .set_state(
             &history_scope(repo),
             &History {
@@ -139,8 +139,7 @@ async fn save_history(
                 prs,
             },
         )
-        .await
-        .map_err(|e| e.to_string())
+        .await?)
 }
 
 #[allow(dead_code)]
@@ -249,8 +248,10 @@ fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
             })
     })
 }
-async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, String> {
-    let (owner, name) = repo.split_once('/').ok_or("invalid repository")?;
+async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, Error> {
+    let (owner, name) = repo
+        .split_once('/')
+        .ok_or(Error::Refused("invalid repository".into()))?;
     let checks: Vec<Option<ChecksContext>> = client
         .graphql_pages(
             CHECKS_QUERY,
@@ -281,8 +282,7 @@ async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, String> 
             },
             |_| false,
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     // A null or unreadable context node reads as not-green, as it did when
     // the nodes were `Value`s without a `__typename`.
     Ok(!checks.is_empty()
@@ -355,7 +355,7 @@ pub(crate) async fn enable_native(
     id: &str,
     method: &str,
     head: &Value,
-) -> Result<Native, String> {
+) -> Result<Native, Error> {
     let input = json!({"input":{"pullRequestId":id,"mergeMethod":method.to_uppercase(),"expectedHeadOid":head}});
     match client
         .graphql::<crate::pull_requests::EnableAutoMergeData>(
@@ -372,11 +372,13 @@ pub(crate) async fn enable_native(
         {
             Ok(Native::Enabled)
         }
-        Ok(_) => Err("GitHub did not acknowledge native auto-merge".into()),
+        Ok(_) => Err(Error::Refused(
+            "GitHub did not acknowledge native auto-merge".into(),
+        )),
         Err(patchula_github::Error::Graphql(message)) if already_mergeable(&message) => {
             Ok(Native::AlreadyMergeable)
         }
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(error.into()),
     }
 }
 async fn one(
@@ -384,7 +386,7 @@ async fn one(
     inventory: &Inventory,
     repo: &Repository,
     pr: &mut Tracked,
-) -> Result<(PullRequestStatus, String), String> {
+) -> Result<(PullRequestStatus, String), Error> {
     let head_oid = json!(pr.pr.head.sha);
     if pr.pr.base.branch != repo.default_branch.as_deref().unwrap_or_default() {
         return Ok((
@@ -393,10 +395,9 @@ async fn one(
         ));
     }
     let settings = &inventory.merge_settings;
-    let method = settings
-        .method
-        .as_deref()
-        .ok_or("repository has no enabled merge method")?;
+    let method = settings.method.as_deref().ok_or(Error::Refused(
+        "repository has no enabled merge method".into(),
+    ))?;
     // A PR that GitHub already finds mergeable cannot take native auto-merge;
     // it falls through to the Count's own merge, behind the same gate.
     if settings.native {
@@ -415,10 +416,7 @@ async fn one(
     let number = pr.pr.number;
     let head = pr.pr.head.sha.clone();
     let path = format!("repos/{}/pulls/{number}", repo.repository);
-    let fresh = client
-        .get_fresh::<model::PullRequest>(&path)
-        .await
-        .map_err(|e| e.to_string())?;
+    let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
     if !same_head(&fresh, &pr.pr, &inventory.actor, &repo.repository) {
         return Ok((
             PullRequestStatus::Protected,
@@ -443,10 +441,7 @@ async fn one(
     }
     // Recheck ownership/protections after pagination, then use a head lease on the
     // normal merge API. No admin/bypass option, direct base write or force merge.
-    let fresh = client
-        .get_fresh::<model::PullRequest>(&path)
-        .await
-        .map_err(|e| e.to_string())?;
+    let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
     if !same_head(&fresh, &pr.pr, &inventory.actor, &repo.repository)
         || fresh.draft != Some(false)
         || fresh.mergeable != Some(true)
@@ -462,8 +457,7 @@ async fn one(
             &format!("{path}/merge"),
             json!({"sha":head,"merge_method":method}),
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     if !result.merged {
         return Ok((
             PullRequestStatus::Skipped,
@@ -474,14 +468,14 @@ async fn one(
     if !settings.delete_branch {
         let cleanup = async {
             if settings.repository_id.is_empty() {
-                return Err("missing repository ID".into());
+                return Err(Error::Refused("missing repository ID".into()));
             }
             crate::delete_owned(
                 client,
                 &settings.repository_id,
                 repo.default_branch
                     .as_deref()
-                    .ok_or("missing default branch")?,
+                    .ok_or(Error::Refused("missing default branch".into()))?,
                 &pr.pr.head.branch,
                 &head,
             )

@@ -1,4 +1,5 @@
 use crate::Plan;
+use crate::error::Error;
 use crate::markers;
 use crate::pr::body::{
     Bodies, Closure, body_hash, closure, notes_key, same_owner, title, unticked, with_foreign,
@@ -333,7 +334,7 @@ async fn page_closed_branch(
     head: &str,
     mut cursor: String,
     pulls: &mut Vec<Tracked>,
-) -> Result<bool, String> {
+) -> Result<bool, Error> {
     let query = format!(
         "query ClosedPulls($owner: String!, $name: String!, $b0: String!, $after: String) {{ \
             repository(owner: $owner, name: $name) {{ \
@@ -347,8 +348,7 @@ async fn page_closed_branch(
                 &query,
                 json!({"owner":owner,"name":name,"b0":head,"after":cursor}),
             )
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
         let Some(page) = closed_page(&data, "b0", head) else {
             return Ok(false);
         };
@@ -370,8 +370,10 @@ async fn closed_pulls(
     client: &Client,
     repo: &str,
     branches: &[String],
-) -> Result<BTreeMap<String, Result<Vec<Tracked>, view::Unread>>, String> {
-    let (owner, name) = repo.split_once('/').ok_or("invalid repository")?;
+) -> Result<BTreeMap<String, Result<Vec<Tracked>, view::Unread>>, Error> {
+    let (owner, name) = repo
+        .split_once('/')
+        .ok_or(Error::Refused("invalid repository".into()))?;
     let mut out = BTreeMap::new();
     for chunk in branches.chunks(25) {
         let parameters: String = (0..chunk.len())
@@ -395,10 +397,7 @@ async fn closed_pulls(
         for (i, head) in chunk.iter().enumerate() {
             variables[format!("b{i}")] = head.clone().into();
         }
-        let data = client
-            .graphql::<Value>(&query, variables)
-            .await
-            .map_err(|e| e.to_string())?;
+        let data = client.graphql::<Value>(&query, variables).await?;
         for (i, head) in chunk.iter().enumerate() {
             let result = match closed_page(&data, &format!("b{i}"), head) {
                 Some(page) => {
@@ -585,16 +584,16 @@ impl Lifecycle {
         recheck: Recheck,
         controls: &crate::dashboard::Controls,
         actor: &str,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, Error> {
         let repo = repository.repository.as_str();
         let base = repository
             .commit
             .as_deref()
-            .ok_or("missing repository commit")?;
+            .ok_or(Error::Refused("missing repository commit".into()))?;
         let default_branch = repository
             .default_branch
             .as_deref()
-            .ok_or("missing default branch")?;
+            .ok_or(Error::Refused("missing default branch".into()))?;
         // The open listing decodes element-wise: a PR that fails stays out
         // of `items` and marks the set incomplete — see `complete`.
         let page = model::Page::<model::PullRequest>::decode(
@@ -605,8 +604,7 @@ impl Lifecycle {
                     ),
                     |_| false,
                 )
-                .await
-                .map_err(|e| e.to_string())?,
+                .await?,
         );
         let mut state = Self {
             repo: repo.into(),
@@ -645,8 +643,7 @@ impl Lifecycle {
                                 .is_some_and(|at| at < now - Duration::hours(1))
                         },
                     )
-                    .await
-                    .map_err(|e| e.to_string())?,
+                    .await?,
             );
             state.complete &= page.complete;
             let recent_prs: Vec<Tracked> = page.items.into_iter().map(Tracked::from).collect();
@@ -707,10 +704,9 @@ impl Lifecycle {
             let number = pr.pr.number;
             let fresh = client
                 .get_fresh::<model::PullRequest>(&format!("repos/{repo}/pulls/{number}"))
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             if !owned_pr(&fresh, actor, repo) || fresh.head.sha != sha {
-                return Err("obsolete PR changed during inspection; rerun".into());
+                return Err(Error::Raced("obsolete PR changed during inspection; rerun"));
             }
             if fresh.state != "open" {
                 state.actions.push(action(
@@ -730,22 +726,22 @@ impl Lifecycle {
                 meta = Some(
                     client
                         .get_fresh::<model::Repository>(&format!("repos/{repo}"))
-                        .await
-                        .map_err(|e| e.to_string())?,
+                        .await?,
                 );
             }
             let meta = meta.as_ref().unwrap();
             if meta.default_branch != default_branch {
-                return Err("default branch changed before PR closure; rerun".into());
+                return Err(Error::Raced(
+                    "default branch changed before PR closure; rerun",
+                ));
             }
             // The default branch's head is a lease on each closure: a base
             // that moved while earlier PRs closed must stop the next one.
             let head = client
                 .get_fresh::<model::BranchHead>(&format!("repos/{repo}/branches/{default_branch}"))
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             if head.commit.sha != base {
-                return Err("base moved before obsolete PR closure; rerun".into());
+                return Err(Error::Raced("base moved before obsolete PR closure; rerun"));
             }
             let text = closure(body(&fresh), Closure::Obsolete);
             client
@@ -753,8 +749,7 @@ impl Lifecycle {
                     &format!("repos/{repo}/pulls/{number}"),
                     json!({"state":"closed","body":text}),
                 )
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             pr.mark_closed(text);
             state.actions.push(action(
                 repo,
@@ -860,7 +855,7 @@ impl Lifecycle {
                     &plan.action().branch,
                     None,
                     PullRequestStatus::Error,
-                    Some(error),
+                    Some(error.to_string()),
                 ));
             }
         }
@@ -868,11 +863,13 @@ impl Lifecycle {
     /// Close each open update PR the batch now carries, once the batch PR is
     /// published. The batched marker keeps the closure from suppressing the
     /// update, so removing it from the batch brings back an individual PR.
-    pub async fn close_batched(&mut self, client: &Client, plans: &[Plan]) -> Result<(), String> {
+    pub async fn close_batched(&mut self, client: &Client, plans: &[Plan]) -> Result<(), Error> {
         if !self.complete {
             // The target list is read off the whole listing; an unreadable
             // PR could be a batch member or the batch PR itself.
-            return Err("repository pull request list is incomplete".into());
+            return Err(Error::Refused(
+                "repository pull request list is incomplete".into(),
+            ));
         }
         let Some(plan) = plans.iter().find(|p| p.batch_items().is_some()) else {
             return Ok(());
@@ -911,10 +908,7 @@ impl Lifecycle {
             .collect();
         for target in targets {
             let path = format!("repos/{}/pulls/{target}", self.repo);
-            let fresh = client
-                .get_fresh::<model::PullRequest>(&path)
-                .await
-                .map_err(|e| e.to_string())?;
+            let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
             if fresh.state != "open"
                 || !owned_pr(&fresh, &self.actor, &self.repo)
                 || !marker_update(body(&fresh)).is_some_and(|u| self.batched.contains(&u))
@@ -926,8 +920,7 @@ impl Lifecycle {
             let text = closure(body(&fresh), Closure::Batched);
             let closed = client
                 .patch::<model::PullRequest>(&path, json!({"state":"closed","body":text}))
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             let mut reason = format!("moved to the batch PR #{number}");
             if let Err(error) = client
                 .post::<serde::de::IgnoredAny>(
@@ -953,7 +946,7 @@ impl Lifecycle {
     }
     /// A failed branch attempt is acknowledged too; its diagnostic remains in
     /// the report and the operator can explicitly request another attempt.
-    pub async fn acknowledge_rechecks(&mut self, client: &Client) -> Result<(), String> {
+    pub async fn acknowledge_rechecks(&mut self, client: &Client) -> Result<(), Error> {
         for pr in &mut self.prs {
             if pr.pr.state != "open"
                 || !owned_pr(&pr.pr, &self.actor, &self.repo)
@@ -963,10 +956,7 @@ impl Lifecycle {
             }
             let number = pr.pr.number;
             let path = format!("repos/{}/pulls/{number}", self.repo);
-            let fresh = client
-                .get_fresh::<model::PullRequest>(&path)
-                .await
-                .map_err(|e| e.to_string())?;
+            let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
             if fresh.state != "open" || !owned_pr(&fresh, &self.actor, &self.repo) {
                 continue;
             }
@@ -974,8 +964,7 @@ impl Lifecycle {
                 *pr = Tracked::from(
                     client
                         .patch::<model::PullRequest>(&path, json!({"body":unticked(body(&fresh))}))
-                        .await
-                        .map_err(|e| e.to_string())?,
+                        .await?,
                 );
             }
         }
@@ -986,12 +975,12 @@ impl Lifecycle {
         client: &Client,
         sources: &patchula_notes::Client,
         plan: &Plan,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         if self.bodies().reserved(plan) > BODY_LIMIT {
-            return Err(
+            return Err(Error::Refused(
                 "manual release-age evidence exceeds the PR body budget; split this update group"
                     .into(),
-            );
+            ));
         }
         let existing = self
             .prs
@@ -1015,16 +1004,15 @@ impl Lifecycle {
             let fresh = loop {
                 let fresh = client
                     .get_fresh::<model::PullRequest>(&format!("{path}/{number}"))
-                    .await
-                    .map_err(|e| e.to_string())?;
+                    .await?;
                 if !owned_pr(&fresh, &self.actor, &self.repo)
                     || branch(&fresh) != plan.action().branch
                     || !same_owner(body(&fresh), body(&pr.pr))
                 {
-                    return Err(
+                    return Err(Error::Refused(
                         "PR ownership marker or repository changed during this run; left untouched"
                             .into(),
-                    );
+                    ));
                 }
                 if fresh.state != "open" {
                     self.actions.push(action(
@@ -1045,13 +1033,14 @@ impl Lifecycle {
                 // Only the exact head verified before our publication is an
                 // expected stale value. Never retry an unfamiliar commit.
                 if fresh.head.sha != plan.action().previous_commit.as_deref().unwrap_or("") {
-                    return Err(
-                        "PR head moved after branch publication to an unexpected commit; rerun"
-                            .into(),
-                    );
+                    return Err(Error::Raced(
+                        "PR head moved after branch publication to an unexpected commit; rerun",
+                    ));
                 }
                 if attempt == 6 {
-                    return Err("PR head has not reflected our published commit after bounded retries; rerun".into());
+                    return Err(Error::Raced(
+                        "PR head has not reflected our published commit after bounded retries; rerun",
+                    ));
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100 << attempt)).await;
                 attempt += 1;
@@ -1069,12 +1058,11 @@ impl Lifecycle {
                         &format!("{path}/{number}"),
                         json!({"title":title,"body":text,"base":self.base}),
                     )
-                    .await
-                    .map_err(|e| e.to_string())?;
+                    .await?;
                 (Tracked::from(updated), PullRequestStatus::Updated)
             }
         } else {
-            let created = client.post::<model::PullRequest>(&path,json!({"title":title,"body":text,"head":plan.action().branch,"base":self.base,"maintainer_can_modify":false})).await.map_err(|e|e.to_string())?;
+            let created = client.post::<model::PullRequest>(&path,json!({"title":title,"body":text,"head":plan.action().branch,"base":self.base,"maintainer_can_modify":false})).await?;
             (Tracked::from(created), PullRequestStatus::Created)
         };
         let number = pr.pr.number;
@@ -1098,8 +1086,7 @@ impl Lifecycle {
                     &format!("repos/{}/issues/{number}/labels", self.repo),
                     json!({"labels":labels}),
                 )
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             pr.set_labels(labels);
         }
         let merge = merge_requested(plan, &self.maintenance_policy);
@@ -1109,16 +1096,14 @@ impl Lifecycle {
             if self.merge_settings.is_none() {
                 let meta = client
                     .get_fresh::<model::Repository>(&format!("repos/{}", self.repo))
-                    .await
-                    .map_err(|e| e.to_string())?;
+                    .await?;
                 self.merge_settings = Some(crate::automerge::Settings::from_rest(&meta));
             }
             let settings = self.merge_settings.as_ref().expect("repository settings");
             if settings.native {
-                let method = settings
-                    .method
-                    .as_ref()
-                    .ok_or("repository has no enabled merge method")?;
+                let method = settings.method.as_ref().ok_or(Error::Refused(
+                    "repository has no enabled merge method".into(),
+                ))?;
                 // A PR that is already mergeable cannot take auto-merge; the
                 // Count's own merge handles it on a later run.
                 native = crate::automerge::enable_native(
@@ -1136,8 +1121,7 @@ impl Lifecycle {
                     DISABLE_AUTO_MERGE,
                     json!({"input":{"pullRequestId":pr.pr.node_id}}),
                 )
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
         }
         pr.set_auto_merge(merge && native);
         if merge && !native {
