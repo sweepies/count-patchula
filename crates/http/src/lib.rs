@@ -108,6 +108,9 @@ impl Transport for Network {
             // runtime worker so reading and inflating them does not block the
             // engine task. `Span::current` is the request's trace span, so
             // `protocol` and the transport's own events keep landing on it.
+            // A spawned task gets a copy of the caller's task-locals, so nothing
+            // in here may record or read `tracked`: credential use is recorded
+            // in the caller before `send`, and a record made here would be lost.
             let client = self.client.clone();
             let exchange = AbortOnDrop(tokio::spawn(
                 async move {
