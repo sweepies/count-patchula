@@ -806,24 +806,28 @@ impl Lifecycle {
         Ok(state)
     }
 
-    pub async fn publish_with_sources(
-        &mut self,
-        client: &Client,
-        sources: &patchula_notes::Client,
-        plans: &mut [Plan],
-    ) {
+    /// The release-notes ranges `publish_with_sources` will fetch for these
+    /// plans once publication settles their statuses — the same selection,
+    /// read over `Planned`, the status every publish outcome is written
+    /// over. It only fills the notes client's caches: a range a publish
+    /// never asks for costs reads, not a different body; a range it asks
+    /// for that this missed is fetched when the body renders, as today.
+    pub fn note_ranges(&self, plans: &[Plan]) -> Vec<(PackageId, String, String)> {
+        self.ranges(
+            plans.iter().filter(|p| {
+                p.restored_pr().is_none() && p.action().status == BranchStatus::Planned
+            }),
+        )
+    }
+    /// The union of each filtered plan's release-notes ranges, bounded to
+    /// eight keys a plan and skipping bodies the existing PR can reuse.
+    fn ranges<'a>(
+        &self,
+        plans: impl Iterator<Item = &'a Plan>,
+    ) -> Vec<(PackageId, String, String)> {
         let mut ranges = BTreeSet::new();
         let bodies = self.bodies();
-        for plan in plans.iter().filter(|p| {
-            p.restored_pr().is_none()
-                && matches!(
-                    p.action().status,
-                    BranchStatus::Created
-                        | BranchStatus::Updated
-                        | BranchStatus::Rebased
-                        | BranchStatus::Unchanged
-                )
-        }) {
+        for plan in plans {
             let existing = self.prs.iter().find(|p| {
                 p.pr.state == "open"
                     && branch(&p.pr) == plan.action().branch
@@ -842,7 +846,24 @@ impl Lifecycle {
             }
             ranges.extend(plan_ranges);
         }
-        let ranges: Vec<_> = ranges.into_iter().collect();
+        ranges.into_iter().collect()
+    }
+    pub async fn publish_with_sources(
+        &mut self,
+        client: &Client,
+        sources: &patchula_notes::Client,
+        plans: &mut [Plan],
+    ) {
+        let ranges = self.ranges(plans.iter().filter(|p| {
+            p.restored_pr().is_none()
+                && matches!(
+                    p.action().status,
+                    BranchStatus::Created
+                        | BranchStatus::Updated
+                        | BranchStatus::Rebased
+                        | BranchStatus::Unchanged
+                )
+        }));
         sources.prepare_release_notes(&ranges).await;
         for plan in plans {
             if let Some(pr) = plan.restored_pr() {

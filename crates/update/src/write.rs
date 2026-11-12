@@ -78,28 +78,34 @@ async fn prepare(
     default_branch: &str,
     actor: &str,
 ) -> Result<Base, Error> {
-    let metadata = client
-        .get_fresh::<Repository>(&format!("repos/{repo}"))
-        .await?;
+    // The mutable reads are one wave; a raced answer to either keeps its
+    // error. The commit and its tree are named by SHA and cannot change, so
+    // they are immutable reads: a run that already scanned this commit
+    // answers them from the cache.
+    let metadata_path = format!("repos/{repo}");
+    let head_path = ref_path(repo, default_branch);
+    let (metadata, head) = tokio::join!(
+        client.get_fresh::<Repository>(&metadata_path),
+        client.get_fresh::<GitRef>(&head_path),
+    );
+    let metadata = metadata?;
     if metadata.default_branch != default_branch {
         return Err(Error::Raced(
             "default branch changed since extraction; rerun",
         ));
     }
-    let head = client
-        .get_fresh::<GitRef>(&ref_path(repo, default_branch))
-        .await?;
+    let head = head?;
     if head.object.sha != base_commit {
         return Err(Error::Raced(
             "default branch moved since extraction; stale blob refusal, rerun",
         ));
     }
     let base = client
-        .get_fresh::<GitCommit>(&format!("repos/{repo}/git/commits/{base_commit}"))
+        .get_immutable::<GitCommit>(&format!("repos/{repo}/git/commits/{base_commit}"))
         .await?;
     let tree_sha = base.tree.sha;
     let tree = client
-        .get_fresh::<Tree>(&format!("repos/{repo}/git/trees/{tree_sha}?recursive=1"))
+        .get_immutable::<Tree>(&format!("repos/{repo}/git/trees/{tree_sha}?recursive=1"))
         .await?;
     if tree.truncated {
         return Err(Error::Refused(

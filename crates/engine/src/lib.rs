@@ -948,9 +948,11 @@ impl Engine {
         Ok(repos.into_iter().map(|repo| repo.full_name).collect())
     }
     async fn tree(&self, repo: &str, sha: &str) -> Result<Vec<Entry>> {
+        // A tree named by SHA cannot change; a cached answer needs no
+        // revalidation, and a later full write reads the same tree from it.
         let tree = self
             .github
-            .get_fresh::<model::Tree>(&format!("repos/{repo}/git/trees/{sha}?recursive=1"))
+            .get_immutable::<model::Tree>(&format!("repos/{repo}/git/trees/{sha}?recursive=1"))
             .await?;
         if tree.truncated {
             return Err(Error::Invalid(

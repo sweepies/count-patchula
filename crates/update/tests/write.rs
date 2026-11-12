@@ -1328,7 +1328,10 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
             .count(),
         0
     );
-    assert_eq!(state.requests.len(), 4 + 17 * 4);
+    // The base commit and recursive tree are immutable reads now: the first
+    // `apply_all` cached them, so this prepare sends only the two fresh
+    // precondition reads beside the per-branch probes.
+    assert_eq!(state.requests.len(), 2 + 17 * 4);
     eprintln!(
         "forced 17-branch recheck: {} reads, 0 mutations, {:?} simulated at 150ms/request",
         state.requests.len(),

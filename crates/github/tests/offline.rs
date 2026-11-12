@@ -128,7 +128,10 @@ async fn a_vary_response_is_stored_once_and_revalidated_but_vary_star_is_not() {
     // An immutable read answers from any stored entry, so three requests
     // prove nothing was stored.
     for _ in 0..3 {
-        client.get_immutable("repos/o/r/vary-star").await.unwrap();
+        client
+            .get_immutable_response("repos/o/r/vary-star")
+            .await
+            .unwrap();
     }
     let counts = transport.counts.lock().unwrap();
     // One store and one revalidation: the Vary response lives under a single key.
@@ -170,8 +173,8 @@ async fn an_immutable_get_is_answered_from_the_cache_without_a_request() {
         Client::with_transport(TOKEN, cache().await, Options::default(), transport.clone())
             .unwrap();
     let path = "repos/acme/app/git/blobs/0123456789abcdef0123456789abcdef01234567";
-    let first = client.get_immutable(path).await.unwrap();
-    let second = client.get_immutable(path).await.unwrap();
+    let first = client.get_immutable_response(path).await.unwrap();
+    let second = client.get_immutable_response(path).await.unwrap();
     assert_eq!(first.body, second.body);
     assert_eq!(second.headers["etag"], "\"blob\"");
     assert_eq!(transport.0.load(Ordering::SeqCst), 1);
@@ -186,7 +189,7 @@ async fn an_immutable_get_is_answered_from_the_cache_without_a_request() {
         transport.clone(),
     )
     .unwrap();
-    other.get_immutable(path).await.unwrap();
+    other.get_immutable_response(path).await.unwrap();
     assert_eq!(transport.0.load(Ordering::SeqCst), 3);
 }
 
@@ -266,7 +269,7 @@ async fn blobs_come_from_graphql_only_when_their_text_hashes_to_the_sha() {
     assert_eq!(again, blobs);
     assert_eq!(
         client
-            .get_immutable(&format!("repos/acme/app/git/blobs/{HI}"))
+            .get_immutable_response(&format!("repos/acme/app/git/blobs/{HI}"))
             .await
             .unwrap()
             .status,
