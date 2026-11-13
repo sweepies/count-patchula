@@ -1796,7 +1796,7 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
             exact_version: false,
         };
         runner
-            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[], &[], false))
+            .cargo_update(&driver, &cwd, "1.100.0", &job, false, (&[], &[], &[], false))
             .await
             .unwrap_or_else(|e| panic!("{locked} -> {target}: {e}"));
         let commands: Vec<_> = executor
@@ -3850,7 +3850,7 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
             exact_version: false,
         };
         runner
-            .cargo_update(&driver, &cwd, "1.99.0", &job, false, (&[], &[], &[], false))
+            .cargo_update(&driver, &cwd, "1.100.0", &job, false, (&[], &[], &[], false))
             .await
             .unwrap_or_else(|e| panic!("git {git}, crates.io {registry}: {e}"));
         assert_eq!(
