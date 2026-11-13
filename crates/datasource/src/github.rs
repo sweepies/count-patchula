@@ -55,7 +55,7 @@ fn compact_release_head(
     >(body)?)
 }
 pub(crate) const GITHUB_RELEASE_HEAD: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("github-release-head", 1, compact_release_head);
+    patchula_http::Derived::new("github-release-head", 2, compact_release_head);
 
 /// The newest release's identity on a release source; a change refetches
 /// history. `None` records a source with no releases.
@@ -68,7 +68,7 @@ pub(crate) struct SourceHeadScope {
 }
 impl State for SourceHead {
     const NAMESPACE: &'static str = "source-head";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
     // Code-versioned: the stored fingerprint holds the newest release's
     // fields as this build picks them, an entry built by code that picked
     // differently must not compare equal.
@@ -85,7 +85,7 @@ pub(crate) struct TagCatalogScope {
 }
 impl State for TagCatalog {
     const NAMESPACE: &'static str = "tag-catalog";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
     // Code-versioned: the fingerprint in the key names the refs, not the
     // catalog this build's peel-and-map code derived from them.
     const CODE_VERSIONED: bool = true;
@@ -101,7 +101,7 @@ pub(crate) struct TagObjectScope {
 }
 impl State for TagObject {
     const NAMESPACE: &'static str = "tag-object";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
     // Code-versioned: the stored version is this build's decode of the
     // object the scope's sha names.
     const CODE_VERSIONED: bool = true;
@@ -682,7 +682,7 @@ mod tests {
         }
         impl State for OtherTagObject {
             const NAMESPACE: &'static str = "tag-object";
-            const VERSION: u32 = 2;
+            const VERSION: u32 = 1;
             type Scope = OtherTagObjectScope;
         }
         cache

@@ -304,33 +304,56 @@ fn without_test_modules(text: &str) -> String {
     String::from_utf8(effective).expect("blanking keeps UTF-8")
 }
 
-/// The `(namespace, code_versioned)` of each `impl State` in `text`:
-/// `impl<T> State for`, qualified `patchula_cache::State` paths and
-/// whitespace variants all count.
+/// The `(namespace, code_versioned)` of each `impl State` in `text`. An
+/// impl counts by what it declares, not how it names the trait: any
+/// `impl … for …` block whose own items include `const NAMESPACE` — the
+/// one trait in the workspace that declares it is `State` — so a renamed
+/// import (`use patchula_cache::State as S`), a qualified path, generics
+/// or an impl that does not start its line are all seen.
 fn impls_in(text: &str, path: &Path) -> Vec<(String, bool)> {
     // Scan the skeleton so a comment or string cannot pose as an impl
     // block or hide the brace that ends one, then read the consts from
-    // the real text.
+    // the real text, at the block's own depth only.
     let skel = skeleton(text);
-    let header = regex::Regex::new(
-        r"(?m)^[ \t]*impl(?:\s*<(?:[^<>]|<[^<>]*>)*>)?\s+(?:[A-Za-z_]\w*::)*State\s+for\b",
-    )
-    .unwrap();
+    let header = regex::Regex::new(r"\bimpl\b").unwrap();
+    let declares = regex::Regex::new(r"\bconst\s+NAMESPACE\b").unwrap();
     let namespace = regex::Regex::new(r#"NAMESPACE\s*:\s*&'static str\s*=\s*"([^"]+)""#).unwrap();
     let versioned = regex::Regex::new(r"CODE_VERSIONED\s*:\s*bool\s*=\s*true").unwrap();
+    let bytes = skel.as_bytes();
     let mut found = Vec::new();
     for m in header.find_iter(&skel) {
-        let bytes = skel.as_bytes();
         let mut j = m.end();
         while j < bytes.len() && bytes[j] != b'{' && bytes[j] != b';' {
             j += 1;
         }
-        if bytes.get(j) != Some(&b'{') {
+        if bytes.get(j) != Some(&b'{') || !skel[m.end()..j].contains(" for ") {
             continue;
         }
-        let body = &text[j..group(bytes, j)];
-        let code_versioned = versioned.is_match(body);
-        let Some(name) = namespace.captures(body) else {
+        let end = group(bytes, j);
+        // The block's own items: nested groups blanked, so an impl inside
+        // a fn of this block is counted once, as itself. The skeleton
+        // decides whether it declares NAMESPACE; the text gives the values.
+        let mut own = text.as_bytes()[j + 1..end - 1].to_vec();
+        let mut own_skel = bytes[j + 1..end - 1].to_vec();
+        let mut k = j + 1;
+        while k < end - 1 {
+            if bytes[k] == b'{' {
+                let close = group(bytes, k).min(end - 1);
+                for i in k - j - 1..close - j - 1 {
+                    own[i] = b' ';
+                    own_skel[i] = b' ';
+                }
+                k = close;
+            } else {
+                k += 1;
+            }
+        }
+        if !declares.is_match(&String::from_utf8_lossy(&own_skel)) {
+            continue;
+        }
+        let own = String::from_utf8_lossy(&own);
+        let code_versioned = versioned.is_match(&own);
+        let Some(name) = namespace.captures(&own) else {
             panic!("{}: impl State without a NAMESPACE literal", path.display())
         };
         found.push((name[1].to_owned(), code_versioned));
@@ -412,7 +435,12 @@ fn exemptions() -> BTreeMap<String, String> {
             };
             (name.to_owned(), reason.to_owned())
         })
-        .collect()
+        .fold(BTreeMap::new(), |mut table, (name, reason)| {
+            if table.insert(name.clone(), reason).is_some() {
+                panic!("tests/state-exempt.tsv: {name} is listed twice");
+            }
+            table
+        })
 }
 
 /// The workspace-wide half of the guard: a code-versioned impl is a row
