@@ -2,6 +2,9 @@
 #![forbid(unsafe_code)]
 mod advisories;
 pub use advisories::{Advisory, AdvisoryListing, AdvisoryQuery, Affected, Event, Range};
+mod catalog;
+pub use catalog::{Catalog, Version};
+pub(crate) use catalog::{sha256_hex, sort};
 mod compact;
 #[cfg(test)]
 mod derive_parity;
@@ -19,6 +22,7 @@ mod packagist;
 mod registries;
 pub mod upstream;
 pub use registries::HelmChart;
+pub use upstream::truncate;
 mod rubygems;
 mod rules;
 use patchula_cache::{Cache, Release, State};
@@ -148,30 +152,6 @@ pub(crate) const FRESH_MS: i64 = 3_600_000;
 /// State stamped with when it was fetched, for the FRESH_MS reuse window.
 trait FetchedAt {
     fn fetched_at(&self) -> i64;
-}
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Catalog {
-    pub versions: Vec<Version>,
-    pub dist_tags: BTreeMap<String, String>,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Version {
-    pub version: String,
-    pub published_at: Option<String>,
-    pub digest: Option<String>,
-    pub deprecated: bool,
-    pub yanked: bool,
-}
-impl From<Release> for Version {
-    fn from(r: Release) -> Self {
-        Self {
-            version: r.version,
-            published_at: r.published_at,
-            digest: r.digest,
-            deprecated: false,
-            yanked: false,
-        }
-    }
 }
 /// npm's public registry, which a dependency without its own registry reads.
 pub const NPM_REGISTRY: &str = "https://registry.npmjs.org";
@@ -572,36 +552,6 @@ fn runners(package: &str) -> Result<Catalog> {
         dist_tags: BTreeMap::new(),
     })
 }
-fn sort(versions: &mut Vec<Version>, scheme: Ecosystem) {
-    // Parse once per release, not once per comparator.
-    let mut parsed: Vec<_> = versions
-        .drain(..)
-        .map(|v| (scheme.parse(&v.version).ok(), v))
-        .collect();
-    parsed.sort_by(|(a, _), (b, _)| match (a, b) {
-        (Some(a), Some(b)) => scheme.order(b, a),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        _ => std::cmp::Ordering::Equal,
-    });
-    versions.extend(parsed.into_iter().map(|(_, v)| v));
-}
-/// The longest prefix of `text` within `limit` bytes that ends on a char
-/// boundary.
-pub fn truncate(text: &str, limit: usize) -> &str {
-    let mut end = text.len().min(limit);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
-}
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
 /// The child manifest an image index offers for `os`/`architecture`/
 /// `variant`, when it has an exact platform match.
 pub(crate) fn platform_manifest<'a>(
@@ -672,16 +622,5 @@ mod tests {
         assert!(StaleKey::digest("1.0+build").is_manifest_of("1.0_build"));
         assert!(!StaleKey::digest("1.0").is_manifest_of("2.0"));
         assert!(!StaleKey::CATALOG.is_manifest_of("1.0"));
-    }
-
-    /// `truncate` never splits a character: the cut backs up to a boundary.
-    #[test]
-    fn truncate_cuts_on_a_character_boundary() {
-        assert_eq!(truncate("abcdef", 3), "abc");
-        // "aéb" is four bytes; a cut inside `é` backs up to before it.
-        assert_eq!(truncate("aéb", 2), "a");
-        assert_eq!(truncate("aéb", 3), "aé");
-        assert_eq!(truncate("aéb", 4), "aéb");
-        assert_eq!(truncate("short", 100), "short");
     }
 }

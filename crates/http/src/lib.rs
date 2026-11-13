@@ -249,6 +249,7 @@ pub const MAX_CONCURRENCY: usize = 100;
 mod cached;
 pub mod conditional;
 mod credentials;
+mod derive;
 pub use cached::{
     Bearer, Cached, Derived, Error as CacheError, NoRules, Options, RegistryRules, Stats,
     representation,

@@ -11,17 +11,18 @@ use tokio::sync::Semaphore;
 type Erased =
     Arc<dyn Fn(&mut dyn std::io::Read) -> std::result::Result<Vec<u8>, ()> + Send + Sync + 'static>;
 
-fn erase<E: 'static>(derived: Derived<E>) -> (&'static str, Erased) {
+fn erase<E: 'static>(derived: Derived<E>) -> (&'static str, u32, Erased) {
     (
         derived.name,
+        derived.version,
         Arc::new(move |body| (derived.derive)(body).map_err(|_| ())),
     )
 }
 
 /// Every `Derived` the crate registers.
-fn derives() -> Vec<(&'static str, Erased)> {
+fn derives() -> Vec<(&'static str, u32, Erased)> {
     vec![
-        erase(crate::NOTES_MISE_VERSIONS),
+        erase(crate::mirror::NOTES_MISE_VERSIONS),
         erase(crate::source::NOTES_SOURCE_NPM),
         erase(crate::source::NOTES_SOURCE_CRATES),
         erase(crate::source::NOTES_SOURCE_PYPI),
@@ -107,7 +108,7 @@ async fn every_derive_reads_a_streamed_body_the_same() {
         bodies.len()
     );
     for body in &bodies {
-        for (name, f) in derives() {
+        for (name, _, f) in derives() {
             let buffered = run(Body::Buffered(body.clone()), f.clone(), &decoding).await;
             // An odd chunk size crosses token boundaries somewhere in every
             // document; one chunk is the fake-transport case.
@@ -120,4 +121,19 @@ async fn every_derive_reads_a_streamed_body_the_same() {
             }
         }
     }
+}
+
+/// A derived body is versioned by its compaction code, not the release:
+/// `tests/derived-versions.tsv` hashes the files and locked dependency
+/// versions that produce its bytes, and every `Derived::new` in the crate
+/// must be registered in `derives()`. A change to one must bump its
+/// `Derived`'s version and update the row in the same commit; this failure
+/// names the new hash.
+#[test]
+fn every_derive_versions_its_compaction_source() {
+    let registered: std::collections::BTreeMap<&'static str, u32> = derives()
+        .into_iter()
+        .map(|(name, version, _)| (name, version))
+        .collect();
+    patchula_testkit::derived::check("notes", &registered);
 }

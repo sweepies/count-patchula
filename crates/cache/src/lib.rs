@@ -638,6 +638,68 @@ mod tests {
         );
     }
 
+    /// A derived body keyed under the old per-build scheme — a
+    /// representation ending `+<build>` — is dropped when the cache opens;
+    /// `@v`-versioned entries and `+` elsewhere in a key are kept.
+    #[tokio::test]
+    async fn opening_drops_per_build_http_representations() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        let entry = HttpEntry {
+            status: 200,
+            etag: None,
+            last_modified: None,
+            headers: BTreeMap::new(),
+            body: b"body".to_vec(),
+            fetched_at: 0,
+            expires_at: None,
+            cache_control: None,
+        };
+        fn key(representation: Option<&str>, credential: Option<&str>) -> String {
+            let mut key = HttpKey::new("GET", "https://example.org/a+b", BTreeMap::new()).unwrap();
+            if let Some(representation) = representation {
+                key = key.representation(representation);
+            }
+            if let Some(credential) = credential {
+                key = key.credential(credential);
+            }
+            key.encoded().unwrap()
+        }
+        cache
+            .call(move |store| {
+                // As an old release wrote it, and the schemes kept today.
+                for key in [
+                    key(Some("doc+0.0.1"), None),
+                    key(Some("doc@v1"), None),
+                    key(Some("doc@v1"), Some("a+b")),
+                    key(None, None),
+                ] {
+                    store.http_put(&key, &entry)?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        drop(cache);
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        let keys = cache
+            .read(|store| {
+                let mut statement = store.conn.prepare("SELECT key FROM http ORDER BY key")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+                Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            })
+            .await
+            .unwrap();
+        let mut expected = [
+            key(Some("doc@v1"), None),
+            key(Some("doc@v1"), Some("a+b")),
+            key(None, None),
+        ];
+        expected.sort();
+        assert_eq!(keys, expected);
+    }
+
     #[tokio::test]
     async fn state_that_does_not_decode_is_a_miss() {
         #[derive(Debug, PartialEq, Serialize, Deserialize)]

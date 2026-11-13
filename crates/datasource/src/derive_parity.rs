@@ -12,15 +12,17 @@ use tokio::sync::Semaphore;
 type Erased =
     Arc<dyn Fn(&mut dyn std::io::Read) -> std::result::Result<Vec<u8>, ()> + Send + Sync + 'static>;
 
-fn erase<E: 'static>(derived: Derived<E>) -> (&'static str, Erased) {
+fn erase<E: 'static>(derived: Derived<E>) -> (&'static str, u32, Erased) {
     (
         derived.name,
+        derived.version,
         Arc::new(move |body| (derived.derive)(body).map_err(|_| ())),
     )
 }
 
-/// Every `Derived` the crate registers.
-fn derives() -> Vec<(&'static str, Erased)> {
+/// Every `Derived` the crate registers, plus the representation the pull
+/// token is stored under: its extraction code is its compaction.
+fn derives() -> Vec<(&'static str, u32, Erased)> {
     vec![
         erase(crate::compact::NPM_CATALOG),
         erase(crate::compact::CRATES_CATALOG),
@@ -124,7 +126,7 @@ async fn every_derive_reads_a_streamed_body_the_same() {
         bodies.len()
     );
     for body in &bodies {
-        for (name, f) in derives() {
+        for (name, _, f) in derives() {
             let buffered = run(Body::Buffered(body.clone()), f.clone(), &decoding).await;
             // An odd chunk size crosses token boundaries somewhere in every
             // document; one chunk is the fake-transport case.
@@ -139,13 +141,32 @@ async fn every_derive_reads_a_streamed_body_the_same() {
     }
 }
 
+/// A derived body is versioned by its compaction code, not the release:
+/// `tests/derived-versions.tsv` hashes the files and locked dependency
+/// versions that produce its bytes, and every `Derived::new` in the crate
+/// must be registered in `derives()`. A change to one must bump its
+/// `Derived`'s version and update the row in the same commit; this failure
+/// names the new hash.
+#[test]
+fn every_derive_versions_its_compaction_source() {
+    let mut registered: std::collections::BTreeMap<&'static str, u32> = derives()
+        .into_iter()
+        .map(|(name, version, _)| (name, version))
+        .collect();
+    registered.insert(
+        crate::docker::PULL_TOKEN_REPRESENTATION.0,
+        crate::docker::PULL_TOKEN_REPRESENTATION.1,
+    );
+    patchula_testkit::derived::check("datasource", &registered);
+}
+
 /// A one-byte stream stresses the chunk reader where documents are small
 /// enough for it to stay cheap.
 #[tokio::test]
 async fn a_byte_at_a_time_reads_the_same() {
     let decoding = Arc::new(Semaphore::new(4));
     for body in bodies().iter().filter(|body| body.len() <= 4096).take(200) {
-        for (name, f) in derives() {
+        for (name, _, f) in derives() {
             let buffered = run(Body::Buffered(body.clone()), f.clone(), &decoding).await;
             let streamed = run(Body::Streaming(chunks(body, 1)), f.clone(), &decoding).await;
             assert_eq!(buffered, streamed, "{name} differs byte-by-byte");

@@ -8,10 +8,10 @@ mod chart;
 mod derive_parity;
 mod forge;
 mod markdown;
+mod mirror;
 mod releases;
 mod source;
 pub use adapters::{parse_go_history, parse_release_sgml};
-use base64::{Engine, engine::general_purpose::STANDARD};
 pub use changelog::{Section, parse_changelog};
 pub use chart::render_changes;
 use forge::{compare_link, releases_url};
@@ -66,16 +66,6 @@ impl State for ParsedChangelog {
     type Scope = ChangelogScope;
 }
 
-fn compact_mirror(
-    body: &mut dyn std::io::Read,
-) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let list: MirrorList = patchula_http::conditional::json_document(body)
-        .map_err(|_| patchula_http::CacheError::Document)?;
-    serde_json::to_vec(&list).map_err(|_| patchula_http::CacheError::Document)
-}
-pub(crate) const NOTES_MISE_VERSIONS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-mise-versions", compact_mirror);
-
 #[derive(Clone, Debug, Default)]
 pub struct Notes {
     /// The version the project is on, and the one it moves to.
@@ -88,24 +78,6 @@ pub struct Notes {
     pub incomplete: bool,
     /// The sections are the chart's own list of changes, not its upstream's.
     pub from_chart: bool,
-}
-
-/// Decode a GitHub blob response into its text content.
-fn blob_text(body: &mut dyn std::io::Read) -> std::result::Result<String, serde_json::Error> {
-    #[derive(Deserialize)]
-    struct Blob {
-        content: String,
-    }
-    let blob: Blob = patchula_http::conditional::json_document(body)?;
-    let decoded = STANDARD
-        .decode(
-            blob.content
-                .bytes()
-                .filter(|byte| !byte.is_ascii_whitespace())
-                .collect::<Vec<_>>(),
-        )
-        .map_err(serde::de::Error::custom)?;
-    String::from_utf8(decoded).map_err(serde::de::Error::custom)
 }
 
 /// Whether `path` sits inside `directory`, the way the changelog sort and
@@ -488,7 +460,7 @@ impl Client {
                 Ok(self
                     .sources
                     .http
-                    .get_derived(&url, "application/json", &NOTES_MISE_VERSIONS)
+                    .get_derived(&url, "application/json", &mirror::NOTES_MISE_VERSIONS)
                     .await?
                     .body)
             })

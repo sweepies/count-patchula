@@ -210,7 +210,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_http::representation("oci-tags"));
+    .representation(&patchula_http::representation("oci-tags", 1));
     let fetched = cache.http_get(&key).await.unwrap().unwrap().fetched_at;
     assert_eq!(
         sources
@@ -463,7 +463,7 @@ async fn validator_free_tags_are_compact_and_survive_a_new_client() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_http::representation("oci-tags"));
+    .representation(&patchula_http::representation("oci-tags", 1));
     let entry = cache.http_get(&key).await.unwrap().unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&entry.body).unwrap(),
@@ -751,6 +751,7 @@ async fn dockerhub_login_is_realm_scoped_and_authenticated_tokens_are_not_persis
     .unwrap()
     .representation(&patchula_http::representation(
         "anonymous-registry-pull-token",
+        1,
     ));
     assert!(cache.http_get(&key).await.unwrap().is_none());
     assert!(steps.0.lock().unwrap().is_empty());
