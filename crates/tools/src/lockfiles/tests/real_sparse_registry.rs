@@ -395,7 +395,10 @@ fn ensure_tool(spec: &str) {
         "rust" => "rustc",
         tool => tool,
     };
-    let installed = Command::new("mise")
+    // A rustup proxy answers `--version` from whatever toolchain is the
+    // default, so the probe must report the requested version itself.
+    let version = spec.split('@').nth(1).unwrap();
+    let probe = Command::new("mise")
         .arg("--no-config")
         .arg("exec")
         .arg(spec)
@@ -405,9 +408,11 @@ fn ensure_tool(spec: &str) {
         .env("MISE_DATA_DIR", &store)
         .env("MISE_EXEC_AUTO_INSTALL", "false")
         .output()
-        .unwrap()
-        .status
-        .success();
+        .unwrap();
+    let installed = probe.status.success()
+        && String::from_utf8_lossy(&probe.stdout)
+            .split_whitespace()
+            .any(|word| word == version);
     if installed {
         return;
     }
