@@ -1452,19 +1452,26 @@ mod tests {
         for depth in [249usize, 255, 256, 300] {
             let flow_seq = format!("{}x{}", "[".repeat(depth), "]".repeat(depth));
             let flow_map = format!("{}x{}", "{k: ".repeat(depth), "}".repeat(depth));
-            let ignored = format!("x: {flow_seq}
+            let ignored = format!(
+                "x: {flow_seq}
 entries: {{}}
-").into_bytes();
-            check(&mut failures, &ignored, &format!("flow seq {depth} ignored"));
-            let kept = format!(
-                "entries:\n  c:\n    - version: 1.0\n      sources: {flow_seq}\n"
+"
             )
             .into_bytes();
+            check(
+                &mut failures,
+                &ignored,
+                &format!("flow seq {depth} ignored"),
+            );
+            let kept = format!("entries:\n  c:\n    - version: 1.0\n      sources: {flow_seq}\n")
+                .into_bytes();
             check(&mut failures, &kept, &format!("flow seq {depth} kept"));
-            let ignored_map =
-                format!("x: {flow_map}
+            let ignored_map = format!(
+                "x: {flow_map}
 entries: {{}}
-").into_bytes();
+"
+            )
+            .into_bytes();
             check(
                 &mut failures,
                 &ignored_map,
