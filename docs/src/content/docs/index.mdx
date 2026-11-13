@@ -29,15 +29,28 @@ hero:
 ---
 
 import { Card, CardGrid, LinkButton } from "@astrojs/starlight/components";
+import SpeedBars from "../../components/SpeedBars.astro";
 
 <CardGrid>
+  <Card title="Blazing fast" icon="seti:rust">
+    One native binary. Up to 18 times faster than Renovate on large real-world projects.
+
+    <SpeedBars />
+
+    <LinkButton href="/benchmarks/" variant="minimal" icon="right-arrow">Benchmarks</LinkButton>
+  </Card>
+  <Card title="Security fixes first" icon="warning">
+    Every dependency with an exact version is checked against OSV.dev. A fix skips the release-age wait, schedule windows and PR limits, and when your rules hold every fix back, the Count proposes the lowest release that fixes the most anyway.
+
+    <LinkButton href="/guide/security/" variant="minimal" icon="right-arrow">Security advisories</LinkButton>
+  </Card>
   <Card title="One run, every repository" icon="rocket">
     Repositories are scanned concurrently, and each package is looked up once per batch however many repositories use it. Unchanged work is skipped through validators and receipts.
 
     <LinkButton href="/guide/how-it-works/" variant="minimal" icon="right-arrow">How it works</LinkButton>
   </Card>
-  <Card title="Real lockfiles" icon="seti:lock">
-    npm, pnpm, Yarn, Bun, Cargo, Go, Terraform, uv, Poetry, NuGet, Bundler, Composer and mise locks are regenerated with the real tools, installed by mise into a store the Count keeps between runs.
+  <Card title="Backed by modern tools" icon="seti:lock">
+    Lockfiles are regenerated with the real tools, from npm to Cargo, Go and uv, installed by mise. npm, pnpm and Yarn Classic locks go through aube, which rewrites them 10 to 20 times faster than npm and pnpm, and every tool's package cache stays warm between runs.
 
     <LinkButton href="/guide/lockfiles/" variant="minimal" icon="right-arrow">Lockfiles</LinkButton>
   </Card>
@@ -46,18 +59,8 @@ import { Card, CardGrid, LinkButton } from "@astrojs/starlight/components";
 
     <LinkButton href="/guide/configuration/" variant="minimal" icon="right-arrow">Configuration</LinkButton>
   </Card>
-  <Card title="Batch it yourself" icon="approve-check">
-    Tick a box on any update PR and the Count moves it into one batch PR with the version you reviewed, then closes the original. Untick to send it back.
-
-    <LinkButton href="/guide/batch/" variant="minimal" icon="right-arrow">Batching</LinkButton>
-  </Card>
-  <Card title="Built in Rust" icon="seti:rust">
-    One native binary. Against Renovate 44.173.1 on six large public repositories, the Count was 6.1 times faster cold and 18.5 times faster warm, using a fraction of the memory.
-
-    <LinkButton href="/benchmarks/" variant="minimal" icon="right-arrow">Benchmarks</LinkButton>
-  </Card>
-  <Card title="The server is MIT too" icon="server">
-    The GitHub App server, with webhooks, scheduled sweeps and warm caches, is part of the same MIT-licensed binary.
+  <Card title="Enterprise features included" icon="server">
+    The GitHub App server is part of the same MIT-licensed binary: webhooks, scheduled sweeps, a priority queue that puts your clicks first, several installations at once, warm caches and a JSON API for dashboards. Renovate keeps its reporting API and worker scaling for its paid Enterprise Edition, and its webhook server is free but not open source.
 
     <LinkButton href="/guide/server/" variant="minimal" icon="right-arrow">Server mode</LinkButton>
   </Card>
@@ -88,4 +91,4 @@ rules {
 ```
 
 Over 30 ecosystems are supported, from npm and Cargo to Helm, Terraform and Nix
-flakes; the [compatibility matrix](/renovate/compatibility/) lists them.
+flakes. See the [compatibility matrix](/renovate/compatibility/).

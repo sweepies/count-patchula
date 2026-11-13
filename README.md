@@ -70,10 +70,17 @@ token or toolchain of your own.
   images, a 24-hour release-age wait, and nothing auto-merges until you say so,
   except CA root bundles and other reference data, which are only useful while
   current.
+- Security fixes first: every dependency with an exact version is checked
+  against [OSV.dev](https://osv.dev), and a fix skips the release-age wait,
+  schedule windows and PR limits.
 - A batch PR you fill by ticking a box on any update PR, keeping the version
   you reviewed.
-- A dependency dashboard, schedule windows, PR limits, grouping, auto-merge
-  behind check gates, and a GitHub App server mode driven by webhooks.
+- A dependency dashboard, schedule windows, PR limits, grouping and auto-merge
+  behind check gates.
+- A GitHub App server in the same MIT-licensed binary: webhooks, scheduled
+  sweeps, a priority queue, several installations at once and a JSON API for
+  dashboards, where Renovate keeps its reporting API and worker scaling for
+  its paid Enterprise Edition.
 - A terminal UI (`patchula tui`) to browse updates, and in a checkout, pick
   some and write them into your files. `patchula apply` writes them without
   asking, for scripts and pre-commit hooks.
