@@ -86,16 +86,18 @@ fn file_link(forge: &Forge, path: &str, anchor: &str) -> String {
 }
 
 fn compact<T: Serialize>(
-    bytes: &[u8],
+    body: &mut dyn std::io::Read,
     map: impl Fn(&Value) -> Option<T>,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let values: Vec<Value> =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+    let values: Vec<Value> = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     let items: Vec<T> = values.iter().filter_map(map).collect();
     serde_json::to_vec(&items).map_err(|_| patchula_http::CacheError::Document)
 }
-fn gitlab_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    compact(bytes, |r| {
+fn gitlab_releases(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    compact(body, |r| {
         Some(Release {
             tag: r["tag_name"].as_str()?.into(),
             body: r["description"].as_str().unwrap_or("").into(),
@@ -104,10 +106,12 @@ fn gitlab_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::
         })
     })
 }
-const NOTES_GITLAB_RELEASES: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NOTES_GITLAB_RELEASES: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("notes-gitlab-releases", gitlab_releases);
-fn gitea_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    compact(bytes, |r| {
+fn gitea_releases(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    compact(body, |r| {
         (r["draft"].as_bool() != Some(true)).then_some(())?;
         Some(Release {
             tag: r["tag_name"].as_str()?.into(),
@@ -116,33 +120,37 @@ fn gitea_releases(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::C
         })
     })
 }
-const NOTES_GITEA_RELEASES: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NOTES_GITEA_RELEASES: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("notes-gitea-releases", gitea_releases);
-fn names(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    compact(bytes, |t| {
+fn names(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    compact(body, |t| {
         Some(Name {
             name: t["name"].as_str()?.into(),
         })
     })
 }
-const NOTES_FORGE_TAGS: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NOTES_FORGE_TAGS: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("notes-forge-tags", names);
 /// Root files only: `blob` on GitLab, `file` on Gitea.
-fn files(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    compact(bytes, |f| {
+fn files(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    compact(body, |f| {
         matches!(f["type"].as_str(), Some("blob" | "file")).then_some(())?;
         Some(Name {
             name: f["path"].as_str()?.into(),
         })
     })
 }
-const NOTES_FORGE_FILES: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NOTES_FORGE_FILES: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("notes-forge-files", files);
-fn sections(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let text = std::str::from_utf8(bytes).map_err(|_| patchula_http::CacheError::Document)?;
-    serde_json::to_vec(&parse_changelog(text)).map_err(|_| patchula_http::CacheError::Document)
+fn sections(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let mut text = String::new();
+    body.read_to_string(&mut text)
+        .map_err(|_| patchula_http::CacheError::Document)?;
+    serde_json::to_vec(&parse_changelog(&text)).map_err(|_| patchula_http::CacheError::Document)
 }
-const NOTES_FORGE_CHANGELOG: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NOTES_FORGE_CHANGELOG: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("notes-forge-changelog", sections);
 
 impl Client {

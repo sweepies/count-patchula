@@ -548,7 +548,7 @@ impl Client {
             }
             if !not_modified && let Some(derived) = derived {
                 response.body = conditional::derive(
-                    std::mem::take(&mut response.body),
+                    conditional::Body::Buffered(std::mem::take(&mut response.body)),
                     derived.derive,
                     &self.0.decoding,
                 )

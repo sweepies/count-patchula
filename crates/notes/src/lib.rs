@@ -4,6 +4,8 @@
 mod adapters;
 mod changelog;
 mod chart;
+#[cfg(test)]
+mod derive_parity;
 mod forge;
 mod markdown;
 mod releases;
@@ -64,12 +66,14 @@ impl State for ParsedChangelog {
     type Scope = ChangelogScope;
 }
 
-fn compact_mirror(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let list: MirrorList =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+fn compact_mirror(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let list: MirrorList = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&list).map_err(|_| patchula_http::CacheError::Document)
 }
-const NOTES_MISE_VERSIONS: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NOTES_MISE_VERSIONS: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("notes-mise-versions", compact_mirror);
 
 #[derive(Clone, Debug, Default)]
@@ -87,12 +91,12 @@ pub struct Notes {
 }
 
 /// Decode a GitHub blob response into its text content.
-fn blob_text(bytes: &[u8]) -> std::result::Result<String, serde_json::Error> {
+fn blob_text(body: &mut dyn std::io::Read) -> std::result::Result<String, serde_json::Error> {
     #[derive(Deserialize)]
     struct Blob {
         content: String,
     }
-    let blob: Blob = serde_json::from_slice(bytes)?;
+    let blob: Blob = patchula_http::conditional::json_document(body)?;
     let decoded = STANDARD
         .decode(
             blob.content

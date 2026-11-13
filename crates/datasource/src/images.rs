@@ -83,19 +83,25 @@ struct Platform {
     variant: Option<String>,
 }
 
-fn compact_platform(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+fn compact_platform(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     use patchula_http::CacheError::Document;
-    let config: Value = serde_json::from_slice(bytes).map_err(|_| Document)?;
+    // The platform is stored addressed by the document's digest: the bytes
+    // are hashed, so they are read whole.
+    let mut bytes = Vec::new();
+    body.read_to_end(&mut bytes).map_err(|_| Document)?;
+    let config: Value = serde_json::from_slice(&bytes).map_err(|_| Document)?;
     let text = |field: &str| config[field].as_str().map(str::to_owned);
     serde_json::to_vec(&Platform {
-        sha256: sha256_hex(bytes),
+        sha256: sha256_hex(&bytes),
         os: text("os"),
         architecture: text("architecture"),
         variant: text("variant"),
     })
     .map_err(|_| Document)
 }
-const IMAGE_PLATFORM: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const IMAGE_PLATFORM: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("image-platform", compact_platform);
 
 fn platform_name(os: &str, architecture: &str, variant: Option<&str>) -> String {
@@ -157,10 +163,16 @@ fn purl(text: &str) -> Option<Purl> {
 
 /// Read an SPDX 2.3 document from an in-toto statement, a DSSE envelope
 /// around one, or on its own.
-fn compact_sbom(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+fn compact_sbom(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     use patchula_http::CacheError::Document;
-    let sha256 = sha256_hex(bytes);
-    let mut value: Value = serde_json::from_slice(bytes).map_err(|_| Document)?;
+    // The stored SBOM names its document's digest: the bytes are hashed, so
+    // they are read whole.
+    let mut bytes = Vec::new();
+    body.read_to_end(&mut bytes).map_err(|_| Document)?;
+    let sha256 = sha256_hex(&bytes);
+    let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| Document)?;
     if let Some(payload) = value["payload"].as_str() {
         let decoded = STANDARD.decode(payload).map_err(|_| Document)?;
         value = serde_json::from_slice(&decoded).map_err(|_| Document)?;
@@ -260,7 +272,7 @@ fn compact_sbom(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::Cac
     }
     serde_json::to_vec(&compact).map_err(|_| Document)
 }
-const SBOM_OS: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const SBOM_OS: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("sbom-os", compact_sbom);
 
 /// OSV's ecosystem name for an OS release, when OSV covers it.
@@ -515,7 +527,7 @@ mod tests {
     use serde_json::json;
 
     fn parse(document: Value) -> Compact {
-        let bytes = compact_sbom(&serde_json::to_vec(&document).unwrap()).unwrap();
+        let bytes = compact_sbom(&mut &serde_json::to_vec(&document).unwrap()[..]).unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
     fn package(purl: &str) -> Value {
@@ -617,6 +629,6 @@ mod tests {
     #[test]
     fn other_predicates_are_not_sboms() {
         let provenance = json!({"predicateType": "https://slsa.dev/provenance/v1", "subject": [], "predicate": {}});
-        assert!(compact_sbom(&serde_json::to_vec(&provenance).unwrap()).is_err());
+        assert!(compact_sbom(&mut &serde_json::to_vec(&provenance).unwrap()[..]).is_err());
     }
 }

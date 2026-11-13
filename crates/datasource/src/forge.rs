@@ -7,8 +7,8 @@ use crate::upstream::{Forge, ForgeKind, Repository};
 /// every tag of a long-lived project.
 const PAGES: u32 = 10;
 
-fn gitlab(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    tags(bytes, |t| {
+fn gitlab(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    tags(body, |t| {
         Some(Version {
             version: t["name"].as_str()?.into(),
             // Annotated tags carry their own date; commit dates never count.
@@ -19,8 +19,8 @@ fn gitlab(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheErro
         })
     })
 }
-fn gitea(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    tags(bytes, |t| {
+fn gitea(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    tags(body, |t| {
         Some(Version {
             version: t["name"].as_str()?.into(),
             published_at: None,
@@ -31,17 +31,17 @@ fn gitea(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError
     })
 }
 fn tags(
-    bytes: &[u8],
+    body: &mut dyn std::io::Read,
     map: impl Fn(&serde_json::Value) -> Option<Version>,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let values: Vec<serde_json::Value> =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+    let values: Vec<serde_json::Value> = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     let versions: Vec<_> = values.iter().filter_map(map).collect();
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
-const FORGE_GITLAB_TAGS: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const FORGE_GITLAB_TAGS: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("forge-gitlab-tags", gitlab);
-const FORGE_GITEA_TAGS: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const FORGE_GITEA_TAGS: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("forge-gitea-tags", gitea);
 
 fn forge(package: &str) -> Result<Forge> {

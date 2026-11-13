@@ -196,7 +196,7 @@ mod tests {
         let settings = Settings::load(&path).unwrap();
         let http = http_options(&settings);
         assert_eq!(http.host_limit("api.github.com"), 8);
-        assert_eq!(http.host_limit("registry.npmjs.org"), 16);
+        assert_eq!(http.host_limit("registry.npmjs.org"), 32);
         assert_eq!(http.go_freshness_secs, 0);
         assert!(check(&settings).is_ok());
         for bad in [

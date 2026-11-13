@@ -48,9 +48,11 @@ fn validate_tag(tag: &str) -> Result<()> {
 }
 /// What release notes read from a config blob: an image's source and version
 /// labels, and a Helm chart's `sources` and Artifact Hub changes.
-fn compact_config(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+fn compact_config(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let value: Value = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     let labels = &value["config"]["Labels"];
     serde_json::to_vec(&serde_json::json!({
         "org.opencontainers.image.source": labels["org.opencontainers.image.source"],
@@ -59,7 +61,7 @@ fn compact_config(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::C
     }))
     .map_err(|_| patchula_http::CacheError::Document)
 }
-const OCI_CONFIG_NOTES: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const OCI_CONFIG_NOTES: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("oci-config-notes", compact_config);
 
 /// The config of one image or chart version, as release notes read it.
@@ -115,16 +117,18 @@ fn token_key(host: &str, path: &str) -> Result<HttpKey> {
         "anonymous-registry-pull-token",
     )))
 }
-fn compact_tags(body: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+fn compact_tags(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     #[derive(Deserialize, Serialize)]
     struct Page {
         tags: Option<Vec<String>>,
     }
-    let page: Page =
-        serde_json::from_slice(body).map_err(|_| patchula_http::CacheError::Document)?;
+    let page: Page = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&page).map_err(|_| patchula_http::CacheError::Document)
 }
-const OCI_TAGS: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const OCI_TAGS: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("oci-tags", compact_tags);
 
 pub(crate) fn identity(package: &str) -> Result<(String, String)> {

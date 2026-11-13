@@ -10,16 +10,18 @@ struct Entry {
     deprecated: bool,
 }
 
-fn listing(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+fn listing(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     #[derive(Deserialize)]
     struct Index {
         versions: Vec<String>,
     }
-    let index: Index =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+    let index: Index = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&index.versions).map_err(|_| patchula_http::CacheError::Document)
 }
-const NUGET_FLAT: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NUGET_FLAT: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("nuget-flat", listing);
 fn entries(items: &serde_json::Value) -> Vec<Entry> {
     items
@@ -42,9 +44,11 @@ fn entries(items: &serde_json::Value) -> Vec<Entry> {
         .collect()
 }
 /// The registration index: the newest page's entries, inline or as a link.
-fn registration(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let index: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+fn registration(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let index: serde_json::Value = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     let newest = index["items"].as_array().and_then(|pages| pages.last());
     let compact = match newest {
         Some(page) if page["items"].is_array() => {
@@ -55,15 +59,15 @@ fn registration(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::Cac
     };
     serde_json::to_vec(&compact).map_err(|_| patchula_http::CacheError::Document)
 }
-const NUGET_REGISTRATION: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NUGET_REGISTRATION: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("nuget-registration", registration);
-fn page(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let page: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+fn page(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let page: serde_json::Value = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&serde_json::json!({"entries": entries(&page["items"])}))
         .map_err(|_| patchula_http::CacheError::Document)
 }
-const NUGET_REGISTRATION_PAGE: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NUGET_REGISTRATION_PAGE: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("nuget-registration-page", page);
 
 impl Client {

@@ -1,6 +1,6 @@
 //! Explicit allowlist of diagnostic fields. Never format a request or error.
 use crate::{Response, Transport};
-use reqwest::{Request, Url};
+use reqwest::{Request, StatusCode, Url};
 use std::time::{Duration, Instant};
 use tracing::Instrument;
 
@@ -69,7 +69,11 @@ impl RequestTrace {
     }
 
     pub fn fresh(&self, response: &Response) {
-        self.finish(Some(response), "fresh-hit", Duration::ZERO);
+        self.finish(
+            Some((response.status, Some(response.body.len()))),
+            "fresh-hit",
+            Duration::ZERO,
+        );
     }
 
     pub fn cache_policy(&self, reason: &'static str, ttl_seconds: Option<i64>) {
@@ -93,14 +97,50 @@ impl RequestTrace {
             Ok(response) if response.status == 200 => "200",
             _ => "miss",
         };
-        self.finish(result.as_ref().ok(), outcome, queued);
+        self.finish(
+            result.as_ref().ok().map(|r| (r.status, Some(r.body.len()))),
+            outcome,
+            queued,
+        );
         result
     }
 
-    fn finish(&self, response: Option<&Response>, outcome: &str, queued: Duration) {
+    /// The same exchange with the body still streaming: the record logs when
+    /// headers arrive, so it carries no byte count.
+    pub async fn send_streaming(
+        &self,
+        transport: &dyn Transport,
+        request: Request,
+        queued: Duration,
+        cached: bool,
+    ) -> Result<crate::Streaming, crate::Error> {
+        let result = transport
+            .send_streaming(request)
+            .instrument(self.span.clone())
+            .await;
+        let outcome = match &result {
+            Ok(response) if response.status == 304 => "304",
+            Ok(_) if !cached => "miss",
+            Ok(response) if response.status == 200 => "200",
+            _ => "miss",
+        };
+        self.finish(
+            result.as_ref().ok().map(|r| (r.status, None)),
+            outcome,
+            queued,
+        );
+        result
+    }
+
+    fn finish(
+        &self,
+        response: Option<(StatusCode, Option<usize>)>,
+        outcome: &str,
+        queued: Duration,
+    ) {
         tracing::debug!(parent: &self.span,
-            status = response.map_or(0, |r| r.status.as_u16()), cache = outcome,
-            bytes = response.map_or(0, |r| r.body.len()),
+            status = response.map_or(0, |(status, _)| status.as_u16()), cache = outcome,
+            bytes = response.and_then(|(_, bytes)| bytes).unwrap_or(0),
             queued_ms = queued.as_secs_f64() * 1000.0,
             total_ms = self.started.elapsed().as_secs_f64() * 1000.0,
             connection_reuse = "unavailable", connect_tls_ms = "unavailable",

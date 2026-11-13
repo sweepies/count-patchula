@@ -28,6 +28,7 @@ serde_yaml_ng = "0.10.0"
 tokio.workspace = true
 
 [dev-dependencies]
+bytes = "1"
 patchula-github = { path = "../github" }
 patchula-testkit = { path = "../testkit" }
 tempfile = "3.27.0"

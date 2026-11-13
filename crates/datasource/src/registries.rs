@@ -1,6 +1,6 @@
 use super::*;
 use patchula_config::split_package;
-use patchula_http::{CacheError, Derived};
+use patchula_http::{CacheError, Derived, conditional};
 
 fn encode(catalog: &Catalog) -> std::result::Result<Vec<u8>, CacheError> {
     serde_json::to_vec(catalog).map_err(|_| CacheError::Document)
@@ -14,7 +14,7 @@ fn release(version: String) -> Version {
         deprecated: false,
     }
 }
-fn terraform(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
+fn terraform(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, CacheError> {
     #[derive(Deserialize)]
     struct Versions {
         versions: Vec<Entry>,
@@ -28,7 +28,7 @@ fn terraform(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
         versions: Option<Vec<Entry>>,
         modules: Option<Vec<Versions>>,
     }
-    let doc: Document = serde_json::from_slice(body).map_err(|_| CacheError::Document)?;
+    let doc: Document = conditional::json_document(body).map_err(|_| CacheError::Document)?;
     let versions = doc
         .versions
         .or_else(|| {
@@ -43,7 +43,8 @@ fn terraform(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
     sort(&mut catalog.versions, Ecosystem::Hashicorp);
     encode(&catalog)
 }
-const TERRAFORM_CATALOG: Derived<CacheError> = Derived::new("terraform-catalog", terraform);
+pub(crate) const TERRAFORM_CATALOG: Derived<CacheError> =
+    Derived::new("terraform-catalog", terraform);
 
 /// One chart from a Helm repository index: its versions, and what release
 /// notes read from each version's metadata.
@@ -53,7 +54,7 @@ pub struct HelmChart {
     #[serde(default)]
     pub notes: BTreeMap<String, upstream::ChartNotes>,
 }
-fn helm(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
+fn helm(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, CacheError> {
     #[derive(Deserialize)]
     struct Index {
         entries: BTreeMap<String, Vec<Chart>>,
@@ -68,7 +69,7 @@ fn helm(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
         sources: Option<serde_yaml_ng::Value>,
         annotations: Option<serde_yaml_ng::Value>,
     }
-    let index: Index = serde_yaml_ng::from_slice(body).map_err(|_| CacheError::Document)?;
+    let index: Index = serde_yaml_ng::from_reader(body).map_err(|_| CacheError::Document)?;
     let charts: BTreeMap<_, _> = index
         .entries
         .into_iter()
@@ -106,7 +107,7 @@ fn helm(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
         .collect();
     serde_json::to_vec(&charts).map_err(|_| CacheError::Document)
 }
-const HELM_INDEX: Derived<CacheError> = Derived::new("helm-index", helm);
+pub(crate) const HELM_INDEX: Derived<CacheError> = Derived::new("helm-index", helm);
 
 impl Client {
     pub(super) async fn terraform(&self, package: &str) -> Result<Catalog> {
@@ -292,10 +293,15 @@ fn html_files(body: &[u8]) -> std::result::Result<Vec<(String, bool)>, CacheErro
 /// A private index's page, as PEP 691 JSON or PEP 503 HTML, read into one
 /// catalog per project its files name. A page whose files belong to another
 /// project gives the requested one none of their versions.
-fn simple_any(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
-    let files = simple_files(body).or_else(|_| {
+fn simple_any(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, CacheError> {
+    // The format is sniffed: a failed JSON read retries the same bytes as
+    // HTML, so the body is buffered before either parse.
+    let mut bytes = Vec::new();
+    body.read_to_end(&mut bytes)
+        .map_err(|_| CacheError::Document)?;
+    let files = simple_files(&mut &bytes[..]).or_else(|_| {
         Ok::<_, CacheError>(
-            html_files(body)?
+            html_files(&bytes)?
                 .into_iter()
                 .map(|(filename, yanked)| SimpleFile {
                     filename,
@@ -317,12 +323,14 @@ fn simple_any(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
         .collect();
     serde_json::to_vec(&catalogs).map_err(|_| CacheError::Document)
 }
-const PYPI_INDEX_CATALOG: Derived<CacheError> = Derived::new("pypi-index-catalog", simple_any);
+pub(crate) const PYPI_INDEX_CATALOG: Derived<CacheError> =
+    Derived::new("pypi-index-catalog", simple_any);
 
-fn simple(body: &[u8]) -> std::result::Result<Vec<u8>, CacheError> {
+fn simple(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, CacheError> {
     encode(&catalog_of(&simple_files(body)?))
 }
-const PYPI_SIMPLE_CATALOG: Derived<CacheError> = Derived::new("pypi-simple-catalog", simple);
+pub(crate) const PYPI_SIMPLE_CATALOG: Derived<CacheError> =
+    Derived::new("pypi-simple-catalog", simple);
 
 #[derive(Deserialize)]
 struct SimpleFile {
@@ -334,7 +342,7 @@ struct SimpleFile {
 }
 
 /// The files of a PEP 691 JSON page, of API version 1.
-fn simple_files(body: &[u8]) -> std::result::Result<Vec<SimpleFile>, CacheError> {
+fn simple_files(body: &mut dyn std::io::Read) -> std::result::Result<Vec<SimpleFile>, CacheError> {
     #[derive(Deserialize)]
     struct Document {
         meta: Meta,
@@ -345,7 +353,7 @@ fn simple_files(body: &[u8]) -> std::result::Result<Vec<SimpleFile>, CacheError>
         #[serde(rename = "api-version")]
         version: String,
     }
-    let doc: Document = serde_json::from_slice(body).map_err(|_| CacheError::Document)?;
+    let doc: Document = conditional::json_document(body).map_err(|_| CacheError::Document)?;
     if doc.meta.version.split('.').next() != Some("1") {
         return Err(CacheError::Document);
     }
@@ -411,7 +419,7 @@ mod tests {
     use super::*;
     #[test]
     fn simple_groups_files_and_preserves_pep440_order() {
-        let catalog: Catalog = serde_json::from_slice(&simple(br#"{"meta":{"api-version":"1.1"},"files":[{"filename":"pkg-1.0rc1.tar.gz","yanked":false},{"filename":"pkg-1.0-py3-none-any.whl","yanked":"reason"},{"filename":"pkg-1.0.tar.gz","yanked":false}]}"#).unwrap()).unwrap();
+        let catalog: Catalog = serde_json::from_slice(&simple(&mut &br#"{"meta":{"api-version":"1.1"},"files":[{"filename":"pkg-1.0rc1.tar.gz","yanked":false},{"filename":"pkg-1.0-py3-none-any.whl","yanked":"reason"},{"filename":"pkg-1.0.tar.gz","yanked":false}]}"#[..]).unwrap()).unwrap();
         assert_eq!(catalog.versions[0].version, "1.0");
         assert!(!catalog.versions[0].yanked);
         assert_eq!(catalog.versions.len(), 2);

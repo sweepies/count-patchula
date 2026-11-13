@@ -13,32 +13,38 @@ fn metadata(value: &Value) -> Option<Repository> {
     Some(source)
 }
 
-fn compact_npm(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+fn compact_npm(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     // Deserialize selected fields only: full packuments can be tens of MB.
     #[derive(Deserialize)]
     struct Metadata {
         repository: Option<Value>,
         homepage: Option<String>,
     }
-    let value: Metadata =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+    let value: Metadata = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&metadata(
         &serde_json::json!({"repository":value.repository,"homepage":value.homepage}),
     ))
     .map_err(|_| patchula_http::CacheError::Document)
 }
-const NOTES_SOURCE_NPM: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NOTES_SOURCE_NPM: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("notes-source-npm", compact_npm);
-fn compact_crate(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+fn compact_crate(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let value: Value = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     serde_json::to_vec(&metadata(&value["crate"])).map_err(|_| patchula_http::CacheError::Document)
 }
-const NOTES_SOURCE_CRATES: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NOTES_SOURCE_CRATES: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("notes-source-crates", compact_crate);
-fn compact_pypi(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+fn compact_pypi(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let value: Value = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     let urls = value["info"]["project_urls"].as_object();
     let mut source = None;
     // Case insensitive; prefer a repository over documentation/changelog sites.
@@ -66,7 +72,7 @@ fn compact_pypi(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::Cac
     });
     serde_json::to_vec(&source).map_err(|_| patchula_http::CacheError::Document)
 }
-const NOTES_SOURCE_PYPI: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const NOTES_SOURCE_PYPI: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("notes-source-pypi", compact_pypi);
 
 pub(super) fn vanity(html: &str, package: &str) -> Option<(String, Repository)> {

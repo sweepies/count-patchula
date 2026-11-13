@@ -61,8 +61,11 @@ validators are never sent.
 Large registry bodies use a versioned local `representation` in the key. npm,
 Cargo sparse indexes, PyPI and GitHub REST release heads store a derived
 document with only the fields the Count reads, never the raw response.
-Derivation runs on `spawn_blocking` with a four-job limit. A 304 updates only
-metadata and reuses the compact body. A derived representation is named once
+Derivation runs on `spawn_blocking`; a successful derived response streams
+straight into its derive worker, so the raw document is never held whole.
+The request's host permit is held until its body is read, so in-flight bodies
+stay inside the host limit. Reads that arrive already buffered derive under a
+four-job limit. A 304 updates only metadata and reuses the compact body. A derived representation is named once
 and suffixed with the HTTP crate's build version, so a change to the
 compaction code re-derives on the next release; raw and derived namespaces
 never share validators.
@@ -117,10 +120,11 @@ must initialise tracing for the warnings to show.
 - `concurrency` in the [settings](/reference/settings/), or `--concurrency`,
   sets repository scan parallelism (default 8).
 - Registry requests use per-host semaphores, `http.defaultHostConcurrency`
-  (16) each, independent of repository work. `http.hostConcurrency` overrides
+  (32) each, independent of repository work. `http.hostConcurrency` overrides
   single hosts, such as `["api.github.com"] = 8`. Limits must be 1–100.
 - GitHub REST and GraphQL share one governor, sized by the `api.github.com`
-  host limit. The server keeps 4 unless `api.github.com` is set. That is below GitHub's 100 simultaneous requests, but does not
+  host limit. Without one, a CLI run takes the default host limit capped at
+  16 and the server keeps 4. That is below GitHub's 100 simultaneous requests, but does not
   by itself avoid its point and CPU
   [secondary limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits).
 - The shared reqwest pool keeps up to 32 idle connections per host.

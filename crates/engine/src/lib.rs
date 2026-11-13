@@ -465,7 +465,7 @@ impl Engine {
             token,
             cache.clone(),
             GithubOptions {
-                concurrency: http_options.host_limit("api.github.com"),
+                concurrency: http_options.github_limit(),
                 ..Default::default()
             },
             transport.clone(),
@@ -582,7 +582,7 @@ impl Engine {
                 token,
                 cache.clone(),
                 GithubOptions {
-                    concurrency: http_options.host_limit("api.github.com"),
+                    concurrency: http_options.github_limit(),
                     write_burst: github_options.write_burst,
                     ..Default::default()
                 },

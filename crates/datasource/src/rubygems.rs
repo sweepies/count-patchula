@@ -2,9 +2,11 @@
 //! listed; platform-specific builds of one version collapse into it.
 use super::*;
 
-fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let values: Vec<serde_json::Value> =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+fn versions(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let values: Vec<serde_json::Value> = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     let mut seen = BTreeMap::<String, Version>::new();
     for value in &values {
         let Some(number) = value["number"].as_str() else {
@@ -26,7 +28,7 @@ fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheEr
     serde_json::to_vec(&seen.into_values().collect::<Vec<_>>())
         .map_err(|_| patchula_http::CacheError::Document)
 }
-const RUBYGEMS_VERSIONS: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const RUBYGEMS_VERSIONS: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("rubygems-versions", versions);
 
 impl Client {
