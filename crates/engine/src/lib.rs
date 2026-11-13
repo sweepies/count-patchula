@@ -6,6 +6,8 @@ mod overrides;
 mod report;
 pub mod repository;
 pub mod settings;
+#[cfg(test)]
+mod state_parity;
 mod sweep;
 mod write;
 
@@ -261,7 +263,7 @@ struct FileExtraction(Extraction);
 #[derive(Serialize, Deserialize)]
 struct EvaluatedConfig(Config);
 #[derive(Serialize)]
-struct CredentialScope {
+pub(crate) struct CredentialScope {
     repository: String,
     credential_scope: String,
 }
@@ -304,35 +306,41 @@ impl State for LastRun {
 impl State for LookupHint {
     const NAMESPACE: &'static str = "lookup-hint";
     const VERSION: u32 = 2;
+    // Not code-versioned: a hint only names what to prefetch. A stale one
+    // costs a wasted read — `resolve_digests` re-reads or overrides it —
+    // never a wrong answer, so `VERSION` covers the shape alone and a
+    // release keeps the entries.
     type Scope = LookupHintScope;
 }
 impl State for BranchHint {
     const NAMESPACE: &'static str = "branch-hint";
     const VERSION: u32 = 1;
+    // Not code-versioned for the same reason as `LookupHint`: a stale
+    // default-branch guess costs one re-read of the authoritative branch.
     type Scope = CredentialScope;
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 1;
-    const PER_BUILD: bool = true;
+    const VERSION: u32 = 2;
+    const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 2;
-    const PER_BUILD: bool = true;
+    const VERSION: u32 = 3;
+    const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 2;
-    const PER_BUILD: bool = true;
+    const VERSION: u32 = 3;
+    const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 1;
-    const PER_BUILD: bool = true;
+    const VERSION: u32 = 2;
+    const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
 type Entry = model::TreeEntry;
@@ -1359,8 +1367,8 @@ impl Engine {
         let scope = ConfigFilesScope {
             repository: repo.into(),
             files_hash: patchula_manager::hash(&serde_json::to_vec(&(&path, &files))?),
-            // PER_BUILD covers the decoding and validation the schema text
-            // does not.
+            // CODE_VERSIONED covers the decoding and validation the schema
+            // text does not.
             schema_hash: patchula_manager::hash(patchula_config::SCHEMA.as_bytes()),
         };
         if let Some(saved) = self.cache.state::<EvaluatedConfig>(&scope).await? {
@@ -1543,5 +1551,54 @@ mod tests {
         )
         .unwrap();
         assert_eq!(engine.github.write_burst(), 1);
+    }
+
+    /// An extraction one release writes is read by the next: the
+    /// namespace carries the guarded version and no build stamp. One
+    /// written under the previous version — what the parity guard's bump
+    /// produces — is missed.
+    #[tokio::test]
+    async fn a_saved_extraction_survives_a_release() {
+        #[derive(Serialize, Deserialize)]
+        struct OldFiles(Extraction);
+        impl State for OldFiles {
+            const NAMESPACE: &'static str = "files";
+            const VERSION: u32 = FileExtraction::VERSION - 1;
+            type Scope = FilesScope;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let scope = FilesScope {
+            repository: "a/b".into(),
+            files_hash: "f".into(),
+            config_hash: "c".into(),
+        };
+        let cache = Cache::open(&path, patchula_cache::Options::default())
+            .await
+            .unwrap();
+        cache
+            .set_state(
+                &scope,
+                &FileExtraction(Extraction {
+                    warnings: vec!["current".into()],
+                    ..Extraction::default()
+                }),
+            )
+            .await
+            .unwrap();
+        cache
+            .set_state(&scope, &OldFiles(Extraction::default()))
+            .await
+            .unwrap();
+        drop(cache);
+        let next = Cache::open(&path, patchula_cache::Options::default())
+            .await
+            .unwrap();
+        let saved = next
+            .state::<FileExtraction>(&scope)
+            .await
+            .unwrap()
+            .expect("the current version's entry is read back");
+        assert_eq!(saved.0.warnings, ["current"]);
     }
 }

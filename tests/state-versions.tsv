@@ -1,0 +1,31 @@
+# Every code-versioned `State`, versioned by the code that derives its
+# value rather than by the release. Columns: namespace, version,
+# comma-separated sources whose text produces the stored bytes (the
+# owning crate's file first; an entry ending `/` names every file under
+# that tree, so a new file in a listed tree fails the guard too),
+# comma-separated Cargo.lock packages whose locked versions the
+# derivation's bytes depend on (`-` when none), and the sha256 of all of
+# it (each file as `path\0bytes\0`, each package as `name\0versions\0`).
+#
+# The version lives at the `State::VERSION` beside `CODE_VERSIONED`; the
+# parity test in the owning crate (state_parity, or the crate's
+# derive_parity module) checks this table and that every `CODE_VERSIONED`
+# impl in the crate's sources is registered. When a state's source — or
+# one of its listed dependencies' locked versions — changes, the test
+# fails naming the new hash: bump the version and update this row in the
+# same commit. A row must list every file the derivation reads bytes
+# through; whole files and trees are hashed, so a formatting or comment
+# edit in a listed file also needs the bump (batch cosmetic edits in
+# these files). Over-include rather than miss: when in doubt, list the
+# whole tree.
+#
+# name	version	sources	deps	sha256
+extract	3	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	87f5d42982aff267cf89d893aa7fd1489ceda92ffbf98a8d9795909918b65147
+files	3	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	87f5d42982aff267cf89d893aa7fd1489ceda92ffbf98a8d9795909918b65147
+config	2	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	87f5d42982aff267cf89d893aa7fd1489ceda92ffbf98a8d9795909918b65147
+config-files	2	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	87f5d42982aff267cf89d893aa7fd1489ceda92ffbf98a8d9795909918b65147
+catalog	1	crates/engine/src/catalogs.rs,crates/datasource/src/,crates/versioning/src/,crates/words/src/	base64,nodejs-semver,pep440_rs,regex,semver,serde,serde_json,serde_yaml_ng,sha2	86bfda0bed54c6acc172f0ac4986fd0549731f7de78a39323d463372d221c213
+catalog-controls	1	crates/engine/src/catalogs.rs,crates/update/src/identity.rs,crates/update/src/plan.rs,crates/update/src/plan/,crates/report/src/lib.rs,crates/manager/src/lib.rs,crates/words/src/	serde,serde_json,sha2	d57352f03140cf0593f49991255c3975105df0252db1fcd35f2c52ef1a5f1eb1
+not-ours	2	crates/update/src/cleanup.rs,crates/update/src/trailers.rs	serde,serde_json	dfe1441fe1ca146b3a432e16b2067e4f55be37532e89a983efb4c0d861522a8f
+changelog	2	crates/notes/src/,crates/versioning/src/,crates/words/src/	base64,nodejs-semver,pep440_rs,regex,semver,serde,serde_json,serde_yaml_ng	6fe33e81eb7e5c6f76bea0c37575087856897ceff136167b57340f9e45c3d4c6
+notes-adapter	2	crates/notes/src/,crates/versioning/src/,crates/words/src/	base64,nodejs-semver,pep440_rs,regex,semver,serde,serde_json,serde_yaml_ng	6fe33e81eb7e5c6f76bea0c37575087856897ceff136167b57340f9e45c3d4c6

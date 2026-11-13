@@ -171,16 +171,24 @@ pub struct RepositoryScope {
 pub trait State: serde::Serialize + serde::de::DeserializeOwned {
     /// Names the stored shape. Never reused for a different shape.
     const NAMESPACE: &'static str;
-    /// Bump when the stored shape or its meaning changes.
+    /// Bump when the stored shape or its meaning changes. For a
+    /// code-versioned value, this names the code that derives it instead.
     const VERSION: u32;
-    /// Whether the value also depends on this build's code (decoding,
-    /// validation, extraction semantics), so a new release never reads it.
-    const PER_BUILD: bool = false;
+    /// Whether the value is derived from an immutable input by this
+    /// build's code (decoding, validation, extraction semantics), so
+    /// `VERSION` names that code: the row in `tests/state-versions.tsv`
+    /// hashes the sources and locked dependencies the derivation reads,
+    /// and the owning crate's parity test fails on a change until the
+    /// version is bumped. Entries survive releases whose derivation code
+    /// did not change.
+    const CODE_VERSIONED: bool = false;
     /// What one entry is about: a small serializable struct with named fields.
     type Scope: serde::Serialize;
 }
 
-/// The release whose code wrote a `PER_BUILD` value.
+/// The release a `+<build>` state namespace was written by. Retired
+/// per-build keys are still recognised so opening can delete rows other
+/// releases wrote.
 pub(crate) const BUILD: &str = env!("CARGO_PKG_VERSION");
 
 /// Whether a `State::NAMESPACE` leaves `@` and `+` to the row key: `@v` starts
@@ -197,8 +205,8 @@ const fn plain(name: &str) -> bool {
     !bytes.is_empty()
 }
 
-/// The `namespace` column of a state row: the shape's name and version, plus
-/// this build's version when the value depends on the build's code.
+/// The `namespace` column of a state row: the shape's name and version —
+/// the deriving code's version for a code-versioned state.
 fn state_namespace<T: State>() -> String {
     const {
         assert!(
@@ -206,12 +214,7 @@ fn state_namespace<T: State>() -> String {
             "a state namespace is nonempty and has no @ or +"
         )
     };
-    let namespace = format!("{}@v{}", T::NAMESPACE, T::VERSION);
-    if T::PER_BUILD {
-        format!("{namespace}+{BUILD}")
-    } else {
-        namespace
-    }
+    format!("{}@v{}", T::NAMESPACE, T::VERSION)
 }
 
 type Job = Box<dyn FnOnce(&mut Store) + Send>;
@@ -587,6 +590,9 @@ impl Cache {
 mod tests {
     use super::*;
 
+    /// A state row keyed under the retired per-build scheme — a namespace
+    /// ending `+<build>` — is dropped when another release's cache opens;
+    /// code-versioned `name@v` entries and `+` elsewhere are kept.
     #[tokio::test]
     async fn opening_drops_per_build_state_from_other_releases() {
         #[derive(Serialize, Deserialize)]
@@ -598,7 +604,6 @@ mod tests {
         impl State for Parsed {
             const NAMESPACE: &'static str = "test-parsed";
             const VERSION: u32 = 1;
-            const PER_BUILD: bool = true;
             type Scope = Scope;
         }
         let directory = tempfile::tempdir().unwrap();
@@ -634,8 +639,61 @@ mod tests {
             .unwrap();
         assert_eq!(
             namespaces,
-            ["plain@v1".to_string(), format!("test-parsed@v1+{BUILD}")]
+            ["plain@v1".to_string(), "test-parsed@v1".to_string()]
         );
+    }
+
+    /// What release A writes under a code-versioned namespace, release B
+    /// reads back: the key carries `name@v` and no build stamp. A release
+    /// that bumped the version — which the `state-versions.tsv` guard
+    /// forces on a derivation change — misses as it must.
+    #[tokio::test]
+    async fn code_versioned_state_survives_a_release() {
+        #[derive(Serialize)]
+        struct Scope {
+            key: String,
+        }
+        macro_rules! release {
+            ($name:ident, $version:expr) => {
+                #[derive(Serialize, Deserialize)]
+                struct $name(u32);
+                impl State for $name {
+                    const NAMESPACE: &'static str = "test-derived";
+                    const VERSION: u32 = $version;
+                    const CODE_VERSIONED: bool = true;
+                    type Scope = Scope;
+                }
+            };
+        }
+        release!(ReleaseA, 1);
+        release!(ReleaseB, 1);
+        release!(ReleaseC, 2);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let scope = Scope { key: "k".into() };
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        cache.set_state(&scope, &ReleaseA(1)).await.unwrap();
+        drop(cache);
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        assert_eq!(
+            cache.state::<ReleaseB>(&scope).await.unwrap().map(|v| v.0),
+            Some(1)
+        );
+        assert_eq!(
+            cache.state::<ReleaseC>(&scope).await.unwrap().map(|v| v.0),
+            None
+        );
+        let namespaces = cache
+            .read(|store| {
+                let mut statement = store
+                    .conn
+                    .prepare("SELECT namespace FROM state ORDER BY namespace")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+                Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(namespaces, ["test-derived@v1".to_string()]);
     }
 
     /// A derived body keyed under the old per-build scheme — a
@@ -711,7 +769,6 @@ mod tests {
         impl State for Parsed {
             const NAMESPACE: &'static str = "test-corrupt";
             const VERSION: u32 = 1;
-            const PER_BUILD: bool = true;
             type Scope = Scope;
         }
         let directory = tempfile::tempdir().unwrap();
@@ -726,7 +783,7 @@ mod tests {
                 // way set_state writes them.
                 store.conn.execute(
                     "UPDATE state SET value=x'6e6f74206a736f6e' WHERE namespace=?1",
-                    rusqlite::params![format!("test-corrupt@v1+{BUILD}")],
+                    rusqlite::params!["test-corrupt@v1"],
                 )?;
                 Ok(())
             })

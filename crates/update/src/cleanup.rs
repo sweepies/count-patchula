@@ -39,22 +39,22 @@ pub(crate) fn all_ours(commits: &[Commit], actor: &str) -> bool {
 
 /// A head commit whose message records no base, so it cannot be the
 /// Count's. Only that answer is stored: it depends on nothing but the
-/// immutable commit and this build's trailer parsing (hence per build), so
-/// it is keyed by the commit OID and not read again. A compare GitHub cannot
-/// answer, or history by another author, depends on the run's actor and on
-/// GitHub, and is probed every run; so are positive answers, whose branch the
-/// same run deletes.
+/// immutable commit and the trailer parsing `tests/state-versions.tsv`
+/// pins (hence code-versioned), so it is keyed by the commit OID and not
+/// read again. A compare GitHub cannot answer, or history by another
+/// author, depends on the run's actor and on GitHub, and is probed every
+/// run; so are positive answers, whose branch the same run deletes.
 #[derive(Serialize, Deserialize)]
-struct NotOurs;
+pub(crate) struct NotOurs;
 #[derive(Serialize)]
-struct NotOursScope {
+pub(crate) struct NotOursScope {
     repository: String,
     oid: String,
 }
 impl State for NotOurs {
     const NAMESPACE: &'static str = "not-ours";
-    const VERSION: u32 = 1;
-    const PER_BUILD: bool = true;
+    const VERSION: u32 = 2;
+    const CODE_VERSIONED: bool = true;
     type Scope = NotOursScope;
 }
 

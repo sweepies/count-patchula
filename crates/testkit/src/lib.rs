@@ -5,7 +5,9 @@ pub mod derived;
 pub mod github;
 mod mise;
 mod redact;
+pub mod state;
 pub mod transcripts;
+mod versions;
 pub use mise::{Call, MiseFixture, MiseRecorder, MiseReplay, Outcome, Run};
 pub use redact::Redactor;
 

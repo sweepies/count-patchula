@@ -1,6 +1,7 @@
 //! Byte-for-byte parity between a buffered body and one arriving in chunks:
 //! every derive the crate registers reads the same document either way, over
 //! every body the fixtures serve.
+use patchula_cache::State;
 use patchula_http::Derived;
 use patchula_http::conditional::{self, Body};
 use std::sync::Arc;
@@ -136,4 +137,25 @@ fn every_derive_versions_its_compaction_source() {
         .map(|(name, version, _)| (name, version))
         .collect();
     patchula_testkit::derived::check("notes", &registered);
+}
+
+/// The crate's code-versioned states are pinned the same way:
+/// `tests/state-versions.tsv` hashes the parsing sources the stored
+/// sections are read through, and a change to one must bump the state's
+/// `VERSION` and update the row in the same commit.
+#[test]
+fn every_code_versioned_state_versions_its_source() {
+    let registered: std::collections::BTreeMap<&'static str, u32> = [
+        (
+            crate::ParsedChangelog::NAMESPACE,
+            crate::ParsedChangelog::VERSION,
+        ),
+        (
+            crate::adapters::AdapterSections::NAMESPACE,
+            crate::adapters::AdapterSections::VERSION,
+        ),
+    ]
+    .into_iter()
+    .collect();
+    patchula_testkit::state::check("notes", &registered);
 }

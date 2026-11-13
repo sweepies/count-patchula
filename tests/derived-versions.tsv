@@ -39,9 +39,9 @@ image-platform	1	crates/datasource/src/images.rs,crates/datasource/src/catalog.r
 sbom-os	1	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	base64,serde,serde_json,sha2	d22f6e485e6b28169fca1a11ea41e3d965a363aa3937033a3f86206bb9b3a447
 github-release-head	1	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	1e0a17ff56cc95c5a7ce6978bcdac0be95ac03e6fcb03f2094294e0b62740af9
 anonymous-registry-pull-token	1	crates/datasource/src/docker.rs	chrono,serde,serde_json	699eb34c4fdd0fcc9cee5ca4fc594ccbc04c2df422d7bd486690bad7a268a881
-notes-adapter-listing	1	crates/notes/src/adapters.rs,crates/http/src/derive.rs	serde,serde_json	ac72793e4cd2c1d49d00ad4e2377a558007fac48a5148e594eaa98ee583e5202
-parsed-postgres-sgml	1	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	d9861db253e9d27afc08805ebe4371fa57386943f492b94ba9600b480643e538
-parsed-go-history	1	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	d9861db253e9d27afc08805ebe4371fa57386943f492b94ba9600b480643e538
+notes-adapter-listing	2	crates/notes/src/adapters.rs,crates/http/src/derive.rs	serde,serde_json	26f8c449f77a8517f0bb5e5c812df2f4da12971cf03142347828a1dee8ee930e
+parsed-postgres-sgml	2	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	7b110133099bc4348fa5225f86fbe2af2e2f0dc5ba3aee967463a1f85952d1b8
+parsed-go-history	2	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	7b110133099bc4348fa5225f86fbe2af2e2f0dc5ba3aee967463a1f85952d1b8
 notes-changelog-directory	1	crates/notes/src/changelog.rs,crates/http/src/derive.rs	serde,serde_json	b5bb9d58412515bc0a53b94201a8afd436615fe01b78c6404ac8da3242e82f02
 parsed-changelog	1	crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	base64,regex,serde,serde_json	c120a4470ecf29a594ea514575d31d5ca6922331a09b0dc2e5aa0330552bc44d
 notes-gitlab-releases	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	45d38d9abe9c52a21c1610d884006928b4c96ec72be91fe4f322423605965ff6
