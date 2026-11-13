@@ -35,5 +35,6 @@ graphql_client = { version = "0.16", default-features = false, features = ["grap
 bytes = "1"
 patchula-process = { path = "../process" }
 patchula-testkit = { path = "../testkit" }
+serde_yaml_ng = "0.10.0"
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["test-util"] }

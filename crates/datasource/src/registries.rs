@@ -44,7 +44,7 @@ fn terraform(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, Cache
     encode(&catalog)
 }
 pub(crate) const TERRAFORM_CATALOG: Derived<CacheError> =
-    Derived::new("terraform-catalog", 2, terraform);
+    Derived::new("terraform-catalog", 3, terraform);
 
 /// One chart from a Helm repository index: its versions, and what release
 /// notes read from each version's metadata.
@@ -311,8 +311,12 @@ impl Anchors {
             } else if let Some((end, probe, yanked)) = self.close.take() {
                 // The first `</a>` past the tag. A closer found straddling an
                 // earlier search's end is not missed: the search resumes a
-                // `</a>`'s width before it.
-                let from = end.max(probe.saturating_sub(3));
+                // `</a>`'s width before it, shifted to a character's start.
+                let mut from = probe.saturating_sub(3);
+                while !self.text.is_char_boundary(from) {
+                    from -= 1;
+                }
+                let from = end.max(from);
                 if let Some(found) = self.text[from..].to_ascii_lowercase().find("</a>") {
                     let close = from + found;
                     let name = unescape(self.text[end + 1..close].trim());
@@ -438,13 +442,13 @@ fn simple_any(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, Cach
     serde_json::to_vec(&catalogs).map_err(|_| CacheError::Document)
 }
 pub(crate) const PYPI_INDEX_CATALOG: Derived<CacheError> =
-    Derived::new("pypi-index-catalog", 2, simple_any);
+    Derived::new("pypi-index-catalog", 3, simple_any);
 
 fn simple(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, CacheError> {
     encode(&catalog_of(&simple_files(body)?))
 }
 pub(crate) const PYPI_SIMPLE_CATALOG: Derived<CacheError> =
-    Derived::new("pypi-simple-catalog", 2, simple);
+    Derived::new("pypi-simple-catalog", 3, simple);
 
 #[derive(Deserialize)]
 struct SimpleFile {
@@ -538,5 +542,40 @@ mod tests {
         assert!(!catalog.versions[0].yanked);
         assert_eq!(catalog.versions.len(), 2);
         assert_eq!(normalize_python("Some__Name.pkg").unwrap(), "some-name-pkg");
+    }
+
+    /// Non-ASCII text around every part of an anchor scans the same however
+    /// the bytes arrive: a resumed `</a>` search never splits a character.
+    #[test]
+    fn anchors_scan_matches_a_buffered_page_at_every_chunk() {
+        let page = concat!(
+            "<!DOCTYPE html><html><body>",
+            "<a href=\"/simple/prénom/fichier-1.0.tar.gz\" é=\"\">fichier-1.0.tar.gz</a>",
+            "<a href='/simple/汉字/汉字-2.0.tar.gz'>汉字-2.0.tar.gz🎉</a>",
+            "<a HREF=\"/simple/pkg/pkg-3.0.tar.gz\">pkg-3.0.tar.gz🎉</A>",
+            "<a data-yanked href=\"/simple/x/🎉-4.0.tar.gz\">🎉-4.0.tar.gz</a>",
+            "<a href=\"/simple/x/&eacute;-5.0.tar.gz\">caf&eacute;-5.0.tar.gz</a>",
+            "</body></html>",
+        );
+        let mut buffered = Anchors::new();
+        buffered.feed(page.as_bytes());
+        let expected = buffered.finish().unwrap();
+        assert_eq!(
+            expected,
+            vec![
+                ("fichier-1.0.tar.gz".to_string(), false),
+                ("汉字-2.0.tar.gz🎉".to_string(), false),
+                ("pkg-3.0.tar.gz🎉".to_string(), false),
+                ("🎉-4.0.tar.gz".to_string(), true),
+                ("caf&eacute;-5.0.tar.gz".to_string(), false),
+            ]
+        );
+        for chunk in 1..=16 {
+            let mut anchors = Anchors::new();
+            for part in page.as_bytes().chunks(chunk) {
+                anchors.feed(part);
+            }
+            assert_eq!(anchors.finish().unwrap(), expected, "chunk size {chunk}");
+        }
     }
 }

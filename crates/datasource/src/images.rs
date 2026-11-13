@@ -133,7 +133,7 @@ fn compact_platform(
     .map_err(|_| Document)
 }
 pub(crate) const IMAGE_PLATFORM: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("image-platform", 2, compact_platform);
+    patchula_http::Derived::new("image-platform", 3, compact_platform);
 
 fn platform_name(os: &str, architecture: &str, variant: Option<&str>) -> String {
     match variant {
@@ -304,7 +304,7 @@ fn compact_sbom(
     serde_json::to_vec(&compact).map_err(|_| Document)
 }
 pub(crate) const SBOM_OS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("sbom-os", 2, compact_sbom);
+    patchula_http::Derived::new("sbom-os", 3, compact_sbom);
 
 /// OSV's ecosystem name for an OS release, when OSV covers it.
 fn ecosystem(kind: &str, namespace: &str, distro: Option<&(String, String)>) -> Option<String> {
@@ -661,5 +661,39 @@ mod tests {
     fn other_predicates_are_not_sboms() {
         let provenance = json!({"predicateType": "https://slsa.dev/provenance/v1", "subject": [], "predicate": {}});
         assert!(compact_sbom(&mut &serde_json::to_vec(&provenance).unwrap()[..]).is_err());
+    }
+
+    /// A reader that hands out `size` bytes a call, so a streamed derive can
+    /// be checked against every chunk boundary.
+    struct Chunks<'a> {
+        bytes: &'a [u8],
+        size: usize,
+    }
+    impl std::io::Read for Chunks<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let take = self.bytes.len().min(self.size).min(buffer.len());
+            buffer[..take].copy_from_slice(&self.bytes[..take]);
+            self.bytes = &self.bytes[take..];
+            Ok(take)
+        }
+    }
+
+    /// The hashed body's digest — and so the derived platform — is the same
+    /// however the bytes arrive.
+    #[test]
+    fn the_platform_digest_matches_at_every_chunk() {
+        let body = br#"{"os":"linux","architecture":"amd64","variant":"v1"}"#;
+        let expected = compact_platform(&mut &body[..]).unwrap();
+        for chunk in 1..=16 {
+            let mut chunks = Chunks {
+                bytes: &body[..],
+                size: chunk,
+            };
+            assert_eq!(
+                compact_platform(&mut chunks).unwrap(),
+                expected,
+                "chunk size {chunk}"
+            );
+        }
     }
 }
