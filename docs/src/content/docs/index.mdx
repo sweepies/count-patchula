@@ -32,6 +32,18 @@ import { Card, CardGrid, LinkButton } from "@astrojs/starlight/components";
 import SpeedBars from "../../components/SpeedBars.astro";
 
 <CardGrid>
+  <Card title="Blazing fast" icon="seti:rust">
+    One native binary. Up to 18 times faster than Renovate on large real-world projects.
+
+    <SpeedBars />
+
+    <LinkButton href="/benchmarks/" variant="minimal" icon="right-arrow">Benchmarks</LinkButton>
+  </Card>
+  <Card title="Security fixes first" icon="warning">
+    Every dependency with an exact version is checked against OSV.dev. A fix skips the release-age wait, schedule windows and PR limits, and when your rules hold every fix back, the Count proposes the lowest release that fixes the most anyway.
+
+    <LinkButton href="/guide/security/" variant="minimal" icon="right-arrow">Security advisories</LinkButton>
+  </Card>
   <Card title="One run, every repository" icon="rocket">
     Repositories are scanned concurrently, and each package is looked up once per batch however many repositories use it. Unchanged work is skipped through validators and receipts.
 
@@ -46,18 +58,6 @@ import SpeedBars from "../../components/SpeedBars.astro";
     Policy is written in Pkl against a published schema. Unknown fields are errors with a file and line, not a silently ignored typo.
 
     <LinkButton href="/guide/configuration/" variant="minimal" icon="right-arrow">Configuration</LinkButton>
-  </Card>
-  <Card title="Security fixes first" icon="warning">
-    Every dependency with an exact version is checked against OSV.dev. A fix skips the release-age wait, schedule windows and PR limits, and when your rules hold every fix back, the Count proposes the lowest release that fixes the most anyway.
-
-    <LinkButton href="/guide/security/" variant="minimal" icon="right-arrow">Security advisories</LinkButton>
-  </Card>
-  <Card title="Blazing fast" icon="seti:rust">
-    One native binary. Up to 18 times faster than Renovate on large real-world projects.
-
-    <SpeedBars />
-
-    <LinkButton href="/benchmarks/" variant="minimal" icon="right-arrow">Benchmarks</LinkButton>
   </Card>
   <Card title="Enterprise features included" icon="server">
     The GitHub App server is part of the same MIT-licensed binary: webhooks, scheduled sweeps, a priority queue that puts your clicks first, several installations at once, warm caches and a JSON API for dashboards. Renovate keeps its reporting API and worker scaling for its paid Enterprise Edition, and its webhook server is free but not open source.
