@@ -420,6 +420,14 @@ fn workspace_root<'a>(parsed: &Parsed<'a>, dir: &'a str) -> &'a str {
     }
 }
 
+/// The folder a Cargo configuration at `config` sits in, `""` at the root.
+fn config_folder(config: &str) -> &str {
+    config
+        .strip_suffix(".cargo/config.toml")
+        .or_else(|| config.strip_suffix(".cargo/config"))
+        .unwrap_or("")
+}
+
 /// The Cargo configurations that can apply to the manifest or lockfile at
 /// `path`, parsed: those in its folder or above, and, since Cargo reads them
 /// from wherever it runs, those anywhere in its workspace.
@@ -433,10 +441,7 @@ fn configs<'a>(
         .configs
         .iter()
         .filter(|(config, _)| {
-            let folder = config
-                .strip_suffix(".cargo/config.toml")
-                .or_else(|| config.strip_suffix(".cargo/config"))
-                .unwrap_or("");
+            let folder = config_folder(config);
             dir.starts_with(folder) || folder.starts_with(root)
         })
         .map(|(config, document)| (*config, document))
@@ -474,10 +479,12 @@ fn publish_age_hours(value: &str) -> Option<u32> {
 }
 
 /// The publish-age cooldown the manifest or lockfile at `path` commits, from
-/// the configurations `configs` selects: `Some(Err)` when an applying
-/// configuration cannot be read or sets a value outside Cargo's grammar —
-/// Cargo itself fails the same way — and `Some(Ok)` of the strictest
-/// committed value otherwise.
+/// the configurations `configs` selects: `Some(Err)` when one Cargo could
+/// read for `path` — a configuration at or above its folder — cannot be read
+/// or sets a value outside Cargo's grammar, Cargo itself failing the same
+/// way, and `Some(Ok)` of the strictest committed value otherwise. A sibling
+/// member's configuration still counts toward the maximum, but Cargo never
+/// reads it for `path`, so one that cannot be read is ignored, not fatal.
 ///
 /// The maximum of every `registry.global-min-publish-age`,
 /// `registry.min-publish-age` and `registries.*.min-publish-age` wins rather
@@ -488,15 +495,21 @@ fn publish_age_hours(value: &str) -> Option<u32> {
 pub(crate) fn cooldown(parsed: &Parsed, path: &str) -> Option<Result<Cooldown, String>> {
     let mut strictest: Option<Cooldown> = None;
     let mut unread = None;
+    let dir = &path[..path.rfind('/').map_or(0, |i| i + 1)];
     for (config, document) in configs(parsed, path) {
+        let read = dir.starts_with(config_folder(config));
         let Ok(document) = document else {
-            unread = unread.or(Some(format!("{config}, which the Count cannot read")));
+            if read {
+                unread = unread.or(Some(format!("{config}, which the Count cannot read")));
+            }
             continue;
         };
         // A configuration that includes others can commit a cooldown the
         // Count does not read.
         if document.get("include").is_some() {
-            unread = unread.or(Some(format!("{config}, which the Count cannot read")));
+            if read {
+                unread = unread.or(Some(format!("{config}, which the Count cannot read")));
+            }
             continue;
         }
         let mut values: Vec<(String, &Item)> = Vec::new();
@@ -518,15 +531,16 @@ pub(crate) fn cooldown(parsed: &Parsed, path: &str) -> Option<Result<Cooldown, S
             }
         }
         for (key, item) in values {
-            let Some(value) = item.as_str() else {
-                return Some(Err(format!(
-                    "{config}'s `{key}`, which the Count cannot read"
-                )));
-            };
-            let Some(hours) = publish_age_hours(value) else {
-                return Some(Err(format!(
-                    "{config}'s `{key}`, which the Count cannot read"
-                )));
+            let Some((value, hours)) = item
+                .as_str()
+                .and_then(|value| publish_age_hours(value).map(|hours| (value, hours)))
+            else {
+                if read {
+                    return Some(Err(format!(
+                        "{config}'s `{key}`, which the Count cannot read"
+                    )));
+                }
+                continue;
             };
             if strictest.as_ref().is_none_or(|c| c.hours <= hours) {
                 strictest = Some(Cooldown {
@@ -551,7 +565,9 @@ pub(crate) fn cooldown(parsed: &Parsed, path: &str) -> Option<Result<Cooldown, S
 /// crates.io's crates, as `cargo vendor` copied them.
 ///
 /// Every definition of a source in any configuration that applies counts,
-/// so one a closer configuration overrides can only make lookups fail.
+/// so one a closer configuration overrides can only make lookups fail. An
+/// unreadable sibling member's configuration cannot fail `path`'s lookups:
+/// Cargo never reads it for them.
 pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<String> {
     // A patch from another registry, in any manifest at or above the crate's
     // folder (its workspace's included) or any applying configuration, may
@@ -577,8 +593,12 @@ pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<Str
     let configs = configs(parsed, path);
     let mut documents = Vec::new();
     for (config, document) in configs {
+        let read = dir.starts_with(config_folder(config));
         let Ok(document) = document else {
-            return Some(format!("{config}, which the Count cannot read"));
+            if read {
+                return Some(format!("{config}, which the Count cannot read"));
+            }
+            continue;
         };
         documents.push((config, document.as_table()));
     }
@@ -601,21 +621,31 @@ pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<Str
         }
     }
     for (config, document) in &documents {
+        let read = dir.starts_with(config_folder(config));
         let unread = || Some(format!("{config}, which the Count cannot read"));
         // A configuration that includes others says things the Count does
         // not read.
         if document.get("include").is_some() {
-            return unread();
+            if read {
+                return unread();
+            }
+            continue;
         }
         let Some(table) = document.get("source") else {
             continue;
         };
         let Some(table) = table.as_table_like() else {
-            return unread();
+            if read {
+                return unread();
+            }
+            continue;
         };
         for (name, source) in table.iter() {
             let Some(source) = source.as_table_like() else {
-                return unread();
+                if read {
+                    return unread();
+                }
+                continue;
             };
             let mut owned = toml_edit::Table::new();
             for (key, value) in source.iter() {

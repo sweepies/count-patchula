@@ -275,9 +275,11 @@ impl Engine {
                 .and_then(|key| lookups.catalogs.get(key))
                 .and_then(|c| c.as_ref().ok());
             match eval.transitive_fix(&dep.dependency, (query, found), catalog, now) {
-                Ok(Some(fix)) => proposals.push(fix),
+                Ok(mut fix) => {
+                    proposals.append(&mut fix.updates);
+                    dep.evaluation.held_back.append(&mut fix.held_back);
+                }
                 Err(e) => report.warnings.push(format!("{}: {e}", dep.name)),
-                Ok(None) => {}
             }
         }
         if let Some((query, found)) = &advisory {

@@ -4142,6 +4142,44 @@ fn an_unreadable_cargo_cooldown_fails_the_manifests_lookups() {
 }
 
 #[test]
+fn an_unreadable_sibling_cargo_config_fails_only_its_own_member() {
+    let manifest = |name: &str| {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\n"
+        )
+    };
+    let app = manifest("app");
+    let tool = manifest("tool");
+    // Cargo never reads a sibling member's configuration for `app`'s
+    // manifest, so one the Count cannot read — unparseable, `include` or a
+    // value outside the grammar — is ignored there, not fatal.
+    for config in [
+        "[registry\n",
+        UNREAD,
+        "include = [\"more.toml\"]\n",
+        "[registry]\nglobal-min-publish-age = \"fortnight\"\n",
+    ] {
+        let files: Vec<(&str, &str)> = vec![
+            ("Cargo.toml", "[workspace]\nmembers = [\"app\", \"tool\"]\n"),
+            ("app/Cargo.toml", app.as_str()),
+            ("tool/Cargo.toml", tool.as_str()),
+            ("tool/.cargo/config.toml", config),
+        ];
+        let dep = cargo_dep(&files, "app/Cargo.toml", "serde");
+        assert_eq!(dep.registry, None, "{config:?}");
+        assert_eq!(dep.cooldown, None, "{config:?}");
+        // The sibling's own manifest is one Cargo does read it for, where
+        // the same file still fails closed.
+        let dep = cargo_dep(&files, "tool/Cargo.toml", "serde");
+        assert!(
+            fails(dep.registry.as_ref().map(|r| r.recorded().to_owned())),
+            "{config:?}"
+        );
+        assert_eq!(dep.cooldown, None, "{config:?}");
+    }
+}
+
+#[test]
 fn a_lockfiles_packages_and_directories_carry_the_committed_cooldown() {
     let files: Files = [
         (

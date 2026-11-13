@@ -505,6 +505,15 @@ impl Evaluator {
             .max()
             .unwrap_or(0)
     }
+    /// The wait a rebuilt routine Cargo job holds the crates it newly locks
+    /// to: the effective wait the rules give `dep` for the update's own
+    /// kind — a batched minor waits as a minor, not the strictest wait any
+    /// kind carries — as `security_wait_hours` answers for a fix.
+    pub fn routine_wait_hours(&self, dep: &Dependency, kind: Update) -> u32 {
+        self.effective(dep, kind)
+            .map(|effective| effective.policy.wait_hours)
+            .unwrap_or(0)
+    }
     /// The wait a security fix of `kind` for `dep` runs under in Cargo:
     /// `security.apply` over the rules, with the Cargo cooldown floor lifted
     /// as it is for every fix. A batch's rebuilt update records no policy,
@@ -525,21 +534,23 @@ impl Evaluator {
     /// A lockfile-only package's one update: the lowest fixed release that
     /// fixes the most of its advisories without a breaking change, under
     /// `security.apply`. Only Cargo locks can be moved to an exact version of
-    /// one package.
+    /// one package. A dated target still inside `security.apply`'s wait is
+    /// held back, as the direct path holds its targets, rather than proposed
+    /// so Cargo refuses it every run.
     pub fn transitive_fix(
         &self,
         dep: &Dependency,
         advisories: Advisories<'_>,
         catalog: Option<&Catalog>,
         now: DateTime<Utc>,
-    ) -> Result<Option<Proposal>> {
+    ) -> Result<Evaluation> {
         let (query, found) = advisories;
         if !dep.proposing().lock.transitive_movable || self.ignored(dep) {
-            return Ok(None);
+            return Ok(Evaluation::default());
         }
         let scheme = Ecosystem::of(dep.scheme, dep.source);
         let Ok(current) = scheme.parse(&dep.current) else {
-            return Ok(None);
+            return Ok(Evaluation::default());
         };
         let fixed = found
             .iter()
@@ -559,10 +570,10 @@ impl Evaluator {
             })
             .map(|(_, v, fixes)| (v, fixes));
         let Some((target, fixes)) = fixed else {
-            return Ok(None);
+            return Ok(Evaluation::default());
         };
         let Ok(target_parsed) = scheme.parse(&target) else {
-            return Ok(None);
+            return Ok(Evaluation::default());
         };
         let kind = scheme.classify(&current, &target_parsed);
         let mut effective = self.effective(dep, kind)?;
@@ -572,7 +583,39 @@ impl Evaluator {
             self.security_permitted.as_ref(),
         );
         if !effective.policy.active {
-            return Ok(None);
+            return Ok(Evaluation::default());
+        }
+        let released = catalog.and_then(|catalog| {
+            catalog
+                .versions
+                .iter()
+                .find(|version| version.version == target)
+        });
+        // The fix answers to `security.apply`'s wait as a direct target does
+        // to its own, so the proposal and Cargo's `deny` agree instead of the
+        // branch failing each run until the fix ages.
+        let wait = effective.policy.wait_hours;
+        if wait > 0
+            && let Some(version) = released.filter(|version| version.published_at.is_some())
+        {
+            let published = published(version)?;
+            let until = eligible_at(published, wait);
+            if until > now {
+                return Ok(Evaluation {
+                    updates: Vec::new(),
+                    held_back: vec![HeldBack {
+                        version: target.clone(),
+                        versions: vec![target],
+                        count: 1,
+                        update_type: kind,
+                        published_at: timestamp(published),
+                        eligible_at: timestamp(until),
+                        target_eligible_at: Some(timestamp(until)),
+                        cooldown: None,
+                    }],
+                    not_proposed: Vec::new(),
+                });
+            }
         }
         let mut update = proposal(None, Some(target.clone()), None, kind, &effective.policy);
         update.fixes = fixes;
@@ -583,17 +626,13 @@ impl Evaluator {
         // the catalog cannot date is denied like any other release.
         update.cooldown = inside_cooldown(
             dep,
-            catalog
-                .and_then(|catalog| {
-                    catalog
-                        .versions
-                        .iter()
-                        .find(|version| version.version == target)
-                })
-                .and_then(|version| version.published_at.as_deref()),
+            released.and_then(|version| version.published_at.as_deref()),
             now,
         );
-        Ok(Some(update))
+        Ok(Evaluation {
+            updates: vec![update],
+            ..Default::default()
+        })
     }
     pub fn propose(&self, dep: &Dependency, catalog: &Catalog) -> Result<Vec<Proposal>> {
         Ok(self.evaluate_at(dep, catalog, Utc::now())?.updates)
@@ -633,6 +672,12 @@ impl Evaluator {
                 .unwrap_or_default()
         };
         if self.ignored(dep) {
+            return Ok(Evaluation::default());
+        }
+        // A lockfile-only package never takes part in routine evaluation
+        // (`needs_lookup` is false for it): the catalog its advisories fetch
+        // exists to date `transitive_fix`'s target, nothing else.
+        if dep.kind == DependencyKind::Transitive {
             return Ok(Evaluation::default());
         }
         let scheme = Ecosystem::of(dep.scheme, dep.source);

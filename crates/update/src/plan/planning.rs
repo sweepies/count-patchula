@@ -989,7 +989,7 @@ fn a_batched_fix_waits_only_what_security_apply_says() {
     assert_eq!(job.wait_hours, 0, "{job:?}");
 }
 
-/// A routine update moved into a batch keeps the strictest routine wait.
+/// A routine update moved into a batch waits as its own kind.
 #[test]
 fn a_batched_routine_update_keeps_the_routine_wait() {
     let files = BTreeMap::from([
@@ -1054,6 +1054,335 @@ fn a_batched_routine_update_keeps_the_routine_wait() {
         .expect("a Cargo job");
     assert!(!job.publish_age_allow, "{job:?}");
     assert_eq!(job.wait_hours, 24, "{job:?}");
+}
+
+/// A routine update moved into a batch waits as its own kind, not the
+/// strictest wait any kind carries: a batched minor under a 720-hour major
+/// rule still waits its 24.
+#[test]
+fn a_batched_minor_waits_as_a_minor_not_the_strictest_kind() {
+    let files = BTreeMap::from([
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1.39.0\"\n"
+                .to_string(),
+        ),
+        ("Cargo.lock".to_string(), cargo_lock("1.39.0")),
+    ]);
+    let config = patchula_config::load_files(
+        "/repo/patchula.pkl",
+        BTreeMap::from([(
+            "/repo/patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nlockfiles { refresh = true; tidyGo = true }\nrules { new Rule { select { updates { \"major\" } } apply { waitHours = 720 } } }\n"
+                .into(),
+        )]),
+    )
+    .unwrap();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies;
+    let mut repo = repo();
+    repo.package_files.push(patchula_report::PackageFile {
+        path: "Cargo.toml".into(),
+        dependencies: vec![patchula_report::Dependency {
+            manager: patchula_words::Manager::Cargo,
+            name: "tokio".into(),
+            occurrence: None,
+            package: "tokio".into(),
+            registry: None,
+            current: patchula_report::Current {
+                value: Some("1.39.0".into()),
+                version: Some("1.39.0".into()),
+                digest: None,
+            },
+            updates: vec![patchula_report::Update {
+                new_value: None,
+                new_version: Some("1.40.0".into()),
+                new_digest: None,
+                update_type: patchula_words::Update::Minor,
+                group: None,
+                policy: None,
+                release_age: None,
+                fixes: vec![],
+                image: None,
+                cooldown: None,
+            }],
+            metadata: None,
+        }],
+    });
+    let mut change = cargo_change("tokio", "1.39.0", "1.40.0");
+    change.kind = patchula_words::Update::Minor;
+    let plan = crate::plan::batch_plan(
+        &repo,
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        batched(vec![change]),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap()
+    .expect("a batch plan");
+    let job = plan
+        .lock_jobs()
+        .iter()
+        .find(|job| job.ecosystem == Ecosystem::Cargo)
+        .expect("a Cargo job");
+    assert!(!job.publish_age_allow, "{job:?}");
+    assert_eq!(job.wait_hours, 24, "{job:?}");
+}
+
+/// A fix moved into a batch keeps its advisory records: the rebuilt change
+/// lists them, so the batch's body shows what it fixes and
+/// `SecurityMergeWithoutDelivery` sees a fix it holds.
+#[test]
+fn a_batched_fix_keeps_its_advisories() {
+    let files = BTreeMap::from([
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1.39.0\"\n"
+                .to_string(),
+        ),
+        ("Cargo.lock".to_string(), cargo_lock("1.39.0")),
+    ]);
+    let config = config();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies;
+    let mut repo = repo();
+    repo.package_files.push(patchula_report::PackageFile {
+        path: "Cargo.toml".into(),
+        dependencies: vec![patchula_report::Dependency {
+            manager: patchula_words::Manager::Cargo,
+            name: "tokio".into(),
+            occurrence: None,
+            package: "tokio".into(),
+            registry: None,
+            current: patchula_report::Current {
+                value: Some("1.39.0".into()),
+                version: Some("1.39.0".into()),
+                digest: None,
+            },
+            updates: vec![patchula_report::Update {
+                new_value: None,
+                new_version: Some("1.40.0".into()),
+                new_digest: None,
+                update_type: patchula_words::Update::Patch,
+                group: None,
+                policy: None,
+                release_age: None,
+                fixes: vec!["GHSA-1".into()],
+                image: None,
+                cooldown: None,
+            }],
+            metadata: Some(patchula_report::DependencyMetadata {
+                tag_digests: Default::default(),
+                source: patchula_words::Source::Crates,
+                kinds: vec![patchula_words::DependencyKind::Production],
+                locations: Vec::new(),
+                held_back: Vec::new(),
+                stale: Default::default(),
+                lookup: None,
+                resolution: None,
+                advisories: vec![
+                    patchula_report::Advisory {
+                        id: "GHSA-1".into(),
+                        aliases: vec!["CVE-2026-0001".into()],
+                        severity: Some(patchula_words::Severity::High),
+                        summary: Some("a flaw".into()),
+                        url: "https://osv.dev/GHSA-1".into(),
+                        fixed_in: Some("1.40.0".into()),
+                    },
+                    // An advisory the update does not fix stays off it.
+                    patchula_report::Advisory {
+                        id: "GHSA-2".into(),
+                        aliases: Vec::new(),
+                        severity: None,
+                        summary: None,
+                        url: "https://osv.dev/GHSA-2".into(),
+                        fixed_in: None,
+                    },
+                ],
+                image: None,
+                credentialed: false,
+            }),
+        }],
+    });
+    let plan = crate::plan::batch_plan(
+        &repo,
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        batched(vec![cargo_change("tokio", "1.39.0", "1.40.0")]),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap()
+    .expect("a batch plan");
+    let change = plan
+        .changes()
+        .iter()
+        .find(|change| change.package == "tokio")
+        .expect("a tokio change");
+    assert_eq!(
+        change
+            .advisories
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect::<Vec<_>>(),
+        ["GHSA-1"]
+    );
+}
+
+/// A lockfile-only package's group holds its fix alone: routine evaluation
+/// never sees the advisory's catalog, so no Major joins the branch whose
+/// job could not lock it and fail the fix with it.
+#[test]
+fn a_grouped_branch_with_a_transitive_fix_plans_only_the_fix() {
+    let files = BTreeMap::from([
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0.0\"\n"
+                .to_string(),
+        ),
+        (
+            "Cargo.lock".to_string(),
+            "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"serde\", \"time\"]\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n[[package]]\nname = \"time\"\nversion = \"0.3.20\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n"
+                .to_string(),
+        ),
+    ]);
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap();
+    let mut dependencies = extraction.dependencies;
+    // The engine pushes a vulnerable lockfile-only package in as a
+    // transitive dependency, so its fix can plan a lockfile job.
+    dependencies.push(
+        extraction
+            .locked
+            .iter()
+            .find(|locked| locked.package == "time")
+            .expect("time locked")
+            .dependency(),
+    );
+    let update = |version: &str, fixes: Vec<String>| patchula_report::Update {
+        new_value: None,
+        new_version: Some(version.into()),
+        new_digest: None,
+        update_type: patchula_words::Update::Patch,
+        group: Some("sec".into()),
+        policy: None,
+        release_age: None,
+        fixes,
+        image: None,
+        cooldown: None,
+    };
+    let mut repo = repo();
+    repo.package_files.push(patchula_report::PackageFile {
+        path: "Cargo.toml".into(),
+        dependencies: vec![patchula_report::Dependency {
+            manager: patchula_words::Manager::Cargo,
+            name: "serde".into(),
+            occurrence: None,
+            package: "serde".into(),
+            registry: None,
+            current: patchula_report::Current {
+                value: Some("1.0.0".into()),
+                version: Some("1.0.0".into()),
+                digest: None,
+            },
+            updates: vec![update("1.0.1", Vec::new())],
+            metadata: Some(patchula_report::DependencyMetadata {
+                tag_digests: Default::default(),
+                source: patchula_words::Source::Crates,
+                kinds: vec![patchula_words::DependencyKind::Production],
+                locations: Vec::new(),
+                held_back: Vec::new(),
+                stale: Default::default(),
+                lookup: None,
+                resolution: None,
+                advisories: Vec::new(),
+                image: None,
+                credentialed: false,
+            }),
+        }],
+    });
+    repo.package_files.push(patchula_report::PackageFile {
+        path: "Cargo.lock".into(),
+        dependencies: vec![patchula_report::Dependency {
+            manager: patchula_words::Manager::Cargo,
+            name: "time".into(),
+            occurrence: None,
+            package: "time".into(),
+            registry: None,
+            current: patchula_report::Current {
+                value: Some("0.3.20".into()),
+                version: Some("0.3.20".into()),
+                digest: None,
+            },
+            updates: vec![update("0.3.23", vec!["RUSTSEC-1".into()])],
+            metadata: Some(patchula_report::DependencyMetadata {
+                tag_digests: Default::default(),
+                source: patchula_words::Source::Crates,
+                kinds: vec![patchula_words::DependencyKind::Transitive],
+                locations: Vec::new(),
+                held_back: Vec::new(),
+                stale: Default::default(),
+                lookup: None,
+                resolution: None,
+                advisories: vec![patchula_report::Advisory {
+                    id: "RUSTSEC-1".into(),
+                    aliases: Vec::new(),
+                    severity: None,
+                    summary: None,
+                    url: "https://osv.dev/RUSTSEC-1".into(),
+                    fixed_in: Some("0.3.23".into()),
+                }],
+                image: None,
+                credentialed: false,
+            }),
+        }],
+    });
+    let plans = crate::plan::plan(
+        &repo,
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap();
+    assert_eq!(plans.len(), 1, "{plans:?}");
+    let changes = plans[0].changes();
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    assert!(
+        changes
+            .iter()
+            .all(|change| change.kind != patchula_words::Update::Major),
+        "{changes:?}"
+    );
+    let fix = changes
+        .iter()
+        .find(|change| change.package == "time")
+        .expect("a time change");
+    assert_eq!(fix.version.as_deref(), Some("0.3.23"));
+    assert!(fix.lock_only(), "{fix:?}");
+    assert_eq!(
+        fix.advisories
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect::<Vec<_>>(),
+        ["RUSTSEC-1"]
+    );
 }
 
 /// A target the dependency has already moved past is dropped, never written

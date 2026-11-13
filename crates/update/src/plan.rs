@@ -867,13 +867,13 @@ fn build(
         match contract::job(dep, update, &snapshot.paths) {
             Ok(Some(mut job)) => {
                 // A batch's rebuilt update records no policy: a Cargo job's
-                // wait for unnamed crates comes from the strictest
-                // effective wait the dependency's rules give it, and a
+                // wait for unnamed crates comes from the effective wait the
+                // dependency's rules give the update's own kind, and a
                 // fix's from `security.apply`, so Cargo does not hold a
                 // fresh fix that lookup proposed.
                 if update.policy.is_none() && job.ecosystem == contract::Ecosystem::Cargo {
                     job.wait_hours = if update.fixes.is_empty() {
-                        evaluator.lockfile_wait_hours(std::slice::from_ref(dep))
+                        evaluator.routine_wait_hours(dep, update.update_type)
                     } else {
                         evaluator.security_wait_hours(dep, update.update_type)
                     };
@@ -1442,10 +1442,11 @@ pub fn batch_plan(
             matching
         };
         for dep in deps {
-            if pending
-                .iter()
-                .any(|(held, _): &(&Dependency, Update)| std::ptr::eq(*held, dep))
-            {
+            if pending.iter().any(
+                |(held, ..): &(&Dependency, Update, &[patchula_report::Advisory])| {
+                    std::ptr::eq(*held, dep)
+                },
+            ) {
                 continue;
             }
             // A lockfile-only target is complete once the lock holds its version.
@@ -1465,17 +1466,30 @@ pub fn batch_plan(
             // The marker kept the target but not what made it a security
             // fix: the reported update that proposed it hands over its
             // fixes and cooldown, so the Cargo job runs under
-            // `security.apply`'s wait and reaches `allow` inside a window.
+            // `security.apply`'s wait and reaches `allow` inside a window,
+            // and its dependency's advisory records list the fix in the
+            // batch's body like a first-planned change's.
             let proposed = repo
                 .package_files
                 .iter()
                 .filter(|file| file.path == target.file)
                 .flat_map(|file| &file.dependencies)
                 .filter(|reported| reported.package == dep.package)
-                .flat_map(|reported| &reported.updates)
-                .find(|proposed| target.same_target(proposed));
-            let cooldown = proposed.and_then(|proposed| proposed.cooldown.clone());
-            let fixes = proposed.map_or_else(Vec::new, |proposed| proposed.fixes.clone());
+                .find_map(|reported| {
+                    reported
+                        .updates
+                        .iter()
+                        .find(|proposed| target.same_target(proposed))
+                        .map(|proposed| (reported, proposed))
+                });
+            let cooldown = proposed.and_then(|(_, proposed)| proposed.cooldown.clone());
+            let fixes = proposed.map_or_else(Vec::new, |(_, proposed)| proposed.fixes.clone());
+            let advisories = proposed.map_or(&[][..], |(reported, _)| {
+                reported
+                    .metadata
+                    .as_ref()
+                    .map_or(&[][..], |m| m.advisories.as_slice())
+            });
             pending.push((
                 dep,
                 Update {
@@ -1490,6 +1504,7 @@ pub fn batch_plan(
                     image: target.image.clone(),
                     cooldown,
                 },
+                advisories,
             ));
         }
     }
@@ -1498,11 +1513,11 @@ pub fn batch_plan(
     }
     let planned: Vec<_> = pending
         .iter()
-        .map(|(dep, update)| Item {
+        .map(|(dep, update, advisories)| Item {
             dep,
             update,
             current_version: None,
-            advisories: &[],
+            advisories,
         })
         .collect();
     let branch = branch_name(&config.prs.branch, "batch")?;

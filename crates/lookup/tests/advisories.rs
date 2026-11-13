@@ -2,7 +2,7 @@ use patchula_datasource::{Advisory, AdvisoryQuery, Affected, Event, Range};
 use patchula_lookup::{advisory_query, affects, fixes, report_advisories};
 use patchula_manager::{Dependency, EditForm, Location, Syntax};
 use patchula_versioning::Ecosystem;
-use patchula_words::{DependencyKind, Manager, Scheme, Severity, Source};
+use patchula_words::{DependencyKind, Manager, Scheme, Severity, Source, Update};
 use std::sync::Arc;
 
 fn dependency(source: Source, package: &str, current: &str, resolved: Option<&str>) -> Dependency {
@@ -76,6 +76,21 @@ fn query(ecosystem: &str, package: &str, version: &str) -> AdvisoryQuery {
         package: package.into(),
         version: version.into(),
     }
+}
+
+fn transitive_fix(
+    eval: &patchula_lookup::Evaluator,
+    dep: &Dependency,
+    q: &AdvisoryQuery,
+    found: &[Arc<Advisory>],
+    catalog: Option<&patchula_datasource::Catalog>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<patchula_report::Update> {
+    eval.transitive_fix(dep, (q, found), catalog, now)
+        .unwrap()
+        .updates
+        .into_iter()
+        .next()
 }
 
 #[test]
@@ -449,10 +464,8 @@ fn lockfile_only_crates_get_the_lowest_compatible_fix() {
         Arc::new(advisory("crates.io", "time", ranges(&["0.3.23"]), &[])),
         Arc::new(breaking),
     ];
-    let fix = eval
-        .transitive_fix(&dep, (&q, &found), None, chrono::Utc::now())
-        .unwrap()
-        .unwrap();
+    let now = chrono::Utc::now();
+    let fix = transitive_fix(&eval, &dep, &q, &found, None, now).unwrap();
     assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
     assert_eq!(fix.new_value, None);
     assert_eq!(fix.fixes, ["GHSA-test"]);
@@ -460,21 +473,13 @@ fn lockfile_only_crates_get_the_lowest_compatible_fix() {
     assert_eq!(policy.wait_hours, 0);
     assert_eq!(policy.commit_prefix, "fix(deps):");
     // Only a breaking release fixes it: the lock cannot get there alone.
-    assert!(
-        eval.transitive_fix(&dep, (&q, &found[1..]), None, chrono::Utc::now())
-            .unwrap()
-            .is_none()
-    );
+    assert!(transitive_fix(&eval, &dep, &q, &found[1..], None, now).is_none());
     // npm locks cannot be moved to an exact version of one package.
     let mut npm = dependency(Source::Npm, "bar", "2.0.0", Some("2.0.0"));
     npm.kind = DependencyKind::Transitive;
     let q = advisory_query(&npm).unwrap();
     let found = vec![Arc::new(advisory("npm", "bar", ranges(&["2.0.1"]), &[]))];
-    assert!(
-        eval.transitive_fix(&npm, (&q, &found), None, chrono::Utc::now())
-            .unwrap()
-            .is_none()
-    );
+    assert!(transitive_fix(&eval, &npm, &q, &found, None, now).is_none());
 }
 
 #[test]
@@ -495,11 +500,7 @@ fn a_transitive_fix_needs_a_parseable_current_version() {
     let mut dep = dependency(Source::Crates, "bogus", "bogus", Some("bogus"));
     dep.kind = DependencyKind::Transitive;
     let q = query("crates.io", "bogus", "bogus");
-    assert!(
-        eval.transitive_fix(&dep, (&q, &[]), None, chrono::Utc::now())
-            .unwrap()
-            .is_none()
-    );
+    assert!(transitive_fix(&eval, &dep, &q, &[], None, chrono::Utc::now()).is_none());
 }
 
 #[test]
@@ -523,11 +524,7 @@ fn a_transitive_fix_is_suppressed_when_the_matched_rule_deactivates_updates() {
         ranges(&["1.0.1"]),
         &[],
     ))];
-    assert!(
-        eval.transitive_fix(&dep, (&q, &found), None, chrono::Utc::now())
-            .unwrap()
-            .is_none()
-    );
+    assert!(transitive_fix(&eval, &dep, &q, &found, None, chrono::Utc::now()).is_none());
 }
 
 #[test]
@@ -691,10 +688,7 @@ fn a_transitive_fix_inside_the_cooldown_is_marked_the_same_way() {
         ],
         dist_tags: Default::default(),
     };
-    let fix = eval
-        .transitive_fix(&dep, (&q, &found), Some(&catalog(Some(100))), now)
-        .unwrap()
-        .unwrap();
+    let fix = transitive_fix(&eval, &dep, &q, &found, Some(&catalog(Some(100))), now).unwrap();
     assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
     assert_eq!(
         fix.cooldown,
@@ -705,21 +699,12 @@ fn a_transitive_fix_inside_the_cooldown_is_marked_the_same_way() {
     );
     // A fix past the window asks for no waiver: `allow` would let the whole
     // resolve ignore the cooldown, so only a dated-inside target earns it.
-    let fix = eval
-        .transitive_fix(&dep, (&q, &found), Some(&catalog(Some(400))), now)
-        .unwrap()
-        .unwrap();
+    let fix = transitive_fix(&eval, &dep, &q, &found, Some(&catalog(Some(400))), now).unwrap();
     assert_eq!(fix.cooldown, None);
     // And a target the catalog cannot date is denied like any release.
-    let fix = eval
-        .transitive_fix(&dep, (&q, &found), Some(&catalog(None)), now)
-        .unwrap()
-        .unwrap();
+    let fix = transitive_fix(&eval, &dep, &q, &found, Some(&catalog(None)), now).unwrap();
     assert_eq!(fix.cooldown, None);
-    let fix = eval
-        .transitive_fix(&dep, (&q, &found), None, now)
-        .unwrap()
-        .unwrap();
+    let fix = transitive_fix(&eval, &dep, &q, &found, None, now).unwrap();
     assert_eq!(fix.cooldown, None);
     // An absurd committed value saturates the same way on this path too:
     // everything is inside the window, so the fix is marked, never unmarked.
@@ -728,10 +713,7 @@ fn a_transitive_fix_inside_the_cooldown_is_marked_the_same_way() {
         value: "999999999 weeks".into(),
         file: ".cargo/config.toml".into(),
     });
-    let fix = eval
-        .transitive_fix(&dep, (&q, &found), Some(&catalog(Some(400))), now)
-        .unwrap()
-        .unwrap();
+    let fix = transitive_fix(&eval, &dep, &q, &found, Some(&catalog(Some(400))), now).unwrap();
     assert_eq!(
         fix.cooldown,
         Some(patchula_report::Cooldown {
@@ -739,4 +721,160 @@ fn a_transitive_fix_inside_the_cooldown_is_marked_the_same_way() {
             file: ".cargo/config.toml".into(),
         })
     );
+}
+
+#[test]
+fn a_transitive_crates_catalog_only_dates_its_fix() {
+    let eval = patchula_lookup::Evaluator::new(
+        &patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap(),
+    )
+    .unwrap();
+    let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
+    dep.kind = DependencyKind::Transitive;
+    dep.file = "Cargo.lock".into();
+    let q = advisory_query(&dep).unwrap();
+    let found = vec![Arc::new(advisory(
+        "crates.io",
+        "time",
+        vec![vec![
+            Event::Introduced("0".into()),
+            Event::Fixed("0.3.23".into()),
+        ]],
+        &[],
+    ))];
+    let now = chrono::Utc::now();
+    let version = |v: &str, ago: i64| patchula_datasource::Version {
+        version: v.into(),
+        published_at: Some((now - chrono::Duration::hours(ago)).to_rfc3339()),
+        digest: None,
+        deprecated: false,
+        yanked: false,
+    };
+    let catalog = patchula_datasource::Catalog {
+        versions: vec![
+            version("0.3.20", 4000),
+            version("0.3.23", 400),
+            version("0.4.0", 500),
+        ],
+        dist_tags: Default::default(),
+    };
+    // The catalog exists to date the advisory's fix; routine evaluation
+    // never sees it, so there are no Patch, Minor or Major proposals and
+    // no held-back or not-proposed noise.
+    let none = Default::default();
+    let routine = eval
+        .evaluate_with(&dep, &catalog, now, &none, Some((&q, &found)))
+        .unwrap();
+    assert_eq!(routine.updates, []);
+    assert_eq!(routine.held_back, []);
+    assert_eq!(routine.not_proposed, []);
+    let fix = transitive_fix(&eval, &dep, &q, &found, Some(&catalog), now).unwrap();
+    assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
+    assert_eq!(fix.fixes, ["GHSA-test"]);
+}
+
+#[test]
+fn a_transitive_fix_waits_out_security_applys_wait() {
+    let mut config =
+        patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
+    config.security.apply.wait_hours = Some(48);
+    let eval = patchula_lookup::Evaluator::new(&config).unwrap();
+    let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
+    dep.kind = DependencyKind::Transitive;
+    dep.file = "Cargo.lock".into();
+    let q = advisory_query(&dep).unwrap();
+    let found = vec![Arc::new(advisory(
+        "crates.io",
+        "time",
+        vec![vec![
+            Event::Introduced("0".into()),
+            Event::Fixed("0.3.23".into()),
+        ]],
+        &[],
+    ))];
+    let now = chrono::Utc::now();
+    let version = |v: &str, ago: i64| patchula_datasource::Version {
+        version: v.into(),
+        published_at: Some((now - chrono::Duration::hours(ago)).to_rfc3339()),
+        digest: None,
+        deprecated: false,
+        yanked: false,
+    };
+    let catalog = |ago: i64| patchula_datasource::Catalog {
+        versions: vec![version("0.3.20", 4000), version("0.3.23", ago)],
+        dist_tags: Default::default(),
+    };
+    // A fix inside `security.apply`'s wait is held, not proposed: Cargo
+    // would only refuse it.
+    let held = eval
+        .transitive_fix(&dep, (&q, &found), Some(&catalog(24)), now)
+        .unwrap();
+    assert_eq!(held.updates, []);
+    assert_eq!(held.held_back.len(), 1, "{:?}", held.held_back);
+    assert_eq!(held.held_back[0].version, "0.3.23");
+    assert_eq!(held.held_back[0].update_type, Update::Patch);
+    assert!(held.held_back[0].cooldown.is_none());
+    // Once the wait has passed the same fix is proposed.
+    let fix = transitive_fix(&eval, &dep, &q, &found, Some(&catalog(96)), now).unwrap();
+    assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
+    assert_eq!(fix.fixes, ["GHSA-test"]);
+}
+
+#[test]
+fn a_transitive_fix_inside_a_committed_cooldown_still_waits_for_security_apply() {
+    let mut config =
+        patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
+    config.security.apply.wait_hours = Some(168);
+    let eval = patchula_lookup::Evaluator::new(&config).unwrap();
+    let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
+    dep.kind = DependencyKind::Transitive;
+    dep.file = "Cargo.lock".into();
+    dep.cooldown = Some(patchula_manager::Cooldown {
+        hours: 48,
+        value: "2 days".into(),
+        file: ".cargo/config.toml".into(),
+    });
+    let q = advisory_query(&dep).unwrap();
+    let found = vec![Arc::new(advisory(
+        "crates.io",
+        "time",
+        vec![vec![
+            Event::Introduced("0".into()),
+            Event::Fixed("0.3.23".into()),
+        ]],
+        &[],
+    ))];
+    let now = chrono::Utc::now();
+    let version = |v: &str, ago: i64| patchula_datasource::Version {
+        version: v.into(),
+        published_at: Some((now - chrono::Duration::hours(ago)).to_rfc3339()),
+        digest: None,
+        deprecated: false,
+        yanked: false,
+    };
+    let catalog = |ago: i64| patchula_datasource::Catalog {
+        versions: vec![version("0.3.20", 4000), version("0.3.23", ago)],
+        dist_tags: Default::default(),
+    };
+    // `security.apply`'s wait is longer than the committed cooldown: past
+    // the cooldown but inside the wait, the fix is still held rather than
+    // proposed so Cargo refuses it.
+    let held = eval
+        .transitive_fix(&dep, (&q, &found), Some(&catalog(72)), now)
+        .unwrap();
+    assert_eq!(held.updates, []);
+    assert_eq!(held.held_back.len(), 1, "{:?}", held.held_back);
+    assert_eq!(held.held_back[0].version, "0.3.23");
+    // Past both, the fix is proposed; outside the cooldown it asks for no
+    // `allow` waiver.
+    let fix = transitive_fix(&eval, &dep, &q, &found, Some(&catalog(200)), now).unwrap();
+    assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
+    assert_eq!(fix.cooldown, None);
+    // Inside the cooldown the wait still decides first, so a fresh fix is
+    // held rather than marked `allow` and proposed.
+    let held = eval
+        .transitive_fix(&dep, (&q, &found), Some(&catalog(24)), now)
+        .unwrap();
+    assert_eq!(held.updates, []);
+    assert_eq!(held.held_back[0].version, "0.3.23");
 }

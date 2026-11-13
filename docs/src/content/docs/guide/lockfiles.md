@@ -349,7 +349,13 @@ the project define under a `tools` entry, by name, index and token, and
 the directory's committed [publish-age
 cooldown](/guide/lookup-policy/#cargos-cooldown) — or the job's `waitHours`
 when that is longer — by environment, so crates a resolve newly locks wait
-as long as the ones an update names. Naming the age explicitly on every
+as long as the ones an update names. Cargo resolves a lockfile in one
+pass, so the job's one wait covers everything that resolve newly locks —
+the crate the update names and transitive crates alike. A semver-crossing
+update runs `cargo update --workspace`, and when the age check leaves a
+release it needs out of reach the failure reads as Cargo's ordinary
+refusal, "did not resolve … to requested version", not its publish-age
+line. Naming the age explicitly on every
 invocation also means a `.cargo/config.toml` above the runner's own
 directories cannot impose one the repository never committed. A
 `security.apply` fix that lands inside the window is the one job that runs
@@ -408,7 +414,10 @@ refreshes every lockfile within the manifests' ranges, at most once per ISO
 week, and no sooner than `waitHours` after the last successful refresh. The
 default window is Monday 00:00 to 04:00 UTC; explicit update windows
 replace it. Windows work as for updates: the first run after a window time
-picks it up, however often the Count runs.
+picks it up, however often the Count runs. A maintenance resolve has no
+update to take a wait from, so for Cargo the run holds everything it newly
+locks to the strictest active `waitHours` any update class reaches on any
+of the repository's crates.io dependencies.
 Failures do not count as a completed refresh, and a closed maintenance PR can
 come back the following week.
 

@@ -85,6 +85,21 @@ fn osv_record(id: &str, record: Value) -> Interaction {
         None,
     )
 }
+fn raw(url: &str, accept: &str, body: Body) -> Interaction {
+    Interaction {
+        request: RecordedRequest {
+            method: "GET".into(),
+            url: url.into(),
+            headers: [("accept".to_owned(), vec![accept.to_owned()])].into(),
+            body: Body::Text(String::new()),
+        },
+        response: RecordedResponse {
+            status: 200,
+            headers: Default::default(),
+            body,
+        },
+    }
+}
 
 #[tokio::test]
 async fn advisories_mark_fixing_updates_and_warm_runs_reuse_records() {
@@ -292,9 +307,18 @@ async fn a_vulnerable_lockfile_only_crate_is_reported_with_its_fix() {
                 "ranges":[{"type":"SEMVER","events":[{"introduced":"0.2.23"},{"fixed":"0.3.23"}]}]}]
         }),
     ));
+    // The advisory's fetch earns the catalog a read, with a Major among
+    // the releases: it dates the fix's target, never routine evaluation.
+    interactions.push(raw(
+        "https://index.crates.io/ti/me/time",
+        "text/plain",
+        Body::Text(
+            "{\"vers\":\"0.3.20\",\"yanked\":false,\"pubtime\":\"2025-01-01T00:00:00Z\"}\n{\"vers\":\"0.3.23\",\"yanked\":false,\"pubtime\":\"2026-01-01T00:00:00Z\"}\n{\"vers\":\"0.4.0\",\"yanked\":false,\"pubtime\":\"2026-01-01T00:00:00Z\"}\n".into(),
+        ),
+    ));
     let cassette = Cassette {
         schema_version: 1,
-        provenance: "Simulated from the GitHub and OSV.dev API documentation; the advisory record is trimmed from OSV.dev".into(),
+        provenance: "Simulated from the GitHub, crates.io and OSV.dev API documentation; the advisory record is trimmed from OSV.dev".into(),
         interactions,
     };
     patchula_testkit::save(&path, &cassette, &Default::default()).unwrap();
@@ -328,7 +352,10 @@ async fn a_vulnerable_lockfile_only_crate_is_reported_with_its_fix() {
         time.metadata.as_ref().unwrap().kinds,
         [DependencyKind::Transitive]
     );
-    assert_eq!(time.updates.len(), 1);
+    // The catalog's 0.4.0 never becomes a routine Major: `time` reports its
+    // fix alone, with no held-back or not-proposed rows either.
+    assert_eq!(time.updates.len(), 1, "{:?}", time.updates);
+    assert!(time.metadata.as_ref().unwrap().held_back.is_empty());
     let fix = &time.updates[0];
     assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
     assert_eq!(fix.new_value, None);
