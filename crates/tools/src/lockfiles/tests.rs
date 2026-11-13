@@ -504,6 +504,7 @@ fn repo() -> Repository {
 }
 fn snapshot(files: &BTreeMap<String, String>) -> Snapshot {
     Snapshot {
+        cargo_cooldowns: Default::default(),
         paths: files.keys().cloned().collect(),
         files: files
             .iter()
@@ -1840,6 +1841,7 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
                 target: Some(target.into()),
             },
             exact_version: false,
+            publish_age_allow: false,
         };
         runner
             .cargo_update(
@@ -2945,6 +2947,7 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
                     target: Some("0.6.9".into()),
                 },
                 exact_version: false,
+                publish_age_allow: false,
             }])
             .content(
                 "pyproject.toml",
@@ -2999,6 +3002,7 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
                 target: Some("0.6.9".into()),
             },
             exact_version: false,
+            publish_age_allow: false,
         }])
         .build();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -3393,6 +3397,7 @@ async fn real_dotnet_restore_regenerates_packages_lock_json() {
             directory: "app".into(),
             scope: Scope::Directory,
             exact_version: false,
+            publish_age_allow: false,
         }])
         .build();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -3693,6 +3698,7 @@ fn a_vulnerable_transitive_crate_moves_through_its_lockfile_alone() {
                 target: Some("0.3.23".into()),
             },
             exact_version: true,
+            publish_age_allow: false,
         }]
     );
     assert_eq!(plan.changes()[0].advisories[0].id, "RUSTSEC-2023-0071");
@@ -3901,6 +3907,7 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
                 target: Some("0.9.9".into()),
             },
             exact_version: false,
+            publish_age_allow: false,
         };
         runner
             .cargo_update(
@@ -3947,6 +3954,7 @@ async fn real_cargo_moves_a_locked_package_without_a_manifest_change() {
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut dep = patchula_manager::Locked {
+        cooldown: None,
         registry: None,
         manager: Manager::Cargo,
         file: "Cargo.lock".into(),
@@ -4713,6 +4721,7 @@ fn an_in_range_release_moves_a_direct_crate_through_its_lockfile_alone() {
                 target: Some("1.40.0".into()),
             },
             exact_version: true,
+            publish_age_allow: false,
         }]
     );
     assert_eq!(plan.changes()[0].value, None);
@@ -4892,6 +4901,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                         target: Some(target.into()),
                     },
                     exact_version: true,
+                    publish_age_allow: false,
                 }])
                 .changes(vec![patchula_update::Change {
                     registry: None,
@@ -6755,6 +6765,7 @@ async fn cargo_package_job_with_unparseable_versions_still_updates() {
             target: Some("1.0.0".into()),
         },
         exact_version: false,
+        publish_age_allow: false,
     }])
     .build();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -7053,6 +7064,7 @@ async fn a_flake_job_for_an_input_the_lock_lacks_fails() {
                 target: Some("rev".into()),
             },
             exact_version: false,
+            publish_age_allow: false,
         }])
         .build();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -7360,6 +7372,7 @@ async fn a_gradle_wrapper_job_takes_the_wrapper_path() {
         directory: "gradle/wrapper".into(),
         scope: Scope::Directory,
         exact_version: false,
+        publish_age_allow: false,
     }])
     .build();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;

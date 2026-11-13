@@ -3,11 +3,11 @@ title: "JSON report"
 description: "The JSON report printed by patchula lookup --json and patchula run --json: repositories, dependencies, updates and lookup failures."
 ---
 `patchula lookup --json` and `patchula run --json` print one report for the
-whole batch. This page describes schema version 7.
+whole batch. This page describes schema version 8.
 
 ```json
 {
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "repositories": [{
     "repository": "owner/repo",
     "status": "complete",
@@ -31,7 +31,12 @@ whole batch. This page describes schema version 7.
 ```
 
 Readers should reject any other `schemaVersion`. Unknown fields are rejected
-too, so a new field means a new version. Version 7 added the repository
+too, so a new field means a new version. Version 8 added `cooldown` to a
+`heldBack` entry, naming the repository's committed Cargo cooldown (`hours`
+and the config `file` that commits it) when the cooldown rather than
+`waitHours` holds the release, and to an `updates` entry, set only on a
+security fix proposed inside the cooldown so the lockfile run knows Cargo
+must allow the too-new release. Version 7 added the repository
 `stale` status for a repository that changed under the run, and `stale` as
 a pull request action status, with the `actions` object at its own version
 3; version 6 split branch and pull request statuses, added the `stale`
@@ -118,9 +123,10 @@ when this list is not empty.
 | `newValue`, `newVersion`, `newDigest` | The target; at least one is set. A `null` `newValue` with a `newVersion` is a lockfile-only update: only a lockfile changes. For a direct dependency that is a release its declaration already allows; a transitive package, which has no declaration, moves the same way |
 | `updateType` | `major`, `minor`, `patch`, `digest` or `pin` |
 | `group` | The group name from configuration, or null |
-| `policy` | Optional. The policy that applies: versions, wait, windows, merge, labels |
+| `policy` | Optional. The policy that applies: versions, wait, windows, merge, labels. `waitHours` is the effective wait: a committed Cargo cooldown is already folded in |
 | `releaseAge` | Optional. `publishedAt` and the `evaluatedAt` it was judged against |
 | `fixes` | Optional. IDs of the current version's advisories that the target no longer has |
+| `cooldown` | Optional. On a security fix, the committed Cargo cooldown the target may sit inside: `hours` and the config `file`. The lockfile run's Cargo must allow the too-new release for this update |
 | `image` | Optional. For a pinned image's new digest, the SBOM comparison: `state`, the compared `platforms`, the `sboms` read (`digest`, `source`, `generator`), `os`, `packages`, the `fixed` advisories with their `package`, `old` and `new` versions and `platforms`, `introduced` advisory IDs (most severe first), `introducedDetails` (OSV's records for up to five of them), `detail` and `silenced` |
 
 ## Dependency metadata
@@ -130,7 +136,7 @@ when this list is not empty.
 | `source`, `kinds` | Where the dependency came from and its kinds, such as `devDependencies`, or `transitive` for a vulnerable package only a lockfile records |
 | `locations` | Byte offsets, line, column and a pointer into the file |
 | `resolution` | How `current.version` was found: `declared`, `lockfile`, `pinned-commit`, `floating-ref`, `release-line` (an installed pin, such as a `.tool-versions` or `.nvmrc` version) or `supported-range` (a runtime constraint such as `engines.node`). `lockfile` covers every manager whose lockfile recorded the resolved version — npm, Bun, Cargo, Bundler, Composer, Pyproject, Go (a `require` version in `go.mod` is the version Go's resolution recorded) and Terraform providers |
-| `heldBack` | Updates waiting on release age, per update type, with when they become eligible |
+| `heldBack` | Updates waiting on release age, per update type, with when they become eligible. An entry's optional `cooldown` (`hours`, `file`) names a committed Cargo cooldown holding the release, in which case `eligibleAt` follows it and the dashboard offers no early-create box |
 | `lookup` | When the lookup ran, whether a stored catalog view was reused (`catalog` with `fetchedAt` and `reused`), disabled update types, and versions rejected as deprecated or yanked |
 | `tagDigests` | For GitHub Actions, the commit each proposed tag points at |
 | `image` | Optional. For a pinned image, the current digest's warning state, in the same shape as an update's `image` |

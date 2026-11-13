@@ -50,6 +50,7 @@ pub(super) fn extract(
                 .map_err(|e| e.to_string())?;
                 let package = template(&extractor.package, &captures)?;
                 out.push(Dependency {
+                    cooldown: None,
                     manager: Manager::Regex,
                     file: path.into(),
                     location: Location::new(text, current.start(), current.end(), String::new()),

@@ -223,6 +223,31 @@ pub struct Dependency {
     /// public one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<Registry>,
+    /// The committed Cargo publish-age cooldown that applies to the package:
+    /// a floor on its release-age wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown: Option<Cooldown>,
+}
+/// A repository's committed Cargo publish-age cooldown: the strictest value
+/// the Cargo configurations applying to a manifest or lockfile set.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cooldown {
+    /// The cooldown in whole hours, rounded up from the committed value.
+    pub hours: u32,
+    /// The committed value, verbatim: what the lockfile run's Cargo gets.
+    pub value: String,
+    /// The configuration file that commits it.
+    pub file: String,
+}
+/// A Cargo directory's committed cooldown, as the lockfile contract carries
+/// it: the value the run's Cargo gets, or the reason its jobs must fail
+/// rather than run without the repository's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CargoCooldown {
+    /// A committed cooldown.
+    Set(Cooldown),
+    /// A committed cooldown the Count cannot read.
+    Unread(String),
 }
 /// A key as one token of a JSON Pointer, which escapes `~` and `/`.
 pub(crate) fn pointer_token(key: &str) -> String {
@@ -379,6 +404,10 @@ pub struct Extraction {
     /// verdict is not public.
     #[serde(default)]
     pub public_only: BTreeMap<String, bool>,
+    /// Each Cargo manifest or lockfile directory's committed publish-age
+    /// cooldown, kept for the lockfile run's Cargo environment.
+    #[serde(default)]
+    pub cargo_cooldowns: BTreeMap<String, CargoCooldown>,
 }
 /// A declaration the Count found but cannot read as a version, such as an
 /// image built from a variable. Unlike a warning, it leaves branch cleanup on.
@@ -959,6 +988,7 @@ mod tests {
                     extract: None,
                     included_by: None,
                     registry: None,
+                    cooldown: None,
                 };
                 super::ecosystem(*manager).proposing(&dep).lock.keeps_ranges
             })

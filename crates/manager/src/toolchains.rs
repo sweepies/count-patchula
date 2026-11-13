@@ -13,6 +13,7 @@ fn pin(
     syntax: Syntax,
 ) -> Dependency {
     Dependency {
+        cooldown: None,
         manager,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), format!("/{tool}")),

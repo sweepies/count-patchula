@@ -3921,6 +3921,272 @@ fn crates_patched_or_included_from_elsewhere_fail_their_lookups() {
     assert!(fails(lookup(&member, "serde")));
 }
 
+/// The dependency `name` in `file` as extraction over `files` produces it,
+/// so tests read the committed cooldown it was marked with.
+fn cargo_dep(files: &[(&str, &str)], file: &str, name: &str) -> patchula_manager::Dependency {
+    let files: Files = files
+        .iter()
+        .map(|(path, text)| ((*path).to_owned(), fixture(text)))
+        .collect();
+    let mut config = config();
+    config.managers = vec![Manager::Cargo];
+    Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|d| d.file == file && d.name == name)
+        .unwrap_or_else(|| panic!("{file} {name}"))
+}
+
+#[test]
+fn a_committed_cargo_cooldown_is_read_in_cargos_own_grammar() {
+    let manifest =
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\n";
+    let at = |path: &'static str, value: &str| {
+        vec![
+            ("app/Cargo.toml", manifest),
+            (
+                path,
+                format!("[registry]\nglobal-min-publish-age = \"{value}\"\n").leak()
+                    as &'static str,
+            ),
+        ]
+    };
+    // Cargo 1.100's grammar, as its sparse-registry texts pin it: digits, an
+    // optional single space and one of six lowercase units, singular or
+    // plural, or a bare `0` — converted to whole hours rounded up.
+    for (value, hours) in [
+        ("14 days", 336),
+        ("14 day", 336),
+        ("14days", 336),
+        ("1 week", 168),
+        ("1 weeks", 168),
+        ("5 hours", 5),
+        ("5hours", 5),
+        ("15 minutes", 1),
+        ("3 seconds", 1),
+        ("0", 0),
+        ("0 days", 0),
+        ("0 months", 0),
+        // Cargo's month is 2 629 746 seconds, a little over 30 days.
+        ("1 month", 731),
+        ("2 months", 1461),
+        ("90 days", 2160),
+    ] {
+        for path in [".cargo/config.toml", ".cargo/config"] {
+            let dep = cargo_dep(&at(path, value), "app/Cargo.toml", "serde");
+            assert_eq!(
+                dep.cooldown
+                    .as_ref()
+                    .map(|c| (c.hours, c.value.as_str(), c.file.as_str())),
+                Some((hours, value, path)),
+                "{value:?} in {path}"
+            );
+            assert_eq!(dep.registry, None, "{value:?}");
+        }
+    }
+    // What Cargo rejects, the Count cannot read either: the manifest's
+    // crates.io lookups fail, naming the file and the key.
+    for value in [
+        "14  days",
+        "14 Days",
+        "14 DAYS",
+        "1 year",
+        "2 years",
+        "fortnight",
+        "abc",
+        "-5 days",
+        "+5 days",
+        "1.5 days",
+        "1.0 days",
+        "days",
+        " 14 days",
+        "  5 days",
+        "5 days ",
+        "1 hour ",
+    ] {
+        let dep = cargo_dep(&at(".cargo/config.toml", value), "app/Cargo.toml", "serde");
+        let recorded = dep.registry.as_ref().map(|r| r.recorded().to_owned());
+        assert!(
+            recorded.as_deref().is_some_and(|r| {
+                r.contains(".cargo/config.toml") && r.contains("registry.global-min-publish-age")
+            }),
+            "{value:?}: {recorded:?}"
+        );
+        assert_eq!(dep.cooldown, None, "{value:?}");
+    }
+    // A non-string value cannot be read either.
+    let dep = cargo_dep(
+        &[
+            ("app/Cargo.toml", manifest),
+            (
+                ".cargo/config.toml",
+                "[registry]\nglobal-min-publish-age = 14\n",
+            ),
+        ],
+        "app/Cargo.toml",
+        "serde",
+    );
+    assert!(fails(
+        dep.registry.as_ref().map(|r| r.recorded().to_owned())
+    ));
+    assert_eq!(dep.cooldown, None);
+}
+
+#[test]
+fn the_committed_cargo_cooldown_is_the_strictest_of_every_applying_config() {
+    let manifest =
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\n";
+    let member =
+        "[package]\nname = \"member\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\n";
+    // The maximum of the three keys in any applying config wins; the key a
+    // later Cargo may honour and a per-registry one hold crates.io too.
+    let dep = cargo_dep(
+        &[
+            ("app/Cargo.toml", manifest),
+            (
+                ".cargo/config.toml",
+                "[registry]\nglobal-min-publish-age = \"7 days\"\n\n[registries.crates-io]\nmin-publish-age = \"14 days\"\n",
+            ),
+            (
+                "app/.cargo/config",
+                "[registry]\nmin-publish-age = \"2 days\"\n",
+            ),
+        ],
+        "app/Cargo.toml",
+        "serde",
+    );
+    assert_eq!(
+        dep.cooldown
+            .as_ref()
+            .map(|c| (c.hours, c.value.as_str(), c.file.as_str())),
+        Some((336, "14 days", ".cargo/config.toml"))
+    );
+    // A member's own configuration applies to it; the root's applies down
+    // to every member, and a workspace member's applies workspace-wide.
+    let dep = cargo_dep(
+        &[
+            ("Cargo.toml", "[workspace]\nmembers = [\"app\", \"tool\"]\n"),
+            ("app/Cargo.toml", manifest),
+            ("tool/Cargo.toml", member),
+            (
+                ".cargo/config.toml",
+                "[registry]\nglobal-min-publish-age = \"2 days\"\n",
+            ),
+            (
+                "tool/.cargo/config.toml",
+                "[registry]\nglobal-min-publish-age = \"14 days\"\n",
+            ),
+        ],
+        "app/Cargo.toml",
+        "serde",
+    );
+    assert_eq!(dep.cooldown.as_ref().map(|c| c.hours), Some(336));
+    // A configuration for a folder outside the workspace does not apply.
+    let dep = cargo_dep(
+        &[
+            ("app/Cargo.toml", manifest),
+            (
+                "elsewhere/.cargo/config.toml",
+                "[registry]\nglobal-min-publish-age = \"14 days\"\n",
+            ),
+        ],
+        "app/Cargo.toml",
+        "serde",
+    );
+    assert_eq!(dep.cooldown, None);
+    // A committed `resolver.incompatible-publish-age = "allow"` is ignored:
+    // the Count stays stricter, never looser.
+    let dep = cargo_dep(
+        &[
+            ("app/Cargo.toml", manifest),
+            (
+                ".cargo/config.toml",
+                "[registry]\nglobal-min-publish-age = \"14 days\"\n\n[resolver]\nincompatible-publish-age = \"allow\"\n",
+            ),
+        ],
+        "app/Cargo.toml",
+        "serde",
+    );
+    assert_eq!(dep.cooldown.as_ref().map(|c| c.hours), Some(336));
+}
+
+#[test]
+fn an_unreadable_cargo_cooldown_fails_the_manifests_lookups() {
+    let manifest =
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\n";
+    for config in [
+        // An `include` can commit a cooldown the Count does not read.
+        "include = [\"more.toml\"]\n\n[registry]\nglobal-min-publish-age = \"14 days\"\n",
+        "include = [\"more.toml\"]\n",
+        // So can one the Count cannot parse.
+        "[registry\n",
+        UNREAD,
+    ] {
+        let dep = cargo_dep(
+            &[("app/Cargo.toml", manifest), (".cargo/config.toml", config)],
+            "app/Cargo.toml",
+            "serde",
+        );
+        let recorded = dep.registry.as_ref().map(|r| r.recorded().to_owned());
+        assert!(
+            recorded
+                .as_deref()
+                .is_some_and(|r| r.contains(".cargo/config.toml")),
+            "{config:?}: {recorded:?}"
+        );
+        assert_eq!(dep.cooldown, None, "{config:?}");
+    }
+}
+
+#[test]
+fn a_lockfiles_packages_and_directories_carry_the_committed_cooldown() {
+    let files: Files = [
+        (
+            "app/Cargo.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1.0\"\n",
+        ),
+        (
+            "app/Cargo.lock",
+            "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n[[package]]\nname = \"trans\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+        ),
+        (
+            ".cargo/config.toml",
+            "[registry]\nglobal-min-publish-age = \"14 days\"\n",
+        ),
+    ]
+    .iter()
+    .map(|(path, text)| ((*path).to_owned(), fixture(text)))
+    .collect();
+    let mut config = config();
+    config.managers = vec![Manager::Cargo];
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    // The locked package no manifest declares is a transitive dependency
+    // under the same cooldown, so a security fix for it knows the floor.
+    let locked = extraction
+        .locked
+        .iter()
+        .find(|l| l.package == "trans")
+        .expect("trans locked");
+    assert_eq!(locked.cooldown.as_ref().map(|c| c.hours), Some(336));
+    let transitive = locked.dependency();
+    assert_eq!(transitive.cooldown.as_ref().map(|c| c.hours), Some(336));
+    // The lockfile run reads the directory's cooldown from the extraction:
+    // the value verbatim, for the environment Cargo gets.
+    assert_eq!(
+        extraction.cargo_cooldowns.get("app"),
+        Some(&patchula_manager::CargoCooldown::Set(
+            patchula_manager::Cooldown {
+                hours: 336,
+                value: "14 days".into(),
+                file: ".cargo/config.toml".into(),
+            }
+        ))
+    );
+}
+
 #[test]
 fn go_modules_a_replace_directive_names_are_skipped() {
     let module = |extra: &str| {

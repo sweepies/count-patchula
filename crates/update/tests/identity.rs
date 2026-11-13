@@ -30,6 +30,7 @@ fn manager_dep() -> ManagerDependency {
         extract: None,
         included_by: None,
         registry: Some("https://npm.corp.example.com".into()),
+        cooldown: None,
     }
 }
 

@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn fixes_name_the_cves_each_advisory_carries() {
         let report: Report = serde_json::from_value(serde_json::json!({
-            "schemaVersion": 7,
+            "schemaVersion": 8,
             "repositories": [{
                 "repository": "owner/repo",
                 "status": "complete",

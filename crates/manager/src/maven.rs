@@ -183,6 +183,7 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
             continue;
         }
         out.push(Dependency {
+            cooldown: None,
             manager: Manager::Maven,
             file: path.into(),
             location,

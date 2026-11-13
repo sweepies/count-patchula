@@ -464,32 +464,44 @@ pub fn render(
                         .insert((None, row.1));
                 }
                 for held in &metadata.held_back {
+                    let eligible = escape(&text::when(
+                        held.target_eligible_at
+                            .as_deref()
+                            .unwrap_or(&held.eligible_at),
+                    ));
+                    // A hold by the repository's committed cooldown gets no
+                    // tick: not even the Count can create it early.
+                    let row = match &held.cooldown {
+                        Some(cooldown) => format!(
+                            "- {} → {} ({}, {}): {}'s cooldown binds the Count; eligible {}\n",
+                            code(&dep.name),
+                            safe(&held.version),
+                            safe(metadata.source.as_str()),
+                            code(&file.path),
+                            code(&cooldown.file),
+                            eligible,
+                        ),
+                        None => checkbox(
+                            &format!(
+                                "Create it now anyway: {} → {} ({}, {}; eligible {})",
+                                code(&dep.name),
+                                safe(&held.version),
+                                safe(metadata.source.as_str()),
+                                code(&file.path),
+                                eligible,
+                            ),
+                            Action::Create(held_key(
+                                &file.path,
+                                dep,
+                                &held.version,
+                                held.update_type.as_str(),
+                            )),
+                        ),
+                    };
                     sections
                         .entry("Pending updates".into())
                         .or_default()
-                        .insert((
-                            None,
-                            checkbox(
-                                &format!(
-                                    "Create it now anyway: {} → {} ({}, {}; eligible {})",
-                                    code(&dep.name),
-                                    safe(&held.version),
-                                    safe(metadata.source.as_str()),
-                                    code(&file.path),
-                                    escape(&text::when(
-                                        held.target_eligible_at
-                                            .as_deref()
-                                            .unwrap_or(&held.eligible_at)
-                                    ))
-                                ),
-                                Action::Create(held_key(
-                                    &file.path,
-                                    dep,
-                                    &held.version,
-                                    held.update_type.as_str(),
-                                )),
-                            ),
-                        ));
+                        .insert((None, row));
                 }
                 let warnings: Vec<_> = repo
                     .warnings

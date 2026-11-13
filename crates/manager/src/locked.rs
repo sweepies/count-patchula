@@ -16,6 +16,9 @@ pub struct Locked {
     /// public one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<Registry>,
+    /// The committed publish-age cooldown its lockfile's project carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown: Option<Cooldown>,
     /// The syntax the located version text is spelled in.
     pub syntax: Syntax,
 }
@@ -41,6 +44,7 @@ impl Locked {
             extract: None,
             included_by: None,
             registry: self.registry.clone(),
+            cooldown: self.cooldown.clone(),
         }
     }
 }
@@ -91,6 +95,7 @@ pub(crate) fn cargo(
                 continue;
             }
             out.push(Locked {
+                cooldown: None,
                 registry: None,
                 manager: Manager::Cargo,
                 file: (*path).into(),
@@ -148,6 +153,7 @@ pub(crate) fn npm(
                 continue;
             }
             out.push(Locked {
+                cooldown: None,
                 registry: None,
                 manager: Manager::Npm,
                 file: (*path).into(),
@@ -309,6 +315,7 @@ pub(crate) fn aube(
             continue;
         }
         out.push(Locked {
+            cooldown: None,
             registry: None,
             manager,
             file,

@@ -8,7 +8,7 @@ use patchula_words::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 /// The `actions` object's own version: 3 added `stale` pull request actions
 /// for publish races a rerun retries; 2 gave branches and pull requests
 /// their own statuses, with `stale` for branches.
@@ -383,6 +383,16 @@ pub struct Resolution {
     pub kind: ResolutionKind,
     pub version: String,
 }
+/// A repository's committed Cargo publish-age cooldown, as a report names
+/// it: the hold a release-age wait did not set.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Cooldown {
+    /// The cooldown in whole hours, rounded up from the committed value.
+    pub hours: u32,
+    /// The Cargo configuration file that commits it.
+    pub file: String,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HeldBack {
@@ -398,6 +408,11 @@ pub struct HeldBack {
     /// Exact summary target's eligibility; eligibleAt remains the earliest in the class.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_eligible_at: Option<String>,
+    /// The committed Cargo cooldown holding the release, when it rather
+    /// than the configured wait does. A hold by it offers no early-create
+    /// override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown: Option<Cooldown>,
 }
 fn one() -> usize {
     1
@@ -458,6 +473,11 @@ pub struct Update {
     /// The comparison of a pinned image's old and new SBOMs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<ImageCheck>,
+    /// The committed Cargo cooldown the target may sit inside: set only on
+    /// a security fix the cooldown did not hold, so the lockfile run knows
+    /// its Cargo must be told to allow too-new releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown: Option<Cooldown>,
 }
 
 patchula_words::words!(
@@ -865,7 +885,7 @@ mod tests {
     fn branch_and_pull_request_statuses_are_their_own() {
         let report = |branch: &str, pr: &str| {
             format!(
-                r#"{{"schemaVersion":7,"repositories":[{{"repository":"o/r","status":"complete","reason":null,"packageFiles":[]}}],"actions":{{"schemaVersion":3,"dryRun":false,"branches":[{{"repository":"o/r","branch":"b","baseCommit":"c","status":"{branch}","reason":"why","message":"m","previousCommit":null,"commit":null,"verified":null,"lockfilePending":false,"files":[]}}],"pullRequests":[{{"repository":"o/r","branch":"b","number":1,"url":null,"status":"{pr}","reason":"why"}}]}}}}"#
+                r#"{{"schemaVersion":{SCHEMA_VERSION},"repositories":[{{"repository":"o/r","status":"complete","reason":null,"packageFiles":[]}}],"actions":{{"schemaVersion":3,"dryRun":false,"branches":[{{"repository":"o/r","branch":"b","baseCommit":"c","status":"{branch}","reason":"why","message":"m","previousCommit":null,"commit":null,"verified":null,"lockfilePending":false,"files":[]}}],"pullRequests":[{{"repository":"o/r","branch":"b","number":1,"url":null,"status":"{pr}","reason":"why"}}]}}}}"#
             )
         };
         assert!(Report::from_json(report("stale", "closed").as_bytes()).is_ok());
@@ -878,7 +898,7 @@ mod tests {
     fn a_stale_repository_is_a_real_run_with_a_reason() {
         let report = |repo: serde_json::Value, actions: serde_json::Value| {
             serde_json::json!({
-                "schemaVersion": 7,
+                "schemaVersion": 8,
                 "repositories": [repo],
                 "actions": actions,
             })
@@ -912,13 +932,13 @@ mod tests {
     #[test]
     fn reject_future_schema_before_interpreting_payload() {
         assert!(matches!(
-            Report::from_json(br#"{"schemaVersion":8,"future":true}"#),
-            Err(Error::Version(8))
+            Report::from_json(br#"{"schemaVersion":9,"future":true}"#),
+            Err(Error::Version(9))
         ));
         assert!(
-            Report::from_json(br#"{"schemaVersion":7,"repositories":[],"typo":true}"#).is_err()
+            Report::from_json(br#"{"schemaVersion":8,"repositories":[],"typo":true}"#).is_err()
         );
-        for old in [1, 2, 3, 4, 5, 6] {
+        for old in [1, 2, 3, 4, 5, 6, 7] {
             let report = format!(r#"{{"schemaVersion":{old},"repositories":[]}}"#);
             assert!(matches!(
                 Report::from_json(report.as_bytes()),
@@ -930,8 +950,8 @@ mod tests {
     #[test]
     fn the_version_error_names_the_supported_schema() {
         assert_eq!(
-            Error::Version(8).to_string(),
-            format!("unsupported report schemaVersion 8; expected {SCHEMA_VERSION}")
+            Error::Version(9).to_string(),
+            format!("unsupported report schemaVersion 9; expected {SCHEMA_VERSION}")
         );
     }
 
@@ -953,9 +973,67 @@ mod tests {
         ));
     }
 
+    /// Version 8 reports a committed Cargo cooldown: on a held release it
+    /// names the hold no override can waive, and on a proposed fix it names
+    /// the window Cargo must be told the release may sit inside.
+    #[test]
+    fn a_cooldown_is_part_of_version_8() {
+        let value = serde_json::json!({
+            "schemaVersion": SCHEMA_VERSION,
+            "repositories": [{
+                "repository": "demo/app",
+                "status": "complete",
+                "reason": null,
+                "packageFiles": [{
+                    "path": "Cargo.toml",
+                    "dependencies": [{
+                        "manager": "cargo",
+                        "name": "serde",
+                        "package": "serde",
+                        "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
+                        "updates": [{
+                            "newValue": "1.0.1", "newVersion": "1.0.1", "newDigest": null,
+                            "updateType": "patch", "group": null,
+                            "cooldown": {"hours": 336, "file": ".cargo/config.toml"}
+                        }],
+                        "metadata": {
+                            "source": "crates", "kinds": [], "locations": [],
+                            "heldBack": [{
+                                "version": "1.0.2", "updateType": "patch", "count": 1,
+                                "publishedAt": "2026-10-13T12:00:00Z",
+                                "eligibleAt": "2026-10-27T12:00:00Z",
+                                "cooldown": {"hours": 336, "file": ".cargo/config.toml"}
+                            }]
+                        }
+                    }]
+                }]
+            }]
+        });
+        let parsed = Report::from_json(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let dep = &parsed.repositories[0].package_files[0].dependencies[0];
+        let cooldown = Cooldown {
+            hours: 336,
+            file: ".cargo/config.toml".into(),
+        };
+        assert_eq!(dep.updates[0].cooldown, Some(cooldown.clone()));
+        assert_eq!(
+            dep.metadata.as_ref().unwrap().held_back[0].cooldown,
+            Some(cooldown)
+        );
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+        let mut seven = value.clone();
+        seven["schemaVersion"] = serde_json::json!(7);
+        assert!(matches!(
+            Report::from_json(&serde_json::to_vec(&seven).unwrap()),
+            Err(Error::Version(7))
+        ));
+    }
+
     #[test]
     fn a_notice_reason_parses() {
-        let report = r#"{"schemaVersion":7,"repositories":[{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[],"notices":[{"manager":"composer","path":"composer.json","name":"acme/lib","package":"acme/lib","current":"^1 | ^2","available":"3.0.0","reason":"cannot be rewritten"}]}]}"#;
+        let report = format!(
+            r#"{{"schemaVersion":{SCHEMA_VERSION},"repositories":[{{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[],"notices":[{{"manager":"composer","path":"composer.json","name":"acme/lib","package":"acme/lib","current":"^1 | ^2","available":"3.0.0","reason":"cannot be rewritten"}}]}}]}}"#
+        );
         let parsed = Report::from_json(report.as_bytes()).unwrap();
         let notice = &parsed.repositories[0].notices[0];
         assert_eq!(notice.reason.as_deref(), Some("cannot be rewritten"));
@@ -1006,7 +1084,7 @@ mod tests {
     #[test]
     fn action_versions_and_dry_run_states_are_validated() {
         let mut value = serde_json::json!({
-            "schemaVersion": 7,
+            "schemaVersion": 8,
             "repositories": [{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[]}],
             "actions": {"schemaVersion":3,"dryRun":true,"branches":[{
                 "repository":"demo/app","branch":"patchula/example","baseCommit":"base",
@@ -1071,11 +1149,19 @@ ordered_by!(HeldBack, |h| (
     &h.published_at,
     &h.eligible_at,
     &h.target_eligible_at,
+    &h.cooldown,
 ));
 ordered_by!(Update, |u| (
     (&u.new_value, &u.new_version, &u.new_digest),
     u.update_type.as_str(),
-    (&u.group, &u.policy, &u.release_age, &u.fixes, &u.image),
+    (
+        &u.group,
+        &u.policy,
+        &u.release_age,
+        &u.fixes,
+        &u.image,
+        &u.cooldown
+    ),
 ));
 ordered_by!(UpdatePolicy, |p| (
     (

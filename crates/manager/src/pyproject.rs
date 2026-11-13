@@ -108,6 +108,7 @@ impl Scan<'_, '_> {
             let current = &requirement[start..end];
             let package = normalise(name);
             self.out.push(Dependency {
+                cooldown: None,
                 manager: Manager::Pyproject,
                 file: self.path.into(),
                 location: Location::new(
@@ -165,6 +166,7 @@ impl Scan<'_, '_> {
             }
             let package = normalise(name);
             self.out.push(Dependency {
+                cooldown: None,
                 manager: Manager::Pyproject,
                 file: self.path.into(),
                 location: Location::new(
@@ -310,6 +312,7 @@ fn python_version(path: &str, text: &Lines<'_>) -> Vec<Dependency> {
     }
     let start = text.find(token).expect("token from text");
     vec![Dependency {
+        cooldown: None,
         manager: Manager::Pyproject,
         file: path.into(),
         location: Location::new(text, start, start + token.len(), "/python".into()),

@@ -29,6 +29,30 @@ show up, and a day is usually enough for someone else to notice.
 - One instant per batch decides eligibility, so every repository in a run sees
   the same answer.
 
+### Cargo's cooldown
+
+A repository can commit a publish-age cooldown that its own Cargo enforces:
+`registry.global-min-publish-age`, `registry.min-publish-age` or
+`registries.<name>.min-publish-age` in `.cargo/config.toml` or `.cargo/config`,
+at the root, in a member or in a directory above one inside the repository.
+The Count reads the strictest of every applying value in Cargo's own duration
+grammar (`N seconds/minutes/hours/days/weeks/months`, a month being
+2,629,746 seconds, converted to hours rounding up) and applies it as a floor
+under `waitHours` for the crates.io dependencies the configuration reaches: a
+release inside the window is never proposed, however short the configured
+wait, and a dashboard "create it now" tick cannot beat it either.
+
+- A committed `resolver.incompatible-publish-age = "allow"` is ignored: the
+  Count stays stricter, never looser.
+- A cooldown configuration the Count cannot read — `include`, unparseable
+  TOML or a value outside the grammar — fails that manifest's crates.io
+  lookups rather than run unprotected.
+- Security fixes bypass the floor: a release that fixes an advisory is
+  proposed inside the window anyway, and the report marks it so.
+- Cargo itself is not told yet: today the floor decides what is proposed and
+  what is held; the lockfile run's Cargo gets the cooldown from a later
+  change.
+
 GitHub tags take their date from the matching release's publication time, then
 from an annotated tag's tagger date. A lightweight tag with no release is
 undated. Commit timestamps are never used: a commit made months ago and tagged

@@ -199,6 +199,7 @@ fn setup_input(
         .cloned()
         .ok_or_else(|| format!("cannot locate setup input {pointer}"))?;
     out.push(Dependency {
+        cooldown: None,
         manager: Manager::GithubActions,
         file: path.into(),
         location,
@@ -337,6 +338,7 @@ fn add(
         )
     };
     out.push(Dependency {
+        cooldown: None,
         manager: Manager::GithubActions,
         file: path.into(),
         location: Location::new(text, located.0, located.1, pointer.into()),
@@ -483,6 +485,7 @@ fn runners(
         })?;
     used.insert(start);
     out.push(Dependency {
+        cooldown: None,
         manager: Manager::GithubActions,
         file: path.into(),
         location: Location::new(text, start, start + label.len(), pointer.into()),

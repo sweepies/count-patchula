@@ -43,6 +43,7 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
             .cloned()
             .ok_or_else(|| format!("cannot locate pre-commit rev {pointer}"))?;
         out.push(Dependency {
+            cooldown: None,
             manager: Manager::PreCommit,
             file: path.into(),
             location,

@@ -59,6 +59,7 @@ pub(super) fn extract(
                 continue;
             }
             out.push(Dependency {
+                cooldown: None,
                 manager: Manager::Go,
                 file: path.into(),
                 location: Location::new(
@@ -96,6 +97,7 @@ pub(super) fn extract(
             let version = c.name("version").unwrap();
             let n = line.find(code).unwrap() + version.start();
             out.push(Dependency {
+                cooldown: None,
                 manager: Manager::Go,
                 file: path.into(),
                 location: Location::new(

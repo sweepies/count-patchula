@@ -22,6 +22,7 @@ pub(super) fn maven(
     pointer: String,
 ) -> Dependency {
     Dependency {
+        cooldown: None,
         manager: Manager::Gradle,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), pointer),
@@ -241,6 +242,7 @@ fn wrapper(path: &str, text: &Lines<'_>) -> Vec<Dependency> {
         return Vec::new();
     };
     vec![Dependency {
+        cooldown: None,
         manager: Manager::Gradle,
         file: path.into(),
         location: Location::new(

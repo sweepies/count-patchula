@@ -251,6 +251,7 @@ pub(super) fn extract(
             continue;
         };
         out.push(Dependency {
+            cooldown: None,
             manager: Manager::Nix,
             file: path.into(),
             location: Location::new(

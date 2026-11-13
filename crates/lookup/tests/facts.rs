@@ -38,6 +38,7 @@ fn dep(manager: Manager, kind: DependencyKind) -> Dependency {
         extract: None,
         included_by: None,
         registry: None,
+        cooldown: None,
     }
 }
 

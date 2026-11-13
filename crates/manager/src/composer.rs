@@ -108,6 +108,7 @@ pub(super) fn extract(
                 continue;
             }
             out.push(Dependency {
+                cooldown: None,
                 manager: Manager::Composer,
                 file: path.into(),
                 location: Location::new(
