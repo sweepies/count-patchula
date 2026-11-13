@@ -166,7 +166,7 @@ description = "Regenerate the request-transcript and run-depth snapshots after a
 env = { PATCHULA_UPDATE_TRANSCRIPTS = "1" }
 run = [
   "rm -f crates/update/tests/transcripts.tsv crates/engine/tests/transcripts.tsv crates/cli/tests/transcripts.tsv crates/server/tests/transcripts.tsv crates/datasource/tests/transcripts.tsv crates/engine/tests/depth.tsv",
-  "cargo test --locked -p patchula-update --test write --test inventory",
+  "cargo test --locked -p patchula-update --test write --test inventory --test inventory_prefix",
   "cargo test --locked -p patchula-engine --test write --test actions --test symlinks",
   "cargo test --locked -p patchula-cli",
   "cargo test --locked -p patchula-server --lib",

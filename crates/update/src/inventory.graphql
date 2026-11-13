@@ -4,6 +4,7 @@ query InventoryQuery(
     $prefix: String!
     $closed: [ID!]!
     $issueFilter: IssueFilters
+    $refQuery: String
 ) {
     viewer {
         login
@@ -92,7 +93,7 @@ query InventoryQuery(
                 }
             }
         }
-        refs(refPrefix: $prefix, first: 100) {
+        refs(refPrefix: $prefix, query: $refQuery, first: 100) {
             pageInfo {
                 hasNextPage
                 endCursor

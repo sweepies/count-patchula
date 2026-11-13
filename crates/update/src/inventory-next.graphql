@@ -2,6 +2,7 @@ query InventoryNextQuery(
     $owner: String!
     $name: String!
     $prefix: String!
+    $refQuery: String
     $cursor: String
     $issueFilter: IssueFilters
     $issueCursor: String
@@ -34,7 +35,7 @@ query InventoryNextQuery(
                 }
             }
         }
-        refs(refPrefix: $prefix, first: 100, after: $cursor) {
+        refs(refPrefix: $prefix, query: $refQuery, first: 100, after: $cursor) {
             pageInfo {
                 hasNextPage
                 endCursor

@@ -393,6 +393,97 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
     check_transcript();
 }
 
+/// GitHub's branch rename keeps an open pull request and repoints its
+/// head: moved outside `prs.branch`, the branch is invisible to the
+/// steady-state refs walk. The receipts still name it, so the run must
+/// take the full write path — the REST pull listing and cleanup's own
+/// branch list see every branch — and the renamed branch's pull request
+/// is closed as obsolete and the branch deleted, exactly as an
+/// unfiltered run would.
+#[tokio::test(start_paused = true)]
+async fn a_branch_renamed_outside_the_prefix_still_takes_the_full_write_path() {
+    let fake = sandbox(base_files(), None, vec![]);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let run = || {
+        engine.run(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+    };
+    let first = run().await.unwrap();
+    assert_eq!(
+        first.actions.as_ref().unwrap().branches[0].status,
+        BranchStatus::Created
+    );
+    {
+        let mut state = fake.state();
+        let repo = state.repo_mut();
+        // The rename: the ref moves outside the prefix and the open pull
+        // request's head follows it — the filtered refs walk cannot see
+        // either.
+        let (name, sha) = repo
+            .refs
+            .iter()
+            .find(|(name, _)| name.starts_with("refs/heads/patchula/"))
+            .map(|(name, sha)| (name.clone(), sha.clone()))
+            .unwrap();
+        repo.refs.remove(&name);
+        repo.refs.insert("refs/heads/human/renamed".into(), sha);
+        repo.prs.get_mut(&1).unwrap()["head"]["ref"] = json!("human/renamed");
+        // Drop the update itself, so no plan names the receipted branch.
+        let content = "{\"dependencies\":{\"fixture\":\"2.0.0\"}}\n";
+        let sha = patchula_github::blob_sha(content.as_bytes());
+        repo.blobs.insert(sha.clone(), content.into());
+        for entry in repo
+            .trees
+            .get_mut("base-tree")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+        {
+            if entry["path"] == "package.json" {
+                entry["sha"] = json!(sha);
+            }
+        }
+    }
+    fake.clear_log();
+    let report = run().await.unwrap();
+    assert_eq!(report.repositories[0].status, Status::Complete);
+    {
+        let state = fake.state();
+        let repo = state.repo();
+        assert_eq!(repo.prs[&1]["state"], "closed");
+        assert!(!repo.refs.contains_key("refs/heads/human/renamed"));
+    }
+    // The filtered walk ran — `refs(query:)` held the prefix — and the
+    // receipted branch's absence took the full write path: the REST pull
+    // listing and cleanup's own branch list, not the settled run's few
+    // requests.
+    let requests = fake.log();
+    assert!(
+        requests
+            .iter()
+            .any(|(_, path, body)| path == "/graphql"
+                && body["variables"]["refQuery"] == "patchula/"),
+        "{requests:?}"
+    );
+    for listed in ["pulls", "branches"] {
+        assert!(
+            requests.iter().any(|(method, path, _)| method == "GET"
+                && path == &format!("/repos/demo/sandbox/{listed}")),
+            "{listed}: {requests:?}"
+        );
+    }
+    check_transcript();
+}
+
 #[tokio::test(start_paused = true)]
 async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_issue() {
     let fake = sandbox(base_files(), None, vec![]);

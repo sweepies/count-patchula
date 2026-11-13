@@ -1500,7 +1500,18 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         {
             let mut s = server.state();
             match case {
-                "pages" => s.settings.ref_page_size = Some(1),
+                "pages" => {
+                    s.settings.ref_page_size = Some(1);
+                    // A second in-prefix branch, not the Count's, so the
+                    // prefix-narrowed walk still takes two refs pages.
+                    s.repo_mut().commits.insert(
+                        "human".into(),
+                        json!({"sha":"human","tree":{"sha":"t"},"message":"human","actor":"human"}),
+                    );
+                    s.repo_mut()
+                        .refs
+                        .insert("refs/heads/patchula/human".into(), "human".into());
+                }
                 "human" => {
                     let mut commit = s.repo().commits[p.action().commit.as_ref().unwrap()].clone();
                     commit["message"] = json!("Human work");
@@ -1971,8 +1982,20 @@ async fn a_pull_reopened_mid_walk_takes_the_full_write_path() {
         .await
         .unwrap();
     // One ref a page: the walk's first page still reports the pull request
-    // closed and the second page's request point reopens it.
-    server.state().settings.ref_page_size = Some(1);
+    // closed and the second page's request point reopens it. A second
+    // in-prefix branch, not the Count's, keeps the prefix-narrowed walk at
+    // two pages.
+    {
+        let mut s = server.state();
+        s.repo_mut().commits.insert(
+            "human".into(),
+            json!({"sha":"human","tree":{"sha":"t"},"message":"human","actor":"human"}),
+        );
+        s.repo_mut()
+            .refs
+            .insert("refs/heads/patchula/human".into(), "human".into());
+        s.settings.ref_page_size = Some(1);
+    }
     server
         .on(patchula_testkit::github::Matcher::Graphql(
             "associatedPullRequests",
