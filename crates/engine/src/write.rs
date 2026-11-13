@@ -1,6 +1,6 @@
 //! The write path as named steps over one repository's plans, one
 //! authoritative inventory and one shared reconciliation tail.
-use super::{Engine, Error, Result, Stage, Work, fail, lockfile_concurrency, stale};
+use super::{Engine, Error, Result, Stage, Work, fail, stale};
 use patchula_config::Config;
 use patchula_manager::Dependency;
 use patchula_report::{
@@ -9,13 +9,24 @@ use patchula_report::{
 use patchula_update::dashboard::Controls;
 use patchula_update::{Inventory, Lifecycle, Plan, RestoreOutcome, Settlement};
 
-/// One run's write context: what every repository's pipeline shares.
+/// One run's write context: what every repository's pipeline shares. All of
+/// it is read-only or internally synchronised — the notes client's memoised
+/// reads, the engine's governor-paced client and progress — so repositories
+/// write side by side.
 pub(super) struct Write<'a> {
     engine: &'a Engine,
     now: chrono::DateTime<chrono::Utc>,
     dry_run: bool,
     allow_lockfile_pending: bool,
     note_sources: patchula_notes::Client,
+}
+
+/// The branch and pull-request actions one repository's write produced.
+/// They join the run's report after every repository has written, in the
+/// report's sorted repository order, so a side-by-side write reports what a
+/// sequential one would.
+#[derive(Default)]
+pub(super) struct Written {
     pub(super) branches: Vec<BranchAction>,
     pub(super) pull_requests: Vec<PullRequestAction>,
 }
@@ -73,20 +84,19 @@ impl Write<'_> {
             dry_run,
             allow_lockfile_pending,
             note_sources: patchula_notes::Client::new(engine.sources.clone()),
-            branches: Vec::new(),
-            pull_requests: Vec::new(),
         }
     }
 
     /// One repository's write: plan it, settle it from receipts or write it,
     /// then reconcile through the shared tail.
-    pub(super) async fn repository(&mut self, work: &mut Work) -> Result<()> {
+    pub(super) async fn repository(&self, work: &mut Work) -> Result<Written> {
         let Some(config) = work.config.take() else {
-            return Ok(());
+            return Ok(Written::default());
         };
         if work.report.status != Status::Complete {
-            return Ok(());
+            return Ok(Written::default());
         }
+        let mut written = Written::default();
         let mut controls = std::mem::take(&mut work.controls);
         let mut snapshot = std::mem::take(&mut work.snapshot);
         let inventory = work.inventory.take();
@@ -101,7 +111,7 @@ impl Write<'_> {
             Ok(plans) => plans,
             Err(failure) => {
                 failed(repo, failure);
-                return Ok(());
+                return Ok(written);
             }
         };
         self.maintenance(repo, &config, &snapshot, &mut plans, since)
@@ -115,7 +125,7 @@ impl Write<'_> {
                 Some(inventory) => Some(inventory),
                 None => {
                     fail(repo, "write inventory missing");
-                    return Ok(());
+                    return Ok(written);
                 }
             }
         };
@@ -131,7 +141,7 @@ impl Write<'_> {
                 since,
             ) {
                 failed(repo, failure);
-                return Ok(());
+                return Ok(written);
             }
             self.tooling(repo, &config, &snapshot, inventory, &mut plans);
             match self.restore(repo, &config, &mut plans, inventory).await {
@@ -158,7 +168,7 @@ impl Write<'_> {
                     {
                         stale(repo, reason);
                     }
-                    self.pull_requests.extend(
+                    written.pull_requests.extend(
                         plans
                             .iter()
                             .filter(|p| {
@@ -177,15 +187,16 @@ impl Write<'_> {
                                 })
                             }),
                     );
-                    self.pull_requests.extend(settlement.merge_actions);
-                    self.branches
+                    written.pull_requests.extend(settlement.merge_actions);
+                    written
+                        .branches
                         .extend(plans.into_iter().map(|p| p.into_action()));
-                    return Ok(());
+                    return Ok(written);
                 }
                 Ok(RestoreOutcome::Partial) => {}
                 Err(failure) => {
                     failed(repo, failure);
-                    return Ok(());
+                    return Ok(written);
                 }
             }
         }
@@ -197,11 +208,11 @@ impl Write<'_> {
                 Ok(state) => Some(state),
                 Err(failure) => {
                     failed(repo, failure);
-                    return Ok(());
+                    return Ok(written);
                 }
             }
         } else {
-            self.pull_requests.extend(
+            written.pull_requests.extend(
                 plans
                     .iter()
                     .filter(|p| p.action().status == BranchStatus::Planned)
@@ -234,7 +245,7 @@ impl Write<'_> {
             _ => Ok(Vec::new()),
         };
         match cleanup {
-            Ok(actions) => self.branches.extend(actions),
+            Ok(actions) => written.branches.extend(actions),
             Err(failure) => {
                 // A dropped prefetch task would finish whenever the runtime
                 // reached it; wait so the reads it made are always the same.
@@ -242,7 +253,7 @@ impl Write<'_> {
                     let _ = notes.await;
                 }
                 failed(repo, failure);
-                return Ok(());
+                return Ok(written);
             }
         }
         if !self.dry_run {
@@ -282,7 +293,7 @@ impl Write<'_> {
                     "one or more pull request actions failed or were protected; inspect actions",
                 );
             }
-            self.pull_requests.append(&mut state.actions);
+            written.pull_requests.append(&mut state.actions);
         }
         for plan in &plans {
             if matches!(
@@ -304,18 +315,19 @@ impl Write<'_> {
             .find(|p| p.action().status == BranchStatus::Stale)
             .and_then(|p| p.action().reason.clone())
             .or_else(|| {
-                self.pull_requests
+                written
+                    .pull_requests
                     .iter()
-                    .filter(|a| a.repository == repo.repository)
                     .find(|a| a.status == PullRequestStatus::Stale)
                     .and_then(|a| a.reason.clone())
             });
         if let Some(reason) = stale_reason {
             stale(repo, reason);
         }
-        self.branches
+        written
+            .branches
             .extend(plans.into_iter().map(|p| p.into_action()));
-        Ok(())
+        Ok(written)
     }
 
     /// The run's schedule turn for every repository that stayed complete,
@@ -495,14 +507,9 @@ impl Write<'_> {
     ) {
         if let Some(runner) = &self.engine.lockfiles {
             self.engine.progress.stage(Stage::Lockfiles, plans.len());
-            patchula_update::lock_all(
-                runner,
-                plans,
-                snapshot,
-                config,
-                lockfile_concurrency(),
-                &|| self.engine.progress.advance(1),
-            )
+            patchula_update::lock_all(runner, plans, snapshot, config, &|| {
+                self.engine.progress.advance(1)
+            })
             .await;
         } else {
             for plan in plans.iter_mut() {

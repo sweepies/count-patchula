@@ -1103,16 +1103,16 @@ pub fn unified(path: &str, old: &str, new: &str) -> String {
     result
 }
 
-/// Every plan's lockfiles through `generator`, `concurrency` plans at a
-/// time, calling `done` as each finishes. Each plan works in its own
-/// scratch tree; the base blobs they add, the same for every plan, join
-/// `snapshot` afterwards.
+/// Every plan's lockfiles through `generator`, all at once — the runner's
+/// own semaphore bounds how many generations a run works at once across
+/// every repository — calling `done` as each finishes. Each plan works in
+/// its own scratch tree; the base blobs they add, the same for every plan,
+/// join `snapshot` afterwards.
 pub async fn lock_all(
     generator: &dyn contract::Generate,
     plans: &mut [Plan],
     snapshot: &mut Snapshot,
     config: &Config,
-    concurrency: usize,
     done: &(dyn Fn() + Sync),
 ) {
     type Task<'a> =
@@ -1133,8 +1133,9 @@ pub async fn lock_all(
             })
         })
         .collect();
+    let width = tasks.len().max(1);
     let added: Vec<Vec<(String, Blob)>> = futures_util::stream::iter(tasks)
-        .buffer_unordered(concurrency.max(1))
+        .buffer_unordered(width)
         .collect()
         .await;
     for (path, blob) in added.into_iter().flatten() {

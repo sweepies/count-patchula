@@ -3225,3 +3225,422 @@ async fn depth_pin_full_write_of_three_plans() {
     check_depth(DEPTH_LATENCY, samples);
     check_transcript();
 }
+
+/// What `seed_files` does for the primary repository, for a repository
+/// `add_repository` made: `files` become blobs and tree entries behind
+/// `main` at `base`.
+fn seed_repository(github: &FakeGitHub, name: &str, files: &BTreeMap<String, String>) {
+    let entries: Vec<Value> = files
+        .iter()
+        .map(|(path, content)| {
+            json!({"path":path,"sha":patchula_github::blob_sha(content.as_bytes()),"mode":"100644","type":"blob"})
+        })
+        .collect();
+    let base = "a".repeat(40);
+    let mut state = github.state();
+    let repo = state.repositories.get_mut(name).unwrap();
+    repo.default_branch = "main".into();
+    repo.base = base.clone();
+    repo.refs.insert("refs/heads/main".into(), base.clone());
+    repo.trees.insert("base-tree".into(), json!(entries));
+    repo.commits.insert(
+        base,
+        json!({"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tree":{"sha":"base-tree"}}),
+    );
+    for content in files.values() {
+        repo.blobs.insert(
+            patchula_github::blob_sha(content.as_bytes()),
+            content.clone(),
+        );
+    }
+    repo.checks =
+        vec![json!({"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"})];
+}
+
+/// The version `defaults.toml` pins for `tool`, read straight from it so a
+/// pin bump does not stale the seeded usage records.
+fn pinned(tool: &str) -> String {
+    let defaults = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../tools/src/lockfiles/defaults.toml"
+    ))
+    .unwrap();
+    defaults
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix(&format!("{tool} = "))
+                .map(|version| version.trim().trim_matches('"').to_owned())
+        })
+        .unwrap_or_else(|| panic!("defaults.toml pins no {tool}"))
+}
+
+/// A scripted lockfile-tool executor covering every repository in the run.
+/// `git` calls address each repository's clone by its `clones/<sha-256>`
+/// path, so `ls-tree` and `checkout` materialize that repository's `files`.
+/// The tool call sleeps `tool_time` before writing the lockfile its working
+/// directory names; `(repository, start, end)` goes into `windows` so the
+/// test can see two repositories' tool runs overlap.
+struct Tools {
+    /// Each repository's checkout file set, keyed by the clone directory
+    /// name `checkout()` derives: `patchula_manager::hash(repository)`.
+    files: BTreeMap<String, BTreeMap<String, String>>,
+    /// The lockfile directory name to its repository: `pkg-a` is alpha's.
+    dirs: BTreeMap<String, String>,
+    /// The lockfile leaf each directory's tool writes.
+    locks: BTreeMap<String, String>,
+    tool_time: std::time::Duration,
+    windows: Mutex<Vec<(String, tokio::time::Instant, tokio::time::Instant)>>,
+}
+impl Tools {
+    /// The file set of the clone `--git-dir` addresses.
+    fn clone_files(&self, spec: &patchula_process::CommandSpec) -> &BTreeMap<String, String> {
+        let dir = spec
+            .args
+            .iter()
+            .find_map(|arg| arg.strip_prefix("--git-dir="))
+            .expect("a repository's git call");
+        let name = std::path::Path::new(dir)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a named clone");
+        &self.files[name]
+    }
+}
+impl patchula_process::Executor for Tools {
+    fn run(
+        &self,
+        spec: patchula_process::CommandSpec,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<u8>, patchula_process::Failure>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move {
+            if spec.args.iter().any(|s| s == "uninstall") {
+                return Ok(Vec::new());
+            }
+            if spec.args.iter().any(|s| s == "git") {
+                if let Some(i) = spec.args.iter().position(|s| s == "init") {
+                    let path = std::path::Path::new(&spec.args[i + 2]);
+                    std::fs::create_dir_all(path).unwrap();
+                    std::fs::write(path.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+                }
+                if spec.args.iter().any(|s| s == "ls-tree") {
+                    return Ok(self
+                        .clone_files(&spec)
+                        .iter()
+                        .map(|(path, content)| {
+                            format!(
+                                "100644 blob {}\t{path}\0",
+                                patchula_github::blob_sha(content.as_bytes())
+                            )
+                        })
+                        .collect::<String>()
+                        .into_bytes());
+                }
+                if let Some(i) = spec.args.iter().position(|s| s == "checkout") {
+                    let root = std::path::Path::new(
+                        spec.args
+                            .iter()
+                            .find_map(|s| s.strip_prefix("--work-tree="))
+                            .unwrap(),
+                    );
+                    for path in &spec.args[i + 3..] {
+                        let target = root.join(path);
+                        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+                        std::fs::write(target, &self.clone_files(&spec)[path]).unwrap();
+                    }
+                }
+                return Ok(Vec::new());
+            }
+            // A lockfile tool run: take its window, then write the lockfile
+            // the run would produce inside its working directory.
+            let directory = spec
+                .args
+                .iter()
+                .zip(spec.args.iter().skip(1))
+                .find_map(|(flag, value)| {
+                    matches!(flag.as_str(), "--cwd" | "--prefix" | "-C")
+                        .then(|| std::path::PathBuf::from(value))
+                })
+                .expect("a lockfile tool names its working directory");
+            let leaf = directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a named tool directory");
+            let repo = self.dirs[leaf].clone();
+            let start = tokio::time::Instant::now();
+            tokio::time::sleep(self.tool_time).await;
+            let content = match self.locks[leaf].as_str() {
+                "bun.lock" => {
+                    "{\"lockfileVersion\":3,\"packages\":{\"fixture\":[\"fixture@2.0.0\"]}}\n"
+                }
+                "package-lock.json" => {
+                    "{\"lockfileVersion\":3,\"packages\":{\"node_modules/fixture\":{\"version\":\"2.0.0\"}}}\n"
+                }
+                leaf => panic!("unexpected lockfile {leaf}"),
+            };
+            std::fs::write(directory.join(&self.locks[leaf]), content).unwrap();
+            self.windows
+                .lock()
+                .unwrap()
+                .push((repo, start, tokio::time::Instant::now()));
+            Ok(Vec::new())
+        })
+    }
+}
+
+/// The three-repository sandbox plus everything a run needs to reach: the
+/// scripted tools and the runner's worktree root (which must outlive the run).
+struct ThreeRepos {
+    engine: Engine,
+    sandbox: Arc<Sandbox>,
+    tools: Arc<Tools>,
+    runner: patchula_tools::Runner,
+    temp: tempfile::TempDir,
+}
+impl ThreeRepos {
+    /// `demo/alpha` regenerates `pkg-a/bun.lock` and `demo/bravo`
+    /// `pkg-b/package-lock.json` alongside the same dependency update
+    /// `demo/charlie` publishes without lockfile work. bun's serial cache
+    /// lock and npm's shared one let the two runs really overlap.
+    async fn build(concurrency: usize) -> Self {
+        let github = Arc::new(FakeGitHub::new("demo/alpha"));
+        github.add_repository("demo/bravo", true);
+        github.add_repository("demo/charlie", true);
+        let hosts = Arc::new(Hosts::new(github.clone()));
+        let catalog = Arc::new(Mutex::new(
+            json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}}),
+        ));
+        let osv = Arc::new(Mutex::new(json!({"results":[{}]})));
+        {
+            let catalog = catalog.clone();
+            hosts.script("registry.npmjs.org", move |_, _| {
+                github::json(200, catalog.lock().unwrap().clone())
+            });
+        }
+        hosts.script("api.osv.dev", move |_, _| {
+            github::json(200, osv.lock().unwrap().clone())
+        });
+        let files = |lock: Option<(&str, &str)>| {
+            let mut files = base_files();
+            if let Some((directory, leaf)) = lock {
+                let manifest = files.remove("package.json").unwrap();
+                files.insert(format!("{directory}/package.json"), manifest);
+                files.insert(format!("{directory}/{leaf}"), "{}\n".into());
+            }
+            files
+        };
+        // npm's cache is documented concurrent-safe, so a native npm run
+        // overlaps bun's serial one in the same partition; aube's is not.
+        let native_npm = |files: &mut BTreeMap<String, String>| {
+            files
+                .get_mut("patchula.pkl")
+                .unwrap()
+                .push_str("lockfiles { npmEngine = \"npm\" }\n");
+        };
+        let mut bravo_files = files(Some(("pkg-b", "package-lock.json")));
+        native_npm(&mut bravo_files);
+        let manifests = [
+            ("demo/alpha", Some(("pkg-a", "bun.lock"))),
+            ("demo/bravo", Some(("pkg-b", "package-lock.json"))),
+            ("demo/charlie", None),
+        ];
+        for (name, lock) in manifests {
+            let seeded = if name == "demo/bravo" {
+                bravo_files.clone()
+            } else {
+                files(lock)
+            };
+            seed_repository(github.as_ref(), name, &seeded);
+        }
+        github.state().settings.latency = std::time::Duration::from_millis(100);
+        let sandbox = Arc::new(Sandbox {
+            github,
+            hosts,
+            catalog,
+            fail_lookup: Default::default(),
+        });
+        let tools = Arc::new(Tools {
+            files: manifests
+                .iter()
+                .filter(|(_, lock)| lock.is_some())
+                .map(|(name, lock)| {
+                    let seeded = if *name == "demo/bravo" {
+                        bravo_files.clone()
+                    } else {
+                        files(*lock)
+                    };
+                    (patchula_manager::hash(name.as_bytes()), seeded)
+                })
+                .collect(),
+            dirs: manifests
+                .iter()
+                .filter_map(|(name, lock)| {
+                    lock.map(|(directory, _)| (directory.to_owned(), name.to_string()))
+                })
+                .collect(),
+            locks: manifests
+                .iter()
+                .filter_map(|(_, lock)| {
+                    lock.map(|(directory, leaf)| (directory.to_owned(), leaf.to_owned()))
+                })
+                .collect(),
+            tool_time: std::time::Duration::from_millis(800),
+            windows: Mutex::new(Vec::new()),
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let runner =
+            patchula_tools::Runner::new(temp.path().join("worktrees"), "offline-installation")
+                .with_executor(tools.clone());
+        // A proven install takes the store's shared lock only: record both
+        // tools as used so neither run's first use waits for the other.
+        let usage: BTreeMap<String, i64> = [
+            (format!("bun@{}", pinned("bun")), 1),
+            (format!("node@{}", pinned("node")), 1),
+        ]
+        .into_iter()
+        .collect();
+        let store = temp.path().join("tools");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(
+            store.join("patchula-usage.json"),
+            serde_json::to_vec(&usage).unwrap(),
+        )
+        .unwrap();
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine =
+            Engine::with_transport("offline-installation", cache, concurrency, sandbox.clone())
+                .unwrap();
+        Self {
+            engine,
+            sandbox,
+            tools,
+            runner,
+            temp,
+        }
+    }
+}
+
+/// Three repositories write side by side: two regenerate lockfiles while
+/// every repository's writes flow. The side-by-side run must produce the
+/// report the sequential one does, byte for byte.
+#[tokio::test(start_paused = true)]
+async fn repositories_write_side_by_side_with_an_identical_report() {
+    let names = || Options {
+        repositories: vec![
+            "demo/alpha".into(),
+            "demo/bravo".into(),
+            "demo/charlie".into(),
+        ],
+        ..Default::default()
+    };
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let sequential = ThreeRepos::build(1).await;
+    let sequential_engine = sequential
+        .engine
+        .with_versions_host(false)
+        .with_lockfile_runner(sequential.runner.clone());
+    // Wall time, not the paused clock's virtual time.
+    let started = std::time::Instant::now();
+    let mut sequential_report = sequential_engine
+        .run_at(names(), false, false, now)
+        .await
+        .unwrap();
+    let sequential_elapsed = started.elapsed();
+
+    let parallel = ThreeRepos::build(4).await;
+    assert!(parallel.temp.path().is_dir());
+    let parallel_engine = parallel
+        .engine
+        .with_versions_host(false)
+        .with_lockfile_runner(parallel.runner.clone());
+    let started = std::time::Instant::now();
+    let mut parallel_report = parallel_engine
+        .run_at(names(), false, false, now)
+        .await
+        .unwrap();
+    let parallel_elapsed = started.elapsed();
+
+    // Both repositories' tool runs overlapped under the runner's shared
+    // semaphore; the sequential run's cannot.
+    let overlaps =
+        |a: &(String, tokio::time::Instant, tokio::time::Instant),
+         b: &(String, tokio::time::Instant, tokio::time::Instant)| a.1 < b.2 && b.1 < a.2;
+    let sequential_windows = sequential.tools.windows.lock().unwrap().clone();
+    assert_eq!(sequential_windows.len(), 2, "{sequential_windows:?}");
+    assert!(
+        !overlaps(&sequential_windows[0], &sequential_windows[1]),
+        "sequential tool runs overlapped: {sequential_windows:?}"
+    );
+    let windows = parallel.tools.windows.lock().unwrap().clone();
+    assert_eq!(windows.len(), 2, "{windows:?}");
+    assert!(
+        overlaps(&windows[0], &windows[1]),
+        "lockfile tool runs did not overlap: {windows:?}"
+    );
+
+    // Writes interleave across repositories behind the shared governor: some
+    // repository's first mutation lands before another's last.
+    let mutation = |method: &str, body: &Value| {
+        method != "GET"
+            || body["query"]
+                .as_str()
+                .is_some_and(|query| query.starts_with("mutation"))
+    };
+    let repository = |path: &str, body: &Value| {
+        ["alpha", "bravo", "charlie"].into_iter().find(|name| {
+            path.contains(&format!("demo/{name}"))
+                || body["variables"]["name"].as_str() == Some(*name)
+        })
+    };
+    let mut spans: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for (index, (method, path, body)) in parallel.sandbox.log().iter().enumerate() {
+        if !mutation(method, body) {
+            continue;
+        }
+        if let Some(name) = repository(path, body) {
+            spans
+                .entry(name)
+                .and_modify(|span| span.1 = index)
+                .or_insert((index, index));
+        }
+    }
+    assert!(
+        ["alpha", "bravo", "charlie"]
+            .iter()
+            .all(|name| spans.contains_key(name)),
+        "a repository wrote nothing: {spans:?}"
+    );
+    let overlapped = ["alpha", "bravo", "charlie"]
+        .iter()
+        .enumerate()
+        .any(|(i, a)| {
+            ["alpha", "bravo", "charlie"]
+                .iter()
+                .skip(i + 1)
+                .any(|b| spans[a].0 < spans[b].1 && spans[b].0 < spans[a].1)
+        });
+    assert!(overlapped, "writes did not interleave: {spans:?}");
+
+    eprintln!(
+        "three-repository write: sequential {sequential_elapsed:?}, \
+         side by side {parallel_elapsed:?}"
+    );
+    assert!(
+        parallel_elapsed < sequential_elapsed,
+        "{parallel_elapsed:?} !< {sequential_elapsed:?}"
+    );
+    sequential_report.stats = None;
+    parallel_report.stats = None;
+    assert_eq!(
+        serde_json::to_string(&sequential_report).unwrap(),
+        serde_json::to_string(&parallel_report).unwrap(),
+        "the side-by-side write's report differs from the sequential one"
+    );
+    check_transcript();
+}

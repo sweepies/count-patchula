@@ -683,20 +683,50 @@ impl Engine {
             ));
         }
         let started = Instant::now();
-        let (mut report, mut work) = self.lookup_work_at(options, now, !dry_run).await?;
+        let (mut report, work) = self.lookup_work_at(options, now, !dry_run).await?;
         let write_started = Instant::now();
         let before = self.github.stats().await;
         // Each `Work` carries its own report row, so the write pairs them by
         // identity: no positional zip, and the report is rebuilt from the
         // rows the pipeline actually wrote.
-        let mut write = write::Write::new(self, now, dry_run, allow_lockfile_pending);
-        for work in &mut work {
-            write.repository(work).await?;
+        let write = write::Write::new(self, now, dry_run, allow_lockfile_pending);
+        // Repositories write side by side — their reads and lockfile tools
+        // overlap each other's governor-paced writes — and the actions they
+        // return join the report in the same sorted order they would in a
+        // sequential pass, so the report is identical.
+        //
+        // A repository's error does not cancel the others: dropping one
+        // mid-write could leave a published branch without its pull request.
+        // Every repository runs to the end, and the run fails with the first
+        // error in repository order, so which error it reports does not
+        // depend on timing.
+        let mut finished: Vec<(String, Result<(Work, write::Written)>)> = stream::iter(work)
+            .map(|mut work| {
+                let write = &write;
+                async move {
+                    let name = work.report.repository.clone();
+                    let done = write.repository(&mut work).await.map(|done| (work, done));
+                    (name, done)
+                }
+            })
+            .buffer_unordered(self.concurrency)
+            .collect()
+            .await;
+        finished.sort_by(|a, b| a.0.cmp(&b.0));
+        let written: Vec<(Work, write::Written)> = finished
+            .into_iter()
+            .map(|(_, done)| done)
+            .collect::<Result<_>>()?;
+        let mut work = Vec::with_capacity(written.len());
+        let mut branches = Vec::new();
+        let mut pull_requests = Vec::new();
+        for (w, mut done) in written {
+            work.push(w);
+            branches.append(&mut done.branches);
+            pull_requests.append(&mut done.pull_requests);
         }
         write.record_runs(&mut work).await;
         report.repositories = work.into_iter().map(|w| w.report).collect();
-        let mut branches = write.branches;
-        let pull_requests = write.pull_requests;
         branches.sort_by(|a, b| (&a.repository, &a.branch).cmp(&(&b.repository, &b.branch)));
         report.actions = Some(patchula_report::Actions {
             schema_version: patchula_report::ACTIONS_SCHEMA_VERSION,
@@ -1407,13 +1437,6 @@ impl patchula_datasource::Flakes for RunnerFlakes {
     > {
         Box::pin(self.0.flake_prefetch(reference, token))
     }
-}
-
-/// How many of a repository's branches regenerate their lockfiles at once:
-/// one per core, up to four, as the tools are CPU-bound and each batch of
-/// another installation runs its own.
-fn lockfile_concurrency() -> usize {
-    std::thread::available_parallelism().map_or(1, |cores| cores.get().min(4))
 }
 
 /// Mark a repository failed. The first failure of a run names the reason;
