@@ -1,0 +1,93 @@
+---
+// Wall time for all six benchmark repositories, from /benchmarks/. Each pair
+// is drawn against the slower tool, so a bar's length is its share of
+// Renovate's time.
+const rows = [
+  { label: "Warm", patchula: 14.8, renovate: 274.3 },
+  { label: "Cold", patchula: 150.5, renovate: 920.6 },
+];
+const seconds = (value: number) => `${value.toFixed(1)} s`;
+---
+
+<figure class="speed-bars">
+  {
+    rows.map((row) => (
+      <div class="group">
+        <span class="label">{row.label}</span>
+        <div class="bar-row">
+          <span class="tool">Patchula</span>
+          <span class="track">
+            <span
+              class="bar patchula"
+              style={`width: ${(row.patchula / row.renovate) * 100}%`}
+            />
+          </span>
+          <span class="value">{seconds(row.patchula)}</span>
+        </div>
+        <div class="bar-row">
+          <span class="tool">Renovate</span>
+          <span class="track">
+            <span class="bar renovate" style="width: 100%" />
+          </span>
+          <span class="value">{seconds(row.renovate)}</span>
+        </div>
+      </div>
+    ))
+  }
+  <figcaption>
+    Six large public repositories, looked up without writing, against
+    Renovate 44.173.1.
+  </figcaption>
+</figure>
+
+<style>
+  .speed-bars {
+    margin: 0.75rem 0 0;
+    display: grid;
+    gap: 0.6rem;
+    font-size: var(--sl-text-xs);
+  }
+  .group {
+    display: grid;
+    gap: 0.2rem;
+  }
+  .label {
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .bar-row {
+    display: grid;
+    grid-template-columns: 4.5rem 1fr 3.75rem;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .tool {
+    color: var(--sl-color-gray-2);
+  }
+  .track {
+    display: block;
+    height: 0.6rem;
+    border-radius: 0.3rem;
+    background: var(--sl-color-gray-6);
+  }
+  .bar {
+    display: block;
+    height: 100%;
+    min-width: 0.3rem;
+    border-radius: 0.3rem;
+  }
+  .bar.patchula {
+    background: var(--sl-color-accent);
+  }
+  .bar.renovate {
+    background: var(--sl-color-gray-4);
+  }
+  .value {
+    text-align: end;
+    font-variant-numeric: tabular-nums;
+    color: var(--sl-color-gray-2);
+  }
+  figcaption {
+    color: var(--sl-color-gray-3);
+  }
+</style>
