@@ -27,7 +27,7 @@ pub(crate) struct ReleaseNotesScope {
 }
 impl State for SavedRelease {
     const NAMESPACE: &'static str = "release-notes";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
     // Code-versioned: the stored release is this build's pick and decode
     // of the release's fields.
     const CODE_VERSIONED: bool = true;
