@@ -207,7 +207,9 @@ impl Engine {
                             // the read away; it is the same read either way.
                             // Its cache lookups and token finish before the
                             // scan starts, so its first request goes out with
-                            // the head check's however fast the scan ends.
+                            // the head check's however fast the scan ends,
+                            // unless the governor holds it (permits in
+                            // flight, a rate-limit cooldown).
                             let beside = if read_controls {
                                 Some(
                                     patchula_update::Inventory::beside(

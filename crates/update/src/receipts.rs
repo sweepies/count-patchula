@@ -852,8 +852,10 @@ impl Inventory {
     }
     /// Everything a read beside the scan's head check needs from the
     /// cache, and the credential's token, gathered before the scan starts:
-    /// the read then sends its first request on its first poll, so it goes
-    /// out with the head check's whatever the scan answers. The
+    /// the read's first poll then reaches the transport unless the GitHub
+    /// governor holds it (every permit in flight, a rate-limit cooldown)
+    /// or another installation's token is minting, so it goes out with the
+    /// head check's however fast the scan ends. The
     /// branch prefix is `declared` (an override's `prs.branch`), else the
     /// prefix the repository's most recent write receipts were saved
     /// under, else the bundled schema's default.
@@ -1111,8 +1113,9 @@ enum ReadFailure {
     WrongActor,
 }
 /// An inventory read prepared to run beside the scan's head check: its
-/// cache lookups are done, so [`read`](Self::read) sends its first request
-/// on its first poll.
+/// cache lookups are done, so [`read`](Self::read) waits on nothing of its
+/// own before its first request — only the GitHub client's governor and
+/// token, which [`Inventory::beside`] readied.
 pub struct Beside {
     prefix: String,
     prepared: Prepared,

@@ -272,8 +272,9 @@ impl Client {
             .ok_or(Error::Configuration)
     }
 
-    /// Renews refreshable credentials now, so a request started next sends
-    /// without waiting on a token. A fixed token has nothing to renew.
+    /// Renews refreshable credentials now, so a request started before the
+    /// token nears expiry sends without waiting on a mint. A fixed token has
+    /// nothing to renew.
     pub async fn ready(&self) -> Result<()> {
         if let Some(credentials) = &self.0.credentials {
             credentials.token().await?;
