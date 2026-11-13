@@ -154,6 +154,10 @@ fn every_code_versioned_state_versions_its_source() {
             crate::adapters::AdapterSections::NAMESPACE,
             crate::adapters::AdapterSections::VERSION,
         ),
+        (
+            crate::releases::SavedRelease::NAMESPACE,
+            crate::releases::SavedRelease::VERSION,
+        ),
     ]
     .into_iter()
     .collect();

@@ -124,10 +124,19 @@ reads, and the owning crate's parity test fails when the code moves without a
 version bump; the maintenance step is to bump the `VERSION` and update the
 row in the same commit. A derivation may only read code in its row's listed
 files and trees; over-include rather than miss, and batch cosmetic edits in
-listed files. The parity test also scans the crate's sources for
-`CODE_VERSIONED` impls, so a code-versioned state cannot exist without a row.
-Hints are not code-versioned: they only name what to prefetch, a stale one
-costs a wasted read and never a wrong answer. Entries written under the
+listed files. The parity test also scans every `impl State` in the
+workspace's non-test sources — `#[cfg(test)]` modules and `tests/`
+directories do not count — and requires each to be either a row in
+`tests/state-versions.tsv` or an entry with a reason in
+`tests/state-exempt.tsv`; an unlisted state, a listing whose impl is gone
+and a flag that disagrees with the table all fail, so states in crates
+without a parity test of their own stay covered. The rule for which table
+a state lands in: a value this build's code derives from an input whose
+key does not capture the decoded result, kept without a TTL — a permanent
+memo — is code-versioned. A state refetched within a bounded freshness
+window, or holding facts that are not code-derived — receipts, history,
+permits, run timestamps, hints — is exempt; a stale hint only costs a
+wasted read and never a wrong answer. Entries written under the
 retired `name@vN+build` scheme are never read again and are deleted when the
 cache opens.
 

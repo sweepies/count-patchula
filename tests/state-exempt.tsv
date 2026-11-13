@@ -1,0 +1,27 @@
+# Every `impl State` in non-test workspace source that is not
+# code-versioned, with the one-line reason it needs no row in
+# tests/state-versions.tsv: either the value is refetched inside a
+# bounded freshness window, or it holds facts a run observed — receipts,
+# history, permits, timestamps, hints — rather than bytes this build's
+# code derives from an input.
+#
+# The coverage check every state parity test runs fails when a state is
+# neither a row here nor a row there, when a listing's impl is gone, and
+# when the `CODE_VERSIONED` flag disagrees with the table the impl lands
+# in. Columns: namespace, reason.
+#
+# name	reason
+auto-merge-history	history a run observed, not a derived value
+branch-hint	a stale default-branch hint costs one re-read of the authoritative branch
+dashboard-age-permits	a granted permit is a fact, not a derivation
+dashboard-receipt	a stored receipt records what a write proved
+inventory-actor	a remembered viewer.login; a wrong entry costs one retry
+last-run	when the run last ran — a fact
+lookup-hint	a hint only names what to prefetch; a stale one costs a wasted read
+maintenance-success	when lockfile maintenance last completed — a fact
+mise-ls-remote	refetched inside the one-hour freshness window
+nix-prefetch	refetched inside the one-hour freshness window
+osv-listing	refetched within the advisory freshness window
+quiet-run	the run's head, report hash and next-due instant — a stale hash fails toward a full run
+receipts-prefix	names the prefix the receipts were saved under — a fact
+verified-write-receipts	receipts of what a write proved, not derived bytes
