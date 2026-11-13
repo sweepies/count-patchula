@@ -197,11 +197,44 @@ impl Engine {
             let local = options.local.as_deref();
             let work: Vec<_> = stream::iter(repos.iter().cloned())
                 .map(|repo| async move {
-                    let scanned = match local {
-                        Some(dir) => self.scan_local(dir, &repo, override_config).await,
+                    let (scanned, early) = match local {
+                        Some(dir) => (self.scan_local(dir, &repo, override_config).await, None),
                         None => {
-                            self.scan(&repo, overrides.get(&repo).or(override_config))
-                                .await
+                            // The inventory reads beside the head check,
+                            // under the branch prefix an override declares,
+                            // else the last receipted run's, else the
+                            // bundled default. A scan that disagrees throws
+                            // the read away; it is the same read either way.
+                            let early = read_controls.then_some(async {
+                                let prefix = match overrides.get(&repo).or(override_config) {
+                                    Some(config) => config.prs.branch.clone(),
+                                    None => {
+                                        patchula_update::Inventory::assumed_prefix(
+                                            &self.cache,
+                                            &repo,
+                                        )
+                                        .await?
+                                    }
+                                };
+                                Ok::<_, patchula_update::Error>((
+                                    patchula_update::Inventory::read_beside(
+                                        &self.github,
+                                        &self.cache,
+                                        &repo,
+                                        &prefix,
+                                    )
+                                    .await?,
+                                    prefix,
+                                ))
+                            });
+                            let scan = self.scan(&repo, overrides.get(&repo).or(override_config));
+                            match early {
+                                Some(early) => {
+                                    let (scanned, early) = tokio::join!(scan, early);
+                                    (scanned, Some(early))
+                                }
+                                None => (scan.await, None),
+                            }
                         }
                     };
                     let mut work = match scanned {
@@ -215,14 +248,28 @@ impl Engine {
                         && work.report.status == Status::Complete
                         && let Some(config) = &work.config
                     {
-                        match patchula_update::Inventory::read(
-                            &self.github,
-                            &self.cache,
-                            &work.report,
-                            config,
-                        )
-                        .await
-                        {
+                        // The early inventory is usable only when it saw
+                        // the scan's head and was read for the scan's
+                        // prefix; anything else reads it again as before.
+                        let read = match early {
+                            Some(Ok((inventory, prefix)))
+                                if inventory.default_branch.name == work.report.default_branch
+                                    && inventory.default_branch.oid == work.report.commit
+                                    && prefix == config.prs.branch =>
+                            {
+                                Ok(inventory)
+                            }
+                            _ => {
+                                patchula_update::Inventory::read(
+                                    &self.github,
+                                    &self.cache,
+                                    &work.report,
+                                    config,
+                                )
+                                .await
+                            }
+                        };
+                        match read {
                             Ok(inventory) => {
                                 match patchula_update::dashboard::Controls::read(
                                     &inventory,

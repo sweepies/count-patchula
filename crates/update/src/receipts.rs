@@ -565,6 +565,17 @@ fn receipts_scope(repo: &str, prefix: &str) -> ReceiptsScope {
         branch_prefix: prefix.into(),
     }
 }
+/// The bundled schema's `prs.branch`: the prefix a repository whose
+/// config is not yet known most likely uses.
+fn default_branch_prefix() -> &'static str {
+    static PREFIX: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        patchula_config::defaults()
+            .expect("bundled config")
+            .prs
+            .branch
+    });
+    &PREFIX
+}
 /// Record that the receipts under `receipts_scope(repo, prefix)` are the
 /// repository's most recent: only while the marker names `prs.branch` may
 /// the next read narrow the refs walk to the prefix.
@@ -826,7 +837,56 @@ impl Inventory {
         repository: &Repository,
         config: &Config,
     ) -> Result<Self, Error> {
-        Self::read_documents(client, cache, repository, config, DOCUMENTS).await
+        Self::read_documents(
+            client,
+            cache,
+            &repository.repository,
+            &config.prs.branch,
+            Head::Scan {
+                name: repository.default_branch.as_deref(),
+                oid: repository.commit.as_deref(),
+            },
+            DOCUMENTS,
+        )
+        .await
+    }
+    /// The inventory read beside the scan's head check: no head is known
+    /// yet, so the first page's answer anchors the per-page race checks
+    /// instead. The caller must compare the result's
+    /// [`DefaultBranch::name`] and [`DefaultBranch::oid`], and the
+    /// `branch_prefix` it passed, with what the scan found — a difference
+    /// means this read answered for another head or another config, and
+    /// the inventory must be read again with [`read`](Self::read).
+    pub async fn read_beside(
+        client: &Client,
+        cache: &Cache,
+        repository: &str,
+        branch_prefix: &str,
+    ) -> Result<Self, Error> {
+        Self::read_documents(
+            client,
+            cache,
+            repository,
+            branch_prefix,
+            Head::FirstPage,
+            DOCUMENTS,
+        )
+        .await
+    }
+    /// The `prs.branch` a read beside the scan may assume before the
+    /// repository's config is known: the prefix the repository's most
+    /// recent write receipts were saved under, or the bundled schema's
+    /// default when no receipts were ever saved. The caller must still
+    /// compare it with the scanned config's `prs.branch` before trusting
+    /// the read.
+    pub async fn assumed_prefix(cache: &Cache, repository: &str) -> Result<String, Error> {
+        let remembered = cache
+            .state::<ReceiptsPrefix>(&RepositoryScope {
+                repository: repository.into(),
+            })
+            .await?
+            .map(|saved| saved.prefix);
+        Ok(remembered.unwrap_or_else(|| default_branch_prefix().into()))
     }
     /// A read over `documents`: the credential's remembered actor filters
     /// the issue walk; a missing or disproven hint reads unfiltered instead
@@ -834,16 +894,17 @@ impl Inventory {
     async fn read_documents(
         client: &Client,
         cache: &Cache,
-        repository: &Repository,
-        config: &Config,
+        repository: &str,
+        branch_prefix: &str,
+        head: Head<'_>,
         documents: Documents,
     ) -> Result<Self, Error> {
         let receipts = cache
-            .state::<Receipts>(&receipts_scope(&repository.repository, &config.prs.branch))
+            .state::<Receipts>(&receipts_scope(repository, branch_prefix))
             .await?;
         let saved = cache
             .state::<ReceiptsPrefix>(&RepositoryScope {
-                repository: repository.repository.clone(),
+                repository: repository.into(),
             })
             .await?;
         // Stored receipts prove every branch the Count wrote here shared
@@ -858,8 +919,8 @@ impl Inventory {
         // restore marks the prefix again.
         let ref_query = (receipts.is_some()
             && documents.ref_query
-            && saved.is_some_and(|saved| saved.prefix == config.prs.branch))
-        .then_some(config.prs.branch.as_str());
+            && saved.is_some_and(|saved| saved.prefix == branch_prefix))
+        .then_some(branch_prefix);
         let receipts = receipts.unwrap_or_default();
         let closed_ids: Vec<_> = receipts
             .closed
@@ -868,7 +929,6 @@ impl Inventory {
             .take(100)
             .collect();
         let (owner, name) = repository
-            .repository
             .split_once('/')
             .ok_or(Error::Refused("invalid repository".into()))?;
         let scope = ActorScope {
@@ -880,7 +940,7 @@ impl Inventory {
                 client,
                 cache,
                 &scope,
-                repository,
+                head,
                 Request {
                     owner,
                     name,
@@ -893,7 +953,7 @@ impl Inventory {
             .await
             {
                 Ok(mut inventory) => {
-                    inventory.finish(cache, &repository.repository).await?;
+                    inventory.finish(cache, repository).await?;
                     return Ok(inventory);
                 }
                 Err(ReadFailure::WrongActor) => hint = None,
@@ -906,12 +966,13 @@ impl Inventory {
     /// each request continues every connection that still has a page — a
     /// finished one is never sent again. `request.actor` is the stored
     /// login hint, if any: the answer's `viewer.login` must confirm it or
-    /// the issue set cannot be trusted.
+    /// the issue set cannot be trusted. `head` says what the per-page
+    /// race checks compare the default branch with.
     async fn walk(
         client: &Client,
         cache: &Cache,
         scope: &ActorScope,
-        repository: &Repository,
+        head: Head<'_>,
         request: Request<'_>,
     ) -> Result<Self, ReadFailure> {
         let actor = request.actor;
@@ -956,7 +1017,9 @@ impl Inventory {
         let repository_data = data.repository.unwrap_or_default();
         result.merge_settings = crate::automerge::Settings::from_graphql(&repository_data);
         let branch = DefaultBranch::read(repository_data.default_branch_ref);
-        Self::head_check(repository, branch.name.as_deref(), branch.oid.as_deref())?;
+        if let Head::Scan { name, oid } = head {
+            Self::head_check(name, oid, branch.name.as_deref(), branch.oid.as_deref())?;
+        }
         result.default_branch = branch;
         result.closed = Page::nodes(
             &data
@@ -992,7 +1055,7 @@ impl Inventory {
             let data: ContinuationData = client
                 .graphql(document, variables(&refs.next, &issues.next, &filter))
                 .await?;
-            let repository_data = Self::check(repository, &result, data)?;
+            let repository_data = Self::check(&result, data)?;
             if !refs.done {
                 refs.page(repository_data.refs.as_ref())?;
             }
@@ -1024,7 +1087,12 @@ impl Inventory {
             let repository_data = data.repository.unwrap_or_default();
             result.merge_settings = crate::automerge::Settings::from_graphql(&repository_data);
             let branch = DefaultBranch::read(repository_data.default_branch_ref);
-            Self::head_check(repository, branch.name.as_deref(), branch.oid.as_deref())?;
+            Self::head_check(
+                result.default_branch.name.as_deref(),
+                result.default_branch.oid.as_deref(),
+                branch.name.as_deref(),
+                branch.oid.as_deref(),
+            )?;
             result.default_branch = branch;
             result.closed = Page::nodes(
                 &data
@@ -1050,13 +1118,15 @@ impl Inventory {
         Ok(result)
     }
     /// The race check every page makes: the default branch's name and head
-    /// OID must still be what the scan saw.
+    /// OID must still be the walk's anchor — the scan's answer, or the
+    /// first page's when the read ran beside the scan.
     fn head_check(
-        repository: &Repository,
+        expected_name: Option<&str>,
+        expected_oid: Option<&str>,
         name: Option<&str>,
         oid: Option<&str>,
     ) -> Result<(), Error> {
-        if name != repository.default_branch.as_deref() || oid != repository.commit.as_deref() {
+        if name != expected_name || oid != expected_oid {
             return Err(Error::Raced(
                 "default branch changed since extraction; rerun",
             ));
@@ -1066,18 +1136,15 @@ impl Inventory {
     /// The per-page checks a continuation repeats — the actor must stay the
     /// first page's actor and the default branch must not have moved —
     /// returning the page's repository data.
-    fn check(
-        repository: &Repository,
-        result: &Inventory,
-        data: ContinuationData,
-    ) -> Result<ContinuationRepository, Error> {
+    fn check(result: &Inventory, data: ContinuationData) -> Result<ContinuationRepository, Error> {
         if result.actor != data.viewer.login {
             return Err(Error::Refused("inventory actor changed".into()));
         }
         let repository_data = data.repository.unwrap_or_default();
         let head = repository_data.default_branch_ref.as_ref();
         Self::head_check(
-            repository,
+            result.default_branch.name.as_deref(),
+            result.default_branch.oid.as_deref(),
             head.map(|h| h.name.as_str()),
             head.and_then(|h| h.target.as_ref()).map(|t| t.oid.as_str()),
         )?;
@@ -1111,6 +1178,21 @@ impl Inventory {
 enum ReadFailure {
     Error(Error),
     WrongActor,
+}
+/// What a walk's per-page head checks compare each page's default branch
+/// with.
+#[derive(Clone, Copy)]
+enum Head<'a> {
+    /// The scan's answer — the extraction's default branch name and
+    /// commit — so a page reporting another raced the run.
+    Scan {
+        name: Option<&'a str>,
+        oid: Option<&'a str>,
+    },
+    /// Whatever the first page answers: the read runs beside the scan's
+    /// head check, so nothing is known yet. The walk stays self-consistent
+    /// and the caller compares the result with the scan's head itself.
+    FirstPage,
 }
 impl From<Error> for ReadFailure {
     fn from(error: Error) -> Self {
@@ -1174,8 +1256,12 @@ pub async fn read_legacy_inventory(
     Inventory::read_documents(
         client,
         cache,
-        repository,
-        config,
+        &repository.repository,
+        &config.prs.branch,
+        Head::Scan {
+            name: repository.default_branch.as_deref(),
+            oid: repository.commit.as_deref(),
+        },
         Documents {
             first: LEGACY_INVENTORY_QUERY,
             next: LEGACY_INVENTORY_QUERY,

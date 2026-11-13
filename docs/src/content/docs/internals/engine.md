@@ -47,6 +47,11 @@ default branch. Catalog, digest and ref requests are deduplicated across the
 batch. Persisted lookup hints let warm source reads — current refs and the
 mutable tags the last run resolved — overlap revalidation, but hints only
 schedule work: the validated extraction and policy decide the report.
+A run that will write reads its control and write inventory beside the
+head check as well: that read anchors its per-page checks on its own
+first page and is kept only when its default branch, head commit and
+branch prefix prove to be the scan's — anything else is read again after
+the scan.
 
 A complete run stores a `quiet-run` state row per repository and credential
 scope: the head commit, a hash of the report row (tooling, lookup and

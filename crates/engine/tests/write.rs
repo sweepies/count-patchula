@@ -2828,12 +2828,17 @@ async fn races_under_the_run_are_stale_never_errors_and_the_rerun_completes() {
     .await;
 
     // The write inventory: the default branch moved between the
-    // extraction and the inventory read.
+    // extraction and the inventory read. The head check re-asserts its
+    // own answer so the rules pin what each side saw no matter which
+    // request lands first — the inventory now reads beside it.
     let fake = sandbox(base_files(), None, vec![]);
     let (engine, cache) = raced_engine(&fake).await;
     fake.github
-        .on(Matcher::Graphql("associatedPullRequests"))
+        .on(Matcher::Graphql("isPrivate"))
         .times(1)
+        .mutate(|state, _| state.repo_mut().move_base("base"));
+    fake.github
+        .on(Matcher::Graphql("associatedPullRequests"))
         .mutate(|state, _| state.repo_mut().move_base("moved"));
     assert_stale_then_completes(
         "write inventory",
@@ -2991,6 +2996,59 @@ async fn races_under_the_run_are_stale_never_errors_and_the_rerun_completes() {
         || repair(&fake),
     )
     .await;
+    check_transcript();
+}
+
+/// The inventory reads beside the head check, so a head that moves on the
+/// early read's first page leaves it answering for a head the scan never
+/// saw: the run reads the inventory again and races, exactly as it did
+/// when the read followed the scan. The head check re-asserts its own
+/// answer so the rules pin what each side saw no matter which request
+/// lands first.
+#[tokio::test(start_paused = true)]
+async fn a_head_move_on_the_early_inventory_read_rereads_it() {
+    use github::Matcher;
+    let fake = sandbox(base_files(), None, vec![]);
+    let (engine, _cache) = raced_engine(&fake).await;
+    fake.github
+        .on(Matcher::Graphql("isPrivate"))
+        .times(1)
+        .mutate(|state, _| state.repo_mut().move_base("base"));
+    fake.github
+        .on(Matcher::Graphql("associatedPullRequests"))
+        .mutate(|state, _| state.repo_mut().move_base("moved"));
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Default::default()
+    };
+    let report = engine.run(options(), false, false).await.unwrap();
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Stale, "{repo:?}");
+    assert!(
+        repo.reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("default branch changed since extraction"),
+        "{repo:?}"
+    );
+    let requests = fake.log();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|(_, path, body)| path == "/graphql"
+                && body["query"] == patchula_update::INVENTORY_QUERY)
+            .count(),
+        2,
+        "the early inventory read and its re-read: {requests:?}"
+    );
+    // The moved head stays authoritative, so the rerun's early read and
+    // scan agree again and one inventory read serves the run.
+    let report = engine.run(options(), false, false).await.unwrap();
+    assert_eq!(
+        report.repositories[0].status,
+        Status::Complete,
+        "{report:?}"
+    );
     check_transcript();
 }
 
