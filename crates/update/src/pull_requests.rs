@@ -547,6 +547,11 @@ pub struct Lifecycle {
     batched: BTreeSet<String>,
     /// The server URL to advertise to the CLI, if any.
     pub(crate) server: Option<String>,
+    /// The oldest `created_at` among the owned PRs the `prs.perHour` count
+    /// covers — `None` when that read did not run or counted none. A
+    /// `PerHour` hold first decays an hour after this instant, or an hour
+    /// after the run when every counted PR is the run's own.
+    pub per_hour_oldest: Option<DateTime<Utc>>,
 }
 impl Lifecycle {
     pub fn set_advertised_server(&mut self, url: Option<String>) {
@@ -632,6 +637,7 @@ impl Lifecycle {
             branch_permits: controls.branch_permits.clone(),
             batched: controls.batched.clone(),
             server: None,
+            per_hour_oldest: None,
         };
         let owner = view::Owner { actor, repo };
         // The hourly count only exists when `prs.perHour` is set: the same
@@ -658,6 +664,7 @@ impl Lifecycle {
             state.complete &= page.complete;
             let recent_prs: Vec<Tracked> = page.items.into_iter().map(Tracked::from).collect();
             recent = Some(view::recent(&recent_prs, owner, now));
+            state.per_hour_oldest = view::recent_oldest(&recent_prs, owner, now);
         }
         // Which branches `admit` will ask closed PRs about, and which open
         // owned PRs are obsolete, are decisions and live in the view; a

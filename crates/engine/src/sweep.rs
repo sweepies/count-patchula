@@ -66,13 +66,15 @@ pub(super) fn hash(repo: &Repository) -> Result<String> {
 
 /// The earliest instant time alone can change this repository's answer: a
 /// held-back release's eligibility, the next schedule-window time, an
-/// update's merge-age gate or a completed lockfile refresh's defer. `None`
-/// means the run saw nothing time-dependent; an input that cannot be
-/// computed makes the answer `Some(now)` — the repository always runs.
+/// update's merge-age gate, a completed lockfile refresh's defer or a
+/// `prs.perHour` hold's counted PRs ageing out. `None` means the run saw
+/// nothing time-dependent; an input that cannot be computed makes the
+/// answer `Some(now)` — the repository always runs.
 fn next_due(
     repo: &Repository,
     config: &Config,
     maintenance_success: Option<i64>,
+    per_hour_due: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> Option<DateTime<Utc>> {
     let parse = |value: &str| -> Option<DateTime<Utc>> {
@@ -114,7 +116,12 @@ fn next_due(
                 let Some(published) = parse(&age.published_at) else {
                     return Some(now);
                 };
-                fold!(published + chrono::Duration::hours(i64::from(wait)));
+                let Some(eligible) =
+                    published.checked_add_signed(chrono::Duration::hours(i64::from(wait)))
+                else {
+                    return Some(now);
+                };
+                fold!(eligible);
             }
         }
     }
@@ -143,19 +150,27 @@ fn next_due(
         && let Some(last) =
             maintenance_success.and_then(|last| chrono::DateTime::<Utc>::from_timestamp(last, 0))
     {
-        let lift = last
+        let Some(week_end) = last
             .date_naive()
             .week(chrono::Weekday::Mon)
             .first_day()
             .checked_add_days(chrono::Days::new(7))
             .and_then(|monday| monday.and_hms_opt(0, 0, 0))
-            .map(|start| {
-                start
-                    .and_utc()
-                    .max(last + chrono::Duration::hours(i64::from(config.lockfiles.wait_hours)))
-            })
-            .unwrap_or(now);
-        fold!(lift);
+            .map(|start| start.and_utc())
+        else {
+            return Some(now);
+        };
+        let Some(waited) = last.checked_add_signed(chrono::Duration::hours(i64::from(
+            config.lockfiles.wait_hours,
+        ))) else {
+            return Some(now);
+        };
+        fold!(week_end.max(waited));
+    }
+    // A `prs.perHour` hold frees as the PRs its count covered leave the
+    // hour window; the write path records the earliest such instant.
+    if let Some(instant) = per_hour_due {
+        fold!(instant);
     }
     due
 }
@@ -314,8 +329,14 @@ impl Engine {
                     commit: commit.clone(),
                     branch: branch.clone(),
                     report_hash: work.lookup_hash.clone(),
-                    next_due: next_due(&work.report, config, maintenance_success, now)
-                        .map(|instant| instant.timestamp_millis()),
+                    next_due: next_due(
+                        &work.report,
+                        config,
+                        maintenance_success,
+                        work.per_hour_due,
+                        now,
+                    )
+                    .map(|instant| instant.timestamp_millis()),
                     ran_at: now.timestamp_millis(),
                 },
             )

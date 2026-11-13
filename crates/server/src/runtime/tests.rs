@@ -2241,6 +2241,12 @@ async fn a_sweep_over_quiet_repositories_makes_no_requests() {
         signs_in: false,
     };
     let settings = settings();
+    // The credential's first inventory lists issues unfiltered and stores
+    // the actor every later read narrows by. Repositories run side by
+    // side, so which of them answers the cold read is scheduling; a
+    // sequential first run gives it to the first repository every time.
+    let mut cold = settings.clone();
+    cold.concurrency = 1;
     let names: Vec<String> = (0..REPOS)
         .map(|index| format!("owner/repo-{index}"))
         .collect();
@@ -2251,7 +2257,7 @@ async fn a_sweep_over_quiet_repositories_makes_no_requests() {
         .map(|name| Work::person(1, name.clone()))
         .collect();
     let outcome = runner
-        .run(&work, &settings, &Attribution::reason("push"))
+        .run(&work, &cold, &Attribution::reason("push"))
         .await
         .unwrap();
     assert!(!outcome.failed());

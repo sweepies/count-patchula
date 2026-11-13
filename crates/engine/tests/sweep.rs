@@ -184,6 +184,98 @@ async fn a_held_back_release_runs_exactly_at_its_due() {
     check_transcript();
 }
 
+/// `prs.perHour` admits two of four updates and holds the rest: the
+/// stored answer must free as the run's own PRs leave the hour window —
+/// quiet an instant before, running at the instant.
+#[tokio::test]
+async fn a_per_hour_hold_frees_as_the_counted_prs_age_out() {
+    const PERHOUR: &str = "amends \"PatchulaConfig.pkl\"\nprs { perHour = 2\n dashboard = false }\ndefaults { releaseNotes = false }\nmanagers = new Listing { \"github-actions\" }\n";
+    let fake = sandbox(BTreeMap::from([
+        ("patchula.pkl".into(), PERHOUR.to_owned()),
+        (
+            ".github/workflows/ci.yml".into(),
+            format!(
+                "on: push\njobs:\n  t:\n    steps:\n{}",
+                [
+                    ("actions/checkout", "v20.0.0"),
+                    ("actions/setup-node", "v3.0.0"),
+                    ("actions/cache", "v3.0.0"),
+                    ("docker/login-action", "v2.0.0"),
+                ]
+                .iter()
+                .enumerate()
+                .map(|(index, (repo, version))| {
+                    let sha = format!("{}{index}", "a".repeat(39));
+                    format!("      - uses: {repo}@{sha} # {version}\n")
+                })
+                .collect::<String>()
+            ),
+        ),
+    ]));
+    for repo in ["actions/setup-node", "actions/cache", "docker/login-action"] {
+        fake.github.add_repository(repo, false);
+    }
+    for (index, (repo, old, new)) in [
+        ("actions/checkout", "v20.0.0", "v21.0.0"),
+        ("actions/setup-node", "v3.0.0", "v4.0.0"),
+        ("actions/cache", "v3.0.0", "v4.0.0"),
+        ("docker/login-action", "v2.0.0", "v3.0.0"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        tag(
+            &fake.github,
+            repo,
+            old,
+            &format!("{}{index}", "a".repeat(39)),
+            "2026-01-01T00:00:00Z",
+        );
+        tag(
+            &fake.github,
+            repo,
+            new,
+            &format!("{}{index}", "b".repeat(39)),
+            "2026-01-02T00:00:00Z",
+        );
+    }
+    let engine = engine(fake.clone()).await;
+    let report = engine
+        .run_at(options(), false, false, at("2026-10-15T00:00:00Z"))
+        .await
+        .unwrap();
+    let actions = report.actions.as_ref().unwrap();
+    assert_eq!(
+        actions
+            .pull_requests
+            .iter()
+            .filter(|a| a.status == patchula_report::PullRequestStatus::Created)
+            .count(),
+        2,
+        "{actions:?}"
+    );
+    assert_eq!(
+        actions
+            .branches
+            .iter()
+            .filter(|a| a.reason.as_deref() == Some("prs.perHour limit reached"))
+            .count(),
+        2,
+        "{actions:?}"
+    );
+    let quiet = engine
+        .sweep_quiet(&["demo/app".into()], at("2026-10-15T00:59:59Z"))
+        .await
+        .unwrap();
+    assert_eq!(quiet, quiet_set(&["demo/app"]));
+    let quiet = engine
+        .sweep_quiet(&["demo/app".into()], at("2026-10-15T01:00:00Z"))
+        .await
+        .unwrap();
+    assert!(quiet.is_empty());
+    check_transcript();
+}
+
 /// A new release in the catalog changes the answer: the hash differs and
 /// the repository runs in full even though nothing about it moved. The
 /// config waits on nothing, so the sweep refetches the catalog rather than

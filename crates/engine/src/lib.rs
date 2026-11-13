@@ -141,6 +141,10 @@ struct Work {
     /// [`sweep::hash`] of the lookup-stage report row, before the write
     /// path adds its tooling and warnings; the sweep compares its own.
     lookup_hash: String,
+    /// When a `prs.perHour` hold could first lift — the oldest counted
+    /// PR's `created_at` plus the hour — set by the write path for
+    /// [`Engine::record_quiet`]'s `next_due`.
+    per_hour_due: Option<chrono::DateTime<chrono::Utc>>,
 }
 impl Work {
     /// A repository's work before extraction: its report and config, with
@@ -156,6 +160,7 @@ impl Work {
             inventory: None,
             controls: patchula_update::dashboard::Controls::default(),
             lookup_hash: String::new(),
+            per_hour_due: None,
         }
     }
 }

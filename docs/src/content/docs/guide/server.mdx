@@ -162,11 +162,13 @@ GitHub requests during a sweep. Each complete run stores the head commit, a
 hash of the repository's report — timings, stats and evaluation timestamps
 excluded — and `next_due`, the earliest instant at which time alone can
 change the answer: a held-back release becoming eligible, an update or
-maintenance window opening, a waiting lockfile refresh. On a batch the
+maintenance window opening, a waiting lockfile refresh, an hourly PR quota
+freeing. On a batch the
 sweep alone started, the server replays the cached extraction and catalog
 reads for every claimed repository, and one whose report hashes the same,
 is not due and ran within the last six hours is skipped with no GitHub
-request of its own — the installation's listing still costs what discovery
+request of its own beyond the hinted tag and digest refreshes every sweep
+makes — the installation's listing still costs what discovery
 always costs. Missing state, a missing cached extraction, a passed due or a
 changed answer all run the repository in full, as does any batch carrying
 more than the sweep — a delivered event, a person's trigger, a check

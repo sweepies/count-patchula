@@ -7,7 +7,7 @@ use patchula_report::{
     BranchAction, BranchStatus, PullRequestAction, PullRequestStatus, Repository, Status,
 };
 use patchula_update::dashboard::Controls;
-use patchula_update::{Inventory, Lifecycle, Plan, RestoreOutcome, Settlement};
+use patchula_update::{Hold, Inventory, Lifecycle, Plan, RestoreOutcome, Settlement};
 
 /// One run's write context: what every repository's pipeline shares. All of
 /// it is read-only or internally synchronised — the notes client's memoised
@@ -296,6 +296,16 @@ impl Write<'_> {
                 );
             }
             written.pull_requests.append(&mut state.actions);
+        }
+        // A `prs.perHour` hold lifts as the PRs its count covered leave
+        // the hour window — the oldest counted `created_at`, or the run's
+        // own time when the listing counted none — so a quiet sweep's
+        // `next_due` holds the answer until then at the latest.
+        if let Some(state) = &lifecycle
+            && plans.iter().any(|plan| plan.held(&Hold::PerHour))
+        {
+            work.per_hour_due =
+                Some(state.per_hour_oldest.unwrap_or(self.now) + chrono::Duration::hours(1));
         }
         for plan in &plans {
             if matches!(
