@@ -189,8 +189,10 @@ async fn a_real_installation_mints_a_metadata_read_token_for_one_repository() {
         std::env::var("PATCHULA_TEST_REPO"),
         std::env::var("PATCHULA_TEST_OTHER_PRIVATE_REPO"),
     ) else {
-        eprintln!("PATCHULA_TEST_* unset; the real-installation proof needs all five");
-        return;
+        panic!(
+            "the real-installation proof needs PATCHULA_TEST_APP_ID, PATCHULA_TEST_APP_KEY_FILE, \
+             PATCHULA_TEST_INSTALLATION, PATCHULA_TEST_REPO and PATCHULA_TEST_OTHER_PRIVATE_REPO"
+        );
     };
     let network = Arc::new(patchula_http::Network::new().unwrap());
     let recorded = Arc::new(Recorded {
@@ -230,7 +232,12 @@ async fn a_real_installation_mints_a_metadata_read_token_for_one_repository() {
     assert_eq!(answer["repository_selection"], "selected");
     let repositories = answer["repositories"].as_array().unwrap();
     assert_eq!(repositories.len(), 1);
-    assert_eq!(repositories[0]["full_name"], repo);
+    assert!(
+        repositories[0]["full_name"]
+            .as_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case(&repo)),
+        "{repositories:?}"
+    );
     assert_eq!(repositories[0]["id"], repository);
 
     // The token reads a public tag by REST and by GraphQL.

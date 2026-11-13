@@ -2422,7 +2422,8 @@ impl FakeGitHub {
             } else if rest.is_empty() {
                 response(
                     200,
-                    json!({"id":repo.id,"node_id":repo.node_id,"default_branch":repo.default_branch,
+                    json!({"id":repo.id,"node_id":repo.node_id,"full_name":repo.name,
+                           "default_branch":repo.default_branch,
                            "private":repo.private,
                            "allow_auto_merge":repo.merge.auto_merge,
                            "allow_squash_merge":repo.merge.squash,

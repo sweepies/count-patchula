@@ -125,12 +125,21 @@ pub enum ToolTokenKind {
     /// tools.
     RunToken,
 }
-/// The GitHub token a lockfile tool runs with. Deliberately not Debug:
-/// `token` is a secret — it goes on the run's `secrets`, never into logs
-/// or output.
+/// The GitHub token a lockfile tool runs with. Deliberately not Debug, and
+/// the token itself is private: the only way to hand it to a tool is
+/// [`grant`](Self::grant), which also puts it on the run's `secrets`, so a
+/// failure can never repeat it.
 pub struct ToolToken {
-    pub token: String,
+    token: String,
     pub kind: ToolTokenKind,
+}
+impl ToolToken {
+    /// Give the tool the token as `GH_TOKEN`, and mask it in the run's
+    /// output.
+    pub fn grant(self, env: &mut Vec<(String, String)>, secrets: &mut Vec<String>) {
+        secrets.push(self.token.clone());
+        env.push(("GH_TOKEN".to_owned(), self.token));
+    }
 }
 
 /// How many lockfile generations the runner works at once, wherever they

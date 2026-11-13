@@ -7385,6 +7385,11 @@ async fn the_actions_lock_token_is_scoped_on_app_credentials_and_the_run_token_o
     let token = app.actions_lock_token("demo/app").await.unwrap();
     assert_eq!(token.kind, ToolTokenKind::Scoped);
     assert_eq!(token.token, "scoped");
+    // Handing it to a tool masks it in the same step.
+    let (mut env, mut secrets) = (Vec::new(), Vec::new());
+    token.grant(&mut env, &mut secrets);
+    assert_eq!(env, vec![("GH_TOKEN".to_owned(), "scoped".to_owned())]);
+    assert_eq!(secrets, vec!["scoped".to_owned()]);
 }
 
 /// The Gradle wrapper job dispatch runs the wrapper's own flow.

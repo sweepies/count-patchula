@@ -299,6 +299,14 @@ impl App {
         let value = self
             .request_json_as(Method::GET, &format!("repos/{repository}"), &token, None)
             .await?;
+        // A token mints only for the repository the caller named: after a
+        // rename, GitHub may answer the old name with another repository.
+        if !value["full_name"]
+            .as_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case(repository))
+        {
+            return Err(Error::Json);
+        }
         value["id"]
             .as_u64()
             .filter(|id| *id > 0 && *id <= i64::MAX as u64)
