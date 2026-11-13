@@ -116,8 +116,9 @@ code cannot name them.
 
 The library's default in-flight cap is **4**, shared by REST and GraphQL;
 callers can set `concurrency=1` for serial requests, which GitHub recommends
-to minimise secondary limits. The engine sizes it from the `api.github.com`
-host limit, 16 by default (see [host limits](/internals/cache/#host-limits)).
+to minimise secondary limits. A token run (the CLI) sizes it from the
+`api.github.com` host limit when one is set, and otherwise from the default
+host limit capped at 16 (see [host limits](/internals/cache/#host-limits)).
 No cap guarantees against secondary throttling.
 
 The governor tracks the `x-ratelimit-*` headers per resource (core, search and

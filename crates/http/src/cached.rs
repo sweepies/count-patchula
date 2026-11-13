@@ -19,6 +19,10 @@ use std::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+/// GitHub's in-flight cap when no `api.github.com` host limit is set: the
+/// default host limit before it rose to 32 for the registries.
+pub const GITHUB_DEFAULT_CONCURRENCY: usize = 16;
+
 /// Batch HTTP policy, independent of repository parallelism.
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -62,6 +66,19 @@ impl Options {
             .get(host)
             .copied()
             .unwrap_or(self.default_host_concurrency)
+    }
+    /// The in-flight cap a token run gives GitHub's API: its own host limit
+    /// when one is set, otherwise the default host limit capped at
+    /// [`GITHUB_DEFAULT_CONCURRENCY`], so raising the registries' default
+    /// does not raise GitHub's.
+    pub fn github_limit(&self) -> usize {
+        self.host_concurrency
+            .get("api.github.com")
+            .copied()
+            .unwrap_or_else(|| {
+                self.default_host_concurrency
+                    .min(GITHUB_DEFAULT_CONCURRENCY)
+            })
     }
     pub fn validate(&self) -> Result<(), Error> {
         if self.registry_retries > 5
@@ -1050,6 +1067,19 @@ fn retry_delay(response: &Response, attempt: u32) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// GitHub keeps its own cap when the registries' default rises: the
+    /// default capped at 16, unless `api.github.com` is set.
+    #[test]
+    fn github_keeps_its_own_cap() {
+        let mut options = Options::default();
+        assert_eq!(options.default_host_concurrency, 32);
+        assert_eq!(options.github_limit(), 16);
+        options.default_host_concurrency = 8;
+        assert_eq!(options.github_limit(), 8);
+        options.host_concurrency.insert("api.github.com".into(), 40);
+        assert_eq!(options.github_limit(), 40);
+    }
     use patchula_cache::HttpKey;
 
     /// The registry rules these tests exercise: OCI digest immutability,
