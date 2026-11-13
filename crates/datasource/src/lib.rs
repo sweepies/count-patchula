@@ -11,6 +11,7 @@ mod derive_parity;
 mod docker;
 mod forge;
 mod github;
+mod helm;
 mod images;
 pub use images::{ImageSbom, Sbom};
 mod maven;

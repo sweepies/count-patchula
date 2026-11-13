@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
-serde_yaml_ng = "0.10.0"
+yaml-rust2 = "0.13.0"
 patchula-mise = { path = "../mise" }
 regex = "1.13.1"
 reqwest.workspace = true
