@@ -20,7 +20,7 @@ server: Server = new {}
 
 class Http {
   /// HTTP requests in flight per host, 1 to 100.
-  defaultHostConcurrency: Int = 16
+  defaultHostConcurrency: Int = 32
   /// Per-host overrides of `defaultHostConcurrency`, keyed by lowercase hostname.
   hostConcurrency: Mapping<String, Int> = new {}
   /// Freshness seconds for OCI tag lists without validators; 0 uses upstream

@@ -171,7 +171,7 @@ impl Default for Settings {
             concurrency: 8,
             recheck: None,
             http: Http {
-                default_host_concurrency: 16,
+                default_host_concurrency: 32,
                 host_concurrency: BTreeMap::new(),
                 registry_freshness_secs: 3600,
                 go_freshness_secs: 3600,

@@ -45,7 +45,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            default_host_concurrency: 16,
+            default_host_concurrency: 32,
             host_concurrency: BTreeMap::new(),
             registry_freshness_secs: 3600,
             go_freshness_secs: 3600,

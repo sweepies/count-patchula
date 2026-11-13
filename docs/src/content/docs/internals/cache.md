@@ -120,7 +120,7 @@ must initialise tracing for the warnings to show.
 - `concurrency` in the [settings](/reference/settings/), or `--concurrency`,
   sets repository scan parallelism (default 8).
 - Registry requests use per-host semaphores, `http.defaultHostConcurrency`
-  (16) each, independent of repository work. `http.hostConcurrency` overrides
+  (32) each, independent of repository work. `http.hostConcurrency` overrides
   single hosts, such as `["api.github.com"] = 8`. Limits must be 1–100.
 - GitHub REST and GraphQL share one governor, sized by the `api.github.com`
   host limit. The server keeps 4 unless `api.github.com` is set. That is below GitHub's 100 simultaneous requests, but does not
