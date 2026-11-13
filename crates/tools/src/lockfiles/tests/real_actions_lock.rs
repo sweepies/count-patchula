@@ -379,9 +379,13 @@ fn ensure_tool() -> String {
 
 /// `gh-actions-lock` the way the lockfile job will call it: the pinned spec
 /// through `mise exec`, a scratch `HOME`, `CI=false` for the tool's quick
-/// retry policy, and every GitHub read through `proxy`. Ambient tokens and
-/// proxy variables are stripped, so replay never sees a real credential and
-/// nothing reaches outside the proxy.
+/// retry policy, and every GitHub read through `proxy`. The environment is
+/// a whitelist, so no ambient credential or `GITHUB_ACTIONS` (which also
+/// selects the tool's patient retries) reaches it. Every proxy variable
+/// points at `proxy`, which refuses and records anything but `CONNECT
+/// api.github.com:443`, and an empty `SSL_CERT_DIR` beside `SSL_CERT_FILE`
+/// leaves the test CA as the only root, so a request that escaped the proxy
+/// would fail its handshake. A run past `TOOL_DEADLINE` is killed.
 fn actions_lock(tree: &Path, proxy: &GitHubProxy, args: &[&str]) -> (bool, String, String) {
     let home = tempfile::tempdir().unwrap();
     let mut command = Command::new("mise");
@@ -394,27 +398,30 @@ fn actions_lock(tree: &Path, proxy: &GitHubProxy, args: &[&str]) -> (bool, Strin
         .args(args)
         .current_dir(tree);
     command.env_clear();
-    for (key, value) in std::env::vars() {
-        let upper = key.to_uppercase();
-        if !(upper.starts_with("GH_")
-            || upper.contains("TOKEN")
-            || upper.ends_with("_PROXY")
-            || upper == "PROXY"
-            || upper == "CI"
-            || upper == "HOME"
-            || upper.starts_with("XDG_"))
-        {
-            command.env(&key, &value);
+    for key in ["PATH", "TMPDIR", "LANG", "LC_ALL", "TZ"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
         }
+    }
+    let no_roots = home.path().join("no-roots");
+    std::fs::create_dir_all(&no_roots).unwrap();
+    for key in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        command.env(key, &proxy.url);
     }
     command
         .env("MISE_DATA_DIR", mise_store())
         .env("MISE_AUTO_INSTALL", "false")
         .env("MISE_EXEC_AUTO_INSTALL", "false")
         .env("MISE_OFFLINE", "1")
-        .env("HTTPS_PROXY", &proxy.url)
-        .env("https_proxy", &proxy.url)
         .env("SSL_CERT_FILE", proxy.cert_file())
+        .env("SSL_CERT_DIR", &no_roots)
         .env("GH_TOKEN", &proxy.token)
         .env("CI", "false")
         .env("GH_HOST", "github.com")
@@ -424,13 +431,48 @@ fn actions_lock(tree: &Path, proxy: &GitHubProxy, args: &[&str]) -> (bool, Strin
         .env("XDG_CACHE_HOME", home.path().join("cache"))
         .env("NO_COLOR", "1")
         .env("TERM", "dumb");
-    let output = command.output().unwrap();
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut text = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut text);
+            }
+            String::from_utf8_lossy(&text).into_owned()
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() > TOOL_DEADLINE {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "gh-actions-lock ran past {TOOL_DEADLINE:?}\n{}\n{}",
+                stdout.join().unwrap(),
+                stderr.join().unwrap()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
     (
-        output.status.success(),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
+        status.success(),
+        stdout.join().unwrap(),
+        stderr.join().unwrap(),
     )
 }
+
+/// How long one tool run may take before the test kills it: replays finish
+/// in seconds, and a wedged proxy exchange must not hang the suite.
+const TOOL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The files `gh-actions-lock` sees, written under `.github/workflows/` in a
 /// fresh tree.
@@ -539,6 +581,7 @@ async fn real_actions_lock_flags_exit_valid() {
             ),
         ]),
     );
+    let lock = read(tree.path(), ".github/workflows/actions.lock");
     let (ok, stdout, stderr) = actions_lock(
         tree.path(),
         &proxy,
@@ -557,5 +600,6 @@ async fn real_actions_lock_flags_exit_valid() {
     // A frozen lock and workflow stay untouched.
     let ci = read(tree.path(), ".github/workflows/ci.yml");
     assert!(ci.contains("actions/checkout@v7.0.1"), "{ci}");
+    assert_eq!(read(tree.path(), ".github/workflows/actions.lock"), lock);
     proxy.assert_finished();
 }
