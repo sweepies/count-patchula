@@ -2,6 +2,7 @@
 //! every derive the crate registers reads the same document either way, over
 //! every body the fixtures serve — and, when `PATCHULA_PARITY_DOCS` names a
 //! directory, over the captured packuments `catalog_bench` replays.
+use patchula_cache::State;
 use patchula_http::Derived;
 use patchula_http::conditional::{self, Body};
 use std::sync::Arc;
@@ -158,6 +159,35 @@ fn every_derive_versions_its_compaction_source() {
         crate::docker::PULL_TOKEN_REPRESENTATION.1,
     );
     patchula_testkit::derived::check("datasource", &registered);
+}
+
+/// The crate's code-versioned states are pinned the same way:
+/// `tests/state-versions.tsv` hashes the decoding and mapping sources the
+/// stored values are read through, and a change to one must bump the
+/// state's `VERSION` and update the row in the same commit.
+#[test]
+fn every_code_versioned_state_versions_its_source() {
+    let registered: std::collections::BTreeMap<&'static str, u32> = [
+        (
+            crate::github::SourceHead::NAMESPACE,
+            crate::github::SourceHead::VERSION,
+        ),
+        (
+            crate::github::TagCatalog::NAMESPACE,
+            crate::github::TagCatalog::VERSION,
+        ),
+        (
+            crate::github::TagObject::NAMESPACE,
+            crate::github::TagObject::VERSION,
+        ),
+        (
+            crate::advisories::Stored::NAMESPACE,
+            crate::advisories::Stored::VERSION,
+        ),
+    ]
+    .into_iter()
+    .collect();
+    patchula_testkit::state::check("datasource", &registered);
 }
 
 /// A one-byte stream stresses the chunk reader where documents are small

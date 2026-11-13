@@ -26,6 +26,8 @@ pub use receipts::{LEGACY_INVENTORY_QUERY, read_legacy_inventory, seed_receipts}
 pub use settle::{Settlement, settle};
 mod plan;
 mod pr;
+#[cfg(test)]
+mod state_parity;
 #[cfg(feature = "testing")]
 pub use plan::testing;
 mod write;

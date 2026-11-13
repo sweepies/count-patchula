@@ -16,18 +16,21 @@ pub(crate) struct ReleaseBody {
     pub(super) prerelease: bool,
 }
 #[derive(Serialize, Deserialize)]
-struct SavedRelease {
+pub(crate) struct SavedRelease {
     updated_at: String,
     release: ReleaseBody,
 }
 #[derive(Serialize)]
-struct ReleaseNotesScope {
+pub(crate) struct ReleaseNotesScope {
     repository: String,
     tag: String,
 }
 impl State for SavedRelease {
     const NAMESPACE: &'static str = "release-notes";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
+    // Code-versioned: the stored release is this build's pick and decode
+    // of the release's fields.
+    const CODE_VERSIONED: bool = true;
     type Scope = ReleaseNotesScope;
 }
 fn release_scope(repo: &str, tag: &str) -> ReleaseNotesScope {

@@ -170,17 +170,20 @@ struct Listed {
 }
 /// A cached record; withdrawn advisories are remembered as `None`.
 #[derive(Serialize, Deserialize)]
-struct Stored {
+pub(crate) struct Stored {
     modified: String,
     advisory: Option<Advisory>,
 }
 #[derive(Serialize)]
-struct AdvisoryScope {
+pub(crate) struct AdvisoryScope {
     id: String,
 }
 impl State for Stored {
     const NAMESPACE: &'static str = "osv-advisory";
     const VERSION: u32 = 1;
+    // Code-versioned: the stored advisory is this build's `Record`-to-
+    // `Advisory` mapping of the record the scope's id names.
+    const CODE_VERSIONED: bool = true;
     type Scope = AdvisoryScope;
 }
 /// The `(id, modified)` pairs the batch answered for one version, kept for

@@ -103,10 +103,7 @@ receipts and the like) live in `state`; the server queue, installations and
 repositories keep their own tables. A state row is one value, keyed by a
 namespace and a canonical-JSON scope. A `State` implementation names its
 `NAMESPACE` and `VERSION`, forming `name@v{VERSION}`, and declares the `Scope` struct
-whose named fields say what the entry is about. A value that depends on this
-build's decoding or extraction code sets `PER_BUILD`, and the build version
-joins the namespace, so a release never reads another release's entries.
-Opening the cache deletes per-build rows written by any other version.
+whose named fields say what the entry is about.
 Values are JSON. A stored value that fails to decode is a miss, logged at
 debug level; database errors remain errors. Each call site owns its value and
 scope types, so a change to a stored shape bumps `VERSION` or `NAMESPACE`
@@ -114,6 +111,34 @@ rather than silently reusing entries written for the old one. The exception
 is a shape that reads both ways: auto-merge history rows went from whole REST
 pull requests to the five fields its readers use, and each shape decodes as
 the other, so they stay at version 1.
+
+A value derived from an immutable input by this build's code — an evaluated
+config, an extraction, a parsed changelog, a `not-ours` verdict — sets
+`CODE_VERSIONED` instead, and `VERSION` names the deriving code: a new
+release keeps the cached entries of every state whose derivation code did not
+change, and a change to one state's derivation misses only its namespace.
+`tests/state-versions.tsv` guards the contract — it hashes the source files,
+source trees (an entry ending `/` covers every file under it, so a file added
+to a listed tree fails too) and locked dependency versions the derivation
+reads, and the owning crate's parity test fails when the code moves without a
+version bump; the maintenance step is to bump the `VERSION` and update the
+row in the same commit. A derivation may only read code in its row's listed
+files and trees; over-include rather than miss, and batch cosmetic edits in
+listed files. The parity test also scans every `impl State` in the
+workspace's non-test sources — `#[cfg(test)]` modules and `tests/`
+directories do not count — and requires each to be either a row in
+`tests/state-versions.tsv` or an entry with a reason in
+`tests/state-exempt.tsv`; an unlisted state, a listing whose impl is gone
+and a flag that disagrees with the table all fail, so states in crates
+without a parity test of their own stay covered. The rule for which table
+a state lands in: a value this build's code derives from an input whose
+key does not capture the decoded result, kept without a TTL — a permanent
+memo — is code-versioned. A state refetched within a bounded freshness
+window, or holding facts that are not code-derived — receipts, history,
+permits, run timestamps, hints — is exempt; a stale hint only costs a
+wasted read and never a wrong answer. Entries written under the
+retired `name@vN+build` scheme are never read again and are deleted when the
+cache opens.
 
 ## Schema and corruption
 
@@ -249,7 +274,7 @@ when the walk goes on to fail. A read whose answer's `viewer.login` does not
 match the stored hint retries unfiltered once, so a wrong or stale entry
 costs one request and never narrows the issue set wrongly.
 
-Branch cleanup keeps a per-build `not-ours` entry per repository and commit
+Branch cleanup keeps a code-versioned `not-ours` entry per repository and commit
 OID whose message records no base: such a commit can never be the Count's,
 so its branch is not read again while it points there. Nothing else about
 ownership is cached; a compare, an author check or a signature check runs

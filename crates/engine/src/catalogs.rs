@@ -8,20 +8,24 @@ use patchula_report::CatalogEvidence;
 const READ_FAN_OUT: usize = 4;
 
 #[derive(Serialize, Deserialize)]
-struct Saved {
+pub(crate) struct Saved {
     fetched_at: i64,
     catalog: Catalog,
     credentialed: bool,
 }
 #[derive(Serialize)]
-struct CatalogScope {
+pub(crate) struct CatalogScope {
     versions_host: bool,
     package: PackageId,
     credential_scope: String,
 }
 impl State for Saved {
     const NAMESPACE: &'static str = "catalog";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
+    // Code-versioned: the view is datasource output decoded into `Catalog`;
+    // a stale-but-decodable view from a release whose transforms moved is
+    // worse than a miss.
+    const CODE_VERSIONED: bool = true;
     type Scope = CatalogScope;
 }
 pub(super) type Evidence = BTreeMap<LookupKey, CatalogEvidence>;
@@ -135,13 +139,17 @@ impl Engine {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-struct Controls {
+pub(crate) struct Controls {
     branches: BTreeMap<String, BTreeSet<String>>,
     targets: BTreeMap<String, BTreeSet<String>>,
 }
 impl State for Controls {
     const NAMESPACE: &'static str = "catalog-controls";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
+    // Code-versioned: the stored keys come from `identity` and `plan`
+    // code, and a key written by older code that no longer matches its
+    // dependency quietly un-retries a ticked box.
+    const CODE_VERSIONED: bool = true;
     type Scope = CredentialScope;
 }
 impl Engine {
