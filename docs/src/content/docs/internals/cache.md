@@ -61,8 +61,11 @@ validators are never sent.
 Large registry bodies use a versioned local `representation` in the key. npm,
 Cargo sparse indexes, PyPI and GitHub REST release heads store a derived
 document with only the fields the Count reads, never the raw response.
-Derivation runs on `spawn_blocking` with a four-job limit. A 304 updates only
-metadata and reuses the compact body. A derived representation is named once
+Derivation runs on `spawn_blocking`; a successful derived response streams
+straight into its derive worker, so the raw document is never held whole.
+The request's host permit is held until its body is read, so in-flight bodies
+stay inside the host limit. Reads that arrive already buffered derive under a
+four-job limit. A 304 updates only metadata and reuses the compact body. A derived representation is named once
 and suffixed with the HTTP crate's build version, so a change to the
 compaction code re-derives on the next release; raw and derived namespaces
 never share validators.

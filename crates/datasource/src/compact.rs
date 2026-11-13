@@ -1,7 +1,7 @@
 //! Typed deserialization skips unused registry fields without building a JSON
 //! tree for README, dependencies, attestations or artifact metadata.
 use super::{Catalog, Version, sort};
-use patchula_http::{CacheError, Derived};
+use patchula_http::{CacheError, Derived, conditional};
 use patchula_versioning::Ecosystem;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -40,8 +40,8 @@ impl Deprecated {
     }
 }
 
-pub(super) fn npm(body: &[u8]) -> Result<Vec<u8>, CacheError> {
-    let mut document: Npm = serde_json::from_slice(body).map_err(|_| CacheError::Document)?;
+pub(super) fn npm(body: &mut dyn std::io::Read) -> Result<Vec<u8>, CacheError> {
+    let mut document: Npm = conditional::json_document(body).map_err(|_| CacheError::Document)?;
     let mut catalog = Catalog {
         dist_tags: document.dist_tags,
         versions: document
@@ -59,7 +59,7 @@ pub(super) fn npm(body: &[u8]) -> Result<Vec<u8>, CacheError> {
     sort(&mut catalog.versions, Ecosystem::Npm);
     encode(catalog)
 }
-pub(super) const NPM_CATALOG: Derived<CacheError> = Derived::new("npm-catalog-v2", npm);
+pub(crate) const NPM_CATALOG: Derived<CacheError> = Derived::new("npm-catalog-v2", npm);
 
 #[derive(Deserialize)]
 struct CrateVersion {
@@ -67,11 +67,15 @@ struct CrateVersion {
     pubtime: Option<String>,
     yanked: bool,
 }
-pub(super) fn crates(body: &[u8]) -> Result<Vec<u8>, CacheError> {
+pub(super) fn crates(body: &mut dyn std::io::Read) -> Result<Vec<u8>, CacheError> {
+    use std::io::BufRead;
     let mut catalog = Catalog::default();
-    let text = std::str::from_utf8(body).map_err(|_| CacheError::Document)?;
-    for line in text.lines().filter(|line| !line.is_empty()) {
-        let node: CrateVersion = serde_json::from_str(line).map_err(|_| CacheError::Document)?;
+    for line in std::io::BufReader::new(body).lines() {
+        let line = line.map_err(|_| CacheError::Document)?;
+        if line.is_empty() {
+            continue;
+        }
+        let node: CrateVersion = serde_json::from_str(&line).map_err(|_| CacheError::Document)?;
         catalog.versions.push(Version {
             version: node.vers,
             published_at: node.pubtime,
@@ -83,7 +87,7 @@ pub(super) fn crates(body: &[u8]) -> Result<Vec<u8>, CacheError> {
     catalog.versions.reverse(); // Sparse index is append-only publication order.
     encode(catalog)
 }
-pub(super) const CRATES_CATALOG: Derived<CacheError> = Derived::new("crates-catalog-v2", crates);
+pub(crate) const CRATES_CATALOG: Derived<CacheError> = Derived::new("crates-catalog-v2", crates);
 
 #[derive(Deserialize)]
 struct Pypi {
@@ -95,8 +99,8 @@ struct PypiFile {
     #[serde(default)]
     yanked: bool,
 }
-pub(super) fn pypi(body: &[u8]) -> Result<Vec<u8>, CacheError> {
-    let document: Pypi = serde_json::from_slice(body).map_err(|_| CacheError::Document)?;
+pub(super) fn pypi(body: &mut dyn std::io::Read) -> Result<Vec<u8>, CacheError> {
+    let document: Pypi = conditional::json_document(body).map_err(|_| CacheError::Document)?;
     let mut catalog = Catalog::default();
     for (version, files) in document.releases {
         if files.is_empty() {
@@ -117,14 +121,14 @@ pub(super) fn pypi(body: &[u8]) -> Result<Vec<u8>, CacheError> {
     sort(&mut catalog.versions, Ecosystem::Pep440);
     encode(catalog)
 }
-pub(super) const PYPI_CATALOG: Derived<CacheError> = Derived::new("pypi-catalog-v2", pypi);
+pub(crate) const PYPI_CATALOG: Derived<CacheError> = Derived::new("pypi-catalog-v2", pypi);
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn pypi_keeps_earliest_upload_and_requires_all_files_yanked() {
-        let bytes = pypi(br#"{"releases":{"0.1":[],"1.0":[{"upload_time_iso_8601":"2026-01-02T00:00:00Z","yanked":true},{"upload_time_iso_8601":"2026-01-01T00:00:00Z","yanked":false}],"2.0":[{"upload_time_iso_8601":null,"yanked":true}]},"info":{"description":"unused"}}"#).unwrap();
+        let bytes = pypi(&mut &br#"{"releases":{"0.1":[],"1.0":[{"upload_time_iso_8601":"2026-01-02T00:00:00Z","yanked":true},{"upload_time_iso_8601":"2026-01-01T00:00:00Z","yanked":false}],"2.0":[{"upload_time_iso_8601":null,"yanked":true}]},"info":{"description":"unused"}}"#[..]).unwrap();
         let catalog: Catalog = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(catalog.versions.len(), 2);
         assert!(catalog.versions[0].yanked);
@@ -142,7 +146,8 @@ mod npm_tests {
     #[test]
     fn npm_deprecation_flags_and_messages() {
         let body = br#"{"dist-tags":{"latest":"2.0.0"},"time":{},"versions":{"1.0.0":{"deprecated":false},"1.1.0":{"deprecated":true},"1.2.0":{"deprecated":"use 2"},"1.3.0":{"deprecated":""},"2.0.0":{}}}"#;
-        let stored: serde_json::Value = serde_json::from_slice(&super::npm(body).unwrap()).unwrap();
+        let stored: serde_json::Value =
+            serde_json::from_slice(&super::npm(&mut &body[..]).unwrap()).unwrap();
         let deprecated: Vec<_> = stored["versions"]
             .as_array()
             .unwrap()

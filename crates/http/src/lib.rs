@@ -1,6 +1,8 @@
 //! Transport boundary: requests can be built without constructing a network client.
 #![forbid(unsafe_code)]
 
+use bytes::Bytes;
+use futures_util::Stream;
 use reqwest::{Request, StatusCode, header::HeaderMap};
 use std::{future::Future, pin::Pin, task::Poll};
 use tracing::Instrument;
@@ -31,6 +33,51 @@ impl std::fmt::Debug for Response {
     }
 }
 
+/// Decoded body chunks as the transport yields them.
+pub type BodyStream = Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>>;
+
+/// A response whose body still arrives as decoded chunks. Reads that derive
+/// a compact body take it, so a large document is never held whole; every
+/// other read collects it.
+pub struct Streaming {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub body: BodyStream,
+}
+
+impl Streaming {
+    /// Buffer the rest of the body, for a status the client reads whole:
+    /// redirects, rate-limit answers and errors are small.
+    pub async fn collect(self) -> Result<Response, Error> {
+        use futures_util::StreamExt;
+        let mut body = self.body;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = body.next().await {
+            bytes.extend_from_slice(&chunk?);
+        }
+        Ok(Response {
+            status: self.status,
+            headers: self.headers,
+            body: bytes,
+            stale: None,
+        })
+    }
+}
+
+impl From<Response> for Streaming {
+    /// A whole body as one chunk: fakes and replays answer this way, and the
+    /// streaming path accepts it unchanged.
+    fn from(response: Response) -> Self {
+        Self {
+            status: response.status,
+            headers: response.headers,
+            body: Box::pin(futures_util::stream::once(async move {
+                Ok(Bytes::from(response.body))
+            })),
+        }
+    }
+}
+
 /// Network errors intentionally discard reqwest's URL-bearing error details.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -41,10 +88,18 @@ pub enum Error {
 }
 
 pub type Exchange<'a> = Pin<Box<dyn Future<Output = Result<Response, Error>> + Send + 'a>>;
+pub type StreamingExchange<'a> =
+    Pin<Box<dyn Future<Output = Result<Streaming, Error>> + Send + 'a>>;
 
 /// Implementations must not log credentials or response bodies.
 pub trait Transport: Send + Sync {
     fn send(&self, request: Request) -> Exchange<'_>;
+    /// The same exchange with the body as decoded chunks. Transports that
+    /// answer whole bodies — fakes and replays — keep the default, which
+    /// buffers `send`'s answer into one chunk.
+    fn send_streaming(&self, request: Request) -> StreamingExchange<'_> {
+        Box::pin(async move { self.send(request).await.map(Streaming::from) })
+    }
 }
 
 /// One shared reqwest connection pool per batch; clones share its pool.
@@ -136,11 +191,43 @@ impl Transport for Network {
             }
         })
     }
+
+    /// The exchange of `send`, with the body left as decoded chunks the
+    /// caller's task feeds to a derive worker rather than collecting here.
+    fn send_streaming(&self, request: Request) -> StreamingExchange<'_> {
+        Box::pin(async move {
+            if !self.allowed(request.url()) {
+                return Err(Error::Network);
+            }
+            let client = self.client.clone();
+            let exchange = AbortOnDrop(tokio::spawn(
+                async move {
+                    let response = client.execute(request).await.map_err(|_| Error::Network)?;
+                    tracing::Span::current()
+                        .record("protocol", tracing::field::debug(response.version()));
+                    Ok(Streaming {
+                        status: response.status(),
+                        headers: response.headers().clone(),
+                        body: Box::pin(futures_util::StreamExt::map(
+                            response.bytes_stream(),
+                            |chunk| chunk.map_err(|_| Error::Network),
+                        )),
+                    })
+                }
+                .instrument(tracing::Span::current()),
+            ));
+            match exchange.await {
+                Ok(result) => result,
+                Err(join) if join.is_panic() => std::panic::resume_unwind(join.into_panic()),
+                Err(_) => Err(Error::Network),
+            }
+        })
+    }
 }
 
 /// Abort a spawned task if the future owning it is dropped, so a cancelled
 /// send does not leave its exchange running on a worker nobody observes.
-struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+pub(crate) struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
 
 impl<T> Future for AbortOnDrop<T> {
     type Output = Result<T, tokio::task::JoinError>;

@@ -259,10 +259,11 @@ pub fn representation(name: &str) -> String {
 
 /// A body the client derives from a fetched document and caches under its
 /// own representation. `name` is stable across builds; the build suffix does
-/// the invalidating.
+/// the invalidating. The function reads the document as `io::Read`, so a
+/// streamed body never has to be held whole.
 pub struct Derived<E> {
     pub name: &'static str,
-    pub derive: fn(&[u8]) -> std::result::Result<Vec<u8>, E>,
+    pub derive: fn(&mut dyn std::io::Read) -> std::result::Result<Vec<u8>, E>,
 }
 // A derived spec is a name and a function pointer; `E` need not be Clone.
 impl<E> Clone for Derived<E> {
@@ -276,7 +277,7 @@ impl<E> Derived<E> {
     /// `state_namespace`'s `plain` check.
     pub const fn new(
         name: &'static str,
-        derive: fn(&[u8]) -> std::result::Result<Vec<u8>, E>,
+        derive: fn(&mut dyn std::io::Read) -> std::result::Result<Vec<u8>, E>,
     ) -> Self {
         assert!(plain(name), "a derived name is nonempty and has no +");
         Self { name, derive }
@@ -349,6 +350,8 @@ impl Cached {
                 cache,
                 hosts: Default::default(),
                 options,
+                // Bounds buffered decodes; this client derives from streams,
+                // which their host permits bound instead.
                 decoding: Arc::new(Semaphore::new(4)),
                 requests: AtomicU64::new(0),
                 not_modified: AtomicU64::new(0),
@@ -763,13 +766,15 @@ impl Cached {
         let mut attempt = 0;
         let mut redirects = BTreeSet::from([url.to_string()]);
         let mut foreign = false;
-        let mut response = loop {
+        // The host permit of the answered request is held through derivation:
+        // a request is in flight until its body is read.
+        let (mut response, stream, _permit) = loop {
             let queued = Instant::now();
             let target = request.url().clone();
             let pull_request =
                 registry.is_some() && self.inner.options.rules.pull_quota(&method, &target);
-            let permit = match self.acquire(&target, pull_request).await {
-                Ok(permit) => permit,
+            let mut permit = match self.acquire(&target, pull_request).await {
+                Ok(permit) => Some(permit),
                 Err(Error::Status(429)) if registry.is_some() => {
                     if let Some(response) = self
                         .stale_registry(cached.as_ref(), &url, accept, &method, scope)
@@ -782,14 +787,46 @@ impl Cached {
                 Err(error) => return Err(error),
             };
             self.inner.requests.fetch_add(1, Ordering::Relaxed);
-            let response = trace
-                .send(
-                    self.inner.transport.as_ref(),
-                    request.try_clone().ok_or(Error::Configuration)?,
-                    queued.elapsed(),
-                    cached.is_some(),
-                )
-                .await?;
+            // A derived answer streams into its derive worker, so a large
+            // document is never held whole. Any status the loop handles —
+            // redirects, throttles and retries — is buffered; those bodies
+            // are small.
+            let mut stream = None;
+            let response = if derived.is_none() {
+                trace
+                    .send(
+                        self.inner.transport.as_ref(),
+                        request.try_clone().ok_or(Error::Configuration)?,
+                        queued.elapsed(),
+                        cached.is_some(),
+                    )
+                    .await?
+            } else {
+                let answer = trace
+                    .send_streaming(
+                        self.inner.transport.as_ref(),
+                        request.try_clone().ok_or(Error::Configuration)?,
+                        queued.elapsed(),
+                        cached.is_some(),
+                    )
+                    .await?;
+                if answer.status.is_success() {
+                    let crate::Streaming {
+                        status,
+                        headers,
+                        body,
+                    } = answer;
+                    stream = Some(body);
+                    Response {
+                        status,
+                        headers,
+                        body: Vec::new(),
+                        stale: None,
+                    }
+                } else {
+                    answer.collect().await?
+                }
+            };
             if matches!(response.status.as_u16(), 301 | 302 | 303 | 307 | 308) {
                 let next = response
                     .headers
@@ -888,7 +925,7 @@ impl Cached {
                         delay
                     }
                 };
-                drop(permit);
+                drop(permit.take());
                 if let Some(response) = self
                     .stale_registry(cached.as_ref(), &url, accept, &method, scope)
                     .await?
@@ -904,7 +941,7 @@ impl Cached {
                     continue;
                 }
             }
-            break response;
+            break (response, stream, permit);
         };
         if registry.is_some()
             && response.status == StatusCode::TOO_MANY_REQUESTS
@@ -954,13 +991,15 @@ impl Cached {
             return Err(Error::Status(response.status.as_u16()));
         }
         if !not_modified && let Some(derived) = derived {
-            response.body = conditional::derive(
-                std::mem::take(&mut response.body),
-                derived.derive,
-                &self.inner.decoding,
-            )
-            .await
-            .map_err(|_| Error::Worker)??;
+            let body = conditional::Body::Streaming(
+                stream.expect("a successful derived read keeps its body stream"),
+            );
+            response.body = conditional::derive(body, derived.derive, &self.inner.decoding)
+                .await
+                .map_err(|error| match error {
+                    conditional::Error::Stream(transport) => Error::Transport(transport),
+                    _ => Error::Worker,
+                })??;
         }
         // Bytes addressed by their digest are the same for everyone, so a
         // registry's no-store or Vary cannot make them private. Those read with
@@ -1916,8 +1955,10 @@ mod tests {
     /// whether they finish, fail or are cancelled.
     #[tokio::test]
     async fn coalesced_reads_are_dropped_when_no_caller_holds_them() {
-        fn same(body: &[u8]) -> Result<Vec<u8>, Error> {
-            Ok(body.to_vec())
+        fn same(body: &mut dyn std::io::Read) -> Result<Vec<u8>, Error> {
+            let mut bytes = Vec::new();
+            body.read_to_end(&mut bytes).unwrap();
+            Ok(bytes)
         }
         let (started, mut calls) = tokio::sync::mpsc::unbounded_channel();
         let transport = Arc::new(Blocked {
@@ -1971,8 +2012,10 @@ mod tests {
         assert!(client.inner.reads.lock().is_empty());
     }
 
-    fn derive_same(body: &[u8]) -> Result<Vec<u8>, Error> {
-        Ok(body.to_vec())
+    fn derive_same(body: &mut dyn std::io::Read) -> Result<Vec<u8>, Error> {
+        let mut bytes = Vec::new();
+        body.read_to_end(&mut bytes).unwrap();
+        Ok(bytes)
     }
     #[test]
     fn a_derived_spec_clones_like_its_copy() {

@@ -138,14 +138,16 @@ pub(super) struct File {
     #[serde(rename = "type")]
     pub kind: String,
 }
-pub(super) fn compact_tree(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
+pub(super) fn compact_tree(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, serde_json::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Document {
         Directory(Vec<File>),
         Tree(Tree),
     }
-    let mut tree = match serde_json::from_slice(bytes)? {
+    let mut tree = match patchula_http::conditional::json_document(body)? {
         Document::Directory(tree) => Tree {
             truncated: tree.len() >= 1000,
             tree,
@@ -156,7 +158,7 @@ pub(super) fn compact_tree(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_j
         .retain(|file| matches!(file.kind.as_str(), "dir" | "tree") || is_changelog(&file.path));
     serde_json::to_vec(&tree)
 }
-pub(super) const NOTES_CHANGELOG_DIRECTORY: patchula_http::Derived<serde_json::Error> =
+pub(crate) const NOTES_CHANGELOG_DIRECTORY: patchula_http::Derived<serde_json::Error> =
     patchula_http::Derived::new("notes-changelog-directory", compact_tree);
 pub(super) fn is_changelog(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_uppercase();
@@ -216,8 +218,10 @@ pub(super) fn relevant(file: &File, directory: Option<&str>, low: u64, high: u64
     true
 }
 
-pub(super) fn compact_blob(bytes: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(&parse_changelog(&blob_text(bytes)?))
+pub(super) fn compact_blob(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&parse_changelog(&blob_text(body)?))
 }
-pub(super) const PARSED_CHANGELOG: patchula_http::Derived<serde_json::Error> =
+pub(crate) const PARSED_CHANGELOG: patchula_http::Derived<serde_json::Error> =
     patchula_http::Derived::new("parsed-changelog", compact_blob);

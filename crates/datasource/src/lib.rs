@@ -3,6 +3,8 @@
 mod advisories;
 pub use advisories::{Advisory, AdvisoryListing, AdvisoryQuery, Affected, Event, Range};
 mod compact;
+#[cfg(test)]
+mod derive_parity;
 mod docker;
 mod forge;
 mod github;

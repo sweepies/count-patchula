@@ -47,10 +47,14 @@ struct ReleaseHead {
     draft: bool,
     prerelease: bool,
 }
-fn compact_release_head(body: &[u8]) -> std::result::Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(&serde_json::from_slice::<Vec<ReleaseHead>>(body)?)
+fn compact_release_head(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&patchula_http::conditional::json_document::<
+        Vec<ReleaseHead>,
+    >(body)?)
 }
-const GITHUB_RELEASE_HEAD: patchula_http::Derived<serde_json::Error> =
+pub(crate) const GITHUB_RELEASE_HEAD: patchula_http::Derived<serde_json::Error> =
     patchula_http::Derived::new("github-release-head", compact_release_head);
 
 /// The newest release's identity on a release source; a change refetches

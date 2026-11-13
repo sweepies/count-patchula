@@ -2,9 +2,11 @@
 //! with their release times. Minified entries always carry version and time.
 use super::*;
 
-fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let document: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|_| patchula_http::CacheError::Document)?;
+fn versions(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
+    let document: serde_json::Value = patchula_http::conditional::json_document(body)
+        .map_err(|_| patchula_http::CacheError::Document)?;
     let entries = document["packages"]
         .as_object()
         .and_then(|p| p.values().next())
@@ -25,7 +27,7 @@ fn versions(bytes: &[u8]) -> std::result::Result<Vec<u8>, patchula_http::CacheEr
         .collect();
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
-const PACKAGIST_P2: patchula_http::Derived<patchula_http::CacheError> =
+pub(crate) const PACKAGIST_P2: patchula_http::Derived<patchula_http::CacheError> =
     patchula_http::Derived::new("packagist-p2", versions);
 
 impl Client {
@@ -66,7 +68,7 @@ mod tests {
     fn p2_releases_keep_versions_and_times() {
         let body = br#"{"packages":{"monolog/monolog":[{"name":"monolog/monolog","version":"3.7.0","version_normalized":"3.7.0.0","time":"2024-06-28T09:40:51+00:00"},{"version":"3.6.0","time":"2024-04-12T21:02:21+00:00"}]},"minified":"composer/2.0"}"#;
         let versions: Vec<super::Version> =
-            serde_json::from_slice(&super::versions(body).unwrap()).unwrap();
+            serde_json::from_slice(&super::versions(&mut &body[..]).unwrap()).unwrap();
         assert_eq!(versions.len(), 2);
         assert_eq!(versions[0].version, "3.7.0");
         assert_eq!(
