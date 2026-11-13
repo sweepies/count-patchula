@@ -114,6 +114,25 @@ pub struct Runner {
     runs: Arc<tokio::sync::Semaphore>,
 }
 
+/// How the token a lockfile tool authenticates to GitHub with was
+/// produced — reported by the tool's run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolTokenKind {
+    /// A GitHub App installation token minted for one repository, with
+    /// `metadata: read` only.
+    Scoped,
+    /// The run's own GitHub token, reused as Renovate hands its token to
+    /// tools.
+    RunToken,
+}
+/// The GitHub token a lockfile tool runs with. Deliberately not Debug:
+/// `token` is a secret — it goes on the run's `secrets`, never into logs
+/// or output.
+pub struct ToolToken {
+    pub token: String,
+    pub kind: ToolTokenKind,
+}
+
 /// How many lockfile generations the runner works at once, wherever they
 /// come from in the batch.
 fn lockfile_concurrency() -> usize {
@@ -203,6 +222,27 @@ impl Runner {
                 .map_err(|_| "GitHub authentication failed".to_owned()),
             None => Ok(self.token.clone()),
         }
+    }
+    /// The GitHub token the actions.lock tool authenticates to GitHub with
+    /// for `repository` (`owner/name`), and how it was produced: a
+    /// repository-scoped `metadata: read` token where the run's credentials
+    /// can mint one — a GitHub App installation — else the run's own token,
+    /// as Renovate hands its token to tools.
+    pub async fn actions_lock_token(&self, repository: &str) -> Result<ToolToken, String> {
+        if let Some(credentials) = &self.credentials
+            && let Some(token) = credentials.scoped_token(repository)
+        {
+            return Ok(ToolToken {
+                token: token
+                    .await
+                    .map_err(|_| "GitHub authentication failed".to_owned())?,
+                kind: ToolTokenKind::Scoped,
+            });
+        }
+        Ok(ToolToken {
+            token: self.github_token().await?,
+            kind: ToolTokenKind::RunToken,
+        })
     }
     /// Set the persistent tool caches' size cap in GiB; 0 turns them off.
     pub fn set_cache_limit(&mut self, cache_gib: u64) {
