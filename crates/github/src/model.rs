@@ -273,12 +273,14 @@ pub struct MergeResult {
     /// `merged` — required.
     pub merged: bool,
 }
-/// `POST`/`PATCH /repos/{owner}/{repo}/issues[/{n}]` — the OpenAPI `issue`
-/// schema, trimmed to the one field the dashboard reads.
+/// `GET`/`POST`/`PATCH /repos/{owner}/{repo}/issues[/{n}]` — the OpenAPI
+/// `issue` schema, trimmed to the fields the dashboard reads.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Issue {
     /// `number` — required.
     pub number: u64,
+    /// `body` — nullable in the schema; a dashboard always carries one.
+    pub body: Option<String>,
 }
 
 /// `GET /user/installations` — the `installations` array of the response,
