@@ -304,6 +304,7 @@ fn proposal_text(
             scope,
             exact_version,
             publish_age_allow: _,
+            wait_hours: _,
         })) => {
             let scope = match &scope {
                 Scope::Directory => "directory".into(),

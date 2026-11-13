@@ -121,7 +121,7 @@ impl Write<'_> {
                 return Ok(written);
             }
         };
-        self.maintenance(repo, &config, &snapshot, &mut plans, since)
+        self.maintenance(repo, &config, &snapshot, &dependencies, &mut plans, since)
             .await?;
         // Every write needs the inventory read during lookup; a missing one
         // is a broken invariant, failed closed rather than assumed away.
@@ -245,7 +245,8 @@ impl Write<'_> {
             tokio::spawn(async move { sources.prepare_release_notes(&ranges).await })
         });
         if inventory.is_some() {
-            self.lockfiles(&mut plans, &mut snapshot, &config).await;
+            self.lockfiles(repo, &mut plans, &mut snapshot, &config)
+                .await;
         }
         let cleanup = match (self.dry_run, repo.degraded(), inventory) {
             (false, false, Some(inventory)) => self.cleanup(repo, &plans, inventory).await,
@@ -406,12 +407,19 @@ impl Write<'_> {
         repo: &mut Repository,
         config: &Config,
         snapshot: &patchula_update::Snapshot,
+        dependencies: &[Dependency],
         plans: &mut Vec<Plan>,
         since: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<()> {
-        let Some(mut maintenance) =
-            patchula_update::maintenance::maintenance(repo, config, snapshot, since, self.now)
-                .map_err(|e| Error::Invalid(e.to_string()))?
+        let Some(mut maintenance) = patchula_update::maintenance::maintenance(
+            repo,
+            config,
+            snapshot,
+            dependencies,
+            since,
+            self.now,
+        )
+        .map_err(|e| Error::Invalid(e.to_string()))?
         else {
             return Ok(());
         };
@@ -523,19 +531,24 @@ impl Write<'_> {
         Ok(state)
     }
 
-    /// Generate lockfiles for the plans that need them.
+    /// Generate lockfiles for the plans that need them. What a run warns it
+    /// could not enforce joins the repository's report warnings.
     async fn lockfiles(
         &self,
+        repo: &mut Repository,
         plans: &mut [Plan],
         snapshot: &mut patchula_update::Snapshot,
         config: &Config,
     ) {
         if let Some(runner) = &self.engine.lockfiles {
             self.engine.progress.stage(Stage::Lockfiles, plans.len());
-            patchula_update::lock_all(runner, plans, snapshot, config, &|| {
+            let warnings = patchula_update::lock_all(runner, plans, snapshot, config, &|| {
                 self.engine.progress.advance(1)
             })
             .await;
+            repo.warnings.extend(warnings);
+            repo.warnings.sort();
+            repo.warnings.dedup();
         } else {
             for plan in plans.iter_mut() {
                 if plan.lock_work().is_some() {

@@ -6,9 +6,11 @@
 //!
 //! Cargo 1.100 reads `pubtime` for the publish ages behind
 //! `registry.global-min-publish-age`. These tests pin what the Count's
-//! runner and the owner's own Cargo do with them today: the cooldown never
-//! reaches the runner, so it locks what the owner would hold back, while a
-//! `.cargo/config.toml` in a directory above the run's driver leaks in.
+//! runner and the owner's own Cargo do with them: the committed cooldown
+//! and each job's `waitHours` reach the run's Cargo by environment, so
+//! direct updates, transitive crates and maintenance all wait the same
+//! way — a `.cargo/config.toml` above the run's driver no longer leaks in,
+//! since every invocation names its own age.
 //! The registry's builder API is the case generator the reader (PR 2) and
 //! the runner environment (PR 3) generate their matrices from.
 use super::*;
@@ -557,6 +559,54 @@ fn write_tree(dir: &Path, files: &BTreeMap<String, String>) {
     }
 }
 
+/// The cooldowns extraction reads for `files`, what `Snapshot.cargo_cooldowns`
+/// carries once the manager has scanned the tree — including the reason a
+/// cooldown file it cannot read gives.
+fn cooldowns(
+    files: &BTreeMap<String, String>,
+) -> BTreeMap<String, patchula_manager::CargoCooldown> {
+    patchula_manager::Scanner::new(&config())
+        .unwrap()
+        .extract(&patchula_manager::all_read(files))
+        .unwrap()
+        .cargo_cooldowns
+}
+/// A snapshot over `files` carrying the cooldowns the Count's own
+/// extraction would hand the run.
+fn sparse_snapshot(files: &BTreeMap<String, String>) -> Snapshot {
+    let mut snapshot = snapshot(files);
+    snapshot.cargo_cooldowns = cooldowns(files);
+    snapshot
+}
+/// A Cargo dependency as extraction reports one, for `maintenance`'s
+/// `waitHours` derivation.
+fn cargo_dependency(file: &str) -> patchula_manager::Dependency {
+    patchula_manager::Dependency {
+        manager: Manager::Cargo,
+        file: file.into(),
+        location: patchula_manager::Location {
+            start: 0,
+            end: 1,
+            line: 1,
+            column: 1,
+            pointer: String::new(),
+        },
+        form: patchula_manager::EditForm::Scalar(patchula_manager::Syntax::Toml),
+        name: "cool-b".into(),
+        package: "cool-b".into(),
+        kind: patchula_words::DependencyKind::Production,
+        current: "1.0.0".into(),
+        resolved: Some("1.0.0".into()),
+        digest: None,
+        source: Source::Crates,
+        scheme: patchula_words::Scheme::Semver,
+        extract: None,
+        included_by: None,
+        registry: None,
+        cooldown: None,
+    }
+}
+
 /// `files` for a one-crate project on `dep` at `req`, locked at `version`,
 /// with `extra` files merged in.
 fn project(dep: (&str, &str), version: &str, extra: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -585,9 +635,9 @@ async fn targeted(
     let temp = tempfile::tempdir().unwrap();
     let runner =
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
-    let mut snapshot = snapshot(files);
+    let mut snapshot = sparse_snapshot(files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     let mut draft = Draft::from(p);
@@ -713,7 +763,7 @@ async fn real_cargo_locks_every_release_without_a_cooldown() {
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
     let mut shot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &shot, None, monday())
+    let mut p = maintenance(&repo(), &config, &shot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut shot, &config).await;
@@ -732,7 +782,7 @@ async fn real_cargo_locks_every_release_without_a_cooldown() {
     let runner =
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
     let mut shot = snapshot(&files);
-    let mut p = maintenance(&repo(), &config, &shot, None, monday())
+    let mut p = maintenance(&repo(), &config, &shot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut shot, &config).await;
@@ -802,9 +852,9 @@ fn cargo_accepts(registry: &SparseRegistry, dir: &Path, name: &str, version: &st
 /// `[registry] global-min-publish-age`: extraction reads it, and lookup
 /// holds the two-day-old release inside it — no update is proposed, so no
 /// branch is planned — while the owner's own Cargo on the same files
-/// refuses it. The runner's Cargo still never reads it, so a branch built
-/// by hand can still lock inside the window until PR 3 tells the run's
-/// Cargo.
+/// refuses it. A branch built by hand that still asks for the release is
+/// refused by the run's Cargo too, verbatim: the run carries the
+/// repository's committed value to every invocation.
 #[tokio::test]
 async fn real_cargo_holds_at_lookup_inside_a_committed_cooldown_the_owner_enforces() {
     let registry = registry();
@@ -838,9 +888,9 @@ async fn real_cargo_holds_at_lookup_inside_a_committed_cooldown_the_owner_enforc
         );
     }
 
-    // Until PR 3 the runner's Cargo is not told: a plan forced by hand
-    // still locks inside the window, and the committed file is never
-    // materialized for it.
+    // A plan forced by hand still asks for the held release: the run's
+    // Cargo refuses it under `deny`, and the branch fails with Cargo's own
+    // age line in the reason, as the owner's Cargo writes it below.
     let (p, _) = targeted(
         &registry,
         &files,
@@ -850,12 +900,15 @@ async fn real_cargo_holds_at_lookup_inside_a_committed_cooldown_the_owner_enforc
         manifest(&[("cool-b", "1.5.0")]),
     )
     .await;
-    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
-    assert!(
-        p.contents()["Cargo.lock"].contains("version = \"1.5.0\""),
-        "{}",
-        p.contents()["Cargo.lock"]
-    );
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.as_deref().unwrap_or_default();
+    for line in [
+        "lockfile generation failed",
+        "1.5.0 is too new",
+        "minimum age 14 days",
+    ] {
+        assert!(reason.contains(line), "{line:?} not in:\n{reason}");
+    }
     assert!(!p.contents().contains_key(".cargo/config.toml"));
 
     // The owner's Cargo on the same tree refuses the same target verbatim,
@@ -902,12 +955,13 @@ async fn real_cargo_holds_at_lookup_inside_a_committed_cooldown_the_owner_enforc
     assert!(!text.contains("version = \"1.5.0\""), "{text}");
 }
 
-/// The one way a cooldown reaches the Count's Cargo today: a
-/// `.cargo/config.toml` in a directory above the driver or cache directory
-/// is a parent of Cargo's working directory, so its config applies. PR 3
-/// ends the leak; today a too-new `--precise` fails the branch.
+/// A `.cargo/config.toml` in a directory above the driver or cache
+/// directory is a parent of Cargo's working directory, so its config
+/// would apply — but every invocation names its own publish age, and the
+/// explicit `0` the repository's missing cooldown resolves to beats the
+/// file. The too-new `--precise` locks in both directions.
 #[tokio::test]
-async fn real_cargo_reads_cooldowns_above_the_driver_directory() {
+async fn real_cargo_ignores_cooldowns_above_the_driver_directory() {
     let registry = registry();
     let files = project(("cool-b", "1.0"), "1.0.0", &[]);
     for config_above in [false, true] {
@@ -921,7 +975,7 @@ async fn real_cargo_reads_cooldowns_above_the_driver_directory() {
             .with_executor(executor);
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         let mut draft = Draft::from(p);
@@ -962,21 +1016,25 @@ async fn real_cargo_reads_cooldowns_above_the_driver_directory() {
             })
             .build();
         prepare_one(&runner, &mut p, &mut snapshot, &config).await;
-        if !config_above {
-            assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
-            continue;
-        }
-        assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
-        let reason = p.action().reason.as_deref().unwrap_or_default();
-        assert!(reason.contains("cargo"), "{reason}");
-        assert!(reason.contains("1.5.0 is too new"), "{reason}");
-        assert!(reason.contains("minimum age 14 days"), "{reason}");
+        assert_eq!(
+            p.action().status,
+            BranchStatus::Planned,
+            "config_above={config_above}: {:?}",
+            p.action()
+        );
+        assert!(
+            p.contents()["Cargo.lock"].contains("version = \"1.5.0\""),
+            "config_above={config_above}: {}",
+            p.contents()["Cargo.lock"]
+        );
     }
 }
 
 /// Rust 1.99.1 with the publish-age variables set runs clean and ignores
 /// them, as the repository's own pinned toolchain may be older than the
-/// runner's default: the too-new release is locked either way.
+/// runner's default: a committed cooldown the run hands it by environment
+/// is dropped with a warning, the too-new release is locked, and the run
+/// reports that transitive crates there do not wait.
 #[tokio::test]
 async fn real_cargo_before_1_100_runs_clean_with_cooldown_keys_set() {
     let registry = registry();
@@ -984,19 +1042,18 @@ async fn real_cargo_before_1_100_runs_clean_with_cooldown_keys_set() {
     let files = project(
         ("cool-b", "1.0"),
         "1.0.0",
-        &[(".tool-versions", "rust 1.99.1\n")],
+        &[
+            (".tool-versions", "rust 1.99.1\n"),
+            (".cargo/config.toml", COOLDOWN),
+        ],
     );
-    // A parent-directory cooldown that reaches today's runner, ignored by
-    // the 1.99.1 Cargo it drives.
     let executor = fixture_sparse(files.clone(), registry.clone());
     let temp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(temp.path().join(".cargo")).unwrap();
-    std::fs::write(temp.path().join(".cargo/config.toml"), COOLDOWN).unwrap();
     let runner =
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
-    let mut snapshot = snapshot(&files);
+    let mut snapshot = sparse_snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     let mut draft = Draft::from(p);
@@ -1036,12 +1093,28 @@ async fn real_cargo_before_1_100_runs_clean_with_cooldown_keys_set() {
             image: None,
         })
         .build();
-    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    let warnings = patchula_update::lock_all(
+        &runner,
+        std::slice::from_mut(&mut p),
+        &mut snapshot,
+        &config,
+        &|| {},
+    )
+    .await;
     assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
     assert!(
         p.contents()["Cargo.lock"].contains("version = \"1.5.0\""),
         "{}",
         p.contents()["Cargo.lock"]
+    );
+    // The run names the cooldown it could not enforce: the toolchain that
+    // ignored it, and the transitive crates that do not wait.
+    assert_eq!(
+        warnings,
+        [
+            "Cargo.toml: rust 1.99.1 predates Cargo 1.100's publish-age support; the cooldown binds direct updates but transitive crates do not wait"
+        ],
+        "{warnings:?}"
     );
 
     // The same keys by environment, verbatim: 1.99.1 warns and ignores.
@@ -1067,6 +1140,192 @@ async fn real_cargo_before_1_100_runs_clean_with_cooldown_keys_set() {
     }
     let text = std::fs::read_to_string(owner.join("Cargo.lock")).unwrap();
     assert!(text.contains("version = \"2.1.0\""), "{text}");
+}
+
+/// The committed cooldown reaches maintenance: `cargo update` under it
+/// keeps the day-old transitive release where the same run without one,
+/// above, locks the newest. The lock does not change, so the run may not
+/// write it at all.
+#[tokio::test]
+async fn real_cargo_maintenance_holds_inside_a_committed_cooldown() {
+    let registry = registry();
+    let files = BTreeMap::from([
+        ("Cargo.toml".to_string(), manifest(&[("cool-wrapper", "1")])),
+        ("src/lib.rs".to_string(), "// fixture\n".to_string()),
+        (
+            "Cargo.lock".to_string(),
+            lock(&[("cool-wrapper", "1.0.0", &[])]),
+        ),
+        (".cargo/config.toml".to_string(), COOLDOWN.to_string()),
+    ]);
+    let executor = fixture_sparse(files.clone(), registry.clone());
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let mut snapshot = sparse_snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
+        .unwrap()
+        .unwrap();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let lock = p.contents().get("Cargo.lock").map(String::as_str);
+    assert!(
+        lock.is_none_or(|text| text.contains("version = \"1.0.0\"")),
+        "{lock:?}"
+    );
+    assert!(lock.is_none_or(|text| !text.contains("1.5.0")), "{lock:?}");
+}
+
+/// With no committed cooldown the job's own `waitHours` still reaches the
+/// run's Cargo: the 336-hour wait maintenance derives from the update
+/// policy holds the same day-old transitive release the committed value
+/// does. The job records the wait it answered to.
+#[tokio::test]
+async fn real_cargo_maintenance_holds_inside_the_jobs_wait() {
+    let registry = registry();
+    let files = BTreeMap::from([
+        ("Cargo.toml".to_string(), manifest(&[("cool-wrapper", "1")])),
+        ("src/lib.rs".to_string(), "// fixture\n".to_string()),
+        (
+            "Cargo.lock".to_string(),
+            lock(&[("cool-wrapper", "1.0.0", &[])]),
+        ),
+    ]);
+    let executor = fixture_sparse(files.clone(), registry.clone());
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let mut snapshot = sparse_snapshot(&files);
+    let mut config = config();
+    config.defaults.wait_hours = 336;
+    let deps = [cargo_dependency("Cargo.toml")];
+    let mut p = maintenance(&repo(), &config, &snapshot, &deps, None, monday())
+        .unwrap()
+        .unwrap();
+    assert_eq!(p.lock_jobs()[0].wait_hours, 336);
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let lock = p.contents().get("Cargo.lock").map(String::as_str);
+    assert!(
+        lock.is_none_or(|text| text.contains("version = \"1.0.0\"")),
+        "{lock:?}"
+    );
+    assert!(lock.is_none_or(|text| !text.contains("1.5.0")), "{lock:?}");
+}
+
+/// `allow` belongs to the one job whose security fix sits inside the
+/// window: it locks cool-b 1.5.0 for the marked job, and the same
+/// directory's ordinary job still runs `deny`, so its too-new target is
+/// refused and the branch carries Cargo's age line.
+#[tokio::test]
+async fn real_cargo_allows_only_the_job_the_fix_marks() {
+    let registry = registry();
+    let files = BTreeMap::from([
+        (
+            "Cargo.toml".to_string(),
+            manifest(&[("cool-b", "1.0"), ("cool-fresh", "1")]),
+        ),
+        ("src/lib.rs".to_string(), "// fixture\n".to_string()),
+        (
+            "Cargo.lock".to_string(),
+            lock(&[("cool-b", "1.0.0", &[]), ("cool-fresh", "1.0.0", &[])]),
+        ),
+        (".cargo/config.toml".to_string(), COOLDOWN.to_string()),
+    ]);
+    let executor = fixture_sparse(files.clone(), registry.clone());
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let mut snapshot = sparse_snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
+        .unwrap()
+        .unwrap();
+    let mut draft = Draft::from(p);
+    // The marked security fix first, then an ordinary job on the same
+    // directory the window still holds.
+    {
+        let jobs = draft.lock_jobs_mut();
+        jobs[0].scope = Scope::Package {
+            package: "cool-b".into(),
+            current: Some("1.0.0".into()),
+            target: Some("1.5.0".into()),
+        };
+        jobs[0].publish_age_allow = true;
+        let mut denied = jobs[0].clone();
+        denied.publish_age_allow = false;
+        denied.scope = Scope::Package {
+            package: "cool-fresh".into(),
+            current: Some("1.0.0".into()),
+            target: Some("1.1.0".into()),
+        };
+        jobs.push(denied);
+    }
+    let old = &files["Cargo.toml"];
+    p = draft
+        .update()
+        .edit(
+            "Cargo.toml",
+            manifest(&[("cool-b", "1.5.0"), ("cool-fresh", "1")]),
+            FileAction {
+                path: "Cargo.toml".into(),
+                blob_sha: blob_sha(old),
+                diff: String::new(),
+            },
+        )
+        .build();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.as_deref().unwrap_or_default();
+    assert!(!reason.contains("1.5.0 is too new"), "{reason}");
+    for line in ["1.1.0 is too new", "minimum age 14 days"] {
+        assert!(reason.contains(line), "{line:?} not in:\n{reason}");
+    }
+}
+
+/// A committed cooldown the Count cannot read fails the directory's jobs
+/// rather than running with none: an ordinary update reports the file's
+/// reason, and maintenance reports it too.
+#[tokio::test]
+async fn real_cargo_unreadable_cooldown_fails_the_directory() {
+    let registry = registry();
+    let files = project(
+        ("cool-b", "1.0"),
+        "1.0.0",
+        &[(
+            ".cargo/config.toml",
+            "[registry]\nglobal-min-publish-age = \"fortnight\"\n",
+        )],
+    );
+    let unread =
+        ".cargo/config.toml's `registry.global-min-publish-age`, which the Count cannot read";
+    let (p, _) = targeted(
+        &registry,
+        &files,
+        ("cool-b", "1.0"),
+        "1.0.0",
+        "1.5.0",
+        manifest(&[("cool-b", "1.5.0")]),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.as_deref().unwrap_or_default();
+    assert!(reason.contains(unread), "{unread:?} not in:\n{reason}");
+
+    let executor = fixture_sparse(files.clone(), registry.clone());
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let mut snapshot = sparse_snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
+        .unwrap()
+        .unwrap();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.as_deref().unwrap_or_default();
+    assert!(reason.contains(unread), "{unread:?} not in:\n{reason}");
 }
 
 /// Cargo 1.100's own texts, the ones its docs do not show, pinned verbatim

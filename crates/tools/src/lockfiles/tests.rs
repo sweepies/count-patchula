@@ -349,7 +349,7 @@ async fn real_apm_relocks_offline() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -385,7 +385,7 @@ async fn apm_locks_use_the_lock_only_command() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         if !refresh {
@@ -556,7 +556,7 @@ async fn a_credentialed_tool_failure_shows_no_output() {
         .with_registries(&[entry]);
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -633,7 +633,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
     let config = config();
     let mut plans: Vec<_> = (0..3)
         .map(|_| {
-            maintenance(&repo(), &config, &snapshot, None, monday())
+            maintenance(&repo(), &config, &snapshot, &[], None, monday())
                 .unwrap()
                 .unwrap()
         })
@@ -680,7 +680,7 @@ async fn committed_registry_credentials_stop_the_run_before_any_tool() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -715,7 +715,7 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -774,7 +774,7 @@ async fn all_tools_are_targeted_scrubbed_and_versions_are_read_without_loading_r
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     let mut draft = Draft::from(p);
@@ -874,7 +874,7 @@ async fn node_lockfiles_use_aube_yarn_and_bun_by_lockfile_format() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p).update().build();
@@ -929,7 +929,7 @@ async fn the_npm_engine_setting_restores_native_npm_for_npm_locks() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config_with("npmEngine = \"npm\"");
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p).update().build();
@@ -1030,7 +1030,7 @@ async fn an_unchanged_lockfile_after_a_manifest_edit_fails_the_branch() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -1073,7 +1073,7 @@ async fn a_manifest_edit_outside_the_dependencies_leaves_the_lock_alone() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -1106,7 +1106,7 @@ async fn aube_lock_yaml_is_regenerated_in_place_beside_other_lockfiles() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         p = Draft::from(p).update().build();
@@ -1151,7 +1151,7 @@ async fn aube_lock_yaml_creation_fails_the_branch() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p).update().build();
@@ -1184,7 +1184,7 @@ async fn maintenance_refreshes_node_lockfiles_within_the_manifest_ranges() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config_with("npmEngine = \"npm\"");
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     assert!(p.is_maintenance());
@@ -1263,7 +1263,7 @@ async fn real_tools_produce_deterministic_lockfiles_from_local_offline_fixtures(
             let runner=Runner::new(temp.path().join("worktrees"),"offline-installation").with_executor(executor);
             let mut snapshot=snapshot(&files);
             let config=config();
-            let mut p=maintenance(&repo(),&config,&snapshot,None,monday()).unwrap().unwrap();
+            let mut p=maintenance(&repo(),&config,&snapshot, &[], None, monday()).unwrap().unwrap();
             assert!(p.lock_jobs().iter().all(|j|j.ecosystem==ecosystem));
             prepare_one(&runner, &mut p,&mut snapshot,&config).await;
             assert!(matches!(p.action().status,BranchStatus::Planned|BranchStatus::Skipped),"{ecosystem:?}: {:?}",p.action());
@@ -1327,7 +1327,7 @@ async fn real_aube_rewrites_pnpm_npm_and_yarn_classic_locks_in_place() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         p = Draft::from(p).update().build();
@@ -1378,7 +1378,7 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -1541,7 +1541,7 @@ async fn real_git_cache_is_reused_and_fetches_new_bases_incrementally_offline() 
         let files = BTreeMap::from([("Cargo.lock".into(), "version = 4\n".into())]);
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo, &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo, &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -1611,7 +1611,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
             .with_executor(executor);
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         let mut draft = Draft::from(p);
@@ -1843,14 +1843,14 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
             },
             exact_version: false,
             publish_age_allow: false,
+            wait_hours: 0,
         };
         runner
             .cargo_update(
                 &driver,
                 &cwd,
-                "1.100.0",
                 &job,
-                false,
+                ("1.100.0", false, None),
                 (&[], &[], &[], false),
             )
             .await
@@ -1941,7 +1941,7 @@ async fn cargo_gets_credentialed_registries_from_the_environment() {
         .with_registries(&[entry]);
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -1984,7 +1984,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     let mut draft = Draft::from(p);
@@ -2047,7 +2047,7 @@ fn provider_lock_drift_is_rejected_before_publication() {
     ]);
     let config = config();
     let snapshot = snapshot(&files);
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -2209,7 +2209,7 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
             };
             let job = job(&dep, &update, &snapshot).unwrap().unwrap();
             assert_eq!(job.ecosystem, Ecosystem::Mise);
-            let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
                 .unwrap()
                 .unwrap();
             p = Draft::from(p)
@@ -2293,7 +2293,7 @@ async fn mise_lock_updates_a_tool_that_records_no_platforms() {
             ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
         };
         let job = job(&dep, &update, &snapshot).unwrap().unwrap();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         p = Draft::from(p)
@@ -2395,7 +2395,7 @@ async fn mise_lock_ignores_configuration_below_the_lockfile() {
     let job = job(in_file("mise.toml"), &update, &snapshot)
         .unwrap()
         .unwrap();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -2457,7 +2457,7 @@ async fn mise_lock_in_a_subdirectory_reads_the_configuration_beside_it() {
     };
     let job = job(&dep, &update, &snapshot).unwrap().unwrap();
     assert_eq!(job.directory, "services/api");
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -2559,7 +2559,7 @@ async fn mise_lock_records_every_request_a_multi_version_declaration_makes() {
                 ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
             };
             let job = job(&dep, &update, &snapshot).unwrap().unwrap();
-            let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
                 .unwrap()
                 .unwrap();
             p = Draft::from(p)
@@ -2632,7 +2632,7 @@ fn npm_change(value: &str) -> patchula_update::Change {
 fn readable_locks_must_resolve_the_requested_version() {
     let config = config();
     let seed = BTreeMap::from([("package-lock.json".to_string(), "{}\n".to_string())]);
-    let mut p = maintenance(&repo(), &config, &snapshot(&seed), None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot(&seed), &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p).changes(vec![npm_change("2.0.0")]).build();
@@ -2846,7 +2846,7 @@ async fn an_unchanged_lockfile_after_a_catalog_edit_fails_the_branch() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -2886,7 +2886,7 @@ async fn real_yarn_berry_uses_a_sanitised_yarnrc_and_restores_it() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p).update().build();
@@ -2942,7 +2942,7 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         p = Draft::from(p)
@@ -2957,6 +2957,7 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
                 },
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             }])
             .content(
                 "pyproject.toml",
@@ -2997,7 +2998,7 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -3012,6 +3013,7 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
             },
             exact_version: false,
             publish_age_allow: false,
+            wait_hours: 0,
         }])
         .build();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -3061,7 +3063,7 @@ async fn real_uv_and_poetry_regenerate_python_locks() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -3397,7 +3399,7 @@ async fn real_dotnet_restore_regenerates_packages_lock_json() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -3407,6 +3409,7 @@ async fn real_dotnet_restore_regenerates_packages_lock_json() {
             scope: Scope::Directory,
             exact_version: false,
             publish_age_allow: false,
+            wait_hours: 0,
         }])
         .build();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -3438,7 +3441,7 @@ async fn real_bundler_relocks_offline() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -3490,7 +3493,7 @@ async fn composer_locks_use_static_or_compiled_php() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config_with(setting);
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -3541,7 +3544,7 @@ async fn static_php_requires_an_exact_version() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -3574,7 +3577,7 @@ async fn real_composer_relocks_offline() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -3708,6 +3711,7 @@ fn a_vulnerable_transitive_crate_moves_through_its_lockfile_alone() {
             },
             exact_version: true,
             publish_age_allow: false,
+            wait_hours: 0,
         }]
     );
     assert_eq!(plan.changes()[0].advisories[0].id, "RUSTSEC-2023-0071");
@@ -3733,7 +3737,7 @@ fn a_lock_resolves_a_target_that_names_no_build_metadata() {
         "Cargo.lock".into(),
         lock("2.1.1+zstd.1.5.7"),
     )]));
-    let mut plan = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut plan = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     plan = Draft::from(plan)
@@ -3917,14 +3921,14 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
             },
             exact_version: false,
             publish_age_allow: false,
+            wait_hours: 0,
         };
         runner
             .cargo_update(
                 &driver,
                 &cwd,
-                "1.100.0",
                 &job,
-                false,
+                ("1.100.0", false, None),
                 (&[], &[], &[], false),
             )
             .await
@@ -4220,7 +4224,7 @@ async fn flake_maintenance_skips_refused_inputs() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -4342,7 +4346,7 @@ async fn real_nix_relocks_a_flake_offline() {
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -4450,7 +4454,7 @@ async fn real_nix_refuses_a_declared_http_input_before_fetching() {
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -4731,6 +4735,7 @@ fn an_in_range_release_moves_a_direct_crate_through_its_lockfile_alone() {
             },
             exact_version: true,
             publish_age_allow: false,
+            wait_hours: 24,
         }]
     );
     assert_eq!(plan.changes()[0].value, None);
@@ -4896,7 +4901,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
             let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
                 .with_executor(executor.clone());
             let mut snapshot = snapshot(&files);
-            let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+            let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
                 .unwrap()
                 .unwrap();
             p = Draft::from(p)
@@ -4911,6 +4916,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                     },
                     exact_version: true,
                     publish_age_allow: false,
+                    wait_hours: 0,
                 }])
                 .changes(vec![patchula_update::Change {
                     registry: None,
@@ -5053,7 +5059,7 @@ async fn mise_lock_follows_the_tools_tasks_install() {
         ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
     };
     let job = job(&dep, &update, &snapshot).unwrap().unwrap();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     let mut draft = Draft::from(p).update().lock_jobs(vec![job]);
@@ -5126,7 +5132,7 @@ async fn lock_task_file_tool(
         ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
     };
     let job = job(&dep, &update, &snapshot).unwrap().expect("a lock job");
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -5224,7 +5230,7 @@ async fn mise_lock_refuses_a_task_that_declares_a_tool_with_other_options() {
         ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
     };
     let job = job(&dep, &update, &snapshot).unwrap().unwrap();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -5288,7 +5294,7 @@ async fn lock_node_declared_twice(old: &str, lock: String) -> (Plan, Vec<String>
         ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
     };
     let job = job(&dep, &update, &snapshot).unwrap().unwrap();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -5913,7 +5919,7 @@ async fn go_fetches_only_through_the_proxy_in_the_public_partition() {
     let runner = Runner::new(temp.path().join("cache"), "x").with_executor(executor.clone());
     let mut first = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &first, None, monday())
+    let mut p = maintenance(&repo(), &config, &first, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut first, &config).await;
@@ -5945,7 +5951,7 @@ async fn go_fetches_only_through_the_proxy_in_the_public_partition() {
     let temp = tempfile::tempdir().unwrap();
     let runner = Runner::new(temp.path().join("cache"), "x").with_executor(executor.clone());
     let mut failed = snapshot(&files);
-    let mut p = maintenance(&repo(), &config, &failed, None, monday())
+    let mut p = maintenance(&repo(), &config, &failed, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut failed, &config).await;
@@ -6046,7 +6052,7 @@ async fn a_repository_that_commits_credentials_runs_no_tool() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -6560,7 +6566,7 @@ async fn dotnet_restore_uses_global_json_sdk_and_tree_nuget_configs() {
         .with_registries(&[entry]);
     let mut snap1 = snapshot(&files);
     let config = config();
-    let p = maintenance(&repo(), &config, &snap1, None, monday())
+    let p = maintenance(&repo(), &config, &snap1, &[], None, monday())
         .unwrap()
         .unwrap();
     let mut draft = Draft::from(p);
@@ -6600,7 +6606,7 @@ async fn dotnet_restore_uses_global_json_sdk_and_tree_nuget_configs() {
     let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
         .with_executor(executor.clone());
     let mut snap2 = snapshot(&files);
-    let mut p = maintenance(&repo(), &config, &snap2, None, monday())
+    let mut p = maintenance(&repo(), &config, &snap2, &[], None, monday())
         .unwrap()
         .unwrap();
     let mut draft = Draft::from(p);
@@ -6651,7 +6657,7 @@ async fn go_gets_private_hosts_through_netrc_and_downloads() {
         )]),
     )
     .unwrap();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -6687,7 +6693,7 @@ async fn cargo_runs_update_workspace_for_untargeted_jobs() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     let mut draft = Draft::from(p);
@@ -6775,6 +6781,7 @@ async fn cargo_package_job_with_unparseable_versions_still_updates() {
         },
         exact_version: false,
         publish_age_allow: false,
+        wait_hours: 0,
     }])
     .build();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -6830,7 +6837,7 @@ async fn tool_pins_from_manifests_are_checked_before_any_tool_runs() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -6882,7 +6889,7 @@ async fn checkout_fails_closed_on_unusual_modes_and_disagreements() {
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
     let mut snap1 = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snap1, None, monday())
+    let mut p = maintenance(&repo(), &config, &snap1, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snap1, &config).await;
@@ -6902,7 +6909,7 @@ async fn checkout_fails_closed_on_unusual_modes_and_disagreements() {
     let runner =
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
     let mut snap2 = snapshot(&files);
-    let mut p = maintenance(&repo(), &config, &snap2, None, monday())
+    let mut p = maintenance(&repo(), &config, &snap2, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snap2, &config).await;
@@ -6923,7 +6930,7 @@ async fn checkout_fails_closed_on_unusual_modes_and_disagreements() {
     let runner =
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
     let mut snap3 = snapshot(&files);
-    let p = maintenance(&repo(), &config, &snap3, None, monday())
+    let p = maintenance(&repo(), &config, &snap3, &[], None, monday())
         .unwrap()
         .unwrap();
     let mut p = Draft::from(p)
@@ -6971,7 +6978,7 @@ async fn tools_cannot_write_outside_their_lockfiles_and_manifests() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         let mut draft = Draft::from(p);
@@ -7025,7 +7032,7 @@ async fn a_tool_that_produces_no_lockfile_fails() {
             .with_executor(executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         let mut draft = Draft::from(p);
@@ -7059,7 +7066,7 @@ async fn a_flake_job_for_an_input_the_lock_lacks_fails() {
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p)
@@ -7074,6 +7081,7 @@ async fn a_flake_job_for_an_input_the_lock_lacks_fails() {
             },
             exact_version: false,
             publish_age_allow: false,
+            wait_hours: 0,
         }])
         .build();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -7135,7 +7143,7 @@ async fn terraform_relocks_over_a_committed_lock() {
         .with_executor(executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -7177,7 +7185,7 @@ async fn tool_versions_with_extra_words_become_mise_arrays() {
         .find(|d| d.name == "node")
         .unwrap();
     let job = job(&dep, &update(), &snapshot).unwrap().unwrap();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     p = Draft::from(p).update().lock_jobs(vec![job]).build();
@@ -7236,7 +7244,7 @@ async fn mise_lock_that_drops_platforms_or_moves_the_target_fails() {
             ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
         };
         let job = job(&dep, &upd, &snapshot).unwrap().unwrap();
-        let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+        let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .unwrap();
         p = Draft::from(p)
@@ -7331,7 +7339,7 @@ async fn a_failing_installation_token_stops_the_run() {
         .with_credentials(Arc::new(Failing));
     let mut snapshot = snapshot(&files);
     let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, None, monday())
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
@@ -7428,6 +7436,7 @@ async fn a_gradle_wrapper_job_takes_the_wrapper_path() {
         scope: Scope::Directory,
         exact_version: false,
         publish_age_allow: false,
+        wait_hours: 0,
     }])
     .build();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;

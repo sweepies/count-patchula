@@ -70,6 +70,7 @@ fn a_mise_tool_is_locked_by_a_mise_lock_at_its_config_root() {
             },
             exact_version: false,
             publish_age_allow: false,
+            wait_hours: 0,
         })
     );
 }
@@ -257,6 +258,7 @@ fn a_flake_input_is_moved_by_name() {
             },
             exact_version: false,
             publish_age_allow: false,
+            wait_hours: 0,
         })
     );
 }

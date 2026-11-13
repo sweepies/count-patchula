@@ -151,6 +151,14 @@ The Count never bumps `_commit` on its own either, since the next `copier update
 
 See [the release-age wait](/guide/lookup-policy/#the-release-age-wait).
 
+### The wait binds what Cargo locks {#cargo-transitive-wait}
+
+- **Renovate:** `minimumReleaseAge` checks only the dependency it updates; what the lockfile gains in the same run is not age-checked
+- **The Count:** tells Cargo `registry.global-min-publish-age`, so every release a Cargo update or maintenance resolve newly locks — dependencies it names and transitive crates alike — has waited as long
+- **Why:** Holding the named dependency while Cargo locks a newer release of something else quietly defeats the wait; a `security.apply` fix inside the window alone runs `resolver.incompatible-publish-age = "allow"`
+
+See [Cargo's cooldown](/guide/lookup-policy/#cargos-cooldown). Rust older than 1.100 does not understand the keys; the run warns that transitive crates do not wait.
+
 ### Exact npm versions {#npm-range-edits}
 
 - **Renovate:** `rangeStrategy` defaults to `auto`, which keeps a caret or tilde range and updates only the lockfile when the new version satisfies it

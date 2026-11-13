@@ -322,6 +322,7 @@ impl Runner {
             .iter()
             .map(|j| (j.ecosystem, j.directory.clone()))
             .collect();
+        let mut warnings = Vec::new();
         for (ecosystem, directory) in groups {
             let tool = descriptor(ecosystem);
             let versions = if tool.versions {
@@ -354,8 +355,16 @@ impl Runner {
                     // Cargo runs outside the repository and reads none of its
                     // configuration. It gets each credentialed registry the
                     // `.cargo/config.toml` files at or above the project
-                    // define, by name, from the environment.
-                    self.cargo_locks(context, &jobs, &cargo_configs).await?;
+                    // define, by name, from the environment, and the
+                    // directory's committed publish-age cooldown alongside.
+                    self.cargo_locks(
+                        context,
+                        &jobs,
+                        &cargo_configs,
+                        work.cargo_cooldowns,
+                        &mut warnings,
+                    )
+                    .await?;
                 }
                 Ecosystem::Go => self.go_locks(context, &jobs).await?,
                 Ecosystem::Terraform => self.terraform_lock(context).await?,
@@ -406,7 +415,7 @@ impl Runner {
                 },
             );
         }
-        Ok(Generated { files })
+        Ok(Generated { files, warnings })
     }
     /// Evict aged and oversized tool-cache partitions, at most once an hour
     /// per cache root per process, without holding the generation up. Lock

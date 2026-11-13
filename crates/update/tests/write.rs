@@ -1438,6 +1438,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                     scope: patchula_lockfiles::Scope::Directory,
                     exact_version: false,
                     publish_age_allow: false,
+                    wait_hours: 0,
                 })
                 .lockfiles_ready(true);
         }
@@ -4259,6 +4260,7 @@ async fn ungenerated_lockfiles_fail_before_any_github_request() {
             scope: patchula_lockfiles::Scope::Directory,
             exact_version: false,
             publish_age_allow: false,
+            wait_hours: 0,
         }])
         .lockfiles_ready(false)
         .build();

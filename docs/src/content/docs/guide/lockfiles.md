@@ -343,13 +343,26 @@ Each tool gets the credentials in the form it reads, only for its own run:
 Files are written with owner-only permissions and removed when the tool
 finishes. Cargo sends the token as the `Authorization` header, so it gets the
 header a lookup sends: `Bearer <token>` or `Basic <base64>`. Cargo runs
-outside the repository and reads none of its configuration, with one
-exception: a publish-age cooldown committed in `.cargo/config.toml` or
-`.cargo/config` is a [floor on the release-age
-wait](/guide/lookup-policy/#cargos-cooldown) the Count applies at lookup.
-The lockfile run's Cargo does not read it either way; it gets each
+outside the repository and reads none of its configuration; it gets each
 registry that the `.cargo/config.toml` and `.cargo/config` files at or above
-the project define under a `tools` entry, by name, index and token. dotnet
+the project define under a `tools` entry, by name, index and token, and
+the directory's committed [publish-age
+cooldown](/guide/lookup-policy/#cargos-cooldown) — or the job's `waitHours`
+when that is longer — by environment, so crates a resolve newly locks wait
+as long as the ones an update names. Cargo resolves a lockfile in one
+pass, so the job's one wait covers everything that resolve newly locks —
+the crate the update names and transitive crates alike. A semver-crossing
+update runs `cargo update --workspace`, and when the age check leaves a
+release it needs out of reach the failure reads as Cargo's ordinary
+refusal, "did not resolve … to requested version", not its publish-age
+line. Naming the age explicitly on every
+invocation also means a `.cargo/config.toml` above the runner's own
+directories cannot impose one the repository never committed. A
+`security.apply` fix that lands inside the window is the one job that runs
+`resolver.incompatible-publish-age = "allow"`. Rust older than 1.100
+ignores the variables: the cooldown still binds the direct targets lookup
+picks, but the run warns that transitive crates in that directory do not
+wait. dotnet
 reads every `nuget.config` in the tree, since a project can name any of them,
 and gives no source credentials if it cannot read one; NuGet compares source
 keys without case. Poetry reads the project's
@@ -401,7 +414,10 @@ refreshes every lockfile within the manifests' ranges, at most once per ISO
 week, and no sooner than `waitHours` after the last successful refresh. The
 default window is Monday 00:00 to 04:00 UTC; explicit update windows
 replace it. Windows work as for updates: the first run after a window time
-picks it up, however often the Count runs.
+picks it up, however often the Count runs. A maintenance resolve has no
+update to take a wait from, so for Cargo the run holds everything it newly
+locks to the strictest active `waitHours` any update class reaches on any
+of the repository's crates.io dependencies.
 Failures do not count as a completed refresh, and a closed maintenance PR can
 come back the following week.
 

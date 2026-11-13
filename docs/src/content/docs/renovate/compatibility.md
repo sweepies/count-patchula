@@ -153,7 +153,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | `rangeStrategy` | `versions`: `exact`, `preserve` or `widen` |
 | `pinDigests` | `digest`, on by default for actions and images |
 | `minimumReleaseAge` | `waitHours`, 24 by default |
-| Cargo's committed `global-min-publish-age` | read as a floor under `waitHours` for the crates.io dependencies it reaches; security fixes bypass it, and the lockfile run's Cargo is told the value in a later change |
+| Cargo's committed `global-min-publish-age` | read as a floor under `waitHours` for the crates.io dependencies it reaches; security fixes bypass it, and the lockfile run's Cargo enforces it on transitive crates too |
 | `schedule`, `timezone` | cron `windows` with a zone; no natural-language schedules |
 | `prConcurrentLimit`, `prHourlyLimit` | `concurrent` (10 by default, as in Renovate), `perHour` (unlimited by default) |
 | `rebaseWhen` | `rebase`: `conflicts` or `behind` |
