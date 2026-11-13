@@ -272,6 +272,15 @@ impl Client {
             .ok_or(Error::Configuration)
     }
 
+    /// Renews refreshable credentials now, so a request started next sends
+    /// without waiting on a token. A fixed token has nothing to renew.
+    pub async fn ready(&self) -> Result<()> {
+        if let Some(credentials) = &self.0.credentials {
+            credentials.token().await?;
+        }
+        Ok(())
+    }
+
     /// Public metadata reads share the transport pool but never GitHub auth.
     /// A registry client on this client's cache and transport, following
     /// `rules`. Its options are the defaults at this client's concurrency,
