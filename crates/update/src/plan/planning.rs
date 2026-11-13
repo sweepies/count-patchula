@@ -47,6 +47,7 @@ fn repo() -> Repository {
 }
 fn snapshot(files: &BTreeMap<String, String>) -> Snapshot {
     Snapshot {
+        cargo_cooldowns: Default::default(),
         paths: files.keys().cloned().collect(),
         files: files
             .iter()
@@ -177,23 +178,25 @@ fn lock_jobs_keep_their_serialized_field_layout() {
             target: Some("1.0.1".into()),
         },
         exact_version: true,
+        publish_age_allow: false,
     };
     assert_eq!(
         serde_json::to_string(&targeted).unwrap(),
-        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true}"#
+        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true,"publish_age_allow":false}"#
     );
     let whole = Job {
         ecosystem: Ecosystem::Node,
         directory: String::new(),
         scope: Scope::Directory,
         exact_version: false,
+        publish_age_allow: false,
     };
     assert_eq!(
         serde_json::to_string(&whole).unwrap(),
-        r#"{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":false}"#
+        r#"{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false}"#
     );
     let back: Job = serde_json::from_str(
-        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true}"#,
+        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true,"publish_age_allow":false}"#,
     )
     .unwrap();
     assert_eq!(back, targeted);
@@ -214,6 +217,7 @@ fn chart_updates_with_a_committed_chart_lock_are_pending() {
         .unwrap()
         .dependencies;
     let update = patchula_report::Update {
+        cooldown: None,
         new_value: Some("2.0.0".into()),
         new_version: Some("2.0.0".into()),
         new_digest: None,
@@ -532,6 +536,7 @@ fn an_in_range_release_is_a_lock_only_plan_for_bundler_composer_and_pyproject() 
                     target: Some(target.into()),
                 },
                 exact_version: true,
+                publish_age_allow: false,
             }],
             "{manager}"
         );
@@ -558,6 +563,7 @@ fn a_lock_only_update_without_a_committed_lockfile_plans_nothing_to_do() {
         None
     );
     let update = patchula_report::Update {
+        cooldown: None,
         new_value: None,
         new_version: Some("13.2.1".into()),
         new_digest: None,
@@ -748,6 +754,7 @@ fn a_lock_only_cargo_update_without_a_committed_lock_has_no_job() {
         .unwrap()
         .dependencies;
     let update = |value: Option<&str>| patchula_report::Update {
+        cooldown: None,
         new_value: value.map(Into::into),
         new_version: Some("1.40.0".into()),
         new_digest: None,
@@ -957,6 +964,7 @@ fn flake_lock(private: bool) -> String {
 /// A dependency as extraction would report it, for `job()` dispatch cases.
 fn mkdep(manager: Manager, file: &str, kind: patchula_words::DependencyKind) -> Dependency {
     Dependency {
+        cooldown: None,
         manager,
         file: file.into(),
         location: patchula_manager::Location {
@@ -1125,6 +1133,7 @@ fn a_job_without_a_package_deserializes_as_directory_scoped() {
     let job: Job = serde_json::from_value(serde_json::json!({
         "ecosystem": "Node", "directory": "web",
         "package": null, "current": null, "target": null, "lock_only": false,
+        "publish_age_allow": false,
     }))
     .unwrap();
     assert_eq!(job.scope, Scope::Directory);
@@ -1163,12 +1172,13 @@ mod goldens {
                 directory: "web".into(),
                 scope: Scope::Directory,
                 exact_version: false,
+                publish_age_allow: false,
             };
             let json = serde_json::to_string(&directory).unwrap();
             assert_eq!(
                 json,
                 format!(
-                    r#"{{"ecosystem":"{name}","directory":"web","package":null,"current":null,"target":null,"lock_only":false}}"#
+                    r#"{{"ecosystem":"{name}","directory":"web","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false}}"#
                 ),
                 "{name} directory job"
             );
@@ -1186,12 +1196,13 @@ mod goldens {
                     target: Some("1.2.0".into()),
                 },
                 exact_version: true,
+                publish_age_allow: false,
             };
             let json = serde_json::to_string(&targeted).unwrap();
             assert_eq!(
                 json,
                 format!(
-                    r#"{{"ecosystem":"{name}","directory":"web","package":"left-pad","current":"1.0.0","target":"1.2.0","lock_only":true}}"#
+                    r#"{{"ecosystem":"{name}","directory":"web","package":"left-pad","current":"1.0.0","target":"1.2.0","lock_only":true,"publish_age_allow":false}}"#
                 ),
                 "{name} package job"
             );
@@ -1210,8 +1221,9 @@ mod goldens {
                         target: None,
                     },
                     exact_version: false,
+                    publish_age_allow: false,
                 },
-                r#"{"ecosystem":"Node","directory":"","package":"p","current":null,"target":null,"lock_only":false}"#,
+                r#"{"ecosystem":"Node","directory":"","package":"p","current":null,"target":null,"lock_only":false,"publish_age_allow":false}"#,
             ),
             (
                 Job {
@@ -1223,8 +1235,9 @@ mod goldens {
                         target: None,
                     },
                     exact_version: false,
+                    publish_age_allow: false,
                 },
-                r#"{"ecosystem":"Node","directory":"","package":"p","current":"1.0.0","target":null,"lock_only":false}"#,
+                r#"{"ecosystem":"Node","directory":"","package":"p","current":"1.0.0","target":null,"lock_only":false,"publish_age_allow":false}"#,
             ),
             (
                 Job {
@@ -1236,8 +1249,9 @@ mod goldens {
                         target: Some("2.0.0".into()),
                     },
                     exact_version: false,
+                    publish_age_allow: false,
                 },
-                r#"{"ecosystem":"Node","directory":"","package":"p","current":null,"target":"2.0.0","lock_only":false}"#,
+                r#"{"ecosystem":"Node","directory":"","package":"p","current":null,"target":"2.0.0","lock_only":false,"publish_age_allow":false}"#,
             ),
             (
                 Job {
@@ -1245,8 +1259,9 @@ mod goldens {
                     directory: String::new(),
                     scope: Scope::Directory,
                     exact_version: true,
+                    publish_age_allow: false,
                 },
-                r#"{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":true}"#,
+                r#"{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":true,"publish_age_allow":false}"#,
             ),
         ] {
             assert_eq!(serde_json::to_string(&job).unwrap(), expected);
@@ -1264,6 +1279,7 @@ mod goldens {
                 directory: "b".into(),
                 scope: Scope::Directory,
                 exact_version: false,
+                publish_age_allow: false,
             },
             Job {
                 ecosystem: Ecosystem::Cargo,
@@ -1274,12 +1290,14 @@ mod goldens {
                     target: Some("2.0.0".into()),
                 },
                 exact_version: true,
+                publish_age_allow: false,
             },
             Job {
                 ecosystem: Ecosystem::Node,
                 directory: String::new(),
                 scope: Scope::Directory,
                 exact_version: false,
+                publish_age_allow: false,
             },
             Job {
                 ecosystem: Ecosystem::Cargo,
@@ -1290,12 +1308,14 @@ mod goldens {
                     target: Some("2.0.0".into()),
                 },
                 exact_version: false,
+                publish_age_allow: false,
             },
             Job {
                 ecosystem: Ecosystem::Cargo,
                 directory: "sub".into(),
                 scope: Scope::Directory,
                 exact_version: false,
+                publish_age_allow: false,
             },
             Job {
                 ecosystem: Ecosystem::Nix,
@@ -1306,18 +1326,20 @@ mod goldens {
                     target: Some("new".into()),
                 },
                 exact_version: false,
+                publish_age_allow: false,
             },
             Job {
                 ecosystem: Ecosystem::Php,
                 directory: String::new(),
                 scope: Scope::Directory,
                 exact_version: true,
+                publish_age_allow: false,
             },
         ];
         let set: BTreeSet<Job> = jobs.into_iter().collect();
         assert_eq!(
             serde_json::to_string(&set).unwrap(),
-            r#"[{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":false},{"ecosystem":"Cargo","directory":"","package":"a","current":"1.0.0","target":"2.0.0","lock_only":false},{"ecosystem":"Cargo","directory":"","package":"z","current":null,"target":"2.0.0","lock_only":true},{"ecosystem":"Cargo","directory":"sub","package":null,"current":null,"target":null,"lock_only":false},{"ecosystem":"Php","directory":"","package":null,"current":null,"target":null,"lock_only":true},{"ecosystem":"Nix","directory":"f","package":"nixpkgs","current":"old","target":"new","lock_only":false},{"ecosystem":"Apm","directory":"b","package":null,"current":null,"target":null,"lock_only":false}]"#
+            r#"[{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false},{"ecosystem":"Cargo","directory":"","package":"a","current":"1.0.0","target":"2.0.0","lock_only":false,"publish_age_allow":false},{"ecosystem":"Cargo","directory":"","package":"z","current":null,"target":"2.0.0","lock_only":true,"publish_age_allow":false},{"ecosystem":"Cargo","directory":"sub","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false},{"ecosystem":"Php","directory":"","package":null,"current":null,"target":null,"lock_only":true,"publish_age_allow":false},{"ecosystem":"Nix","directory":"f","package":"nixpkgs","current":"old","target":"new","lock_only":false,"publish_age_allow":false},{"ecosystem":"Apm","directory":"b","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false}]"#
         );
     }
 
@@ -1336,12 +1358,14 @@ mod goldens {
                     target: Some("1.40.0".into()),
                 },
                 exact_version: true,
+                publish_age_allow: false,
             },
             Job {
                 ecosystem: Ecosystem::Node,
                 directory: String::new(),
                 scope: Scope::Directory,
                 exact_version: false,
+                publish_age_allow: false,
             },
         ];
         let built = fingerprint(FingerprintStage::Built {
@@ -1352,7 +1376,7 @@ mod goldens {
         });
         assert_eq!(
             built,
-            "1751efce2f28afe1a84ed846bc452699fabff1c9bf4235c07876b7bbd2afbc96"
+            "d67ff5e8c3835fcfbc032116984c80ccfe419aa692914f9865cbc67c221cc668"
         );
     }
 
@@ -1402,7 +1426,7 @@ mod goldens {
         assert!(plan.is_maintenance());
         assert_eq!(
             plan.fingerprint(),
-            "afc5cee4a02f229ef7a115e629120a6d10e8aa1c7a66e40e2afbc8bf00369cac"
+            "6ab3f7166a31bafcb0136e2bf13392eb2f81a5b0573296cf4c1f4bb6789113b6"
         );
         assert_eq!(plan.input_fingerprint(), plan.fingerprint());
         assert_eq!(
@@ -1411,7 +1435,7 @@ mod goldens {
         );
         assert_eq!(
             plan.update_key(),
-            "39b92221b8041c0d7005557eac085932f17517b7ff35be1b9aa0538d7f971ecb"
+            "a793cdc13c9ef186d125aa51cdbc350f4953d5eb5a7bcf55a95af61efa45480d"
         );
     }
 
@@ -1520,6 +1544,7 @@ mod goldens {
         let config = config();
         let evaluator = patchula_lookup::Evaluator::new(&config).unwrap();
         let update = Update {
+            cooldown: None,
             new_value: None,
             new_version: Some("2.0.0".into()),
             new_digest: None,

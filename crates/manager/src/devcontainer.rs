@@ -49,6 +49,7 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
             };
             let start = range.start + 1 + reference.len() + 1;
             out.push(Dependency {
+                cooldown: None,
                 manager: Manager::Devcontainer,
                 file: path.into(),
                 location: Location::new(

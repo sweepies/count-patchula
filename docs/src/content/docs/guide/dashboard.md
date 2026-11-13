@@ -36,7 +36,12 @@ In order:
 4. open update PRs, grouped by update type, then the ones he merged;
 5. pending updates, each with the reason it is held (release age with the time
    it becomes eligible, such as "eligible 31 Oct 08:29 UTC", PR limits,
-   schedule windows). A held update's lockfile or tool failure shows a short
+   schedule windows). An update held by the repository's committed [Cargo
+   cooldown](/guide/lookup-policy/#cargos-cooldown) is a plain line naming the
+   config file and the eligible time, with no box to tick — not even the
+   Count can create it early. Once past the floor but still inside
+   `waitHours`, the box returns. A held update's lockfile or tool failure
+   shows a short
    reason, with the decisive lines of the tool's output (from its first error,
    at most 10 lines) in a collapsed block. The full output stays in the CLI log
    and the JSON report;
@@ -73,7 +78,8 @@ Ticking a box asks for one thing:
   updates.
 - Create a held-back update now: skip the release-age wait, PR limit or
   schedule window for that one update. Everything else, digest pins, lockfile
-  generation and ownership checks, still applies.
+  generation and ownership checks, still applies — and a hold by a committed
+  Cargo cooldown is the wait a tick cannot waive, so it carries no box.
 - Recreate a closed update: open a new PR for the same target and leave the old
   one closed.
 - Retry a failed lookup: fetch the source again despite cached freshness.

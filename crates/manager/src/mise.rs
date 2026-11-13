@@ -243,6 +243,7 @@ impl Reader<'_, '_> {
                 }))
         .then(|| version.to_owned());
         self.out.push(Dependency {
+            cooldown: None,
             manager: Manager::Mise,
             file: path.into(),
             location: Location::new(

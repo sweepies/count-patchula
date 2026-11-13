@@ -453,6 +453,7 @@ mod tests {
         .unwrap();
         let batch = crate::branch_name(&config.prs.branch, "batch").unwrap();
         let dep = Dependency {
+            cooldown: None,
             manager: patchula_words::Manager::Npm,
             file: "package.json".into(),
             location: patchula_manager::Location {
@@ -494,6 +495,7 @@ mod tests {
         .unwrap();
         let text = "{\"shared\":\"1.0.0\"}";
         let snapshot = Snapshot {
+            cargo_cooldowns: Default::default(),
             paths: BTreeSet::from(["package.json".to_string()]),
             files: BTreeMap::from([(
                 "package.json".to_string(),

@@ -515,6 +515,7 @@ mod tests {
 
     fn snapshot(files: &[(&str, &str)]) -> Snapshot {
         Snapshot {
+            cargo_cooldowns: Default::default(),
             paths: files.iter().map(|(p, _)| p.to_string()).collect(),
             files: files
                 .iter()

@@ -153,6 +153,7 @@ fn add<'a>(
         return None;
     };
     out.push(Dependency {
+        cooldown: None,
         manager: Manager::Terraform,
         file: path.into(),
         location: Location::new(

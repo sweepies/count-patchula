@@ -158,6 +158,7 @@ fn dependency(
     // commit pin and is rewritten with it.
     let end = trailing_comment(text, location).map_or(location.end, |range| range.end);
     Ok(Some(Dependency {
+        cooldown: None,
         manager: Manager::Apm,
         file: path.into(),
         location: Location::new(text, location.start, end, location.pointer.clone()),

@@ -76,6 +76,7 @@ fn setup(
         .dependencies;
     let d = &deps[0];
     let snapshot = Snapshot {
+        cargo_cooldowns: Default::default(),
         paths: BTreeSet::from(["mise.toml".into()]),
         files: BTreeMap::from([(
             "mise.toml".into(),
@@ -113,6 +114,7 @@ fn setup(
                 },
                 metadata: Some(metadata(d)),
                 updates: vec![Update {
+                    cooldown: None,
                     new_value: Some(target.into()),
                     new_version: Some(target.into()),
                     new_digest: None,
@@ -1435,6 +1437,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                     directory: String::new(),
                     scope: patchula_lockfiles::Scope::Directory,
                     exact_version: false,
+                    publish_age_allow: false,
                 })
                 .lockfiles_ready(true);
         }
@@ -2891,6 +2894,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
         .unwrap()
         .dependencies;
     let mut snapshot = Snapshot {
+        cargo_cooldowns: Default::default(),
         paths: files.keys().cloned().collect(),
         files: files
             .iter()
@@ -2940,6 +2944,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
         let updates = targets
             .iter()
             .map(|(kind, target)| Update {
+                cooldown: None,
                 new_value: Some((*target).into()),
                 new_version: Some((*target).into()),
                 new_digest: if dep.source == patchula_words::Source::Docker {
@@ -3857,6 +3862,7 @@ fn reference_data_pins_get_their_own_branch() {
         .unwrap()
         .dependencies;
     let mut snapshot = Snapshot {
+        cargo_cooldowns: Default::default(),
         paths: files.keys().cloned().collect(),
         files: files
             .iter()
@@ -3897,6 +3903,7 @@ fn reference_data_pins_get_their_own_branch() {
             updates: targets
                 .iter()
                 .map(|(kind, target)| Update {
+                    cooldown: None,
                     new_value: Some((*target).into()),
                     new_version: Some((*target).into()),
                     new_digest: None,
@@ -4251,6 +4258,7 @@ async fn ungenerated_lockfiles_fail_before_any_github_request() {
             directory: String::new(),
             scope: patchula_lockfiles::Scope::Directory,
             exact_version: false,
+            publish_age_allow: false,
         }])
         .lockfiles_ready(false)
         .build();

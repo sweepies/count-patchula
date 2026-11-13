@@ -50,6 +50,7 @@ pub fn maintenance(
         jobs.into_iter().collect(),
         fingerprint,
         snapshot.public_only.clone(),
+        snapshot.cargo_cooldowns.clone(),
     );
     if !due {
         plan.hold(Hold::MaintenanceWindow);

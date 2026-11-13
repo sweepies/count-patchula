@@ -31,6 +31,7 @@ fn dependency(manager: Manager, file: &str) -> Dependency {
         extract: None,
         included_by: None,
         registry: None,
+        cooldown: None,
     }
 }
 
@@ -45,6 +46,7 @@ fn update() -> Update {
         release_age: None,
         fixes: vec![],
         image: None,
+        cooldown: None,
     }
 }
 
@@ -67,6 +69,7 @@ fn a_mise_tool_is_locked_by_a_mise_lock_at_its_config_root() {
                 target: Some("2.0.0".into()),
             },
             exact_version: false,
+            publish_age_allow: false,
         })
     );
 }
@@ -253,6 +256,7 @@ fn a_flake_input_is_moved_by_name() {
                 target: Some("b".repeat(64)),
             },
             exact_version: false,
+            publish_age_allow: false,
         })
     );
 }

@@ -39,6 +39,7 @@ fn dependency(source: Source, package: &str, current: &str, resolved: Option<&st
         extract: None,
         included_by: None,
         registry: None,
+        cooldown: None,
     }
 }
 
@@ -512,4 +513,133 @@ fn a_transitive_fix_is_suppressed_when_the_matched_rule_deactivates_updates() {
         &[],
     ))];
     assert!(eval.transitive_fix(&dep, (&q, &found)).unwrap().is_none());
+}
+
+#[test]
+fn a_fix_bypasses_a_committed_cargo_cooldown_and_the_proposal_says_so() {
+    let eval = patchula_lookup::Evaluator::new(
+        &patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap(),
+    )
+    .unwrap();
+    let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
+    dep.cooldown = Some(patchula_manager::Cooldown {
+        hours: 336,
+        value: "14 days".into(),
+        file: ".cargo/config.toml".into(),
+    });
+    let q = advisory_query(&dep).unwrap();
+    let found = vec![Arc::new(advisory(
+        "crates.io",
+        "time",
+        vec![vec![
+            Event::Introduced("0".into()),
+            Event::Fixed("0.3.23".into()),
+        ]],
+        &[],
+    ))];
+    let now = chrono::Utc::now();
+    let version = |v: &str, ago: i64| patchula_datasource::Version {
+        version: v.into(),
+        published_at: Some((now - chrono::Duration::hours(ago)).to_rfc3339()),
+        digest: None,
+        deprecated: false,
+        yanked: false,
+    };
+    let catalog = patchula_datasource::Catalog {
+        versions: vec![
+            version("0.3.20", 4000),
+            version("0.3.23", 100), // inside the 14-day cooldown
+            version("0.4.0", 400),  // inside the cooldown, fixes nothing
+            version("0.5.0", 500),  // past the cooldown, fixes nothing
+        ],
+        dist_tags: Default::default(),
+    };
+    let none = Default::default();
+    // Without the advisory the floor holds everything the rules would not.
+    let plain = eval
+        .evaluate_with(&dep, &catalog, now, &none, None)
+        .unwrap();
+    assert_eq!(plain.updates.len(), 1);
+    assert_eq!(plain.updates[0].new_version.as_deref(), Some("0.5.0"));
+    assert_eq!(plain.updates[0].cooldown, None);
+    assert_eq!(
+        plain
+            .held_back
+            .iter()
+            .map(|h| (h.version.as_str(), h.cooldown.is_some()))
+            .collect::<Vec<_>>(),
+        [("0.3.23", true)], // 0.4.0 is superseded by the eligible 0.5.0
+        "{:?}",
+        plain.held_back
+    );
+    // With it the fix is proposed anyway and marked, so the lockfile job
+    // can let Cargo resolve a release inside the committed window.
+    let secure = eval
+        .evaluate_with(&dep, &catalog, now, &none, Some((&q, &found)))
+        .unwrap();
+    assert_eq!(secure.updates.len(), 2, "{:?}", secure.updates);
+    let fix = secure
+        .updates
+        .iter()
+        .find(|u| u.new_version.as_deref() == Some("0.3.23"))
+        .unwrap();
+    assert_eq!(fix.fixes, ["GHSA-test"]);
+    assert_eq!(
+        fix.cooldown,
+        Some(patchula_report::Cooldown {
+            hours: 336,
+            file: ".cargo/config.toml".into(),
+        })
+    );
+    let routine = secure
+        .updates
+        .iter()
+        .find(|u| u.new_version.as_deref() == Some("0.5.0"))
+        .unwrap();
+    assert_eq!(routine.cooldown, None);
+    // A fix that lands past the cooldown needs no marker.
+    let catalog = patchula_datasource::Catalog {
+        versions: vec![version("0.3.20", 4000), version("0.3.23", 400)],
+        dist_tags: Default::default(),
+    };
+    let secure = eval
+        .evaluate_with(&dep, &catalog, now, &none, Some((&q, &found)))
+        .unwrap();
+    assert_eq!(secure.updates.len(), 1);
+    assert_eq!(secure.updates[0].cooldown, None);
+}
+
+#[test]
+fn a_transitive_fix_inside_the_cooldown_is_marked_the_same_way() {
+    let eval = patchula_lookup::Evaluator::new(
+        &patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap(),
+    )
+    .unwrap();
+    let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
+    dep.kind = DependencyKind::Transitive;
+    dep.file = "Cargo.lock".into();
+    dep.cooldown = Some(patchula_manager::Cooldown {
+        hours: 336,
+        value: "14 days".into(),
+        file: ".cargo/config.toml".into(),
+    });
+    let q = advisory_query(&dep).unwrap();
+    let found = vec![Arc::new(advisory(
+        "crates.io",
+        "time",
+        vec![vec![
+            Event::Introduced("0".into()),
+            Event::Fixed("0.3.23".into()),
+        ]],
+        &[],
+    ))];
+    let fix = eval.transitive_fix(&dep, (&q, &found)).unwrap().unwrap();
+    assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
+    assert_eq!(
+        fix.cooldown,
+        Some(patchula_report::Cooldown {
+            hours: 336,
+            file: ".cargo/config.toml".into(),
+        })
+    );
 }

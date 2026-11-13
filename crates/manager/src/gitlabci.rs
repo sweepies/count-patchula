@@ -159,6 +159,7 @@ impl Scan<'_, '_> {
         let end = location.start + raw.len() - (raw.len() - inner.len()) / 2;
         let start = end - version.len();
         self.out.push(Dependency {
+            cooldown: None,
             manager: Manager::Gitlabci,
             file: self.path.into(),
             location: Location::new(self.text, start, end, pointer.into()),
@@ -209,6 +210,7 @@ impl Scan<'_, '_> {
             return;
         }
         self.out.push(Dependency {
+            cooldown: None,
             manager: Manager::GitlabciInclude,
             file: self.path.into(),
             location,

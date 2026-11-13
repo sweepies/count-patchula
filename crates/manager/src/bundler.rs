@@ -15,6 +15,7 @@ use std::sync::LazyLock;
 
 fn ruby(path: &str, text: &Lines<'_>, start: usize, version: &str, pointer: &str) -> Dependency {
     Dependency {
+        cooldown: None,
         manager: Manager::Bundler,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), pointer.into()),
@@ -144,6 +145,7 @@ pub(super) fn extract(
             )));
         }
         out.push(Dependency {
+            cooldown: None,
             manager: Manager::Bundler,
             file: path.into(),
             location: Location::new(text, first.start(), first.end(), format!("/gems/{name}")),

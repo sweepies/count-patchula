@@ -343,7 +343,11 @@ Each tool gets the credentials in the form it reads, only for its own run:
 Files are written with owner-only permissions and removed when the tool
 finishes. Cargo sends the token as the `Authorization` header, so it gets the
 header a lookup sends: `Bearer <token>` or `Basic <base64>`. Cargo runs
-outside the repository and reads none of its configuration; it gets each
+outside the repository and reads none of its configuration, with one
+exception: a publish-age cooldown committed in `.cargo/config.toml` or
+`.cargo/config` is a [floor on the release-age
+wait](/guide/lookup-policy/#cargos-cooldown) the Count applies at lookup.
+The lockfile run's Cargo does not read it either way; it gets each
 registry that the `.cargo/config.toml` and `.cargo/config` files at or above
 the project define under a `tools` entry, by name, index and token. dotnet
 reads every `nuget.config` in the tree, since a project can name any of them,

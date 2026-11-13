@@ -32,6 +32,7 @@ fn dependency(name: &str) -> Dependency {
         extract: None,
         included_by: None,
         registry: None,
+        cooldown: None,
     }
 }
 fn catalog(values: &[&str]) -> Catalog {
@@ -1958,4 +1959,185 @@ fn a_tagged_action_with_a_short_tag_resolves_through_its_commit_digest() {
             .as_deref(),
         Some("v1.2.3")
     );
+}
+
+/// A crates.io dependency of the Cargo manager carrying the committed
+/// publish-age cooldown extraction marked it with.
+fn cooled(hours: u32) -> Dependency {
+    let mut dep = dependency("crate-a");
+    dep.manager = Manager::Cargo;
+    dep.file = "Cargo.toml".into();
+    dep.source = Source::Crates;
+    dep.cooldown = Some(patchula_manager::Cooldown {
+        hours,
+        value: "14 days".into(),
+        file: ".cargo/config.toml".into(),
+    });
+    dep
+}
+fn dated(catalog: &mut Catalog, dates: &[&str]) {
+    for (version, date) in catalog.versions.iter_mut().zip(dates) {
+        version.published_at = Some((*date).into());
+    }
+}
+
+#[test]
+fn a_committed_cargo_cooldown_is_a_floor_the_rules_wait_cannot_lower() {
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let now = instant("2026-10-15T12:00:00Z");
+    let dep = cooled(336);
+    let mut versions = catalog(&["1.0.0", "1.0.1", "1.1.0", "2.0.0"]);
+    dated(
+        &mut versions,
+        &[
+            "2026-09-01T12:00:00Z", // current
+            "2026-09-30T12:00:00Z", // 15 days old: past the cooldown
+            "2026-10-13T12:00:00Z", // 48h old: past the 24h rules' wait, inside 14 days
+            "2026-10-10T12:00:00Z", // 5 days old: inside the cooldown
+        ],
+    );
+    let result = eval.evaluate_at(&dep, &versions, now).unwrap();
+    // Only the oldest is proposed, and its recorded policy names the
+    // effective wait — the number the merge-time age check reads.
+    assert_eq!(result.updates.len(), 1);
+    let update = &result.updates[0];
+    assert_eq!(update.new_version.as_deref(), Some("1.0.1"));
+    assert_eq!(update.policy.as_ref().unwrap().wait_hours, 336);
+    assert_eq!(update.cooldown, None);
+    // The younger releases are held by the floor, each naming its source.
+    assert_eq!(result.held_back.len(), 2);
+    for held in &result.held_back {
+        assert_eq!(
+            held.cooldown,
+            Some(patchula_report::Cooldown {
+                hours: 336,
+                file: ".cargo/config.toml".into(),
+            }),
+            "{held:?}"
+        );
+    }
+    let minor = result
+        .held_back
+        .iter()
+        .find(|h| h.update_type == Update::Minor)
+        .unwrap();
+    assert_eq!(minor.version, "1.1.0");
+    assert_eq!(minor.eligible_at, "2026-10-27T12:00:00Z");
+    let major = result
+        .held_back
+        .iter()
+        .find(|h| h.update_type == Update::Major)
+        .unwrap();
+    assert_eq!(major.version, "2.0.0");
+    assert_eq!(major.eligible_at, "2026-10-24T12:00:00Z");
+    // A shared catalog stays fresh for the longest wait on it.
+    assert_eq!(eval.catalog_wait_hours(&dep), 336);
+    // With no committed cooldown the same catalog answers as before.
+    let plain = dependency("crate-a");
+    assert_eq!(eval.catalog_wait_hours(&plain), 24);
+    let result = eval.evaluate_at(&plain, &versions, now).unwrap();
+    assert_eq!(result.updates.len(), 3, "{:?}", result.updates);
+}
+
+#[test]
+fn a_wait_of_zero_does_not_disable_a_committed_cargo_cooldown() {
+    let mut cfg = config("renovate-migration");
+    cfg.defaults.wait_hours = 0;
+    let eval = Evaluator::new(&cfg).unwrap();
+    let now = instant("2026-10-15T12:00:00Z");
+    let dep = cooled(336);
+    let mut versions = catalog(&["1.0.0", "1.0.1"]);
+    dated(
+        &mut versions,
+        &["2026-09-01T12:00:00Z", "2026-10-13T12:00:00Z"],
+    );
+    let result = eval.evaluate_at(&dep, &versions, now).unwrap();
+    assert!(result.updates.is_empty());
+    assert_eq!(
+        result.held_back[0].cooldown,
+        Some(patchula_report::Cooldown {
+            hours: 336,
+            file: ".cargo/config.toml".into(),
+        })
+    );
+    assert_eq!(result.held_back[0].eligible_at, "2026-10-27T12:00:00Z");
+}
+
+#[test]
+fn a_cooldown_shorter_than_the_wait_leaves_the_rules_hold_to_them() {
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let now = instant("2026-10-15T12:00:00Z");
+    // A two-hour cooldown under the 24-hour wait holds nothing the rules
+    // would not: the hold is the rules', not the cooldown's.
+    let dep = cooled(2);
+    let mut versions = catalog(&["1.0.0", "1.0.1"]);
+    dated(
+        &mut versions,
+        &["2026-09-01T12:00:00Z", "2026-10-15T02:00:00Z"],
+    );
+    let result = eval.evaluate_at(&dep, &versions, now).unwrap();
+    assert!(result.updates.is_empty());
+    assert_eq!(result.held_back[0].cooldown, None);
+    assert_eq!(result.held_back[0].eligible_at, "2026-10-16T02:00:00Z");
+}
+
+#[test]
+fn the_dashboard_override_narrows_the_wait_to_the_cooldown_never_below() {
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let now = instant("2026-10-15T12:00:00Z");
+    let dep = cooled(336);
+    let mut versions = catalog(&["1.0.0", "1.1.0", "1.1.1"]);
+    dated(
+        &mut versions,
+        &[
+            "2026-09-01T12:00:00Z",
+            "2026-10-13T12:00:00Z", // past the 24h wait, inside the cooldown
+            "2026-10-10T12:00:00Z", // inside both
+        ],
+    );
+    let overrides = std::collections::BTreeSet::from([("1.1.0".into(), "minor".into())]);
+    let result = eval
+        .evaluate_with_age_overrides(&dep, &versions, now, &overrides)
+        .unwrap();
+    // The ticked minor is still held — by the cooldown, which says so.
+    assert!(result.updates.is_empty());
+    let held = result
+        .held_back
+        .iter()
+        .find(|h| h.update_type == Update::Minor)
+        .unwrap();
+    assert_eq!(
+        held.cooldown,
+        Some(patchula_report::Cooldown {
+            hours: 336,
+            file: ".cargo/config.toml".into(),
+        })
+    );
+    // Past the floor, the same tick creates it: the rules' wait is all a
+    // dashboard override waives.
+    let mut versions = catalog(&["1.0.0", "1.1.0"]);
+    dated(
+        &mut versions,
+        &["2026-09-01T12:00:00Z", "2026-10-01T12:00:00Z"],
+    );
+    let result = eval
+        .evaluate_with_age_overrides(&dep, &versions, now, &overrides)
+        .unwrap();
+    assert_eq!(
+        result.updates[0].new_version.as_deref(),
+        Some("1.1.0"),
+        "{:?}",
+        result.held_back
+    );
+}
+
+#[test]
+fn an_undated_release_is_never_held_by_a_cargo_cooldown() {
+    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let dep = cooled(336);
+    let versions = catalog(&["1.0.0", "1.0.1"]);
+    let result = eval
+        .evaluate_at(&dep, &versions, instant("2026-10-15T12:00:00Z"))
+        .unwrap();
+    assert_eq!(result.updates[0].new_version.as_deref(), Some("1.0.1"));
 }

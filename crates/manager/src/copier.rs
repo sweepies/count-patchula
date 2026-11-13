@@ -93,6 +93,7 @@ pub(super) fn extract(
         .cloned()
         .ok_or("cannot locate `_commit`")?;
     Ok(vec![Dependency {
+        cooldown: None,
         manager: Manager::Copier,
         file: path.into(),
         location,

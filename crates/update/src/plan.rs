@@ -19,6 +19,10 @@ pub struct Snapshot {
     /// reads decides so; a missing verdict is not public.
     #[serde(default)]
     pub public_only: BTreeMap<String, bool>,
+    /// Each Cargo manifest or lockfile directory's committed publish-age
+    /// cooldown, for the lockfile run's Cargo environment.
+    #[serde(default)]
+    pub cargo_cooldowns: BTreeMap<String, patchula_manager::CargoCooldown>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Blob {
@@ -97,6 +101,9 @@ pub struct Plan {
     /// The snapshot's public-only verdicts, for the lockfile runs'
     /// cache-partition choice.
     public_only: BTreeMap<String, bool>,
+    /// The snapshot's Cargo cooldowns, for the lockfile runs' Cargo
+    /// environment.
+    cargo_cooldowns: BTreeMap<String, patchula_manager::CargoCooldown>,
     /// Where the plan is in the lockfile lifecycle; owns the stage's data.
     stage: Stage,
     /// The tree the plan's commit produced, once a write or receipt names it.
@@ -209,6 +216,7 @@ impl Plan {
             stage: Stage::Built { jobs: Vec::new() },
             input_fingerprint: String::new(),
             public_only: BTreeMap::new(),
+            cargo_cooldowns: BTreeMap::new(),
             tooling: Vec::new(),
             hold: None,
         }
@@ -220,6 +228,7 @@ impl Plan {
         jobs: Vec<contract::Job>,
         fingerprint: String,
         public_only: BTreeMap<String, bool>,
+        cargo_cooldowns: BTreeMap<String, patchula_manager::CargoCooldown>,
     ) -> Self {
         Self {
             failure: action.reason.as_deref().map(crate::text::failure),
@@ -235,6 +244,7 @@ impl Plan {
             stage: Stage::Built { jobs },
             input_fingerprint: fingerprint,
             public_only,
+            cargo_cooldowns,
             tooling: Vec::new(),
             hold: None,
         }
@@ -463,6 +473,7 @@ impl Plan {
                 })
                 .collect(),
             public_only: &self.public_only,
+            cargo_cooldowns: &self.cargo_cooldowns,
             maintenance: self.is_maintenance(),
         })
     }
@@ -1054,6 +1065,7 @@ fn build(
         stage,
         input_fingerprint: fingerprint.clone(),
         public_only: snapshot.public_only.clone(),
+        cargo_cooldowns: snapshot.cargo_cooldowns.clone(),
         tooling: Vec::new(),
         failure: hold.as_ref().map(|hold| crate::text::failure(hold.text())),
         hold,
@@ -1439,6 +1451,7 @@ pub fn batch_plan(
                     release_age: None,
                     fixes: Vec::new(),
                     image: target.image.clone(),
+                    cooldown: None,
                 },
             ));
         }
@@ -1503,6 +1516,7 @@ mod frozen_bytes {
 
     fn dep(registry: Option<&str>, package: &str) -> Dependency {
         Dependency {
+            cooldown: None,
             manager: Manager::Npm,
             file: "package.json".into(),
             location: Location {
@@ -1850,6 +1864,7 @@ mod tests {
             Vec::new(),
             "fingerprint".into(),
             BTreeMap::new(),
+            BTreeMap::new(),
         );
         assert!(!plan.lockfiles_ready());
         let pr = crate::pull_requests::Tracked::from(
@@ -1869,6 +1884,7 @@ mod tests {
 
     fn dep() -> Dependency {
         Dependency {
+            cooldown: None,
             manager: Manager::Npm,
             file: "package.json".into(),
             location: Location {
@@ -1912,6 +1928,7 @@ mod tests {
 
     fn update() -> Update {
         Update {
+            cooldown: None,
             new_value: Some("1.2.0".into()),
             new_version: Some("1.2.0".into()),
             new_digest: None,

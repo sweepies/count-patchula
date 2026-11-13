@@ -314,6 +314,7 @@ fn walk(
                 };
                 let package = value.get("package").and_then(Item::as_str).unwrap_or(name);
                 out.push(Dependency {
+                    cooldown: None,
                     manager: Manager::Cargo,
                     file: path.into(),
                     location: Location::new(text, span.start, span.end, format!("{next}/{name}")),
@@ -440,6 +441,106 @@ fn configs<'a>(
         })
         .map(|(config, document)| (*config, document))
         .collect()
+}
+
+/// The seconds in one of Cargo's `months`: the average 30.436875 days its
+/// `maybe_parse_time_span` uses.
+const MONTH_SECONDS: u64 = 2_629_746;
+
+/// The publish age `value` commits, in Cargo 1.100's `maybe_parse_time_span`
+/// grammar — `0`, or digits, an optional single space, and one lowercase
+/// unit, singular or plural — as whole hours rounded up.
+fn publish_age_hours(value: &str) -> Option<u32> {
+    if value == "0" {
+        return Some(0);
+    }
+    let right = value.find(|c: char| !c.is_ascii_digit())?;
+    let (count, mut unit) = value.split_at(right);
+    if let Some(rest) = unit.strip_prefix(' ') {
+        unit = rest;
+    }
+    let count: u64 = count.parse().ok()?;
+    let factor: u64 = match unit {
+        "second" | "seconds" => 1,
+        "minute" | "minutes" => 60,
+        "hour" | "hours" => 60 * 60,
+        "day" | "days" => 24 * 60 * 60,
+        "week" | "weeks" => 7 * 24 * 60 * 60,
+        "month" | "months" => MONTH_SECONDS,
+        _ => return None,
+    };
+    let seconds = factor.saturating_mul(count);
+    Some(u32::try_from(seconds.div_ceil(3600)).unwrap_or(u32::MAX))
+}
+
+/// The publish-age cooldown the manifest or lockfile at `path` commits, from
+/// the configurations `configs` selects: `Some(Err)` when an applying
+/// configuration cannot be read or sets a value outside Cargo's grammar —
+/// Cargo itself fails the same way — and `Some(Ok)` of the strictest
+/// committed value otherwise.
+///
+/// The maximum of every `registry.global-min-publish-age`,
+/// `registry.min-publish-age` and `registries.*.min-publish-age` wins rather
+/// than Cargo's exact merge: over-reading can only hold releases longer, and
+/// `registry.min-publish-age` is an unused key today that a later Cargo may
+/// honour. A committed `resolver.incompatible-publish-age` never loosens
+/// what the Count reads.
+pub(crate) fn cooldown(parsed: &Parsed, path: &str) -> Option<Result<Cooldown, String>> {
+    let mut strictest: Option<Cooldown> = None;
+    let mut unread = None;
+    for (config, document) in configs(parsed, path) {
+        let Ok(document) = document else {
+            unread = unread.or(Some(format!("{config}, which the Count cannot read")));
+            continue;
+        };
+        // A configuration that includes others can commit a cooldown the
+        // Count does not read.
+        if document.get("include").is_some() {
+            unread = unread.or(Some(format!("{config}, which the Count cannot read")));
+            continue;
+        }
+        let mut values: Vec<(String, &Item)> = Vec::new();
+        if let Some(registry) = document.get("registry").and_then(Item::as_table_like) {
+            for key in ["global-min-publish-age", "min-publish-age"] {
+                if let Some(item) = registry.get(key) {
+                    values.push((format!("registry.{key}"), item));
+                }
+            }
+        }
+        if let Some(registries) = document.get("registries").and_then(Item::as_table_like) {
+            for (name, entry) in registries.iter() {
+                if let Some(item) = entry
+                    .as_table_like()
+                    .and_then(|entry| entry.get("min-publish-age"))
+                {
+                    values.push((format!("registries.{name}.min-publish-age"), item));
+                }
+            }
+        }
+        for (key, item) in values {
+            let Some(value) = item.as_str() else {
+                return Some(Err(format!(
+                    "{config}'s `{key}`, which the Count cannot read"
+                )));
+            };
+            let Some(hours) = publish_age_hours(value) else {
+                return Some(Err(format!(
+                    "{config}'s `{key}`, which the Count cannot read"
+                )));
+            };
+            if strictest.as_ref().is_none_or(|c| c.hours <= hours) {
+                strictest = Some(Cooldown {
+                    hours,
+                    value: value.to_owned(),
+                    file: config.to_owned(),
+                });
+            }
+        }
+    }
+    if let Some(reason) = unread {
+        return Some(Err(reason));
+    }
+    strictest.map(Ok)
 }
 
 /// Why the crates.io lookups of the manifest or lockfile at `path` cannot be
@@ -692,9 +793,20 @@ impl crate::Ecosystem for Descriptor {
                     toolchains::rust(path, text)
                 } else {
                     extract(path, text, &extract_state.docs, &mut out.skipped).map(|mut deps| {
-                        if let Some(reason) = replaced(files, &extract_state.parsed, path) {
-                            for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
+                        // A committed cooldown the Count cannot read fails
+                        // the manifest's crates.io lookups the way a
+                        // replacement it cannot read does.
+                        let held = cooldown(&extract_state.parsed, path);
+                        let unusable = match &held {
+                            Some(Err(reason)) => Some(reason.clone()),
+                            _ => replaced(files, &extract_state.parsed, path),
+                        };
+                        for dep in deps.iter_mut().filter(|d| d.source == Source::Crates) {
+                            if let Some(reason) = &unusable {
                                 dep.registry = origins::Named::Unusable(reason.clone()).registry();
+                            }
+                            if let Some(Ok(cooldown)) = &held {
+                                dep.cooldown = Some(cooldown.clone());
                             }
                         }
                         deps
@@ -712,11 +824,39 @@ impl crate::Ecosystem for Descriptor {
                     .iter_mut()
                     .filter(|l| l.manager == Manager::Cargo)
                 {
-                    let reason = memo
-                        .entry(locked.file.clone())
-                        .or_insert_with(|| replaced(files, &state.parsed, &locked.file));
-                    if let Some(reason) = reason {
-                        locked.registry = Some(Registry::Unusable(reason.clone()));
+                    let (replaced, held) = memo.entry(locked.file.clone()).or_insert_with(|| {
+                        (
+                            replaced(files, &state.parsed, &locked.file),
+                            cooldown(&state.parsed, &locked.file),
+                        )
+                    });
+                    if let Some(reason) = match held {
+                        Some(Err(reason)) => Some(reason.as_str()),
+                        _ => replaced.as_deref(),
+                    } {
+                        locked.registry = Some(Registry::Unusable(reason.to_owned()));
+                    }
+                    if let Some(Ok(held)) = held {
+                        locked.cooldown = Some(held.clone());
+                    }
+                }
+                // Each Cargo directory's committed cooldown, for the
+                // lockfile run's Cargo environment: every manifest and
+                // lockfile directory reports the strictest value its
+                // applying configurations set, or the reason it is unread.
+                for path in state.parsed.manifests.keys() {
+                    let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
+                    if out.cargo_cooldowns.contains_key(dir) {
+                        continue;
+                    }
+                    if let Some(held) = cooldown(&state.parsed, path) {
+                        out.cargo_cooldowns.insert(
+                            dir.to_owned(),
+                            match held {
+                                Ok(held) => CargoCooldown::Set(held),
+                                Err(reason) => CargoCooldown::Unread(reason),
+                            },
+                        );
                     }
                 }
                 Ok(())

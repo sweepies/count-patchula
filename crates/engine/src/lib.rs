@@ -321,25 +321,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -1177,6 +1177,7 @@ impl Engine {
                 paths,
                 files: blobs,
                 public_only: extraction.public_only.clone(),
+                cargo_cooldowns: extraction.cargo_cooldowns.clone(),
             },
             ..Work::empty(report, Some(config))
         })
@@ -1292,12 +1293,14 @@ impl Engine {
             extraction.skipped.extend(unsupported);
             extraction.warnings.extend(warnings);
             let public_only = extraction.public_only.clone();
+            let cargo_cooldowns = extraction.cargo_cooldowns.clone();
             let cached = CachedExtraction {
                 extraction,
                 snapshot: patchula_update::Snapshot {
                     paths,
                     files: blobs,
                     public_only,
+                    cargo_cooldowns,
                 },
             };
             self.cache.set_state(&scope, &cached).await?;

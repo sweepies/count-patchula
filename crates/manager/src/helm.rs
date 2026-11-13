@@ -35,6 +35,7 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
             .cloned()
             .ok_or_else(|| format!("cannot locate chart version {pointer}"))?;
         out.push(Dependency {
+            cooldown: None,
             manager: Manager::Helm,
             file: path.into(),
             location,

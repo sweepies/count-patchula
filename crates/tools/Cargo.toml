@@ -34,6 +34,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 [dev-dependencies]
 patchula-update = { path = "../update", features = ["testing"] }
 patchula-cache = { path = "../cache" }
+patchula-datasource = { path = "../datasource" }
+patchula-lookup = { path = "../lookup" }
 patchula-report = { path = "../report" }
 patchula-testkit = { path = "../testkit" }
 crc32fast = "1.5.2"

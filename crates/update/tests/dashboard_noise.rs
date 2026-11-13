@@ -484,6 +484,29 @@ fn held_updates_read_as_dates_and_name_the_package_in_code() {
 }
 
 #[test]
+fn a_cooldown_hold_names_its_config_and_offers_no_checkbox() {
+    let mut repo = repository();
+    let dep = repo
+        .package_files
+        .iter_mut()
+        .flat_map(|f| f.dependencies.iter_mut())
+        .find(|d| d.name == "@astrojs/starlight")
+        .unwrap();
+    dep.metadata.as_mut().unwrap().held_back[0].cooldown = Some(patchula_report::Cooldown {
+        hours: 336,
+        file: ".cargo/config.toml".into(),
+    });
+    let text = render_with(&repo);
+    let line = text.lines().find(|l| l.contains("0.42.8")).unwrap();
+    assert_eq!(
+        line,
+        "- `@astrojs/starlight` → 0.42.8 (npm, `docs/package.json`): `.cargo/config.toml`'s cooldown binds the Count; eligible 31 Oct 08:29 UTC"
+    );
+    assert!(!line.contains("Create it now anyway"), "{line}");
+    assert!(!line.contains("[ ]"), "{line}");
+}
+
+#[test]
 fn advisory_ids_and_aliases_cannot_mention_anyone() {
     let mut repo = repository();
     repo.package_files[0].dependencies[0]

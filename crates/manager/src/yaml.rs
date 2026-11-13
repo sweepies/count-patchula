@@ -89,6 +89,7 @@ impl Scan<'_, '_> {
         };
         let location = self.location(pointer)?;
         self.out.push(Dependency {
+            cooldown: None,
             manager: self.manager,
             file: self.path.into(),
             location,
@@ -179,6 +180,7 @@ pub(super) fn extract(
             // The version identifies a generated bundle. A future writer must
             // regenerate its resources, rather than editing only this comment.
             scan.out.push(Dependency {
+                cooldown: None,
                 manager,
                 file: path.into(),
                 location: Location::new(

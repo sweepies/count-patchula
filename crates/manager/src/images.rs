@@ -27,6 +27,7 @@ pub(super) fn dependency(
         return None;
     }
     Some(Dependency {
+        cooldown: None,
         manager,
         file: path.into(),
         location,

@@ -647,6 +647,7 @@ fn dep(
         extract: None,
         included_by: None,
         registry: None,
+        cooldown: None,
     }
 }
 

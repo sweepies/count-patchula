@@ -71,7 +71,7 @@ fn check(name: &str, actual: &str) {
 #[test]
 fn a_lookup_reads_plain_with_counts_first() {
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 7,
+        "schemaVersion": 8,
         "repositories": [repository("local/web-chat")]
     }))
     .unwrap();
@@ -108,7 +108,7 @@ fn a_run_lists_branches_and_pull_requests_per_repository() {
         broken[key] = json!([]);
     }
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 7,
+        "schemaVersion": 8,
         "repositories": [broken, repository("acme/web")],
         "actions": {
             "schemaVersion": 3,
@@ -157,7 +157,7 @@ fn a_stale_repository_warns_with_the_race_and_keeps_the_headline() {
         raced[key] = json!([]);
     }
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 7,
+        "schemaVersion": 8,
         "repositories": [raced, repository("acme/web")],
         "actions": {
             "schemaVersion": 3,
@@ -185,7 +185,7 @@ fn a_stale_repository_warns_with_the_race_and_keeps_the_headline() {
 #[test]
 fn a_terminal_fits_rows_to_its_width_but_leaves_links_whole() {
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 7,
+        "schemaVersion": 8,
         "repositories": [repository("local/web-chat")]
     }))
     .unwrap();

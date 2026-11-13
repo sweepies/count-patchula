@@ -61,6 +61,11 @@ struct Effective<'a> {
     policy: Policy,
     digest: bool,
     permitted: Option<&'a Filter>,
+    /// The committed Cargo cooldown folded into `policy.wait_hours`, beside
+    /// the wait the rules asked for: a security fix answers to the rules'
+    /// wait alone, and the dashboard's tick narrows the wait to the
+    /// cooldown's, never below it.
+    floor: Option<(u32, patchula_manager::Cooldown)>,
 }
 impl<'a> Effective<'a> {
     fn apply(&mut self, o: &patchula_config::Overrides, permitted: Option<&'a Filter>) {
@@ -86,6 +91,13 @@ impl<'a> Effective<'a> {
         }
         if o.permitted.is_some() {
             self.permitted = permitted;
+        }
+    }
+    /// A security fix answers to the wait the rules set, not the committed
+    /// cooldown: the vulnerability does not wait the repository's age out.
+    fn unfloor(&mut self) {
+        if let Some((wait, _)) = self.floor.take() {
+            self.policy.wait_hours = wait;
         }
     }
 }
@@ -290,6 +302,7 @@ impl Evaluator {
                 self.config.defaults.action_digests
             },
             permitted: self.permitted.as_ref(),
+            floor: None,
         };
         // Runtime constraints describe supported versions, rather than an
         // installed package version. Explicit rules can still
@@ -327,6 +340,15 @@ impl Evaluator {
                 VersionPolicy::Widen
             };
         }
+        // A committed Cargo publish-age cooldown is a floor on the wait the
+        // rules set: the effective wait is the larger of the two, and the
+        // rules' wait is kept beside it so a security fix or a dashboard
+        // tick still answers to it.
+        effective.floor = dep.cooldown.clone().map(|cooldown| {
+            let wait = effective.policy.wait_hours;
+            effective.policy.wait_hours = wait.max(cooldown.hours);
+            (wait, cooldown)
+        });
         Ok(effective)
     }
     pub fn needs_digest(&self, dep: &Dependency, proposal: &Proposal) -> bool {
@@ -346,6 +368,7 @@ impl Evaluator {
     pub fn secure(&self, dep: &Dependency, update: &mut Proposal) -> Result<bool> {
         let kind = update.update_type;
         let mut effective = self.effective(dep, kind)?;
+        effective.unfloor();
         effective.apply(
             &self.config.security.apply,
             self.security_permitted.as_ref(),
@@ -507,6 +530,7 @@ impl Evaluator {
         };
         let kind = scheme.classify(&current, &target_parsed);
         let mut effective = self.effective(dep, kind)?;
+        effective.unfloor();
         effective.apply(
             &self.config.security.apply,
             self.security_permitted.as_ref(),
@@ -516,6 +540,16 @@ impl Evaluator {
         }
         let mut update = proposal(None, Some(target), None, kind, &effective.policy);
         update.fixes = fixes;
+        // The runner moves the transitive package by Cargo's own resolve:
+        // the fix targets what the repository's cooldown may still hold, so
+        // the report marks it for the run to allow.
+        update.cooldown = dep
+            .cooldown
+            .as_ref()
+            .map(|cooldown| patchula_report::Cooldown {
+                hours: cooldown.hours,
+                file: cooldown.file.clone(),
+            });
         Ok(Some(update))
     }
     pub fn propose(&self, dep: &Dependency, catalog: &Catalog) -> Result<Vec<Proposal>> {
@@ -580,14 +614,19 @@ impl Evaluator {
                 }
             }
             // The gate chooses proposals; it never removes extracted/current releases.
-            if effective.policy.wait_hours == 0
-                || version.published_at.is_none()
-                || overrides.contains(&(selected.into(), kind.to_string()))
-            {
+            // A dashboard tick narrows the wait to a committed cooldown's:
+            // what the repository commits, the Count cannot waive.
+            let gated = overrides.contains(&(selected.into(), kind.to_string()));
+            let wait = if gated {
+                effective.floor.as_ref().map_or(0, |(_, c)| c.hours)
+            } else {
+                effective.policy.wait_hours
+            };
+            if wait == 0 || version.published_at.is_none() {
                 return Ok(true);
             }
             let published = published(version)?;
-            let until = eligible_at(published, effective.policy.wait_hours)
+            let until = eligible_at(published, wait)
                 .ok_or_else(|| "release eligibility timestamp overflow".to_owned())?;
             if until <= now {
                 return Ok(true);
@@ -600,6 +639,17 @@ impl Evaluator {
                 published_at: timestamp(published),
                 eligible_at: timestamp(until),
                 target_eligible_at: Some(timestamp(until)),
+                // A hold reports the cooldown only when the floor decides
+                // the wait: always once ticked, otherwise when the cooldown
+                // is the longer of the two.
+                cooldown: effective
+                    .floor
+                    .as_ref()
+                    .filter(|(rules, cooldown)| gated || cooldown.hours >= *rules)
+                    .map(|(_, cooldown)| patchula_report::Cooldown {
+                        hours: cooldown.hours,
+                        file: cooldown.file.clone(),
+                    }),
             });
             Ok(false)
         };
@@ -757,6 +807,7 @@ impl Evaluator {
             .iter()
             .cloned()
             .map(|(kind, mut effective)| {
+                effective.unfloor();
                 effective.apply(
                     &self.config.security.apply,
                     self.security_permitted.as_ref(),
@@ -1035,6 +1086,10 @@ impl Evaluator {
                 );
                 update.release_age = release_age(version, now);
                 update.fixes = fixes(update.new_version.as_deref().unwrap_or_default());
+                // A fix inside the repository's cooldown was held by nothing;
+                // the report names the hold it bypassed so the lockfile run
+                // lets Cargo take it.
+                update.cooldown = inside_cooldown(dep, version, now);
                 result.push(update);
                 break;
             }
@@ -1046,6 +1101,7 @@ impl Evaluator {
             // Pin a range even when its highest satisfying release is unchanged.
             let plain = self.effective(dep, Update::Pin)?;
             let mut secure = plain.clone();
+            secure.unfloor();
             secure.apply(
                 &self.config.security.apply,
                 self.security_permitted.as_ref(),
@@ -1106,6 +1162,7 @@ impl Evaluator {
                     );
                     update.release_age = release_age(v, now);
                     update.fixes = fixes(&v.version);
+                    update.cooldown = inside_cooldown(dep, v, now);
                     result.push(update);
                 }
             }
@@ -1136,6 +1193,26 @@ impl Evaluator {
         })
     }
 }
+/// The committed cooldown a proposed target still sits inside, when `dep`
+/// carries one: only a security fix the floor did not hold can be marked —
+/// anything else inside the cooldown is held back, not proposed.
+fn inside_cooldown(
+    dep: &Dependency,
+    version: &Version,
+    now: DateTime<Utc>,
+) -> Option<patchula_report::Cooldown> {
+    let cooldown = dep.cooldown.as_ref()?;
+    let inside = version
+        .published_at
+        .as_deref()
+        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+        .and_then(|published| eligible_at(published.with_timezone(&Utc), cooldown.hours))
+        .is_some_and(|until| until > now);
+    inside.then(|| patchula_report::Cooldown {
+        hours: cooldown.hours,
+        file: cooldown.file.clone(),
+    })
+}
 fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
     releases.sort();
     releases.dedup();
@@ -1158,6 +1235,9 @@ fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
             if release.eligible_at < summary.eligible_at {
                 summary.eligible_at = release.eligible_at;
                 summary.published_at = release.published_at;
+            }
+            if summary.cooldown.is_none() {
+                summary.cooldown = release.cooldown;
             }
             summary.versions.push(release.version);
             summary.count = summary.versions.len();
@@ -1204,6 +1284,7 @@ fn proposal(
         release_age: None,
         fixes: Vec::new(),
         image: None,
+        cooldown: None,
     }
 }
 fn timestamp(value: DateTime<Utc>) -> String {
@@ -1421,6 +1502,7 @@ mod tests {
             extract: Some(extract.into()),
             included_by: None,
             registry: None,
+            cooldown: None,
         };
         let now = chrono::DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
             .unwrap()

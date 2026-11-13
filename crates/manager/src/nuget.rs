@@ -25,6 +25,7 @@ fn package(
 ) -> Dependency {
     let (start, version, syntax) = located;
     Dependency {
+        cooldown: None,
         manager: Manager::Nuget,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), pointer),
@@ -189,6 +190,7 @@ fn sdk(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
         Some(r"^v(?<version>\d+\.\d+\.[1-9]\d{2}(?:-.+)?)$".to_string()),
     );
     Ok(vec![Dependency {
+        cooldown: None,
         manager: Manager::Nuget,
         file: path.into(),
         location: Location::new(

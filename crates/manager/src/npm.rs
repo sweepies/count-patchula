@@ -133,6 +133,7 @@ pub(super) fn extract(
             .split_once('+')
             .map_or((value, None), |(v, h)| (v, Some(h.to_owned())));
         deps.push(Dependency {
+            cooldown: None,
             manager,
             file: path.into(),
             location: Location::new(text, pm.start(), pm.end(), "/packageManager".into()),
@@ -159,6 +160,7 @@ pub(super) fn extract(
         .and_then(|engines| engines.get_string("node"))
     {
         deps.push(Dependency {
+            cooldown: None,
             manager,
             file: path.into(),
             location: Location::new(text, version.start(), version.end(), "/engines/node".into()),
@@ -212,6 +214,7 @@ fn collect(
                 .map_or(override_name, |(n, _)| n);
             let (package, current) = alias(override_name, &value.value);
             deps.push(Dependency {
+                cooldown: None,
                 manager,
                 file: path.into(),
                 location: Location::new(text, value.start(), value.end(), ptr),
@@ -343,6 +346,7 @@ pub(super) fn catalogs(
                 .ok_or_else(|| format!("cannot locate catalog entry {pointer}"))?;
             let (package, current) = alias(name, value);
             deps.push(Dependency {
+                cooldown: None,
                 manager,
                 file: path.into(),
                 location,
@@ -380,6 +384,7 @@ pub(super) fn node_version(path: &str, text: &Lines<'_>, manager: Manager) -> Ve
     }
     let start = text.find(token).expect("token from text") + (token.len() - version.len());
     vec![Dependency {
+        cooldown: None,
         manager,
         file: path.into(),
         location: Location::new(text, start, start + version.len(), "/node".into()),

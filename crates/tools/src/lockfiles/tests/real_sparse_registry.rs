@@ -103,6 +103,40 @@ impl SparseRegistry {
     pub(super) fn requested(&self) -> Vec<String> {
         self.requests.lock().unwrap().clone()
     }
+    /// The lookup catalog the index file for `name` implies at `now`:
+    /// `pubtime` rendered as the server renders it, so the Count's lookup
+    /// and the owner's Cargo judge the same releases on the same clock.
+    pub(super) fn catalog(
+        &self,
+        name: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> patchula_datasource::Catalog {
+        patchula_datasource::Catalog {
+            versions: self
+                .crates
+                .lock()
+                .unwrap()
+                .get(name)
+                .map(|releases| {
+                    releases
+                        .iter()
+                        .map(|release| patchula_datasource::Version {
+                            version: release.vers.clone(),
+                            published_at: release.age.map(|age| {
+                                (now - chrono::Duration::from_std(age).unwrap())
+                                    .format("%Y-%m-%dT%H:%M:%SZ")
+                                    .to_string()
+                            }),
+                            digest: None,
+                            deprecated: false,
+                            yanked: false,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            dist_tags: Default::default(),
+        }
+    }
     /// The `CARGO_HOME/config.toml` that points crates.io at this registry.
     pub(super) fn write_cargo_home(&self, cargo_home: &Path) {
         std::fs::create_dir_all(cargo_home).unwrap();
@@ -479,7 +513,25 @@ fn owner_cargo(
     for (key, value) in env {
         command.env(key, value);
     }
-    let output = command.output().unwrap();
+    // A Cargo that cannot finish in two minutes is wedged, not slow: kill
+    // it rather than hang the suite.
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let output = loop {
+        if child.try_wait().unwrap().is_some() {
+            break child.wait_with_output().unwrap();
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("owner cargo {args:?} ran past 120 seconds");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
     (
         output.status.success(),
         format!(
@@ -692,19 +744,103 @@ async fn real_cargo_locks_every_release_without_a_cooldown() {
     );
 }
 
+/// What the Count concludes about `name` on `files` and the releases
+/// `registry` serves at `now`: extraction marks the committed cooldown on
+/// the dependency, and the evaluator — with no release-age wait of its own,
+/// so the cooldown is the only gate — proposes and holds over the same
+/// `pubtime`s the owner's Cargo reads.
+fn count_verdict(
+    files: &BTreeMap<String, String>,
+    name: &str,
+    registry: &SparseRegistry,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (patchula_manager::Dependency, patchula_lookup::Evaluation) {
+    let mut count = config();
+    count.defaults.wait_hours = 0;
+    let read = patchula_manager::all_read(files);
+    let extraction = patchula_manager::Scanner::new(&count)
+        .unwrap()
+        .extract(&read)
+        .unwrap();
+    let dep = extraction
+        .dependencies
+        .iter()
+        .find(|dep| dep.name == name)
+        .unwrap_or_else(|| {
+            panic!(
+                "{name} was not extracted: {:?}",
+                extraction
+                    .dependencies
+                    .iter()
+                    .map(|dep| &dep.name)
+                    .collect::<Vec<_>>()
+            )
+        })
+        .clone();
+    let verdict = patchula_lookup::Evaluator::new(&count)
+        .unwrap()
+        .evaluate_at(&dep, &registry.catalog(name, now), now)
+        .unwrap();
+    (dep, verdict)
+}
+
+/// Invariant A, checked against Cargo itself rather than a model of it:
+/// every version the Count proposes is one the owner's Cargo accepts with
+/// `--precise`.
+fn cargo_accepts(registry: &SparseRegistry, dir: &Path, name: &str, version: &str) -> bool {
+    owner_cargo(
+        dir,
+        registry,
+        "1.100.0",
+        &["update", "-p", name, "--precise", version],
+        &[],
+    )
+    .0
+}
+
 /// A repository that commits a `.cargo/config.toml` with
-/// `[registry] global-min-publish-age`: the runner's Cargo never reads it —
-/// the file is not materialized and Cargo's working directory is the
-/// driver, not the repository — so the Count locks a release inside the
-/// owner's cooldown. The owner's own Cargo on the same files refuses it.
+/// `[registry] global-min-publish-age`: extraction reads it, and lookup
+/// holds the two-day-old release inside it — no update is proposed, so no
+/// branch is planned — while the owner's own Cargo on the same files
+/// refuses it. The runner's Cargo still never reads it, so a branch built
+/// by hand can still lock inside the window until PR 3 tells the run's
+/// Cargo.
 #[tokio::test]
-async fn real_cargo_locks_inside_a_committed_cooldown_the_owner_enforces() {
+async fn real_cargo_holds_at_lookup_inside_a_committed_cooldown_the_owner_enforces() {
     let registry = registry();
     let files = project(
         ("cool-b", "1.0"),
         "1.0.0",
         &[(".cargo/config.toml", COOLDOWN)],
     );
+    let now = chrono::Utc::now();
+    let (dep, verdict) = count_verdict(&files, "cool-b", &registry, now);
+    assert_eq!(
+        dep.cooldown,
+        Some(patchula_manager::Cooldown {
+            hours: 336,
+            value: "14 days".into(),
+            file: ".cargo/config.toml".into(),
+        })
+    );
+    // Every newer release is inside the 14-day window: nothing is
+    // proposed, so no branch exists to plan for it.
+    assert!(verdict.updates.is_empty(), "{:?}", verdict.updates);
+    assert!(!verdict.held_back.is_empty());
+    for held in &verdict.held_back {
+        assert_eq!(
+            held.cooldown,
+            Some(patchula_report::Cooldown {
+                hours: 336,
+                file: ".cargo/config.toml".into(),
+            }),
+            "{held:?}"
+        );
+    }
+
+    // Until PR 3 the runner's Cargo is not told: a plan forced by hand
+    // still locks inside the window, and the committed file is never
+    // materialized for it.
     let (p, _) = targeted(
         &registry,
         &files,
@@ -1167,4 +1303,374 @@ fn real_cargo_publish_age_texts_are_pinned() {
         "{requested:?}"
     );
     assert!(requested.iter().all(|p| p.starts_with('/')));
+}
+
+/// The floor against Cargo itself: generated cases over the committed
+/// value's grammar, the file's placement and releases straddling the
+/// window. For each, the Count's extraction and lookup run on the same
+/// files the owner's `cargo update --precise` runs on, and every version
+/// the Count proposes is one Cargo accepts — the Count may only be
+/// stricter, and each place it is, the case says so.
+#[test]
+fn the_count_never_proposes_what_the_owners_cargo_holds_back() {
+    // Cargo's `maybe_parse_time_span` month, pinned by the case below.
+    const MONTH: u64 = 2_629_746;
+    const HOUR: u64 = 3_600;
+    const DAY: u64 = 86_400;
+    let now = chrono::Utc::now();
+    let temp = tempfile::tempdir().unwrap();
+    let owner = temp.path().join("owner");
+    let cooldown_toml = |value: &str| format!("[registry]\nglobal-min-publish-age = \"{value}\"\n");
+    let floor = |value: &str, hours: u32| patchula_manager::Cooldown {
+        hours,
+        value: value.into(),
+        file: ".cargo/config.toml".into(),
+    };
+    // One grammar cell: `held` is inside the cooldown, `allowed` outside
+    // it, and `hours` is what the Count's rounded-up floor must be.
+    let cell = |name: &str, value: &str, hours: u32, held: u64, allowed: u64| {
+        let registry = SparseRegistry::start();
+        registry
+            .publish(name, Release::new("1.0.0").days(90))
+            .publish(name, Release::new("1.5.0").age(held))
+            .publish(name, Release::new("2.0.0").age(allowed));
+        let files = project(
+            (name, "*"),
+            "1.0.0",
+            &[(".cargo/config.toml", cooldown_toml(value).as_str())],
+        );
+        write_tree(&owner, &files);
+        let (dep, verdict) = count_verdict(&files, name, &registry, now);
+        assert_eq!(dep.cooldown, Some(floor(value, hours)), "{value}");
+        // The Count holds what Cargo refuses and proposes what Cargo
+        // accepts — each checked with `--precise`, not a model of it.
+        let proposed: Vec<_> = verdict
+            .updates
+            .iter()
+            .filter_map(|u| u.new_version.as_deref())
+            .collect();
+        for version in &proposed {
+            assert!(
+                cargo_accepts(&registry, &owner, name, version),
+                "{value}: the Count proposed {version}, which the owner's Cargo refuses"
+            );
+        }
+        for held in &verdict.held_back {
+            for version in &held.versions {
+                let (ok, output) = owner_cargo(
+                    &owner,
+                    &registry,
+                    "1.100.0",
+                    &["update", "-p", name, "--precise", version],
+                    &[],
+                );
+                assert!(
+                    !ok && output.contains("too new"),
+                    "{value}: the Count held {version} at lookup but the owner's Cargo takes it:\n{output}"
+                );
+            }
+        }
+        assert_eq!(proposed, ["2.0.0"], "{value}: {:?}", verdict.updates);
+        assert_eq!(
+            verdict
+                .held_back
+                .iter()
+                .flat_map(|h| h.versions.iter())
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["1.5.0"],
+            "{value}"
+        );
+    };
+
+    // Whole units both sides agree on: days, weeks, hours, months.
+    cell("parity-days", "14 days", 336, 13 * DAY, 15 * DAY);
+    cell("parity-weeks", "1 week", 168, 6 * DAY, 8 * DAY);
+    cell("parity-hours", "48 hours", 48, 47 * HOUR, 49 * HOUR);
+    cell("parity-months", "2 months", 1461, 60 * DAY, 62 * DAY);
+    // `0` holds nothing, on both sides.
+    {
+        let registry = SparseRegistry::start();
+        registry
+            .publish("parity-zero", Release::new("1.0.0").days(90))
+            .publish("parity-zero", Release::new("1.5.0").age(HOUR));
+        let files = project(
+            ("parity-zero", "*"),
+            "1.0.0",
+            &[(".cargo/config.toml", cooldown_toml("0").as_str())],
+        );
+        write_tree(&owner, &files);
+        let (dep, verdict) = count_verdict(&files, "parity-zero", &registry, now);
+        assert_eq!(dep.cooldown, Some(floor("0", 0)));
+        assert_eq!(
+            verdict
+                .updates
+                .iter()
+                .filter_map(|u| u.new_version.as_deref())
+                .collect::<Vec<_>>(),
+            ["1.5.0"]
+        );
+        assert!(cargo_accepts(&registry, &owner, "parity-zero", "1.5.0"));
+    }
+    // Sub-hour values round the Count's floor up to one hour: a release
+    // Cargo already allows stays held a while longer — the one direction
+    // the Count may differ.
+    {
+        let registry = SparseRegistry::start();
+        registry
+            .publish("parity-minutes", Release::new("1.0.0").days(90))
+            .publish("parity-minutes", Release::new("1.5.0").age(30 * 60))
+            .publish("parity-minutes", Release::new("2.0.0").age(2 * HOUR));
+        let files = project(
+            ("parity-minutes", "*"),
+            "1.0.0",
+            &[(".cargo/config.toml", cooldown_toml("15 minutes").as_str())],
+        );
+        write_tree(&owner, &files);
+        let (dep, verdict) = count_verdict(&files, "parity-minutes", &registry, now);
+        assert_eq!(dep.cooldown, Some(floor("15 minutes", 1)));
+        assert_eq!(
+            verdict
+                .held_back
+                .iter()
+                .flat_map(|h| h.versions.iter())
+                .collect::<Vec<_>>(),
+            [&"1.5.0".to_string()]
+        );
+        assert!(
+            cargo_accepts(&registry, &owner, "parity-minutes", "1.5.0"),
+            "Cargo allows a 30-minute-old release under a 15-minute cooldown"
+        );
+        assert!(cargo_accepts(&registry, &owner, "parity-minutes", "2.0.0"));
+    }
+    // A month is Cargo's 2,629,746 seconds — 30.436875 days, not 30 and not
+    // 31: probes either side of it, one inside the Count's round-up sliver.
+    {
+        let registry = SparseRegistry::start();
+        registry
+            .publish("parity-month", Release::new("1.0.0").days(90))
+            .publish("parity-month", Release::new("1.1.0").days(28))
+            .publish("parity-month", Release::new("1.2.0").days(30))
+            .publish("parity-month", Release::new("1.3.0").age(MONTH - 600))
+            .publish("parity-month", Release::new("2.0.0").age(MONTH + 600))
+            .publish(
+                "parity-month",
+                Release::new("3.0.0").age(MONTH + HOUR + 600),
+            );
+        let files = project(
+            ("parity-month", "*"),
+            "1.0.0",
+            &[(".cargo/config.toml", cooldown_toml("1 month").as_str())],
+        );
+        write_tree(&owner, &files);
+        let (dep, verdict) = count_verdict(&files, "parity-month", &registry, now);
+        // floor(2_629_746 s) rounds up to 731 h.
+        assert_eq!(dep.cooldown, Some(floor("1 month", 731)));
+        // The minors are reported held; 2.0.0 is held too but the report
+        // drops it, superseded by the eligible 3.0.0 of its class.
+        assert_eq!(
+            verdict
+                .held_back
+                .iter()
+                .flat_map(|h| h.versions.iter())
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["1.1.0", "1.2.0", "1.3.0"]
+        );
+        // Cargo refuses the inside releases, verbatim as the Count does.
+        for version in ["1.1.0", "1.2.0", "1.3.0"] {
+            let (ok, output) = owner_cargo(
+                &owner,
+                &registry,
+                "1.100.0",
+                &["update", "-p", "parity-month", "--precise", version],
+                &[],
+            );
+            assert!(!ok && output.contains("too new"), "{version}:\n{output}");
+        }
+        // 2.0.0 sits in the Count's rounded-up sliver: Cargo takes it, the
+        // Count waits another hour at most. 3.0.0 is outside both.
+        assert!(cargo_accepts(&registry, &owner, "parity-month", "2.0.0"));
+        assert_eq!(
+            verdict
+                .updates
+                .iter()
+                .filter_map(|u| u.new_version.as_deref())
+                .collect::<Vec<_>>(),
+            ["3.0.0"]
+        );
+        assert!(cargo_accepts(&registry, &owner, "parity-month", "3.0.0"));
+    }
+    // `.cargo/config` at the root reads the same way by each.
+    {
+        let registry = SparseRegistry::start();
+        registry
+            .publish("parity-placed", Release::new("1.0.0").days(90))
+            .publish("parity-placed", Release::new("1.5.0").days(5));
+        let files = project(
+            ("parity-placed", "*"),
+            "1.0.0",
+            &[(".cargo/config", COOLDOWN)],
+        );
+        write_tree(&owner, &files);
+        let (dep, verdict) = count_verdict(&files, "parity-placed", &registry, now);
+        assert_eq!(
+            dep.cooldown,
+            Some(patchula_manager::Cooldown {
+                hours: 336,
+                value: "14 days".into(),
+                file: ".cargo/config".into(),
+            })
+        );
+        assert!(verdict.updates.is_empty(), "{:?}", verdict.updates);
+        let (ok, output) = owner_cargo(
+            &owner,
+            &registry,
+            "1.100.0",
+            &["update", "-p", "parity-placed", "--precise", "1.5.0"],
+            &[],
+        );
+        assert!(!ok && output.contains("too new"), "{output}");
+    }
+    // `member/.cargo/config.toml` applies to the member's dependencies —
+    // and to Cargo run inside the member.
+    {
+        let registry = SparseRegistry::start();
+        registry
+            .publish("parity-placed", Release::new("1.0.0").days(90))
+            .publish("parity-placed", Release::new("1.5.0").days(5));
+        let files = BTreeMap::from([
+            (
+                "Cargo.toml".to_string(),
+                "[workspace]\nmembers = [\"member\"]\nresolver = \"2\"\n".to_string(),
+            ),
+            (
+                "member/Cargo.toml".to_string(),
+                manifest(&[("parity-placed", "*")]),
+            ),
+            ("member/src/lib.rs".to_string(), "// fixture\n".to_string()),
+            (
+                "Cargo.lock".to_string(),
+                lock(&[("parity-placed", "1.0.0", &[])]),
+            ),
+            (
+                "member/.cargo/config.toml".to_string(),
+                COOLDOWN.to_string(),
+            ),
+        ]);
+        write_tree(&owner, &files);
+        let (dep, verdict) = count_verdict(&files, "parity-placed", &registry, now);
+        assert_eq!(
+            dep.cooldown,
+            Some(patchula_manager::Cooldown {
+                hours: 336,
+                value: "14 days".into(),
+                file: "member/.cargo/config.toml".into(),
+            })
+        );
+        assert!(verdict.updates.is_empty(), "{:?}", verdict.updates);
+        let (ok, output) = owner_cargo(
+            &owner.join("member"),
+            &registry,
+            "1.100.0",
+            &["update", "-p", "parity-placed", "--precise", "1.5.0"],
+            &[],
+        );
+        assert!(!ok && output.contains("too new"), "{output}");
+    }
+    // `include` and an unparseable file are configs the Count cannot read:
+    // its lookups fail unusable rather than run unprotected, while Cargo
+    // follows the `include` and errors on bad TOML.
+    for (extra, cargo_line) in [
+        ("include = [\"more.toml\"]\n", "too new"),
+        ("this is not [toml\n", "error"),
+    ] {
+        let registry = SparseRegistry::start();
+        registry
+            .publish("parity-unread", Release::new("1.0.0").days(90))
+            .publish("parity-unread", Release::new("1.5.0").days(5));
+        let mut files = project(
+            ("parity-unread", "*"),
+            "1.0.0",
+            &[(".cargo/config.toml", extra)],
+        );
+        if extra.starts_with("include") {
+            files.insert(".cargo/more.toml".into(), COOLDOWN.into());
+        }
+        write_tree(&owner, &files);
+        let read = patchula_manager::all_read(&files);
+        let mut count = config();
+        count.defaults.wait_hours = 0;
+        let extraction = patchula_manager::Scanner::new(&count)
+            .unwrap()
+            .extract(&read)
+            .unwrap();
+        let dep = extraction
+            .dependencies
+            .iter()
+            .find(|dep| dep.name == "parity-unread")
+            .unwrap();
+        assert!(
+            matches!(dep.registry, Some(patchula_config::Registry::Unusable(_))),
+            "{extra:?}: {:?}",
+            dep.registry
+        );
+        let (ok, output) = owner_cargo(
+            &owner,
+            &registry,
+            "1.100.0",
+            &["update", "-p", "parity-unread", "--precise", "1.5.0"],
+            &[],
+        );
+        assert!(!ok && output.contains(cargo_line), "{extra:?}:\n{output}");
+    }
+    // A committed `resolver.incompatible-publish-age = "allow"` loosens
+    // Cargo but never the Count: it holds the release anyway.
+    {
+        let registry = SparseRegistry::start();
+        registry
+            .publish("parity-allow", Release::new("1.0.0").days(90))
+            .publish("parity-allow", Release::new("1.5.0").days(5));
+        let files = project(
+            ("parity-allow", "*"),
+            "1.0.0",
+            &[(
+                ".cargo/config.toml",
+                "[registry]\nglobal-min-publish-age = \"14 days\"\n[resolver]\nincompatible-publish-age = \"allow\"\n",
+            )],
+        );
+        write_tree(&owner, &files);
+        let (dep, verdict) = count_verdict(&files, "parity-allow", &registry, now);
+        assert_eq!(dep.cooldown, Some(floor("14 days", 336)));
+        assert!(verdict.updates.is_empty(), "{:?}", verdict.updates);
+        assert!(
+            cargo_accepts(&registry, &owner, "parity-allow", "1.5.0"),
+            "a committed allow loosens Cargo, not the Count"
+        );
+    }
+    // A key Cargo warns is unused is still read — the strictest of every
+    // key wins, so `registry.min-publish-age` holds on the Count's side
+    // alone today.
+    {
+        let registry = SparseRegistry::start();
+        registry
+            .publish("parity-key", Release::new("1.0.0").days(90))
+            .publish("parity-key", Release::new("1.5.0").days(5));
+        let files = project(
+            ("parity-key", "*"),
+            "1.0.0",
+            &[(
+                ".cargo/config.toml",
+                "[registry]\nmin-publish-age = \"14 days\"\n",
+            )],
+        );
+        write_tree(&owner, &files);
+        let (dep, verdict) = count_verdict(&files, "parity-key", &registry, now);
+        assert_eq!(dep.cooldown, Some(floor("14 days", 336)));
+        assert!(verdict.updates.is_empty(), "{:?}", verdict.updates);
+        assert!(
+            cargo_accepts(&registry, &owner, "parity-key", "1.5.0"),
+            "Cargo's unused key holds nothing today; the Count still reads it"
+        );
+    }
 }

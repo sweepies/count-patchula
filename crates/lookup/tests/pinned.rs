@@ -34,6 +34,7 @@ fn dependency(name: &str) -> Dependency {
         extract: None,
         included_by: None,
         registry: None,
+        cooldown: None,
     }
 }
 fn catalog(values: &[&str]) -> Catalog {
