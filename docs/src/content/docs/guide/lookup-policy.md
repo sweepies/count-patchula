@@ -46,12 +46,18 @@ wait, and a dashboard "create it now" tick cannot beat it either.
   Count stays stricter, never looser.
 - A cooldown configuration the Count cannot read — `include`, unparseable
   TOML or a value outside the grammar — fails that manifest's crates.io
-  lookups rather than run unprotected.
+  lookups rather than run unprotected, and fails that directory's lockfile
+  jobs rather than run Cargo with no cooldown.
 - Security fixes bypass the floor: a release that fixes an advisory is
   proposed inside the window anyway, and the report marks it so.
-- Cargo itself is not told yet: today the floor decides what is proposed and
-  what is held; the lockfile run's Cargo gets the cooldown from a later
-  change.
+- The lockfile run's Cargo is told: every invocation gets the committed
+  value (or the job's `waitHours`, whichever is longer) by environment, so
+  direct targets, transitive crates and maintenance all wait the same way,
+  and only the job whose security fix sits inside the window runs
+  `resolver.incompatible-publish-age = "allow"`. A Rust toolchain older
+  than 1.100 ignores the variables — the floor still binds the direct
+  targets lookup picks, but the run warns that transitive crates there do
+  not wait.
 
 GitHub tags take their date from the matching release's publication time, then
 from an annotated tag's tagger date. A lightweight tag with no release is

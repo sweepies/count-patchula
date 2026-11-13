@@ -4,8 +4,8 @@ use crate::error::{Error, PlanError};
 use crate::{Hold, Plan, Snapshot, branch_name};
 use patchula_cache::State;
 use patchula_config::Config;
-use patchula_lockfiles::refresh_jobs;
-use patchula_manager::hash;
+use patchula_lockfiles::{Ecosystem, refresh_jobs};
+use patchula_manager::{Dependency, hash};
 use patchula_report::{BranchAction, BranchStatus, Repository};
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +15,7 @@ pub fn maintenance(
     repository: &Repository,
     config: &Config,
     snapshot: &Snapshot,
+    dependencies: &[Dependency],
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Option<Plan>, PlanError> {
@@ -22,9 +23,23 @@ pub fn maintenance(
     if !config.lockfiles.refresh {
         return Ok(None);
     }
-    let jobs = refresh_jobs(config, &snapshot.paths);
+    let mut jobs: Vec<_> = refresh_jobs(config, &snapshot.paths).into_iter().collect();
     if jobs.is_empty() {
         return Ok(None);
+    }
+    // `waitHours` reaches Cargo for crates a refresh newly locks that no
+    // update names — which is every crate: a maintenance job has no single
+    // dependency, so its directory waits the strictest effective wait the
+    // rules give the repository's Cargo dependencies.
+    if jobs.iter().any(|job| job.ecosystem == Ecosystem::Cargo) {
+        let wait = patchula_lookup::Evaluator::new(config)
+            .map_err(PlanError::Lookup)?
+            .lockfile_wait_hours(dependencies);
+        for job in &mut jobs {
+            if job.ecosystem == Ecosystem::Cargo {
+                job.wait_hours = wait;
+            }
+        }
     }
     let due = patchula_config::due(&config.maintenance_windows(), since, now);
     let period = format!("{}-{:02}", now.iso_week().year(), now.iso_week().week());
@@ -47,7 +62,7 @@ pub fn maintenance(
             lockfile_pending: false,
             files: Vec::new(),
         },
-        jobs.into_iter().collect(),
+        jobs,
         fingerprint,
         snapshot.public_only.clone(),
         snapshot.cargo_cooldowns.clone(),

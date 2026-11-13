@@ -53,6 +53,11 @@ pub struct Job {
     /// A security fix inside the repository's Cargo publish-age cooldown:
     /// the run's Cargo is told to allow too-new releases for this job only.
     pub publish_age_allow: bool,
+    /// The release-age wait the job's update answered to, in hours: Cargo
+    /// gets it for the crates this job newly locks that no update names —
+    /// transitive crates and whole-directory work wait like direct updates.
+    /// Non-Cargo ecosystems ignore it.
+    pub wait_hours: u32,
 }
 impl Job {
     /// The package a targeted job moves.
@@ -94,7 +99,7 @@ impl Serialize for Job {
                 target.as_deref(),
             ),
         };
-        let mut state = serializer.serialize_struct("Job", 7)?;
+        let mut state = serializer.serialize_struct("Job", 8)?;
         state.serialize_field("ecosystem", &self.ecosystem)?;
         state.serialize_field("directory", &self.directory)?;
         state.serialize_field("package", &package)?;
@@ -102,6 +107,7 @@ impl Serialize for Job {
         state.serialize_field("target", &target)?;
         state.serialize_field("lock_only", &self.exact_version)?;
         state.serialize_field("publish_age_allow", &self.publish_age_allow)?;
+        state.serialize_field("wait_hours", &self.wait_hours)?;
         state.end()
     }
 }
@@ -116,6 +122,7 @@ impl<'de> Deserialize<'de> for Job {
             target: Option<String>,
             lock_only: bool,
             publish_age_allow: bool,
+            wait_hours: u32,
         }
         let fields = Fields::deserialize(deserializer)?;
         let scope = match fields.package {
@@ -132,6 +139,7 @@ impl<'de> Deserialize<'de> for Job {
             scope,
             exact_version: fields.lock_only,
             publish_age_allow: fields.publish_age_allow,
+            wait_hours: fields.wait_hours,
         })
     }
 }
@@ -239,6 +247,7 @@ pub fn job(
                 },
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             }));
         }
         // Node version files pin the runtime, which no lockfile records.
@@ -334,6 +343,7 @@ pub fn job(
                 },
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             }));
         }
         // NuGet locks sit beside each project; a manifest under a directory
@@ -356,6 +366,7 @@ pub fn job(
                 scope: Scope::Directory,
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             }));
         }
         Manager::Gradle
@@ -369,6 +380,7 @@ pub fn job(
                 scope: Scope::Directory,
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             }));
         }
         // Gradle dependency locking writes per-configuration lockfiles that
@@ -477,6 +489,9 @@ pub fn job(
         },
         exact_version: targeted && update.new_value.is_none(),
         publish_age_allow: update.cooldown.is_some(),
+        // The wait the update's policy answered to, floor folded in; a
+        // batched update records no policy, so the planner re-derives it.
+        wait_hours: update.policy.as_ref().map_or(0, |policy| policy.wait_hours),
     }))
 }
 
@@ -582,6 +597,7 @@ pub fn refresh_jobs(config: &Config, paths: &BTreeSet<String>) -> BTreeSet<Job> 
             scope: Scope::Directory,
             exact_version: false,
             publish_age_allow: false,
+            wait_hours: 0,
         });
     }
     jobs
@@ -672,6 +688,9 @@ pub struct Target<'a> {
 /// generated it.
 pub struct Generated {
     pub files: BTreeMap<String, GeneratedFile>,
+    /// What the run wants the report to warn about: facts it could not
+    /// enforce, such as a pre-1.100 Cargo ignoring the publish-age keys.
+    pub warnings: Vec<String>,
 }
 
 /// One path the run left different from the base commit.

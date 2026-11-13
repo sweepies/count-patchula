@@ -343,13 +343,20 @@ Each tool gets the credentials in the form it reads, only for its own run:
 Files are written with owner-only permissions and removed when the tool
 finishes. Cargo sends the token as the `Authorization` header, so it gets the
 header a lookup sends: `Bearer <token>` or `Basic <base64>`. Cargo runs
-outside the repository and reads none of its configuration, with one
-exception: a publish-age cooldown committed in `.cargo/config.toml` or
-`.cargo/config` is a [floor on the release-age
-wait](/guide/lookup-policy/#cargos-cooldown) the Count applies at lookup.
-The lockfile run's Cargo does not read it either way; it gets each
+outside the repository and reads none of its configuration; it gets each
 registry that the `.cargo/config.toml` and `.cargo/config` files at or above
-the project define under a `tools` entry, by name, index and token. dotnet
+the project define under a `tools` entry, by name, index and token, and
+the directory's committed [publish-age
+cooldown](/guide/lookup-policy/#cargos-cooldown) — or the job's `waitHours`
+when that is longer — by environment, so crates a resolve newly locks wait
+as long as the ones an update names. Naming the age explicitly on every
+invocation also means a `.cargo/config.toml` above the runner's own
+directories cannot impose one the repository never committed. A
+`security.apply` fix that lands inside the window is the one job that runs
+`resolver.incompatible-publish-age = "allow"`. Rust older than 1.100
+ignores the variables: the cooldown still binds the direct targets lookup
+picks, but the run warns that transitive crates in that directory do not
+wait. dotnet
 reads every `nuget.config` in the tree, since a project can name any of them,
 and gives no source credentials if it cannot read one; NuGet compares source
 keys without case. Poetry reads the project's

@@ -240,8 +240,7 @@ fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
                                 patchula_lookup::eligible_at(
                                     published.with_timezone(&Utc),
                                     p.wait_hours,
-                                )
-                                .is_some_and(|eligible| eligible <= now)
+                                ) <= now
                             })
                         })
                 })

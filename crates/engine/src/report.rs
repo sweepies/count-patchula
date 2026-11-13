@@ -266,7 +266,15 @@ impl Engine {
             .and_then(|query| lookups.advisories.get(&query).map(|found| (query, found)))
             .filter(|(_, found)| !found.is_empty());
         if let (Some(eval), Some((query, found))) = (eval, &advisory) {
-            match eval.transitive_fix(&dep.dependency, (query, found)) {
+            // A transitive fix's marker asks whether its target sits inside
+            // the committed cooldown, which only the catalog can date.
+            let catalog = dep
+                .needs
+                .catalog_key
+                .as_ref()
+                .and_then(|key| lookups.catalogs.get(key))
+                .and_then(|c| c.as_ref().ok());
+            match eval.transitive_fix(&dep.dependency, (query, found), catalog, now) {
                 Ok(Some(fix)) => proposals.push(fix),
                 Err(e) => report.warnings.push(format!("{}: {e}", dep.name)),
                 Ok(None) => {}

@@ -449,7 +449,10 @@ fn lockfile_only_crates_get_the_lowest_compatible_fix() {
         Arc::new(advisory("crates.io", "time", ranges(&["0.3.23"]), &[])),
         Arc::new(breaking),
     ];
-    let fix = eval.transitive_fix(&dep, (&q, &found)).unwrap().unwrap();
+    let fix = eval
+        .transitive_fix(&dep, (&q, &found), None, chrono::Utc::now())
+        .unwrap()
+        .unwrap();
     assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
     assert_eq!(fix.new_value, None);
     assert_eq!(fix.fixes, ["GHSA-test"]);
@@ -458,7 +461,7 @@ fn lockfile_only_crates_get_the_lowest_compatible_fix() {
     assert_eq!(policy.commit_prefix, "fix(deps):");
     // Only a breaking release fixes it: the lock cannot get there alone.
     assert!(
-        eval.transitive_fix(&dep, (&q, &found[1..]))
+        eval.transitive_fix(&dep, (&q, &found[1..]), None, chrono::Utc::now())
             .unwrap()
             .is_none()
     );
@@ -467,7 +470,11 @@ fn lockfile_only_crates_get_the_lowest_compatible_fix() {
     npm.kind = DependencyKind::Transitive;
     let q = advisory_query(&npm).unwrap();
     let found = vec![Arc::new(advisory("npm", "bar", ranges(&["2.0.1"]), &[]))];
-    assert!(eval.transitive_fix(&npm, (&q, &found)).unwrap().is_none());
+    assert!(
+        eval.transitive_fix(&npm, (&q, &found), None, chrono::Utc::now())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -488,7 +495,11 @@ fn a_transitive_fix_needs_a_parseable_current_version() {
     let mut dep = dependency(Source::Crates, "bogus", "bogus", Some("bogus"));
     dep.kind = DependencyKind::Transitive;
     let q = query("crates.io", "bogus", "bogus");
-    assert!(eval.transitive_fix(&dep, (&q, &[])).unwrap().is_none());
+    assert!(
+        eval.transitive_fix(&dep, (&q, &[]), None, chrono::Utc::now())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -512,7 +523,11 @@ fn a_transitive_fix_is_suppressed_when_the_matched_rule_deactivates_updates() {
         ranges(&["1.0.1"]),
         &[],
     ))];
-    assert!(eval.transitive_fix(&dep, (&q, &found)).unwrap().is_none());
+    assert!(
+        eval.transitive_fix(&dep, (&q, &found), None, chrono::Utc::now())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -607,6 +622,29 @@ fn a_fix_bypasses_a_committed_cargo_cooldown_and_the_proposal_says_so() {
         .unwrap();
     assert_eq!(secure.updates.len(), 1);
     assert_eq!(secure.updates[0].cooldown, None);
+    // A committed value too huge to add to a date saturates instead of
+    // overflowing: it holds every release — and still marks the fix —
+    // and never errors.
+    dep.cooldown = Some(patchula_manager::Cooldown {
+        hours: u32::MAX,
+        value: "999999999 weeks".into(),
+        file: ".cargo/config.toml".into(),
+    });
+    let secure = eval
+        .evaluate_with(&dep, &catalog, now, &none, Some((&q, &found)))
+        .unwrap();
+    let fix = secure
+        .updates
+        .iter()
+        .find(|u| u.new_version.as_deref() == Some("0.3.23"))
+        .unwrap();
+    assert_eq!(
+        fix.cooldown,
+        Some(patchula_report::Cooldown {
+            hours: u32::MAX,
+            file: ".cargo/config.toml".into(),
+        })
+    );
 }
 
 #[test]
@@ -633,12 +671,71 @@ fn a_transitive_fix_inside_the_cooldown_is_marked_the_same_way() {
         ]],
         &[],
     ))];
-    let fix = eval.transitive_fix(&dep, (&q, &found)).unwrap().unwrap();
+    let now = chrono::Utc::now();
+    let catalog = |ago: Option<i64>| patchula_datasource::Catalog {
+        versions: vec![
+            patchula_datasource::Version {
+                version: "0.3.20".into(),
+                published_at: Some((now - chrono::Duration::hours(4000)).to_rfc3339()),
+                digest: None,
+                deprecated: false,
+                yanked: false,
+            },
+            patchula_datasource::Version {
+                version: "0.3.23".into(),
+                published_at: ago.map(|h| (now - chrono::Duration::hours(h)).to_rfc3339()),
+                digest: None,
+                deprecated: false,
+                yanked: false,
+            },
+        ],
+        dist_tags: Default::default(),
+    };
+    let fix = eval
+        .transitive_fix(&dep, (&q, &found), Some(&catalog(Some(100))), now)
+        .unwrap()
+        .unwrap();
     assert_eq!(fix.new_version.as_deref(), Some("0.3.23"));
     assert_eq!(
         fix.cooldown,
         Some(patchula_report::Cooldown {
             hours: 336,
+            file: ".cargo/config.toml".into(),
+        })
+    );
+    // A fix past the window asks for no waiver: `allow` would let the whole
+    // resolve ignore the cooldown, so only a dated-inside target earns it.
+    let fix = eval
+        .transitive_fix(&dep, (&q, &found), Some(&catalog(Some(400))), now)
+        .unwrap()
+        .unwrap();
+    assert_eq!(fix.cooldown, None);
+    // And a target the catalog cannot date is denied like any release.
+    let fix = eval
+        .transitive_fix(&dep, (&q, &found), Some(&catalog(None)), now)
+        .unwrap()
+        .unwrap();
+    assert_eq!(fix.cooldown, None);
+    let fix = eval
+        .transitive_fix(&dep, (&q, &found), None, now)
+        .unwrap()
+        .unwrap();
+    assert_eq!(fix.cooldown, None);
+    // An absurd committed value saturates the same way on this path too:
+    // everything is inside the window, so the fix is marked, never unmarked.
+    dep.cooldown = Some(patchula_manager::Cooldown {
+        hours: u32::MAX,
+        value: "999999999 weeks".into(),
+        file: ".cargo/config.toml".into(),
+    });
+    let fix = eval
+        .transitive_fix(&dep, (&q, &found), Some(&catalog(Some(400))), now)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        fix.cooldown,
+        Some(patchula_report::Cooldown {
+            hours: u32::MAX,
             file: ".cargo/config.toml".into(),
         })
     );

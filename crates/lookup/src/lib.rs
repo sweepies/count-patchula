@@ -15,9 +15,11 @@ use std::cmp::Ordering;
 
 pub type Result<T> = std::result::Result<T, String>;
 /// When a release published at `published` clears a `wait_hours` release-age
-/// gate, or `None` when the timestamp overflows.
-pub fn eligible_at(published: DateTime<Utc>, wait_hours: u32) -> Option<DateTime<Utc>> {
-    published.checked_add_signed(Duration::hours(i64::from(wait_hours)))
+/// gate. An absurd wait holds the release forever rather than erroring.
+pub fn eligible_at(published: DateTime<Utc>, wait_hours: u32) -> DateTime<Utc> {
+    published
+        .checked_add_signed(Duration::hours(i64::from(wait_hours)))
+        .unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 #[derive(Default)]
 pub struct Evaluation {
@@ -488,6 +490,38 @@ impl Evaluator {
         }
         Ok(best.map(|(_, value)| value))
     }
+    /// The release-age wait a Cargo lockfile job holds crates it newly locks
+    /// to when no update names them — the crates a `--precise` update
+    /// resolves past, and everything lockfile maintenance re-resolves: the
+    /// strictest effective wait the rules give the repository's crates.io
+    /// dependencies, over every update class.
+    pub fn lockfile_wait_hours(&self, deps: &[Dependency]) -> u32 {
+        deps.iter()
+            .filter(|dep| dep.source == Source::Crates)
+            .flat_map(|dep| Update::ALL.iter().copied().map(move |kind| (dep, kind)))
+            .filter_map(|(dep, kind)| self.effective(dep, kind).ok())
+            .filter(|effective| effective.policy.active)
+            .map(|effective| effective.policy.wait_hours)
+            .max()
+            .unwrap_or(0)
+    }
+    /// The wait a security fix of `kind` for `dep` runs under in Cargo:
+    /// `security.apply` over the rules, with the Cargo cooldown floor lifted
+    /// as it is for every fix. A batch's rebuilt update records no policy,
+    /// so its fix job takes this rather than the strictest routine wait,
+    /// which Cargo would hold a fresh fix against.
+    pub fn security_wait_hours(&self, dep: &Dependency, kind: Update) -> u32 {
+        self.effective(dep, kind)
+            .map(|mut effective| {
+                effective.unfloor();
+                effective.apply(
+                    &self.config.security.apply,
+                    self.security_permitted.as_ref(),
+                );
+                effective.policy.wait_hours
+            })
+            .unwrap_or(0)
+    }
     /// A lockfile-only package's one update: the lowest fixed release that
     /// fixes the most of its advisories without a breaking change, under
     /// `security.apply`. Only Cargo locks can be moved to an exact version of
@@ -496,6 +530,8 @@ impl Evaluator {
         &self,
         dep: &Dependency,
         advisories: Advisories<'_>,
+        catalog: Option<&Catalog>,
+        now: DateTime<Utc>,
     ) -> Result<Option<Proposal>> {
         let (query, found) = advisories;
         if !dep.proposing().lock.transitive_movable || self.ignored(dep) {
@@ -538,18 +574,25 @@ impl Evaluator {
         if !effective.policy.active {
             return Ok(None);
         }
-        let mut update = proposal(None, Some(target), None, kind, &effective.policy);
+        let mut update = proposal(None, Some(target.clone()), None, kind, &effective.policy);
         update.fixes = fixes;
         // The runner moves the transitive package by Cargo's own resolve:
-        // the fix targets what the repository's cooldown may still hold, so
-        // the report marks it for the run to allow.
-        update.cooldown = dep
-            .cooldown
-            .as_ref()
-            .map(|cooldown| patchula_report::Cooldown {
-                hours: cooldown.hours,
-                file: cooldown.file.clone(),
-            });
+        // `allow` waives the check for every crate the resolve touches, so
+        // the fix is marked only when the catalog dates its target inside
+        // the repository's cooldown, like the direct-fix paths. A target
+        // the catalog cannot date is denied like any other release.
+        update.cooldown = inside_cooldown(
+            dep,
+            catalog
+                .and_then(|catalog| {
+                    catalog
+                        .versions
+                        .iter()
+                        .find(|version| version.version == target)
+                })
+                .and_then(|version| version.published_at.as_deref()),
+            now,
+        );
         Ok(Some(update))
     }
     pub fn propose(&self, dep: &Dependency, catalog: &Catalog) -> Result<Vec<Proposal>> {
@@ -626,8 +669,7 @@ impl Evaluator {
                 return Ok(true);
             }
             let published = published(version)?;
-            let until = eligible_at(published, wait)
-                .ok_or_else(|| "release eligibility timestamp overflow".to_owned())?;
+            let until = eligible_at(published, wait);
             if until <= now {
                 return Ok(true);
             }
@@ -1089,7 +1131,7 @@ impl Evaluator {
                 // A fix inside the repository's cooldown was held by nothing;
                 // the report names the hold it bypassed so the lockfile run
                 // lets Cargo take it.
-                update.cooldown = inside_cooldown(dep, version, now);
+                update.cooldown = inside_cooldown(dep, version.published_at.as_deref(), now);
                 result.push(update);
                 break;
             }
@@ -1162,7 +1204,7 @@ impl Evaluator {
                     );
                     update.release_age = release_age(v, now);
                     update.fixes = fixes(&v.version);
-                    update.cooldown = inside_cooldown(dep, v, now);
+                    update.cooldown = inside_cooldown(dep, v.published_at.as_deref(), now);
                     result.push(update);
                 }
             }
@@ -1198,16 +1240,13 @@ impl Evaluator {
 /// anything else inside the cooldown is held back, not proposed.
 fn inside_cooldown(
     dep: &Dependency,
-    version: &Version,
+    published_at: Option<&str>,
     now: DateTime<Utc>,
 ) -> Option<patchula_report::Cooldown> {
     let cooldown = dep.cooldown.as_ref()?;
-    let inside = version
-        .published_at
-        .as_deref()
+    let inside = published_at
         .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-        .and_then(|published| eligible_at(published.with_timezone(&Utc), cooldown.hours))
-        .is_some_and(|until| until > now);
+        .is_some_and(|published| eligible_at(published.with_timezone(&Utc), cooldown.hours) > now);
     inside.then(|| patchula_report::Cooldown {
         hours: cooldown.hours,
         file: cooldown.file.clone(),

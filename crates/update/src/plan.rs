@@ -104,6 +104,9 @@ pub struct Plan {
     /// The snapshot's Cargo cooldowns, for the lockfile runs' Cargo
     /// environment.
     cargo_cooldowns: BTreeMap<String, patchula_manager::CargoCooldown>,
+    /// What the plan's lockfile run warned it could not enforce, for the
+    /// repository's report warnings.
+    lock_warnings: Vec<String>,
     /// Where the plan is in the lockfile lifecycle; owns the stage's data.
     stage: Stage,
     /// The tree the plan's commit produced, once a write or receipt names it.
@@ -217,6 +220,7 @@ impl Plan {
             input_fingerprint: String::new(),
             public_only: BTreeMap::new(),
             cargo_cooldowns: BTreeMap::new(),
+            lock_warnings: Vec::new(),
             tooling: Vec::new(),
             hold: None,
         }
@@ -245,6 +249,7 @@ impl Plan {
             input_fingerprint: fingerprint,
             public_only,
             cargo_cooldowns,
+            lock_warnings: Vec::new(),
             tooling: Vec::new(),
             hold: None,
         }
@@ -491,6 +496,7 @@ impl Plan {
                 return Vec::new();
             }
         };
+        self.lock_warnings.extend(generated.warnings);
         let mut contents = self.contents.clone();
         let mut deleted = BTreeSet::new();
         let mut added = Vec::new();
@@ -859,7 +865,19 @@ fn build(
             }
         }
         match contract::job(dep, update, &snapshot.paths) {
-            Ok(Some(job)) => {
+            Ok(Some(mut job)) => {
+                // A batch's rebuilt update records no policy: a Cargo job's
+                // wait for unnamed crates comes from the strictest
+                // effective wait the dependency's rules give it, and a
+                // fix's from `security.apply`, so Cargo does not hold a
+                // fresh fix that lookup proposed.
+                if update.policy.is_none() && job.ecosystem == contract::Ecosystem::Cargo {
+                    job.wait_hours = if update.fixes.is_empty() {
+                        evaluator.lockfile_wait_hours(std::slice::from_ref(dep))
+                    } else {
+                        evaluator.security_wait_hours(dep, update.update_type)
+                    };
+                }
                 lock_jobs.insert(job);
             }
             Ok(None) => {}
@@ -1069,6 +1087,7 @@ fn build(
         tooling: Vec::new(),
         failure: hold.as_ref().map(|hold| crate::text::failure(hold.text())),
         hold,
+        lock_warnings: Vec::new(),
     })
 }
 
@@ -1126,7 +1145,7 @@ pub async fn lock_all(
     snapshot: &mut Snapshot,
     config: &Config,
     done: &(dyn Fn() + Sync),
-) {
+) -> Vec<String> {
     type Task<'a> =
         std::pin::Pin<Box<dyn std::future::Future<Output = Vec<(String, Blob)>> + Send + 'a>>;
     let tasks: Vec<Task<'_>> = plans
@@ -1153,6 +1172,10 @@ pub async fn lock_all(
     for (path, blob) in added.into_iter().flatten() {
         snapshot.files.entry(path).or_insert(blob);
     }
+    plans
+        .iter()
+        .flat_map(|plan| plan.lock_warnings.iter().cloned())
+        .collect()
 }
 
 /// Registry-qualified identities (`registry|name`) name their branch after the
@@ -1439,6 +1462,20 @@ pub fn batch_plan(
             if applied || superseded(dep, target) {
                 continue;
             }
+            // The marker kept the target but not what made it a security
+            // fix: the reported update that proposed it hands over its
+            // fixes and cooldown, so the Cargo job runs under
+            // `security.apply`'s wait and reaches `allow` inside a window.
+            let proposed = repo
+                .package_files
+                .iter()
+                .filter(|file| file.path == target.file)
+                .flat_map(|file| &file.dependencies)
+                .filter(|reported| reported.package == dep.package)
+                .flat_map(|reported| &reported.updates)
+                .find(|proposed| target.same_target(proposed));
+            let cooldown = proposed.and_then(|proposed| proposed.cooldown.clone());
+            let fixes = proposed.map_or_else(Vec::new, |proposed| proposed.fixes.clone());
             pending.push((
                 dep,
                 Update {
@@ -1449,9 +1486,9 @@ pub fn batch_plan(
                     group: None,
                     policy: None,
                     release_age: None,
-                    fixes: Vec::new(),
+                    fixes,
                     image: target.image.clone(),
-                    cooldown: None,
+                    cooldown,
                 },
             ));
         }

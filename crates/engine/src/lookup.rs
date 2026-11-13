@@ -747,23 +747,29 @@ impl Engine {
         // A vulnerable dependency's fix may be newer than a catalog reused
         // under its release-age wait, so those catalogs are read again. So is a
         // forge action's: its tags may have moved, and their commits are its pins.
+        // A vulnerable lockfile-only package earns a first read: its transitive
+        // fix's publish date, which marks it inside or past the cooldown, only
+        // lives in its catalog.
         let mut vulnerable = BTreeSet::new();
         for repo in work.iter() {
             for dep in &repo.dependencies {
                 let Some(key) = &dep.needs.catalog_key else {
                     continue;
                 };
+                let advisory_found = dep
+                    .needs
+                    .advisory
+                    .as_ref()
+                    .and_then(|q| lookups.advisories.get(q))
+                    .is_some_and(|found| !found.is_empty());
+                if advisory_found && dep.proposing().lock.transitive_movable {
+                    vulnerable.insert(key.clone());
+                    continue;
+                }
                 if !lookups.evidence.get(key).is_some_and(|e| e.reused) {
                     continue;
                 }
-                let advisory_hit = dep.needs.versions
-                    && dep
-                        .needs
-                        .advisory
-                        .as_ref()
-                        .and_then(|q| lookups.advisories.get(q))
-                        .is_some_and(|found| !found.is_empty());
-                if dep.needs.forge || advisory_hit {
+                if dep.needs.forge || (dep.needs.versions && advisory_found) {
                     vulnerable.insert(key.clone());
                 }
             }

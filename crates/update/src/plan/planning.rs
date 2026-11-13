@@ -75,7 +75,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
     let snapshot = snapshot(&files);
     let mut config = config();
     let repo = repo();
-    let p = maintenance(&repo, &config, &snapshot, None, monday())
+    let p = maintenance(&repo, &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     assert_eq!(p.action().branch, "patchula/lock-file-maintenance");
@@ -84,6 +84,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
         &repo,
         &config,
         &snapshot,
+        &[],
         None,
         monday() + chrono::Duration::days(1),
     )
@@ -101,7 +102,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
     for days in [0, 7] {
         config.lockfiles.wait_hours = 200;
         let now = monday() + chrono::Duration::days(days);
-        let mut p = maintenance(&repo, &config, &snapshot, None, now)
+        let mut p = maintenance(&repo, &config, &snapshot, &[], None, now)
             .unwrap()
             .unwrap();
         defer_completed_refresh(&cache, &mut p, &config, now)
@@ -114,6 +115,7 @@ async fn scheduled_refresh_uses_stable_name_windows_weekly_cadence_and_wait_hour
         &repo,
         &config,
         &snapshot,
+        &[],
         None,
         monday() + chrono::Duration::days(7),
     )
@@ -148,7 +150,7 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
     snapshot.paths.insert("mise.lock".into());
     config.lockfiles.refresh = false;
     assert!(
-        maintenance(&repo(), &config, &snapshot, None, monday())
+        maintenance(&repo(), &config, &snapshot, &[], None, monday())
             .unwrap()
             .is_none()
     );
@@ -157,7 +159,7 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
         "ordinary updates must still refresh a committed lock"
     );
     config.lockfiles.refresh = true;
-    let plan = maintenance(&repo(), &config, &snapshot, None, monday())
+    let plan = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     assert_eq!(plan.lock_jobs().len(), 1);
@@ -179,10 +181,11 @@ fn lock_jobs_keep_their_serialized_field_layout() {
         },
         exact_version: true,
         publish_age_allow: false,
+        wait_hours: 0,
     };
     assert_eq!(
         serde_json::to_string(&targeted).unwrap(),
-        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true,"publish_age_allow":false}"#
+        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true,"publish_age_allow":false,"wait_hours":0}"#
     );
     let whole = Job {
         ecosystem: Ecosystem::Node,
@@ -190,13 +193,14 @@ fn lock_jobs_keep_their_serialized_field_layout() {
         scope: Scope::Directory,
         exact_version: false,
         publish_age_allow: false,
+        wait_hours: 0,
     };
     assert_eq!(
         serde_json::to_string(&whole).unwrap(),
-        r#"{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false}"#
+        r#"{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false,"wait_hours":0}"#
     );
     let back: Job = serde_json::from_str(
-        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true,"publish_age_allow":false}"#,
+        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true,"publish_age_allow":false,"wait_hours":0}"#,
     )
     .unwrap();
     assert_eq!(back, targeted);
@@ -537,6 +541,7 @@ fn an_in_range_release_is_a_lock_only_plan_for_bundler_composer_and_pyproject() 
                 },
                 exact_version: true,
                 publish_age_allow: false,
+                wait_hours: 0,
             }],
             "{manager}"
         );
@@ -843,6 +848,214 @@ fn a_batch_moves_every_declaration_of_a_dependency_in_a_file() {
     assert!(!written.contains("@v4.1.0"), "{written}");
 }
 
+/// A batch marker keeps the target but not the cooldown: the reported
+/// update that proposed a security fix inside the committed window hands
+/// its marker over, so the rebuilt Cargo job keeps `publish_age_allow`
+/// where a marker of its own would have dropped it.
+#[test]
+fn a_batch_keeps_a_security_fixs_cooldown_on_its_job() {
+    let files = BTreeMap::from([
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1.39.0\"\n"
+                .to_string(),
+        ),
+        ("Cargo.lock".to_string(), cargo_lock("1.39.0")),
+    ]);
+    let config = config();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies;
+    let mut repo = repo();
+    repo.package_files.push(patchula_report::PackageFile {
+        path: "Cargo.toml".into(),
+        dependencies: vec![patchula_report::Dependency {
+            manager: patchula_words::Manager::Cargo,
+            name: "tokio".into(),
+            occurrence: None,
+            package: "tokio".into(),
+            registry: None,
+            current: patchula_report::Current {
+                value: Some("1.39.0".into()),
+                version: Some("1.39.0".into()),
+                digest: None,
+            },
+            updates: vec![patchula_report::Update {
+                new_value: None,
+                new_version: Some("1.40.0".into()),
+                new_digest: None,
+                update_type: patchula_words::Update::Patch,
+                group: None,
+                policy: None,
+                release_age: None,
+                fixes: vec!["GHSA-1".into()],
+                image: None,
+                cooldown: Some(patchula_report::Cooldown {
+                    hours: 336,
+                    file: ".cargo/config.toml".into(),
+                }),
+            }],
+            metadata: None,
+        }],
+    });
+    let plan = crate::plan::batch_plan(
+        &repo,
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        batched(vec![cargo_change("tokio", "1.39.0", "1.40.0")]),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap()
+    .expect("a batch plan");
+    let job = plan
+        .lock_jobs()
+        .iter()
+        .find(|job| job.ecosystem == Ecosystem::Cargo)
+        .expect("a Cargo job");
+    assert!(job.publish_age_allow, "{job:?}");
+}
+
+/// With no committed cooldown, a fix moved into a batch runs Cargo under
+/// `security.apply`'s wait (none by default), not the routine 24 hours,
+/// so Cargo does not refuse a fix lookup proposed fresh.
+#[test]
+fn a_batched_fix_waits_only_what_security_apply_says() {
+    let files = BTreeMap::from([
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1.39.0\"\n"
+                .to_string(),
+        ),
+        ("Cargo.lock".to_string(), cargo_lock("1.39.0")),
+    ]);
+    let config = config();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies;
+    let mut repo = repo();
+    repo.package_files.push(patchula_report::PackageFile {
+        path: "Cargo.toml".into(),
+        dependencies: vec![patchula_report::Dependency {
+            manager: patchula_words::Manager::Cargo,
+            name: "tokio".into(),
+            occurrence: None,
+            package: "tokio".into(),
+            registry: None,
+            current: patchula_report::Current {
+                value: Some("1.39.0".into()),
+                version: Some("1.39.0".into()),
+                digest: None,
+            },
+            updates: vec![patchula_report::Update {
+                new_value: None,
+                new_version: Some("1.40.0".into()),
+                new_digest: None,
+                update_type: patchula_words::Update::Patch,
+                group: None,
+                policy: None,
+                release_age: None,
+                fixes: vec!["GHSA-1".into()],
+                image: None,
+                cooldown: None,
+            }],
+            metadata: None,
+        }],
+    });
+    let plan = crate::plan::batch_plan(
+        &repo,
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        batched(vec![cargo_change("tokio", "1.39.0", "1.40.0")]),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap()
+    .expect("a batch plan");
+    let job = plan
+        .lock_jobs()
+        .iter()
+        .find(|job| job.ecosystem == Ecosystem::Cargo)
+        .expect("a Cargo job");
+    assert!(!job.publish_age_allow, "{job:?}");
+    assert_eq!(job.wait_hours, 0, "{job:?}");
+}
+
+/// A routine update moved into a batch keeps the strictest routine wait.
+#[test]
+fn a_batched_routine_update_keeps_the_routine_wait() {
+    let files = BTreeMap::from([
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1.39.0\"\n"
+                .to_string(),
+        ),
+        ("Cargo.lock".to_string(), cargo_lock("1.39.0")),
+    ]);
+    let config = config();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies;
+    let mut repo = repo();
+    repo.package_files.push(patchula_report::PackageFile {
+        path: "Cargo.toml".into(),
+        dependencies: vec![patchula_report::Dependency {
+            manager: patchula_words::Manager::Cargo,
+            name: "tokio".into(),
+            occurrence: None,
+            package: "tokio".into(),
+            registry: None,
+            current: patchula_report::Current {
+                value: Some("1.39.0".into()),
+                version: Some("1.39.0".into()),
+                digest: None,
+            },
+            updates: vec![patchula_report::Update {
+                new_value: None,
+                new_version: Some("1.40.0".into()),
+                new_digest: None,
+                update_type: patchula_words::Update::Patch,
+                group: None,
+                policy: None,
+                release_age: None,
+                fixes: vec![],
+                image: None,
+                cooldown: None,
+            }],
+            metadata: None,
+        }],
+    });
+    let plan = crate::plan::batch_plan(
+        &repo,
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        batched(vec![cargo_change("tokio", "1.39.0", "1.40.0")]),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap()
+    .expect("a batch plan");
+    let job = plan
+        .lock_jobs()
+        .iter()
+        .find(|job| job.ecosystem == Ecosystem::Cargo)
+        .expect("a Cargo job");
+    assert!(!job.publish_age_allow, "{job:?}");
+    assert_eq!(job.wait_hours, 24, "{job:?}");
+}
+
 /// A target the dependency has already moved past is dropped, never written
 /// backwards: node 24.22.2 ticked into the batch after a batch took node to
 /// 26.13.0 must not take it back down.
@@ -1133,7 +1346,7 @@ fn a_job_without_a_package_deserializes_as_directory_scoped() {
     let job: Job = serde_json::from_value(serde_json::json!({
         "ecosystem": "Node", "directory": "web",
         "package": null, "current": null, "target": null, "lock_only": false,
-        "publish_age_allow": false,
+        "publish_age_allow": false, "wait_hours": 0,
     }))
     .unwrap();
     assert_eq!(job.scope, Scope::Directory);
@@ -1173,12 +1386,13 @@ mod goldens {
                 scope: Scope::Directory,
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             };
             let json = serde_json::to_string(&directory).unwrap();
             assert_eq!(
                 json,
                 format!(
-                    r#"{{"ecosystem":"{name}","directory":"web","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false}}"#
+                    r#"{{"ecosystem":"{name}","directory":"web","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false,"wait_hours":0}}"#
                 ),
                 "{name} directory job"
             );
@@ -1197,12 +1411,13 @@ mod goldens {
                 },
                 exact_version: true,
                 publish_age_allow: false,
+                wait_hours: 0,
             };
             let json = serde_json::to_string(&targeted).unwrap();
             assert_eq!(
                 json,
                 format!(
-                    r#"{{"ecosystem":"{name}","directory":"web","package":"left-pad","current":"1.0.0","target":"1.2.0","lock_only":true,"publish_age_allow":false}}"#
+                    r#"{{"ecosystem":"{name}","directory":"web","package":"left-pad","current":"1.0.0","target":"1.2.0","lock_only":true,"publish_age_allow":false,"wait_hours":0}}"#
                 ),
                 "{name} package job"
             );
@@ -1222,8 +1437,9 @@ mod goldens {
                     },
                     exact_version: false,
                     publish_age_allow: false,
+                    wait_hours: 0,
                 },
-                r#"{"ecosystem":"Node","directory":"","package":"p","current":null,"target":null,"lock_only":false,"publish_age_allow":false}"#,
+                r#"{"ecosystem":"Node","directory":"","package":"p","current":null,"target":null,"lock_only":false,"publish_age_allow":false,"wait_hours":0}"#,
             ),
             (
                 Job {
@@ -1236,8 +1452,9 @@ mod goldens {
                     },
                     exact_version: false,
                     publish_age_allow: false,
+                    wait_hours: 0,
                 },
-                r#"{"ecosystem":"Node","directory":"","package":"p","current":"1.0.0","target":null,"lock_only":false,"publish_age_allow":false}"#,
+                r#"{"ecosystem":"Node","directory":"","package":"p","current":"1.0.0","target":null,"lock_only":false,"publish_age_allow":false,"wait_hours":0}"#,
             ),
             (
                 Job {
@@ -1250,8 +1467,9 @@ mod goldens {
                     },
                     exact_version: false,
                     publish_age_allow: false,
+                    wait_hours: 0,
                 },
-                r#"{"ecosystem":"Node","directory":"","package":"p","current":null,"target":"2.0.0","lock_only":false,"publish_age_allow":false}"#,
+                r#"{"ecosystem":"Node","directory":"","package":"p","current":null,"target":"2.0.0","lock_only":false,"publish_age_allow":false,"wait_hours":0}"#,
             ),
             (
                 Job {
@@ -1260,8 +1478,9 @@ mod goldens {
                     scope: Scope::Directory,
                     exact_version: true,
                     publish_age_allow: false,
+                    wait_hours: 0,
                 },
-                r#"{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":true,"publish_age_allow":false}"#,
+                r#"{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":true,"publish_age_allow":false,"wait_hours":0}"#,
             ),
         ] {
             assert_eq!(serde_json::to_string(&job).unwrap(), expected);
@@ -1280,6 +1499,7 @@ mod goldens {
                 scope: Scope::Directory,
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             },
             Job {
                 ecosystem: Ecosystem::Cargo,
@@ -1291,6 +1511,7 @@ mod goldens {
                 },
                 exact_version: true,
                 publish_age_allow: false,
+                wait_hours: 0,
             },
             Job {
                 ecosystem: Ecosystem::Node,
@@ -1298,6 +1519,7 @@ mod goldens {
                 scope: Scope::Directory,
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             },
             Job {
                 ecosystem: Ecosystem::Cargo,
@@ -1309,6 +1531,7 @@ mod goldens {
                 },
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             },
             Job {
                 ecosystem: Ecosystem::Cargo,
@@ -1316,6 +1539,7 @@ mod goldens {
                 scope: Scope::Directory,
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             },
             Job {
                 ecosystem: Ecosystem::Nix,
@@ -1327,6 +1551,7 @@ mod goldens {
                 },
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             },
             Job {
                 ecosystem: Ecosystem::Php,
@@ -1334,12 +1559,13 @@ mod goldens {
                 scope: Scope::Directory,
                 exact_version: true,
                 publish_age_allow: false,
+                wait_hours: 0,
             },
         ];
         let set: BTreeSet<Job> = jobs.into_iter().collect();
         assert_eq!(
             serde_json::to_string(&set).unwrap(),
-            r#"[{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false},{"ecosystem":"Cargo","directory":"","package":"a","current":"1.0.0","target":"2.0.0","lock_only":false,"publish_age_allow":false},{"ecosystem":"Cargo","directory":"","package":"z","current":null,"target":"2.0.0","lock_only":true,"publish_age_allow":false},{"ecosystem":"Cargo","directory":"sub","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false},{"ecosystem":"Php","directory":"","package":null,"current":null,"target":null,"lock_only":true,"publish_age_allow":false},{"ecosystem":"Nix","directory":"f","package":"nixpkgs","current":"old","target":"new","lock_only":false,"publish_age_allow":false},{"ecosystem":"Apm","directory":"b","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false}]"#
+            r#"[{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false,"wait_hours":0},{"ecosystem":"Cargo","directory":"","package":"a","current":"1.0.0","target":"2.0.0","lock_only":false,"publish_age_allow":false,"wait_hours":0},{"ecosystem":"Cargo","directory":"","package":"z","current":null,"target":"2.0.0","lock_only":true,"publish_age_allow":false,"wait_hours":0},{"ecosystem":"Cargo","directory":"sub","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false,"wait_hours":0},{"ecosystem":"Php","directory":"","package":null,"current":null,"target":null,"lock_only":true,"publish_age_allow":false,"wait_hours":0},{"ecosystem":"Nix","directory":"f","package":"nixpkgs","current":"old","target":"new","lock_only":false,"publish_age_allow":false,"wait_hours":0},{"ecosystem":"Apm","directory":"b","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false,"wait_hours":0}]"#
         );
     }
 
@@ -1359,6 +1585,7 @@ mod goldens {
                 },
                 exact_version: true,
                 publish_age_allow: false,
+                wait_hours: 0,
             },
             Job {
                 ecosystem: Ecosystem::Node,
@@ -1366,6 +1593,7 @@ mod goldens {
                 scope: Scope::Directory,
                 exact_version: false,
                 publish_age_allow: false,
+                wait_hours: 0,
             },
         ];
         let built = fingerprint(FingerprintStage::Built {
@@ -1376,7 +1604,7 @@ mod goldens {
         });
         assert_eq!(
             built,
-            "d67ff5e8c3835fcfbc032116984c80ccfe419aa692914f9865cbc67c221cc668"
+            "4205caa57f71901465d28ea1747d5eb379e3095bed2b2e66db0e9848c119cc9b"
         );
     }
 
@@ -1420,13 +1648,13 @@ mod goldens {
             ("main.tf".to_string(), "terraform {}\n".to_string()),
             (".terraform.lock.hcl".to_string(), "# lock\n".to_string()),
         ]);
-        let plan = maintenance(&repo(), &config(), &snapshot(&files), None, monday())
+        let plan = maintenance(&repo(), &config(), &snapshot(&files), &[], None, monday())
             .unwrap()
             .unwrap();
         assert!(plan.is_maintenance());
         assert_eq!(
             plan.fingerprint(),
-            "6ab3f7166a31bafcb0136e2bf13392eb2f81a5b0573296cf4c1f4bb6789113b6"
+            "d837ffb0e7ca52d4f497dd5a5d658c20a590c5530360cabfbc9083ec109589ff"
         );
         assert_eq!(plan.input_fingerprint(), plan.fingerprint());
         assert_eq!(
@@ -1435,7 +1663,7 @@ mod goldens {
         );
         assert_eq!(
             plan.update_key(),
-            "a793cdc13c9ef186d125aa51cdbc350f4953d5eb5a7bcf55a95af61efa45480d"
+            "d7687789d9073a6db85865a1a4ad7d4c4e4344745ae08b40f7d39cf4cb88d8fc"
         );
     }
 
