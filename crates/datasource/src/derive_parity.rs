@@ -29,7 +29,7 @@ fn derives() -> Vec<(&'static str, u32, Erased)> {
         erase(crate::compact::CRATES_CATALOG),
         erase(crate::compact::PYPI_CATALOG),
         erase(crate::registries::TERRAFORM_CATALOG),
-        erase(crate::registries::HELM_INDEX),
+        erase(crate::helm::HELM_INDEX),
         erase(crate::registries::PYPI_INDEX_CATALOG),
         erase(crate::registries::PYPI_SIMPLE_CATALOG),
         erase(crate::nuget::NUGET_FLAT),
@@ -188,6 +188,40 @@ fn every_code_versioned_state_versions_its_source() {
     .into_iter()
     .collect();
     patchula_testkit::state::check("datasource", &registered);
+}
+
+/// The PyPI index's HTML fallback: a PEP 503 page reads its anchors the same
+/// buffered or a byte at a time, tags with quoted `>` and `data-yanked`
+/// included. The fixtures serve JSON pages, so this body is made here.
+#[tokio::test]
+async fn a_simple_page_scans_anchors_the_same() {
+    let body = br#"<!DOCTYPE html><html><body>
+<a href="https://x.test/pkg-1.0.tar.gz#sha256=aa">pkg-1.0.tar.gz</a><br />
+<a href='a>b' data-yanked>pkg-1.1.tar.gz</a>
+<a href="c">other-2.0.whl</a>&lt;text&gt;
+<a
+  href="d">pkg-2.1.tar.gz</a>
+<p>none</p>
+</body></html>"#
+        .to_vec();
+    let decoding = Arc::new(Semaphore::new(4));
+    let (_, _, f) = derives()
+        .into_iter()
+        .find(|(name, _, _)| *name == "pypi-index-catalog")
+        .unwrap();
+    let buffered = run(Body::Buffered(body.clone()), f.clone(), &decoding)
+        .await
+        .unwrap();
+    assert!(
+        buffered.windows(5).any(|w| w == b"\"1.1\""),
+        "the page's anchors did not parse"
+    );
+    for size in [usize::MAX, 997, 1] {
+        let streamed = run(Body::Streaming(chunks(&body, size)), f.clone(), &decoding)
+            .await
+            .unwrap();
+        assert_eq!(buffered, streamed, "pypi-index-catalog differs at {size}");
+    }
 }
 
 /// A one-byte stream stresses the chunk reader where documents are small

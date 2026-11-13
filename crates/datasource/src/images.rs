@@ -83,18 +83,49 @@ struct Platform {
     variant: Option<String>,
 }
 
+/// Hashes a body as it streams to the parser, so the stored form can stay
+/// addressed by the document's digest without the bytes being held.
+struct HashRead<'a> {
+    body: &'a mut dyn std::io::Read,
+    sha256: sha2::Sha256,
+}
+impl<'a> HashRead<'a> {
+    fn new(body: &'a mut dyn std::io::Read) -> Self {
+        use sha2::Digest;
+        Self {
+            body,
+            sha256: sha2::Sha256::new(),
+        }
+    }
+    /// The digest of everything read so far.
+    fn digest(self) -> String {
+        use sha2::Digest;
+        self.sha256
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+}
+impl std::io::Read for HashRead<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        use sha2::Digest;
+        let read = self.body.read(buffer)?;
+        self.sha256.update(&buffer[..read]);
+        Ok(read)
+    }
+}
+
 fn compact_platform(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     use patchula_http::CacheError::Document;
-    // The platform is stored addressed by the document's digest: the bytes
-    // are hashed, so they are read whole.
-    let mut bytes = Vec::new();
-    body.read_to_end(&mut bytes).map_err(|_| Document)?;
-    let config: Value = serde_json::from_slice(&bytes).map_err(|_| Document)?;
+    let mut read = HashRead::new(body);
+    let config: Value =
+        patchula_http::conditional::json_document(&mut read).map_err(|_| Document)?;
     let text = |field: &str| config[field].as_str().map(str::to_owned);
     serde_json::to_vec(&Platform {
-        sha256: sha256_hex(&bytes),
+        sha256: read.digest(),
         os: text("os"),
         architecture: text("architecture"),
         variant: text("variant"),
@@ -102,7 +133,7 @@ fn compact_platform(
     .map_err(|_| Document)
 }
 pub(crate) const IMAGE_PLATFORM: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("image-platform", 1, compact_platform);
+    patchula_http::Derived::new("image-platform", 3, compact_platform);
 
 fn platform_name(os: &str, architecture: &str, variant: Option<&str>) -> String {
     match variant {
@@ -167,12 +198,12 @@ fn compact_sbom(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     use patchula_http::CacheError::Document;
-    // The stored SBOM names its document's digest: the bytes are hashed, so
-    // they are read whole.
-    let mut bytes = Vec::new();
-    body.read_to_end(&mut bytes).map_err(|_| Document)?;
-    let sha256 = sha256_hex(&bytes);
-    let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| Document)?;
+    // The stored SBOM names its document's digest: the bytes are hashed as
+    // they stream to the parser, never read whole.
+    let mut read = HashRead::new(body);
+    let mut value: Value =
+        patchula_http::conditional::json_document(&mut read).map_err(|_| Document)?;
+    let sha256 = read.digest();
     if let Some(payload) = value["payload"].as_str() {
         let decoded = STANDARD.decode(payload).map_err(|_| Document)?;
         value = serde_json::from_slice(&decoded).map_err(|_| Document)?;
@@ -273,7 +304,7 @@ fn compact_sbom(
     serde_json::to_vec(&compact).map_err(|_| Document)
 }
 pub(crate) const SBOM_OS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("sbom-os", 1, compact_sbom);
+    patchula_http::Derived::new("sbom-os", 3, compact_sbom);
 
 /// OSV's ecosystem name for an OS release, when OSV covers it.
 fn ecosystem(kind: &str, namespace: &str, distro: Option<&(String, String)>) -> Option<String> {
@@ -630,5 +661,39 @@ mod tests {
     fn other_predicates_are_not_sboms() {
         let provenance = json!({"predicateType": "https://slsa.dev/provenance/v1", "subject": [], "predicate": {}});
         assert!(compact_sbom(&mut &serde_json::to_vec(&provenance).unwrap()[..]).is_err());
+    }
+
+    /// A reader that hands out `size` bytes a call, so a streamed derive can
+    /// be checked against every chunk boundary.
+    struct Chunks<'a> {
+        bytes: &'a [u8],
+        size: usize,
+    }
+    impl std::io::Read for Chunks<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let take = self.bytes.len().min(self.size).min(buffer.len());
+            buffer[..take].copy_from_slice(&self.bytes[..take]);
+            self.bytes = &self.bytes[take..];
+            Ok(take)
+        }
+    }
+
+    /// The hashed body's digest — and so the derived platform — is the same
+    /// however the bytes arrive.
+    #[test]
+    fn the_platform_digest_matches_at_every_chunk() {
+        let body = br#"{"os":"linux","architecture":"amd64","variant":"v1"}"#;
+        let expected = compact_platform(&mut &body[..]).unwrap();
+        for chunk in 1..=16 {
+            let mut chunks = Chunks {
+                bytes: &body[..],
+                size: chunk,
+            };
+            assert_eq!(
+                compact_platform(&mut chunks).unwrap(),
+                expected,
+                "chunk size {chunk}"
+            );
+        }
     }
 }

@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
-serde_yaml_ng = "0.10.0"
+libyaml-safer = "0.3.0"
 patchula-mise = { path = "../mise" }
 regex = "1.13.1"
 reqwest.workspace = true
@@ -35,5 +35,6 @@ graphql_client = { version = "0.16", default-features = false, features = ["grap
 bytes = "1"
 patchula-process = { path = "../process" }
 patchula-testkit = { path = "../testkit" }
+serde_yaml_ng = "0.10.0"
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["test-util"] }
