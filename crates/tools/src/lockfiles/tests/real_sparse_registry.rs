@@ -412,7 +412,7 @@ fn ensure_tool(spec: &str) {
         return;
     }
     let status = Command::new("mise")
-        .args(["--no-config", "install", spec])
+        .args(["install", spec])
         .env("MISE_DATA_DIR", &store)
         .status()
         .unwrap();
