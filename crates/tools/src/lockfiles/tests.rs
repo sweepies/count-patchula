@@ -32,6 +32,7 @@ fn validate_targets(
     super::validate_targets(&plan.lock_work().expect("planned lock work"), config, files)
 }
 
+mod real_actions_lock;
 mod real_python_indexes;
 mod real_sparse_registry;
 
@@ -2706,7 +2707,15 @@ fn lockfile_engine_pins_match_the_repository_mise_tasks() {
     let tools = &tasks["test:tools"]["tools"];
     assert_eq!(tools["aube"].as_str(), defaults["tools"]["aube"].as_str());
     for tool in [
-        "bun", "yarn", "python", "uv", "poetry", "dotnet", "ruby", "apm",
+        "bun",
+        "yarn",
+        "python",
+        "uv",
+        "poetry",
+        "dotnet",
+        "ruby",
+        "apm",
+        tool::ACTIONS_LOCK_SPEC,
     ] {
         assert_eq!(
             tools[tool].as_str(),

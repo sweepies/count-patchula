@@ -446,6 +446,53 @@ url = "https://github.com/crate-ci/cargo-release/releases/download/v1.1.7/cargo-
 url_api = "https://api.github.com/repos/crate-ci/cargo-release/releases/assets/662705905"
 provenance = "github-attestations"
 
+[[tools."github:github/gh-actions-lock"]]
+version = "0.4.1"
+backend = "github:github/gh-actions-lock"
+specifiers = ["0.4.1"]
+
+[tools."github:github/gh-actions-lock"."platforms.linux-arm64"]
+checksum = "sha256:aee61c993da36a5f09be2c77e6e4a1a22542a1b30ded4996bf8301c15dcf2b39"
+url = "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/linux-arm64"
+url_api = "https://api.github.com/repos/github/gh-actions-lock/releases/assets/702813294"
+provenance = "github-attestations"
+
+[tools."github:github/gh-actions-lock"."platforms.linux-arm64-musl"]
+checksum = "sha256:aee61c993da36a5f09be2c77e6e4a1a22542a1b30ded4996bf8301c15dcf2b39"
+url = "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/linux-arm64"
+url_api = "https://api.github.com/repos/github/gh-actions-lock/releases/assets/702813294"
+provenance = "github-attestations"
+
+[tools."github:github/gh-actions-lock"."platforms.linux-x64"]
+checksum = "sha256:39deb2fe714dbf74b073d8245fc7f3d50cd0eee18d5c0900e9e849ae933ae17e"
+url = "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/linux-amd64"
+url_api = "https://api.github.com/repos/github/gh-actions-lock/releases/assets/702813259"
+provenance = "github-attestations"
+
+[tools."github:github/gh-actions-lock"."platforms.linux-x64-baseline"]
+checksum = "sha256:39deb2fe714dbf74b073d8245fc7f3d50cd0eee18d5c0900e9e849ae933ae17e"
+url = "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/linux-amd64"
+url_api = "https://api.github.com/repos/github/gh-actions-lock/releases/assets/702813259"
+provenance = "github-attestations"
+
+[tools."github:github/gh-actions-lock"."platforms.linux-x64-musl"]
+checksum = "sha256:39deb2fe714dbf74b073d8245fc7f3d50cd0eee18d5c0900e9e849ae933ae17e"
+url = "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/linux-amd64"
+url_api = "https://api.github.com/repos/github/gh-actions-lock/releases/assets/702813259"
+provenance = "github-attestations"
+
+[tools."github:github/gh-actions-lock"."platforms.linux-x64-musl-baseline"]
+checksum = "sha256:39deb2fe714dbf74b073d8245fc7f3d50cd0eee18d5c0900e9e849ae933ae17e"
+url = "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/linux-amd64"
+url_api = "https://api.github.com/repos/github/gh-actions-lock/releases/assets/702813259"
+provenance = "github-attestations"
+
+[tools."github:github/gh-actions-lock"."platforms.macos-arm64"]
+checksum = "sha256:f205ea5dbbda67165e08aab1fb6395290ca62f0a038bf27d4b684abd0816635c"
+url = "https://github.com/github/gh-actions-lock/releases/download/v0.4.1/darwin-arm64"
+url_api = "https://api.github.com/repos/github/gh-actions-lock/releases/assets/702813195"
+provenance = "github-attestations"
+
 [[tools.go]]
 version = "1.27.3"
 backend = "core:go"
