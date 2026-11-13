@@ -214,11 +214,13 @@ fn write_usage(dir: &Path, usage: &BTreeMap<String, i64>) -> Result<(), String> 
 }
 
 /// Every pinned default the runner installs and keeps: each descriptor's
-/// install specs, in `Ecosystem` order.
+/// install specs, in `Ecosystem` order, and the actions.lock tool, which
+/// has no descriptor yet.
 pub(super) fn defaults() -> Result<Vec<(String, String)>, String> {
     let doc = tool_defaults()?;
     Ok(descriptors()
         .flat_map(|tool| tool.install_specs(doc))
+        .chain(tool::actions_lock_spec(doc))
         .collect())
 }
 

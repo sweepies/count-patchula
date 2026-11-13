@@ -3,6 +3,23 @@
 //! code that runs it.
 use super::*;
 
+/// The actions.lock tool's mise spec: its release assets are bare binaries
+/// named by platform, so `bin` picks the one to install. Its ecosystem's
+/// descriptor arrives with the actions.lock job; until then `tools install`
+/// and `tools prune` see it through `actions_lock_spec`.
+pub(super) const ACTIONS_LOCK_SPEC: &str = "github:github/gh-actions-lock[bin=gh-actions-lock]";
+
+/// `gh-actions-lock` at `defaults.toml`'s pin, for `tools install` and
+/// `tools prune` before its ecosystem has a descriptor.
+pub(super) fn actions_lock_spec(
+    defaults: &toml_edit::Document<&'static str>,
+) -> Option<(String, String)> {
+    Some((
+        ACTIONS_LOCK_SPEC.to_string(),
+        defaults["tools"][ACTIONS_LOCK_SPEC].as_str()?.to_string(),
+    ))
+}
+
 /// How an ecosystem's pinned tools become mise install specs, for
 /// `tools install` and `tools prune`.
 pub(super) enum Install {

@@ -75,6 +75,7 @@ apm = "0.35.0"
 "http:php[url=https://dl.static-php.dev/static-php-cli/common/php-{{version}}-cli-linux-x86_64.tar.gz]" = "8.5.8"
 "http:composer[url=https://getcomposer.org/download/{{version}}/composer.phar,bin=composer]" = "2.10.3"
 "http:nix[url=https://hydra.nixos.org/build/350797336/download/2/nix,checksum=sha256:5d580d993636e3b987868881776214a7d4a169434715ec30bf9ead9345d78fb6,bin=nix]" = "2.35.5"
+"github:github/gh-actions-lock[bin=gh-actions-lock]" = "0.4.1"
 
 [lint]
 description = "Run every check in hk.pkl on the whole tree, Clippy included"
