@@ -19,6 +19,5 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
-patchula-process = { path = "../process" }
 patchula-testkit = { path = "../testkit" }
 tokio = { workspace = true, features = ["test-util"] }
