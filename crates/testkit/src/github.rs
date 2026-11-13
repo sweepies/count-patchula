@@ -37,6 +37,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_http::{Exchange, Response, Transport};
 use reqwest::{Method, Request, StatusCode};
 use serde_json::{Map, Value, json};
+use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
@@ -45,6 +46,15 @@ use std::{
     },
     time::Duration,
 };
+
+/// A content validator for the ref and tag listings, which GitHub etags as
+/// it does any changed representation.
+fn etag(nodes: &[Value]) -> String {
+    Sha256::digest(serde_json::to_vec(nodes).unwrap())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 
 fn response(status: u16, body: Value) -> Response {
     Response {
@@ -1042,8 +1052,14 @@ impl FakeGitHub {
     /// Seed the primary repository: `branch` points at commit `base` whose
     /// tree `"{base}-tree"` holds `entries` (REST tree entries).
     pub fn seed(&self, branch: &str, base: &str, entries: Vec<Value>) {
+        let repo = self.repo.clone();
+        self.seed_on(&repo, branch, base, entries);
+    }
+    /// Seed the named repository the way [`FakeGitHub::seed`] seeds the
+    /// primary one.
+    fn seed_on(&self, name: &str, branch: &str, base: &str, entries: Vec<Value>) {
         let mut state = self.state();
-        let repo = state.repo_mut();
+        let repo = state.repositories.get_mut(name).expect("seeded repository");
         repo.default_branch = branch.into();
         repo.base = base.into();
         repo.refs
@@ -1064,6 +1080,19 @@ impl FakeGitHub {
         files: &BTreeMap<String, String>,
         extra: Vec<Value>,
     ) {
+        let repo = self.repo.clone();
+        self.seed_files_on(&repo, branch, base, files, extra);
+    }
+    /// Seed the named repository the way [`FakeGitHub::seed_files`] seeds
+    /// the primary one.
+    pub fn seed_files_on(
+        &self,
+        name: &str,
+        branch: &str,
+        base: &str,
+        files: &BTreeMap<String, String>,
+        extra: Vec<Value>,
+    ) {
         let mut entries: Vec<Value> = files
             .iter()
             .map(|(path, content)| {
@@ -1071,9 +1100,9 @@ impl FakeGitHub {
             })
             .collect();
         entries.extend(extra);
-        self.seed(branch, base, entries);
+        self.seed_on(name, branch, base, entries);
         let mut state = self.state();
-        let repo = state.repo_mut();
+        let repo = state.repositories.get_mut(name).expect("seeded repository");
         for content in files.values() {
             repo.blobs.insert(blob_sha(content), content.clone());
         }
@@ -2387,13 +2416,6 @@ impl FakeGitHub {
                     None => response(404, json!({"message":"not found"})),
                 }
             } else if let Some(matching) = rest.strip_prefix("git/matching-refs/") {
-                if request
-                    .headers()
-                    .get("if-none-match")
-                    .is_some_and(|value| value == "tags")
-                {
-                    return response(304, Value::Null);
-                }
                 let prefix = format!("refs/{matching}");
                 let refs: Vec<_> = repo
                     .refs
@@ -2401,17 +2423,18 @@ impl FakeGitHub {
                     .filter(|(name, _)| name.starts_with(&prefix))
                     .map(|(name, oid)| json!({"ref":name,"object":{"sha":oid,"type":"commit"}}))
                     .collect();
-                let mut reply = response(200, json!(refs));
-                reply.headers.insert("etag", "tags".parse().unwrap());
-                reply
-            } else if rest == "tags" {
+                let etag = format!("tags-{}", etag(&refs));
                 if request
                     .headers()
                     .get("if-none-match")
-                    .is_some_and(|value| value == "tags")
+                    .is_some_and(|value| value == &etag)
                 {
                     return response(304, Value::Null);
                 }
+                let mut reply = response(200, json!(refs));
+                reply.headers.insert("etag", etag.parse().unwrap());
+                reply
+            } else if rest == "tags" {
                 let tags: Vec<_> = repo
                     .refs
                     .iter()
@@ -2420,8 +2443,16 @@ impl FakeGitHub {
                             .map(|tag| json!({"name":tag,"commit":{"sha":oid}}))
                     })
                     .collect();
+                let etag = format!("tags-{}", etag(&tags));
+                if request
+                    .headers()
+                    .get("if-none-match")
+                    .is_some_and(|value| value == &etag)
+                {
+                    return response(304, Value::Null);
+                }
                 let mut reply = response(200, json!(tags));
-                reply.headers.insert("etag", "tags".parse().unwrap());
+                reply.headers.insert("etag", etag.parse().unwrap());
                 reply
             } else if rest == "contents" {
                 match &repo.contents {
@@ -2694,7 +2725,7 @@ impl Transport for Hosts {
             .unwrap()
             .get(&host)
             .cloned()
-            .unwrap_or_else(|| panic!("unscripted host {host}"));
+            .unwrap_or_else(|| panic!("unscripted host {host} {path}"));
         let latency = *self.latency.lock().unwrap();
         let reply = route(&request, &body);
         Box::pin(async move {

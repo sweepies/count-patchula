@@ -90,7 +90,9 @@ impl Write<'_> {
     /// One repository's write: plan it, settle it from receipts or write it,
     /// then reconcile through the shared tail.
     pub(super) async fn repository(&self, work: &mut Work) -> Result<Written> {
-        let Some(config) = work.config.take() else {
+        // The config stays on the work: the quiet sweep's `next_due` is
+        // computed from it once the repository stayed complete.
+        let Some(config) = work.config.clone() else {
             return Ok(Written::default());
         };
         if work.report.status != Status::Complete {
@@ -348,6 +350,14 @@ impl Write<'_> {
                 failed(
                     &mut work.report,
                     StepFailure::Warning(format!("last run cache: {error}")),
+                );
+            }
+            // The stored answer a later sweep may skip the run with; a
+            // failure to store it only means the next sweep runs in full.
+            if let Err(error) = self.engine.record_quiet(work, self.now).await {
+                failed(
+                    &mut work.report,
+                    StepFailure::Warning(format!("quiet run cache: {error}")),
                 );
             }
         }
