@@ -10,7 +10,7 @@ use reqwest::{
     header::{self, HeaderValue},
 };
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashSet},
     sync::Arc,
@@ -28,13 +28,47 @@ struct CachedToken {
     expires: i64,
 }
 
+/// What a cached installation token covers: the whole installation, or one
+/// repository id with one permission set — a token never answers a mint
+/// narrower or wider than its own.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Mint {
+    installation: u64,
+    /// `None` is the full installation token; `Some` is the `repository_ids`
+    /// + `permissions` mint GitHub narrows the token to.
+    scope: Option<MintScope>,
+}
+/// A scoped mint's `repository_ids` and `permissions`: the fields GitHub
+/// binds the answer to, so both belong to the cache key.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct MintScope {
+    repository: u64,
+    permissions: Permissions,
+}
+/// One exact `permissions` object a scoped mint may request.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Permissions {
+    /// `{"metadata": "read"}` — repository metadata reads only; the token
+    /// reads public repositories as any authenticated caller does.
+    MetadataRead,
+}
+impl MintScope {
+    /// The request body this scope mints with.
+    fn body(&self) -> Value {
+        let permissions = match self.permissions {
+            Permissions::MetadataRead => json!({"metadata": "read"}),
+        };
+        json!({"repository_ids": [self.repository], "permissions": permissions})
+    }
+}
+
 /// Deliberately no Debug implementation: contains the signing key and access tokens.
 pub struct App {
     id: u64,
     key: EncodingKey,
     api_url: Url,
     transport: Arc<dyn Transport>,
-    tokens: Mutex<BTreeMap<u64, CachedToken>>,
+    tokens: Mutex<BTreeMap<Mint, CachedToken>>,
 }
 impl App {
     pub fn new(
@@ -112,9 +146,22 @@ impl App {
         join_api(&self.api_url, path)
     }
     async fn request(&self, method: Method, url: Url, now: i64) -> Result<Response> {
+        self.request_as(method, url, &self.jwt(now)?, None).await
+    }
+    /// The App surface's one request shape: a bearer — the JWT, or a minted
+    /// installation token for the reads a scoped mint needs — plus an
+    /// optional JSON body. `None` sends no body: the full-installation mint
+    /// stays exactly the body-less request it always was.
+    async fn request_as(
+        &self,
+        method: Method,
+        url: Url,
+        bearer: &str,
+        body: Option<Value>,
+    ) -> Result<Response> {
         let mut request = Request::new(method, url);
-        let mut auth = HeaderValue::from_str(&format!("Bearer {}", self.jwt(now)?))
-            .map_err(|_| Error::Configuration)?;
+        let mut auth =
+            HeaderValue::from_str(&format!("Bearer {bearer}")).map_err(|_| Error::Configuration)?;
         auth.set_sensitive(true);
         request.headers_mut().insert(header::AUTHORIZATION, auth);
         request
@@ -127,6 +174,13 @@ impl App {
             "x-github-api-version",
             HeaderValue::from_static(API_VERSION),
         );
+        if let Some(body) = body {
+            request.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            *request.body_mut() = Some(serde_json::to_vec(&body).map_err(|_| Error::Json)?.into());
+        }
         let response = self
             .transport
             .send(request)
@@ -138,7 +192,21 @@ impl App {
         Ok(response)
     }
     async fn request_json(&self, method: Method, path: &str, now: i64) -> Result<Value> {
-        let response = self.request(method, self.url(path)?, now).await?;
+        self.request_json_as(method, path, &self.jwt(now)?, None)
+            .await
+    }
+    /// A request authenticating as `bearer` — an installation token for the
+    /// metadata reads a scoped mint needs — with an optional JSON body.
+    async fn request_json_as(
+        &self,
+        method: Method,
+        path: &str,
+        bearer: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        let response = self
+            .request_as(method, self.url(path)?, bearer, body)
+            .await?;
         serde_json::from_slice(&response.body).map_err(|_| Error::Json)
     }
     /// Authenticates the signing key with GitHub and returns the app's canonical bot login.
@@ -211,16 +279,77 @@ impl App {
         if id == 0 {
             return Err(Error::Configuration);
         }
+        self.mint(
+            Mint {
+                installation: id,
+                scope: None,
+            },
+            now,
+        )
+        .await
+    }
+    /// `repository`'s numeric id, read with `installation`'s token: the
+    /// `repository_ids` a scoped mint must name.
+    async fn repository_id(&self, installation: u64, repository: &str, now: i64) -> Result<u64> {
+        let parts: Vec<_> = repository.split('/').collect();
+        if parts.len() != 2 || !parts.iter().all(|part| valid_segment(part)) {
+            return Err(Error::Configuration);
+        }
+        let token = self.token_at(installation, now).await?;
+        let value = self
+            .request_json_as(Method::GET, &format!("repos/{repository}"), &token, None)
+            .await?;
+        // A token mints only for the repository the caller named: after a
+        // rename, GitHub may answer the old name with another repository.
+        if !value["full_name"]
+            .as_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case(repository))
+        {
+            return Err(Error::Json);
+        }
+        value["id"]
+            .as_u64()
+            .filter(|id| *id > 0 && *id <= i64::MAX as u64)
+            .ok_or(Error::Json)
+    }
+    /// `installation`'s token narrowed to `repository`'s numeric id with
+    /// `metadata: read` only: what a lockfile tool gets. The token reads
+    /// the named repository's metadata and public repositories, as any
+    /// authenticated caller does.
+    async fn scoped_token_at(
+        &self,
+        installation: u64,
+        repository: u64,
+        now: i64,
+    ) -> Result<String> {
+        if installation == 0 || repository == 0 {
+            return Err(Error::Configuration);
+        }
+        self.mint(
+            Mint {
+                installation,
+                scope: Some(MintScope {
+                    repository,
+                    permissions: Permissions::MetadataRead,
+                }),
+            },
+            now,
+        )
+        .await
+    }
+    async fn mint(&self, key: Mint, now: i64) -> Result<String> {
         // Single flight: simultaneous readiness, Git and API requests cannot mint twice.
         let mut tokens = self.tokens.lock().await;
-        if let Some(token) = tokens.get(&id).filter(|token| token.expires > now + 120) {
+        if let Some(token) = tokens.get(&key).filter(|token| token.expires > now + 120) {
             return Ok(token.value.clone());
         }
+        let jwt = self.jwt(now)?;
         let value = self
-            .request_json(
+            .request_json_as(
                 Method::POST,
-                &format!("app/installations/{id}/access_tokens"),
-                now,
+                &format!("app/installations/{}/access_tokens", key.installation),
+                &jwt,
+                key.scope.as_ref().map(MintScope::body),
             )
             .await?;
         let token = value["token"]
@@ -235,7 +364,7 @@ impl App {
             return Err(Error::Configuration);
         }
         tokens.insert(
-            id,
+            key,
             CachedToken {
                 value: token.into(),
                 expires,
@@ -262,6 +391,16 @@ impl Credentials for Installation {
     }
     fn token(&self) -> Token<'_> {
         Box::pin(self.app.token_at(self.id, Utc::now().timestamp()))
+    }
+    fn scoped_token(&self, repository: &str) -> Option<Token<'_>> {
+        let app = self.app.clone();
+        let installation = self.id;
+        let repository = repository.to_owned();
+        Some(Box::pin(async move {
+            let now = Utc::now().timestamp();
+            let repository = app.repository_id(installation, &repository, now).await?;
+            app.scoped_token_at(installation, repository, now).await
+        }))
     }
 }
 
@@ -330,6 +469,44 @@ mod tests {
         assert_ne!(app.token_at(10, now + 3480).await.unwrap(), first);
         assert_eq!(transport.0.load(Ordering::SeqCst), 3);
         assert_ne!(app.installation(10).scope(), app.installation(20).scope());
+    }
+
+    /// A scoped mint is cached per (installation, repository, permission
+    /// set): a different repository mints its own token, the full
+    /// installation token stays a separate mint, and the window two
+    /// minutes before expiry mints again.
+    #[tokio::test]
+    async fn scoped_mints_cache_per_repository_and_renew_before_expiry() {
+        use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey, LineEnding};
+        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+        let transport = Arc::new(Offline(
+            AtomicUsize::new(0),
+            key.to_public_key().to_pkcs1_pem(LineEnding::LF).unwrap(),
+        ));
+        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let app = App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            Url::parse("https://api.github.com/").unwrap(),
+        )
+        .unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
+            .unwrap()
+            .timestamp();
+        let first = app.scoped_token_at(10, 42, now).await.unwrap();
+        assert_eq!(
+            app.scoped_token_at(10, 42, now + 3479).await.unwrap(),
+            first
+        );
+        assert_eq!(transport.0.load(Ordering::SeqCst), 1);
+        assert_ne!(app.scoped_token_at(10, 43, now).await.unwrap(), first);
+        assert_ne!(app.token_at(10, now).await.unwrap(), first);
+        assert_ne!(
+            app.scoped_token_at(10, 42, now + 3480).await.unwrap(),
+            first
+        );
+        assert_eq!(transport.0.load(Ordering::SeqCst), 4);
     }
 
     /// Answers the App metadata and installations endpoints; the second

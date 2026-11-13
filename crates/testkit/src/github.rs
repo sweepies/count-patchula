@@ -277,6 +277,9 @@ impl Default for Merge {
 pub struct Repository {
     /// `owner/name`.
     pub name: String,
+    /// REST `id`, the numeric id a `repository_ids` mint names. Assigned
+    /// at registration.
+    pub id: u64,
     /// REST `node_id`, GraphQL `id`, the `updateRefs` `repositoryId`.
     pub node_id: String,
     /// `user/repos` and `installation/repositories` list repositories the
@@ -349,6 +352,7 @@ impl Repository {
     fn new(name: &str) -> Self {
         Self {
             name: name.into(),
+            id: 0,
             node_id: format!("{name}-id"),
             installed: false,
             private: false,
@@ -443,6 +447,7 @@ impl State {
             upstream.mirror_releases = releases;
             upstream.mirror_tags = tags;
             upstream.release_tags = release_tags;
+            upstream.id = repositories.len() as u64 + 1;
             repositories.insert(name.to_owned(), upstream);
         }
         Self {
@@ -1031,6 +1036,7 @@ impl FakeGitHub {
         let mut primary = Repository::new(repo);
         primary.node_id = "repo-id".into();
         primary.installed = true;
+        primary.id = state.repositories.len() as u64 + 1;
         state.repositories.insert(repo.into(), primary);
         state.primary = repo.into();
         let this = Self {
@@ -1047,7 +1053,9 @@ impl FakeGitHub {
     pub fn add_repository(&self, repo: &str, installed: bool) {
         let mut repository = Repository::new(repo);
         repository.installed = installed;
-        self.state().repositories.insert(repo.into(), repository);
+        let mut state = self.state();
+        repository.id = state.repositories.len() as u64 + 1;
+        state.repositories.insert(repo.into(), repository);
     }
     /// Seed the primary repository: `branch` points at commit `base` whose
     /// tree `"{base}-tree"` holds `entries` (REST tree entries).
@@ -2180,8 +2188,15 @@ impl FakeGitHub {
         response(200, state.repositories[full].prs[&n].clone())
     }
     /// The App surface: installation listing, installation lookup and
-    /// per-installation access tokens.
-    fn app_routes(&self, path: &str, method: &Method, state: &mut State) -> Option<Response> {
+    /// per-installation access tokens, full or scoped to named
+    /// repositories with a permission set.
+    fn app_routes(
+        &self,
+        path: &str,
+        method: &Method,
+        body: &Value,
+        state: &mut State,
+    ) -> Option<Response> {
         if path == "/app/installations" && *method == Method::GET {
             let installations: Vec<_> = state
                 .installations
@@ -2198,11 +2213,30 @@ impl FakeGitHub {
             let _: u64 = id.parse().unwrap();
             state.minted += 1;
             let expires = chrono::Utc::now() + chrono::Duration::hours(1);
-            return Some(response(
-                201,
-                json!({"token":format!("installation-token-{}",state.minted),
-                       "expires_at":expires.to_rfc3339()}),
-            ));
+            let mut answer = json!({"token":format!("installation-token-{}",state.minted),
+                   "expires_at":expires.to_rfc3339()});
+            if let Some(ids) = body["repository_ids"].as_array() {
+                // A scoped mint names repositories the installation sees;
+                // an id it does not is a 404, as GitHub answers.
+                let mut repositories = Vec::new();
+                for id in ids {
+                    let Some(repo) = id.as_u64().and_then(|id| {
+                        state
+                            .repositories
+                            .values()
+                            .find(|repo| repo.id == id && repo.installed && !repo.deleted)
+                    }) else {
+                        return Some(response(404, json!({"message":"Not Found"})));
+                    };
+                    repositories.push(json!({"id":repo.id,"node_id":repo.node_id,
+                               "name":repo.name.rsplit('/').next().unwrap(),
+                               "full_name":repo.name,"private":repo.private}));
+                }
+                answer["permissions"] = body["permissions"].clone();
+                answer["repositories"] = json!(repositories);
+                answer["repository_selection"] = json!("selected");
+            }
+            return Some(response(201, answer));
         }
         if let Some(spec) = path
             .strip_prefix("/repos/")
@@ -2265,7 +2299,7 @@ impl FakeGitHub {
         if path == "/graphql" {
             return self.graphql(ctx, body, state);
         }
-        if let Some(reply) = self.app_routes(path, &ctx.method, state) {
+        if let Some(reply) = self.app_routes(path, &ctx.method, body, state) {
             return reply;
         }
         if ctx.method == Method::GET
@@ -2388,7 +2422,8 @@ impl FakeGitHub {
             } else if rest.is_empty() {
                 response(
                     200,
-                    json!({"node_id":repo.node_id,"default_branch":repo.default_branch,
+                    json!({"id":repo.id,"node_id":repo.node_id,"full_name":repo.name,
+                           "default_branch":repo.default_branch,
                            "private":repo.private,
                            "allow_auto_merge":repo.merge.auto_merge,
                            "allow_squash_merge":repo.merge.squash,

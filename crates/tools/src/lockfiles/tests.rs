@@ -7346,6 +7346,52 @@ async fn a_failing_installation_token_stops_the_run() {
     );
 }
 
+/// The actions.lock tool's token: credentials that mint a repository-scoped
+/// token give `Scoped`; every other run hands the tool the run's own token
+/// (`RunToken`) — the same choice Renovate makes.
+#[tokio::test]
+async fn the_actions_lock_token_is_scoped_on_app_credentials_and_the_run_token_otherwise() {
+    let temp = tempfile::tempdir().unwrap();
+    // A bare-token run gets its own token back.
+    let bare = Runner::new(temp.path().join("worktrees"), "run-token");
+    let token = bare.actions_lock_token("demo/app").await.unwrap();
+    assert_eq!(token.kind, ToolTokenKind::RunToken);
+    assert_eq!(token.token, "run-token");
+    // Credentials that cannot scope a token hand the tool `token()`'s.
+    let plain = Runner::new(temp.path().join("worktrees"), "run-token")
+        .with_credentials(Arc::new(Installation("github-app:1/installation:10")));
+    let token = plain.actions_lock_token("demo/app").await.unwrap();
+    assert_eq!(token.kind, ToolTokenKind::RunToken);
+    assert_eq!(token.token, "token");
+    // Credentials that can scope mint a scoped token for the repository.
+    struct Scoped;
+    impl patchula_github::Credentials for Scoped {
+        fn scope(&self) -> &str {
+            "github-app:1/installation:10"
+        }
+        fn token(&self) -> patchula_github::Token<'_> {
+            Box::pin(async { Ok("full".to_owned()) })
+        }
+        fn scoped_token(&self, repository: &str) -> Option<patchula_github::Token<'_>> {
+            let repository = repository.to_owned();
+            Some(Box::pin(async move {
+                assert_eq!(repository, "demo/app");
+                Ok("scoped".to_owned())
+            }))
+        }
+    }
+    let app =
+        Runner::new(temp.path().join("worktrees"), "run-token").with_credentials(Arc::new(Scoped));
+    let token = app.actions_lock_token("demo/app").await.unwrap();
+    assert_eq!(token.kind, ToolTokenKind::Scoped);
+    assert_eq!(token.token, "scoped");
+    // Handing it to a tool masks it in the same step.
+    let (mut env, mut secrets) = (Vec::new(), Vec::new());
+    token.grant(&mut env, &mut secrets);
+    assert_eq!(env, vec![("GH_TOKEN".to_owned(), "scoped".to_owned())]);
+    assert_eq!(secrets, vec!["scoped".to_owned()]);
+}
+
 /// The Gradle wrapper job dispatch runs the wrapper's own flow.
 #[tokio::test]
 async fn a_gradle_wrapper_job_takes_the_wrapper_path() {

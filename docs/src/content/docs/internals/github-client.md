@@ -22,6 +22,23 @@ requests never mint twice. App requests resolve against the configured API
 root, so an Enterprise deployment's App endpoints work too. No credential
 reaches SQLite.
 
+Installation credentials can also mint a token scoped to one repository:
+`Credentials::scoped_token("owner/name")` reads the repository's numeric id
+with the installation token (`GET /repos/{owner}/{repo}`), then posts
+`{"repository_ids": [<id>], "permissions": {"metadata": "read"}}` to
+`app/installations/{id}/access_tokens`. GitHub answers the token with the
+`permissions`, `repositories` and `repository_selection` it minted. The full
+installation mint stays body-less. Scoped tokens share the cache and the
+single-flight lock, keyed by (installation, repository, permission set), so
+two repositories mint separately and a fuller token never answers a narrower
+mint. Only App installation credentials answer `scoped_token`; every other
+credential returns `None` and the caller uses the run's own token. A
+real-installation proof lives ignored in `crates/github/tests/app.rs`: set
+`PATCHULA_TEST_APP_ID`, `PATCHULA_TEST_APP_KEY_FILE`,
+`PATCHULA_TEST_INSTALLATION`, `PATCHULA_TEST_REPO` and
+`PATCHULA_TEST_OTHER_PRIVATE_REPO`, then run
+`mise exec -- cargo test -p patchula-github --test app -- --ignored`.
+
 ## Transport
 
 reqwest 0.13 uses HTTP/2 negotiation, rustls, gzip, brotli and zstd
