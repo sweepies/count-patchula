@@ -2345,6 +2345,12 @@ impl FakeGitHub {
         } else if ctx.method == Method::GET {
             if rest == "pulls" {
                 self.list_pulls(request, repo, page_size)
+            } else if let Some(number) = rest.strip_prefix("issues/") {
+                let n: u64 = number.parse().unwrap();
+                match repo.issues.get(&n) {
+                    Some(issue) => response(200, issue.clone()),
+                    None => response(404, json!({"message":"Not Found"})),
+                }
             } else if rest == "branches" {
                 let branches: Vec<_> = repo
                     .refs

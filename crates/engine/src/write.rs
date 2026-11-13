@@ -63,11 +63,16 @@ pub(super) fn failed(repo: &mut Repository, failure: StepFailure) {
     }
 }
 
-/// The dashboard's failure fails the repository, after whatever earlier
-/// failure the caller checked first so the first failure keeps its reason.
+/// The dashboard's outcome lands after whatever earlier failure the
+/// caller checked first, so the first failure keeps its reason: its own
+/// race — the issue changed under the run — marks the repository stale
+/// for the rerun that re-reads it, and anything else fails it.
 fn dashboard_failed(repo: &mut Repository, settlement: &Settlement) {
     if let Err(error) = &settlement.dashboard {
-        fail(repo, format!("dependency dashboard: {error}"));
+        match error {
+            patchula_update::Error::Raced(reason) => stale(repo, *reason),
+            error => fail(repo, format!("dependency dashboard: {error}")),
+        }
     }
 }
 

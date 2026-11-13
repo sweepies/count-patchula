@@ -1167,6 +1167,18 @@ pub async fn reconcile(
             .is_some_and(|r| r.number == number && r.actor == inventory.actor && r.hash == digest)
             && crate::pr::body::body_hash(current) == digest;
         if !unchanged && crate::pr::body::body_hash(current) != digest {
+            // The run's controls were read from `current`, which the
+            // early inventory may have sampled a whole extraction ago.
+            // Re-read the one issue: a body that moved since is a
+            // person's edit this run never saw, and writing over it
+            // would lose it — the rerun reads the newer controls.
+            let fresh: patchula_github::model::Issue =
+                client.get_fresh(&format!("{path}/{number}")).await?;
+            if fresh.body.as_deref() != Some(current) {
+                return Err(Error::Raced(
+                    "dependency dashboard changed under the run; rerun",
+                ));
+            }
             client
                 .patch::<Value>(&format!("{path}/{number}"), json!({"body":body}))
                 .await?;

@@ -230,8 +230,46 @@ impl Engine {
                             let scan = self.scan(&repo, overrides.get(&repo).or(override_config));
                             match early {
                                 Some(early) => {
-                                    let (scanned, early) = tokio::join!(scan, early);
-                                    (scanned, Some(early))
+                                    tokio::pin!(scan);
+                                    tokio::pin!(early);
+                                    // Whichever answers first: a finished
+                                    // early read leaves the scan to end
+                                    // alone, and a scan that cannot use an
+                                    // inventory — refused, failed or
+                                    // config-free — drops the in-flight
+                                    // walk rather than waiting out its
+                                    // pages. A walk already done when the
+                                    // scan wins its poll is still kept.
+                                    let mut scanned_answer = None;
+                                    let early_answer = tokio::select! {
+                                        biased;
+                                        scanned = scan.as_mut() => {
+                                            scanned_answer = Some(scanned);
+                                            futures_util::FutureExt::now_or_never(
+                                                early.as_mut(),
+                                            )
+                                        }
+                                        read = early.as_mut() => Some(read),
+                                    };
+                                    let scanned = match scanned_answer {
+                                        Some(scanned) => scanned,
+                                        None => scan.await,
+                                    };
+                                    let early = match early_answer {
+                                        Some(read) => Some(read),
+                                        None if matches!(
+                                            &scanned,
+                                            Ok(work)
+                                                if work.report.status
+                                                    == Status::Complete
+                                                    && work.config.is_some()
+                                        ) =>
+                                        {
+                                            Some(early.await)
+                                        }
+                                        None => None,
+                                    };
+                                    (scanned, early)
                                 }
                                 None => (scan.await, None),
                             }

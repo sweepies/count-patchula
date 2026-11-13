@@ -51,7 +51,13 @@ A run that will write reads its control and write inventory beside the
 head check as well: that read anchors its per-page checks on its own
 first page and is kept only when its default branch, head commit and
 branch prefix prove to be the scan's — anything else is read again after
-the scan.
+the scan, and a scan that cannot use an inventory at all drops the
+in-flight walk rather than waiting it out. Sampling that early also
+means non-head state — dashboard edits, merge settings, branch
+protection, a receipted branch deleted mid-run — can be observed up to
+one extraction earlier than before; it self-corrects next run, and the
+dashboard write re-reads its issue immediately before patching so an
+edit landed during the run is never written over.
 
 A complete run stores a `quiet-run` state row per repository and credential
 scope: the head commit, a hash of the report row (tooling, lookup and
@@ -158,8 +164,9 @@ each names a state change observed mid-run, safe to rerun because the write
 stopped before mutating against the stale view or its mutations are
 idempotent on retry: the publish lease's base-head and metadata reads, the
 write inventory, the obsolete-PR refresh and closure leases, the cleanup
-metadata read, and the post-publish head read with its bounded replication
-retries. A race leaves its branch or pull request action `stale`; the first
+metadata read, the post-publish head read with its bounded replication
+retries, and the dashboard issue's re-check before its write. A race
+leaves its branch or pull request action `stale`; the first
 stale action lifts to the repository's `stale` status after errors and
 protections have had their say, since an error always outranks a race. A
 stale repository records no schedule turn, so the rerun still sees the
