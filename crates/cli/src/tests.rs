@@ -179,11 +179,14 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
         drop(cache);
         if second {
             let requests = hosts.log();
-            let inventory = requests
+            let inventories = requests
                 .iter()
-                .position(|(_, _, b)| b["query"] == patchula_update::INVENTORY_QUERY)
-                .unwrap();
-            assert!(inventory > 0, "inventory follows repository discovery");
+                .filter(|(_, _, b)| b["query"] == patchula_update::INVENTORY_QUERY)
+                .count();
+            assert_eq!(
+                inventories, 1,
+                "the read beside the scan is kept, not repeated"
+            );
             assert!(
                 requests.iter().all(|(method, path, body)| method == "GET"
                     || body["query"] == patchula_update::INVENTORY_QUERY

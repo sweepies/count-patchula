@@ -205,26 +205,33 @@ impl Engine {
                             // else the last receipted run's, else the
                             // bundled default. A scan that disagrees throws
                             // the read away; it is the same read either way.
-                            let early = read_controls.then_some(async {
-                                let prefix = match overrides.get(&repo).or(override_config) {
-                                    Some(config) => config.prs.branch.clone(),
-                                    None => {
-                                        patchula_update::Inventory::assumed_prefix(
-                                            &self.cache,
-                                            &repo,
-                                        )
-                                        .await?
-                                    }
-                                };
-                                Ok::<_, patchula_update::Error>((
-                                    patchula_update::Inventory::read_beside(
+                            // Its cache lookups and token finish before the
+                            // scan starts, so its first request goes out with
+                            // the head check's however fast the scan ends,
+                            // unless the governor holds it (permits in
+                            // flight, a rate-limit cooldown).
+                            let beside = if read_controls {
+                                Some(
+                                    patchula_update::Inventory::beside(
                                         &self.github,
                                         &self.cache,
                                         &repo,
-                                        &prefix,
+                                        overrides
+                                            .get(&repo)
+                                            .or(override_config)
+                                            .map(|config| config.prs.branch.as_str()),
                                     )
-                                    .await?,
-                                    prefix,
+                                    .await,
+                                )
+                            } else {
+                                None
+                            };
+                            let early = beside.map(|beside| async move {
+                                let beside = beside?;
+                                let inventory = beside.read(&self.github, &self.cache).await?;
+                                Ok::<_, patchula_update::Error>((
+                                    inventory,
+                                    beside.prefix().to_owned(),
                                 ))
                             });
                             let scan = self.scan(&repo, overrides.get(&repo).or(override_config));

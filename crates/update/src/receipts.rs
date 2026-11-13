@@ -850,47 +850,39 @@ impl Inventory {
         )
         .await
     }
-    /// The inventory read beside the scan's head check: no head is known
-    /// yet, so the first page's answer anchors the per-page race checks
-    /// instead. The caller must compare the result's
-    /// [`DefaultBranch::name`] and [`DefaultBranch::oid`], and the
-    /// `branch_prefix` it passed, with what the scan found — a difference
-    /// means this read answered for another head or another config, and
-    /// the inventory must be read again with [`read`](Self::read).
-    pub async fn read_beside(
+    /// Everything a read beside the scan's head check needs from the
+    /// cache, and the credential's token, gathered before the scan starts:
+    /// the read's first poll then reaches the transport unless the GitHub
+    /// governor holds it (every permit in flight, a rate-limit cooldown)
+    /// or another installation's token is minting, so it goes out with the
+    /// head check's however fast the scan ends. The
+    /// branch prefix is `declared` (an override's `prs.branch`), else the
+    /// prefix the repository's most recent write receipts were saved
+    /// under, else the bundled schema's default.
+    pub async fn beside(
         client: &Client,
         cache: &Cache,
         repository: &str,
-        branch_prefix: &str,
-    ) -> Result<Self, Error> {
-        Self::read_documents(
-            client,
-            cache,
-            repository,
-            branch_prefix,
-            Head::FirstPage,
-            DOCUMENTS,
-        )
-        .await
-    }
-    /// The `prs.branch` a read beside the scan may assume before the
-    /// repository's config is known: the prefix the repository's most
-    /// recent write receipts were saved under, or the bundled schema's
-    /// default when no receipts were ever saved. The caller must still
-    /// compare it with the scanned config's `prs.branch` before trusting
-    /// the read.
-    pub async fn assumed_prefix(cache: &Cache, repository: &str) -> Result<String, Error> {
-        let remembered = cache
+        declared: Option<&str>,
+    ) -> Result<Beside, Error> {
+        client.ready().await?;
+        let saved = cache
             .state::<ReceiptsPrefix>(&RepositoryScope {
                 repository: repository.into(),
             })
-            .await?
-            .map(|saved| saved.prefix);
-        Ok(remembered.unwrap_or_else(|| default_branch_prefix().into()))
+            .await?;
+        let prefix = match declared {
+            Some(prefix) => prefix.to_owned(),
+            None => saved.as_ref().map_or_else(
+                || default_branch_prefix().into(),
+                |saved| saved.prefix.clone(),
+            ),
+        };
+        let prepared =
+            Prepared::look_up(client, cache, repository, &prefix, saved, DOCUMENTS).await?;
+        Ok(Beside { prefix, prepared })
     }
-    /// A read over `documents`: the credential's remembered actor filters
-    /// the issue walk; a missing or disproven hint reads unfiltered instead
-    /// and the answer's `viewer.login` is stored for the next read.
+    /// A read over `documents`.
     async fn read_documents(
         client: &Client,
         cache: &Cache,
@@ -899,75 +891,16 @@ impl Inventory {
         head: Head<'_>,
         documents: Documents,
     ) -> Result<Self, Error> {
-        let receipts = cache
-            .state::<Receipts>(&receipts_scope(repository, branch_prefix))
-            .await?;
         let saved = cache
             .state::<ReceiptsPrefix>(&RepositoryScope {
                 repository: repository.into(),
             })
             .await?;
-        // Stored receipts prove every branch the Count wrote here shared
-        // this prefix — while the marker says they are the repository's
-        // most recent. A `prs.branch` flip away and back leaves the older
-        // prefix's receipts in place beside newer ones, and they no
-        // longer prove the walk may skip every other branch. Without
-        // receipts, without the marker, or with a marker naming another
-        // prefix — a first run, a cold cache, a changed prefix or a flip
-        // back — the walk covers every branch as before: that run is a
-        // full write whose cleanup lists every branch itself and whose
-        // restore marks the prefix again.
-        let ref_query = (receipts.is_some()
-            && documents.ref_query
-            && saved.is_some_and(|saved| saved.prefix == branch_prefix))
-        .then_some(branch_prefix);
-        let receipts = receipts.unwrap_or_default();
-        let closed_ids: Vec<_> = receipts
-            .closed
-            .values()
-            .map(|r| r.pr["node_id"].clone())
-            .take(100)
-            .collect();
-        let (owner, name) = repository
-            .split_once('/')
-            .ok_or(Error::Refused("invalid repository".into()))?;
-        let scope = ActorScope {
-            credential_scope: client.credential_scope().into(),
-        };
-        let mut hint = cache.state::<ActorHint>(&scope).await?.map(|hint| hint.0);
-        for _ in 0..2 {
-            match Self::walk(
-                client,
-                cache,
-                &scope,
-                head,
-                Request {
-                    owner,
-                    name,
-                    closed_ids: &closed_ids,
-                    documents: &documents,
-                    actor: hint.as_deref(),
-                    ref_query,
-                },
-            )
+        Prepared::look_up(client, cache, repository, branch_prefix, saved, documents)
+            .await?
+            .read(client, cache, head)
             .await
-            {
-                Ok(mut inventory) => {
-                    inventory.finish(cache, repository).await?;
-                    return Ok(inventory);
-                }
-                Err(ReadFailure::WrongActor) => hint = None,
-                Err(ReadFailure::Error(error)) => return Err(error),
-            }
-        }
-        Err(Error::Refused("inventory actor changed".into()))
     }
-    /// The document walk itself: the first page asks for everything, then
-    /// each request continues every connection that still has a page — a
-    /// finished one is never sent again. `request.actor` is the stored
-    /// login hint, if any: the answer's `viewer.login` must confirm it or
-    /// the issue set cannot be trusted. `head` says what the per-page
-    /// race checks compare the default branch with.
     async fn walk(
         client: &Client,
         cache: &Cache,
@@ -1178,6 +1111,132 @@ impl Inventory {
 enum ReadFailure {
     Error(Error),
     WrongActor,
+}
+/// An inventory read prepared to run beside the scan's head check: its
+/// cache lookups are done, so [`read`](Self::read) waits on nothing of its
+/// own before its first request — only the GitHub client's governor and
+/// token, which [`Inventory::beside`] readied.
+pub struct Beside {
+    prefix: String,
+    prepared: Prepared,
+}
+impl Beside {
+    /// The branch prefix the read walks under. The caller must compare it
+    /// with the scanned config's `prs.branch` before trusting the read.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+    /// The read: no head is known yet, so the first page's answer anchors
+    /// the per-page race checks instead. The caller must compare the
+    /// result's [`DefaultBranch::name`] and [`DefaultBranch::oid`] with
+    /// what the scan found — a difference means this read answered for
+    /// another head, and the inventory must be read again with
+    /// [`Inventory::read`].
+    pub async fn read(&self, client: &Client, cache: &Cache) -> Result<Inventory, Error> {
+        self.prepared.read(client, cache, Head::FirstPage).await
+    }
+}
+/// A read's arguments with its cache lookups done. The credential's
+/// remembered actor filters the issue walk; a missing or disproven hint
+/// reads unfiltered instead and the answer's `viewer.login` is stored for
+/// the next read.
+struct Prepared {
+    repository: String,
+    owner: String,
+    name: String,
+    closed_ids: Vec<Value>,
+    documents: Documents,
+    ref_query: Option<String>,
+    scope: ActorScope,
+    hint: Option<String>,
+}
+impl Prepared {
+    /// `saved` is the repository's [`ReceiptsPrefix`], which the caller
+    /// has already read.
+    async fn look_up(
+        client: &Client,
+        cache: &Cache,
+        repository: &str,
+        branch_prefix: &str,
+        saved: Option<ReceiptsPrefix>,
+        documents: Documents,
+    ) -> Result<Self, Error> {
+        let receipts = cache
+            .state::<Receipts>(&receipts_scope(repository, branch_prefix))
+            .await?;
+        // Stored receipts prove every branch the Count wrote here shared
+        // this prefix — while the marker says they are the repository's
+        // most recent. A `prs.branch` flip away and back leaves the older
+        // prefix's receipts in place beside newer ones, and they no
+        // longer prove the walk may skip every other branch. Without
+        // receipts, without the marker, or with a marker naming another
+        // prefix — a first run, a cold cache, a changed prefix or a flip
+        // back — the walk covers every branch as before: that run is a
+        // full write whose cleanup lists every branch itself and whose
+        // restore marks the prefix again.
+        let ref_query = (receipts.is_some()
+            && documents.ref_query
+            && saved.is_some_and(|saved| saved.prefix == branch_prefix))
+        .then(|| branch_prefix.to_owned());
+        let receipts = receipts.unwrap_or_default();
+        let closed_ids: Vec<_> = receipts
+            .closed
+            .values()
+            .map(|r| r.pr["node_id"].clone())
+            .take(100)
+            .collect();
+        let (owner, name) = repository
+            .split_once('/')
+            .ok_or(Error::Refused("invalid repository".into()))?;
+        let scope = ActorScope {
+            credential_scope: client.credential_scope().into(),
+        };
+        let hint = cache.state::<ActorHint>(&scope).await?.map(|hint| hint.0);
+        Ok(Self {
+            repository: repository.to_owned(),
+            owner: owner.to_owned(),
+            name: name.to_owned(),
+            closed_ids,
+            documents,
+            ref_query,
+            scope,
+            hint,
+        })
+    }
+    async fn read(
+        &self,
+        client: &Client,
+        cache: &Cache,
+        head: Head<'_>,
+    ) -> Result<Inventory, Error> {
+        let mut hint = self.hint.as_deref();
+        for _ in 0..2 {
+            match Inventory::walk(
+                client,
+                cache,
+                &self.scope,
+                head,
+                Request {
+                    owner: &self.owner,
+                    name: &self.name,
+                    closed_ids: &self.closed_ids,
+                    documents: &self.documents,
+                    actor: hint,
+                    ref_query: self.ref_query.as_deref(),
+                },
+            )
+            .await
+            {
+                Ok(mut inventory) => {
+                    inventory.finish(cache, &self.repository).await?;
+                    return Ok(inventory);
+                }
+                Err(ReadFailure::WrongActor) => hint = None,
+                Err(ReadFailure::Error(error)) => return Err(error),
+            }
+        }
+        Err(Error::Refused("inventory actor changed".into()))
+    }
 }
 /// What a walk's per-page head checks compare each page's default branch
 /// with.
