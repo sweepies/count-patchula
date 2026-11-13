@@ -33,6 +33,7 @@ fn validate_targets(
 }
 
 mod real_python_indexes;
+mod real_sparse_registry;
 
 /// What `defaults.toml` pins for a tool, which a repository without its own pin
 /// gets. A defaults bump must not need a test edit, so expectations ask here.
@@ -66,6 +67,10 @@ struct Fixture {
     extra: Vec<String>,
     /// Files a tool deletes while it runs.
     removes: Vec<String>,
+    /// A sparse registry the run's Cargo fetches as crates.io, served over
+    /// TCP while every other host sits behind a dead proxy. `None` keeps
+    /// the vendored directory source and `CARGO_NET_OFFLINE`.
+    sparse: Option<Arc<real_sparse_registry::SparseRegistry>>,
 }
 impl Executor for Fixture {
     fn run(
@@ -160,6 +165,7 @@ impl Executor for Fixture {
                     .push(std::fs::read_to_string(tree.join(path)).unwrap_or_default());
             }
             if self.real {
+                let sparse_cargo = self.sparse.is_some() && spec.args.iter().any(|a| a == "cargo");
                 let crates: Vec<_> = [
                     ("offline-registry-fixture", ["1.0.0", "2.0.0"]),
                     ("offline-patch-fixture", ["1.0.0", "1.0.1"]),
@@ -172,7 +178,17 @@ impl Executor for Fixture {
                 })
                 .flat_map(|(name, versions)| versions.map(|v| (name, v)))
                 .collect();
-                if spec.args.iter().any(|a| a == "cargo") && !crates.is_empty() {
+                if sparse_cargo {
+                    let cargo = spec
+                        .args
+                        .iter()
+                        .find_map(|a| a.strip_prefix("CARGO_HOME="))
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| {
+                            PathBuf::from(&spec.env[std::ffi::OsStr::new("CARGO_HOME")])
+                        });
+                    self.sparse.as_ref().unwrap().write_cargo_home(&cargo);
+                } else if spec.args.iter().any(|a| a == "cargo") && !crates.is_empty() {
                     let vendor = spec.cwd.join("vendor");
                     for (name, version) in crates {
                         let package = vendor.join(format!("{name}-{version}"));
@@ -234,10 +250,28 @@ impl Executor for Fixture {
                     ("GOPROXY", "off"),
                     ("GOSUMDB", "off"),
                 ] {
+                    // The sparse fixture is the one host Cargo may reach.
+                    if sparse_cargo && key == "CARGO_NET_OFFLINE" {
+                        continue;
+                    }
                     spec.env.insert(key.into(), value.into());
                 }
                 if let Some(goproxy) = goproxy {
                     spec.env.insert("GOPROXY".into(), goproxy.into());
+                }
+                if sparse_cargo {
+                    for (key, value) in [
+                        ("HTTPS_PROXY", "http://127.0.0.1:9"),
+                        ("HTTP_PROXY", "http://127.0.0.1:9"),
+                        ("ALL_PROXY", "http://127.0.0.1:9"),
+                        ("https_proxy", "http://127.0.0.1:9"),
+                        ("http_proxy", "http://127.0.0.1:9"),
+                        ("all_proxy", "http://127.0.0.1:9"),
+                        ("NO_PROXY", "127.0.0.1,localhost"),
+                        ("no_proxy", "127.0.0.1,localhost"),
+                    ] {
+                        spec.env.insert(key.into(), value.into());
+                    }
                 }
                 return SystemExecutor.run(spec).await;
             }
@@ -439,7 +473,19 @@ fn fixture_with(
         tamper: false,
         extra: Vec::new(),
         removes: Vec::new(),
+        sparse: None,
     })
+}
+/// A real-Cargo fixture whose crates.io is `registry`: the run's Cargo
+/// fetches the index and `.crate` files over loopback, and the proxy
+/// variables keep every other host unreachable.
+fn fixture_sparse(
+    files: BTreeMap<String, String>,
+    registry: Arc<real_sparse_registry::SparseRegistry>,
+) -> Arc<Fixture> {
+    let mut fixture = fixture_with(files, false, true, None);
+    Arc::get_mut(&mut fixture).unwrap().sparse = Some(registry);
+    fixture
 }
 fn repo() -> Repository {
     Repository {
@@ -4826,6 +4872,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                     package,
                     if fresh { target } else { locked },
                 )),
+                sparse: None,
             });
             let temp = tempfile::tempdir().unwrap();
             let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
