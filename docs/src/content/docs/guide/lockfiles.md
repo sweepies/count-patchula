@@ -142,7 +142,7 @@ pinned defaults apply:
 | aube | 2.9.0 |
 | Yarn | 4.18.1 (Berry) |
 | Bun | 1.4.4 |
-| Rust | 1.99.1 |
+| Rust | 1.100.0 |
 | Go | 1.27.3 |
 | Terraform | 1.17.1 |
 | Python, uv, Poetry | 3.15.2, 0.13.6, 2.5.1 |

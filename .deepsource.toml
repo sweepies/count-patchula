@@ -17,7 +17,7 @@ test_patterns = [
 name = "rust"
 
   [analyzers.meta]
-  msrv = "1.99"
+  msrv = "1.100"
 
 [[analyzers]]
 name = "javascript"

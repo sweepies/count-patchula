@@ -20,13 +20,25 @@ def main [...targets: string] {
       error make --unspanned {msg: $"no release platform for ($target.item)"}
     }
     ^rustup target add $target.item
-    ^cargo build --release --locked -p patchula-cli --target $target.item
+    let messages = ^cargo build --release --locked -p patchula-cli --target $target.item --message-format json
+      | lines
+      | where {|line| $line | is-not-empty }
+      | each {|line| $line | from json }
+    if $env.LAST_EXIT_CODE != 0 {
+      error make --unspanned {msg: $"cargo build failed for ($target.item)"}
+    }
     let bin = $"target/($target.item)/release/patchula"
     # AWS_LC_SYS_NO_JITTER_ENTROPY keeps the jitter-entropy collector out of
     # AWS-LC. The release binary is stripped on musl, so look in the crate's
     # own archive, which keeps its symbols on every target: a jent_ symbol
-    # means the collector crept back in.
-    let archives = glob $"target/($target.item)/release/deps/libaws_lc_sys-*.rlib"
+    # means the collector crept back in. Its path comes from Cargo's JSON
+    # messages; the build dir's inner layout is Cargo's own.
+    let archives = $messages
+      | where {|message| ($message | get -o reason) == "compiler-artifact" }
+      | where {|message| $message.package_id | str contains "aws-lc-sys@" }
+      | get -o filenames
+      | flatten
+      | where {|file| $file ends-with ".rlib" }
     if ($archives | is-empty) {
       error make --unspanned {msg: $"no aws-lc-sys archive for ($target.item) to check"}
     }
