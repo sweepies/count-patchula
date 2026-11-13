@@ -266,6 +266,75 @@ async fn a_copy_of_a_counts_branch_is_obsolete_only_to_the_full_walk() {
     check_transcript();
 }
 
+/// Receipts are scoped by repository and prefix, so a `prs.branch` flip
+/// away and back leaves the older prefix's entries in place — stale
+/// receipts that cannot prove the walk may skip every other branch. The
+/// marker names the prefix the most recent save used: while it names
+/// another prefix the read walks every branch, and the restore that
+/// verifies the stale receipts marks them the most recent again.
+#[tokio::test]
+async fn a_prefix_flip_back_walks_everything_once() {
+    let server = fake();
+    // Every branch here is foreign: nothing is owned, so the full walk's
+    // restore settles.
+    seed_branch(&server, "patchula/kept", "kept", false);
+    seed_branch(&server, "deps/stray", "stray", false);
+    for number in 1..=50 {
+        seed_branch(
+            &server,
+            &format!("topic/{number}"),
+            &format!("t{number}"),
+            false,
+        );
+    }
+    seed_issue(
+        &server,
+        1,
+        "dashboard <!-- patchula:dashboard -->",
+        actor_author(),
+    );
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let github = client(&cache, server.clone());
+    let config = config();
+    let mut flipped = config.clone();
+    flipped.prs.branch = "deps/".into();
+    let repo = repository();
+    // Receipts saved under `patchula/`; the config then spent a run on
+    // `deps/`, which left its own receipts and moved the marker.
+    seed_receipts(&cache, "demo/app", &config).await.unwrap();
+    seed_receipts(&cache, "demo/app", &flipped).await.unwrap();
+    // Back on `patchula/` the older receipts stay, but the marker names
+    // `deps/`: the read walks every branch once.
+    let full = Inventory::read(&github, &cache, &repo, &config)
+        .await
+        .unwrap();
+    assert!(full.ref_filter.is_none());
+    assert_eq!(names(&full).len(), 53);
+    let mut plans: Vec<patchula_update::Plan> = Vec::new();
+    assert_eq!(
+        restore_inventory(
+            &cache,
+            &repo,
+            &config,
+            &mut plans,
+            Recheck::default(),
+            None,
+            &full
+        )
+        .await
+        .unwrap(),
+        RestoreOutcome::Complete
+    );
+    // The unfiltered restore verified the older receipts live and marks
+    // them the most recent again: the next read narrows to the prefix.
+    let prefix = Inventory::read(&github, &cache, &repo, &config)
+        .await
+        .unwrap();
+    assert_eq!(prefix.ref_filter.as_deref(), Some("patchula/"));
+    assert_eq!(names(&prefix), vec!["patchula/kept"]);
+    check_transcript();
+}
+
 /// A `patchula/` branch the plans want is restored identically: the
 /// receipt's fast path reads it in either walk.
 #[tokio::test]

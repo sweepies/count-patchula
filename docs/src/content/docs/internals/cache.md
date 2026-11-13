@@ -210,11 +210,19 @@ of heads and open PRs, and an exact match skips history, tree and PR reads.
 A stored receipt is proof every branch the Count wrote shared the prefix, so
 the refs walk passes it as `refs(query:)`: GitHub's filter is a
 case-insensitive substring match, and the client keeps only the names that
-start with the prefix. No receipt — a first run, a cold cache or a changed
-prefix — walks every branch as before, and that run is a full write whose
-cleanup lists every branch itself. One consequence: a copy of a Count branch
-under a name outside the prefix is invisible to a warm run and is deleted by
-the next full write instead.
+start with the prefix. The walk narrows only while a `receipts-prefix` state
+entry, written beside every save, names the repository's current
+`prs.branch`: a prefix flip away and back leaves the older prefix's receipts
+in place but no longer proves the other branches, so the run walks every
+branch once and the restore that verifies the receipts again marks them.
+Every branch the receipts name must also appear in the answer — one that
+does not, renamed outside the prefix while its pull request stayed open or
+deleted, takes the full write path rather than settling around a branch it
+cannot see. No receipt — a first run, a cold cache or a changed prefix —
+walks every branch as before, and that run is a full write whose cleanup
+lists every branch itself. One consequence remains: a copy of a Count branch
+under a name outside the prefix has no receipt, so it is invisible to a warm
+run and is deleted by the next full write instead.
 Any mismatch, or unknown or incomplete inventory data, falls back to full
 reconciliation. In behind mode a base move invalidates the receipt. At `-vv`,
 diagnostics report save and restore counts and the first failed condition per

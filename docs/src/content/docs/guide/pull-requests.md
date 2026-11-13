@@ -106,10 +106,14 @@ target superseded), its branch and PR are closed and deleted, with a lease on
 the branch head so nothing unfamiliar is lost. Cleanup waits for the next run
 if the default branch moved since it was read, and is skipped entirely in a run that reported
 warnings, so a file that failed to parse never makes its updates look obsolete.
-A warm run reads only the branches under `prs.branch`, so a branch a person
-made by copying one of the Count's to a name outside the prefix is not seen
-there: it is deleted by the next full write — a first run, a cold cache or a
-run after the prefix changed — which reads every branch itself.
+A warm run reads only the branches under `prs.branch`. If a branch the
+receipts name is absent from that walk — GitHub's branch rename keeps its
+pull request open at the new name — the run takes the full write path,
+which lists every branch and open pull request itself and handles the
+renamed copy as before. A branch a person made by copying one of the
+Count's to a name outside the prefix has no receipt, so it stays invisible
+to a warm run: it is deleted by the next full write — a first run, a cold
+cache or a run after the prefix changed — which reads every branch itself.
 
 ## Limits and holds
 

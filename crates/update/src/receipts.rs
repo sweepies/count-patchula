@@ -1,7 +1,7 @@
 //! Receipts are proof of previously verified writes, never proof from a marker alone.
 use crate::error::Error;
 use crate::{Lifecycle, Plan};
-use patchula_cache::{Cache, State};
+use patchula_cache::{Cache, RepositoryScope, State};
 use patchula_config::{Config, Rebase};
 use patchula_github::{Client, Error as GithubError, model};
 use patchula_manager::hash;
@@ -543,11 +543,44 @@ impl State for ActorHint {
     const VERSION: u32 = 1;
     type Scope = ActorScope;
 }
+/// The prefix the repository's most recent write receipts were saved
+/// under, and when. Receipts are scoped by repository and prefix both, so
+/// a `prs.branch` flip away and back leaves an older prefix's entries in
+/// place; they prove nothing about the branches written under the other
+/// prefix since, and only this marker naming `config.prs.branch` lets the
+/// inventory's refs walk narrow to the prefix.
+#[derive(Serialize, Deserialize)]
+struct ReceiptsPrefix {
+    prefix: String,
+    saved: i64,
+}
+impl State for ReceiptsPrefix {
+    const NAMESPACE: &'static str = "receipts-prefix";
+    const VERSION: u32 = 1;
+    type Scope = RepositoryScope;
+}
 fn receipts_scope(repo: &str, prefix: &str) -> ReceiptsScope {
     ReceiptsScope {
         repository: repo.into(),
         branch_prefix: prefix.into(),
     }
+}
+/// Record that the receipts under `receipts_scope(repo, prefix)` are the
+/// repository's most recent: only while the marker names `prs.branch` may
+/// the next read narrow the refs walk to the prefix.
+async fn mark_prefix(cache: &Cache, repository: &str, prefix: &str) -> Result<(), Error> {
+    cache
+        .set_state(
+            &RepositoryScope {
+                repository: repository.into(),
+            },
+            &ReceiptsPrefix {
+                prefix: prefix.into(),
+                saved: chrono::Utc::now().timestamp(),
+            },
+        )
+        .await
+        .map_err(Error::Cache)
 }
 /// `server` is the advertised URL, which the PR body carries. Only a server
 /// joins the hash, so receipts written without one stay valid.
@@ -760,6 +793,12 @@ pub struct Inventory {
     pub merged_prs: Vec<crate::automerge::MergedPr>,
     /// The default branch's head, for the freshness check and tooling.
     pub default_branch: DefaultBranch,
+    /// The `refs(query:)` the walk ran with, if it narrowed the branch
+    /// list to a prefix: `Some` means `refs` may omit Count branches
+    /// whose names fall outside the prefix — a rename GitHub keeps an
+    /// open pull request on — so the receipts path must not settle around
+    /// a receipted branch it cannot see. `None` walked every branch.
+    pub ref_filter: Option<String>,
     /// Branch names whose `associatedPullRequests` or their `labels` were
     /// not fully readable. Their PR view is incomplete, so the receipts
     /// fast path must not settle from this inventory.
@@ -802,13 +841,25 @@ impl Inventory {
         let receipts = cache
             .state::<Receipts>(&receipts_scope(&repository.repository, &config.prs.branch))
             .await?;
-        // A stored receipt proves every branch the Count wrote here
-        // shared this prefix, so the refs walk can ask `refs(query:)` for
-        // it instead of reading every branch. A first run, a cold cache
-        // or a changed prefix has none and walks every branch as before —
-        // that run is a full write, and cleanup lists every branch itself.
-        let ref_query =
-            (receipts.is_some() && documents.ref_query).then_some(config.prs.branch.as_str());
+        let saved = cache
+            .state::<ReceiptsPrefix>(&RepositoryScope {
+                repository: repository.repository.clone(),
+            })
+            .await?;
+        // Stored receipts prove every branch the Count wrote here shared
+        // this prefix — while the marker says they are the repository's
+        // most recent. A `prs.branch` flip away and back leaves the older
+        // prefix's receipts in place beside newer ones, and they no
+        // longer prove the walk may skip every other branch. Without
+        // receipts, without the marker, or with a marker naming another
+        // prefix — a first run, a cold cache, a changed prefix or a flip
+        // back — the walk covers every branch as before: that run is a
+        // full write whose cleanup lists every branch itself and whose
+        // restore marks the prefix again.
+        let ref_query = (receipts.is_some()
+            && documents.ref_query
+            && saved.is_some_and(|saved| saved.prefix == config.prs.branch))
+        .then_some(config.prs.branch.as_str());
         let receipts = receipts.unwrap_or_default();
         let closed_ids: Vec<_> = receipts
             .closed
@@ -993,6 +1044,7 @@ impl Inventory {
                 .refs
                 .items
                 .retain(|item| item.as_ref().is_none_or(|r| r.name.starts_with(prefix)));
+            result.ref_filter = Some(prefix.into());
         }
         result.issues = Page::nodes(&issues.nodes, true);
         Ok(result)
@@ -1146,7 +1198,8 @@ pub async fn seed_receipts(cache: &Cache, repository: &str, config: &Config) -> 
             &Receipts::default(),
         )
         .await
-        .map_err(Error::Cache)
+        .map_err(Error::Cache)?;
+    mark_prefix(cache, repository, &config.prs.branch).await
 }
 /// One connection's walk: the last cursor sent, the cursors already seen
 /// (a repeat fails rather than looping) and the nodes gathered so far.
@@ -1190,13 +1243,14 @@ pub async fn restore_inventory(
     server: Option<&str>,
     inventory: &Inventory,
 ) -> Result<RestoreOutcome, Error> {
-    let receipts = cache
+    let stored = cache
         .state::<Receipts>(&receipts_scope(&repository.repository, &config.prs.branch))
         .await?;
+    let proven = stored.is_some();
     let pending = plans
         .iter()
         .any(|p| p.action().status == BranchStatus::Planned);
-    let receipts = match receipts {
+    let receipts = match stored {
         None if pending => return Ok(not_restored(repository, plans, "missing-receipt")),
         Some(receipts) => receipts,
         None => Receipts::default(),
@@ -1215,6 +1269,24 @@ pub async fn restore_inventory(
     // walk cannot name it must not settle around.
     if !refs.complete {
         return Ok(not_restored(repository, plans, "incomplete-refs"));
+    }
+    // The filtered walk holds only names under the prefix, so a branch the
+    // receipts still name being absent means it was renamed out of the
+    // prefix or deleted — GitHub's rename keeps its open pull request,
+    // whose rechecks and dashboard row the settled run would silently
+    // drop. Unless a plan rewrites that branch this run — its
+    // `missing-head` fails the restore on its own — take the full write
+    // path: its REST pull listing and cleanup's own branch list see every
+    // branch, exactly as an unfiltered run's would.
+    if inventory.ref_filter.is_some()
+        && receipts.writes.keys().any(|branch| {
+            !refs.items.iter().flatten().any(|r| r.name == *branch)
+                && !plans.iter().any(|plan| {
+                    plan.action().status == BranchStatus::Planned && plan.action().branch == *branch
+                })
+        })
+    {
+        return Ok(not_restored(repository, plans, "receipted-branch-missing"));
     }
     let desired: BTreeSet<_> = plans.iter().map(|p| p.action().branch.as_str()).collect();
     let obsolete = refs.items.iter().flatten().any(|r| {
@@ -1291,6 +1363,20 @@ pub async fn restore_inventory(
     tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         restored, complete, obsolete, unsettled = inventory.unsettled.len(), "write receipts restored");
     Ok(if complete {
+        // An unfiltered walk just verified every claim these receipts
+        // make against live data. When the walk ran unfiltered because
+        // the prefix marker was absent or stale — a `prs.branch` flip
+        // back, or receipts saved before the marker existed — these are
+        // again the repository's most recent receipts: mark them, so the
+        // next read may narrow the refs walk. A failed write only costs
+        // the next run its narrowed walk.
+        if proven
+            && inventory.ref_filter.is_none()
+            && let Err(error) = mark_prefix(cache, &repository.repository, &config.prs.branch).await
+        {
+            tracing::warn!(target: "patchula_update::receipts", repo = %repository.repository,
+                %error, "receipts prefix marker not saved");
+        }
         RestoreOutcome::Complete
     } else {
         RestoreOutcome::Partial
@@ -1381,7 +1467,8 @@ pub(crate) async fn save_merge_states(
             receipt.pr = PrState::from_rest(&pr.pr).value();
         }
     }
-    Ok(cache.set_state(&scope, &receipts).await?)
+    cache.set_state(&scope, &receipts).await?;
+    mark_prefix(cache, &repository.repository, &config.prs.branch).await
 }
 
 pub async fn save_receipts(
@@ -1467,6 +1554,7 @@ pub async fn save_receipts(
             &receipts,
         )
         .await?;
+    mark_prefix(cache, &repository.repository, &config.prs.branch).await?;
     tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
         count = receipts.writes.len() + receipts.closed.len(), writes = receipts.writes.len(),
         closed = receipts.closed.len(), "write receipts saved");
