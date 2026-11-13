@@ -121,7 +121,8 @@ impl SparseRegistry {
         };
         let mut reader = BufReader::new(clone);
         let mut request = String::new();
-        if reader.read_line(&mut request).is_err() {
+        // A connection that closes before its request line is not a request.
+        if reader.read_line(&mut request).unwrap_or(0) == 0 {
             return;
         }
         loop {
@@ -178,9 +179,16 @@ impl SparseRegistry {
                         crate_file(name, vers, &release.deps),
                     )
                 }),
-            [.., name] => self.crates.lock().unwrap().get(*name).map(|releases| {
-                ("text/plain", index_file(name, releases).into_bytes())
-            }),
+            // Cargo lowercases index paths; the file keeps the published name.
+            [.., name] => self
+                .crates
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(published, _)| published.eq_ignore_ascii_case(name))
+                .map(|(published, releases)| {
+                    ("text/plain", index_file(published, releases).into_bytes())
+                }),
             _ => None,
         }
     }
@@ -383,13 +391,16 @@ fn mise_store() -> PathBuf {
 /// installed ahead of `test:tools` on CI.
 fn ensure_tool(spec: &str) {
     let store = mise_store();
-    let tool = spec.split('@').next().unwrap();
+    let bin = match spec.split('@').next().unwrap() {
+        "rust" => "rustc",
+        tool => tool,
+    };
     let installed = Command::new("mise")
         .arg("--no-config")
         .arg("exec")
         .arg(spec)
         .arg("--")
-        .arg(tool)
+        .arg(bin)
         .arg("--version")
         .env("MISE_DATA_DIR", &store)
         .env("MISE_EXEC_AUTO_INSTALL", "false")
@@ -401,7 +412,7 @@ fn ensure_tool(spec: &str) {
         return;
     }
     let status = Command::new("mise")
-        .args(["install", spec])
+        .args(["--no-config", "install", spec])
         .env("MISE_DATA_DIR", &store)
         .status()
         .unwrap();
@@ -475,8 +486,13 @@ fn owner_cargo(
 }
 
 /// The files the Count's git checkout sees, written to `dir` for the
-/// owner's own Cargo run.
+/// owner's own Cargo run. `dir` holds exactly `files` afterwards: a file an
+/// earlier case wrote, a cooldown config or a lock, must not decide this one.
 fn write_tree(dir: &Path, files: &BTreeMap<String, String>) {
+    if dir.exists() {
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    std::fs::create_dir_all(dir).unwrap();
     for (path, text) in files {
         let path = dir.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
