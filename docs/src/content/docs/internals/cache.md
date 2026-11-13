@@ -67,13 +67,20 @@ The request's host permit is held until its body is read, so in-flight bodies
 stay inside the host limit. Reads that arrive already buffered derive under a
 four-job limit. A 304 updates only metadata and reuses the compact body. A
 derived representation is `name@v{VERSION}`, where the version belongs to the
-transform's own code rather than the release: a new release re-reads every
-derived body whose compaction code did not change, and a change to one
+transform's own code rather than the release: a new release keeps the cached
+entries of every transform whose code did not change, and a change to one
 transform misses only that representation. `tests/derived-versions.tsv`
-guards the contract — it hashes the source files that produce each
-representation's bytes, and the owning crate's parity test fails when the
-code moves without a version bump; the maintenance step is to bump the
-`Derived`'s version and update the row in the same commit. Entries written
+guards the contract — it hashes the source files and locked dependency
+versions that produce each representation's bytes, and the owning crate's
+parity test fails when the code moves without a version bump; the
+maintenance step is to bump the `Derived`'s version and update the row in
+the same commit. A derive may only read code in its row's listed files, and
+since whole files are hashed a formatting or comment edit in one forces a
+bump too — batch cosmetic edits in those files. The parity test also scans
+the crate's sources for `Derived::new("<name>"` (and the pull-token
+representation constant), so a representation cannot exist without a row,
+and a listed file that is renamed fails naming the row and the missing
+file. Entries written
 under the retired `name+build` scheme are never read again and are deleted
 when the cache opens; raw and derived namespaces never share validators.
 
