@@ -2,6 +2,7 @@ query InventoryRefsQuery(
     $owner: String!
     $name: String!
     $prefix: String!
+    $refQuery: String
     $cursor: String
 ) {
     viewer {
@@ -15,7 +16,7 @@ query InventoryRefsQuery(
                 oid
             }
         }
-        refs(refPrefix: $prefix, first: 100, after: $cursor) {
+        refs(refPrefix: $prefix, query: $refQuery, first: 100, after: $cursor) {
             pageInfo {
                 hasNextPage
                 endCursor

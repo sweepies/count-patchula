@@ -106,6 +106,10 @@ target superseded), its branch and PR are closed and deleted, with a lease on
 the branch head so nothing unfamiliar is lost. Cleanup waits for the next run
 if the default branch moved since it was read, and is skipped entirely in a run that reported
 warnings, so a file that failed to parse never makes its updates look obsolete.
+A warm run reads only the branches under `prs.branch`, so a branch a person
+made by copying one of the Count's to a name outside the prefix is not seen
+there: it is deleted by the next full write — a first run, a cold cache or a
+run after the prefix changed — which reads every branch itself.
 
 ## Limits and holds
 
@@ -146,6 +150,8 @@ until their own hour is up.
 
 After a successful write the Count stores a receipt: the commit and tree, the
 inputs that produced them, and the PR's state. On the next run one GraphQL
-inventory reads every branch head and open PR, and a matching receipt skips
-the branch entirely. Change the base, the plan, the PR title, body or labels,
-and that branch is reconciled again. Everything else stays skipped.
+inventory asks GitHub for the branches under `prs.branch` and the open PRs —
+without a receipt it reads every branch head instead — and a matching
+receipt skips the branch entirely. Change the base, the plan, the PR title,
+body or labels, and that branch is reconciled again. Everything else stays
+skipped.

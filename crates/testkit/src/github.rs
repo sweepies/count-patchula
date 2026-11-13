@@ -1462,7 +1462,7 @@ impl FakeGitHub {
                                              .unwrap_or(Value::Null)}}})
                     }),
                 "issues" => self.issues_connection(child, repo, body),
-                "refs" => self.refs_connection(repo, body, state),
+                "refs" => self.refs_connection(child, repo, body, state),
                 "pullRequests" => self.pull_requests(child, repo, body, state),
                 "release" => {
                     if !release_logged {
@@ -1756,11 +1756,68 @@ impl FakeGitHub {
                 Value::Null
             }}})
     }
-    fn refs_connection(&self, repo: &Repository, body: &Value, state: &State) -> Value {
+    /// `repository { refs }` — the `RefConnection` the schema types
+    /// (`schema.docs.graphql`, `Repository.refs`). Modeled arguments:
+    /// `refPrefix` (`String!`; GitHub requires the trailing `/`),
+    /// `query` (a case-insensitive substring filter on the ref's short
+    /// name — measured: `ENOVATE` matched `macabu/renovate-...` in
+    /// grafana/grafana) and `first`/`after` (forward paging over an
+    /// index cursor, as `issues_connection` pages). `orderBy`,
+    /// `direction`, `before`, `last` and any other argument are
+    /// unmodeled and panic.
+    fn refs_connection(
+        &self,
+        field: &GqlField,
+        repo: &Repository,
+        body: &Value,
+        state: &State,
+    ) -> Value {
+        for (name, _) in &field.args {
+            assert!(
+                matches!(name.as_str(), "refPrefix" | "query" | "first" | "after"),
+                "unmodeled refs argument {name}"
+            );
+        }
+        let prefix = field
+            .arg("refPrefix", body)
+            .unwrap_or_else(|| panic!("refs without `refPrefix`"));
+        assert!(
+            prefix.ends_with('/'),
+            "refs `refPrefix` {prefix:?} must end in `/`"
+        );
+        let query = field.arg("query", body).map(str::to_lowercase);
+        // GitHub refuses a connection without `first`/`last` and a
+        // `first` outside 1-100.
+        let first = field
+            .arg_json("first", body)
+            .map(|first| {
+                first
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("refs `first` is not a count: {first}"))
+                    as usize
+            })
+            .unwrap_or_else(|| panic!("refs without `first`"));
+        assert!(
+            (1..=100).contains(&first),
+            "refs `first` {first} is outside 1-100"
+        );
+        let after = field
+            .arg("after", body)
+            .map(|cursor| {
+                cursor
+                    .parse::<usize>()
+                    .unwrap_or_else(|_| panic!("refs `after` {cursor:?} is not a fake cursor"))
+            })
+            .unwrap_or(0);
         let nodes: Vec<_> = repo
             .refs
             .iter()
-            .filter_map(|(name, oid)| Some((name.strip_prefix("refs/heads/")?, oid)))
+            .filter_map(|(name, oid)| Some((name.strip_prefix(prefix)?, oid)))
+            .filter(|(name, _)| {
+                query
+                    .as_ref()
+                    .is_none_or(|query| name.to_lowercase().contains(query))
+            })
             .map(|(name, oid)| {
                 let commit = &repo.commits[oid];
                 let prs: Vec<_> = repo
@@ -1783,15 +1840,13 @@ impl FakeGitHub {
                           "pageInfo":{"__typename":"PageInfo","hasNextPage":state.settings.pr_next_page.as_deref() == Some(name)}}})
             })
             .collect();
-        let offset = body["variables"]["cursor"]
-            .as_str()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-        let size = state.settings.ref_page_size.unwrap_or(100);
-        let more = offset + size < nodes.len();
-        let nodes: Vec<_> = nodes.into_iter().skip(offset).take(size).collect();
+        // `ref_page_size` simulates GitHub serving a shorter page than
+        // `first` asked for, never a longer one.
+        let size = state.settings.ref_page_size.unwrap_or(first).min(first);
+        let more = after + size < nodes.len();
+        let nodes: Vec<_> = nodes.into_iter().skip(after).take(size).collect();
         json!({"__typename":"RefConnection","nodes":nodes,
-               "pageInfo":{"__typename":"PageInfo","hasNextPage":more,"endCursor":(offset+size).to_string()}})
+               "pageInfo":{"__typename":"PageInfo","hasNextPage":more,"endCursor":(after+size).to_string()}})
     }
     fn graphql_mutation(&self, name: &str, body: &Value, state: &mut State) -> FieldAnswer {
         match name {

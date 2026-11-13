@@ -22,7 +22,7 @@ pub use receipts::{
     RestoreOutcome, restore_inventory, save_receipts,
 };
 #[cfg(feature = "testing")]
-pub use receipts::{LEGACY_INVENTORY_QUERY, read_legacy_inventory};
+pub use receipts::{LEGACY_INVENTORY_QUERY, read_legacy_inventory, seed_receipts};
 pub use settle::{Settlement, settle};
 mod plan;
 mod pr;

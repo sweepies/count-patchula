@@ -207,6 +207,14 @@ base, the planned update and
 the canonical PR state (a line-ending-normalised body hash, labels and the
 auto-merge flag), never credentials. Warm runs read a fresh GraphQL inventory
 of heads and open PRs, and an exact match skips history, tree and PR reads.
+A stored receipt is proof every branch the Count wrote shared the prefix, so
+the refs walk passes it as `refs(query:)`: GitHub's filter is a
+case-insensitive substring match, and the client keeps only the names that
+start with the prefix. No receipt — a first run, a cold cache or a changed
+prefix — walks every branch as before, and that run is a full write whose
+cleanup lists every branch itself. One consequence: a copy of a Count branch
+under a name outside the prefix is invisible to a warm run and is deleted by
+the next full write instead.
 Any mismatch, or unknown or incomplete inventory data, falls back to full
 reconciliation. In behind mode a base move invalidates the receipt. At `-vv`,
 diagnostics report save and restore counts and the first failed condition per

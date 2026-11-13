@@ -801,8 +801,15 @@ impl Inventory {
     ) -> Result<Self, Error> {
         let receipts = cache
             .state::<Receipts>(&receipts_scope(&repository.repository, &config.prs.branch))
-            .await?
-            .unwrap_or_default();
+            .await?;
+        // A stored receipt proves every branch the Count wrote here
+        // shared this prefix, so the refs walk can ask `refs(query:)` for
+        // it instead of reading every branch. A first run, a cold cache
+        // or a changed prefix has none and walks every branch as before —
+        // that run is a full write, and cleanup lists every branch itself.
+        let ref_query =
+            (receipts.is_some() && documents.ref_query).then_some(config.prs.branch.as_str());
+        let receipts = receipts.unwrap_or_default();
         let closed_ids: Vec<_> = receipts
             .closed
             .values()
@@ -829,6 +836,7 @@ impl Inventory {
                     closed_ids: &closed_ids,
                     documents: &documents,
                     actor: hint.as_deref(),
+                    ref_query,
                 },
             )
             .await
@@ -860,10 +868,16 @@ impl Inventory {
         // reports; a null filter is no filter at all.
         let mut filter = actor.map_or(Value::Null, |login| json!({"createdBy":login}));
         let variables = |cursor: &Value, issue_cursor: &Value, filter: &Value| {
-            json!({"owner":request.owner,"name":request.name,
+            let mut variables = json!({"owner":request.owner,"name":request.name,
                 "prefix":"refs/heads/","closed":request.closed_ids,
                 "cursor":cursor,"issueCursor":issue_cursor,
-                "issueFilter":filter.clone()})
+                "issueFilter":filter.clone()});
+            // A null variable is no filter; the key stays out entirely
+            // when the walk covers every branch.
+            if let Some(query) = request.ref_query {
+                variables["refQuery"] = json!(query);
+            }
+            variables
         };
         let data: InventoryData = client
             .graphql(
@@ -969,6 +983,17 @@ impl Inventory {
             );
         }
         result.refs = Page::nodes(&refs.nodes, true);
+        // `refs(query:)` is GitHub's case-insensitive substring match on
+        // the ref name — `a/patchula/b` still arrives — while every
+        // branch the Count writes starts with the prefix, so only those
+        // keep. An undecoded node stays: it could hide an in-prefix
+        // branch, and `complete` already counts it.
+        if let Some(prefix) = request.ref_query {
+            result
+                .refs
+                .items
+                .retain(|item| item.as_ref().is_none_or(|r| r.name.starts_with(prefix)));
+        }
         result.issues = Page::nodes(&issues.nodes, true);
         Ok(result)
     }
@@ -1053,18 +1078,24 @@ struct Request<'a> {
     closed_ids: &'a [Value],
     documents: &'a Documents,
     actor: Option<&'a str>,
+    /// The branch prefix `refs(query:)` narrows the walk to when a write
+    /// receipt exists for it — `None` sends no `query` argument at all.
+    ref_query: Option<&'a str>,
 }
 /// The documents a read walks: the first page asks everything once; each
 /// continuation asks every connection that still has a page. `last` is the
 /// closing re-read of the fields only the first page asks, sent when the
 /// walk took more than one request so the newest answer wins; `None` when
 /// `first` already re-read them on every page (the legacy document).
+/// `ref_query` marks the documents as declaring `$refQuery` on `refs`, so
+/// a stored receipt may narrow the walk to the branch prefix.
 struct Documents {
     first: &'static str,
     next: &'static str,
     refs: &'static str,
     issues: &'static str,
     last: Option<&'static str>,
+    ref_query: bool,
 }
 const DOCUMENTS: Documents = Documents {
     first: INVENTORY_QUERY,
@@ -1072,6 +1103,7 @@ const DOCUMENTS: Documents = Documents {
     refs: INVENTORY_REFS_QUERY,
     issues: INVENTORY_ISSUES_QUERY,
     last: Some(INVENTORY_LAST_QUERY),
+    ref_query: true,
 };
 
 /// The pre-split inventory document, kept so the differential test can
@@ -1098,9 +1130,23 @@ pub async fn read_legacy_inventory(
             refs: LEGACY_INVENTORY_QUERY,
             issues: LEGACY_INVENTORY_QUERY,
             last: None,
+            ref_query: false,
         },
     )
     .await
+}
+/// The receipt set a full write leaves behind, emptied: enough state for
+/// the read to take the prefix walk without a real write. For tests and
+/// benchmarks that seed a steady-state repository.
+#[cfg(feature = "testing")]
+pub async fn seed_receipts(cache: &Cache, repository: &str, config: &Config) -> Result<(), Error> {
+    cache
+        .set_state(
+            &receipts_scope(repository, &config.prs.branch),
+            &Receipts::default(),
+        )
+        .await
+        .map_err(Error::Cache)
 }
 /// One connection's walk: the last cursor sent, the cursors already seen
 /// (a repeat fails rather than looping) and the nodes gathered so far.
