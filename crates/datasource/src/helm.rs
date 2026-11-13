@@ -14,25 +14,16 @@ use patchula_http::{CacheError, Derived};
 use std::{
     collections::{BTreeMap, VecDeque},
     io::{BufReader, Read},
+    ops::Range,
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
 /// A document's node as the walk consumes it: the structure serde would
-/// see, resolved scalars excepted. Anchored nodes are kept whole so an
-/// alias can replay them — aliases inside them stay aliases, to be
-/// resolved when the replay reaches them.
-#[derive(Clone)]
+/// see, resolved scalars excepted.
 enum Node {
     Scalar(String, ScalarStyle, Option<String>),
     Seq(Option<String>, Vec<Node>),
     Map(Option<String>, Vec<(Node, Node)>),
-    Alias(usize),
-    /// A subtree recorded past serde's recursion budget: it can never be
-    /// deserialized anywhere, so replaying it into a kept position fails
-    /// the way serde's remaining-depth check would, while recording it —
-    /// and skipping the anchored value nobody aliases — stays cheap.
-    /// Capping the tree here keeps clone, replay and drop shallow.
-    TooDeep,
 }
 
 /// What an event is to the walk: aliases stay aliases until a position
@@ -40,6 +31,7 @@ enum Node {
 /// steps over them. The alias carries the anchor's binding id, resolved
 /// where the event is read, the way serde's loader stores each alias's
 /// position.
+#[derive(Clone)]
 enum Ev {
     Scalar(String, ScalarStyle, Option<String>),
     SeqStart(Option<String>),
@@ -53,68 +45,23 @@ enum Ev {
     StreamEnd,
 }
 
-/// Events still being recorded under an anchor: unanchored children build
-/// the same tree. A recording nested deeper than serde's recursion budget
-/// (128 collections under the root) ends as `Node::TooDeep`: serde could
-/// never deserialize it anywhere, so nothing deeper needs keeping.
+/// A recording's open-collection budget: serde's recursion limit, 128
+/// collections under the root. An anchor nested past it can never
+/// deserialize anywhere, so the recording is abandoned — nothing deeper
+/// needs keeping, and an alias to it fails where serde's remaining-depth
+/// check would.
 const MAX_NODE_DEPTH: usize = 128;
 
-enum Partial {
-    Seq(Option<String>, Vec<Node>),
-    Map(Option<String>, Vec<(Node, Node)>, Option<Node>),
-}
+/// An anchor still recording. Every content event until the end event
+/// balancing its root is appended once to the buffer all recordings
+/// share; the anchor's node is its span, `start` to that end. `depth`
+/// counts the collections open inside it — inner anchors' starts deepen
+/// it like any collection's — and past `MAX_NODE_DEPTH` the recording is
+/// dropped rather than bound.
 struct Recording {
     anchor: usize,
-    stack: Vec<Partial>,
-}
-impl Recording {
-    /// Feeds one event into the tree; a completed recording reports its
-    /// anchor and node.
-    fn feed(&mut self, event: &Ev) -> Option<(usize, Node)> {
-        let built = match event {
-            Ev::Scalar(text, style, tag) => Node::Scalar(text.clone(), *style, tag.clone()),
-            Ev::SeqStart(tag) => {
-                self.stack.push(Partial::Seq(tag.clone(), Vec::new()));
-                return self.too_deep();
-            }
-            Ev::MapStart(tag) => {
-                self.stack.push(Partial::Map(tag.clone(), Vec::new(), None));
-                return self.too_deep();
-            }
-            Ev::SeqEnd => match self.stack.pop() {
-                Some(Partial::Seq(tag, items)) => Node::Seq(tag, items),
-                _ => return None,
-            },
-            Ev::MapEnd => match self.stack.pop() {
-                Some(Partial::Map(tag, pairs, _)) => Node::Map(tag, pairs),
-                _ => return None,
-            },
-            Ev::Alias(anchor) => Node::Alias(*anchor),
-            _ => return None,
-        };
-        match self.stack.last_mut() {
-            Some(Partial::Seq(_, items)) => items.push(built),
-            Some(Partial::Map(_, _, key @ None)) => *key = Some(built),
-            Some(Partial::Map(_, pairs, key)) => {
-                if let Some(key) = key.take() {
-                    pairs.push((key, built));
-                }
-            }
-            None => return Some((self.anchor, built)),
-        }
-        None
-    }
-    /// Past serde's recursion budget the node can never deserialize:
-    /// finish the recording as `Node::TooDeep`, so the tree stays shallow
-    /// for clone, replay and drop. Its remaining events still belong to
-    /// the recordings above it; this one is simply done.
-    fn too_deep(&mut self) -> Option<(usize, Node)> {
-        if self.stack.len() > MAX_NODE_DEPTH {
-            self.stack.clear();
-            return Some((self.anchor, Node::TooDeep));
-        }
-        None
-    }
+    start: usize,
+    depth: usize,
 }
 
 /// The pull side of the walk: libyaml's events in order, with anchored
@@ -127,12 +74,21 @@ struct Walk<'a> {
     /// replay runs ahead of the frame below it, and an exhausted frame
     /// pops back to the caller's events.
     pending: Vec<VecDeque<Ev>>,
+    /// Anchors still recording, shallowest first.
     recording: Vec<Recording>,
+    /// Every recorded content event, stored once however many anchors'
+    /// spans cover it: a nested anchor's span covers the inner anchors'
+    /// events without holding them again, so anchored memory tracks the
+    /// anchored events, not the nesting.
+    buffer: Vec<Ev>,
     /// Anchor name to its latest binding — serde's loader `anchors` map,
     /// where a redefined name shadows the earlier node — and each
-    /// binding's completed node, serde's `aliases` id-to-position map.
+    /// binding's recorded span in `buffer`, serde's `aliases`
+    /// id-to-position map. A scalar is its one event's span; an abandoned
+    /// recording is never bound, so an alias to it fails like an alias
+    /// serde's remaining-depth check would fail.
     bindings: BTreeMap<String, usize>,
-    anchors: BTreeMap<usize, Node>,
+    anchors: BTreeMap<usize, Range<usize>>,
     next_binding: usize,
     /// Content events pulled so far: what serde's `document.events` would
     /// hold (scalars, aliases and the four collection events; the stream
@@ -169,6 +125,7 @@ impl<'a> Walk<'a> {
             parser,
             pending: Vec::new(),
             recording: Vec::new(),
+            buffer: Vec::new(),
             bindings: BTreeMap::new(),
             anchors: BTreeMap::new(),
             next_binding: 0,
@@ -186,19 +143,59 @@ impl<'a> Walk<'a> {
         self.bindings.insert(name, id);
         id
     }
-    /// Records the event in every open anchored tree.
-    fn record(&mut self, event: &Ev) {
-        let mut done = Vec::new();
-        for recording in &mut self.recording {
-            if let Some(built) = recording.feed(event) {
-                done.push(built);
+    /// Records the event in every open anchored span: appended once to
+    /// the shared buffer, then counted in each recording's depth. A
+    /// start that pushes a recording past serde's recursion budget
+    /// abandons it — its remaining events still belong to the spans
+    /// above it — and an end that closes a recording binds its anchor's
+    /// span. The event's buffer position, when it was kept: a stream or
+    /// document marker, or an event outside any anchor, keeps nothing.
+    fn record(&mut self, event: &Ev) -> Option<usize> {
+        let content = matches!(
+            event,
+            Ev::Scalar(..)
+                | Ev::SeqStart(_)
+                | Ev::SeqEnd
+                | Ev::MapStart(_)
+                | Ev::MapEnd
+                | Ev::Alias(_)
+        );
+        if !content || self.recording.is_empty() {
+            return None;
+        }
+        let at = self.store(event);
+        match event {
+            Ev::SeqStart(_) | Ev::MapStart(_) => {
+                self.recording.retain_mut(|recording| {
+                    recording.depth += 1;
+                    recording.depth <= MAX_NODE_DEPTH
+                });
             }
+            Ev::SeqEnd | Ev::MapEnd => {
+                let end = at + 1;
+                let mut done = Vec::new();
+                self.recording.retain_mut(|recording| {
+                    recording.depth -= 1;
+                    if recording.depth == 0 {
+                        done.push((recording.anchor, recording.start..end));
+                        return false;
+                    }
+                    true
+                });
+                for (anchor, span) in done {
+                    self.anchors.insert(anchor, span);
+                }
+            }
+            _ => {}
         }
-        self.recording
-            .retain(|recording| !recording.stack.is_empty());
-        for (anchor, node) in done {
-            self.anchors.insert(anchor, node);
-        }
+        Some(at)
+    }
+    /// The event into the shared buffer every open span indexes. Its
+    /// position.
+    fn store(&mut self, event: &Ev) -> usize {
+        let at = self.buffer.len();
+        self.buffer.push(event.clone());
+        at
     }
     /// The next event, or a document error: a parse failure, an alias to
     /// an anchor never bound — serde's loader fails those no matter where
@@ -240,30 +237,30 @@ impl<'a> Walk<'a> {
                 ..
             } => {
                 self.events += 1;
+                let event = Ev::Scalar(value, style, tag);
                 if let Some(name) = anchor {
                     let id = self.bind_anchor(name);
-                    self.anchors
-                        .insert(id, Node::Scalar(value.clone(), style, tag.clone()));
+                    // A scalar is its one event; its span is where the
+                    // spans already open — or the buffer itself — kept
+                    // it.
+                    let start = self.record(&event).unwrap_or_else(|| self.store(&event));
+                    self.anchors.insert(id, start..start + 1);
+                    return Ok(event);
                 }
-                Ev::Scalar(value, style, tag)
+                event
             }
             EventData::SequenceStart { anchor, tag, .. } => {
                 self.events += 1;
                 let event = Ev::SeqStart(tag);
                 if let Some(name) = anchor {
                     let id = self.bind_anchor(name);
-                    // The start belongs to any anchored tree still open
-                    // before the anchor's own recording begins.
-                    self.record(&event);
+                    // The start belongs to the anchored spans still open
+                    // before the anchor's own recording begins at it.
+                    let start = self.record(&event).unwrap_or_else(|| self.store(&event));
                     self.recording.push(Recording {
                         anchor: id,
-                        stack: vec![Partial::Seq(
-                            match &event {
-                                Ev::SeqStart(tag) => tag.clone(),
-                                _ => None,
-                            },
-                            Vec::new(),
-                        )],
+                        start,
+                        depth: 1,
                     });
                     return Ok(event);
                 }
@@ -274,17 +271,11 @@ impl<'a> Walk<'a> {
                 let event = Ev::MapStart(tag);
                 if let Some(name) = anchor {
                     let id = self.bind_anchor(name);
-                    self.record(&event);
+                    let start = self.record(&event).unwrap_or_else(|| self.store(&event));
                     self.recording.push(Recording {
                         anchor: id,
-                        stack: vec![Partial::Map(
-                            match &event {
-                                Ev::MapStart(tag) => tag.clone(),
-                                _ => None,
-                            },
-                            Vec::new(),
-                            None,
-                        )],
+                        start,
+                        depth: 1,
                     });
                     return Ok(event);
                 }
@@ -302,65 +293,36 @@ impl<'a> Walk<'a> {
         self.record(&event);
         Ok(event)
     }
-    /// The node an alias event names, replayed into `pending`: serde's
+    /// The span an alias event names, replayed into `pending`: serde's
     /// jump to the anchor's events. An anchor still recording — an alias
-    /// to the node being read — can only turn into serde's repetition
-    /// limit, and an unbound anchor never reaches here.
+    /// to the node being read — or one abandoned past serde's recursion
+    /// budget is not bound: the first can only turn into serde's
+    /// repetition limit, the second fails where serde's remaining-depth
+    /// check would, and an unbound anchor never reaches here.
     fn resolve(&mut self, mut event: Ev) -> Result<Ev, ()> {
         while let Ev::Alias(id) = event {
             self.jumps += 1;
-            let Some(node) = self.anchors.get(&id).cloned() else {
+            let Some(span) = self.anchors.get(&id).cloned() else {
                 return Err(());
             };
-            self.replay(&node)?;
+            self.replay(span)?;
             event = self.take()?;
         }
         Ok(event)
     }
-    /// One node worth of replayed events, pushed as a fresh frame: serde's
-    /// `jump` hands each alias its own cursor, so a nested alias replays
-    /// ahead of the outer frame's tail rather than behind it. Recordings
-    /// keep trees no deeper than serde's recursion budget, so the
-    /// recursion stays shallow.
-    fn replay(&mut self, node: &Node) -> Result<(), ()> {
-        let mut frame = VecDeque::new();
-        self.replay_into(node, &mut frame)?;
-        self.pending.push(frame);
-        Ok(())
-    }
-    fn replay_into(&mut self, node: &Node, frame: &mut VecDeque<Ev>) -> Result<(), ()> {
-        match node {
-            Node::Scalar(text, style, tag) => {
-                self.push_replayed(Ev::Scalar(text.clone(), *style, tag.clone()), frame)
-            }
-            Node::Alias(anchor) => self.push_replayed(Ev::Alias(*anchor), frame),
-            Node::TooDeep => Err(()),
-            Node::Seq(tag, items) => {
-                self.push_replayed(Ev::SeqStart(tag.clone()), frame)?;
-                for item in items {
-                    self.replay_into(item, frame)?;
-                }
-                self.push_replayed(Ev::SeqEnd, frame)
-            }
-            Node::Map(tag, pairs) => {
-                self.push_replayed(Ev::MapStart(tag.clone()), frame)?;
-                for (key, value) in pairs {
-                    self.replay_into(key, frame)?;
-                    self.replay_into(value, frame)?;
-                }
-                self.push_replayed(Ev::MapEnd, frame)
-            }
-        }
-    }
-    /// One replayed event, bounded: serde's own cap on this work scales
-    /// with the document's size and is checked at stream end; this is the
-    /// fixed ceiling beneath it that only an alias bomb reaches.
-    fn push_replayed(&mut self, event: Ev, frame: &mut VecDeque<Ev>) -> Result<(), ()> {
-        self.replayed += 1;
+    /// One span's worth of recorded events, pushed as a fresh frame:
+    /// serde's `jump` hands each alias its own cursor, so a nested alias
+    /// replays ahead of the outer frame's tail rather than behind it.
+    /// The count is bounded: serde's own cap on this work scales with
+    /// the document's size and is checked at stream end; `REPLAY_LIMIT`
+    /// is the fixed ceiling beneath it that only an alias bomb reaches.
+    fn replay(&mut self, span: Range<usize>) -> Result<(), ()> {
+        self.replayed += span.len();
         if self.replayed > REPLAY_LIMIT {
             return Err(());
         }
-        frame.push_back(event);
+        self.pending
+            .push(self.buffer[span].iter().cloned().collect());
         Ok(())
     }
     /// One whole value, consumed without deserializing it: serde's
@@ -673,7 +635,6 @@ fn scalar_value(text: String, style: ScalarStyle, tag: Option<String>) -> Result
 fn yaml(node: &Node) -> Result<Yaml, ()> {
     Ok(match node {
         Node::Scalar(text, style, tag) => scalar_value(text.clone(), *style, tag.clone())?,
-        Node::Alias(_) | Node::TooDeep => return Err(()),
         Node::Seq(tag, items) => {
             let seq = Yaml::Seq(items.iter().map(yaml).collect::<Result<_, _>>()?);
             match tag {
@@ -1479,6 +1440,30 @@ entries: {{}}
             );
         }
         report(failures);
+
+        // libyaml-safer's scanner panics where C libyaml emits the Tag
+        // token: a tag immediately followed by `,` in a flow collection
+        // (`scanner.rs`'s `panic!("TODO: What is expected here?")`). The
+        // buffered parse accepts these; the walk's catch_unwind makes
+        // them failed documents — an asserted residual, like the replay
+        // cap, fail-closed and not a shape an honest index writes.
+        let residuals: &[&[u8]] = &[
+            b"entries: {}\nother: [!x, a]\n",
+            b"entries: {}\nother: {version: !x, digest: d}\n",
+        ];
+        for (index, &body) in residuals.iter().enumerate() {
+            assert!(
+                helm_buffered(&mut &body[..]).is_ok(),
+                "residual {index}: the buffered parse accepts"
+            );
+            for size in [usize::MAX, 1, 3, 7, 64] {
+                let mut chunks = Chunks { body, size, at: 0 };
+                assert!(
+                    helm(&mut chunks).is_err(),
+                    "residual {index} at chunk {size}: the walk fails the document"
+                );
+            }
+        }
     }
 
     /// A deterministic PRNG, so a failing case replays from its seed.
@@ -2079,6 +2064,70 @@ entries: {{}}
         report(failures);
     }
 
+    /// What the walk still holds for anchors once the stream ends: the
+    /// shared buffer's events and their scalars.
+    fn retained(body: &[u8]) -> usize {
+        let mut body = body;
+        let mut walk = Walk::new(&mut body);
+        while let Ok(event) = walk.take() {
+            if matches!(event, Ev::StreamEnd) {
+                break;
+            }
+        }
+        walk.buffer
+            .iter()
+            .map(|event| match event {
+                Ev::Scalar(text, _, tag) => {
+                    size_of::<Ev>() + text.len() + tag.as_ref().map_or(0, String::len)
+                }
+                _ => size_of::<Ev>(),
+            })
+            .sum()
+    }
+
+    /// Anchored content is stored once however deeply the anchors nest:
+    /// each recording is a span into the buffer every open recording
+    /// shares, so a scalar inside 128 nested anchors — and inside an
+    /// anchor holding many anchored siblings — is kept once, not once
+    /// per enclosing span. Both shapes must agree with the oracle, and
+    /// what the walk retains for anchors stays within a small factor of
+    /// the input.
+    #[test]
+    fn nested_anchors_share_one_recording() {
+        let scalar = "x".repeat(1 << 20);
+        // 128 anchors each wrapping the next, at serde's recursion
+        // budget, around a large scalar — then one used through an alias.
+        let mut nested = String::from("x: &a1 [");
+        for n in 2..=MAX_NODE_DEPTH {
+            nested.push_str(&format!("&a{n} ["));
+        }
+        nested.push('"');
+        nested.push_str(&scalar);
+        nested.push('"');
+        nested.push_str(&"]".repeat(MAX_NODE_DEPTH));
+        nested.push_str("\nentries: {c: [{version: 1.0, sources: *a64}]}\n");
+        // One big anchor holding many anchored siblings, each a large
+        // scalar.
+        let mut siblings = String::from("x: &big [");
+        for n in 0..64 {
+            siblings.push_str(&format!("&s{n} [\"{}\"], ", "y".repeat(1 << 14)));
+        }
+        siblings.push_str("null]\nentries: {c: [{version: 1.0, sources: *s32}]}\n");
+
+        let mut failures = Vec::new();
+        check(&mut failures, nested.as_bytes(), "nested anchors");
+        check(&mut failures, siblings.as_bytes(), "sibling anchors");
+        report(failures);
+        for (case, body) in [("nested", &nested), ("siblings", &siblings)] {
+            let retained = retained(body.as_bytes());
+            assert!(
+                retained <= body.len() * 2,
+                "{case}: retained {retained} bytes for a {}-byte body",
+                body.len()
+            );
+        }
+    }
+
     /// Truncated and corrupted bodies still get a document answer: the
     /// parser's own panics are contained as a failed document, and the
     /// oracle agrees which side each one lands on.
@@ -2124,9 +2173,16 @@ entries: {{}}
     /// absolute ceiling on replayed events is `REPLAY_LIMIT`. A document
     /// serde accepts can still pass the ceiling: a small anchor used
     /// enough times stays under serde's bound yet exhausts the fixed one,
-    /// and there the walk fails where serde would not. This is the one
-    /// residual divergence, fail-closed and adversarial-only: an honest
-    /// index does not alias.
+    /// and there the walk fails where serde would not. That is one of
+    /// the two residual divergences, both fail-closed and not shapes an
+    /// honest index writes:
+    /// - the replay cap above: a document serde accepts can exhaust
+    ///   `REPLAY_LIMIT` while staying under serde's per-event bound;
+    /// - a tag immediately followed by `,` in a flow collection —
+    ///   `other: [!x, a]`, `{version: !x, digest: d}` — where C libyaml
+    ///   emits the Tag token but libyaml-safer's scanner panics, so the
+    ///   buffered parse accepts and `helm()`'s catch_unwind fails the
+    ///   document (asserted in the hand table's residuals).
     #[test]
     fn replay_work_past_the_cap_fails_closed() {
         // `[{k: v}]` replays six events per use; enough uses pass
