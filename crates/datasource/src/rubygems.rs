@@ -29,7 +29,7 @@ fn versions(
         .map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const RUBYGEMS_VERSIONS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("rubygems-versions", versions);
+    patchula_http::Derived::new("rubygems-versions", 1, versions);
 
 impl Client {
     pub(crate) async fn rubygems(&self, package: &str) -> Result<Catalog> {

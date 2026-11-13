@@ -248,10 +248,6 @@ pub trait RegistryRules: Send + Sync + std::fmt::Debug {
 pub struct NoRules;
 impl RegistryRules for NoRules {}
 
-/// This build's version, which every derived representation key carries so a
-/// release never reads bodies another release's code derived.
-const BUILD: &str = env!("CARGO_PKG_VERSION");
-
 const fn plain(name: &str) -> bool {
     let bytes = name.as_bytes();
     if bytes.is_empty() {
@@ -259,7 +255,7 @@ const fn plain(name: &str) -> bool {
     }
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'+' {
+        if matches!(bytes[index], b'@' | b'+') {
             return false;
         }
         index += 1;
@@ -267,22 +263,25 @@ const fn plain(name: &str) -> bool {
     true
 }
 
-/// The cache `representation` for a locally derived body: `"{name}+{build}"`.
-/// `+` is the build's separator, so a name never contains one.
-pub fn representation(name: &str) -> String {
-    debug_assert!(plain(name), "a representation name has no +");
-    format!("{name}+{BUILD}")
+/// The cache `representation` for a locally derived body: `"{name}@v{version}"`.
+/// `@v` starts the version, so a name never contains `@` or `+`.
+pub fn representation(name: &str, version: u32) -> String {
+    debug_assert!(plain(name), "a representation name has no @ or +");
+    format!("{name}@v{version}")
 }
 
 /// A body the client derives from a fetched document and caches under its
-/// own representation. `name` is stable across builds; the build suffix does
-/// the invalidating. The function reads the document as `io::Read`, so a
-/// streamed body never has to be held whole.
+/// own representation. `version` is the transform's own version: bump it when
+/// the compaction code changes what bytes it produces, never for a release;
+/// `tests/derived-versions.tsv` guards the pairing. The function reads the
+/// document as `io::Read`, so a streamed body never has to be held whole.
 pub struct Derived<E> {
     pub name: &'static str,
+    pub version: u32,
     pub derive: fn(&mut dyn std::io::Read) -> std::result::Result<Vec<u8>, E>,
 }
-// A derived spec is a name and a function pointer; `E` need not be Clone.
+// A derived spec is a name, a version and a function pointer; `E` need not
+// be Clone.
 impl<E> Clone for Derived<E> {
     fn clone(&self) -> Self {
         *self
@@ -290,18 +289,23 @@ impl<E> Clone for Derived<E> {
 }
 impl<E> Copy for Derived<E> {}
 impl<E> Derived<E> {
-    /// Names must leave `+` to the build suffix, checked here like
+    /// Names must leave `@` to the version, checked here like
     /// `state_namespace`'s `plain` check.
     pub const fn new(
         name: &'static str,
+        version: u32,
         derive: fn(&mut dyn std::io::Read) -> std::result::Result<Vec<u8>, E>,
     ) -> Self {
-        assert!(plain(name), "a derived name is nonempty and has no +");
-        Self { name, derive }
+        assert!(plain(name), "a derived name is nonempty and has no @ or +");
+        Self {
+            name,
+            version,
+            derive,
+        }
     }
     /// The cache `representation` this derived body is stored under.
     pub fn representation(&self) -> String {
-        representation(self.name)
+        representation(self.name, self.version)
     }
 }
 
@@ -551,7 +555,10 @@ impl Cached {
             "registry:{method}:{}:{}:{url}\n{accept}\n{}:{}",
             token.is_some(),
             token.is_some_and(|t| t.account),
-            derived.map_or("", |derived| derived.name),
+            derived
+                .map(|derived| derived.representation())
+                .as_deref()
+                .unwrap_or(""),
             self.revalidating
         );
         // Boxed: the fetch future is large and would otherwise sit inline in
@@ -647,7 +654,11 @@ impl Cached {
         accept: &str,
         derived: &Derived<Error>,
     ) -> Result<Response, Error> {
-        let key = format!("{url}\n{accept}\n{}:{}", derived.name, self.revalidating);
+        let key = format!(
+            "{url}\n{accept}\n{}:{}",
+            derived.representation(),
+            self.revalidating
+        );
         // Coalesce overlapping callers even when upstream requires revalidation.
         // A later sequential call still observes normal HTTP freshness rules.
         // Boxed: the fetch future is large and would otherwise sit inline in
@@ -2002,7 +2013,7 @@ mod tests {
                 .get_derived(
                     "https://a.org/doc",
                     "text/plain",
-                    &Derived::new("same", same),
+                    &Derived::new("same", 1, same),
                 )
                 .await
         };
@@ -2052,10 +2063,107 @@ mod tests {
         fn cloned<T: Clone>(value: &T) -> T {
             value.clone()
         }
-        let derived = Derived::new("same", derive_same);
+        let derived = Derived::new("same", 1, derive_same);
         let cloned = cloned(&derived);
         assert_eq!(cloned.name, "same");
-        assert_eq!(cloned.representation(), format!("same+{BUILD}"));
+        assert_eq!(cloned.representation(), "same@v1");
+    }
+
+    /// An entry stored under `doc@v1` — as any build writing that version
+    /// would — is read by a later build whose transform kept version 1. A
+    /// bump misses, and an entry keyed by the retired `name+build` scheme is
+    /// never read again.
+    #[tokio::test]
+    async fn a_derived_body_is_versioned_by_its_code_not_the_release() {
+        fn same(body: &mut dyn std::io::Read) -> Result<Vec<u8>, Error> {
+            let mut bytes = Vec::new();
+            body.read_to_end(&mut bytes).unwrap();
+            Ok(bytes)
+        }
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let url = "https://a.org/doc";
+        let stored = |format: &str| {
+            let key = HttpKey::new(
+                "GET",
+                url,
+                BTreeMap::from([("accept".into(), "text/plain".into())]),
+            )
+            .unwrap()
+            .representation(format);
+            let now = conditional::unix_now();
+            let cache = cache.clone();
+            async move {
+                cache
+                    .http_put(
+                        &key,
+                        &HttpEntry {
+                            status: 200,
+                            etag: None,
+                            last_modified: None,
+                            headers: BTreeMap::new(),
+                            body: b"stored".to_vec(),
+                            fetched_at: now,
+                            expires_at: Some(now + 3600),
+                            cache_control: None,
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        };
+        // A "release A" entry: the same representation this build computes.
+        stored(&representation("doc", 1)).await;
+        let transport = Arc::new(Count(std::sync::atomic::AtomicUsize::new(0)));
+        let client =
+            Cached::with_options(cache.clone(), transport.clone(), Default::default()).unwrap();
+        let doc = Derived::new("doc", 1, same);
+        assert_eq!(
+            client
+                .get_derived(url, "text/plain", &doc)
+                .await
+                .unwrap()
+                .body,
+            b"stored",
+            "a later build reads an unchanged version"
+        );
+        assert_eq!(transport.0.load(Ordering::Relaxed), 0);
+        // A bumped version is another representation: it misses and fetches.
+        let bumped = Derived::new("doc", 2, same);
+        assert_eq!(
+            client
+                .get_derived(url, "text/plain", &bumped)
+                .await
+                .unwrap()
+                .body,
+            b"new"
+        );
+        assert_eq!(transport.0.load(Ordering::Relaxed), 1);
+        // The retired `name+build` scheme is never looked up again: with
+        // only a `doc+0.0.0` entry left, a version-1 read fetches.
+        for format in [representation("doc", 1), representation("doc", 2)] {
+            cache
+                .http_remove(
+                    &HttpKey::new(
+                        "GET",
+                        url,
+                        BTreeMap::from([("accept".into(), "text/plain".into())]),
+                    )
+                    .unwrap()
+                    .representation(&format),
+                )
+                .await
+                .unwrap();
+        }
+        stored("doc+0.0.0").await;
+        assert_eq!(
+            client
+                .get_derived(url, "text/plain", &doc)
+                .await
+                .unwrap()
+                .body,
+            b"new"
+        );
+        assert_eq!(transport.0.load(Ordering::Relaxed), 2);
     }
 
     struct Always {

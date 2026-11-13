@@ -59,7 +59,7 @@ pub(super) fn npm(body: &mut dyn std::io::Read) -> Result<Vec<u8>, CacheError> {
     sort(&mut catalog.versions, Ecosystem::Npm);
     encode(catalog)
 }
-pub(crate) const NPM_CATALOG: Derived<CacheError> = Derived::new("npm-catalog-v2", npm);
+pub(crate) const NPM_CATALOG: Derived<CacheError> = Derived::new("npm-catalog-v2", 1, npm);
 
 #[derive(Deserialize)]
 struct CrateVersion {
@@ -87,7 +87,7 @@ pub(super) fn crates(body: &mut dyn std::io::Read) -> Result<Vec<u8>, CacheError
     catalog.versions.reverse(); // Sparse index is append-only publication order.
     encode(catalog)
 }
-pub(crate) const CRATES_CATALOG: Derived<CacheError> = Derived::new("crates-catalog-v2", crates);
+pub(crate) const CRATES_CATALOG: Derived<CacheError> = Derived::new("crates-catalog-v2", 1, crates);
 
 #[derive(Deserialize)]
 struct Pypi {
@@ -121,7 +121,7 @@ pub(super) fn pypi(body: &mut dyn std::io::Read) -> Result<Vec<u8>, CacheError> 
     sort(&mut catalog.versions, Ecosystem::Pep440);
     encode(catalog)
 }
-pub(crate) const PYPI_CATALOG: Derived<CacheError> = Derived::new("pypi-catalog-v2", pypi);
+pub(crate) const PYPI_CATALOG: Derived<CacheError> = Derived::new("pypi-catalog-v2", 1, pypi);
 
 #[cfg(test)]
 mod tests {

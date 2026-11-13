@@ -1,6 +1,5 @@
 //! Where a package's upstream lives: the repository release notes are read
 //! from, and what a Helm chart's metadata says about its sources and changes.
-use crate::truncate;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::LazyLock};
@@ -267,6 +266,15 @@ pub struct MirrorEntry {
     #[serde(default)]
     pub prerelease: bool,
 }
+/// The longest prefix of `text` within `limit` bytes that ends on a char
+/// boundary.
+pub fn truncate(text: &str, limit: usize) -> &str {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
 
 #[cfg(test)]
 mod tests {
@@ -314,5 +322,16 @@ mod tests {
         // Unsafe owner or repository names are refused.
         assert!(Repository::from_url("https://github.com/o/").is_none());
         assert!(Repository::from_url("https://github.com/.").is_none());
+    }
+
+    /// `truncate` never splits a character: the cut backs up to a boundary.
+    #[test]
+    fn truncate_cuts_on_a_character_boundary() {
+        assert_eq!(truncate("abcdef", 3), "abc");
+        // "aéb" is four bytes; a cut inside `é` backs up to before it.
+        assert_eq!(truncate("aéb", 2), "a");
+        assert_eq!(truncate("aéb", 3), "aé");
+        assert_eq!(truncate("aéb", 4), "aéb");
+        assert_eq!(truncate("short", 100), "short");
     }
 }

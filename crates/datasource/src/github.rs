@@ -55,7 +55,7 @@ fn compact_release_head(
     >(body)?)
 }
 pub(crate) const GITHUB_RELEASE_HEAD: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("github-release-head", compact_release_head);
+    patchula_http::Derived::new("github-release-head", 1, compact_release_head);
 
 /// The newest release's identity on a release source; a change refetches
 /// history. `None` records a source with no releases.

@@ -1,6 +1,7 @@
 //! Opt-in recording, fail-closed offline replay, and secret scanning for tests.
 #![forbid(unsafe_code)]
 
+pub mod derived;
 pub mod github;
 mod mise;
 mod redact;

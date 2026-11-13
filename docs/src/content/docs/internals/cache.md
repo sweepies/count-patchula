@@ -65,10 +65,17 @@ Derivation runs on `spawn_blocking`; a successful derived response streams
 straight into its derive worker, so the raw document is never held whole.
 The request's host permit is held until its body is read, so in-flight bodies
 stay inside the host limit. Reads that arrive already buffered derive under a
-four-job limit. A 304 updates only metadata and reuses the compact body. A derived representation is named once
-and suffixed with the HTTP crate's build version, so a change to the
-compaction code re-derives on the next release; raw and derived namespaces
-never share validators.
+four-job limit. A 304 updates only metadata and reuses the compact body. A
+derived representation is `name@v{VERSION}`, where the version belongs to the
+transform's own code rather than the release: a new release re-reads every
+derived body whose compaction code did not change, and a change to one
+transform misses only that representation. `tests/derived-versions.tsv`
+guards the contract — it hashes the source files that produce each
+representation's bytes, and the owning crate's parity test fails when the
+code moves without a version bump; the maintenance step is to bump the
+`Derived`'s version and update the row in the same commit. Entries written
+under the retired `name+build` scheme are never read again and are deleted
+when the cache opens; raw and derived namespaces never share validators.
 
 The default 256 MiB budget counts compressed HTTP body bytes. An access clock
 approximates LRU and evicts whole HTTP rows, validators included, until the

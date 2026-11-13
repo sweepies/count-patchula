@@ -69,23 +69,23 @@ pub(super) fn compact_listing(
     serde_json::to_vec(&listing)
 }
 pub(crate) const NOTES_ADAPTER_LISTING: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("notes-adapter-listing", compact_listing);
+    patchula_http::Derived::new("notes-adapter-listing", 1, compact_listing);
 
 pub(super) fn compact_sgml(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(&parse_release_sgml(&blob_text(body)?))
+    serde_json::to_vec(&parse_release_sgml(&changelog::blob_text(body)?))
 }
 pub(crate) const PARSED_POSTGRES_SGML: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("parsed-postgres-sgml", compact_sgml);
+    patchula_http::Derived::new("parsed-postgres-sgml", 1, compact_sgml);
 
 pub(super) fn compact_history(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(&parse_go_history(&blob_text(body)?))
+    serde_json::to_vec(&parse_go_history(&changelog::blob_text(body)?))
 }
 pub(crate) const PARSED_GO_HISTORY: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("parsed-go-history", compact_history);
+    patchula_http::Derived::new("parsed-go-history", 1, compact_history);
 
 impl Client {
     /// Adapter notes for the requested range, and whether the adapter covered

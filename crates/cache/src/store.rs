@@ -66,6 +66,17 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
          AND substr(namespace, instr(namespace, '+') + 1) != ?1",
         [crate::BUILD],
     )?;
+    // A derived body under the old scheme — a representation ending
+    // `+<build>` — is never read again either. `+<build>` sits before the
+    // value's closing quote; `+<digit>` elsewhere in the key is not one.
+    transaction.execute(
+        "DELETE FROM http \
+         WHERE instr(key, '\"representation\":\"') > 0 \
+           AND instr(substr(key, instr(key, '\"representation\":\"') + 18), '+') > 0 \
+           AND instr(substr(key, instr(key, '\"representation\":\"') + 18), '+') \
+             < instr(substr(key, instr(key, '\"representation\":\"') + 18), '\"')",
+        [],
+    )?;
     transaction.commit()?;
     Ok(conn)
 }

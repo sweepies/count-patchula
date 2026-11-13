@@ -1,5 +1,26 @@
 use super::*;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{collections::BTreeMap, sync::LazyLock};
+
+/// Decode a GitHub blob response into its text content.
+pub(super) fn blob_text(
+    body: &mut dyn std::io::Read,
+) -> std::result::Result<String, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct Blob {
+        content: String,
+    }
+    let blob: Blob = patchula_http::conditional::json_document(body)?;
+    let decoded = STANDARD
+        .decode(
+            blob.content
+                .bytes()
+                .filter(|byte| !byte.is_ascii_whitespace())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(serde::de::Error::custom)?;
+    String::from_utf8(decoded).map_err(serde::de::Error::custom)
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Section {
@@ -159,7 +180,7 @@ pub(super) fn compact_tree(
     serde_json::to_vec(&tree)
 }
 pub(crate) const NOTES_CHANGELOG_DIRECTORY: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("notes-changelog-directory", compact_tree);
+    patchula_http::Derived::new("notes-changelog-directory", 1, compact_tree);
 pub(super) fn is_changelog(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_uppercase();
     let stem = name.split('.').next().unwrap_or(&name);
@@ -224,4 +245,4 @@ pub(super) fn compact_blob(
     serde_json::to_vec(&parse_changelog(&blob_text(body)?))
 }
 pub(crate) const PARSED_CHANGELOG: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("parsed-changelog", compact_blob);
+    patchula_http::Derived::new("parsed-changelog", 1, compact_blob);
