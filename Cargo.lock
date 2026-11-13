@@ -1826,6 +1826,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "libyaml-safer"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d325b93a27b93b93b7cf4a57d681c5b6a4d8f910e695db989c055eb1e4f657df"
+
+[[package]]
 name = "line-clipping"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2305,6 +2311,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "graphql_client",
+ "libyaml-safer",
  "patchula-cache",
  "patchula-config",
  "patchula-github",
@@ -2323,7 +2330,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "yaml-rust2",
 ]
 
 [[package]]

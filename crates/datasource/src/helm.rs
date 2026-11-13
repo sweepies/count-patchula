@@ -1,132 +1,21 @@
-//! A Helm repository's `index.yaml`, read as it streams: yaml-rust2's event
-//! parser pulls the document's characters out of the body, and a walk keeps
-//! only the fields each chart entry uses — never the whole index. The walk
-//! mirrors how `serde_yaml_ng` would deserialize the same structure: plain
-//! scalars are resolved under its schema, aliases replay their anchored
-//! nodes where serde would follow them, and anything it would reject — bad
+//! A Helm repository's `index.yaml`, read as it streams: libyaml's own
+//! events, from `libyaml-safer` — the safe-Rust port of the unsafe-libyaml
+//! `serde_yaml_ng` runs — come out of the body, and a walk keeps only the
+//! fields each chart entry uses, never the whole index. The walk mirrors
+//! how `serde_yaml_ng` would deserialize the same structure: plain scalars
+//! are resolved under its schema, aliases replay their anchored nodes
+//! where serde would follow them, and anything it would reject — bad
 //! UTF-8, NUL, too much nesting in a kept value — is a document error.
+//! The parser is told UTF-8, the encoding serde's parser forces, so
+//! UTF-16 and other encodings fail as undecodable bytes.
 use crate::{Ecosystem, HelmChart, Version, sort, upstream};
+use libyaml_safer::{Encoding, EventData, Parser, ScalarStyle};
 use patchula_http::{CacheError, Derived};
 use std::{
-    cell::{Cell, RefCell},
     collections::{BTreeMap, VecDeque},
-    io::Read,
-    rc::Rc,
+    io::{BufReader, Read},
+    panic::{AssertUnwindSafe, catch_unwind},
 };
-use yaml_rust2::{
-    parser::{Event, Parser, Tag},
-    scanner::{Marker, TScalarStyle},
-};
-
-/// The document's characters, decoded as they are read: UTF-8 only, the way
-/// serde_yaml_ng's parser reads its input — UTF-16 and other encodings fail
-/// as undecodable bytes. A U+FEFF at the start of a line reads as a blank,
-/// the byte-order mark libyaml skips between tokens occupying its column.
-/// An io or decoding error poisons the rest of the stream.
-struct Chars<'a> {
-    body: std::io::BufReader<&'a mut dyn Read>,
-    /// The next character starts a line: libyaml skips one U+FEFF there.
-    line_start: bool,
-    /// Every character emitted so far, by index — the walk looks back
-    /// through it to tell an implicit empty node from a `?`-marked one.
-    seen: Rc<RefCell<Vec<char>>>,
-    failed: Rc<Cell<bool>>,
-}
-impl Iterator for Chars<'_> {
-    type Item = char;
-    fn next(&mut self) -> Option<char> {
-        if self.failed.get() {
-            return None;
-        }
-        match self.utf8() {
-            // libyaml's scanner skips a BOM found at column zero, but the
-            // character still occupies the column: a line that opens with a
-            // BOM indents one step past where it would start without one.
-            // Emitting a blank reproduces that column accounting while the
-            // scanner skips it like any other whitespace.
-            Some('\u{FEFF}') if self.line_start => {
-                self.seen.borrow_mut().push(' ');
-                self.line_start = false;
-                Some(' ')
-            }
-            Some(c) => {
-                self.seen.borrow_mut().push(c);
-                self.line_start = matches!(c, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}');
-                Some(c)
-            }
-            None => None,
-        }
-    }
-}
-impl Chars<'_> {
-    fn byte(&mut self) -> Option<u8> {
-        let mut byte = [0];
-        match self.body.read(&mut byte) {
-            Ok(1) => Some(byte[0]),
-            Ok(_) => None,
-            Err(_) => {
-                self.failed.set(true);
-                None
-            }
-        }
-    }
-    /// One UTF-8 character, or failure: libyaml rejects NUL and the other
-    /// C0/C1 controls, DEL, and the U+FFFE/U+FFFF noncharacters, where
-    /// yaml-rust2 would read them as content or end-of-input.
-    fn utf8(&mut self) -> Option<char> {
-        let lead = self.byte()?;
-        let length = match lead {
-            0x00..=0x7F => {
-                if !matches!(lead, 0x09 | 0x0A | 0x0D | 0x20..=0x7E) {
-                    self.failed.set(true);
-                    return None;
-                }
-                return Some(lead as char);
-            }
-            0xC0..=0xDF => 2,
-            0xE0..=0xEF => 3,
-            0xF0..=0xF7 => 4,
-            _ => {
-                self.failed.set(true);
-                return None;
-            }
-        };
-        let mut bytes = vec![lead];
-        for _ in 1..length {
-            match self.byte() {
-                Some(byte) => bytes.push(byte),
-                None => {
-                    self.failed.set(true);
-                    return None;
-                }
-            }
-        }
-        match std::str::from_utf8(&bytes) {
-            Ok(text) => match text.chars().next() {
-                Some('\u{86}'..='\u{9F}' | '\u{FFFE}' | '\u{FFFF}') => {
-                    self.failed.set(true);
-                    None
-                }
-                some => some,
-            },
-            Err(_) => {
-                self.failed.set(true);
-                None
-            }
-        }
-    }
-}
-
-/// The tag serde_yaml_ng sees for one of yaml-rust2's: `!!x` resolves to the
-/// yaml.org tag, `!x` stays local, and an explicit `%TAG` handle keeps its
-/// resolved form — which never starts `!`.
-fn serde_tag(tag: &Tag) -> String {
-    match tag.handle.as_str() {
-        "!!" => format!("tag:yaml.org,2002:{}", tag.suffix),
-        "!" => format!("!{}", tag.suffix),
-        handle => format!("{handle}{}", tag.suffix),
-    }
-}
 
 /// A document's node as the walk consumes it: the structure serde would
 /// see, resolved scalars excepted. Anchored nodes are kept whole so an
@@ -134,21 +23,25 @@ fn serde_tag(tag: &Tag) -> String {
 /// resolved when the replay reaches them.
 #[derive(Clone)]
 enum Node {
-    Scalar(String, TScalarStyle, Option<String>),
+    Scalar(String, ScalarStyle, Option<String>),
     Seq(Option<String>, Vec<Node>),
     Map(Option<String>, Vec<(Node, Node)>),
     Alias(usize),
+    /// A subtree recorded past serde's recursion budget: it can never be
+    /// deserialized anywhere, so replaying it into a kept position fails
+    /// the way serde's remaining-depth check would, while recording it —
+    /// and skipping the anchored value nobody aliases — stays cheap.
+    /// Capping the tree here keeps clone, replay and drop shallow.
+    TooDeep,
 }
 
 /// What an event is to the walk: aliases stay aliases until a position
 /// that deserializes them asks for their node — serde's `ignore_any` just
-/// steps over them.
+/// steps over them. The alias carries the anchor's binding id, resolved
+/// where the event is read, the way serde's loader stores each alias's
+/// position.
 enum Ev {
-    Scalar(String, TScalarStyle, Option<String>),
-    /// An empty plain scalar no `?` stands for — libyaml makes these in
-    /// value positions (`key:` is `key: null`), and errors where one turns
-    /// up as a key.
-    EmptyScalar,
+    Scalar(String, ScalarStyle, Option<String>),
     SeqStart(Option<String>),
     SeqEnd,
     MapStart(Option<String>),
@@ -161,7 +54,11 @@ enum Ev {
 }
 
 /// Events still being recorded under an anchor: unanchored children build
-/// the same tree.
+/// the same tree. A recording nested deeper than serde's recursion budget
+/// (128 collections under the root) ends as `Node::TooDeep`: serde could
+/// never deserialize it anywhere, so nothing deeper needs keeping.
+const MAX_NODE_DEPTH: usize = 128;
+
 enum Partial {
     Seq(Option<String>, Vec<Node>),
     Map(Option<String>, Vec<(Node, Node)>, Option<Node>),
@@ -172,35 +69,28 @@ struct Recording {
 }
 impl Recording {
     /// Feeds one event into the tree; a completed recording reports its
-    /// anchor and node. An implicit empty scalar where the map wants a key
-    /// is a libyaml parse error.
-    fn feed(&mut self, event: &Ev) -> Result<Option<(usize, Node)>, ()> {
+    /// anchor and node.
+    fn feed(&mut self, event: &Ev) -> Option<(usize, Node)> {
         let built = match event {
             Ev::Scalar(text, style, tag) => Node::Scalar(text.clone(), *style, tag.clone()),
-            Ev::EmptyScalar => {
-                if matches!(self.stack.last(), Some(Partial::Map(_, _, None))) {
-                    return Err(());
-                }
-                Node::Scalar(String::new(), TScalarStyle::Plain, None)
-            }
             Ev::SeqStart(tag) => {
                 self.stack.push(Partial::Seq(tag.clone(), Vec::new()));
-                return Ok(None);
+                return self.too_deep();
             }
             Ev::MapStart(tag) => {
                 self.stack.push(Partial::Map(tag.clone(), Vec::new(), None));
-                return Ok(None);
+                return self.too_deep();
             }
             Ev::SeqEnd => match self.stack.pop() {
                 Some(Partial::Seq(tag, items)) => Node::Seq(tag, items),
-                _ => return Ok(None),
+                _ => return None,
             },
             Ev::MapEnd => match self.stack.pop() {
                 Some(Partial::Map(tag, pairs, _)) => Node::Map(tag, pairs),
-                _ => return Ok(None),
+                _ => return None,
             },
             Ev::Alias(anchor) => Node::Alias(*anchor),
-            _ => return Ok(None),
+            _ => return None,
         };
         match self.stack.last_mut() {
             Some(Partial::Seq(_, items)) => items.push(built),
@@ -210,67 +100,97 @@ impl Recording {
                     pairs.push((key, built));
                 }
             }
-            None => return Ok(Some((self.anchor, built))),
+            None => return Some((self.anchor, built)),
         }
-        Ok(None)
+        None
+    }
+    /// Past serde's recursion budget the node can never deserialize:
+    /// finish the recording as `Node::TooDeep`, so the tree stays shallow
+    /// for clone, replay and drop. Its remaining events still belong to
+    /// the recordings above it; this one is simply done.
+    fn too_deep(&mut self) -> Option<(usize, Node)> {
+        if self.stack.len() > MAX_NODE_DEPTH {
+            self.stack.clear();
+            return Some((self.anchor, Node::TooDeep));
+        }
+        None
     }
 }
 
-/// The pull side of the walk: parser events in order, with anchored nodes
-/// recorded as they close and aliases resolved where serde's deserializer
-/// would follow them.
+/// The pull side of the walk: libyaml's events in order, with anchored
+/// nodes recorded as they close and aliases resolved where serde's
+/// deserializer would follow them.
 struct Walk<'a> {
-    parser: Parser<Chars<'a>>,
-    pending: VecDeque<Ev>,
+    parser: Parser<BufReader<&'a mut dyn Read>>,
+    /// Replayed alias work as a stack of frames: serde's `jump` gives each
+    /// alias its own cursor into the anchored events, so a nested alias's
+    /// replay runs ahead of the frame below it, and an exhausted frame
+    /// pops back to the caller's events.
+    pending: Vec<VecDeque<Ev>>,
     recording: Vec<Recording>,
+    /// Anchor name to its latest binding — serde's loader `anchors` map,
+    /// where a redefined name shadows the earlier node — and each
+    /// binding's completed node, serde's `aliases` id-to-position map.
+    bindings: BTreeMap<String, usize>,
     anchors: BTreeMap<usize, Node>,
-    /// Parser events pulled so far; caps alias jumps like serde's
-    /// `jumpcount`, which fails past a hundred jumps per event.
+    next_binding: usize,
+    /// Content events pulled so far: what serde's `document.events` would
+    /// hold (scalars, aliases and the four collection events; the stream
+    /// and document markers are not in it). serde's alias bound is a
+    /// hundred jumps per document event — checked when the count is
+    /// final.
     events: usize,
+    /// Alias resolutions — serde's `jumpcount`.
     jumps: usize,
-    /// The characters the parser has read since `base`: only the previous
-    /// token's wake is ever consulted, so the buffer stays a token wide.
-    seen: Rc<RefCell<Vec<char>>>,
-    /// Where `seen` starts in the parser's stream.
-    base: usize,
-    failed: Rc<Cell<bool>>,
-    /// Open flow collections the scanner is inside: `{` and `[` count, a
-    /// block collection does not. Needed where libyaml's plain-scalar rules
-    /// differ inside flow — a `:` that precedes a flow indicator there is a
-    /// scan error, where yaml-rust2 happily splits a key off.
-    flow: usize,
-    /// Start of the previous real parser token in `seen`, and whether it was
-    /// a plain scalar — a `:` directly in its wake is part of its scan.
-    previous: (usize, bool),
+    /// Events pushed through alias replays. serde's own bound on that
+    /// work scales with the whole document's event count — a bound a
+    /// streaming walk can only check at stream end — so replay work is
+    /// capped at a fixed limit instead, `REPLAY_LIMIT`: a document serde
+    /// accepts can still exceed it (a small anchor replayed past it stays
+    /// under serde's hundred-jumps-per-event bound), and there the walk
+    /// fails where serde would not. Fail closed; only an alias bomb
+    /// reaches it — an index never aliases.
+    replayed: usize,
 }
+
+/// The most events alias replays may push for one document: generous
+/// against any honest index, short of what an alias bomb can do to the
+/// buffered parse.
+const REPLAY_LIMIT: usize = 1 << 20;
+
 impl<'a> Walk<'a> {
     fn new(body: &'a mut dyn Read) -> Self {
-        let failed = Rc::new(Cell::new(false));
-        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut parser = Parser::new();
+        parser.set_input(BufReader::new(body));
+        // serde_yaml_ng's parser forces UTF-8 over whatever the bytes
+        // claim, so UTF-16 — BOM'd or not — fails as undecodable input.
+        parser.set_encoding(Encoding::Utf8);
         Self {
-            parser: Parser::new(Chars {
-                body: std::io::BufReader::new(body),
-                line_start: true,
-                seen: seen.clone(),
-                failed: failed.clone(),
-            }),
-            pending: VecDeque::new(),
+            parser,
+            pending: Vec::new(),
             recording: Vec::new(),
+            bindings: BTreeMap::new(),
             anchors: BTreeMap::new(),
+            next_binding: 0,
             events: 0,
             jumps: 0,
-            seen,
-            base: 0,
-            failed,
-            flow: 0,
-            previous: (0, false),
+            replayed: 0,
         }
     }
+    /// Binds an anchor name to a fresh binding id, the way serde's loader
+    /// registers each anchored node's position — before its content is
+    /// read, so an alias inside it names the node still being recorded.
+    fn bind_anchor(&mut self, name: String) -> usize {
+        let id = self.next_binding;
+        self.next_binding += 1;
+        self.bindings.insert(name, id);
+        id
+    }
     /// Records the event in every open anchored tree.
-    fn record(&mut self, event: &Ev) -> Result<(), ()> {
+    fn record(&mut self, event: &Ev) {
         let mut done = Vec::new();
         for recording in &mut self.recording {
-            if let Some(built) = recording.feed(event)? {
+            if let Some(built) = recording.feed(event) {
                 done.push(built);
             }
         }
@@ -279,167 +199,64 @@ impl<'a> Walk<'a> {
         for (anchor, node) in done {
             self.anchors.insert(anchor, node);
         }
-        Ok(())
     }
-    /// Scans the wake of a plain scalar the way libyaml continues one:
-    /// buffered whitespace and breaks keep it going until a token character
-    /// ends it, a `:` before a blank or break makes a value of it, and a `:`
-    /// before `, ? [ ] { }` fails the scan. Returns true on that failure.
-    fn colon_in_flow(&self, from: usize) -> bool {
-        let seen = self.seen.borrow();
-        let mut i = from.saturating_sub(self.base);
-        while i < seen.len() {
-            match seen[i] {
-                ':' => match seen.get(i + 1) {
-                    Some(',' | '?' | '[' | ']' | '{' | '}') => return true,
-                    Some(' ' | '\t' | '\r' | '\n' | '\u{85}' | '\u{2028}' | '\u{2029}') | None => {
-                        return false;
-                    }
-                    _ => i += 1,
-                },
-                ' ' | '\t' | '\r' | '\n' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
-                    i += 1;
-                    if let Some(c) = seen.get(i)
-                        && matches!(
-                            c,
-                            '&' | '*'
-                                | '!'
-                                | '\''
-                                | '"'
-                                | '#'
-                                | '?'
-                                | ','
-                                | '['
-                                | ']'
-                                | '{'
-                                | '}'
-                                | '|'
-                                | '>'
-                        )
-                    {
-                        return false;
-                    }
-                }
-                _ => i += 1,
-            }
-        }
-        false
-    }
-    /// Whether the empty node at `mark` followed a `?` — the only empty key
-    /// libyaml accepts.
-    fn explicit_empty(&self, mark: &Marker) -> bool {
-        let seen = self.seen.borrow();
-        let to = mark.index().saturating_sub(self.base).min(seen.len());
-        seen[..to]
-            .iter()
-            .rev()
-            .find(|c| !matches!(c, ' ' | '\t' | '\r' | '\n'))
-            == Some(&'?')
-    }
-    /// The events a kept node replays.
-    fn replay(node: &Node, into: &mut VecDeque<Ev>) {
-        match node {
-            Node::Scalar(text, style, tag) => {
-                into.push_back(Ev::Scalar(text.clone(), *style, tag.clone()))
-            }
-            Node::Alias(anchor) => into.push_back(Ev::Alias(*anchor)),
-            Node::Seq(tag, items) => {
-                into.push_back(Ev::SeqStart(tag.clone()));
-                for item in items {
-                    Self::replay(item, into);
-                }
-                into.push_back(Ev::SeqEnd);
-            }
-            Node::Map(tag, pairs) => {
-                into.push_back(Ev::MapStart(tag.clone()));
-                for (key, value) in pairs {
-                    Self::replay(key, into);
-                    Self::replay(value, into);
-                }
-                into.push_back(Ev::MapEnd);
-            }
-        }
-    }
-    /// The next event, or a document error: parse failures, plain scalars
-    /// libyaml could not have scanned, and end of stream alike.
+    /// The next event, or a document error: a parse failure, an alias to
+    /// an anchor never bound — serde's loader fails those no matter where
+    /// they sit — or serde's repetition bound, checked at stream end when
+    /// the document's event count is final.
     fn take(&mut self) -> Result<Ev, ()> {
-        if let Some(event) = self.pending.pop_front() {
-            return Ok(event);
-        }
-        if self.failed.get() {
-            return Err(());
-        }
-        let (event, mark) = self.parser.next_token().map_err(|_| ())?;
-        self.events += 1;
-        if self.failed.get() {
-            return Err(());
-        }
-        // A `:` the scanner met inside a flow collection while continuing a
-        // plain scalar is a libyaml error when a flow indicator follows it
-        // (`{a:{`, `{a:,`, `{a:?`): yaml-rust2 emits key and value instead.
-        if self.flow > 0 && self.previous.1 && self.colon_in_flow(self.previous.0) {
-            return Err(());
-        }
-        // Nothing before the earlier of the last two tokens' starts is read
-        // again — a token's mark can point back before the previous one's.
-        let low = self.previous.0.min(mark.index());
-        {
-            let mut seen = self.seen.borrow_mut();
-            // Marks run past the buffer's end at stream end, where the
-            // parser consumes sentinels `seen` never holds.
-            let cut = low.saturating_sub(self.base).min(seen.len());
-            if cut > 0 {
-                seen.drain(..cut);
+        while let Some(frame) = self.pending.last_mut() {
+            if let Some(event) = frame.pop_front() {
+                return Ok(event);
             }
-            self.base += cut;
+            self.pending.pop();
         }
-        // Count the collections the character stream itself opens and
-        // closes, so `flow` follows the scanner rather than the events.
-        match self
-            .seen
-            .borrow()
-            .get(mark.index().saturating_sub(self.base))
-        {
-            Some('{' | '[') => self.flow += 1,
-            Some('}' | ']') => self.flow = self.flow.saturating_sub(1),
-            _ => {}
-        }
-        self.previous = (
-            mark.index(),
-            matches!(&event, Event::Scalar(text, TScalarStyle::Plain, _, _) if !text.is_empty()),
-        );
-        let event = match event {
-            Event::Scalar(text, style, anchor, tag) => {
-                // A plain scalar can never open with `|` or `>`: in block
-                // context those are block scalar headers, and inside flow
-                // collections they fail the scan outright — yaml-rust2
-                // alone swallows them into a plain scalar.
-                if style == TScalarStyle::Plain && text.starts_with(['|', '>']) {
+        let event = match self.parser.parse() {
+            Ok(e) => e,
+            Err(_e) => return Err(()),
+        };
+        let event = match event.data {
+            EventData::StreamStart { .. } => Ev::StreamStart,
+            EventData::StreamEnd => {
+                if self.jumps > self.events * 100 {
                     return Err(());
                 }
-                let tag = tag.as_ref().map(serde_tag);
-                if anchor != 0 {
-                    self.anchors
-                        .insert(anchor, Node::Scalar(text.clone(), style, tag.clone()));
-                }
-                if style == TScalarStyle::Plain
-                    && text.is_empty()
-                    && tag.is_none()
-                    && !self.explicit_empty(&mark)
-                {
-                    Ev::EmptyScalar
-                } else {
-                    Ev::Scalar(text, style, tag)
-                }
+                Ev::StreamEnd
             }
-            Event::SequenceStart(anchor, tag) => {
-                let event = Ev::SeqStart(tag.as_ref().map(serde_tag));
-                if anchor != 0 {
+            EventData::DocumentStart { .. } => Ev::DocumentStart,
+            EventData::DocumentEnd { .. } => Ev::DocumentEnd,
+            EventData::Alias { anchor } => {
+                self.events += 1;
+                let Some(&id) = self.bindings.get(&anchor) else {
+                    return Err(());
+                };
+                Ev::Alias(id)
+            }
+            EventData::Scalar {
+                anchor,
+                tag,
+                value,
+                style,
+                ..
+            } => {
+                self.events += 1;
+                if let Some(name) = anchor {
+                    let id = self.bind_anchor(name);
+                    self.anchors
+                        .insert(id, Node::Scalar(value.clone(), style, tag.clone()));
+                }
+                Ev::Scalar(value, style, tag)
+            }
+            EventData::SequenceStart { anchor, tag, .. } => {
+                self.events += 1;
+                let event = Ev::SeqStart(tag);
+                if let Some(name) = anchor {
+                    let id = self.bind_anchor(name);
                     // The start belongs to any anchored tree still open
                     // before the anchor's own recording begins.
-                    self.record(&event)?;
+                    self.record(&event);
                     self.recording.push(Recording {
-                        anchor,
+                        anchor: id,
                         stack: vec![Partial::Seq(
                             match &event {
                                 Ev::SeqStart(tag) => tag.clone(),
@@ -452,12 +269,14 @@ impl<'a> Walk<'a> {
                 }
                 event
             }
-            Event::MappingStart(anchor, tag) => {
-                let event = Ev::MapStart(tag.as_ref().map(serde_tag));
-                if anchor != 0 {
-                    self.record(&event)?;
+            EventData::MappingStart { anchor, tag, .. } => {
+                self.events += 1;
+                let event = Ev::MapStart(tag);
+                if let Some(name) = anchor {
+                    let id = self.bind_anchor(name);
+                    self.record(&event);
                     self.recording.push(Recording {
-                        anchor,
+                        anchor: id,
                         stack: vec![Partial::Map(
                             match &event {
                                 Ev::MapStart(tag) => tag.clone(),
@@ -471,62 +290,94 @@ impl<'a> Walk<'a> {
                 }
                 event
             }
-            Event::SequenceEnd => Ev::SeqEnd,
-            Event::MappingEnd => Ev::MapEnd,
-            Event::Alias(id) => Ev::Alias(id),
-            Event::DocumentStart => Ev::DocumentStart,
-            Event::DocumentEnd => Ev::DocumentEnd,
-            Event::StreamStart => Ev::StreamStart,
-            Event::StreamEnd => Ev::StreamEnd,
-            Event::Nothing => return Err(()),
+            EventData::SequenceEnd => {
+                self.events += 1;
+                Ev::SeqEnd
+            }
+            EventData::MappingEnd => {
+                self.events += 1;
+                Ev::MapEnd
+            }
         };
-        self.record(&event)?;
+        self.record(&event);
         Ok(event)
     }
     /// The node an alias event names, replayed into `pending`: serde's
     /// jump to the anchor's events. An anchor still recording — an alias
-    /// to the node being read — is serde's repetition limit.
-    fn resolve(&mut self, event: Ev) -> Result<Ev, ()> {
-        let Ev::Alias(id) = event else {
-            return Ok(event);
-        };
-        self.jumps += 1;
-        if self.jumps > self.events * 100 {
+    /// to the node being read — can only turn into serde's repetition
+    /// limit, and an unbound anchor never reaches here.
+    fn resolve(&mut self, mut event: Ev) -> Result<Ev, ()> {
+        while let Ev::Alias(id) = event {
+            self.jumps += 1;
+            let Some(node) = self.anchors.get(&id).cloned() else {
+                return Err(());
+            };
+            self.replay(&node)?;
+            event = self.take()?;
+        }
+        Ok(event)
+    }
+    /// One node worth of replayed events, pushed as a fresh frame: serde's
+    /// `jump` hands each alias its own cursor, so a nested alias replays
+    /// ahead of the outer frame's tail rather than behind it. Recordings
+    /// keep trees no deeper than serde's recursion budget, so the
+    /// recursion stays shallow.
+    fn replay(&mut self, node: &Node) -> Result<(), ()> {
+        let mut frame = VecDeque::new();
+        self.replay_into(node, &mut frame)?;
+        self.pending.push(frame);
+        Ok(())
+    }
+    fn replay_into(&mut self, node: &Node, frame: &mut VecDeque<Ev>) -> Result<(), ()> {
+        match node {
+            Node::Scalar(text, style, tag) => {
+                self.push_replayed(Ev::Scalar(text.clone(), *style, tag.clone()), frame)
+            }
+            Node::Alias(anchor) => self.push_replayed(Ev::Alias(*anchor), frame),
+            Node::TooDeep => Err(()),
+            Node::Seq(tag, items) => {
+                self.push_replayed(Ev::SeqStart(tag.clone()), frame)?;
+                for item in items {
+                    self.replay_into(item, frame)?;
+                }
+                self.push_replayed(Ev::SeqEnd, frame)
+            }
+            Node::Map(tag, pairs) => {
+                self.push_replayed(Ev::MapStart(tag.clone()), frame)?;
+                for (key, value) in pairs {
+                    self.replay_into(key, frame)?;
+                    self.replay_into(value, frame)?;
+                }
+                self.push_replayed(Ev::MapEnd, frame)
+            }
+        }
+    }
+    /// One replayed event, bounded: serde's own cap on this work scales
+    /// with the document's size and is checked at stream end; this is the
+    /// fixed ceiling beneath it that only an alias bomb reaches.
+    fn push_replayed(&mut self, event: Ev, frame: &mut VecDeque<Ev>) -> Result<(), ()> {
+        self.replayed += 1;
+        if self.replayed > REPLAY_LIMIT {
             return Err(());
         }
-        let Some(node) = self.anchors.get(&id).cloned() else {
-            return Err(());
-        };
-        Self::replay(&node, &mut self.pending);
-        let next = self.take()?;
-        self.resolve(next)
+        frame.push_back(event);
+        Ok(())
     }
     /// One whole value, consumed without deserializing it: serde's
     /// `ignore_any`, which steps over aliases unresolved and never counts
     /// depth.
     fn skip(&mut self, first: Ev) -> Result<(), ()> {
-        // For each open collection, whether the next event lands on a map
-        // key: an implicit empty scalar does not make a key.
-        let mut open: Vec<Option<bool>> = Vec::new();
-        match first {
-            Ev::SeqStart(_) => open.push(None),
-            Ev::MapStart(_) => open.push(Some(true)),
-            Ev::Scalar(..) | Ev::Alias(_) | Ev::EmptyScalar => return Ok(()),
+        let mut open = match first {
+            Ev::SeqStart(_) | Ev::MapStart(_) => 1usize,
+            Ev::Scalar(..) | Ev::Alias(_) => return Ok(()),
             _ => return Err(()),
-        }
-        while let Some(key) = open.last_mut() {
+        };
+        while open > 0 {
             match self.take()? {
-                Ev::EmptyScalar if *key == Some(true) => return Err(()),
-                Ev::SeqStart(_) => open.push(None),
-                Ev::MapStart(_) => open.push(Some(true)),
-                Ev::SeqEnd | Ev::MapEnd => {
-                    open.pop();
-                }
-                _ => {
-                    if let Some(key) = key.as_mut() {
-                        *key = !*key;
-                    }
-                }
+                Ev::SeqStart(_) | Ev::MapStart(_) => open += 1,
+                Ev::SeqEnd | Ev::MapEnd => open -= 1,
+                Ev::Scalar(..) | Ev::Alias(_) => {}
+                _ => return Err(()),
             }
         }
         Ok(())
@@ -536,7 +387,6 @@ impl<'a> Walk<'a> {
     fn node(&mut self, first: Ev, depth: usize) -> Result<Node, ()> {
         match self.resolve(first)? {
             Ev::Scalar(text, style, tag) => Ok(Node::Scalar(text, style, tag)),
-            Ev::EmptyScalar => Ok(Node::Scalar(String::new(), TScalarStyle::Plain, None)),
             Ev::SeqStart(tag) => {
                 if depth == 0 {
                     return Err(());
@@ -558,7 +408,6 @@ impl<'a> Walk<'a> {
                 loop {
                     match self.take()? {
                         Ev::MapEnd => break,
-                        Ev::EmptyScalar => return Err(()),
                         event => {
                             let key = self.node(event, depth - 1)?;
                             let first = self.take()?;
@@ -772,7 +621,7 @@ fn float_value(scalar: &str) -> Option<f64> {
 /// core tags type or fail the document, a local `!` tag wraps the resolved
 /// node, other tags make a string, and an untagged scalar follows the
 /// schema's resolution.
-fn scalar_value(text: String, style: TScalarStyle, tag: Option<String>) -> Result<Yaml, ()> {
+fn scalar_value(text: String, style: ScalarStyle, tag: Option<String>) -> Result<Yaml, ()> {
     if let Some(tag) = tag {
         if tag.starts_with('!') {
             let inner = scalar_value(text, style, None)?;
@@ -792,7 +641,7 @@ fn scalar_value(text: String, style: TScalarStyle, tag: Option<String>) -> Resul
             _ => Ok(Yaml::Str(text)),
         };
     }
-    if style != TScalarStyle::Plain {
+    if style != ScalarStyle::Plain {
         return Ok(Yaml::Str(text));
     }
     if text.is_empty() || null(&text) {
@@ -824,7 +673,7 @@ fn scalar_value(text: String, style: TScalarStyle, tag: Option<String>) -> Resul
 fn yaml(node: &Node) -> Result<Yaml, ()> {
     Ok(match node {
         Node::Scalar(text, style, tag) => scalar_value(text.clone(), *style, tag.clone())?,
-        Node::Alias(_) => return Err(()),
+        Node::Alias(_) | Node::TooDeep => return Err(()),
         Node::Seq(tag, items) => {
             let seq = Yaml::Seq(items.iter().map(yaml).collect::<Result<_, _>>()?);
             match tag {
@@ -859,7 +708,7 @@ fn yaml(node: &Node) -> Result<Yaml, ()> {
 fn optional_string(node: &Node) -> Result<Option<String>, ()> {
     match node {
         Node::Scalar(text, style, tag) => {
-            if *style == TScalarStyle::Plain {
+            if *style == ScalarStyle::Plain {
                 match tag.as_deref() {
                     Some("tag:yaml.org,2002:null") => {
                         return if null(text) { Ok(None) } else { Err(()) };
@@ -877,7 +726,7 @@ fn optional_string(node: &Node) -> Result<Option<String>, ()> {
 /// The node `Option<serde_yaml_ng::Value>` reads, resolved like a `Value`.
 fn optional_value(node: &Node) -> Result<Option<Yaml>, ()> {
     if let Node::Scalar(text, style, tag) = node
-        && *style == TScalarStyle::Plain
+        && *style == ScalarStyle::Plain
     {
         match tag.as_deref() {
             Some("tag:yaml.org,2002:null") => {
@@ -906,14 +755,14 @@ struct ChartFields {
 fn pairs_of(node: &Node) -> Result<&[(Node, Node)], ()> {
     match node {
         Node::Map(_, pairs) => Ok(pairs),
-        Node::Scalar(text, TScalarStyle::Plain, _) if text.is_empty() => Ok(&[]),
+        Node::Scalar(text, ScalarStyle::Plain, _) if text.is_empty() => Ok(&[]),
         _ => Err(()),
     }
 }
 fn items_of(node: &Node) -> Result<&[Node], ()> {
     match node {
         Node::Seq(_, items) => Ok(items),
-        Node::Scalar(text, TScalarStyle::Plain, _) if text.is_empty() => Ok(&[]),
+        Node::Scalar(text, ScalarStyle::Plain, _) if text.is_empty() => Ok(&[]),
         _ => Err(()),
     }
 }
@@ -934,7 +783,6 @@ fn chart_item_fields(walk: &mut Walk, fields: &mut ChartFields) -> Result<(), ()
     loop {
         match walk.take()? {
             Ev::MapEnd => break,
-            Ev::EmptyScalar => return Err(()),
             event => {
                 let key = walk.node(event, 124)?;
                 let Node::Scalar(name, ..) = &key else {
@@ -968,8 +816,8 @@ fn chart_item_fields(walk: &mut Walk, fields: &mut ChartFields) -> Result<(), ()
                         let Node::Scalar(text, style, tag) = walk.node(value, 124)? else {
                             return Err(());
                         };
-                        if style != TScalarStyle::Plain
-                            && !(style == TScalarStyle::Literal
+                        if style != ScalarStyle::Plain
+                            && !(style == ScalarStyle::Literal
                                 && tag.as_deref() == Some("tag:yaml.org,2002:bool"))
                         {
                             return Err(());
@@ -1064,8 +912,8 @@ fn chart_item_nodes(node: &Node) -> Result<ChartFields, ()> {
                 let Node::Scalar(text, style, tag) = value else {
                     return Err(());
                 };
-                if *style != TScalarStyle::Plain
-                    && !(*style == TScalarStyle::Literal
+                if *style != ScalarStyle::Plain
+                    && !(*style == ScalarStyle::Literal
                         && tag.as_deref() == Some("tag:yaml.org,2002:bool"))
                 {
                     return Err(());
@@ -1102,7 +950,6 @@ fn helm_index(walk: &mut Walk) -> Result<Vec<(String, Vec<ChartFields>)>, ()> {
     loop {
         match walk.take()? {
             Ev::MapEnd => break,
-            Ev::EmptyScalar => return Err(()),
             event => {
                 let key = walk.node(event, 127)?;
                 if string_key(&key)? == "entries" {
@@ -1114,7 +961,6 @@ fn helm_index(walk: &mut Walk) -> Result<Vec<(String, Vec<ChartFields>)>, ()> {
                         Ev::MapStart(_) => loop {
                             match walk.take()? {
                                 Ev::MapEnd => break,
-                                Ev::EmptyScalar => return Err(()),
                                 event => {
                                     let key = walk.node(event, 126)?;
                                     let chart = string_key(&key)?.to_owned();
@@ -1149,6 +995,13 @@ fn helm_index(walk: &mut Walk) -> Result<Vec<(String, Vec<ChartFields>)>, ()> {
 }
 
 fn helm(body: &mut dyn Read) -> std::result::Result<Vec<u8>, CacheError> {
+    // A malformed document must fail this derive, not the worker: the
+    // parser — like serde's own deserializer — has panic sites on inputs
+    // its invariants never expected, and any panic inside becomes a
+    // document error here rather than a `JoinError` upstream.
+    catch_unwind(AssertUnwindSafe(|| helm_walk(body))).unwrap_or(Err(CacheError::Document))
+}
+fn helm_walk(body: &mut dyn Read) -> std::result::Result<Vec<u8>, CacheError> {
     let mut walk = Walk::new(body);
     let entries = (|| -> Result<Vec<(String, Vec<ChartFields>)>, ()> {
         match walk.take()? {
@@ -1177,9 +1030,6 @@ fn helm(body: &mut dyn Read) -> std::result::Result<Vec<u8>, CacheError> {
         Ok(entries)
     })()
     .map_err(|_| CacheError::Document)?;
-    if walk.failed.get() {
-        return Err(CacheError::Document);
-    }
     let charts: BTreeMap<_, _> = entries
         .into_iter()
         .map(|(name, entries)| {
@@ -1285,6 +1135,23 @@ mod tests {
             })
             .collect();
         serde_json::to_vec(&charts).map_err(|_| CacheError::Document)
+    }
+
+    impl std::fmt::Debug for Ev {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Ev::Scalar(t, s, _) => write!(f, "Scalar({t:?},{s:?})"),
+                Ev::SeqStart(_) => write!(f, "SeqStart"),
+                Ev::SeqEnd => write!(f, "SeqEnd"),
+                Ev::MapStart(_) => write!(f, "MapStart"),
+                Ev::MapEnd => write!(f, "MapEnd"),
+                Ev::Alias(id) => write!(f, "Alias({id})"),
+                Ev::DocumentStart => write!(f, "DocStart"),
+                Ev::DocumentEnd => write!(f, "DocEnd"),
+                Ev::StreamStart => write!(f, "StreamStart"),
+                Ev::StreamEnd => write!(f, "StreamEnd"),
+            }
+        }
     }
 
     /// A body arriving `size` bytes at a time.
@@ -1498,10 +1365,111 @@ mod tests {
             b"entries: 1\n",
             b"entries: \n",
             b"entries:\n- version: 1.0\n",
+            // Tabs: after a `:`, as indentation, and inside scalars.
+            b"entries:\n  c:\n    - version:\t1.0\n",
+            b"entries:\n\tc:\n\t  - version: 1.0\n",
+            b"entries:\n  c:\n    - version: 1\t0\n",
+            b"entries: {c: {version:\t1.0}}\n",
+            b"entries:\n  c:\n    - version: '1\t0'\n",
+            b"entries:\n  c:\n    - version: \"1\t0\"\n",
+            // Version directives, unknown directives, and %TAG.
+            b"%YAML 1.1\n---\nentries: {}\n",
+            b"%YAML 1.2\n---\nentries: {}\n",
+            b"%YAML 2.0\n---\nentries: {}\n",
+            b"%YAML 1.9\n---\nentries: {}\n",
+            b"%YAML 1.1\n%YAML 1.1\n---\nentries: {}\n",
+            b"%FOO directive\n---\nentries: {}\n",
+            b"%FOO\n---\nentries: {}\n",
+            b"%TAG ! tag:example.com,2020:\n---\nentries:\n  c:\n    - version: !x 1.0\n",
+            b"%TAG !! tag:example.com,2020:\n---\nentries:\n  c:\n    - version: !!x 1.0\n",
+            b"%TAG !e! tag:example.com,2020:\nentries: {}\n",
+            b"%TAG !a! tag:a:\n%TAG !a! tag:b:\n---\nentries: {}\n",
+            // U+2028 and U+2029 as separators and inside scalars.
+            b"entries: {}\xe2\x80\xa8",
+            b"entries: {}\xe2\x80\xa9",
+            b"entries:\xe2\x80\xa8  c: []\n",
+            b"entries:\n  c:\xe2\x80\xa9    - version: 1.0\n",
+            b"entries:\n  c:\n    - version: \"a\xe2\x80\xa8b\"\n",
+            b"entries:\n  c:\n    - version: 'a\xe2\x80\xa9b'\n",
+            b"entries:\xe2\x80\xa8\xc2\x85  c: []\n",
+            // NEL as a break and mid-scalar.
+            b"entries: {}\xc2\x85",
+            b"entries:\n  c:\n    - version: \"a\xc2\x85b\"\n",
+            // CR, CRLF and LF line endings.
+            b"entries:\r  c: []\r",
+            b"entries:\r\n  c: []\r\n",
+            b"entries:\n  c: []\r\n",
+            b"entries:\r  c:\r\n    - version: 1.0\n",
+            b"entries:\n\rc: []\n",
+            // More control characters and noncharacters.
+            b"entries: {}\x01",
+            b"entries: {}\x1f",
+            b"entries: {}\x7f",
+            b"entries:\n  c:\n    - version: 1\x01.0\n",
+            b"entries:\n  c:\n    - version: 'a\x7fb'\n",
+            b"entries:\n  c:\n    - version: a\x0bb\n",
+            b"entries:\xef\xbf\xbe {}\n",
+            b"entries:\n  c:\n    - version: \xef\xbf\xbf\n",
+            // UTF-16, both endians, with and without BOMs.
+            b"\xff\xfee\x00n\x00t\x00r\x00i\x00e\x00s\x00:\x00 \x00{\x00}\x00\n\x00",
+            b"\xfe\xff\x00e\x00n\x00t\x00r\x00i\x00e\x00s\x00:\x00 \x00{\x00}\x00\n",
+            b"e\x00n\x00t\x00r\x00i\x00e\x00s\x00:\x00 \x00{\x00}\x00\n\x00",
+            b"\x00e\x00n\x00t\x00r\x00i\x00e\x00s\x00:\x00 \x00{\x00}\x00\n",
+            b"\xff\xfe\x00\x00e\x00n\x00t\x00r\x00i\x00e\x00s\x00:\x00 \x00{\x00}\x00",
+            // Alias bombs with long tails, redefined anchors, alias of
+            // alias, and merge keys behind aliases.
+            b"base: &b\n  - x\n  - y\nx: &a [*b, *b]\nentries:\n  c:\n    - version: 1.0\n      sources: [*a, *a]\n",
+            b"x: &a [s]\nentries:\n  c:\n    - version: 1.0\n      sources: *a\n      annotations: {k1: *a, k2: *a, k3: *a, k4: *a}\n",
+            b"one: &a 1.0\ntwo: &a [1]\nthree: &a {k: v}\nentries:\n  c:\n    - version: *a\n",
+            b"x: &b [*a]\ny: &a [s]\nentries:\n  c:\n    - version: 1.0\n      sources: *b\n",
+            b"y: &a [s]\nx: &b [*a]\nentries:\n  c:\n    - version: 1.0\n      sources: *b\n",
+            b"y: &a [s]\nx: &b *a\nentries:\n  c:\n    - version: 1.0\n      sources: *b\n",
+            b"base: &m\n  version: 1.0\n  digest: d\nentries:\n  c:\n    - <<: *m\n",
+            b"base: &m {version: 1.0, digest: d}\nentries:\n  c:\n    - <<: *m\n      version: 2.0\n",
+            b"entries:\n  c:\n    - <<: [x, y]\n      version: 1.0\n",
+            b"entries:\n  c:\n    - version: 1.0\n      annotations: {<<: *u}\n",
+            // Duplicate keys spelled differently.
+            b"entries:\n  c:\n    - version: 1.0\n      annotations: {1: a, +1: b}\n",
+            b"entries:\n  c:\n    - version: 1.0\n      annotations: {'1': a, 1: b}\n",
+            b"entries:\n  c:\n    - version: 1.0\n      annotations: {1: a, '1': b}\n",
+            b"entries:\n  c:\n    - version: 1.0\n      annotations: {null: a, NULL: b}\n",
+            b"entries:\n  c:\n    - version: 1.0\n      annotations: {true: a, 'true': b}\n",
+            b"entries:\n  c:\n    - version: 1.0\n      annotations: {True: a, TRUE: b}\n",
+            b"entries:\n  c:\n    - version: 1.0\n      annotations: {0x1: a, +1: b}\n",
+            b"entries:\n  c:\n    - version: 1.0\n      annotations: {'': a, '': b}\n",
+            b"entries:\n  c:\n    - version: 1.0\n      annotations: {? ~: a, ? null: b}\n",
+            // Anchors on empty scalars and anchored aliases.
+            b"entries:\n  c:\n    - version: &e\n",
+            b"x: &e\nentries:\n  c:\n    - version: *e\n",
+            b"x: &a y\nz: &b *a\nentries:\n  c:\n    - version: *b\n",
         ];
         let mut failures = Vec::new();
         for (index, body) in cases.iter().enumerate() {
             check(&mut failures, body, &format!("table case {index}"));
+        }
+        // Flow nesting at and past yaml-rust2's old 255 cap, kept and
+        // ignored, sequences and mappings.
+        for depth in [249usize, 255, 256, 300] {
+            let flow_seq = format!("{}x{}", "[".repeat(depth), "]".repeat(depth));
+            let flow_map = format!("{}x{}", "{k: ".repeat(depth), "}".repeat(depth));
+            let ignored = format!("x: {flow_seq}
+entries: {{}}
+").into_bytes();
+            check(&mut failures, &ignored, &format!("flow seq {depth} ignored"));
+            let kept = format!(
+                "entries:\n  c:\n    - version: 1.0\n      sources: {flow_seq}\n"
+            )
+            .into_bytes();
+            check(&mut failures, &kept, &format!("flow seq {depth} kept"));
+            let ignored_map =
+                format!("x: {flow_map}
+entries: {{}}
+").into_bytes();
+            check(
+                &mut failures,
+                &ignored_map,
+                &format!("flow map {depth} ignored"),
+            );
         }
         report(failures);
     }
@@ -1549,8 +1517,14 @@ mod tests {
         }
         fn anchor(&mut self) -> Option<String> {
             if self.rng.chance(12) {
-                let name = format!("a{}", self.next_anchor);
-                self.next_anchor += 1;
+                // Sometimes redefine an earlier name: bindings shadow.
+                let name = if self.rng.chance(15) && !self.anchors.is_empty() {
+                    self.anchors[self.rng.below(self.anchors.len())].clone()
+                } else {
+                    let name = format!("a{}", self.next_anchor);
+                    self.next_anchor += 1;
+                    name
+                };
                 self.anchors.push(name.clone());
                 Some(name)
             } else {
@@ -1601,6 +1575,8 @@ mod tests {
                 "99999999999999999999",
                 "18446744073709551616",
                 "2020-01-01",
+                "a\tb",
+                "1\t0",
             ];
             const QUOTED: &[&str] = &[
                 "\"v 1.0\"",
@@ -1659,9 +1635,10 @@ mod tests {
                         format!("*u{}", self.rng.below(4))
                     }
                 }
-                _ => (*self
-                    .rng
-                    .pick(&[">", "|", ">", "|", "&a9 *u1", "", " ", "?x", "\u{FEFF}"]))
+                _ => (*self.rng.pick(&[
+                    ">", "|", ">", "|", "&a9 *u1", "", " ", "?x", "\u{FEFF}", "\u{2028}",
+                    "\u{2029}", "\t",
+                ]))
                 .to_owned(),
             }
         }
@@ -1688,7 +1665,7 @@ mod tests {
                     out.push_str(&self.scalar(false));
                 }
                 0..=58 => {
-                    out.push(' ');
+                    out.push(if self.rng.chance(4) { '\t' } else { ' ' });
                     out.push_str(&self.inline(depth));
                 }
                 59..=68 => {
@@ -1738,10 +1715,9 @@ mod tests {
                 }
             }
         }
-        /// A deeply nested collection, at a chosen depth. Flow collections
-        /// stay under 255 levels — yaml-rust2's scanner caps its flow level
-        /// there where libyaml's effectively does not — and block entries
-        /// carry the deeper cases, which neither parser caps.
+        /// A deeply nested collection, at a chosen depth: serde's kept
+        /// values cap at 128, its ignored ones are unbounded, and a
+        /// recorded anchor never keeps more than serde could deserialize.
         fn deep(&mut self, _indent: usize) -> String {
             let depth = *self
                 .rng
@@ -1845,8 +1821,13 @@ mod tests {
         }
         fn document(&mut self) -> Vec<u8> {
             let mut out = String::new();
-            if self.rng.chance(8) {
-                out.push_str("%YAML 1.1\n");
+            match self.rng.below(100) {
+                0..=4 => out.push_str("%YAML 1.1\n"),
+                5..=6 => out.push_str("%YAML 1.2\n"),
+                7..=8 => out.push_str("%YAML 2.0\n"),
+                9..=10 => out.push_str("%FOO directive\n"),
+                11..=12 => out.push_str("%YAML 1.1\n%YAML 1.2\n"),
+                _ => {}
             }
             if self.rng.chance(6) {
                 out.push_str("%TAG !e! tag:example.com,2020:\n");
@@ -1888,7 +1869,18 @@ mod tests {
                     out.push_str(&self.inline(5));
                     out.push('\n');
                 }
+                25..=30 if !self.anchors.is_empty() => {
+                    // An alias bomb's long tail: many uses of one anchor.
+                    let name = self.anchors[self.rng.below(self.anchors.len())].clone();
+                    let uses = vec![format!("*{name}"); self.rng.below(80) + 2].join(", ");
+                    out.push_str("tail: [");
+                    out.push_str(&uses);
+                    out.push_str("]\n");
+                }
                 _ => {}
+            }
+            if self.rng.chance(5) {
+                out = out.replace('\n', if self.rng.chance(50) { "\r" } else { "\r\n" });
             }
             let mut bytes = out.into_bytes();
             match self.rng.below(100) {
@@ -1915,12 +1907,33 @@ mod tests {
                         .flat_map(|u| u.to_le_bytes())
                         .collect();
                 }
-                13..=17 if !bytes.is_empty() => {
+                13..=15 => {
+                    bytes = String::from_utf8_lossy(&bytes)
+                        .encode_utf16()
+                        .flat_map(|u| u.to_be_bytes())
+                        .collect();
+                }
+                16..=19 if !bytes.is_empty() => {
                     bytes.insert(self.rng.below(bytes.len()), 0);
                 }
-                18..=22 if !bytes.is_empty() => {
+                20..=23 if !bytes.is_empty() => {
                     let at = self.rng.below(bytes.len());
                     bytes.splice(at..at, [0xEF, 0xBB, 0xBF]);
+                }
+                24..=28 if !bytes.is_empty() => {
+                    let at = self.rng.below(bytes.len());
+                    let splice: &[u8] = self.rng.pick(&[
+                        &[0x01][..],
+                        &[0x1f][..],
+                        &[0x7f][..],
+                        &[0x0b][..],
+                        &[0xc2, 0x85][..],
+                        &[0xe2, 0x80, 0xa8][..],
+                        &[0xe2, 0x80, 0xa9][..],
+                        &[0x09][..],
+                        &[0x80][..],
+                    ]);
+                    bytes.splice(at..at, splice.iter().copied());
                 }
                 _ => {}
             }
@@ -1948,6 +1961,11 @@ mod tests {
         "true",
         "é",
         "a-b",
+        "<<",
+        "0x1",
+        "+1",
+        "1",
+        "''",
     ];
 
     /// The seeded corpus: thousands of composed documents at a fixed seed,
@@ -1957,7 +1975,7 @@ mod tests {
         const SEED: u64 = 0x9E3779B97F4A7C15;
         let mut rng = Rng(SEED);
         let mut failures = Vec::new();
-        for index in 0..3000 {
+        for index in 0..6000 {
             let seed = rng.next();
             let mut document = Gen {
                 rng: Rng(seed),
@@ -1971,6 +1989,158 @@ mod tests {
                 &format!("generated seed {seed:#x} (case {index})"),
             );
         }
+        report(failures);
+    }
+
+    /// Deep anchored nodes — the case that could overflow a stack: a
+    /// subtree nested ~3,000 deep recorded under an anchor, then replayed
+    /// into a kept field or left alone. serde's recursion budget fails the
+    /// kept uses and ignores the rest; the walk's recordings cap at the
+    /// same depth, so replay, clone and drop stay shallow. Runs on a
+    /// thread with the default 2 MB test stack, as in production.
+    #[test]
+    fn deep_anchored_nodes_agree_with_the_oracle() {
+        let seq = |n: usize| format!("{}x", "- ".repeat(n));
+        let map = |n: usize| format!("{}v{}", "{k:".repeat(n), "}".repeat(n));
+        let chain = |n: usize| {
+            let mut doc = String::from("x: &a1 [v]\n");
+            for link in 2..=n {
+                doc.push_str(&format!("x{link}: &a{link} [*a{}]\n", link - 1));
+            }
+            doc
+        };
+        let bodies: Vec<Vec<u8>> = [
+            // The repro: a ~3,000-deep anchored sequence aliased into a
+            // kept field — serde's remaining-depth check fails it.
+            format!(
+                "x: &a {}\nentries: {{c: [{{version: 1.0, sources: *a}}]}}\n",
+                seq(3000)
+            ),
+            // A deep anchored mapping the same way.
+            format!(
+                "x: &a {}\nentries: {{c: [{{version: 1.0, sources: *a}}]}}\n",
+                map(3000)
+            ),
+            // A deep chain of aliases through anchored sequences, used.
+            format!(
+                "{}entries: {{c: [{{version: 1.0, sources: *a3000}}]}}\n",
+                chain(3000)
+            ),
+            // A chain short enough for serde's budget.
+            format!(
+                "{}entries: {{c: [{{version: 1.0, sources: *a100}}]}}\n",
+                chain(100)
+            ),
+            // Ignored deep anchors nobody aliases still succeed.
+            format!("x: &a {}\nentries: {{}}\n", seq(3000)),
+            format!("x: &a {}\nentries: {{}}\n", map(3000)),
+            // Ignored deep values, anchored or not.
+            format!("x: {}\nentries: {{}}\n", seq(3000)),
+            format!("entries:\n  x: &a {}\n  c: []\n", seq(3000)),
+            // A kept deep value that is not anchored fails like serde.
+            format!(
+                "entries:\n  c:\n    - version: 1.0\n      sources: {}\n",
+                seq(3000)
+            ),
+            format!(
+                "entries:\n  c:\n    - version: 1.0\n      urls: {}\n",
+                seq(3000)
+            ),
+            // An anchored node just inside the budget, used at depth.
+            format!(
+                "x: &a {}\nentries: {{c: [{{version: 1.0, sources: *a}}]}}\n",
+                seq(100)
+            ),
+            // A deep anchored node aliased inside an ignored value.
+            format!("x: &a {}\nignored: [*a]\nentries: {{}}\n", seq(3000)),
+        ]
+        .into_iter()
+        .map(String::into_bytes)
+        .collect();
+        let failures = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let mut failures = Vec::new();
+                for (index, body) in bodies.iter().enumerate() {
+                    check(&mut failures, body, &format!("deep case {index}"));
+                }
+                failures
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        report(failures);
+    }
+
+    /// Truncated and corrupted bodies still get a document answer: the
+    /// parser's own panics are contained as a failed document, and the
+    /// oracle agrees which side each one lands on.
+    #[test]
+    fn malformed_input_fails_the_document_never_the_process() {
+        let body = b"apiVersion: v1\nentries:\n  c:\n    - version: 1.0\n      created: '2020-01-01'\n      digest: abc\n      deprecated: true\n      sources: [https://x.test/1]\n      annotations: {k: v}\n    - version: 2.0\n";
+        let mut bodies: Vec<Vec<u8>> = (0..=body.len())
+            .step_by(3)
+            .map(|cut| body[..cut].to_vec())
+            .collect();
+        let mut rng = Rng(0x5EED_CAFE);
+        for _ in 0..300 {
+            let mut doc = body.to_vec();
+            for _ in 0..rng.below(6) + 1 {
+                let at = rng.below(doc.len() + 1);
+                let splice: &[u8] = rng.pick(&[
+                    &[0x00][..],
+                    &[0xff][..],
+                    &[0xfe][..],
+                    &[0x80][..],
+                    &[0x01][..],
+                    &[0x7f][..],
+                    &b"{"[..],
+                    &b"}"[..],
+                    &b"["[..],
+                    &b":"[..],
+                    &b"\xef\xbb\xbf"[..],
+                    &b"\xe2\x80\xa8"[..],
+                ]);
+                doc.splice(at..at, splice.iter().copied());
+            }
+            bodies.push(doc);
+        }
+        let mut failures = Vec::new();
+        for (index, doc) in bodies.iter().enumerate() {
+            check(&mut failures, doc, &format!("malformed case {index}"));
+        }
+        report(failures);
+    }
+
+    /// serde's alias bound is a hundred jumps per document event — a bound
+    /// the walk can only check once the count is final — while the walk's
+    /// absolute ceiling on replayed events is `REPLAY_LIMIT`. A document
+    /// serde accepts can still pass the ceiling: a small anchor used
+    /// enough times stays under serde's bound yet exhausts the fixed one,
+    /// and there the walk fails where serde would not. This is the one
+    /// residual divergence, fail-closed and adversarial-only: an honest
+    /// index does not alias.
+    #[test]
+    fn replay_work_past_the_cap_fails_closed() {
+        // `[{k: v}]` replays six events per use; enough uses pass
+        // REPLAY_LIMIT while staying under serde's hundred-jumps-per-event
+        // bound on this document.
+        let uses = 190_000;
+        let body = format!(
+            "x: &a [{{k: v}}]\nentries:\n  c:\n    - version: 1.0\n      sources: [{}]\n",
+            vec!["*a"; uses].join(", ")
+        )
+        .into_bytes();
+        assert!(helm_buffered(&mut &body[..]).is_ok());
+        assert!(helm(&mut &body[..]).is_err());
+        // And a long but ordinary alias chain both sides take.
+        let ok = format!(
+            "x: &a [{{k: v}}]\nentries:\n  c:\n    - version: 1.0\n      sources: [{}]\n",
+            vec!["*a"; 1_000].join(", ")
+        )
+        .into_bytes();
+        let mut failures = Vec::new();
+        check(&mut failures, &ok, "replay under the cap");
         report(failures);
     }
 
