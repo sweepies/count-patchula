@@ -48,6 +48,22 @@ batch. Persisted lookup hints let warm source reads — current refs and the
 mutable tags the last run resolved — overlap revalidation, but hints only
 schedule work: the validated extraction and policy decide the report.
 
+A complete run stores a `quiet-run` state row per repository and credential
+scope: the head commit, a hash of the report row (tooling, lookup and
+release-age evaluation timestamps, catalog evidence, stats and clock fields
+excluded), `next_due` — the earliest instant time alone can change the
+answer: a held-back release's eligibility, a schedule window, a lockfile
+defer, an hourly PR quota freeing — and the run's timestamp. The server's
+quiet sweep check runs only
+for batches the sweep alone claimed: candidates are rebuilt from the cached
+config and extraction without a head check, the hinted digests are
+prefetched — the only requests a quiet repository makes — and the report
+is re-evaluated off the same catalogs. A
+repository stays in the quiet set when its rebuilt report hashes the same,
+its `next_due` has not passed and its last full run is under six hours old;
+any missing state, failed reconstruction, passed due or hash mismatch runs
+it in full — the check fails open toward running, never skipping.
+
 ## Report and exit codes
 
 The report carries the branch and commit, warnings, sources, kinds and

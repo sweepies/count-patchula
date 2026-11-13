@@ -2075,6 +2075,228 @@ async fn a_repository_made_private_is_recorded_private() {
     patchula_testkit::transcripts::check(&transcripts());
 }
 
+/// A batch the sweep alone enqueued finishes a repository whose stored
+/// answer stands without a GitHub request of its own — and a person
+/// trigger, a delivered event, a non-sweep cause or a discovery row in the
+/// same batch runs the repositories in full.
+#[tokio::test]
+async fn a_quiet_repository_skips_the_sweep_and_its_record_stands() {
+    let github = Arc::new(FakeGitHub::new("owner/repo"));
+    github.seed_files(
+        "main",
+        "base",
+        &BTreeMap::from([(
+            "patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing {}\nprs { dashboard = false }\n"
+                .into(),
+        )]),
+        vec![],
+    );
+    {
+        let mut state = github.state();
+        state.installations = vec![1];
+        state.repo_mut().installed = true;
+    }
+    let transport: Arc<dyn Transport> = github.clone();
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let runner = Engines {
+        app: lookup_app(transport.clone(), 1),
+        transport,
+        cache: cache.clone(),
+        engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
+        recheck: None,
+        bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
+    };
+    let settings = settings();
+    // A person's run stores the answer and the public record.
+    let outcome = runner
+        .run(
+            &[Work::person(1, "owner/repo")],
+            &settings,
+            &Attribution::reason("push"),
+        )
+        .await
+        .unwrap();
+    if let Some(job) = outcome.record {
+        runner.record(job).await;
+    }
+    runner.recordings_done().await;
+    let recorded = cache.repository("owner/repo").await.unwrap().unwrap();
+    // The sweep finds it quiet: no report row, no record, no request.
+    let before = github.requests();
+    let outcome = runner
+        .run(
+            &[Work::repository(1, "owner/repo")],
+            &settings,
+            &Attribution::reason("sweep"),
+        )
+        .await
+        .unwrap();
+    assert!(!outcome.failed());
+    assert!(outcome.record.is_none());
+    assert_eq!(github.requests(), before);
+    let after = cache.repository("owner/repo").await.unwrap().unwrap();
+    assert_eq!(
+        (recorded.ran_at, recorded.summary, recorded.snapshot),
+        (after.ran_at, after.summary, after.snapshot),
+        "a skipped repository's public record stands"
+    );
+    // A person trigger always runs in full.
+    let before = github.requests();
+    let outcome = runner
+        .run(
+            &[Work::person(1, "owner/repo")],
+            &settings,
+            &Attribution::reason("push"),
+        )
+        .await
+        .unwrap();
+    assert!(!outcome.failed());
+    assert!(
+        github.requests().len() > before.len(),
+        "a person trigger runs the repository"
+    );
+    // A delivered event on the claim runs it in full too.
+    let mut event = Attribution::reason("sweep");
+    event.deliveries.insert("delivery-1".into());
+    let before = github.requests();
+    runner
+        .run(&[Work::repository(1, "owner/repo")], &settings, &event)
+        .await
+        .unwrap();
+    assert!(
+        github.requests().len() > before.len(),
+        "a delivered event runs the repository"
+    );
+    // As does a cause that is not the sweep's.
+    let before = github.requests();
+    runner
+        .run(
+            &[Work::repository(1, "owner/repo")],
+            &settings,
+            &Attribution::reason("startup discovery"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        github.requests().len() > before.len(),
+        "a non-sweep cause runs the repository"
+    );
+    // And a batch carrying a discovery row runs everything it lists.
+    let before = github.requests();
+    runner
+        .run(
+            &[Work::repository(1, "owner/repo"), Work::repository(1, "")],
+            &settings,
+            &Attribution::reason("sweep"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        github.requests().len() > before.len(),
+        "discovery never skips a repository"
+    );
+    patchula_testkit::transcripts::check(&transcripts());
+}
+
+/// The sweep over quiet repositories measured the way the spec wants it:
+/// the same repositories cost their head check and inventory on a real
+/// run and nothing at all once the sweep sees their answers stand.
+#[tokio::test]
+async fn a_sweep_over_quiet_repositories_makes_no_requests() {
+    const REPOS: usize = 4;
+    let github = Arc::new(FakeGitHub::new("owner/repo-0"));
+    let files = BTreeMap::from([(
+        "patchula.pkl".into(),
+        "amends \"PatchulaConfig.pkl\"\nmanagers = new Listing {}\nprs { dashboard = false }\n"
+            .into(),
+    )]);
+    github.seed_files("main", "base", &files, vec![]);
+    for index in 1..REPOS {
+        let name = format!("owner/repo-{index}");
+        github.add_repository(&name, true);
+        github.seed_files_on(&name, "main", "base", &files, vec![]);
+    }
+    {
+        let mut state = github.state();
+        state.installations = vec![1];
+        state.repo_mut().installed = true;
+    }
+    let transport: Arc<dyn Transport> = github.clone();
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let runner = Engines {
+        app: lookup_app(transport.clone(), 1),
+        transport,
+        cache: cache.clone(),
+        engines: Mutex::new(BTreeMap::new()),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
+        recheck: None,
+        bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
+    };
+    let settings = settings();
+    // The credential's first inventory lists issues unfiltered and stores
+    // the actor every later read narrows by. Repositories run side by
+    // side, so which of them answers the cold read is scheduling; a
+    // sequential first run gives it to the first repository every time.
+    let mut cold = settings.clone();
+    cold.concurrency = 1;
+    let names: Vec<String> = (0..REPOS)
+        .map(|index| format!("owner/repo-{index}"))
+        .collect();
+    // The answers each repository already holds: a run's requests are the
+    // "before" — every repository pays its head check and inventory.
+    let work: Vec<Work> = names
+        .iter()
+        .map(|name| Work::person(1, name.clone()))
+        .collect();
+    let outcome = runner
+        .run(&work, &cold, &Attribution::reason("push"))
+        .await
+        .unwrap();
+    assert!(!outcome.failed());
+    if let Some(job) = outcome.record {
+        runner.record(job).await;
+    }
+    runner.recordings_done().await;
+    let before_sweep = github.requests().len();
+    let work: Vec<Work> = names
+        .iter()
+        .map(|name| Work::person(1, name.clone()))
+        .collect();
+    runner
+        .run(&work, &settings, &Attribution::reason("push"))
+        .await
+        .unwrap();
+    runner.recordings_done().await;
+    let steady_state = github.requests().len() - before_sweep;
+    assert!(steady_state > 0, "a real run costs requests");
+    // The sweep replays the stored answers: the "after" is zero requests
+    // for {REPOS} repositories.
+    let work: Vec<Work> = names
+        .iter()
+        .map(|name| Work::repository(1, name.clone()))
+        .collect();
+    let before = github.requests().len();
+    let outcome = runner
+        .run(&work, &settings, &Attribution::reason("sweep"))
+        .await
+        .unwrap();
+    assert!(!outcome.failed());
+    let sweep_requests = github.requests().len() - before;
+    assert_eq!(sweep_requests, 0, "the quiet sweep requests nothing");
+    eprintln!(
+        "quiet sweep benchmark: {REPOS} repositories — before {steady_state} requests, after {sweep_requests}"
+    );
+    patchula_testkit::transcripts::check(&transcripts());
+}
+
 #[tokio::test]
 async fn a_payload_of_the_wrong_shape_is_rejected() {
     let state = state().await;

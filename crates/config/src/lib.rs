@@ -142,6 +142,25 @@ pub fn due(windows: &[Window], since: Option<DateTime<Utc>>, now: DateTime<Utc>)
     windows.is_empty() || windows.iter().any(|w| window_due(w, since, now))
 }
 
+/// A window's next cron instant strictly after `from`: the first run time at
+/// which [`due`] turns true for a run recorded at `from`. A window that
+/// cannot be read — a bad zone or cron — is never due and has no answer.
+pub fn window_after(window: &Window, from: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let zone = window.zone.parse::<chrono_tz::Tz>().ok()?;
+    let local = from.with_timezone(&zone);
+    window
+        .cron
+        .iter()
+        .filter_map(|expr| {
+            schedule(expr, false)
+                .ok()?
+                .after(&local)
+                .find(|instant| *instant > local)
+        })
+        .min()
+        .map(|instant| instant.with_timezone(&Utc))
+}
+
 impl Config {
     /// Whether any update this config plans can merge on its own: a merge
     /// policy, a security merge, a rule's merge, or the batch PR's.

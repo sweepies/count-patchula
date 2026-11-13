@@ -19,7 +19,7 @@ pub(super) struct Discovery {
     /// Hash of the lookup inputs the hints are scoped by.
     inputs_hash: String,
     /// Hash of the config schema the hints are scoped by.
-    schema_hash: String,
+    pub(super) schema_hash: String,
     /// The credential scope the hints are scoped by.
     credential_scope: String,
     hint: LookupHint,
@@ -31,6 +31,17 @@ pub(super) struct Scanned {
     pub extraction: u64,
     pub prefetch: u64,
     pub digests: BTreeMap<DigestKey, std::result::Result<String, Failure>>,
+}
+
+/// What the post-scan stages produced: the finished work, the lookups they
+/// made and each stage's microseconds.
+pub(super) struct LookupTail {
+    pub lookups: Lookups,
+    pub work: Vec<Work>,
+    pub lookup: u64,
+    pub digest: u64,
+    pub image: u64,
+    pub policy: u64,
 }
 
 /// What the plan stage decided the batch must fetch.
@@ -136,6 +147,36 @@ impl Engine {
         })
     }
 
+    /// The hinted digest reads a scan overlaps: the refs the last runs
+    /// recorded, and the mutable tags they tracked. A quiet sweep's lookup
+    /// prefetches exactly these before its stages.
+    pub(super) async fn prefetch_digests(
+        &self,
+        discovery: &Discovery,
+        sent: &Mutex<BTreeSet<Sent>>,
+    ) -> BTreeMap<DigestKey, std::result::Result<String, Failure>> {
+        let hint_digests = discovery.hint.digests.clone();
+        // A pinned tag is also a hinted ref; the tracked ref read answers it.
+        let hint_tags: BTreeSet<DigestKey> = discovery
+            .hint
+            .tags
+            .difference(&hint_digests)
+            .cloned()
+            .collect();
+        let (digests, tags) = tokio::join!(
+            self.digests(
+                hint_digests.into_iter().map(|key| (key, false)).collect(),
+                &self.sources,
+                false,
+                sent,
+            ),
+            self.sources.fresh_tag_digests(&hint_tags),
+        );
+        let mut digests = digests;
+        digests.extend(tags);
+        digests
+    }
+
     /// Stage: scan — read every repository's config and files; hinted digests
     /// prefetch alongside.
     pub(super) async fn scan_all(
@@ -150,14 +191,6 @@ impl Engine {
         let override_config = options.config.as_ref();
         let repos = &discovery.repos;
         let overrides = &discovery.overrides;
-        let hint_digests = discovery.hint.digests.clone();
-        // A pinned tag is also a hinted ref; the tracked ref read answers it.
-        let hint_tags: BTreeSet<DigestKey> = discovery
-            .hint
-            .tags
-            .difference(&hint_digests)
-            .cloned()
-            .collect();
         let scans = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("extraction");
@@ -232,20 +265,10 @@ impl Engine {
         let prefetch = async {
             let started = Instant::now();
             let _phase = PhaseTrace::new("lookup.prefetch");
-            // Hinted refs and the last run's mutable tags are read beside the
-            // head check; the tag batch's own REST fallbacks overlap too.
-            let (digests, tags) = tokio::join!(
-                self.digests(
-                    hint_digests.into_iter().map(|key| (key, false)).collect(),
-                    &self.sources,
-                    false,
-                    sent,
-                ),
-                self.sources.fresh_tag_digests(&hint_tags),
-            );
-            let mut digests = digests;
-            digests.extend(tags);
-            (digests, micros(started))
+            (
+                self.prefetch_digests(discovery, sent).await,
+                micros(started),
+            )
         };
         let ((work, extraction), (digests, prefetch)) = tokio::join!(scans, prefetch);
         Ok(Scanned {
@@ -253,6 +276,64 @@ impl Engine {
             extraction,
             prefetch,
             digests,
+        })
+    }
+
+    /// The stages after a scan — plan, fetch, evaluate, resolve digests,
+    /// read images and assemble the report — shared by a run's scanned work
+    /// and a quiet sweep's cached work.
+    pub(super) async fn lookup_tail(
+        &self,
+        discovery: &Discovery,
+        scanned: Scanned,
+        now: DateTime<Utc>,
+        sent: &Mutex<BTreeSet<Sent>>,
+    ) -> Result<LookupTail> {
+        let mut work = scanned.work;
+        work.sort_by(|a, b| a.report.repository.cmp(&b.report.repository));
+        let mut lookups = Lookups {
+            digests: scanned.digests,
+            ..Default::default()
+        };
+        let phase = PhaseTrace::new("lookup");
+        let started = Instant::now();
+        let plan = self.plan_lookups(&mut work, discovery).await?;
+        self.fetch_lookups(&plan, &mut work, &mut lookups, now, sent)
+            .await?;
+        let lookup = scanned.prefetch + micros(started);
+        drop(phase);
+        let phase = PhaseTrace::new("policy.evaluate");
+        let (eval_keys, proposal_cpu_time) =
+            self.evaluate_lookups(&mut work, &lookups, now).await?;
+        drop(phase);
+        let started = Instant::now();
+        let phase = PhaseTrace::new("digest");
+        let hinted_tags = self.resolve_digests(eval_keys, &mut lookups, sent).await?;
+        let digest = micros(started);
+        drop(phase);
+        self.save_lookup_hints(&plan, &hinted_tags).await?;
+        let started = Instant::now();
+        let phase = PhaseTrace::new("image");
+        self.read_images(&work, &mut lookups, sent).await?;
+        let image = micros(started);
+        drop(phase);
+        let started = Instant::now();
+        let _phase = PhaseTrace::new("policy.report");
+        self.assemble_reports(&mut work, &lookups, sent, now).await;
+        self.save_catalog_controls(&work, now).await?;
+        let policy = proposal_cpu_time + micros(started);
+        // The sweep replays this stage against its stored answer: hash each
+        // row now, before the write path adds its tooling and warnings.
+        for work in &mut work {
+            work.lookup_hash = crate::sweep::hash(&work.report)?;
+        }
+        Ok(LookupTail {
+            lookups,
+            work,
+            lookup,
+            digest,
+            image,
+            policy,
         })
     }
 

@@ -6,6 +6,7 @@ mod overrides;
 mod report;
 pub mod repository;
 pub mod settings;
+mod sweep;
 mod write;
 
 use futures_util::{StreamExt, stream};
@@ -137,6 +138,13 @@ struct Work {
     snapshot: patchula_update::Snapshot,
     inventory: Option<patchula_update::Inventory>,
     controls: patchula_update::dashboard::Controls,
+    /// [`sweep::hash`] of the lookup-stage report row, before the write
+    /// path adds its tooling and warnings; the sweep compares its own.
+    lookup_hash: String,
+    /// When a `prs.perHour` hold could first lift — the oldest counted
+    /// PR's `created_at` plus the hour — set by the write path for
+    /// [`Engine::record_quiet`]'s `next_due`.
+    per_hour_due: Option<chrono::DateTime<chrono::Utc>>,
 }
 impl Work {
     /// A repository's work before extraction: its report and config, with
@@ -151,6 +159,8 @@ impl Work {
             snapshot: patchula_update::Snapshot::default(),
             inventory: None,
             controls: patchula_update::dashboard::Controls::default(),
+            lookup_hash: String::new(),
+            per_hour_due: None,
         }
     }
 }
@@ -800,39 +810,10 @@ impl Engine {
         let scanned = self
             .scan_all(&discovery, &options, read_controls, sent)
             .await?;
-        let mut work = scanned.work;
-        work.sort_by(|a, b| a.report.repository.cmp(&b.report.repository));
-        let mut lookups = Lookups {
-            digests: scanned.digests,
-            ..Default::default()
-        };
-        let phase = PhaseTrace::new("lookup");
-        let started = Instant::now();
-        let plan = self.plan_lookups(&mut work, &discovery).await?;
-        self.fetch_lookups(&plan, &mut work, &mut lookups, now, sent)
-            .await?;
-        let lookup_time = scanned.prefetch + micros(started);
-        drop(phase);
-        let phase = PhaseTrace::new("policy.evaluate");
-        let (eval_keys, proposal_cpu_time) =
-            self.evaluate_lookups(&mut work, &lookups, now).await?;
-        drop(phase);
-        let started = Instant::now();
-        let phase = PhaseTrace::new("digest");
-        let hinted_tags = self.resolve_digests(eval_keys, &mut lookups, sent).await?;
-        let digest_time = micros(started);
-        drop(phase);
-        self.save_lookup_hints(&plan, &hinted_tags).await?;
-        let started = Instant::now();
-        let phase = PhaseTrace::new("image");
-        self.read_images(&work, &mut lookups, sent).await?;
-        let image_time = micros(started);
-        drop(phase);
-        let started = Instant::now();
-        let _phase = PhaseTrace::new("policy.report");
-        self.assemble_reports(&mut work, &lookups, sent, now).await;
-        self.save_catalog_controls(&work, now).await?;
-        let policy_time = proposal_cpu_time + micros(started);
+        let extraction_time = scanned.extraction;
+        let tail = self.lookup_tail(&discovery, scanned, now, sent).await?;
+        let lookups = tail.lookups;
+        let work = tail.work;
         let after_g = self.github.stats().await;
         let after_h = self.http.stats();
         let report = Report {
@@ -853,11 +834,11 @@ impl Engine {
                 lookups: lookups.catalogs.len() as u64,
                 phase_micros: BTreeMap::from([
                     ("discovery".into(), discovery_time),
-                    ("extraction".into(), scanned.extraction),
-                    ("lookup".into(), lookup_time),
-                    ("policy".into(), policy_time),
-                    ("digest".into(), digest_time),
-                    ("image".into(), image_time),
+                    ("extraction".into(), extraction_time),
+                    ("lookup".into(), tail.lookup),
+                    ("policy".into(), tail.policy),
+                    ("digest".into(), tail.digest),
+                    ("image".into(), tail.image),
                     ("total".into(), micros(total)),
                 ]),
             }),

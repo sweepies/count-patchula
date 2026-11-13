@@ -12,7 +12,7 @@ use chrono::Utc;
 use futures_util::{FutureExt, future::BoxFuture};
 use patchula_cache::{
     Cache,
-    queue::{Attribution, Claim, Finish, MAX_REQUEUES, Work},
+    queue::{Attribution, Claim, Finish, MAX_REQUEUES, Priority, Work},
 };
 use patchula_config::settings::Settings;
 use patchula_engine::Engine;
@@ -529,6 +529,41 @@ impl Batch for Engines {
                     work.iter().all(|w| w.repo.is_empty()),
                 );
                 return Ok(BatchOutcome::default());
+            }
+            // A batch the sweep alone enqueued — sweep-priority claims,
+            // no check candidates, no deliveries, nothing retried or
+            // recovered — may finish a repository whose stored answer
+            // still stands without a GitHub request of its own. Anything
+            // else runs in full.
+            let quiet_sweep = work.iter().all(|w| {
+                !w.repo.is_empty() && w.priority == Priority::Sweep && w.check_prs.is_none()
+            }) && attribution.deliveries.is_empty()
+                && attribution.reasons.iter().all(|reason| reason == "sweep");
+            if quiet_sweep {
+                let quiet = {
+                    let mut slot = self.engine(id, settings).await?;
+                    let outcome = std::panic::AssertUnwindSafe(async {
+                        let (_, engine) = slot.as_mut().ok_or(Error("missing batch engine"))?;
+                        Ok::<_, Error>(engine.sweep_quiet(&repositories, Utc::now()).await)
+                    })
+                    .catch_unwind()
+                    .await;
+                    discard_on_panic(&mut slot, outcome)?
+                };
+                match quiet {
+                    Ok(quiet) if !quiet.is_empty() => {
+                        tracing::info!(target: "patchula_server", quiet = quiet.len(), repositories = repositories.len(), "quiet repositories skipped on the sweep");
+                        repositories.retain(|repo| !quiet.contains(repo));
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(target: "patchula_server", %error, "quiet sweep check failed; repositories run in full");
+                    }
+                }
+                if repositories.is_empty() {
+                    skip_report("every repository's stored answer stood on the sweep", false);
+                    return Ok(BatchOutcome::default());
+                }
             }
             let started = Utc::now();
             let (result, withheld) = {

@@ -149,16 +149,37 @@ pub(crate) fn obsolete<'a>(
 
 /// Owned PRs created in the last hour, the count the recent read supplies.
 pub(crate) fn recent(all: &[Tracked], owner: Owner<'_>, now: DateTime<Utc>) -> u32 {
-    all.iter()
-        .filter(|t| {
-            owned_pr(&t.pr, owner.actor, owner.repo)
-                && t.pr
-                    .created_at
-                    .as_deref()
-                    .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-                    .is_some_and(|t| t >= now - Duration::hours(1))
-        })
-        .count() as u32
+    counted(all, owner, now).count() as u32
+}
+
+/// The oldest `created_at` among the owned PRs `recent` counts — when it
+/// leaves the window, an hour later, the hourly count first decays.
+/// `None` when the count is zero.
+pub(crate) fn recent_oldest(
+    all: &[Tracked],
+    owner: Owner<'_>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    counted(all, owner, now).min()
+}
+
+/// The `created_at` of every owned PR inside the hour window `recent`
+/// counts.
+fn counted<'a>(
+    all: &'a [Tracked],
+    owner: Owner<'a>,
+    now: DateTime<Utc>,
+) -> impl Iterator<Item = DateTime<Utc>> + 'a {
+    all.iter().filter_map(move |t| {
+        if !owned_pr(&t.pr, owner.actor, owner.repo) {
+            return None;
+        }
+        t.pr.created_at
+            .as_deref()
+            .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+            .map(|at| at.with_timezone(&Utc))
+            .filter(|at| *at >= now - Duration::hours(1))
+    })
 }
 
 /// The lifecycle's admission decisions over the view: whether each planned
