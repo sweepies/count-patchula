@@ -170,6 +170,38 @@ Forget the stored token for a server.
 | `--server <URL>` | Server URL; also PATCHULA_SERVER. |  |
 | `-h --help` | Print help |  |
 
+## `patchula cache`
+
+- **Usage:** `patchula cache <SUBCOMMAND>`
+
+Inspect the cache directory's database.
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-h --help` | Print help |  |
+
+### Examples
+
+Print the cache schema this binary supports
+
+```sh
+patchula cache schema
+```
+
+## `patchula cache schema`
+
+- **Usage:** `patchula cache schema`
+
+Print the cache database schema this binary supports; it refuses a cache from a newer one.
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-h --help` | Print help |  |
+
 ## `patchula config`
 
 - **Usage:** `patchula config <SUBCOMMAND>`

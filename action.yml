@@ -44,39 +44,70 @@ runs:
         cache: false
         env: "false"
         working_directory: ${{ runner.temp }}
+    # Installs the binary first, so the cache below can be keyed by the cache
+    # schema it reads. A binary refuses a cache from a newer schema, so each
+    # schema keeps its own lineage. Older releases, without
+    # `patchula cache schema`, key by their version instead.
+    - name: Install Count Patchula
+      id: patchula
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_BINARY: ${{ inputs.binary }}
+        ACTION_REF: ${{ github.action_ref }}
+        # Lets mise list releases from GitHub itself when the version is
+        # "latest"; the public versions mirror can lag behind a new release.
+        MISE_GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        if [ -n "$INPUT_BINARY" ]; then
+          bin=$(realpath "$INPUT_BINARY")
+        else
+          version="$INPUT_VERSION"
+          if [ -z "$version" ]; then
+            if [[ "$ACTION_REF" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              version="${BASH_REMATCH[1]}"
+            else
+              version=latest
+            fi
+          fi
+          # The workflow chose this version by pinning the action, so mise's
+          # release-age wait does not apply to it.
+          if [ "$version" = latest ]; then
+            export MISE_USE_VERSIONS_HOST=0
+          fi
+          bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
+        fi
+        if schema=$("$bin" cache schema 2>/dev/null) && [[ "$schema" =~ ^[0-9]+$ ]]; then
+          lineage="s$schema"
+        elif [[ "$("$bin" --version)" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+          lineage="v${BASH_REMATCH[1]}"
+        else
+          echo "::error::cannot tell which cache $bin reads" >&2
+          exit 1
+        fi
+        echo "bin=$bin" >> "$GITHUB_OUTPUT"
+        echo "lineage=$lineage" >> "$GITHUB_OUTPUT"
     # The cache holds HTTP validators, write receipts and the lockfile tool
     # store. Each run saves a new entry and restores the newest one.
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/patchula
-        key: patchula-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: patchula-v2-${{ runner.os }}-${{ runner.arch }}-
+        key: patchula-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.patchula.outputs.lineage }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: patchula-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.patchula.outputs.lineage }}-
     - name: Run Count Patchula
       shell: bash
       env:
         PATCHULA_TOKEN: ${{ inputs.token }}
+        PATCHULA_BIN: ${{ steps.patchula.outputs.bin }}
         INPUT_REPOSITORIES: ${{ inputs.repositories }}
         INPUT_ALL_REPOS: ${{ inputs.all-repos }}
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
-        INPUT_VERSION: ${{ inputs.version }}
-        INPUT_BINARY: ${{ inputs.binary }}
         INPUT_ARGS: ${{ inputs.args }}
         INPUT_SETTINGS: ${{ inputs.settings }}
-        ACTION_REF: ${{ github.action_ref }}
-        # Lets mise list releases from GitHub itself when the version is
-        # "latest"; the public versions mirror can lag behind a new release.
-        MISE_GITHUB_TOKEN: ${{ github.token }}
         CACHE_DIR: ${{ runner.temp }}/patchula
       run: |
         set -euo pipefail
-        version="$INPUT_VERSION"
-        if [ -z "$version" ]; then
-          if [[ "$ACTION_REF" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            version="${BASH_REMATCH[1]}"
-          else
-            version=latest
-          fi
-        fi
         args=(run)
         if [ "$INPUT_DRY_RUN" = true ]; then
           args+=(--dry-run)
@@ -97,22 +128,12 @@ runs:
           args+=("${extra[@]}")
         fi
         mkdir -p "$CACHE_DIR"
-        # The workflow chose this version by pinning the action, so mise's
-        # release-age wait does not apply to it.
-        if [ "$version" = latest ]; then
-          export MISE_USE_VERSIONS_HOST=0
-        fi
-        if [ -n "$INPUT_BINARY" ]; then
-          bin=$(realpath "$INPUT_BINARY")
-        else
-          bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
-        fi
         # The version input can install any release. Releases up to 0.4.0 take
         # --cache as the SQLite file; later ones take the directory holding it.
-        help=$("$bin" run --help)
+        help=$("$PATCHULA_BIN" run --help)
         if [[ "$help" == *'--cache <DIR>'* ]]; then
           args+=(--cache "$CACHE_DIR")
         else
           args+=(--cache "$CACHE_DIR/cache.sqlite")
         fi
-        "$bin" "${args[@]}"
+        "$PATCHULA_BIN" "${args[@]}"

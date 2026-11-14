@@ -36,18 +36,26 @@ fn help_version_and_bundled_schema() {
             "{args:?}"
         );
     }
+    let output = cli(&["cache", "schema"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{}\n", patchula_cache::SCHEMA)
+    );
 }
 
 /// Every command's plain `--help`, as a pipe at 80 columns gets it.
 #[test]
 fn help_pages_match_the_snapshot() {
     const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/help.txt");
-    let routes: [&[&str]; 17] = [
+    let routes: [&[&str]; 19] = [
         &[],
         &["apply"],
         &["auth"],
         &["auth", "login"],
         &["auth", "logout"],
+        &["cache"],
+        &["cache", "schema"],
         &["config"],
         &["config", "check"],
         &["config", "schema"],

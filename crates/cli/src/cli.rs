@@ -131,6 +131,12 @@ pub enum Command {
         example("patchula auth logout", help = "Forget the token for PATCHULA_SERVER")
     )]
     Auth(Auth),
+    /// Inspect the cache directory's database.
+    #[usage(example(
+        "patchula cache schema",
+        help = "Print the cache schema this binary supports"
+    ))]
+    Cache(Cache),
     /// Inspect and validate Pkl configuration.
     #[usage(
         example(
@@ -233,6 +239,18 @@ pub enum AuthCommand {
     Login(AuthServer),
     /// Forget the stored token for a server.
     Logout(AuthServer),
+}
+
+#[derive(Args)]
+pub struct Cache {
+    #[usage(subcommand)]
+    pub command: CacheCommand,
+}
+
+#[derive(Subcommands)]
+pub enum CacheCommand {
+    /// Print the cache database schema this binary supports; it refuses a cache from a newer one.
+    Schema,
 }
 
 #[derive(Args)]

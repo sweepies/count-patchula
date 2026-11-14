@@ -15,6 +15,7 @@ Commands:
           here, without branches or pull requests.
   auth    Sign in to or out of a Count Patchula server for
           `--remote`.
+  cache   Inspect the cache directory's database.
   config  Inspect and validate Pkl configuration.
   lookup  Report available updates without writing; with
           no repository, reads the working tree here.
@@ -217,6 +218,62 @@ Usage: patchula auth logout [--server <URL>]
 
 Flags:
       --server <URL>    Server URL; also PATCHULA_SERVER.
+  -h, --help            Print help
+
+Global flags:
+      --recheck <WHEN>  When a ticked checkbox says it takes effect; also
+                        PATCHULA_RECHECK. Default: now in the server, next-run
+                        in the CLI.
+                        [possible values: now, next-run]
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
+      --color <WHEN>    Control ANSI colors in diagnostics.
+                        [possible values: auto, always, never]
+                        (default: auto)
+      --json            Emit command results and errors as JSON; configs stay
+                        Pkl.
+
+Run 'patchula <command> --help' for more information on a command.
+
+==> patchula cache --help
+Inspect the cache directory's database.
+
+Usage: patchula cache <SUBCOMMAND>
+
+Commands:
+  schema  Print the cache database schema this binary supports; it refuses a
+          cache from a newer one.
+  help    Print this message or the help of the given subcommand(s)
+
+Flags:
+  -h, --help            Print help
+
+Global flags:
+      --recheck <WHEN>  When a ticked checkbox says it takes effect; also
+                        PATCHULA_RECHECK. Default: now in the server, next-run
+                        in the CLI.
+                        [possible values: now, next-run]
+  -v, --verbose         Show request counts and phase timings after a batch;
+                        repeat for debug logs.
+      --color <WHEN>    Control ANSI colors in diagnostics.
+                        [possible values: auto, always, never]
+                        (default: auto)
+      --json            Emit command results and errors as JSON; configs stay
+                        Pkl.
+
+Examples:
+    Print the cache schema this binary supports
+    $ patchula cache schema
+
+Run 'patchula <command> --help' for more information on a command.
+
+==> patchula cache schema --help
+Print the cache database schema this binary supports; it refuses a cache from a
+newer one.
+
+Usage: patchula cache schema
+
+Flags:
   -h, --help            Print help
 
 Global flags:

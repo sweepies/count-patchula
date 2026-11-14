@@ -179,6 +179,9 @@ its current one (see the prune above).
 Migrations are transactional and tracked with SQLite's `user_version`. A
 migration that retires a representation costs one unconditional fetch per
 affected registry. A database from a future schema is rejected untouched.
+`patchula cache schema` prints the newest schema the binary supports; the
+GitHub Action keys its saved cache by it, so a run never restores a database
+its binary would reject.
 
 Opening runs `quick_check`. `SQLITE_CORRUPT`, `SQLITE_NOTADB` or a failed
 check closes the connection, moves the file and its WAL and SHM sidecars to a
