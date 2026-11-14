@@ -801,13 +801,12 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
     let blocker = rusqlite::Connection::open(&path).unwrap();
     blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
     let router = router(state, Arc::new(AtomicBool::new(true)));
-    let mut deliveries = Vec::new();
-    for (event, action) in [("push", ""), ("issues", "edited"), ("check_run", "created")] {
+    let deliver = |event: &'static str, action: &'static str| {
         let router = router.clone();
         let mut value = payload();
         value.as_object_mut().unwrap().remove("installation");
         value["action"] = json!(action);
-        deliveries.push(tokio::spawn(async move {
+        tokio::spawn(async move {
             router
                 .oneshot(request(
                     serde_json::to_vec(&value).unwrap(),
@@ -816,18 +815,44 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
                 ))
                 .await
                 .unwrap()
-        }));
-    }
+        })
+    };
+    let events = [("push", ""), ("issues", "edited"), ("check_run", "created")];
+    let mut deliveries: Vec<_> = events
+        .iter()
+        .map(|(event, action)| deliver(event, action))
+        .collect();
     // Lookup uses the App JWT without waiting for the startup token mint's mutex.
     tokio::time::timeout(Duration::from_secs(5), transport.lookup_started.notified())
         .await
         .unwrap();
-    // The deliveries now wait on the locked database. That none is
-    // answered before its work is durable is pinned by
-    // `database_busy_has_a_stable_error_kind_and_does_not_consume_the_delivery`
-    // (a write that fails answers 503); here every delivery must come
-    // through the contention accepted.
+    // Run every task until it is parked. On this current-thread runtime a
+    // paused clock moves only once no task can run, so the 1 ms sleep
+    // returns exactly then, and no timer further out fires. No delivery can
+    // be acknowledged while its write is locked out: one that has answered
+    // by now gave up on the lock (the database's own busy timeout, which a
+    // loaded machine can reach) and answered 503, so GitHub redelivers it.
+    tokio::time::pause();
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    tokio::time::resume();
+    let mut redeliver = Vec::new();
+    for (index, delivery) in deliveries.iter_mut().enumerate() {
+        if delivery.is_finished() {
+            let response = delivery.await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "a delivery was acknowledged while its write was locked out"
+            );
+            assert_eq!(error_kind(response).await, "cache-busy");
+            redeliver.push(index);
+        }
+    }
     blocker.execute_batch("COMMIT").unwrap();
+    for &index in &redeliver {
+        let (event, action) = events[index];
+        deliveries[index] = deliver(event, action);
+    }
     for delivery in deliveries {
         let response = tokio::time::timeout(Duration::from_secs(5), delivery)
             .await
@@ -837,7 +862,10 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
             panic!("delivery failed: {}", error_kind(response).await);
         }
     }
-    assert_eq!(transport.lookups.load(Ordering::SeqCst), 1);
+    // The deliveries in flight together shared one installation lookup.
+    if redeliver.is_empty() {
+        assert_eq!(transport.lookups.load(Ordering::SeqCst), 1);
+    }
     stop.send(true).unwrap();
     transport.finish_mint.notify_one();
     tokio::time::timeout(Duration::from_secs(5), worker)
