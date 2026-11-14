@@ -85,7 +85,7 @@ so its updates are unknown. A repository with lookup failures is still
   "package": "is-number",
   "datasource": "npm",
   "kind": "network",
-  "message": "registry HTTP 503"
+  "message": "HTTP 503"
 }]
 ```
 

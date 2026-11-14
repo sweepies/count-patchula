@@ -116,7 +116,7 @@ pub enum Error {
     /// A stored entry's status or headers do not parse.
     #[error("invalid cached HTTP metadata")]
     Metadata,
-    #[error("registry HTTP {0}")]
+    #[error("HTTP {0}")]
     Status(u16),
     /// The host is cooling down from an earlier 429 for longer than the
     /// client waits; no request was sent.

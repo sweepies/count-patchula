@@ -515,9 +515,10 @@ impl Engine {
     /// The persistent tool caches' size cap in GiB; 0 turns them off.
     pub fn set_lockfile_cache_limit(&mut self, cache_gib: u64) {
         self.lockfile_cache_gib = cache_gib;
-        if let Some(runner) = &mut self.lockfiles {
-            runner.set_cache_limit(cache_gib);
-        }
+        self.lockfiles = self
+            .lockfiles
+            .take()
+            .map(|runner| runner.with_cache_limit(cache_gib));
     }
     /// A server sets this between batches as its settings change.
     pub fn set_advertised_server(&mut self, url: Option<String>) {
@@ -610,9 +611,8 @@ impl Engine {
                 .with_nix(std::sync::Arc::new(RunnerFlakes(runner.clone())));
         }
     }
-    pub fn with_lockfile_runner(mut self, mut runner: patchula_tools::Runner) -> Self {
-        runner.set_cache_limit(self.lockfile_cache_gib);
-        self.lockfiles = Some(runner);
+    pub fn with_lockfile_runner(mut self, runner: patchula_tools::Runner) -> Self {
+        self.lockfiles = Some(runner.with_cache_limit(self.lockfile_cache_gib));
         self.look_up_mise_tools_with_runner();
         self
     }
@@ -678,15 +678,16 @@ impl Engine {
             )?,
         };
         let lockfiles = cache.workspace_dir().map(|path| {
-            let mut runner = match &auth {
+            let runner = match &auth {
                 Auth::Token(token) => patchula_tools::Runner::new(path.into(), token),
                 Auth::Credentials(credentials) => patchula_tools::Runner::new(path.into(), "")
                     .with_credentials(credentials.clone()),
             };
             // Set before `build` clones the runner into `sources` for Nix
             // lookups, so every copy shares the limit.
-            runner.set_cache_limit(settings.lockfiles.cache_gib);
-            runner.with_registries(&tool_registries)
+            runner
+                .with_cache_limit(settings.lockfiles.cache_gib)
+                .with_registries(&tool_registries)
         });
         let mut engine = Self::build(
             github,

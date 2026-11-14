@@ -2218,7 +2218,7 @@ mod tests {
             {"manager": "mise", "path": "mise.toml", "name": "pipx:acme/tidy", "package": "pipx:acme/tidy",
              "datasource": "mise", "kind": "not-found", "message": "mise lists no versions of pipx:acme/tidy"},
             {"manager": "npm", "path": "package.json", "name": "@acme/gone", "package": "@acme/gone",
-             "datasource": "npm", "kind": "not-found", "message": "registry HTTP 404"}
+             "datasource": "npm", "kind": "not-found", "message": "HTTP 404"}
         ]))
         .unwrap();
         let mut model = Model::new(&report, Origin::GitHub);

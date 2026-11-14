@@ -257,8 +257,9 @@ impl Runner {
         })
     }
     /// Set the persistent tool caches' size cap in GiB; 0 turns them off.
-    pub fn set_cache_limit(&mut self, cache_gib: u64) {
+    pub fn with_cache_limit(mut self, cache_gib: u64) -> Self {
         self.cache_gib = cache_gib;
+        self
     }
     /// Give lockfile tools the credentials of the entries that allow it
     /// (`tools = true`), among all of `registries`.

@@ -5,6 +5,7 @@
 //! comes from where he writes it, so text others wrote — which he preserves
 //! around his own sections — can invalidate a read but never be taken for
 //! his marker.
+use patchula_datasource::upstream::truncate;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 /// `<!-- patchula:` followed by his ownership JSON and ` -->`, closing his
@@ -257,28 +258,16 @@ pub(crate) fn ticked_lines(text: &str) -> Vec<&str> {
         .collect()
 }
 
-/// `text` cut to at most `len` bytes on a char boundary.
-pub(crate) fn cut_bytes(text: &str, len: usize) -> &str {
-    if text.len() <= len {
-        return text;
-    }
-    let mut end = len;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
-}
-
 /// `body` cut to `limit` bytes with his section and markers kept whole:
 /// only the foreign text around them is truncated, the text before his
 /// section first, then what follows it.
 pub(crate) fn truncate_marked(body: &str, limit: usize) -> String {
     let Some((before, section, after)) = regions(body) else {
-        return cut_bytes(body, limit).to_owned();
+        return truncate(body, limit).to_owned();
     };
     let room = limit.saturating_sub(section.len());
-    let before = cut_bytes(before, room);
-    let after = cut_bytes(after, room - before.len());
+    let before = truncate(before, room);
+    let after = truncate(after, room - before.len());
     format!("{before}{section}{after}")
 }
 
@@ -509,10 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn cut_and_truncate_marked_never_sever_his_markers() {
-        assert_eq!(cut_bytes("héllo", 2), "h");
-        assert_eq!(cut_bytes("héllo", 3), "hé");
-        assert_eq!(cut_bytes("abc", 10), "abc");
+    fn truncate_marked_never_severs_his_markers() {
         let text = body(" foreign tail");
         // Tight enough to cut the foreign text, generous enough for his
         // section: the markers come through whole and the result fits.

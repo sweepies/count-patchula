@@ -101,7 +101,7 @@ async fn an_unchanged_repository_is_quiet_without_a_request() {
         .run_at(options(), false, false, at("2026-10-15T00:00:00Z"))
         .await
         .unwrap();
-    fake.github.state().requests.clear();
+    fake.github.state().log.clear();
     let quiet = engine
         .sweep_quiet(&["demo/app".into()], at("2026-10-15T01:00:00Z"))
         .await

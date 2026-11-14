@@ -397,8 +397,6 @@ pub struct State {
     pub installations: Vec<u64>,
     /// Minted installation-token counter for `access_tokens`.
     minted: usize,
-    /// `(method, path)` of every request, in arrival order.
-    pub requests: Vec<(String, String)>,
     /// `(path, body)` of every mutation request, in arrival order.
     pub writes: Vec<(String, Value)>,
     /// ReleaseNotes operation bodies, in arrival order.
@@ -410,12 +408,19 @@ pub struct State {
     /// Server properties.
     pub settings: Settings,
     /// `(method, path, body)` of every request, in arrival order.
-    log: Vec<(String, String, Value)>,
+    pub log: Vec<(String, String, Value)>,
     /// The repository `FakeGitHub::new` named.
     primary: String,
 }
 
 impl State {
+    /// `(method, path)` of every request, in arrival order.
+    pub fn requests(&self) -> Vec<(String, String)> {
+        self.log
+            .iter()
+            .map(|(method, path, _)| (method.clone(), path.clone()))
+            .collect()
+    }
     fn new() -> Self {
         let mut repositories = BTreeMap::new();
         for (name, contents, releases, tags, release_tags) in [
@@ -447,7 +452,6 @@ impl State {
             actor: "patchula[bot]".into(),
             installations: vec![10],
             minted: 0,
-            requests: Vec::new(),
             writes: Vec::new(),
             release_queries: Vec::new(),
             traffic: BTreeMap::new(),
@@ -1173,7 +1177,7 @@ impl FakeGitHub {
     }
     /// `(method, path)` for every request, in arrival order.
     pub fn requests(&self) -> Vec<(String, String)> {
-        self.state().requests.clone()
+        self.state().requests()
     }
     /// `(path, body)` for every mutation request, in arrival order.
     pub fn writes(&self) -> Vec<(String, Value)> {
@@ -2584,9 +2588,6 @@ impl Transport for FakeGitHub {
             .unwrap_or(Value::Null);
         let mut state = self.state.lock().unwrap();
         let latency = state.settings.latency;
-        state
-            .requests
-            .push((request.method().to_string(), path.clone()));
         state
             .log
             .push((request.method().to_string(), path.clone(), body.clone()));

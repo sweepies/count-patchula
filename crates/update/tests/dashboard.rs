@@ -71,12 +71,12 @@ fn a_failed_lookup_is_listed_once_under_its_dependency() {
     repo.warnings.clear();
     repo.lookup_failures = serde_json::from_value(json!([{
         "manager":"npm","path":"package.json","name":"fixture","package":"fixture",
-        "datasource":"npm","kind":"network","message":"registry HTTP 503"
+        "datasource":"npm","kind":"network","message":"HTTP 503"
     }]))
     .unwrap();
     let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     assert_eq!(
-        text.matches("Lookup failed (npm, network): registry HTTP 503")
+        text.matches("Lookup failed (npm, network): HTTP 503")
             .count(),
         1,
         "{text}"

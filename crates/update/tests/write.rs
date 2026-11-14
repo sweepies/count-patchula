@@ -377,7 +377,7 @@ async fn dry_run_plans_diffs_and_never_sends_mutations() {
             .contains("+node = '22.0.0' # keep")
     );
     assert!(server.state().writes.is_empty());
-    assert!(server.state().requests.is_empty());
+    assert!(server.state().requests().is_empty());
     check_transcript();
 }
 #[tokio::test(start_paused = true)]
@@ -1223,18 +1223,18 @@ async fn shared_base_write_trace_and_request_budget() {
             .all(|p| p.action().status == BranchStatus::Created)
     );
     let state = server.state();
-    for (method, path) in &state.requests {
+    for (method, path) in &state.requests() {
         eprintln!("{method} api.github.com{path}");
     }
     eprintln!(
         "real: {} requests, simulated elapsed {:?}; 12 branches, 150ms/request, 1s mutation cooldown",
-        state.requests.len(),
+        state.requests().len(),
         started.elapsed()
     );
-    assert_eq!(state.requests.len(), 4 + 12 * 3 + 1);
+    assert_eq!(state.requests().len(), 4 + 12 * 3 + 1);
     assert_eq!(
         state
-            .requests
+            .requests()
             .iter()
             .filter(|(_, p)| p.ends_with("/git/trees/base-tree"))
             .count(),
@@ -1242,7 +1242,7 @@ async fn shared_base_write_trace_and_request_budget() {
     );
     assert!(
         !state
-            .requests
+            .requests()
             .iter()
             .any(|(_, p)| p.ends_with("/git/blobs"))
     );
@@ -1285,7 +1285,7 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
     .await;
     {
         let mut state = server.state();
-        state.requests.clear();
+        state.log.clear();
         state.writes.clear();
     }
     let mut repeat = plans();
@@ -1310,7 +1310,7 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
     // The actor comes with the run's inventory, so no viewer query is sent.
     assert_eq!(
         state
-            .requests
+            .requests()
             .iter()
             .filter(|(_, path)| path == "/graphql")
             .count(),
@@ -1319,10 +1319,10 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
     // The base commit and recursive tree are immutable reads now: the first
     // `apply_all` cached them, so this prepare sends only the two fresh
     // precondition reads beside the per-branch probes.
-    assert_eq!(state.requests.len(), 2 + 17 * 4);
+    assert_eq!(state.requests().len(), 2 + 17 * 4);
     eprintln!(
         "forced 17-branch recheck: {} reads, 0 mutations, {:?} simulated at 150ms/request",
-        state.requests.len(),
+        state.requests().len(),
         started.elapsed()
     );
     check_transcript();
@@ -1552,7 +1552,7 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
                 }
                 _ => {}
             }
-            s.requests.clear();
+            s.log.clear();
             s.settings.latency = std::time::Duration::from_millis(200);
         }
         let started = tokio::time::Instant::now();
@@ -1609,14 +1609,14 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
         );
         let s = server.state();
         assert_eq!(
-            s.requests.len(),
+            s.requests().len(),
             // The two pages, then the closing re-read of the first page's
             // constants.
             if case == "pages" { 3 } else { 1 },
             "{case}"
         );
         assert!(
-            s.requests
+            s.requests()
                 .iter()
                 .all(|(m, p)| m == "POST" && p == "/graphql")
         );
@@ -1824,7 +1824,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
         )
         .await;
         assert_eq!(next.action().status, BranchStatus::Rebased);
-        server.state().requests.clear();
+        server.state().log.clear();
         if case == "closed-while-waiting" {
             server.close_pulls_after_reads(1);
         }
@@ -1833,7 +1833,7 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
         let result = &lifecycle.actions[0];
         let s = server.state();
         let reads = s
-            .requests
+            .requests()
             .iter()
             .filter(|(m, p)| m == "GET" && p.ends_with("/pulls/1"))
             .count();
@@ -2026,7 +2026,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
                 }
                 _ => {}
             }
-            s.requests.clear();
+            s.log.clear();
         }
         let (mut warm, _) = make_plan(if case == "target" { "22.1.0" } else { "22.0.0" });
         let inventory = patchula_update::Inventory::read(&github, &cache, &repo, &config)
@@ -2054,7 +2054,7 @@ async fn closed_update_receipts_are_freshly_verified_and_invalidated() {
             "{case}"
         );
         assert_eq!(
-            server.state().requests,
+            server.state().requests(),
             [("POST".into(), "/graphql".into())]
         );
     }
@@ -2121,7 +2121,7 @@ async fn a_pull_reopened_mid_walk_takes_the_full_write_path() {
         .mutate(|state, _| {
             state.repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("open");
         });
-    server.state().requests.clear();
+    server.state().log.clear();
     let (mut warm, _) = make_plan("22.0.0");
     let inventory = patchula_update::Inventory::read(&github, &cache, &repo, &config)
         .await
@@ -2142,7 +2142,7 @@ async fn a_pull_reopened_mid_walk_takes_the_full_write_path() {
     // Two paged requests, then the closing re-read; a one-page walk stays
     // one request.
     assert_eq!(
-        server.state().requests,
+        server.state().requests(),
         [
             ("POST".into(), "/graphql".into()),
             ("POST".into(), "/graphql".into()),
@@ -2592,7 +2592,7 @@ async fn text_others_wrote_in_the_description_is_left_alone_and_never_doubled() 
         let edited = format!("{before}{own}{after}");
         server.state().repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(edited);
         // No change in content: nothing is patched, three publishes over.
-        server.state().requests.clear();
+        server.state().log.clear();
         for _ in 0..3 {
             publish(false).await;
             let mut s = server.state();
@@ -2686,7 +2686,7 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
                     body = body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check");
                 }
                 s.repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(body.replace('\n', "\r\n"));
-                s.requests.clear();
+                s.log.clear();
                 s.writes.clear();
                 s.release_queries.clear();
             }
@@ -2705,7 +2705,7 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
                 "{origin}: recheck validates timestamps and fetches only changed bodies"
             );
             let patches = s
-                .requests
+                .requests()
                 .iter()
                 .filter(|(method, path)| method == "PATCH" && path == "/repos/demo/app/pulls/1")
                 .count();
@@ -2799,7 +2799,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
     );
     let reads = server
         .state()
-        .requests
+        .requests()
         .iter()
         .filter(|(_, p)| p.starts_with("/data/github/"))
         .count();
@@ -2815,7 +2815,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         reads,
         server
             .state()
-            .requests
+            .requests()
             .iter()
             .filter(|(_, p)| p.contains("/releases/tags/") || p.starts_with("/data/github/"))
             .count(),
@@ -2878,7 +2878,7 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
                 && b["variables"]["input"]["expectedHeadOid"]
                     == p.action().commit.as_deref().unwrap()
         }));
-        assert!(!s.requests.iter().any(|(_, p)| p.ends_with("/merge")));
+        assert!(!s.requests().iter().any(|(_, p)| p.ends_with("/merge")));
     }
     let (next, _) = make_plan("22.1.0");
     let mut draft = Draft::from(next);
@@ -3188,7 +3188,7 @@ async fn pin_title_respects_prefix_and_pin_rows_never_request_release_notes() {
     assert!(text.contains("| Package | Change | Type | File |"));
     assert!(text.contains("| pin |"));
     assert!(!text.to_lowercase().contains("release notes"));
-    assert!(!s.requests.iter().any(|(_, p)| p.contains("/releases/")));
+    assert!(!s.requests().iter().any(|(_, p)| p.contains("/releases/")));
     check_transcript();
 }
 
@@ -4118,7 +4118,7 @@ async fn obsolete_prs_fetch_repository_metadata_once() {
             }
         }
     }
-    server.state().requests.clear();
+    server.state().log.clear();
     let state = patchula_update::Lifecycle::prepare_with_controls(
         &github,
         &repo,
@@ -4134,20 +4134,21 @@ async fn obsolete_prs_fetch_repository_metadata_once() {
     assert_eq!(state.actions.len(), 2, "{:?}", state.actions);
     let s = server.state();
     let metas = s
-        .requests
+        .requests()
         .iter()
         .filter(|(method, path)| method == "GET" && path == "/repos/demo/app")
         .count();
-    assert_eq!(metas, 1, "{:?}", s.requests);
+    assert_eq!(metas, 1, "{:?}", s.requests());
     let heads = s
-        .requests
+        .requests()
         .iter()
         .filter(|(method, path)| method == "GET" && path == "/repos/demo/app/branches/main")
         .count();
     assert_eq!(
-        heads, 2,
+        heads,
+        2,
         "the head is re-read before each closure: {:?}",
-        s.requests
+        s.requests()
     );
     check_transcript();
 }
@@ -4394,7 +4395,7 @@ async fn ungenerated_lockfiles_fail_before_any_github_request() {
         p.action().reason.as_deref(),
         Some("lockfiles must be generated successfully before publication")
     );
-    assert!(server.state().requests.is_empty());
+    assert!(server.state().requests().is_empty());
     check_transcript();
 }
 
@@ -4898,7 +4899,7 @@ async fn a_hundred_pulls_of_history_narrow_to_open_and_planned_reads() {
     let (mut plan, _) = make_plan("22.0.0");
     {
         let mut state = server.state();
-        state.requests.clear();
+        state.log.clear();
         state.traffic.clear();
     }
     patchula_update::Lifecycle::prepare_with_controls(
@@ -4933,7 +4934,7 @@ async fn a_hundred_pulls_of_history_narrow_to_open_and_planned_reads() {
     assert_eq!(listing("state=open"), 1, "{:?}", state.traffic);
     assert_eq!(listing("state=all"), 0, "{:?}", state.traffic);
     assert_eq!(
-        state.requests.iter().filter(|(m, _)| m == "POST").count(),
+        state.requests().iter().filter(|(m, _)| m == "POST").count(),
         1
     );
     check_transcript();
@@ -5007,7 +5008,7 @@ async fn a_branchs_closed_pulls_page_on_their_own() {
         suppressor["number"] = json!(2);
         repo.prs.insert(2, suppressor);
     }
-    server.state().requests.clear();
+    server.state().log.clear();
     patchula_update::Lifecycle::prepare_with_controls(
         &github,
         &repo,
@@ -5028,7 +5029,7 @@ async fn a_branchs_closed_pulls_page_on_their_own() {
     assert_eq!(
         server
             .state()
-            .requests
+            .requests()
             .iter()
             .filter(|(m, _)| m == "POST")
             .count(),
