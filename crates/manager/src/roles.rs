@@ -432,6 +432,16 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             roles.writable = named(lock_names(Manager::Apm).supported, path);
             roles.read = named(manifest_names(Manager::Apm), path);
         }
+        Manager::GithubActions => {
+            // The Actions run writes the lock; the workflows and action
+            // files it is written from are checked out only while the
+            // work holds an Actions job (checkout.rs), so nothing here
+            // is `read` and `.github/dependabot.yml` stays out.
+            roles.writable = path == ".github/workflows/actions.lock";
+            // A workflow or action file can steer the run's fetches: it
+            // names the repositories the tool resolves.
+            roles.steers = github_workflow(path) || action_file(path) || roles.writable;
+        }
         _ => {}
     }
     roles
@@ -478,6 +488,24 @@ pub fn credential_scope(path: &str) -> bool {
 /// A Cargo configuration file, read only for its `registries`.
 pub fn cargo_config(path: &str) -> bool {
     crate::cargo::config_file(path)
+}
+
+/// A workflow file directly under `.github/workflows/` — never nested,
+/// and never the lockfile itself. `.forgejo` and `.gitea` workflows are
+/// not GitHub Actions' and match nothing here.
+pub fn github_workflow(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix(".github/workflows/") else {
+        return false;
+    };
+    rest != "actions.lock"
+        && !rest.contains('/')
+        && matches!(rest.rsplit('.').next(), Some("yml" | "yaml"))
+}
+
+/// An in-repository action definition, `action.yml` or `action.yaml` at
+/// any depth.
+pub fn action_file(path: &str) -> bool {
+    matches!(leaf(path), "action.yml" | "action.yaml")
 }
 
 /// Whether `path` is a NuGet configuration file, in any letter case.

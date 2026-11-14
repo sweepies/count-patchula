@@ -53,7 +53,7 @@ fn catalog(values: &[&str]) -> Catalog {
 
 #[test]
 fn peer_support_ranges_widen_without_pins_while_installed_dependencies_remain_exact() {
-    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let eval = Evaluator::new(&config("benchmark-public"), Default::default()).unwrap();
     for (kind, current, target, expected) in [
         (DependencyKind::Peer, "^5", "7.0.2", "^5 || ^7.0.0"),
         (
@@ -99,7 +99,7 @@ fn peer_support_ranges_widen_without_pins_while_installed_dependencies_remain_ex
 #[test]
 fn satisfying_provider_constraints_and_cargo_floors_are_retained() {
     let cfg = config("preserve-ranges");
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("azure_core");
     dep.manager = Manager::Cargo;
     dep.source = Source::Crates;
@@ -115,7 +115,7 @@ fn satisfying_provider_constraints_and_cargo_floors_are_retained() {
     dep.resolved = None;
     assert!(eval.propose(&dep, &catalog(&["1.1.0"])).unwrap().is_empty());
 
-    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let eval = Evaluator::new(&config("benchmark-public"), Default::default()).unwrap();
     dep.manager = Manager::Terraform;
     dep.kind = DependencyKind::Provider;
     dep.source = Source::Terraform;
@@ -156,7 +156,7 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
     dep.resolved = Some(dep.current.clone());
     let mut versions = catalog(&["22.1.0", "24.2.0", "26.1.0"]);
     versions.dist_tags.insert("lts".into(), "24.2.0".into());
-    let stable = Evaluator::new(&cfg)
+    let stable = Evaluator::new(&cfg, Default::default())
         .unwrap()
         .propose(&dep, &versions)
         .unwrap();
@@ -167,7 +167,7 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
     );
     let rule = serde_json::from_value(serde_json::json!({"note":"Node LTS", "select":{"packages":["node"],"dependencies":[],"managers":["mise"],"files":[],"updates":[],"sources":[],"kinds":[],"current":null},"apply":{"channel":"lts"}})).unwrap();
     cfg.rules.push(rule);
-    let lts = Evaluator::new(&cfg)
+    let lts = Evaluator::new(&cfg, Default::default())
         .unwrap()
         .propose(&dep, &versions)
         .unwrap();
@@ -184,7 +184,7 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
     );
     versions.dist_tags.clear();
     assert!(
-        Evaluator::new(&cfg)
+        Evaluator::new(&cfg, Default::default())
             .unwrap()
             .propose(&dep, &versions)
             .unwrap_err()
@@ -193,7 +193,7 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
     cfg.rules.last_mut().unwrap().apply.channel = Some(ReleaseChannel::Stable);
     // A catalog without LTS evidence, as when the `lts` listing failed, still
     // serves the stable channel.
-    let stable = Evaluator::new(&cfg)
+    let stable = Evaluator::new(&cfg, Default::default())
         .unwrap()
         .propose(&dep, &versions)
         .unwrap();
@@ -208,7 +208,7 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
     // `lts` is not Node-only: any catalog carrying the tag answers to it.
     let mut tagged = catalog(&["1.4.0", "1.5.0", "2.0.0"]);
     tagged.dist_tags.insert("lts".into(), "1.5.0".into());
-    let lts = Evaluator::new(&cfg)
+    let lts = Evaluator::new(&cfg, Default::default())
         .unwrap()
         .propose(&dep, &tagged)
         .unwrap();
@@ -222,7 +222,7 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
     );
     // Without the tag the evaluation says so rather than guessing at stable.
     assert!(
-        Evaluator::new(&cfg)
+        Evaluator::new(&cfg, Default::default())
             .unwrap()
             .propose(&dep, &catalog(&["2.0.0"]))
             .unwrap_err()
@@ -233,7 +233,7 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
 #[test]
 fn equal_precedence_candidates_and_age_boundaries_are_order_independent() {
     let cfg = config("benchmark-public");
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T05:51:26Z")
         .unwrap()
         .to_utc();
@@ -269,7 +269,7 @@ fn equal_precedence_candidates_and_age_boundaries_are_order_independent() {
 
 #[test]
 fn action_digest_targets_resolve_the_new_commit_without_expanding_ref_precision() {
-    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let eval = Evaluator::new(&config("benchmark-public"), Default::default()).unwrap();
     let mut dep = dependency("example/action");
     dep.manager = Manager::GithubActions;
     dep.kind = DependencyKind::Action;
@@ -309,7 +309,7 @@ fn mise_latest_pins_the_newest_listed_version() {
         )]))
         .unwrap()
         .dependencies;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     for dep in dependencies {
         // mise lists versions without their tag prefixes (`jq-1.8.2`, `bws-v2.1.0`).
         let (versions, target) = if dep.name == "jq" {
@@ -328,7 +328,7 @@ fn mise_latest_pins_the_newest_listed_version() {
 fn docker_policy_keeps_variants_and_python_epochs_use_pep440_order() {
     let mut cfg = config("renovate-migration");
     cfg.defaults.wait_hours = 0;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("image");
     dep.manager = Manager::Compose;
     dep.kind = DependencyKind::ContainerImage;
@@ -370,7 +370,7 @@ fn docker_policy_keeps_variants_and_python_epochs_use_pep440_order() {
 }
 #[test]
 fn grouping_ops_workflow_opt_out_and_opaque_refs() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     for name in [
         "alchemy",
         "@alchemy.run/core",
@@ -417,11 +417,11 @@ fn grouping_ops_workflow_opt_out_and_opaque_refs() {
 fn exact_preserve_nightly_and_deprecated_yanked_filters() {
     let mut dep = dependency("serde");
     dep.current = "^1.0.0".into();
-    let eval = Evaluator::new(&config("preserve-ranges")).unwrap();
+    let eval = Evaluator::new(&config("preserve-ranges"), Default::default()).unwrap();
     let p = eval.propose(&dep, &catalog(&["1.2.0", "2.0.0"])).unwrap();
     assert!(p.iter().any(|p| p.new_value.as_deref() == Some("^1.0.0")));
     assert!(p.iter().any(|p| p.new_value.as_deref() == Some("^2.0.0")));
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let p = eval.propose(&dep, &catalog(&["1.0.0"])).unwrap();
     assert_eq!(p[0].update_type, Update::Pin);
     assert_eq!(p[0].new_value.as_deref(), Some("1.0.0"));
@@ -433,7 +433,7 @@ fn exact_preserve_nightly_and_deprecated_yanked_filters() {
             .unwrap()
             .is_empty()
     );
-    let eval = Evaluator::new(&config("nightly-pins")).unwrap();
+    let eval = Evaluator::new(&config("nightly-pins"), Default::default()).unwrap();
     dep.name = "pingdotgg/t3code".into();
     dep.package.clone_from(&dep.name);
     dep.manager = Manager::Regex;
@@ -455,7 +455,7 @@ fn exact_preserve_nightly_and_deprecated_yanked_filters() {
 
 #[test]
 fn lookup_evidence_records_rejected_versions_and_per_class_policy() {
-    let eval = Evaluator::new(&config("kubernetes-infra")).unwrap();
+    let eval = Evaluator::new(&config("kubernetes-infra"), Default::default()).unwrap();
     let mut dep = dependency("plain");
     let mut versions = catalog(&["0.9.0", "1.1.0", "1.2.0", "1.3.0"]);
     versions.versions[0].deprecated = true;
@@ -496,7 +496,7 @@ fn rules_replace_lists_in_order_and_windows_are_reported() {
     rule.apply.group = Some(String::new());
     rule.apply.labels = Some(vec![]);
     config.rules.push(rule);
-    let eval = Evaluator::new(&config).unwrap();
+    let eval = Evaluator::new(&config, Default::default()).unwrap();
     let p = eval
         .propose(&dependency("plain"), &catalog(&["1.2.0"]))
         .unwrap();
@@ -507,7 +507,7 @@ fn rules_replace_lists_in_order_and_windows_are_reported() {
     assert_eq!(policy.windows.len(), 1);
     config.ignore = vec!["plain".into()];
     assert!(
-        Evaluator::new(&config)
+        Evaluator::new(&config, Default::default())
             .unwrap()
             .propose(&dependency("plain"), &catalog(&["1.2.0"]))
             .unwrap()
@@ -519,7 +519,7 @@ fn rules_replace_lists_in_order_and_windows_are_reported() {
 fn negated_ignore_exceptions_match_manifest_or_registry_alias() {
     let mut config = config("renovate-migration");
     config.ignore = vec!["!alias".into()];
-    let eval = Evaluator::new(&config).unwrap();
+    let eval = Evaluator::new(&config, Default::default()).unwrap();
     let mut dep = dependency("alias");
     dep.package = "real".into();
     assert!(!eval.ignored(&dep));
@@ -528,7 +528,7 @@ fn negated_ignore_exceptions_match_manifest_or_registry_alias() {
 
 #[test]
 fn floating_dist_tags_and_latest_tools_can_be_pinned() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let mut dep = dependency("plain");
     dep.current = "latest".into();
     dep.resolved = None;
@@ -562,7 +562,7 @@ fn extracted_reusable_workflow_matches_runner_digest_opt_out() {
         .unwrap();
     let dep = &extracted.dependencies[0];
     assert_eq!(dep.name, "acme/shared-workflows");
-    let eval = Evaluator::new(&config).unwrap();
+    let eval = Evaluator::new(&config, Default::default()).unwrap();
     assert!(!eval.needs_lookup(dep));
     assert!(eval.propose(dep, &catalog(&["v1.0.0"])).unwrap().is_empty());
     assert!(
@@ -580,7 +580,7 @@ fn instant(value: &str) -> chrono::DateTime<chrono::Utc> {
 #[test]
 fn held_back_versions_share_the_normalized_proposal_identity() {
     let cfg = config("renovate-migration");
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("plain");
     dep.extract = Some(r"^release-(?<version>.*)$".into());
     let mut versions = catalog(&["release-1.0.1", "release-1.0.2"]);
@@ -595,7 +595,7 @@ fn held_back_versions_share_the_normalized_proposal_identity() {
 
 #[test]
 fn held_back_summarizes_newest_but_keeps_earliest_eligibility() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let mut versions = catalog(&["1.0.2", "1.0.4", "1.0.3"]);
     for (v, date) in versions.versions.iter_mut().zip([
         "2026-10-14T13:00:00Z",
@@ -634,7 +634,7 @@ fn manual_age_override_selects_only_its_version_and_class_and_preserves_disabled
     }
     let now = instant("2026-10-15T12:00:00Z");
     let overrides = std::collections::BTreeSet::from([("1.0.2".into(), "patch".into())]);
-    let result = Evaluator::new(&cfg)
+    let result = Evaluator::new(&cfg, Default::default())
         .unwrap()
         .evaluate_with_age_overrides(&dep, &versions, now, &overrides)
         .unwrap();
@@ -654,7 +654,7 @@ fn manual_age_override_selects_only_its_version_and_class_and_preserves_disabled
     assert!(!result.held_back.is_empty());
     cfg.defaults.active = false;
     assert!(
-        Evaluator::new(&cfg)
+        Evaluator::new(&cfg, Default::default())
             .unwrap()
             .evaluate_with_age_overrides(&dep, &versions, now, &overrides)
             .unwrap()
@@ -665,7 +665,7 @@ fn manual_age_override_selects_only_its_version_and_class_and_preserves_disabled
 #[test]
 fn release_age_falls_back_and_reports_eligibility_without_hiding_current() {
     let config = config("renovate-migration");
-    let eval = Evaluator::new(&config).unwrap();
+    let eval = Evaluator::new(&config, Default::default()).unwrap();
     let now = instant("2026-10-15T12:00:00Z");
     let mut versions = catalog(&["1.0.0", "1.0.1", "1.0.2", "2.0.0", "3.0.0"]);
     for (v, date) in versions.versions.iter_mut().zip([
@@ -707,7 +707,7 @@ fn release_age_falls_back_and_reports_eligibility_without_hiding_current() {
     );
     let mut cfg = config;
     cfg.defaults.wait_hours = 0;
-    let result = Evaluator::new(&cfg)
+    let result = Evaluator::new(&cfg, Default::default())
         .unwrap()
         .evaluate_at(&dependency("plain"), &versions, now)
         .unwrap();
@@ -728,7 +728,7 @@ fn missing_dates_all_held_and_rule_overrides_are_explicit() {
     for version in &mut versions.versions {
         version.published_at = Some("2026-10-15T00:00:00Z".into());
     }
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let result = eval
         .evaluate_at(&dependency("plain"), &versions, now)
         .unwrap();
@@ -749,7 +749,7 @@ fn missing_dates_all_held_and_rule_overrides_are_explicit() {
     rule.apply.wait_hours = Some(12);
     cfg.rules = vec![rule];
     assert_eq!(
-        Evaluator::new(&cfg)
+        Evaluator::new(&cfg, Default::default())
             .unwrap()
             .evaluate_at(&dependency("plain"), &versions, now)
             .unwrap()
@@ -762,7 +762,7 @@ fn missing_dates_all_held_and_rule_overrides_are_explicit() {
 
 #[test]
 fn floating_targets_fall_back_and_existing_lock_pins_survive_age_gate() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let now = instant("2026-10-15T12:00:00Z");
     let mut dep = dependency("plain");
     dep.current = "latest".into();
@@ -792,7 +792,7 @@ fn runner_latest_is_floating_and_versioned_images_never_get_digests() {
         )]))
         .unwrap()
         .dependencies;
-    let eval = Evaluator::new(&config).unwrap();
+    let eval = Evaluator::new(&config, Default::default()).unwrap();
     assert!(!eval.needs_lookup(&deps[0]));
     let p = eval
         .propose(&deps[1], &catalog(&["24.04", "26.04"]))
@@ -825,7 +825,7 @@ fn oci_charts_follow_the_image_digest_setting() {
     };
 
     cfg.defaults.action_digests = false;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     assert!(
         updates(&eval, &chart)
             .iter()
@@ -843,7 +843,7 @@ fn oci_charts_follow_the_image_digest_setting() {
     );
 
     cfg.defaults.image_digests = false;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     assert!(
         updates(&eval, &chart)
             .iter()
@@ -867,7 +867,7 @@ fn mise_current_versions_resolve_from_the_listing_without_proposal_filters() {
         )]))
         .unwrap()
         .dependencies;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     for (name, listed, expected) in [
         ("age", "1.2.3", "1.2.3"),
         ("fnox", "2.3.4", "2.3.4"),
@@ -888,7 +888,7 @@ fn mise_current_versions_resolve_from_the_listing_without_proposal_filters() {
 
 #[test]
 fn floating_action_aliases_resolve_by_commit_and_keep_comment_precision() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let mut dep = dependency("example/action");
     dep.manager = Manager::GithubActions;
     dep.source = Source::GithubTags;
@@ -930,7 +930,7 @@ fn floating_action_aliases_resolve_by_commit_and_keep_comment_precision() {
 
 #[test]
 fn docker_alias_precision_prevents_patch_and_date_tag_proposals() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let mut dep = dependency("image");
     dep.manager = Manager::Kubernetes;
     dep.kind = DependencyKind::ContainerImage;
@@ -948,7 +948,7 @@ fn docker_alias_precision_prevents_patch_and_date_tag_proposals() {
 
 #[test]
 fn cargo_noop_ranges_are_not_updates_and_both_breaking_tracks_survive() {
-    let eval = Evaluator::new(&config("preserve-ranges")).unwrap();
+    let eval = Evaluator::new(&config("preserve-ranges"), Default::default()).unwrap();
     let mut dep = dependency("example");
     dep.manager = Manager::Cargo;
     dep.source = Source::Crates;
@@ -965,7 +965,7 @@ fn cargo_noop_ranges_are_not_updates_and_both_breaking_tracks_survive() {
 
 #[test]
 fn satisfying_npm_range_upgrade_is_one_pin_even_with_an_older_lock() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let mut dep = dependency("plain");
     dep.current = "^1.0.0".into();
     dep.resolved = Some("1.0.0".into());
@@ -991,14 +991,14 @@ fn numeric_mise_selectors_resolve_the_release_line_without_fake_zero_patches() {
     dep.current = "24".into();
     dep.resolved = Some("24".into());
     let versions = catalog(&["24.0.1", "24.6.2", "26.1.0"]);
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     assert_eq!(
         eval.resolved_current_version(&dep, &versions)
             .unwrap()
             .as_deref(),
         Some("24.6.2")
     );
-    let p = Evaluator::new(&config("renovate-migration"))
+    let p = Evaluator::new(&config("renovate-migration"), Default::default())
         .unwrap()
         .propose(&dep, &versions)
         .unwrap();
@@ -1022,7 +1022,7 @@ fn runtime_support_intervals_are_observed_without_spurious_exact_pins() {
     assert_eq!(dep.kind, DependencyKind::Toolchain);
     assert_eq!(dep.location.pointer, "/engines/node");
     let versions = catalog(&["22.1.0", "24.2.0", "26.3.0", "27.0.0"]);
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     assert_eq!(
         eval.resolved_current_version(dep, &versions)
             .unwrap()
@@ -1030,7 +1030,7 @@ fn runtime_support_intervals_are_observed_without_spurious_exact_pins() {
         Some("26.3.0")
     );
     assert!(
-        Evaluator::new(&cfg)
+        Evaluator::new(&cfg, Default::default())
             .unwrap()
             .propose(dep, &versions)
             .unwrap()
@@ -1041,7 +1041,7 @@ fn runtime_support_intervals_are_observed_without_spurious_exact_pins() {
 fn pyproject_pins_move_poetry_ranges_keep_form_and_satisfied_ranges_wait() {
     let mut cfg = config("renovate-migration");
     cfg.defaults.wait_hours = 0;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("ruff");
     dep.manager = Manager::Pyproject;
     dep.kind = DependencyKind::Production;
@@ -1062,7 +1062,7 @@ fn pyproject_pins_move_poetry_ranges_keep_form_and_satisfied_ranges_wait() {
     dep.current = ">=0.6".into();
     let mut preserve = cfg.clone();
     preserve.defaults.versions = patchula_words::VersionPolicy::Preserve;
-    let eval = Evaluator::new(&preserve).unwrap();
+    let eval = Evaluator::new(&preserve, Default::default()).unwrap();
     let open = eval.propose(&dep, &releases).unwrap();
     assert_eq!(
         open.iter()
@@ -1087,7 +1087,7 @@ fn pyproject_pins_move_poetry_ranges_keep_form_and_satisfied_ranges_wait() {
 fn maven_variants_are_kept_and_ordered_by_maven_rules() {
     let mut cfg = config("renovate-migration");
     cfg.defaults.wait_hours = 0;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("com.google.guava:guava");
     dep.manager = Manager::Maven;
     dep.kind = DependencyKind::Production;
@@ -1117,7 +1117,7 @@ fn maven_variants_are_kept_and_ordered_by_maven_rules() {
 fn unlocked_composer_and_gem_ranges_classify_from_their_floor() {
     let mut cfg = config("renovate-migration");
     cfg.defaults.wait_hours = 0;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("symfony/console");
     dep.manager = Manager::Composer;
     dep.kind = DependencyKind::Production;
@@ -1154,7 +1154,7 @@ fn unlocked_composer_and_gem_ranges_classify_from_their_floor() {
 /// release of an ordinary package still waits.
 #[test]
 fn reference_data_is_fast_tracked_by_the_built_in_rule() {
-    let eval = Evaluator::new(&config("defaults")).unwrap();
+    let eval = Evaluator::new(&config("defaults"), Default::default()).unwrap();
     let mut versions = catalog(&["2026.10.20"]);
     versions.versions[0].published_at = Some("2026-10-22T11:00:00Z".into());
     let now = chrono::DateTime::parse_from_rfc3339("2026-10-22T12:00:00Z")
@@ -1218,7 +1218,7 @@ const PRETTIER: &[&str] = &[
 
 #[test]
 fn a_stable_mise_pin_is_not_offered_a_prerelease_from_the_listing() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let proposals = eval
         .propose(
             &prettier_tool("2.8.8"),
@@ -1240,7 +1240,7 @@ fn a_stable_mise_pin_is_not_offered_a_prerelease_from_the_listing() {
 
 #[test]
 fn a_prerelease_mise_pin_is_offered_a_newer_prerelease() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let proposals = eval
         .propose(
             &prettier_tool("3.0.0-alpha.1"),
@@ -1254,7 +1254,7 @@ fn a_prerelease_mise_pin_is_offered_a_newer_prerelease() {
 #[test]
 fn gitlab_refs_update_to_the_exact_tag_name() {
     let cfg = config("benchmark-public");
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("grp/proj");
     dep.manager = Manager::GitlabciInclude;
     dep.package = "gitlab.com/grp/proj".into();
@@ -1276,7 +1276,7 @@ fn gitlab_refs_update_to_the_exact_tag_name() {
 #[test]
 fn pre_commit_revs_update_to_the_exact_tag_name() {
     let cfg = config("benchmark-public");
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("org/hooks");
     dep.manager = Manager::PreCommit;
     dep.file = ".pre-commit-config.yaml".into();
@@ -1302,7 +1302,7 @@ fn pre_commit_revs_update_to_the_exact_tag_name() {
 fn flake_inputs_get_digest_updates_after_the_release_age_wait() {
     let mut cfg = config("benchmark-public");
     cfg.defaults.wait_hours = 24;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("nixpkgs");
     dep.manager = Manager::Nix;
     dep.kind = DependencyKind::FlakeInput;
@@ -1352,7 +1352,7 @@ fn flake_inputs_get_digest_updates_after_the_release_age_wait() {
 
 #[test]
 fn apm_short_tags_are_fixed_tags_not_floating_aliases() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let mut dep = dependency("example/package");
     dep.manager = Manager::Apm;
     dep.file = "apm.yml".into();
@@ -1410,7 +1410,8 @@ fn an_image_rebuild_is_secured_only_as_security_apply_allows() {
             format!("amends \"PatchulaConfig.pkl\"\nsecurity {{ apply {{ {overrides} }} }}\n"),
         )
         .unwrap();
-        let eval = Evaluator::new(&patchula_config::load(&path).unwrap()).unwrap();
+        let eval =
+            Evaluator::new(&patchula_config::load(&path).unwrap(), Default::default()).unwrap();
         let dep = image(&format!("sha256:{}", "a".repeat(64)));
         let mut update = eval
             .digest_proposal(&dep, &format!("sha256:{}", "b".repeat(64)))
@@ -1460,7 +1461,7 @@ fn an_image_rebuild_is_secured_only_as_security_apply_allows() {
         "amends \"PatchulaConfig.pkl\"\nsecurity { apply { permitted = \"semver:<2\" } }\n",
     )
     .unwrap();
-    let eval = Evaluator::new(&patchula_config::load(&path).unwrap()).unwrap();
+    let eval = Evaluator::new(&patchula_config::load(&path).unwrap(), Default::default()).unwrap();
     let dep = image(&format!("sha256:{}", "a".repeat(64)));
     let mut update = eval
         .digest_proposal(&dep, &format!("sha256:{}", "b".repeat(64)))
@@ -1478,7 +1479,7 @@ fn an_image_rebuild_is_secured_only_as_security_apply_allows() {
 fn in_range_releases_are_lock_only_updates_when_a_lockfile_holds_the_version() {
     let mut cfg = config("preserve-ranges");
     cfg.defaults.wait_hours = 0;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     for (manager, source, scheme, current, locked, newer) in [
         (
             Manager::Cargo,
@@ -1547,7 +1548,7 @@ fn in_range_releases_are_lock_only_updates_when_a_lockfile_holds_the_version() {
 fn lock_only_updates_keep_the_wait_the_permitted_filter_and_exact_policy() {
     let mut cfg = config("preserve-ranges");
     cfg.defaults.wait_hours = 24;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("tokio");
     dep.manager = Manager::Cargo;
     dep.source = Source::Crates;
@@ -1581,7 +1582,7 @@ fn lock_only_updates_keep_the_wait_the_permitted_filter_and_exact_policy() {
         deprecated: false,
         yanked: false,
     });
-    let result = Evaluator::new(&filtered)
+    let result = Evaluator::new(&filtered, Default::default())
         .unwrap()
         .evaluate_at(&dep, &later, instant("2026-10-15T12:00:00Z"))
         .unwrap();
@@ -1597,7 +1598,7 @@ fn lock_only_updates_keep_the_wait_the_permitted_filter_and_exact_policy() {
     // Exact policy still pins the declaration.
     cfg.defaults.versions = patchula_words::VersionPolicy::Exact;
     cfg.rules.retain(|rule| rule.apply.versions.is_none());
-    let exact = Evaluator::new(&cfg)
+    let exact = Evaluator::new(&cfg, Default::default())
         .unwrap()
         .evaluate_at(&dep, &releases, instant("2026-10-15T12:00:00Z"))
         .unwrap();
@@ -1609,7 +1610,7 @@ fn lock_only_updates_keep_the_wait_the_permitted_filter_and_exact_policy() {
 fn out_of_range_releases_still_shift_the_declaration_under_preserve() {
     let mut cfg = config("preserve-ranges");
     cfg.defaults.wait_hours = 0;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("tokio");
     dep.manager = Manager::Cargo;
     dep.source = Source::Crates;
@@ -1635,7 +1636,7 @@ fn out_of_range_releases_still_shift_the_declaration_under_preserve() {
 /// elsewhere.
 #[test]
 fn cargo_pyproject_bundler_and_composer_preserve_by_default_and_the_rest_pin() {
-    let eval = Evaluator::new(&config("defaults")).unwrap();
+    let eval = Evaluator::new(&config("defaults"), Default::default()).unwrap();
     for (manager, source, scheme, current, locked, newer, versions) in [
         (
             Manager::Cargo,
@@ -1712,7 +1713,7 @@ fn cargo_pyproject_bundler_and_composer_preserve_by_default_and_the_rest_pin() {
 fn constraints_that_cannot_be_rewritten_are_reported_not_failed() {
     let mut cfg = config("preserve-ranges");
     cfg.defaults.wait_hours = 0;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     for (manager, source, scheme, current, locked) in [
         (
             Manager::Bundler,
@@ -1767,7 +1768,7 @@ fn constraints_that_cannot_be_rewritten_are_reported_not_failed() {
 fn an_unrewritable_newest_release_does_not_hide_an_older_one_the_range_allows() {
     let mut cfg = config("preserve-ranges");
     cfg.defaults.wait_hours = 0;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut dep = dependency("example");
     dep.manager = Manager::Composer;
     dep.source = Source::Packagist;
@@ -1841,7 +1842,7 @@ fn bracketed_intervals_start_at_their_first_bound_and_widen() {
         dep.resolved = None;
         let releases = catalog(&versions);
         cfg.defaults.versions = patchula_words::VersionPolicy::Widen;
-        let widen = Evaluator::new(&cfg)
+        let widen = Evaluator::new(&cfg, Default::default())
             .unwrap()
             .evaluate_at(&dep, &releases, now)
             .unwrap_or_else(|e| panic!("{current}: {e}"));
@@ -1855,7 +1856,7 @@ fn bracketed_intervals_start_at_their_first_bound_and_widen() {
             "{current}"
         );
         cfg.defaults.versions = patchula_words::VersionPolicy::Preserve;
-        let preserve = Evaluator::new(&cfg)
+        let preserve = Evaluator::new(&cfg, Default::default())
             .unwrap()
             .evaluate_at(&dep, &releases, now)
             .unwrap();
@@ -1878,7 +1879,7 @@ fn bracketed_intervals_start_at_their_first_bound_and_widen() {
 
 #[test]
 fn floating_latest_skips_yanked_unnormalizable_and_unparsable_releases() {
-    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let eval = Evaluator::new(&config("benchmark-public"), Default::default()).unwrap();
     let mut dep = dependency("lib");
     dep.kind = DependencyKind::Tool;
     dep.current = "latest".into();
@@ -1895,7 +1896,7 @@ fn floating_latest_skips_yanked_unnormalizable_and_unparsable_releases() {
 
 #[test]
 fn a_permitted_filter_skips_tag_candidates_it_rejects() {
-    let eval = Evaluator::new(&config("nightly-pins")).unwrap();
+    let eval = Evaluator::new(&config("nightly-pins"), Default::default()).unwrap();
     let mut dep = dependency("pingdotgg/t3code");
     dep.current = "nightly".into();
     dep.resolved = Some("nightly".into());
@@ -1915,7 +1916,7 @@ fn a_permitted_filter_skips_tag_candidates_it_rejects() {
 
 #[test]
 fn mise_tool_versions_resolve_through_the_extract_pattern() {
-    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let eval = Evaluator::new(&config("benchmark-public"), Default::default()).unwrap();
     let mut dep = dependency("lib");
     dep.manager = Manager::Mise;
     dep.resolved = Some("1.0.0".into());
@@ -1931,7 +1932,7 @@ fn mise_tool_versions_resolve_through_the_extract_pattern() {
 
 #[test]
 fn a_tagged_action_with_a_short_tag_resolves_through_its_commit_digest() {
-    let eval = Evaluator::new(&config("benchmark-public")).unwrap();
+    let eval = Evaluator::new(&config("benchmark-public"), Default::default()).unwrap();
     let mut dep = dependency("actions/checkout");
     dep.manager = Manager::GithubActions;
     dep.source = Source::GithubTags;
@@ -1983,7 +1984,7 @@ fn dated(catalog: &mut Catalog, dates: &[&str]) {
 
 #[test]
 fn a_committed_cargo_cooldown_is_a_floor_the_rules_wait_cannot_lower() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let now = instant("2026-10-15T12:00:00Z");
     let dep = cooled(336);
     let mut versions = catalog(&["1.0.0", "1.0.1", "1.1.0", "2.0.0"]);
@@ -2043,7 +2044,7 @@ fn a_committed_cargo_cooldown_is_a_floor_the_rules_wait_cannot_lower() {
 fn a_wait_of_zero_does_not_disable_a_committed_cargo_cooldown() {
     let mut cfg = config("renovate-migration");
     cfg.defaults.wait_hours = 0;
-    let eval = Evaluator::new(&cfg).unwrap();
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let now = instant("2026-10-15T12:00:00Z");
     let dep = cooled(336);
     let mut versions = catalog(&["1.0.0", "1.0.1"]);
@@ -2065,7 +2066,7 @@ fn a_wait_of_zero_does_not_disable_a_committed_cargo_cooldown() {
 
 #[test]
 fn a_cooldown_shorter_than_the_wait_leaves_the_rules_hold_to_them() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let now = instant("2026-10-15T12:00:00Z");
     // A two-hour cooldown under the 24-hour wait holds nothing the rules
     // would not: the hold is the rules', not the cooldown's.
@@ -2083,7 +2084,7 @@ fn a_cooldown_shorter_than_the_wait_leaves_the_rules_hold_to_them() {
 
 #[test]
 fn the_dashboard_override_narrows_the_wait_to_the_cooldown_never_below() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let now = instant("2026-10-15T12:00:00Z");
     let dep = cooled(336);
     let mut versions = catalog(&["1.0.0", "1.1.0", "1.1.1"]);
@@ -2133,7 +2134,7 @@ fn the_dashboard_override_narrows_the_wait_to_the_cooldown_never_below() {
 
 #[test]
 fn an_undated_release_is_never_held_by_a_cargo_cooldown() {
-    let eval = Evaluator::new(&config("renovate-migration")).unwrap();
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
     let dep = cooled(336);
     let versions = catalog(&["1.0.0", "1.0.1"]);
     let result = eval

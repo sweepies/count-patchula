@@ -521,7 +521,12 @@ impl Engine {
             repo.evaluator = repo
                 .config
                 .as_ref()
-                .map(Evaluator::new)
+                .map(|config| {
+                    Evaluator::new(
+                        config,
+                        patchula_update::actions_locked_workflows(&repo.snapshot),
+                    )
+                })
                 .transpose()
                 .map_err(Error::Invalid)?;
             let needs: Vec<Needs> = repo

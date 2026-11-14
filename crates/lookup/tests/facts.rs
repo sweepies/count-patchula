@@ -12,7 +12,7 @@ fn eval() -> Evaluator {
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus"),
     )
     .unwrap();
-    Evaluator::new(&config).unwrap()
+    Evaluator::new(&config, Default::default()).unwrap()
 }
 
 fn dep(manager: Manager, kind: DependencyKind) -> Dependency {
@@ -147,7 +147,7 @@ fn a_disabled_policy_proposes_no_lowest_fix() {
         version: "1.0.0".into(),
     };
     let found = [std::sync::Arc::new(advisory("2.0.0"))];
-    let evaluation = Evaluator::new(&config)
+    let evaluation = Evaluator::new(&config, Default::default())
         .unwrap()
         .evaluate_with(
             &dep,

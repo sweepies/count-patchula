@@ -129,6 +129,22 @@ rewrites the file. It needs the network, a `mise` on `PATH` and `GH_TOKEN`,
 which mise gets as it would in production and which is never written down.
 `mise run fixtures:check` scans these files with the cassettes.
 
+## gh-actions-lock
+
+`gh-actions-lock` is a real subprocess with real TLS, not an HTTP client the
+replay transport can stand in for, so its tests run it behind a loopback
+HTTPS CONNECT proxy (`GitHubProxy` in
+`crates/tools/src/lockfiles/tests/real_actions_lock.rs`). The proxy accepts
+`api.github.com:443` and refuses every other target, terminates TLS with a
+certificate `rcgen` mints for the test, and answers each request from the
+same cassette format as everything else, recorded with the same
+`PATCHULA_RECORD=1` flow and the same redaction — the token reaches the
+tool as `GH_TOKEN` and is redacted before a cassette is written. The suite
+also exercises the tool's real flag contract against a frozen lockfile:
+`--no-interactive --no-onboard --no-narrow --ignore-local-actions
+--json=valid,findings` over an already-listed workflow exits 0 with
+`valid: true` and changes nothing.
+
 ## Replaying a webhook to a local server
 
 ```sh

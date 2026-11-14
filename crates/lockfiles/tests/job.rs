@@ -289,4 +289,198 @@ fn refresh_claims_locks_and_manifests_only_when_the_manager_is_enabled() {
         "app",
         &paths
     ));
+    // actions.lock is regenerated only with an update: maintenance has no
+    // relock to run, so the lockfile claims nothing.
+    config.managers = vec![Manager::GithubActions];
+    assert!(!refresh(Ecosystem::Actions).claims(
+        &config,
+        "actions.lock",
+        ".github/workflows",
+        &paths
+    ));
+    assert!(
+        patchula_lockfiles::refresh_jobs(
+            &config,
+            &[patchula_lockfiles::ACTIONS_LOCK.to_owned()].into()
+        )
+        .is_empty()
+    );
+}
+
+/// `workflows:` is read as gh-actions-lock's parser reads it: a path key it
+/// refuses or an entry that is no repository-scoped pin makes the whole
+/// lock unreadable, and entries come back in the canonical key form the
+/// tool writes.
+#[test]
+fn actions_lock_workflows_follow_the_tool_grammar() {
+    use patchula_lockfiles::actions_lock_workflows as read;
+    let lock =
+        |workflows: &str| format!("version: 'v0.0.3'\nworkflows:\n{workflows}dependencies: {{}}\n");
+    let sha = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+    let read_back = read(&lock(&format!(
+        "    '.github/workflows/ci.yml':\n        - 'Azure/login@v2'\n        - 'actions/checkout@{sha}'\n        - 'octo/x@Release@2024'\n    '.github/workflows/empty.yml': []\n    '.github/workflows/null.yml':\n"
+    )))
+    .unwrap();
+    assert_eq!(
+        read_back[".github/workflows/ci.yml"],
+        BTreeSet::from([
+            "azure/login@v2".to_owned(),
+            format!("actions/checkout@{}", sha.to_ascii_lowercase()),
+            "octo/x@Release@2024".to_owned(),
+        ])
+    );
+    assert!(read_back[".github/workflows/empty.yml"].is_empty());
+    assert!(read_back[".github/workflows/null.yml"].is_empty());
+    for bad in [
+        // Path keys the tool refuses.
+        "    '/etc/ci.yml': []\n",
+        "    '.github/workflows/../../ci.yml': []\n",
+        "    'C:\\ci.yml': []\n",
+        "    '.github\\workflows\\ci.yml': []\n",
+        "    '': []\n",
+        // Entries that are no repository-scoped pin.
+        "    '.github/workflows/ci.yml':\n        - 'actions/checkout'\n",
+        "    '.github/workflows/ci.yml':\n        - 'actions/cache/save@v4'\n",
+        "    '.github/workflows/ci.yml':\n        - 'actions@v4'\n",
+        "    '.github/workflows/ci.yml':\n        - 'actions/checkout@'\n",
+        "    '.github/workflows/ci.yml':\n        - 'actions/checkout@v4:x'\n",
+        "    '.github/workflows/ci.yml':\n        - '/checkout@v4'\n",
+        "    '.github/workflows/ci.yml':\n        - 3\n",
+        "    '.github/workflows/ci.yml': {}\n",
+    ] {
+        assert_eq!(read(&lock(bad)), None, "{bad}");
+    }
+    assert_eq!(read("workflows: 3\n"), None);
+    assert_eq!(read("version: 'v0.0.3'\n"), None);
+}
+
+/// `$/` callers follow gh-actions-lock's `ScanSelfRepositoryActions`: bare
+/// step-level `$/<dir>` values, `parallel:` groups included, cleaned like
+/// `filepath.Join`; `action.yml` before `action.yaml`; nested composites
+/// followed. `./` actions, `$/…@ref`, job-level `$/` reusable workflows
+/// and unlisted workflows call nothing. What the tool could not read
+/// leaves the answer unknown.
+#[test]
+fn actions_lock_callers_follow_the_tool() {
+    use patchula_lockfiles::actions_lock_callers;
+    use std::collections::BTreeMap;
+    let steps = |uses: &[&str]| {
+        let mut text = "on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n".to_owned();
+        for u in uses {
+            text.push_str(&format!("      - uses: {u}\n"));
+        }
+        text
+    };
+    let composite =
+        |uses: &str| format!("name: x\nruns:\n  using: composite\n  steps:\n    - uses: {uses}\n");
+    let mut files: BTreeMap<String, String> = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            steps(&["$/.github/actions/outer"]),
+        ),
+        (
+            ".github/workflows/deploy.yml".into(),
+            "on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - parallel:\n          - uses: $/./.github//actions/setup/\n".into(),
+        ),
+        (
+            ".github/workflows/tagged.yml".into(),
+            steps(&["$/.github/actions/setup@v1"]),
+        ),
+        (
+            ".github/workflows/local.yml".into(),
+            steps(&["./.github/actions/setup"]),
+        ),
+        (
+            ".github/workflows/reusable.yml".into(),
+            "on: push\njobs:\n  call:\n    uses: $/.github/actions/setup\n".into(),
+        ),
+        (
+            ".github/workflows/unlisted.yml".into(),
+            steps(&["$/.github/actions/setup"]),
+        ),
+        (
+            ".github/workflows/both.yml".into(),
+            steps(&["$/.github/actions/both"]),
+        ),
+        (
+            ".github/actions/outer/action.yml".into(),
+            composite("$/.github/actions/setup"),
+        ),
+        (
+            ".github/actions/setup/action.yml".into(),
+            composite("actions/setup-node@v6"),
+        ),
+        (
+            ".github/actions/both/action.yml".into(),
+            composite("actions/setup-node@v6"),
+        ),
+        (
+            ".github/actions/both/action.yaml".into(),
+            composite("actions/setup-node@v6"),
+        ),
+    ]);
+    let mut listed: BTreeSet<String> = files
+        .keys()
+        .filter(|path| path.starts_with(".github/workflows/") && !path.contains("unlisted"))
+        .cloned()
+        .collect();
+    let callers = |files: &BTreeMap<String, String>, listed: &BTreeSet<String>, file: &str| {
+        actions_lock_callers(file, listed, &|path| Ok(files.get(path).cloned()))
+    };
+    assert_eq!(
+        callers(&files, &listed, ".github/actions/setup/action.yml").unwrap(),
+        BTreeSet::from([
+            ".github/workflows/ci.yml".to_owned(),
+            ".github/workflows/deploy.yml".to_owned(),
+        ])
+    );
+    assert_eq!(
+        callers(&files, &listed, ".github/actions/both/action.yml").unwrap(),
+        BTreeSet::from([".github/workflows/both.yml".to_owned()])
+    );
+    assert!(
+        callers(&files, &listed, ".github/actions/both/action.yaml")
+            .unwrap()
+            .is_empty()
+    );
+    // A workflow that does not parse, a `$/` path out of the repository, a
+    // nested composite that does not parse, and a file whose text is not at
+    // hand all leave the answer unknown.
+    let file = ".github/actions/setup/action.yml";
+    let mut broken = files.clone();
+    broken.insert(".github/workflows/broken.yml".into(), "jobs: [\n".into());
+    listed.insert(".github/workflows/broken.yml".into());
+    assert!(
+        callers(&broken, &listed, file)
+            .unwrap_err()
+            .contains("broken.yml does not parse")
+    );
+    listed.remove(".github/workflows/broken.yml");
+    let mut escaping = files.clone();
+    escaping.insert(
+        ".github/workflows/ci.yml".into(),
+        steps(&["$/../elsewhere"]),
+    );
+    assert!(
+        callers(&escaping, &listed, file)
+            .unwrap_err()
+            .contains("outside the repository")
+    );
+    files.insert(
+        ".github/actions/outer/action.yml".into(),
+        "runs: [\n".into(),
+    );
+    assert!(
+        callers(&files, &listed, file)
+            .unwrap_err()
+            .contains("outer/action.yml does not parse")
+    );
+    let unread = actions_lock_callers(file, &listed, &|path| {
+        if path == ".github/workflows/ci.yml" {
+            Err("not read".into())
+        } else {
+            Ok(None)
+        }
+    });
+    assert!(unread.unwrap_err().contains("not read"));
 }

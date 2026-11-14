@@ -27,6 +27,7 @@ commit. If the tool fails, nothing is published.
 | `mise.lock` | mise | `mise lock` with the lockfile's recorded platforms |
 | `flake.lock` | nix | `nix flake update <input>`, or `nix flake update` for maintenance |
 | `apm.lock.yaml` | APM | `apm lock`, or `apm lock --update` for maintenance |
+| `.github/workflows/actions.lock` | gh-actions-lock | `gh-actions-lock --no-interactive --no-onboard --no-narrow --ignore-local-actions --json=valid,findings <workflows>` |
 
 A `mise.lock` records the configuration in its own directory and above it,
 as mise does. A `mise.toml` in a subdirectory is locked by a `mise.lock` of its
@@ -150,6 +151,7 @@ pinned defaults apply:
 | Ruby | 4.0.9 |
 | PHP, Composer | 8.5.8, 2.10.3 |
 | APM | 0.35.0 |
+| gh-actions-lock | 0.4.1 |
 
 ### PHP
 
@@ -197,6 +199,52 @@ kept; `apm_modules/` never enters the commit. Git may use the `file`
 protocol as well as `https` in this run, because APM clones each package from
 its own local cache. APM reads only `apm.yml`, so a manifest named
 `apm.yaml` gets no lockfile refresh.
+
+### gh-actions-lock
+
+A `.github/workflows/actions.lock` is regenerated only for workflows the
+lockfile already lists: `--no-onboard` and `--no-narrow` are always set, so
+the Count adds no workflow or action to the lockfile and rewrites no `uses:`
+ref he did not edit. An update touching a workflow the lock does not list
+leaves it alone, and a run whose edited workflows are all unlisted runs no
+tool at all.
+
+An update inside an in-repository `action.yml` or `action.yaml` depends on
+how the workflows call it. A local `./` composite is never followed or
+locked by the tool, so the update leaves the lockfile alone and publishes
+as it would without one. A composite called with the tool's same-repository
+syntax, `uses: $/<dir>`, is relocked under the workflows that call it: the
+Count finds the listed workflows whose steps reach the file through `$/`,
+nested composites included, runs the tool over exactly those, and the
+read-back wants the new ref under each of them. If a listed workflow or a
+composite on the way cannot be read or parsed, which workflows call it is
+unknown and the update is held with the reason.
+
+The tool authenticates to github.com only, through `GH_TOKEN`, `GH_HOST` and
+`GH_REPO` and nothing else in its environment: on the App server it gets a
+scoped installation token; the CLI and the GitHub Action hand it the run's
+own token, as Renovate does. `gh` and `git` are kept off its `PATH`, so no
+GitHub Enterprise configuration can redirect it. An action the token cannot
+read — a private one — holds the update with the reason instead of
+publishing a lock that dropped it, and a rate-limit or outage answer makes
+the update wait rather than fail.
+
+The tool can report success while still refusing to cover an action, so a
+clean exit is not enough: the run then checks the lock itself with the
+tool's offline `--verify-local` pass over the same paths, and reads the
+regenerated `actions.lock` back — every step-level `uses:` in the files the
+run scoped must appear under its workflow (a `$/` composite's under every
+workflow that calls it), keyed as the tool keys it (owner
+and repository lowercased, no sub-path), and a written SHA must be the
+commit the lock records — before the commit opens. Reusable workflows at
+`jobs.<id>.uses` are not in the lock and are not checked, and an edited
+workflow the lock does not list is not the run's to prove. `actions.lock` is
+the only file the tool may change; the usual unexpected-write guard holds
+for the rest.
+
+`--no-narrow` also leaves a SHA pin as written: an existing pin the update
+moves stays a pin in the workflow, and the lock records it under that SHA
+with the tag it resolves to.
 
 ## The tool store
 
@@ -411,7 +459,9 @@ lockfiles {
 
 `refresh = true` keeps one `patchula/lock-file-maintenance` branch that
 refreshes every lockfile within the manifests' ranges, at most once per ISO
-week, and no sooner than `waitHours` after the last successful refresh. The
+week, and no sooner than `waitHours` after the last successful refresh.
+`.github/workflows/actions.lock` is the exception: maintenance never
+touches it, and it changes only with an update to a workflow it lists. The
 default window is Monday 00:00 to 04:00 UTC; explicit update windows
 replace it. Windows work as for updates: the first run after a window time
 picks it up, however often the Count runs. A maintenance resolve has no

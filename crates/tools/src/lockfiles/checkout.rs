@@ -159,11 +159,18 @@ impl Runner {
             .await?;
         let mut entries = BTreeMap::new();
         let mut cargo_configs = BTreeMap::new();
+        // The Actions tool reads every workflow the lock may list and every
+        // in-repository action definition; nothing checks them out unless
+        // the work holds an Actions job.
+        let actions = work.jobs.iter().any(|j| j.ecosystem == Ecosystem::Actions);
         for entry in tree.split(|b| *b == 0).filter(|e| !e.is_empty()) {
             let entry = std::str::from_utf8(entry).map_err(|_| "non UTF-8 repository path")?;
             let (metadata, path) = entry.split_once('\t').ok_or("invalid Git tree entry")?;
             let cargo = self.reads_cargo_config(work, path);
-            if !materialized(path) && !cargo && !work.edits.contains_key(path) {
+            let actions = actions
+                && (patchula_manager::roles::github_workflow(path)
+                    || patchula_manager::roles::action_file(path));
+            if !materialized(path) && !cargo && !actions && !work.edits.contains_key(path) {
                 continue;
             }
             if !safe_path(path) {

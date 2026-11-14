@@ -30,6 +30,16 @@ pub struct Blob {
     pub mode: String,
     pub content: String,
 }
+/// The workflow paths the snapshot's `actions.lock` lists, which the
+/// pinning decision reads; none when the file is absent or unreadable.
+pub fn actions_locked_workflows(snapshot: &Snapshot) -> BTreeSet<String> {
+    snapshot
+        .files
+        .get(contract::ACTIONS_LOCK)
+        .and_then(|lock| contract::actions_lock_workflows(&lock.content))
+        .map(|workflows| workflows.into_keys().collect())
+        .unwrap_or_default()
+}
 /// What a plan fingerprint hashes, by lifecycle stage. A built plan's
 /// fingerprint covers its contents, message, pending flag and lock jobs; once the
 /// tools generate, it covers the generated contents, deleted set and
@@ -705,7 +715,8 @@ pub fn plan(
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<Plan>, PlanError> {
-    let evaluator = patchula_lookup::Evaluator::new(config).map_err(PlanError::Lookup)?;
+    let evaluator = patchula_lookup::Evaluator::new(config, actions_locked_workflows(snapshot))
+        .map_err(PlanError::Lookup)?;
     let mut package_names = PackageNames::new();
     for dep in dependencies {
         package_names
@@ -844,6 +855,13 @@ fn build(
     // A branch with a security fix is named for it: the occurrences that do not
     // need the fix move to the same version in the same commit.
     let secure = items.iter().any(|item| !item.update.fixes.is_empty());
+    // The snapshot's text of a repository file, for decisions that read
+    // contents: a path the tree has but the run did not read is unknown.
+    let read = |path: &str| match snapshot.files.get(path) {
+        Some(blob) => Ok(Some(blob.content.clone())),
+        None if snapshot.paths.contains(path) => Err(format!("{path} was not read")),
+        None => Ok(None),
+    };
     for item in items {
         let dep = item.dep;
         let update = item.update;
@@ -880,7 +898,17 @@ fn build(
                 }
                 lock_jobs.insert(job);
             }
-            Ok(None) => {}
+            // An in-repository action file is in actions.lock only through
+            // a listed workflow that calls it with `$/`; when that cannot
+            // be told, the update is held rather than publishing a lock
+            // the runner would reject.
+            Ok(None) => match contract::actions_composite_job(dep, &snapshot.paths, &read) {
+                Ok(Some(job)) => {
+                    lock_jobs.insert(job);
+                }
+                Ok(None) => {}
+                Err(reason) => keep(&mut hold, Hold::Blocked(reason)),
+            },
             Err(error) => pending = Some(error),
         }
         let value = update.new_value.as_deref().unwrap_or(&dep.current);
@@ -1403,7 +1431,8 @@ pub fn batch_plan(
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Option<Plan>, PlanError> {
-    let evaluator = patchula_lookup::Evaluator::new(config).map_err(PlanError::Lookup)?;
+    let evaluator = patchula_lookup::Evaluator::new(config, actions_locked_workflows(snapshot))
+        .map_err(PlanError::Lookup)?;
     let targets: Vec<Change> = items.iter().flat_map(|i| i.targets.clone()).collect();
     let mut pending = Vec::new();
     for target in &targets {

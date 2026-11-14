@@ -2001,7 +2001,7 @@ mod goldens {
     #[test]
     fn an_update_plans_update_key_is_frozen() {
         let config = config();
-        let evaluator = patchula_lookup::Evaluator::new(&config).unwrap();
+        let evaluator = patchula_lookup::Evaluator::new(&config, Default::default()).unwrap();
         let files = BTreeMap::from([(
             "package.json".to_string(),
             "{\"dependencies\":{\"dep\":\"1.0.0\"}}\n".to_string(),
@@ -2099,7 +2099,7 @@ mod goldens {
     #[test]
     fn lockfile_job_errors_reach_the_report_pending() {
         let config = config();
-        let evaluator = patchula_lookup::Evaluator::new(&config).unwrap();
+        let evaluator = patchula_lookup::Evaluator::new(&config, Default::default()).unwrap();
         let update = Update {
             cooldown: None,
             new_value: None,
@@ -2201,6 +2201,111 @@ mod goldens {
             );
             assert!(plan.action().lockfile_pending, "{error}");
         }
+    }
+
+    /// An in-repository composite is planned against actions.lock from the
+    /// contents: an Actions job when a listed workflow calls it through
+    /// `$/`, none for a `./` composite, and a hold naming the cause when a
+    /// listed workflow cannot be read to tell.
+    #[test]
+    fn a_composite_bump_plans_the_actions_job_only_for_self_repository_callers() {
+        let config = config();
+        let evaluator = patchula_lookup::Evaluator::new(&config, Default::default()).unwrap();
+        let update = Update {
+            cooldown: None,
+            new_value: Some("v6.1.0".into()),
+            new_version: Some("v6.1.0".into()),
+            new_digest: Some("b".repeat(40)),
+            update_type: UpdateKind::Minor,
+            group: None,
+            policy: None,
+            release_age: None,
+            fixes: vec![],
+            image: None,
+        };
+        let plan_for = |workflow: &str, extra: Option<(&str, &str)>| {
+            let mut files = BTreeMap::from([
+                (
+                    ".github/workflows/ci.yml".to_string(),
+                    format!("on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: {workflow}\n"),
+                ),
+                (
+                    ".github/actions/setup/action.yml".to_string(),
+                    format!("name: setup\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-node@{} # v6.0.0\n", "a".repeat(40)),
+                ),
+                (
+                    ".github/workflows/actions.lock".to_string(),
+                    "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml': []\n    '.github/workflows/other.yml': []\ndependencies: {}\n".to_string(),
+                ),
+            ]);
+            if let Some((path, text)) = extra {
+                files.insert(path.into(), text.into());
+            }
+            let dep = patchula_manager::Scanner::new(&config)
+                .unwrap()
+                .extract(&patchula_manager::all_read(&files))
+                .unwrap()
+                .dependencies
+                .into_iter()
+                .find(|dep| dep.package == "actions/setup-node")
+                .unwrap();
+            build(
+                &repo(),
+                &config,
+                &evaluator,
+                &snapshot(&files),
+                false,
+                None,
+                monday(),
+                "golden",
+                "patchula/golden".into(),
+                &[Item {
+                    dep: &dep,
+                    update: &update,
+                    current_version: None,
+                    advisories: &[],
+                }],
+                Kind::Update,
+            )
+            .unwrap()
+        };
+        let called = plan_for("$/.github/actions/setup", None);
+        assert_eq!(
+            called.action().status,
+            BranchStatus::Planned,
+            "{:?}",
+            called.action()
+        );
+        assert_eq!(
+            called
+                .lock_jobs()
+                .iter()
+                .map(|job| job.ecosystem)
+                .collect::<Vec<_>>(),
+            [Ecosystem::Actions]
+        );
+        let local = plan_for("./.github/actions/setup", None);
+        assert_eq!(
+            local.action().status,
+            BranchStatus::Planned,
+            "{:?}",
+            local.action()
+        );
+        assert!(local.lock_jobs().is_empty());
+        let unknown = plan_for(
+            "./.github/actions/setup",
+            Some((".github/workflows/other.yml", "jobs: [\n")),
+        );
+        assert_ne!(unknown.action().status, BranchStatus::Planned);
+        assert!(
+            unknown
+                .action()
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains("other.yml does not parse")),
+            "{:?}",
+            unknown.action()
+        );
     }
 
     /// A failed generation reports `lockfile generation failed: …` with the

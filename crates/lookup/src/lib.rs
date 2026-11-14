@@ -44,6 +44,9 @@ struct CompiledRule {
 }
 pub struct Evaluator {
     config: Config,
+    /// Workflow paths the repository's `actions.lock` lists, when it has
+    /// one: the pinning decision reads them.
+    locked_workflows: std::collections::BTreeSet<String>,
     rules: Vec<CompiledRule>,
     ignore: Patterns,
     exclude: Patterns,
@@ -197,7 +200,10 @@ impl Evaluator {
             catalog: None,
         })
     }
-    pub fn new(config: &Config) -> Result<Self> {
+    pub fn new(
+        config: &Config,
+        locked_workflows: std::collections::BTreeSet<String>,
+    ) -> Result<Self> {
         let rules = config
             .rules
             .iter()
@@ -224,6 +230,7 @@ impl Evaluator {
             .collect::<Result<_>>()?;
         Ok(Self {
             config: config.clone(),
+            locked_workflows,
             rules,
             ignore: Patterns::compile(&config.ignore)?,
             exclude: Patterns::compile(&config.exclude)?,
@@ -353,9 +360,20 @@ impl Evaluator {
         });
         Ok(effective)
     }
+    /// Whether a step-level action gets no new SHA pin: its workflow is
+    /// one `actions.lock` lists, so the owner's plain `gh actions-lock`
+    /// would unpin what the Count pinned. An existing pin still moves
+    /// with its update, and the lock does not cover `jobs.<id>.uses`,
+    /// so reusable workflows keep pinning.
+    fn pin_suppressed(&self, dep: &Dependency) -> bool {
+        dep.digest.is_none()
+            && dep.kind == DependencyKind::Action
+            && self.locked_workflows.contains(&dep.file)
+    }
     pub fn needs_digest(&self, dep: &Dependency, proposal: &Proposal) -> bool {
         let update = proposal.update_type;
         dep.proposing().pin.needs_digest
+            && !self.pin_suppressed(dep)
             && self
                 .effective(dep, update)
                 .map(|effective| effective.digest)
@@ -397,6 +415,9 @@ impl Evaluator {
     /// are on for it: `Digest` when the dependency already pins one, `Pin`
     /// otherwise.
     fn digest_effective(&self, dep: &Dependency) -> Result<Option<(Update, Effective<'_>)>> {
+        if self.pin_suppressed(dep) {
+            return Ok(None);
+        }
         let update = if dep.digest.is_some() {
             Update::Digest
         } else {
@@ -1563,7 +1584,7 @@ mod tests {
                 .join("../../examples/benchmark-public.pkl"),
         )
         .unwrap();
-        let eval = Evaluator::new(&config).unwrap();
+        let eval = Evaluator::new(&config, Default::default()).unwrap();
         let dep = |extract: &str| patchula_manager::Dependency {
             manager: Manager::Npm,
             file: "package.json".into(),
@@ -1603,5 +1624,70 @@ mod tests {
                 .is_ok()
         );
         assert_eq!(eval.extractors.lock().unwrap().len(), 2);
+    }
+
+    /// A step action gets no new SHA pin when its workflow is one
+    /// `actions.lock` lists: the owner's `gh actions-lock` would unpin it.
+    /// An existing pin still moves with its update, and reusable workflows
+    /// (`jobs.<id>.uses`), which the lock does not cover, keep pinning, as
+    /// does a step action in a workflow the lock does not list.
+    #[test]
+    fn locked_workflows_suppress_only_new_step_action_pins() {
+        let config = patchula_config::load_files(
+            "/repo/patchula.pkl",
+            std::collections::BTreeMap::from([(
+                "/repo/patchula.pkl".into(),
+                "amends \"PatchulaConfig.pkl\"\n".to_owned(),
+            )]),
+        )
+        .unwrap();
+        let dep =
+            |file: &str, kind: DependencyKind, digest: Option<&str>| patchula_manager::Dependency {
+                manager: Manager::GithubActions,
+                file: file.into(),
+                location: patchula_manager::Location {
+                    start: 0,
+                    end: 1,
+                    line: 1,
+                    column: 1,
+                    pointer: String::new(),
+                },
+                form: patchula_manager::EditForm::Scalar(patchula_manager::Syntax::Yaml),
+                name: "actions/checkout".into(),
+                package: "actions/checkout".into(),
+                kind,
+                current: "v7.0.0".into(),
+                resolved: Some("v7.0.0".into()),
+                digest: digest.map(|d| d.into()),
+                source: Source::GithubTags,
+                scheme: patchula_words::Scheme::Semver,
+                extract: None,
+                included_by: None,
+                registry: None,
+                cooldown: None,
+            };
+        let locked = std::collections::BTreeSet::from([".github/workflows/ci.yml".to_owned()]);
+        let eval = Evaluator::new(&config, locked).unwrap();
+        // Suppressed: new pin on a step action in a listed workflow.
+        let action = dep(".github/workflows/ci.yml", DependencyKind::Action, None);
+        assert!(!eval.digest_policy_applies(&action));
+        assert!(eval.digest_proposal(&action, "sha1-x").unwrap().is_none());
+        // Kept: an existing pin still gets digest updates.
+        let pinned = dep(
+            ".github/workflows/ci.yml",
+            DependencyKind::Action,
+            Some("sha1-old"),
+        );
+        assert!(eval.digest_policy_applies(&pinned));
+        // Kept: a reusable workflow in the same file still pins.
+        let reusable = dep(
+            ".github/workflows/ci.yml",
+            DependencyKind::ReusableWorkflow,
+            None,
+        );
+        assert!(eval.digest_policy_applies(&reusable));
+        // Kept: a step action in an unlisted workflow still pins.
+        let other = dep(".github/workflows/other.yml", DependencyKind::Action, None);
+        assert!(eval.digest_policy_applies(&other));
     }
 }

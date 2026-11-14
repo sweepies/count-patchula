@@ -480,7 +480,7 @@ fn corpus_proposals_match_their_snapshot() {
     let now = chrono::DateTime::parse_from_rfc3339(NOW)
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let eval = Evaluator::new(&config).unwrap();
+    let eval = Evaluator::new(&config, Default::default()).unwrap();
     let mut config_exact = config.clone();
     config_exact.rules.push(patchula_config::Rule {
         note: "corpus proposals: exact versions".into(),
@@ -510,7 +510,7 @@ fn corpus_proposals_match_their_snapshot() {
             windows: None,
         },
     });
-    let exact = Evaluator::new(&config_exact).unwrap();
+    let exact = Evaluator::new(&config_exact, Default::default()).unwrap();
     let paths: BTreeSet<String> = all.iter().cloned().collect();
     let render = || {
         let mut holes = Vec::new();

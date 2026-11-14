@@ -827,7 +827,7 @@ fn count_verdict(
             )
         })
         .clone();
-    let verdict = patchula_lookup::Evaluator::new(&count)
+    let verdict = patchula_lookup::Evaluator::new(&count, Default::default())
         .unwrap()
         .evaluate_at(&dep, &registry.catalog(name, now), now)
         .unwrap();

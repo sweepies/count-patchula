@@ -50,6 +50,7 @@ pub(super) enum Bin {
     Terraform,
     Nix,
     Apm,
+    ActionsLock,
 }
 
 /// One binary's cache wiring, or `None` for a tool with no cache to keep.
@@ -81,6 +82,7 @@ impl Bin {
             Self::Terraform => "terraform",
             Self::Nix => "nix",
             Self::Apm => "apm",
+            Self::ActionsLock => "gh-actions-lock",
         }
     }
     /// How the binary's cache is wired, keyed by the binary itself rather
@@ -128,7 +130,7 @@ impl Bin {
             ),
             // Terraform's `providers lock` keeps no package cache, and nix
             // and apm keep their own.
-            Self::Terraform | Self::Nix | Self::Apm => return None,
+            Self::Terraform | Self::Nix | Self::Apm | Self::ActionsLock => return None,
         })
     }
 }

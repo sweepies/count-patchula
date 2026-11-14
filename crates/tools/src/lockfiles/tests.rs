@@ -72,6 +72,30 @@ struct Fixture {
     /// TCP while every other host sits behind a dead proxy. `None` keeps
     /// the vendored directory source and `CARGO_NET_OFFLINE`.
     sparse: Option<Arc<real_sparse_registry::SparseRegistry>>,
+    /// What a `gh-actions-lock` invocation gets: the cassette proxy a real
+    /// run's GitHub requests tunnel through, and the scripted answers a
+    /// faked one reports.
+    actions: Option<ActionsFixture>,
+}
+/// One scripted `gh-actions-lock` invocation: the streams and status the
+/// run's shell captures, and what the run writes to the tree.
+#[derive(Clone)]
+struct ActionsRun {
+    code: u8,
+    stdout: String,
+    stderr: String,
+    /// The `.github/workflows/actions.lock` text the run writes; `None`
+    /// leaves the file as the checkout left it.
+    lock: Option<String>,
+    /// Other tree writes, for a run that must be rejected.
+    extra: Vec<(String, String)>,
+}
+struct ActionsFixture {
+    /// The cassette proxy a real `gh-actions-lock` runs through; the
+    /// request never leaves the loopback tunnel.
+    proxy: Option<Arc<real_actions_lock::GitHubProxy>>,
+    /// Answers per invocation, in order; the last repeats.
+    runs: Mutex<std::collections::VecDeque<ActionsRun>>,
 }
 impl Executor for Fixture {
     fn run(
@@ -125,31 +149,59 @@ impl Executor for Fixture {
                 }
                 return Ok(Vec::new());
             }
-            for (k, v) in &spec.env {
-                let key = k.to_string_lossy().to_ascii_lowercase();
-                // nix gets the token through its per-host access tokens alone.
-                let v = if key == "nix_config" {
-                    v.to_string_lossy()
-                        .replace("access-tokens = github.com=offline-installation", "")
-                        .into()
-                } else {
-                    v.clone()
+            // The shell-wrapped tool run alone: `mise install` of the same
+            // spec carries the name without the run's environment.
+            let actions_call = spec.args.iter().any(|arg| arg == "/bin/sh");
+            if actions_call {
+                // The actions.lock run's environment is a whitelist: the
+                // token only ever as GH_TOKEN, the host and repository the
+                // tool answers for, the tree root, CI off and a PATH that
+                // keeps `gh` and `git` unreachable.
+                let env = |key: &str| {
+                    spec.env
+                        .get(std::ffi::OsStr::new(key))
+                        .map(|value| value.to_string_lossy().into_owned())
                 };
-                assert!(
-                    ![
-                        "token",
-                        "secret",
-                        "password",
-                        "authorization",
-                        "github",
-                        "gh_",
-                        "patchula"
-                    ]
-                    .iter()
-                    .any(|part| key.contains(part)),
-                    "unexpected env {key}"
-                );
-                assert!(!v.to_string_lossy().contains("offline-installation"));
+                assert_eq!(env("GH_HOST").as_deref(), Some("github.com"));
+                assert_eq!(env("GH_REPO").as_deref(), Some("demo/app"));
+                assert_eq!(env("CI").as_deref(), Some("false"));
+                assert!(env("GH_TOKEN").is_some(), "no GH_TOKEN granted");
+                let root = env("GH_ACTIONS_LOCK_REPO_ROOT").expect("no repo root env");
+                assert!(Path::new(&root).join(".github/workflows").is_dir());
+                for k in spec.env.keys() {
+                    let key = k.to_string_lossy().to_ascii_lowercase();
+                    assert!(
+                        !key.contains("github") || key.starts_with("gh_actions_lock"),
+                        "ambient GitHub environment {key}"
+                    );
+                }
+            } else {
+                for (k, v) in &spec.env {
+                    let key = k.to_string_lossy().to_ascii_lowercase();
+                    // nix gets the token through its per-host access tokens alone.
+                    let v = if key == "nix_config" {
+                        v.to_string_lossy()
+                            .replace("access-tokens = github.com=offline-installation", "")
+                            .into()
+                    } else {
+                        v.clone()
+                    };
+                    assert!(
+                        ![
+                            "token",
+                            "secret",
+                            "password",
+                            "authorization",
+                            "github",
+                            "gh_",
+                            "patchula"
+                        ]
+                        .iter()
+                        .any(|part| key.contains(part)),
+                        "unexpected env {key}"
+                    );
+                    assert!(!v.to_string_lossy().contains("offline-installation"));
+                }
             }
             assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_CONFIG")], "1");
             assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_ENV")], "1");
@@ -260,6 +312,29 @@ impl Executor for Fixture {
                 if let Some(goproxy) = goproxy {
                     spec.env.insert("GOPROXY".into(), goproxy.into());
                 }
+                // The real gh-actions-lock tunnels every GitHub request
+                // through the test's CONNECT proxy, which refuses any
+                // other target; the test CA is its only root.
+                if actions_call
+                    && let Some(proxy) = self.actions.as_ref().and_then(|a| a.proxy.as_ref())
+                {
+                    for key in [
+                        "HTTPS_PROXY",
+                        "https_proxy",
+                        "HTTP_PROXY",
+                        "http_proxy",
+                        "ALL_PROXY",
+                        "all_proxy",
+                    ] {
+                        spec.env.insert(key.into(), proxy.url().into());
+                    }
+                    let no_roots = spec.cwd.join("no-roots");
+                    std::fs::create_dir_all(&no_roots).unwrap();
+                    spec.env
+                        .insert("SSL_CERT_FILE".into(), proxy.cert_file().into_os_string());
+                    spec.env
+                        .insert("SSL_CERT_DIR".into(), no_roots.into_os_string());
+                }
                 if sparse_cargo {
                     for (key, value) in [
                         ("HTTPS_PROXY", "http://127.0.0.1:9"),
@@ -277,6 +352,34 @@ impl Executor for Fixture {
                 return SystemExecutor.run(spec).await;
             }
             let root = spec.cwd.parent().unwrap().join("tree");
+            if actions_call && let Some(actions) = &self.actions {
+                // The run's shell redirects the tool's streams and status
+                // into the driver directory; the fixture writes what the
+                // shell would have captured, then the tree writes.
+                let mut runs = actions.runs.lock().unwrap();
+                let answer = if runs.len() > 1 {
+                    runs.pop_front().unwrap()
+                } else {
+                    runs.front().unwrap().clone()
+                };
+                drop(runs);
+                let env = |key: &str| {
+                    spec.env
+                        .get(std::ffi::OsStr::new(key))
+                        .map(|value| value.to_string_lossy().into_owned())
+                };
+                std::fs::write(env("ACTIONS_LOCK_STDOUT").unwrap(), &answer.stdout).unwrap();
+                std::fs::write(env("ACTIONS_LOCK_STDERR").unwrap(), &answer.stderr).unwrap();
+                std::fs::write(env("ACTIONS_LOCK_STATUS").unwrap(), answer.code.to_string())
+                    .unwrap();
+                if let Some(lock) = &answer.lock {
+                    write(&root, contract::ACTIONS_LOCK, lock).unwrap();
+                }
+                for (path, content) in &answer.extra {
+                    write(&root, path, content).unwrap();
+                }
+                return Ok(Vec::new());
+            }
             if self.fail {
                 write(&root, "bun.lock", "half-written").unwrap();
                 return Err(Failure::Io("fixture resolution failure".into()));
@@ -475,7 +578,32 @@ fn fixture_with(
         extra: Vec::new(),
         removes: Vec::new(),
         sparse: None,
+        actions: None,
     })
+}
+/// A fixture whose `gh-actions-lock` invocations run the real pinned tool
+/// behind `proxy`'s cassette tunnel.
+fn fixture_actions_lock(
+    files: BTreeMap<String, String>,
+    proxy: Arc<real_actions_lock::GitHubProxy>,
+) -> Arc<Fixture> {
+    real_actions_lock::ensure_tool();
+    let mut fixture = fixture_with(files, false, true, None);
+    Arc::get_mut(&mut fixture).unwrap().actions = Some(ActionsFixture {
+        proxy: Some(proxy),
+        runs: Mutex::new(std::collections::VecDeque::new()),
+    });
+    fixture
+}
+/// A fixture whose `gh-actions-lock` invocations report the scripted
+/// answers instead of running the tool.
+fn fixture_actions_runs(files: BTreeMap<String, String>, runs: Vec<ActionsRun>) -> Arc<Fixture> {
+    let mut fixture = fixture_with(files, false, false, None);
+    Arc::get_mut(&mut fixture).unwrap().actions = Some(ActionsFixture {
+        proxy: None,
+        runs: Mutex::new(runs.into()),
+    });
+    fixture
 }
 /// A real-Cargo fixture whose crates.io is `registry`: the run's Cargo
 /// fetches the index and `.crate` files over loopback, and the proxy
@@ -2715,7 +2843,7 @@ fn lockfile_engine_pins_match_the_repository_mise_tasks() {
         "dotnet",
         "ruby",
         "apm",
-        tool::ACTIONS_LOCK_SPEC,
+        actions::ACTIONS_LOCK_SPEC,
     ] {
         assert_eq!(
             tools[tool].as_str(),
@@ -4896,6 +5024,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                     if fresh { target } else { locked },
                 )),
                 sparse: None,
+                actions: None,
             });
             let temp = tempfile::tempdir().unwrap();
             let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
@@ -7455,4 +7584,1222 @@ async fn a_gradle_wrapper_job_takes_the_wrapper_path() {
             "a".repeat(64)
         )
     );
+}
+
+/// A workflow file as the fixture writes it: one `uses:` step.
+fn actions_workflow(step: &str) -> String {
+    format!(
+        "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: {step}\n"
+    )
+}
+
+/// The lockfile's workflows: a strict `workflows:` map whose values the
+/// run ignores, matching what `gh actions-lock` writes.
+fn actions_lock(workflows: &[&str]) -> String {
+    let mut lock = "# This file is machine-generated.\nversion: 'v0.0.3'\nworkflows:\n".to_owned();
+    for workflow in workflows {
+        lock.push_str(&format!("    '{workflow}': []\n"));
+    }
+    lock.push_str("dependencies: {}\n");
+    lock
+}
+
+/// An update plan's branch action, as `Draft::new` wants it.
+fn actions_branch() -> BranchAction {
+    BranchAction {
+        repository: "demo/app".into(),
+        branch: "patchula/x".into(),
+        base_commit: "a".repeat(40),
+        status: BranchStatus::Planned,
+        reason: None,
+        message: "m".into(),
+        previous_commit: None,
+        commit: None,
+        verified: None,
+        lockfile_pending: false,
+        files: Vec::new(),
+    }
+}
+
+/// The whole-directory job `job()` yields for a step-action update in a
+/// repository whose `actions.lock` exists.
+fn actions_job() -> Job {
+    Job {
+        ecosystem: Ecosystem::Actions,
+        directory: ".github/workflows".into(),
+        scope: Scope::Directory,
+        exact_version: false,
+        publish_age_allow: false,
+        wait_hours: 0,
+    }
+}
+
+/// The `uses:` dependencies `dep` extraction reports for a workflow step,
+/// so `job()` can be asked of a real dependency.
+fn actions_dep(
+    file: &str,
+    step: &str,
+    kind: patchula_words::DependencyKind,
+) -> patchula_manager::Dependency {
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&BTreeMap::from([(
+            file.to_owned(),
+            actions_workflow(step),
+        )])))
+        .unwrap();
+    extraction
+        .dependencies
+        .into_iter()
+        .find(|dep| dep.kind == kind)
+        .unwrap()
+}
+
+/// `job()` asks for the Actions ecosystem only for a step-level action in a
+/// `.github/workflows/` workflow, and only while the lockfile is
+/// committed. In-repository action files, which the tool never locks,
+/// reusable workflows, images and Forgejo/Gitea files ask for none, and no
+/// lockfile means none.
+#[test]
+fn the_actions_job_covers_only_what_the_lock_lists() {
+    for (file, step, paths, want) in [
+        (
+            ".github/workflows/ci.yml",
+            "actions/checkout@v7",
+            true,
+            true,
+        ),
+        (
+            ".github/workflows/ci.yml",
+            "actions/checkout@v7",
+            false,
+            false,
+        ),
+        (
+            ".github/actions/x/action.yml",
+            "actions/checkout@v7",
+            true,
+            false,
+        ),
+        (
+            ".forgejo/workflows/ci.yml",
+            "actions/checkout@v7",
+            true,
+            false,
+        ),
+        (
+            ".github/workflows/ci.yml",
+            "docker://alpine:3.21",
+            true,
+            false,
+        ),
+    ] {
+        let dep = actions_dep(
+            file,
+            step,
+            if step.starts_with("docker") {
+                patchula_words::DependencyKind::ContainerImage
+            } else {
+                patchula_words::DependencyKind::Action
+            },
+        );
+        let mut snapshot = snapshot(&BTreeMap::from([(file.to_owned(), String::new())]));
+        if paths {
+            snapshot.paths.insert(contract::ACTIONS_LOCK.to_owned());
+        }
+        let job = job(&dep, &update(), &snapshot).unwrap();
+        assert_eq!(job.is_some(), want, "{file} {step}");
+        if let Some(job) = job {
+            assert_eq!(job.ecosystem, Ecosystem::Actions);
+            assert_eq!(job.directory, ".github/workflows");
+        }
+    }
+    // A reusable workflow at `jobs.<id>.uses` is not a step action.
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&BTreeMap::from([(
+            ".github/workflows/ci.yml".to_owned(),
+            "name: ci\non: push\njobs:\n  call:\n    uses: octo/work/.github/workflows/ci.yml@v1\n"
+                .to_owned(),
+        )])))
+        .unwrap();
+    let dep = extraction
+        .dependencies
+        .into_iter()
+        .find(|dep| dep.kind == patchula_words::DependencyKind::ReusableWorkflow)
+        .unwrap();
+    let mut snapshot = snapshot(&BTreeMap::from([(
+        ".github/workflows/ci.yml".to_owned(),
+        String::new(),
+    )]));
+    snapshot.paths.insert(contract::ACTIONS_LOCK.to_owned());
+    assert!(job(&dep, &update(), &snapshot).unwrap().is_none());
+}
+
+/// An update to an action in a listed workflow runs the pinned tool over
+/// that workflow alone, and the regenerated lockfile enters the commit
+/// beside the workflow.
+#[tokio::test]
+async fn an_action_update_carries_the_regenerated_lock() {
+    let lock = actions_lock(&[".github/workflows/ci.yml", ".github/workflows/release.yml"]);
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            ".github/workflows/release.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (contract::ACTIONS_LOCK.into(), lock),
+    ]);
+    let new_lock = "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7.0.1'\n    '.github/workflows/release.yml':\n        - 'actions/checkout@v7.0.0'\ndependencies:\n    'actions/checkout@v7.0.1':\n        ref: 'v7.0.1'\n        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'\n    'actions/checkout@v7.0.0':\n        ref: 'v7.0.0'\n        commit: 'sha1-08c6903cd8c0fde910a37f88322edcfb5dd907a8'\n".to_owned();
+    let executor = fixture_actions_runs(
+        files.clone(),
+        vec![
+            ActionsRun {
+                code: 0,
+                stdout: "{\"valid\":true,\"findings\":[]}".into(),
+                stderr: String::new(),
+                lock: Some(new_lock.clone()),
+                extra: Vec::new(),
+            },
+            ActionsRun {
+                code: 0,
+                stdout: "{}".into(),
+                stderr: String::new(),
+                lock: None,
+                extra: Vec::new(),
+            },
+        ],
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let edited = actions_workflow("actions/checkout@v7.0.1");
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(".github/workflows/ci.yml", edited.clone())
+        .lock_jobs(vec![actions_job()])
+        .build();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let calls = executor.calls.lock().unwrap();
+    let runs: Vec<_> = recorded(&calls)
+        .into_iter()
+        .filter(|(_, args)| args.iter().any(|arg| arg == "/bin/sh"))
+        .collect();
+    assert_eq!(runs.len(), 2, "{calls:?}");
+    let (fix, verify) = (&runs[0].1, &runs[1].1);
+    for flag in [
+        "--no-interactive",
+        "--no-onboard",
+        "--no-narrow",
+        "--ignore-local-actions",
+        "--json=valid,findings",
+    ] {
+        assert!(fix.contains(&flag.to_owned()), "{fix:?}");
+    }
+    // Only the edited, listed workflow is the run's scope.
+    assert_eq!(
+        fix.iter().filter(|arg| arg.ends_with(".yml")).count(),
+        1,
+        "{fix:?}"
+    );
+    assert!(fix.contains(&".github/workflows/ci.yml".to_owned()));
+    assert!(verify.contains(&"--verify-local".to_owned()));
+    assert_eq!(p.contents()[".github/workflows/ci.yml"], edited);
+    assert_eq!(p.contents()[contract::ACTIONS_LOCK], new_lock);
+}
+
+/// A workflow the lockfile does not list starts no tool run and is
+/// untouched. An Actions job with no committed lockfile at all cannot
+/// legitimately exist; asked for one anyway, the run refuses it.
+#[tokio::test]
+async fn unlisted_workflows_run_no_tool() {
+    let lock = actions_lock(&[".github/workflows/release.yml"]);
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            ".github/workflows/release.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (contract::ACTIONS_LOCK.into(), lock),
+    ]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snap = snapshot(&files);
+    let config = config();
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(
+            ".github/workflows/ci.yml",
+            actions_workflow("actions/checkout@v7.0.1"),
+        )
+        .lock_jobs(vec![actions_job()])
+        .build();
+    prepare_one(&runner, &mut p, &mut snap, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert!(
+        !executor
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call.iter().any(|arg| arg == "/bin/sh")),
+        "{:?}",
+        executor.calls.lock().unwrap()
+    );
+    assert!(!p.contents().contains_key(contract::ACTIONS_LOCK));
+
+    // A job without the lockfile in the checkout is refused outright.
+    let files = BTreeMap::from([(
+        ".github/workflows/ci.yml".into(),
+        actions_workflow("actions/checkout@v7.0.0"),
+    )]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snap = snapshot(&files);
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(
+            ".github/workflows/ci.yml",
+            actions_workflow("actions/checkout@v7.0.1"),
+        )
+        .lock_jobs(vec![actions_job()])
+        .build();
+    prepare_one(&runner, &mut p, &mut snap, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("without the lockfile")),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// `actions_composite_job` over a snapshot's files, as planning asks it.
+fn composite_job(
+    dep: &patchula_manager::Dependency,
+    files: &BTreeMap<String, String>,
+) -> Result<Option<Job>, String> {
+    contract::actions_composite_job(dep, &files.keys().cloned().collect(), &|path| {
+        Ok(files.get(path).cloned())
+    })
+}
+
+/// The `actions/setup-node` step extraction finds in `files`.
+fn setup_node(files: &BTreeMap<String, String>) -> patchula_manager::Dependency {
+    patchula_manager::Scanner::new(&config())
+        .unwrap()
+        .extract(&patchula_manager::all_read(files))
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|dep| dep.package == "actions/setup-node")
+        .unwrap()
+}
+
+/// A composite action whose one step uses `actions/setup-node@{pin}`.
+fn setup_action(pin: &str) -> String {
+    format!(
+        "name: setup\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-node@{pin}\n"
+    )
+}
+
+/// A bump inside a local `./` composite cannot change actions.lock: the
+/// tool never follows or locks `./` actions. No Actions job is planned for
+/// it, nor for a composite no listed workflow calls, so the update
+/// publishes like any other, with no tool run and the lock untouched.
+#[tokio::test]
+async fn a_composite_action_bump_makes_no_actions_job() {
+    let action = |pin: &str| {
+        format!(
+            "name: setup\nruns:\n  using: composite\n  steps:\n    - uses: actions/setup-node@{pin}\n"
+        )
+    };
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("./.github/actions/setup"),
+        ),
+        (".github/actions/setup/action.yml".into(), action("v6.0.0")),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml"]),
+        ),
+    ]);
+    let config = config();
+    let dep = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|dep| dep.package == "actions/setup-node")
+        .unwrap();
+    assert_eq!(dep.kind, patchula_words::DependencyKind::Action);
+    assert!(job(&dep, &update(), &snapshot(&files)).unwrap().is_none());
+    assert!(composite_job(&dep, &files).unwrap().is_none());
+    // Called through `$/` only by a workflow the lock does not list.
+    let mut unlisted = files.clone();
+    unlisted.insert(
+        ".github/workflows/release.yml".into(),
+        actions_workflow("$/.github/actions/setup"),
+    );
+    assert!(
+        composite_job(&setup_node(&unlisted), &unlisted)
+            .unwrap()
+            .is_none()
+    );
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snap = snapshot(&files);
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(".github/actions/setup/action.yml", action("v6.1.0"))
+        .build();
+    prepare_one(&runner, &mut p, &mut snap, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert_eq!(
+        p.contents()[".github/actions/setup/action.yml"],
+        action("v6.1.0")
+    );
+    assert!(!p.contents().contains_key(contract::ACTIONS_LOCK));
+    assert!(
+        !executor
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call.iter().any(|arg| arg == "/bin/sh")),
+        "{:?}",
+        executor.calls.lock().unwrap()
+    );
+}
+
+/// A bump inside a `$/` composite is relocked under exactly the listed
+/// workflows that call it: the job is planned, the tool runs over
+/// `ci.yml` and not the listed `release.yml` that does not call it, and
+/// the read-back wants the new ref under `ci.yml`. A lock without it
+/// there holds the update.
+#[tokio::test]
+async fn a_self_repository_composite_is_relocked_under_its_callers() {
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("$/.github/actions/setup"),
+        ),
+        (
+            ".github/workflows/release.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            ".github/actions/setup/action.yml".into(),
+            setup_action("v6.0.0"),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml", ".github/workflows/release.yml"]),
+        ),
+    ]);
+    assert_eq!(
+        composite_job(&setup_node(&files), &files).unwrap(),
+        Some(actions_job())
+    );
+    let edit = [(".github/actions/setup/action.yml", setup_action("v6.1.0"))];
+    let (p, runs) = actions_prepared(
+        &files,
+        &edit,
+        actions_clean("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/setup-node@v6.1.0'\n    '.github/workflows/release.yml': []\ndependencies:\n    'actions/setup-node@v6.1.0':\n        ref: 'v6.1.0'\n        commit: 'sha1-2028fbc5c25fe9cf00d9f06a71cc4710d4507903'\n"),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    for run in &runs {
+        let paths: Vec<&String> = run.iter().filter(|arg| arg.ends_with(".yml")).collect();
+        assert_eq!(paths, [".github/workflows/ci.yml"], "{run:?}");
+    }
+    let (p, _) = actions_prepared(
+        &files,
+        &edit,
+        actions_clean("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml': []\n    '.github/workflows/release.yml':\n        - 'actions/setup-node@v6.1.0'\ndependencies:\n    'actions/setup-node@v6.1.0':\n        ref: 'v6.1.0'\n        commit: 'sha1-2028fbc5c25fe9cf00d9f06a71cc4710d4507903'\n"),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action().reason.as_deref().is_some_and(
+            |r| r.contains("actions/setup-node@v6.1.0 is not under .github/workflows/ci.yml")
+        ),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// When which listed workflows call a composite cannot be told — here a
+/// listed workflow that does not parse — the update is held, at planning
+/// and in the run, before any tool runs, rather than publishing a lock the
+/// runner might reject.
+#[tokio::test]
+async fn an_unresolvable_composite_caller_holds_the_update() {
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("$/.github/actions/setup"),
+        ),
+        (
+            ".github/workflows/broken.yml".into(),
+            "jobs: [unclosed\n".into(),
+        ),
+        (
+            ".github/actions/setup/action.yml".into(),
+            setup_action("v6.0.0"),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml", ".github/workflows/broken.yml"]),
+        ),
+    ]);
+    let error = composite_job(&setup_node(&files), &files).unwrap_err();
+    assert!(
+        error.contains(".github/workflows/broken.yml does not parse"),
+        "{error}"
+    );
+    let (p, runs) = actions_prepared(
+        &files,
+        &[(".github/actions/setup/action.yml", setup_action("v6.1.0"))],
+        actions_clean("version: 'v0.0.3'\nworkflows: {}\ndependencies: {}\n"),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.clone().unwrap();
+    assert!(reason.contains("is unknown"), "{reason}");
+    assert!(reason.contains("broken.yml does not parse"), "{reason}");
+    assert!(runs.is_empty(), "{runs:?}");
+}
+
+/// Findings the fix run reports block the update: a retryable error means
+/// GitHub was unreachable or rate-limited and the update waits, a
+/// `repo-unavailable` is a private action the token cannot read, and
+/// `onboarding-required` is the lock refusing to cover a new action. The
+/// first finding other than `ref-changed`, `stale` and `not-pinned` names
+/// the hold; those three are what the fix run rewrites.
+#[tokio::test]
+async fn blocking_findings_hold_the_update() {
+    let lock = actions_lock(&[".github/workflows/ci.yml"]);
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (contract::ACTIONS_LOCK.into(), lock),
+    ]);
+    let findings = |category: &str, retryable: bool| {
+        format!(
+            "{{\"valid\":false,\"findings\":[{{\"category\":\"ref-changed\",\"severity\":\"error\",\"detail\":\"moved\",\"retryable\":false,\"workflow\":\".github/workflows/ci.yml\"}},{{\"category\":\"{category}\",\"severity\":\"error\",\"detail\":\"the detail\",\"remediation\":\"the fix\",\"retryable\":{retryable},\"workflow\":\".github/workflows/ci.yml\"}}]}}"
+        )
+    };
+    for (findings, want) in [
+        (
+            findings("repo-unavailable", false),
+            "a private action the token cannot read",
+        ),
+        (
+            findings("reachability-unknown", true),
+            "GitHub was unreachable or rate-limited",
+        ),
+        (
+            findings("unreachable-pin", false),
+            "a pin is no longer in upstream history",
+        ),
+        (
+            findings("onboarding-required", false),
+            "an action the lockfile does not list yet",
+        ),
+    ] {
+        let executor = fixture_actions_runs(
+            files.clone(),
+            vec![ActionsRun {
+                code: 1,
+                stdout: findings.clone(),
+                stderr: String::new(),
+                lock: None,
+                extra: Vec::new(),
+            }],
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let mut p = Draft::new(actions_branch())
+            .update()
+            .content(
+                ".github/workflows/ci.yml",
+                actions_workflow("actions/checkout@v7.0.1"),
+            )
+            .lock_jobs(vec![actions_job()])
+            .build();
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+        assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+        let reason = p.action().reason.clone().unwrap();
+        assert!(reason.contains("actions.lock"), "{reason}");
+        assert!(reason.contains(want), "{reason}");
+        assert!(reason.contains("the detail"), "{reason}");
+    }
+}
+
+/// A tool failure's last stderr line names the hold: a token refusal, a
+/// lockfile the tool cannot read, or its own words.
+#[tokio::test]
+async fn a_tool_failure_names_the_hold() {
+    let lock = actions_lock(&[".github/workflows/ci.yml"]);
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (contract::ACTIONS_LOCK.into(), lock),
+    ]);
+    for (stderr, want) in [
+        (
+            "noise\nGitHub rejected the token in GH_TOKEN (401)",
+            "the token refused",
+        ),
+        (
+            "failed to parse .github/workflows/actions.lock: unsupported version",
+            "a corrupt or newer lockfile",
+        ),
+        ("something else entirely", "something else entirely"),
+    ] {
+        let executor = fixture_actions_runs(
+            files.clone(),
+            vec![ActionsRun {
+                code: 2,
+                stdout: String::new(),
+                stderr: stderr.into(),
+                lock: None,
+                extra: Vec::new(),
+            }],
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+            .with_executor(executor.clone());
+        let mut snapshot = snapshot(&files);
+        let config = config();
+        let mut p = Draft::new(actions_branch())
+            .update()
+            .content(
+                ".github/workflows/ci.yml",
+                actions_workflow("actions/checkout@v7.0.1"),
+            )
+            .lock_jobs(vec![actions_job()])
+            .build();
+        prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+        assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+        let reason = p.action().reason.clone().unwrap();
+        assert!(reason.contains(want), "{reason}");
+    }
+}
+
+/// A base lockfile the strict reader cannot take — corrupt, or a newer
+/// format — holds the update before any tool runs.
+#[tokio::test]
+async fn a_corrupt_lockfile_holds_without_a_run() {
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (contract::ACTIONS_LOCK.into(), "workflows: 3\n".into()),
+    ]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(
+            ".github/workflows/ci.yml",
+            actions_workflow("actions/checkout@v7.0.1"),
+        )
+        .lock_jobs(vec![actions_job()])
+        .build();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("a corrupt or newer lockfile")),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// `--no-onboard` exits 0 while refusing to cover an action, so the
+/// offline `--verify-local` pass must agree the lock covers every
+/// workflow the run scoped. A mismatch holds the update.
+#[tokio::test]
+async fn a_valid_report_still_verifies_locally() {
+    let lock = actions_lock(&[".github/workflows/ci.yml"]);
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (contract::ACTIONS_LOCK.into(), lock),
+    ]);
+    let new_lock = "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7.0.1'\ndependencies:\n    'actions/checkout@v7.0.1':\n        ref: 'v7.0.1'\n        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'\n".to_owned();
+    let executor = fixture_actions_runs(
+        files.clone(),
+        vec![
+            // `valid: true`, but the coverage check disagrees.
+            ActionsRun {
+                code: 0,
+                stdout: "{\"valid\":true,\"findings\":[]}".into(),
+                stderr: String::new(),
+                lock: Some(new_lock),
+                extra: Vec::new(),
+            },
+            ActionsRun {
+                code: 1,
+                stdout: "{\"findings\":[{\"category\":\"not-pinned\",\"severity\":\"error\",\"detail\":\"uses is not locked\",\"retryable\":false}]}".into(),
+                stderr: String::new(),
+                lock: None,
+                extra: Vec::new(),
+            },
+        ],
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(
+            ".github/workflows/ci.yml",
+            actions_workflow("actions/checkout@v7.0.1"),
+        )
+        .lock_jobs(vec![actions_job()])
+        .build();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("an action the lockfile does not list yet")),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// One `prepare_one` of an Actions job over `files` with `edits`, the
+/// fake tool answering `runs` in order: the plan afterwards, and every
+/// `gh-actions-lock` invocation's arguments.
+async fn actions_prepared(
+    files: &BTreeMap<String, String>,
+    edits: &[(&str, String)],
+    runs: Vec<ActionsRun>,
+) -> (Plan, Vec<Vec<String>>) {
+    let executor = fixture_actions_runs(files.clone(), runs);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snap = snapshot(files);
+    let config = config();
+    let mut draft = Draft::new(actions_branch()).update();
+    for (path, content) in edits {
+        draft = draft.content(*path, content.clone());
+    }
+    let mut p = draft.lock_jobs(vec![actions_job()]).build();
+    prepare_one(&runner, &mut p, &mut snap, &config).await;
+    let calls = executor.calls.lock().unwrap();
+    let runs = recorded(&calls)
+        .into_iter()
+        .filter(|(_, args)| args.iter().any(|arg| arg == "/bin/sh"))
+        .map(|(_, args)| args)
+        .collect();
+    (p, runs)
+}
+
+/// A clean fix run that writes `lock`, then a clean `--verify-local`.
+fn actions_clean(lock: &str) -> Vec<ActionsRun> {
+    vec![
+        ActionsRun {
+            code: 0,
+            stdout: "{\"valid\":true,\"findings\":[]}".into(),
+            stderr: String::new(),
+            lock: Some(lock.to_owned()),
+            extra: Vec::new(),
+        },
+        ActionsRun {
+            code: 0,
+            stdout: "{}".into(),
+            stderr: String::new(),
+            lock: None,
+            extra: Vec::new(),
+        },
+    ]
+}
+
+/// The read-back proof: a step-level `uses:` the update wrote must appear
+/// under its workflow in the regenerated lock, and a written SHA must be
+/// the entry's recorded commit. An entry the tool left out, or a different
+/// commit, holds the update.
+#[tokio::test]
+async fn the_lock_is_read_back_against_the_edit() {
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml"]),
+        ),
+    ]);
+    // A lock that names another action under the workflow proves nothing
+    // for the edit's ref.
+    let (p, _) = actions_prepared(
+        &files,
+        &[(
+            ".github/workflows/ci.yml",
+            actions_workflow("actions/checkout@v7.0.1"),
+        )],
+        actions_clean("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/setup-node@v6'\ndependencies: {}\n"),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action().reason.as_deref().is_some_and(
+            |r| r.contains("actions/checkout@v7.0.1 is not under .github/workflows/ci.yml")
+        ),
+        "{:?}",
+        p.action().reason
+    );
+    // An existing pin moves with its update and the lock keys it by the
+    // SHA: the entry named but a commit that is not the written SHA fails.
+    let pinned = |pin: &str| actions_workflow(&format!("actions/checkout@{pin}"));
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            pinned("08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v7.0.0"),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml"]),
+        ),
+    ]);
+    let (p, _) = actions_prepared(
+        &files,
+        &[(
+            ".github/workflows/ci.yml",
+            pinned("3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"),
+        )],
+        actions_clean("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'\ndependencies:\n    'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1':\n        ref: 'v7.0.1'\n        commit: 'sha1-0000000000000000000000000000000000000000'\n"),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("did not record the written pin")),
+        "{:?}",
+        p.action().reason
+    );
+    // A SHA in any letter case is keyed lowercase, as the tool writes it,
+    // and the recorded commit proves the pin.
+    let (p, _) = actions_prepared(
+        &files,
+        &[(
+            ".github/workflows/ci.yml",
+            pinned("3D3C42E5AAC5BA805825DA76410C181273BA90B1 # v7.0.1"),
+        )],
+        actions_clean("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'\ndependencies:\n    'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1':\n        ref: 'v7.0.1'\n        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'\n"),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+}
+
+/// `jobs.<id>.uses` reusable workflows are never in the lock: the tool
+/// locks step-level actions only, so the read-back does not ask for one
+/// beside the checkout bump it proves.
+#[tokio::test]
+async fn a_reusable_workflow_is_not_read_back() {
+    let workflow = |checkout: &str| {
+        format!(
+            "name: ci\non: push\njobs:\n  release:\n    uses: octo/hello/.github/workflows/release.yml@v2\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@{checkout}\n"
+        )
+    };
+    let files = BTreeMap::from([
+        (".github/workflows/ci.yml".into(), workflow("v7.0.0")),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml"]),
+        ),
+    ]);
+    let (p, runs) = actions_prepared(
+        &files,
+        &[(".github/workflows/ci.yml", workflow("v7.0.1"))],
+        actions_clean("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7.0.1'\ndependencies:\n    'actions/checkout@v7.0.1':\n        ref: 'v7.0.1'\n        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'\n"),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert_eq!(runs.len(), 2, "{runs:?}");
+}
+
+/// The tool keys entries as `strings.ToLower(owner/repo) + "@" + ref`, so
+/// `Azure/login@v2` in a workflow is `azure/login@v2` in the lock; the
+/// read-back canonicalizes both sides the same way.
+#[tokio::test]
+async fn lock_keys_compare_as_the_tool_writes_them() {
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("Azure/login@v1"),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml"]),
+        ),
+    ]);
+    let (p, _) = actions_prepared(
+        &files,
+        &[(".github/workflows/ci.yml", actions_workflow("Azure/login@v2"))],
+        actions_clean("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'azure/login@v2'\ndependencies:\n    'azure/login@v2':\n        ref: 'v2'\n        commit: 'sha1-a457da9ea143d694b1b9c7c869ebb04ebe844ef5'\n"),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    // The ref keeps its case, as git refs do: `V2` is not `v2`.
+    let (p, _) = actions_prepared(
+        &files,
+        &[(".github/workflows/ci.yml", actions_workflow("Azure/login@V2"))],
+        actions_clean("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'azure/login@v2'\ndependencies:\n    'azure/login@v2':\n        ref: 'v2'\n        commit: 'sha1-a457da9ea143d694b1b9c7c869ebb04ebe844ef5'\n"),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+}
+
+/// A grouped bump that edits a listed `ci.yml` and an unlisted
+/// `release.yml` proves only what the run scoped: the tool runs over
+/// `ci.yml` alone — not the listed, unedited `deploy.yml` either — and a
+/// lock that lists only `ci.yml` publishes.
+#[tokio::test]
+async fn only_the_scoped_workflows_are_read_back() {
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            ".github/workflows/release.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            ".github/workflows/deploy.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml", ".github/workflows/deploy.yml"]),
+        ),
+    ]);
+    let (p, runs) = actions_prepared(
+        &files,
+        &[
+            (
+                ".github/workflows/ci.yml",
+                actions_workflow("actions/checkout@v7.0.1"),
+            ),
+            (
+                ".github/workflows/release.yml",
+                actions_workflow("actions/checkout@v7.0.1"),
+            ),
+        ],
+        actions_clean("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7.0.1'\n    '.github/workflows/deploy.yml': []\ndependencies:\n    'actions/checkout@v7.0.1':\n        ref: 'v7.0.1'\n        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'\n"),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    for run in &runs {
+        let paths: Vec<&String> = run
+            .iter()
+            .filter(|arg| arg.ends_with(".yml") || arg.ends_with(".yaml"))
+            .collect();
+        assert_eq!(paths, [".github/workflows/ci.yml"], "{run:?}");
+    }
+    assert_eq!(runs.len(), 2, "{runs:?}");
+}
+
+/// A file the tool wrote beside `actions.lock` is rejected by the
+/// generated-file guard, the same as any other ecosystem.
+#[tokio::test]
+async fn a_write_beside_the_lock_is_rejected() {
+    let lock = actions_lock(&[".github/workflows/ci.yml"]);
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (contract::ACTIONS_LOCK.into(), lock),
+    ]);
+    let executor = fixture_actions_runs(
+        files.clone(),
+        vec![ActionsRun {
+            code: 0,
+            stdout: "{}".into(),
+            stderr: String::new(),
+            lock: Some("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7.0.1'\ndependencies:\n    'actions/checkout@v7.0.1':\n        ref: 'v7.0.1'\n        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'\n".into()),
+            extra: vec![(".github/workflows/ci.yml.orig".into(), "orig\n".into())],
+        }],
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(
+            ".github/workflows/ci.yml",
+            actions_workflow("actions/checkout@v7.0.1"),
+        )
+        .lock_jobs(vec![actions_job()])
+        .build();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("unexpected file")),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// Output quoting the granted token never reaches the hold reason: the
+/// streams the run reads back are masked the way a tool failure would
+/// mask them.
+#[tokio::test]
+async fn the_token_never_reaches_a_reason() {
+    let lock = actions_lock(&[".github/workflows/ci.yml"]);
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (contract::ACTIONS_LOCK.into(), lock),
+    ]);
+    let executor = fixture_actions_runs(
+        files.clone(),
+        vec![ActionsRun {
+            code: 2,
+            stdout: String::new(),
+            stderr: "authorization failed for offline-installation\n".into(),
+            lock: None,
+            extra: Vec::new(),
+        }],
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(
+            ".github/workflows/ci.yml",
+            actions_workflow("actions/checkout@v7.0.1"),
+        )
+        .lock_jobs(vec![actions_job()])
+        .build();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.clone().unwrap();
+    assert!(!reason.contains("offline-installation"), "{reason}");
+}
+
+/// A byte-identical regenerated lockfile is fine: legitimate edits, such
+/// as a moved ref upstream still resolves, need not change the bytes.
+#[tokio::test]
+async fn an_unchanged_lock_is_not_a_failure() {
+    let lock = "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7.0.1'\ndependencies:\n    'actions/checkout@v7.0.1':\n        ref: 'v7.0.1'\n        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'\n".to_owned();
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml"]),
+        ),
+    ]);
+    let executor = fixture_actions_runs(
+        files.clone(),
+        vec![
+            ActionsRun {
+                code: 0,
+                stdout: "{}".into(),
+                stderr: String::new(),
+                lock: Some(lock.clone()),
+                extra: Vec::new(),
+            },
+            ActionsRun {
+                code: 0,
+                stdout: "{}".into(),
+                stderr: String::new(),
+                lock: None,
+                extra: Vec::new(),
+            },
+        ],
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(
+            ".github/workflows/ci.yml",
+            actions_workflow("actions/checkout@v7.0.1"),
+        )
+        .lock_jobs(vec![actions_job()])
+        .build();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert_eq!(p.contents()[contract::ACTIONS_LOCK], lock);
+}
+
+/// The pinned tool end to end over a `$/` composite: `ci.yml` calls
+/// `$/.github/actions/setup`, whose SHA-pinned checkout the update moves.
+/// The tool follows the composite and relocks the new pin under `ci.yml`,
+/// and the commit carries the composite and the lock together.
+#[tokio::test]
+async fn real_actions_lock_relocks_a_self_repository_composite() {
+    const V700: &str = "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0";
+    const V701: &str = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+    let proxy = real_actions_lock::GitHubProxy::start("actions-lock-self-composite");
+    let action = |pin: &str| {
+        format!(
+            "name: setup\nruns:\n  using: composite\n  steps:\n    - uses: actions/checkout@{pin}\n"
+        )
+    };
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("$/.github/actions/setup"),
+        ),
+        (
+            ".github/actions/setup/action.yml".into(),
+            action(&format!("{V700} # v7.0.0")),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            format!(
+                "# This file is machine-generated by `gh actions-lock`.\nversion: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@{V700}'\ndependencies:\n    'actions/checkout@{V700}':\n        ref: 'v7.0.0'\n        commit: 'sha1-{V700}'\n        owner_id: 44036562\n        repo_id: 197814629\n"
+            ),
+        ),
+    ]);
+    let dep = patchula_manager::Scanner::new(&config())
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|dep| dep.package == "actions/checkout")
+        .unwrap();
+    let job = composite_job(&dep, &files).unwrap().unwrap();
+    let executor = fixture_actions_lock(files.clone(), proxy.clone());
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), proxy.token()).with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let edited = action(&format!("{V701} # v7.0.1"));
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(".github/actions/setup/action.yml", edited.clone())
+        .lock_jobs(vec![job])
+        .build();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let lock = &p.contents()[contract::ACTIONS_LOCK];
+    assert!(
+        lock.contains(&format!(
+            "'.github/workflows/ci.yml':\n        - 'actions/checkout@{V701}'"
+        )),
+        "{lock}"
+    );
+    assert!(lock.contains(&format!("commit: 'sha1-{V701}'")), "{lock}");
+    assert_eq!(p.contents()[".github/actions/setup/action.yml"], edited);
+    assert!(!p.contents().contains_key(".github/workflows/ci.yml"));
+    proxy.assert_finished();
+}
+
+/// The pinned tool end to end: a checkout bump in a listed workflow
+/// regenerates the lock through the cassette tunnel, and the commit
+/// carries the workflow and the lock together.
+#[tokio::test]
+async fn real_actions_lock_run_regenerates_the_listed_lock() {
+    let proxy = real_actions_lock::GitHubProxy::start("actions-lock-update");
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            "# This file is machine-generated by `gh actions-lock`.\nversion: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7.0.0'\ndependencies:\n    'actions/checkout@v7.0.0':\n        ref: 'v7.0.0'\n        commit: 'sha1-9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0'\n        owner_id: 44036562\n        repo_id: 197814629\n".into(),
+        ),
+    ]);
+    let executor = fixture_actions_lock(files.clone(), proxy.clone());
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), proxy.token()).with_executor(executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = Draft::new(actions_branch())
+        .update()
+        .content(
+            ".github/workflows/ci.yml",
+            actions_workflow("actions/checkout@v7.0.1"),
+        )
+        .lock_jobs(vec![actions_job()])
+        .build();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let lock = &p.contents()[contract::ACTIONS_LOCK];
+    assert!(lock.contains("'actions/checkout@v7.0.1'"), "{lock}");
+    assert!(
+        lock.contains("sha1-3d3c42e5aac5ba805825da76410c181273ba90b1"),
+        "{lock}"
+    );
+    assert!(
+        p.contents()[".github/workflows/ci.yml"].contains("v7.0.1"),
+        "{:?}",
+        p.contents()
+    );
+    proxy.assert_finished();
 }

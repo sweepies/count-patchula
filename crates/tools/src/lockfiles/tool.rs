@@ -3,23 +3,6 @@
 //! code that runs it.
 use super::*;
 
-/// The actions.lock tool's mise spec: its release assets are bare binaries
-/// named by platform, so `bin` picks the one to install. Its ecosystem's
-/// descriptor arrives with the actions.lock job; until then `tools install`
-/// and `tools prune` see it through `actions_lock_spec`.
-pub(super) const ACTIONS_LOCK_SPEC: &str = "github:github/gh-actions-lock[bin=gh-actions-lock]";
-
-/// `gh-actions-lock` at `defaults.toml`'s pin, for `tools install` and
-/// `tools prune` before its ecosystem has a descriptor.
-pub(super) fn actions_lock_spec(
-    defaults: &toml_edit::Document<&'static str>,
-) -> Option<(String, String)> {
-    Some((
-        ACTIONS_LOCK_SPEC.to_string(),
-        defaults["tools"][ACTIONS_LOCK_SPEC].as_str()?.to_string(),
-    ))
-}
-
 /// How an ecosystem's pinned tools become mise install specs, for
 /// `tools install` and `tools prune`.
 pub(super) enum Install {
@@ -46,6 +29,10 @@ pub(super) enum Run {
     /// Through rustup: the named tool's pin is the toolchain,
     /// `rustup run <version> bin`, with the run's own Cargo home.
     Rustup(&'static str),
+    /// Through `/bin/sh -c`, for a tool whose exit status and streams the
+    /// run must keep whole rather than letting the executor turn a nonzero
+    /// exit into a bounded failure.
+    Shell,
 }
 
 /// How far `validate_targets` proves this ecosystem moved a requested
@@ -151,6 +138,7 @@ pub(super) fn descriptor(ecosystem: Ecosystem) -> &'static Tool {
         Ecosystem::Php => &super::php::DESCRIPTOR,
         Ecosystem::Nix => &super::nix::DESCRIPTOR,
         Ecosystem::Apm => &super::apm::DESCRIPTOR,
+        Ecosystem::Actions => &super::actions::DESCRIPTOR,
     }
 }
 
@@ -169,6 +157,7 @@ pub(super) fn descriptors() -> impl Iterator<Item = &'static Tool> {
         Ecosystem::Php,
         Ecosystem::Nix,
         Ecosystem::Apm,
+        Ecosystem::Actions,
     ]
     .into_iter()
     .map(descriptor)

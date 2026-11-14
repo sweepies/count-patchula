@@ -1,4 +1,5 @@
 //! Real ecosystem tools run before any Git Data mutation, in disposable trees.
+mod actions;
 mod apm;
 mod caches;
 mod cargo;
@@ -382,6 +383,7 @@ impl Runner {
                 Ecosystem::Php => self.composer_lock(context, &jobs).await?,
                 Ecosystem::Nix => self.flake_lock(context, &jobs).await?,
                 Ecosystem::Apm => self.apm_lock(context).await?,
+                Ecosystem::Actions => self.actions_lock(context, work).await?,
             }
         }
         // Only manifests and lockfiles can enter the API commit. Reject links,
@@ -537,6 +539,7 @@ impl Runner {
                 ]);
             }
             Run::Direct => spec.args.push(call.bin.name().into()),
+            Run::Shell => spec.args.push("/bin/sh".into()),
         }
         spec.args.extend(call.args);
         spec.secrets = call.secrets;

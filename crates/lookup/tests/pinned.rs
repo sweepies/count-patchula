@@ -59,7 +59,7 @@ fn catalog(values: &[&str]) -> Catalog {
 /// `required_version`) keep the `preserve` default.
 #[test]
 fn version_files_update_like_pins() {
-    let eval = Evaluator::new(&config()).unwrap();
+    let eval = Evaluator::new(&config(), Default::default()).unwrap();
     let mut dep = dependency("node");
     dep.file = ".nvmrc".into();
     dep.form = EditForm::Scalar(Syntax::Bare);
@@ -105,7 +105,7 @@ fn version_files_update_like_pins() {
 /// default, and a ranged peer is widened rather than rewritten exact.
 #[test]
 fn bun_follows_npm_toolchain_and_peer_rules() {
-    let eval = Evaluator::new(&config()).unwrap();
+    let eval = Evaluator::new(&config(), Default::default()).unwrap();
     let mut toolchain = dependency("node");
     toolchain.manager = Manager::Bun;
     toolchain.kind = DependencyKind::Toolchain;
@@ -139,7 +139,7 @@ fn bun_follows_npm_toolchain_and_peer_rules() {
 /// looked up and never errors. Only a version-shaped `rev` is looked up.
 #[test]
 fn a_precommit_branch_rev_is_an_opaque_ref() {
-    let eval = Evaluator::new(&config()).unwrap();
+    let eval = Evaluator::new(&config(), Default::default()).unwrap();
     let mut dep = dependency("pre-commit/pre-commit-hooks");
     dep.manager = Manager::PreCommit;
     dep.file = ".pre-commit-config.yaml".into();
