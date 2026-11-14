@@ -24,7 +24,7 @@ pub async fn command(
 ) -> Result<u8, (u8, miette::Report)> {
     let usage = |message: String| {
         (
-            2,
+            crate::USAGE,
             miette::miette!(
                 help = "patchula apply only writes the working tree in the current directory",
                 "{message}"
@@ -60,18 +60,13 @@ pub async fn command(
         .iter()
         .map(|manager| {
             manager.parse().map_err(|_| {
-                (
-                    2,
-                    miette::miette!(
-                        help = "the managers are listed at https://count-patchula.sweepy.dev/guide/managers/",
-                        "--manager {manager} is not a known manager"
-                    ),
-                )
+                (crate::USAGE, miette::miette!(help = "the managers are listed at https://count-patchula.sweepy.dev/guide/managers/",
+                        "--manager {manager} is not a known manager"))
             })
         })
         .collect::<Result<_, _>>()?;
     let names = patchula_config::Patterns::compile(&options.dependency)
-        .map_err(|e| (2, miette::miette!("--dependency: {e}")))?;
+        .map_err(|e| crate::usage(format!("--dependency: {e}")))?;
     let types = &options.update_type;
     let lookup = cli::Lookup {
         repositories: Vec::new(),
@@ -83,25 +78,19 @@ pub async fn command(
     };
     let (report, read) = crate::report(app, &lookup, None, services).await?;
     let crate::Read::Checkout(checkout) = read else {
-        return Err((
-            1,
-            miette::miette!("the lookup did not read the working tree"),
-        ));
+        return Err(crate::fail("the lookup did not read the working tree"));
     };
     let (dir, config) = *checkout;
-    let local = plan::local(&dir, config).map_err(|e| (2, miette::miette!("{e}")))?;
+    let local = plan::local(&dir, config).map_err(crate::usage)?;
     let mut warnings = Vec::new();
     let mut failures = Vec::new();
     for repo in &report.repositories {
         if repo.status == patchula_report::Status::Error {
-            return Err((
-                1,
-                miette::miette!(
-                    "{}: {}",
-                    repo.repository,
-                    repo.reason.as_deref().unwrap_or("the lookup failed")
-                ),
-            ));
+            return Err(crate::fail(format!(
+                "{}: {}",
+                repo.repository,
+                repo.reason.as_deref().unwrap_or("the lookup failed")
+            )));
         }
         warnings.extend(repo.reason.iter().chain(&repo.warnings).cloned());
         failures.extend(&repo.lookup_failures);
@@ -146,10 +135,10 @@ pub async fn command(
     // Conflicts are the planner's to report, the same skips the TUI shows.
     chosen.sort_by_key(|u| u.kind.rank());
     chosen.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
-    let plan = plan::plan(&local, &chosen).map_err(|e| (1, miette::miette!("{e}")))?;
+    let plan = plan::plan(&local, &chosen).map_err(crate::fail)?;
     let writes = !options.dry_run && !options.check;
     if writes {
-        plan.write(&dir).map_err(|e| (1, miette::miette!("{e}")))?;
+        plan.write(&dir).map_err(crate::fail)?;
     }
     let waiting = if writes {
         !plan.skipped.is_empty()
@@ -169,7 +158,7 @@ pub async fn command(
         .iter()
         .map(|(path, (old, new))| (path, patchula_update::unified(path, old, new)))
         .collect();
-    let fail = |e: io::Error| (1, miette::miette!("{e}"));
+    let fail = |e: io::Error| crate::fail(e);
     if app.json {
         let update = |u: &updates::Update| {
             json!({
@@ -407,13 +396,7 @@ mod tests {
             &["add", "."],
             &["commit", "-qm", "init"],
         ] {
-            let status = std::process::Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-                .args(args)
-                .current_dir(&tree)
-                .status()
-                .unwrap();
-            assert!(status.success());
+            crate::copier::test_git(&tree, args);
         }
         let fake = dir.path().join("copier");
         std::fs::write(

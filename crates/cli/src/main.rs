@@ -32,10 +32,32 @@ const TOKEN_HELP: &str = "lookup/run requires PATCHULA_TOKEN, GITHUB_TOKEN or GH
 const LOG_VAR: &str = "PATCHULA_LOG";
 /// A lookup or apply finished, but some dependencies' lookups failed.
 const LOOKUP_FAILED: u8 = 4;
+/// The command failed.
+const FAILED: u8 = 1;
+/// The command line or its environment is not usable.
+const USAGE: u8 = 2;
 /// A run finished, but a repository changed under it; a rerun retries it.
 const STALE: u8 = 5;
 const RECHECK_VAR: &str = "PATCHULA_RECHECK";
+const RECHECK_HELP: &str = "PATCHULA_RECHECK must be now or next-run";
 const HOME_VAR: &str = "HOME";
+
+/// The exit for an engine error: a configuration error is a usage error.
+fn engine_failure(error: patchula_engine::Error) -> (u8, miette::Report) {
+    if matches!(error, patchula_engine::Error::Configuration(_)) {
+        usage(error)
+    } else {
+        fail(error)
+    }
+}
+/// A failure exit with `message`.
+pub(crate) fn fail(message: impl std::fmt::Display) -> (u8, miette::Report) {
+    (FAILED, miette::miette!("{message}"))
+}
+/// A usage exit with `message`.
+pub(crate) fn usage(message: impl std::fmt::Display) -> (u8, miette::Report) {
+    (USAGE, miette::miette!("{message}"))
+}
 
 // Only the token and transport are replaced in offline CLI tests. Dispatch,
 // configuration, disk-cache opening and engine construction stay on this path.
@@ -207,7 +229,7 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
     let command = app
         .command
         .as_ref()
-        .ok_or_else(|| (2, miette::miette!("choose a subcommand; see --help")))?;
+        .ok_or_else(|| usage("choose a subcommand; see --help"))?;
     match command {
         Command::Apply(options) => {
             apply::command(
@@ -240,10 +262,10 @@ async fn auth_command(
     let server = match &target.server {
         Some(server) => remote::parse(server)?,
         None => remote::configured(services)?.ok_or_else(|| {
-            (
-                2,
-                miette::miette!("name the server with --server or {}", remote::SERVER_VAR),
-            )
+            usage(format!(
+                "name the server with --server or {}",
+                remote::SERVER_VAR
+            ))
         })?,
     };
     let (done, message) = match auth.command {
@@ -270,7 +292,7 @@ async fn auth_command(
     };
     writeln!(io::stdout().lock(), "{result}")
         .map(|_| 0)
-        .map_err(|e| (1, miette::miette!("{e}")))
+        .map_err(fail)
 }
 
 /// `patchula config ...`: print or validate configuration and operator settings.
@@ -279,11 +301,11 @@ fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Re
         ConfigCommand::SettingsSchema => {
             write!(io::stdout().lock(), "{}", patchula_config::settings::SCHEMA)
                 .map(|_| 0)
-                .map_err(|e| (1, miette::miette!("{e}")))
+                .map_err(fail)
         }
         ConfigCommand::CheckSettings(check) => {
             let settings =
-                patchula_config::settings::Settings::load(&check.path).map_err(|e| (2, e))?;
+                patchula_config::settings::Settings::load(&check.path).map_err(|e| (USAGE, e))?;
             patchula_engine::settings::check(&settings).map_err(|(field, message)| {
                 (
                     2,
@@ -301,13 +323,13 @@ fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Re
                 }
             )
             .map(|_| 0)
-            .map_err(|e| (1, miette::miette!("{e}")))
+            .map_err(fail)
         }
         ConfigCommand::Schema => write!(io::stdout().lock(), "{}", patchula_config::SCHEMA)
             .map(|_| 0)
-            .map_err(|error| (1, miette::miette!("{error}"))),
+            .map_err(fail),
         ConfigCommand::Check(check) => {
-            let config = patchula_config::load(&check.path).map_err(|error| (2, error))?;
+            let config = patchula_config::load(&check.path).map_err(|error| (USAGE, error))?;
             if app.verbose > 0 && !app.json {
                 eprintln!(
                     "patchula: {} managers, {} rules, {} extractors",
@@ -324,7 +346,7 @@ fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Re
             };
             writeln!(io::stdout().lock(), "{result}")
                 .map(|_| 0)
-                .map_err(|error| (1, miette::miette!("{error}")))
+                .map_err(fail)
         }
     }
 }
@@ -336,15 +358,14 @@ async fn tui_command(
     services: &Services,
 ) -> Result<u8, (u8, miette::Report)> {
     if !tui.once && !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
-        return Err((
-            2,
-            miette::miette!("patchula tui needs a terminal; use --once for a plain snapshot"),
+        return Err(usage(
+            "patchula tui needs a terminal; use --once for a plain snapshot",
         ));
     }
     let (report, read) = report(app, &tui.lookup, None, services).await?;
     let origin = match read {
         Read::Checkout(checkout) => tui::Origin::Local(Box::new(
-            plan::local(&checkout.0, checkout.1).map_err(|e| (2, miette::miette!("{e}")))?,
+            plan::local(&checkout.0, checkout.1).map_err(usage)?,
         )),
         Read::Server => tui::Origin::Server,
         Read::GitHub => tui::Origin::GitHub,
@@ -353,11 +374,11 @@ async fn tui_command(
     if tui.once {
         write!(io::stdout().lock(), "{}", tui::snapshot(&model))
             .map(|_| 0)
-            .map_err(|e| (1, miette::miette!("{e}")))
+            .map_err(fail)
     } else {
         tui::interact(model)
             .map(|_| 0)
-            .map_err(|e| (1, miette::miette!("terminal error: {e}")))
+            .map_err(|e| fail(format!("terminal error: {e}")))
     }
 }
 
@@ -368,13 +389,13 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
         ToolsCommand::Prune(prune) => (&prune.store, Some(prune.days)),
     };
     if days.is_some_and(|d| d < 1) {
-        return Err((2, miette::miette!("--days must be at least 1")));
+        return Err(usage("--days must be at least 1"));
     }
-    let dir = cache_dir(store.cache.as_deref()).map_err(|e| (1, e))?;
+    let dir = cache_dir(store.cache.as_deref()).map_err(|e| (FAILED, e))?;
     if days.is_none() {
         patchula_tools::bootstrap_mise(&patchula_tools::tools_dir(&dir.join("worktrees")))
             .await
-            .map_err(|e| (1, miette::miette!("{e}")))?;
+            .map_err(fail)?;
     }
     let mut runner = patchula_tools::Runner::new(dir.join("worktrees"), "");
     if let Some(mise_data) = user::mise_data() {
@@ -384,7 +405,7 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
         None => ("installed", runner.prewarm().await),
         Some(days) => ("pruned", runner.prune(days).await),
     };
-    let specs = specs.map_err(|e| (1, miette::miette!("{e}")))?;
+    let specs = specs.map_err(fail)?;
     let result = if app.json {
         serde_json::json!({"schemaVersion":1,"store":runner.tools(),action:specs}).to_string()
     } else {
@@ -397,7 +418,7 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
     };
     writeln!(io::stdout().lock(), "{result}")
         .map(|_| 0)
-        .map_err(|error| (1, miette::miette!("{error}")))
+        .map_err(fail)
 }
 
 #[tokio::main]
@@ -491,13 +512,13 @@ async fn batch(
     use patchula_report::Status;
     let (report, _) = report(app, options, run, services).await?;
     let write = |text: &str| -> Result<(), (u8, miette::Report)> {
-        write!(io::stdout().lock(), "{text}").map_err(|e| (1, miette::miette!("{e}")))
+        write!(io::stdout().lock(), "{text}").map_err(fail)
     };
     if app.json {
         write(&format!(
             "{}\n",
             serde_json::to_string(&report)
-                .map_err(|e| (1, miette::miette!("cannot write report: {e}")))?
+                .map_err(|e| fail(format!("cannot write report: {e}")))?
         ))?;
     } else {
         write(&output::report(&report, &output::Style::stdout(app.color)))?;
@@ -574,7 +595,7 @@ fn settings(scan: &cli::Scan) -> Result<patchula_config::settings::Settings, (u8
         scan.settings.as_deref(),
         user::settings_file(),
     )
-    .map_err(|e| (2, e))?;
+    .map_err(|e| (USAGE, e))?;
     patchula_engine::settings::check(&settings).map_err(|(field, message)| {
         (
             2,
@@ -586,12 +607,7 @@ fn settings(scan: &cli::Scan) -> Result<patchula_config::settings::Settings, (u8
 
 /// `PATCHULA_RECHECK`'s value: `now` or `next-run`.
 fn parse_recheck(value: &str) -> Result<patchula_words::Recheck, (u8, miette::Report)> {
-    value.parse().map_err(|_| {
-        (
-            2,
-            miette::miette!("PATCHULA_RECHECK must be now or next-run"),
-        )
-    })
+    value.parse().map_err(|_| usage(RECHECK_HELP))
 }
 
 /// The checkbox wording: `--recheck`, then for runs `PATCHULA_RECHECK` and the
@@ -609,10 +625,7 @@ fn recheck(
                 settings.recheck.unwrap_or(patchula_words::Recheck::NextRun)
             }
             Err(_) => {
-                return Err((
-                    2,
-                    miette::miette!("PATCHULA_RECHECK must be now or next-run"),
-                ));
+                return Err(usage(RECHECK_HELP));
             }
         },
         None => patchula_words::Recheck::NextRun,
@@ -707,12 +720,11 @@ async fn source(
     run: Option<&cli::Run>,
     services: &Services,
 ) -> Result<Source, (u8, miette::Report)> {
-    let usage = |message: String| (2, miette::miette!("{message}"));
     let named = !options.repositories.is_empty() || options.all_repos;
     let writes = run.is_some_and(|run| !run.dry_run);
     let local_flag = remote_flags(app, options, run)
         .into_iter()
-        .find(|(flag, set)| *set && cli::remote_policy(flag) == Some(cli::RemotePolicy::Local))
+        .find(|(_, set)| *set)
         .map(|(flag, _)| flag);
     if options.remote {
         if let Some(flag) = local_flag {
@@ -732,7 +744,7 @@ async fn source(
                 repositories: options.repositories.clone(),
             });
         }
-        let repository = current_repository().await.map_err(|e| (2, e))?;
+        let repository = current_repository().await.map_err(|e| (USAGE, e))?;
         let server = match remote::configured(services)? {
             Some(server) => server,
             None => remote::find(services, &repository).await?.ok_or_else(|| {
@@ -753,19 +765,19 @@ async fn source(
     if options.scan.default_config {
         if options.scan.config.is_some() || options.config_dir.is_some() {
             return Err(usage(
-                "--default-config cannot be combined with --config or --config-dir".into(),
+                "--default-config cannot be combined with --config or --config-dir",
             ));
         }
         if named || writes {
             return Err(usage(
-                "--default-config is for the working tree; a repository on GitHub invites the Count with its own patchula.pkl".into(),
+                "--default-config is for the working tree; a repository on GitHub invites the Count with its own patchula.pkl",
             ));
         }
     }
     if named {
         return repositories(options)
             .map(Source::GitHub)
-            .map_err(|e| (2, e));
+            .map_err(|e| (USAGE, e));
     }
     if !options.here
         && local_flag.is_none()
@@ -781,20 +793,20 @@ async fn source(
         });
     }
     if writes {
-        let repository = current_repository().await.map_err(|e| (2, e))?;
+        let repository = current_repository().await.map_err(|e| (USAGE, e))?;
         pushed().await?;
         return Ok(Source::GitHub(vec![repository]));
     }
     if options.config_dir.is_some() {
         return Err(usage(
-            "--config-dir picks config per repository; name repositories, or use --config for the working tree".into(),
+            "--config-dir picks config per repository; name repositories, or use --config for the working tree",
         ));
     }
     let dir = services
         .current_dir()
-        .map_err(|e| (2, miette::miette!("cannot read the current directory: {e}")))?;
+        .map_err(|e| usage(format!("cannot read the current directory: {e}")))?;
     let config = match &options.scan.config {
-        Some(path) => Some(patchula_config::load(path).map_err(|e| (2, e))?),
+        Some(path) => Some(patchula_config::load(path).map_err(|e| (USAGE, e))?),
         None => missing_config(
             &dir,
             options.scan.default_config,
@@ -839,18 +851,22 @@ fn missing_config(
     style: &output::Style,
 ) -> Result<Option<patchula_config::Config>, (u8, miette::Report)> {
     let found = patchula_config::discover(dir)
-        .map_err(|e| (2, miette::miette!("cannot read {}: {e}", dir.display())))?;
+        .map_err(|e| usage(format!("cannot read {}: {e}", dir.display())))?;
     if found.is_some() {
         return Ok(None);
     }
-    let defaults = || patchula_config::defaults().map(Some).map_err(|e| (2, e));
+    let defaults = || {
+        patchula_config::defaults()
+            .map(Some)
+            .map_err(|e| (USAGE, e))
+    };
     if default_config {
         return defaults();
     }
     let path = dir.join(patchula_config::CONFIG_PATH);
     if !services.interactive() {
         return Err((
-            2,
+            USAGE,
             miette::miette!(
                 help = format!(
                     "pass --default-config to use the Count's defaults for this run, or create {} containing `amends \"PatchulaConfig.pkl\"` to invite him for good",
@@ -891,7 +907,7 @@ fn missing_config(
     ));
     let answer = services
         .pick(&question, Missing::from_key)
-        .map_err(|e| (1, miette::miette!("cannot read the answer: {e}")))?;
+        .map_err(|e| fail(format!("cannot read the answer: {e}")))?;
     match answer {
         Missing::Defaults => {
             eprintln!(
@@ -906,7 +922,7 @@ fn missing_config(
                 .create_new(true)
                 .open(&path)
                 .and_then(|mut file| file.write_all(patchula_config::STARTER.as_bytes()))
-                .map_err(|e| (1, miette::miette!("cannot write {}: {e}", path.display())))?;
+                .map_err(|e| fail(format!("cannot write {}: {e}", path.display())))?;
             eprintln!(
                 "{}",
                 style.dim(&format!(
@@ -917,7 +933,7 @@ fn missing_config(
             Ok(None)
         }
         Missing::Quit => Err((
-            2,
+            USAGE,
             miette::miette!(
                 help = "pass --default-config to use the Count's defaults, or add a patchula.pkl",
                 "the Count stays outside: {} has no patchula.pkl",
@@ -932,7 +948,7 @@ fn missing_config(
 async fn pushed() -> Result<(), (u8, miette::Report)> {
     let refuse = |message: String| {
         (
-            2,
+            USAGE,
             miette::miette!(
                 help = "use --dry-run to plan from the working tree, or commit and push to the default branch first",
                 "{message}"
@@ -947,7 +963,7 @@ async fn pushed() -> Result<(), (u8, miette::Report)> {
             "a run with no repository opens pull requests from what is on GitHub, and this working tree has uncommitted changes".into(),
         ));
     }
-    let remote = git_remote().await.map_err(|e| (2, e))?;
+    let remote = git_remote().await.map_err(|e| (USAGE, e))?;
     let default = git(&["symbolic-ref", "--short", &format!("refs/remotes/{remote}/HEAD")])
         .await
         .ok_or_else(|| {
@@ -976,19 +992,48 @@ async fn git(args: &[&str]) -> Option<String> {
         }
     }
     let output = patchula_process::SystemExecutor
-        .run(patchula_process::CommandSpec {
-            program: "git".into(),
-            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
-            cwd: std::env::current_dir().ok()?,
+        .run(git_command(
+            std::env::current_dir().ok()?,
+            args,
             env,
-            secrets: Vec::new(),
-            timeout: GIT_TIMEOUT,
-            output_limit: 1 << 16,
-            complete_output: false,
-        })
+            GitOutput::Short,
+        ))
         .await
         .ok()?;
     Some(String::from_utf8_lossy(&output).trim().to_owned())
+}
+
+/// How much of git's output a caller reads.
+#[derive(Clone, Copy)]
+enum GitOutput {
+    /// A line or two, such as a remote's name: 64 KiB, cut beyond.
+    Short,
+    /// A whole listing, such as `git status`: up to 16 MiB, never cut.
+    Complete,
+}
+
+/// The one way the CLI runs git: `args` in `dir`, seeing exactly `env`,
+/// under the shared timeout.
+fn git_command(
+    dir: std::path::PathBuf,
+    args: &[&str],
+    env: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+    output: GitOutput,
+) -> patchula_process::CommandSpec {
+    let (output_limit, complete_output) = match output {
+        GitOutput::Short => (1 << 16, false),
+        GitOutput::Complete => (1 << 24, true),
+    };
+    patchula_process::CommandSpec {
+        program: "git".into(),
+        args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        cwd: dir,
+        env,
+        secrets: Vec::new(),
+        timeout: GIT_TIMEOUT,
+        output_limit,
+        complete_output,
+    }
 }
 
 const CHECKOUT_HELP: &str =
@@ -1093,8 +1138,8 @@ async fn report(
 ) -> Result<(patchula_report::Report, Read), (u8, miette::Report)> {
     use patchula_engine::{Engine, Options};
     let scan = &options.scan;
-    if scan.concurrency.is_some_and(|n| n == 0 || n > 100) {
-        return Err((2, miette::miette!("concurrency must be 1..100")));
+    if let Some(concurrency) = scan.concurrency {
+        patchula_engine::check_concurrency(concurrency).map_err(usage)?;
     }
     let (repositories, local, config) = match source(app, options, run, services).await? {
         Source::Remote {
@@ -1111,7 +1156,7 @@ async fn report(
                 .as_ref()
                 .map(|path| patchula_config::load(path))
                 .transpose()
-                .map_err(|e| (2, e))?;
+                .map_err(|e| (USAGE, e))?;
             (repositories, None, config)
         }
         Source::Local(dir, config) => (Vec::new(), Some(dir), config.map(|config| *config)),
@@ -1121,28 +1166,17 @@ async fn report(
     let recheck = recheck(app, run.is_some(), &settings)?;
     let (credentials, failed) = patchula_engine::settings::credentials(&settings, None);
     if let Some((prefix, reason)) = failed.first() {
-        return Err((
-            2,
-            miette::miette!("cannot use the registry credentials for {prefix}: {reason}"),
-        ));
+        return Err(usage(format!(
+            "cannot use the registry credentials for {prefix}: {reason}"
+        )));
     }
     let spinner = progress::Spinner::start(app.color);
-    let token = services
-        .token()
-        .await
-        .ok_or_else(|| (1, miette::miette!("{TOKEN_HELP}")))?;
-    let dir = cache_dir(scan.cache.as_deref()).map_err(|e| (1, e))?;
+    let token = services.token().await.ok_or_else(|| fail(TOKEN_HELP))?;
+    let dir = cache_dir(scan.cache.as_deref()).map_err(|e| (FAILED, e))?;
     let cache = patchula_cache::Cache::open_dir(&dir, Default::default())
         .await
-        .map_err(|e| {
-            (
-                1,
-                miette::miette!("cannot open the cache in {}: {e}", dir.display()),
-            )
-        })?;
-    let transport = services
-        .transport()
-        .map_err(|e| (1, miette::miette!("{e}")))?;
+        .map_err(|e| fail(format!("cannot open the cache in {}: {e}", dir.display())))?;
+    let transport = services.transport().map_err(fail)?;
     let mut engine = Engine::from_settings(
         &settings,
         credentials,
@@ -1152,14 +1186,7 @@ async fn report(
         cache,
         transport,
     )
-    .map_err(|e| {
-        let code = if matches!(e, patchula_engine::Error::Configuration(_)) {
-            2
-        } else {
-            1
-        };
-        (code, miette::miette!("{e}"))
-    })?;
+    .map_err(engine_failure)?;
     if let Some(spinner) = &spinner {
         engine = engine.with_progress(spinner.clone());
     }
@@ -1179,14 +1206,7 @@ async fn report(
     } else {
         engine.lookup(options).await
     }
-    .map_err(|e| {
-        let code = if matches!(e, patchula_engine::Error::Configuration(_)) {
-            2
-        } else {
-            1
-        };
-        (code, miette::miette!("{e}"))
-    })?;
+    .map_err(engine_failure)?;
     Ok((
         report,
         match local {

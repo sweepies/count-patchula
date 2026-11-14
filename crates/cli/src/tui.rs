@@ -1533,44 +1533,14 @@ fn warning_lines(model: &Model, width: usize) -> Vec<Line<'static>> {
 /// Greedy word wrap to `width` columns. A word longer than a line is broken,
 /// so every character of `text` lands on some line.
 fn wrap(text: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let columns = |s: &str| Span::raw(s).width();
-    let mut lines = Vec::new();
-    for paragraph in text.lines() {
-        let mut line = String::new();
-        for word in paragraph.split(' ') {
-            let mut word = word;
-            loop {
-                let gap = usize::from(!line.is_empty());
-                if columns(&line) + gap + columns(word) <= width {
-                    if gap == 1 {
-                        line.push(' ');
-                    }
-                    line.push_str(word);
-                    break;
-                }
-                if !line.is_empty() {
-                    lines.push(std::mem::take(&mut line));
-                    continue;
-                }
-                let mut split = 0;
-                for (index, c) in word.char_indices() {
-                    let end = index + c.len_utf8();
-                    if split > 0 && columns(&word[..end]) > width {
-                        break;
-                    }
-                    split = end;
-                }
-                lines.push(word[..split].to_owned());
-                word = &word[split..];
-                if word.is_empty() {
-                    break;
-                }
-            }
-        }
-        lines.push(line);
-    }
-    lines
+    let options = textwrap::Options::new(width.max(1))
+        .word_separator(textwrap::WordSeparator::AsciiSpace)
+        .word_splitter(textwrap::WordSplitter::NoHyphenation)
+        .break_words(true);
+    text.lines()
+        .flat_map(|paragraph| textwrap::wrap(paragraph, &options))
+        .map(std::borrow::Cow::into_owned)
+        .collect()
 }
 
 fn draw_help(frame: &mut Frame) {
@@ -1907,13 +1877,7 @@ mod tests {
             &["add", "."],
             &["commit", "-qm", "init"],
         ] {
-            let status = std::process::Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-                .args(args)
-                .current_dir(&tree)
-                .status()
-                .unwrap();
-            assert!(status.success());
+            crate::copier::test_git(&tree, args);
         }
         let fake = dir.path().join("copier");
         std::fs::write(
