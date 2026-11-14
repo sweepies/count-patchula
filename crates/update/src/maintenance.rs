@@ -30,15 +30,22 @@ pub fn maintenance(
     // `waitHours` reaches Cargo for crates a refresh newly locks that no
     // update names — which is every crate: a maintenance job has no single
     // dependency, so its directory waits the strictest effective wait the
-    // rules give the repository's Cargo dependencies.
+    // rules give the repository's Cargo dependencies. A rule error holds
+    // the plan with the error, so Cargo never relocks under a wait of 0.
+    let mut wait_error = None;
     if jobs.iter().any(|job| job.ecosystem == Ecosystem::Cargo) {
-        let wait = patchula_lookup::Evaluator::new(config, Default::default())
+        match patchula_lookup::Evaluator::new(config, Default::default())
             .map_err(PlanError::Lookup)?
-            .lockfile_wait_hours(dependencies);
-        for job in &mut jobs {
-            if job.ecosystem == Ecosystem::Cargo {
-                job.wait_hours = wait;
+            .lockfile_wait_hours(dependencies)
+        {
+            Ok(wait) => {
+                for job in &mut jobs {
+                    if job.ecosystem == Ecosystem::Cargo {
+                        job.wait_hours = wait;
+                    }
+                }
             }
+            Err(error) => wait_error = Some(error),
         }
     }
     let due = patchula_config::due(&config.maintenance_windows(), since, now);
@@ -70,6 +77,9 @@ pub fn maintenance(
         snapshot.public_only.clone(),
         snapshot.cargo_cooldowns.clone(),
     );
+    if let Some(error) = wait_error {
+        plan.hold(Hold::Blocked(error));
+    }
     if !due {
         plan.hold(Hold::MaintenanceWindow);
     }

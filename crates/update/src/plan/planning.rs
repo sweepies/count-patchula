@@ -2389,3 +2389,117 @@ mod goldens {
         );
     }
 }
+
+/// A config whose one rule's `current` filter is an invalid Cargo
+/// requirement: evaluating it on a crates.io dependency is a rule error.
+fn broken_current_rule() -> Config {
+    patchula_config::load_files(
+        "/repo/patchula.pkl",
+        BTreeMap::from([(
+            "/repo/patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nlockfiles { refresh = true; tidyGo = true }\nrules { new Rule { select { current = \"semver:>>1\" } apply { waitHours = 72 } } }\n"
+                .into(),
+        )]),
+    )
+    .unwrap()
+}
+fn tokio_files() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1.39.0\"\n"
+                .to_string(),
+        ),
+        ("Cargo.lock".to_string(), cargo_lock("1.39.0")),
+    ])
+}
+
+/// A batched Cargo update whose wait the rules cannot evaluate holds the
+/// branch with the rule error, and never runs Cargo with a wait of 0.
+#[test]
+fn a_rule_error_holds_a_batched_cargo_job() {
+    let files = tokio_files();
+    let config = broken_current_rule();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies;
+    let mut repo = repo();
+    repo.package_files.push(patchula_report::PackageFile {
+        path: "Cargo.toml".into(),
+        dependencies: vec![patchula_report::Dependency {
+            manager: patchula_words::Manager::Cargo,
+            name: "tokio".into(),
+            occurrence: None,
+            package: "tokio".into(),
+            registry: None,
+            current: patchula_report::Current {
+                value: Some("1.39.0".into()),
+                version: Some("1.39.0".into()),
+                digest: None,
+            },
+            updates: vec![patchula_report::Update {
+                new_value: None,
+                new_version: Some("1.40.0".into()),
+                new_digest: None,
+                update_type: patchula_words::Update::Patch,
+                group: None,
+                policy: None,
+                release_age: None,
+                fixes: vec![],
+                image: None,
+                cooldown: None,
+            }],
+            metadata: None,
+        }],
+    });
+    let plan = crate::plan::batch_plan(
+        &repo,
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        batched(vec![cargo_change("tokio", "1.39.0", "1.40.0")]),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap()
+    .expect("a batch plan");
+    assert_eq!(plan.action().status, BranchStatus::Skipped);
+    let reason = plan.action().reason.as_deref().unwrap_or_default();
+    assert!(reason.starts_with("tokio: "), "{reason}");
+    assert!(
+        plan.lock_jobs()
+            .iter()
+            .all(|job| job.ecosystem != Ecosystem::Cargo),
+        "{:?}",
+        plan.lock_jobs()
+    );
+}
+
+/// Lockfile maintenance whose Cargo wait the rules cannot evaluate is held
+/// with the rule error rather than relocking under a wait of 0.
+#[test]
+fn a_rule_error_holds_lockfile_maintenance() {
+    let files = tokio_files();
+    let config = broken_current_rule();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies;
+    let plan = maintenance(
+        &repo(),
+        &config,
+        &snapshot(&files),
+        &dependencies,
+        None,
+        monday(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(plan.action().status, BranchStatus::Skipped);
+    let reason = plan.action().reason.as_deref().unwrap_or_default();
+    assert_eq!(reason, "tokio: invalid version or requirement: >>1");
+}
