@@ -8,7 +8,7 @@ mod governor;
 pub mod model;
 mod pagination;
 pub use blobs::blob_sha;
-pub use credentials::{Credentials, Permissions, Token};
+pub use credentials::{Credentials, Permissions, RepositoryId, Token};
 pub use governor::{PrimaryLimit, Stats};
 pub use pagination::{GraphqlPage, next_link};
 pub use patchula_http::{Network, Response, Transport};
@@ -305,6 +305,12 @@ impl Client {
             .credentials
             .as_ref()?
             .scoped_token(repository, permissions)
+    }
+
+    /// The numeric id of the repository `scoped_token` mints for under
+    /// `repository`; `None` when the credentials cannot mint.
+    pub fn scoped_repository_id(&self, repository: &str) -> Option<RepositoryId<'_>> {
+        self.0.credentials.as_ref()?.repository_id(repository)
     }
 
     /// Whether `scoped_token` mints, without minting.

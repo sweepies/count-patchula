@@ -83,7 +83,8 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   `--all-repos` with App credentials, or an Action run on several
   repositories) the token is a read-only one he mints for the repository the
   lookup is for, so a repository's `mise.toml` sees only that repository and
-  public tools, never another private repository the App can read. With a
+  public tools, never another private repository the App can read. Release
+  notes for a mise tool look it up the same way. With a
   personal token, or the token of an Action run on its own repository, mise
   gets that token.
 - With a three-minute limit per lookup and at most four running at once.

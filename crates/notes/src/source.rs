@@ -125,12 +125,7 @@ impl Client {
         {
             return Ok(Some(source));
         }
-        let token = self.sources.run_tool_token().await;
-        let backend = self
-            .sources
-            .mise_lookup()?
-            .backend(tool, token.as_deref())
-            .await?;
+        let backend = self.sources.mise_backend(tool).await?;
         let (source, package) = match backend.split_once(':') {
             Some(("npm", package)) => (Source::Npm, package),
             Some(("pypi", package)) => (Source::Pypi, package),

@@ -53,7 +53,7 @@ notes-gitea-releases	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde
 notes-forge-tags	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	6a531ac87a6f5fc97d73023486b38f6db9580a69bbc8be30117585472da364c2
 notes-forge-files	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	6a531ac87a6f5fc97d73023486b38f6db9580a69bbc8be30117585472da364c2
 notes-forge-changelog	1	crates/notes/src/forge.rs,crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	regex,serde,serde_json	ebc4a3c430b8db1fc93d2fff8586d788248126c4432677a090a162f523fb4834
-notes-source-npm	2	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	995027089db3a5224d6c7336954ed38d38bc67c1c8d4a2daad6840da5ea137e1
-notes-source-crates	2	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	995027089db3a5224d6c7336954ed38d38bc67c1c8d4a2daad6840da5ea137e1
-notes-source-pypi	2	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	995027089db3a5224d6c7336954ed38d38bc67c1c8d4a2daad6840da5ea137e1
+notes-source-npm	2	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	c96d772fd52cbacb9180a10b28cdca576a5f2e6f992c6f3c8d5641cf7fb7a4d6
+notes-source-crates	2	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	c96d772fd52cbacb9180a10b28cdca576a5f2e6f992c6f3c8d5641cf7fb7a4d6
+notes-source-pypi	2	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	c96d772fd52cbacb9180a10b28cdca576a5f2e6f992c6f3c8d5641cf7fb7a4d6
 notes-mise-versions	1	crates/notes/src/mirror.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json	1bebc4a0e97ddbaea0fa5f66ee60d3e1eb4695559b86db896f808d53b4a2a267

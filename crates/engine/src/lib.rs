@@ -14,7 +14,7 @@ mod write;
 use futures_util::{StreamExt, stream};
 use patchula_cache::{Cache, State};
 use patchula_config::{Config, PackageId};
-use patchula_datasource::{Client as Sources, Failure, MiseAccess};
+use patchula_datasource::{Client as Sources, Failure, MiseAccess, MiseRepository};
 use patchula_github::{Client as Github, Options as GithubOptions, model};
 use patchula_http::{Cached, MAX_CONCURRENCY, PhaseTrace, Transport};
 use patchula_lookup::{Evaluation, Evaluator};
@@ -432,9 +432,10 @@ impl Sent {
         }
     }
 }
-/// The repository each `Public` mise key's token is scoped to: one that
-/// asked for it, so never the repository the tool is released from.
-type MiseVias = BTreeMap<LookupKey, String>;
+/// The repository each scoped mise key is looked up for: one that asked for
+/// it. A `Public` key's token is scoped to it, so it is never the repository
+/// the tool is released from.
+type MiseVias = BTreeMap<LookupKey, MiseRepository>;
 type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, Failure>>;
 #[allow(dead_code)]
 mod repository_head {
@@ -714,15 +715,22 @@ impl Engine {
         engine.lockfile_cache_gib = settings.lockfiles.cache_gib;
         Ok(engine)
     }
-    /// Whom `dep`'s mise listing in `repo` is made for: the one place the
-    /// token mise gets is chosen. Credentials that cannot mint a
-    /// repository-scoped token, and a local directory, which no token can
-    /// be scoped to, keep the run's own.
+    /// The repository `repo`'s mise lookups are made for; none for a local
+    /// directory, which no token can be scoped to.
+    fn mise_repository(repo: &Work) -> Option<MiseRepository> {
+        (!repo.local).then(|| MiseRepository {
+            name: repo.report.repository.clone(),
+            private: repo.private,
+        })
+    }
+    /// Whom `dep`'s mise listing in `repo` is made for, as
+    /// `Sources::mise_access` decides; `Run` for every other source.
     fn mise_access(&self, repo: &Work, dep: &Dependency) -> MiseAccess {
-        if dep.source != Source::Mise || repo.local || !self.github.mints_scoped_tokens() {
+        if dep.source != Source::Mise {
             return MiseAccess::Run;
         }
-        patchula_datasource::mise_access(&dep.package, &repo.report.repository, repo.private)
+        self.sources
+            .mise_access(Self::mise_repository(repo).as_ref(), &dep.package)
     }
     fn catalog_key(&self, repo: &Work, dep: &Dependency) -> LookupKey {
         let config = repo.config.as_ref();
@@ -1671,6 +1679,14 @@ mod tests {
         );
         assert_eq!(
             installation.mise_access(&app, &tool("github:Acme/App")),
+            MiseAccess::Repository("acme/app".into())
+        );
+        // The repository is named in lowercase whatever case it was read in.
+        assert_eq!(
+            installation.mise_access(
+                &work("Acme/App", Some(true), false),
+                &tool("github:acme/app")
+            ),
             MiseAccess::Repository("acme/app".into())
         );
         assert_eq!(

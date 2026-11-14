@@ -3,6 +3,8 @@ use crate::Result;
 use std::{future::Future, pin::Pin};
 
 pub type Token<'a> = Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
+/// A repository's numeric id, as a scoped mint names it.
+pub type RepositoryId<'a> = Pin<Box<dyn Future<Output = Result<u64>> + Send + 'a>>;
 
 pub trait Credentials: Send + Sync {
     /// Stable, non-secret authorization namespace, independent of token rotation.
@@ -18,6 +20,12 @@ pub trait Credentials: Send + Sync {
     /// Whether `scoped_token` answers `Some`.
     fn mints_scoped_tokens(&self) -> bool {
         false
+    }
+    /// The numeric id of the repository `scoped_token` mints for under
+    /// this name; `None` exactly when `scoped_token` is. A rename keeps the
+    /// id, and a new repository under an old name gets another.
+    fn repository_id(&self, _repository: &str) -> Option<RepositoryId<'_>> {
+        None
     }
 }
 

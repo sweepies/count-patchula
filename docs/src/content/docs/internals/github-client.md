@@ -27,17 +27,21 @@ Installation credentials can also mint a token scoped to one repository:
 numeric id with the installation token (`GET /repos/{owner}/{repo}`), then
 posts `{"repository_ids": [<id>], "permissions": …}` to
 `app/installations/{id}/access_tokens`. `Permissions::MetadataRead`
-(`{"metadata": "read"}`) is what the actions.lock tool gets;
-`Permissions::ContentsRead` (`{"contents": "read", "metadata": "read"}`) is
-what mise gets for a repository's tool lookups, enough to list releases and
-tags of the repository itself as well as public ones. GitHub answers the token with the
+(`{"metadata": "read"}`) is what the actions.lock tool and mise's public
+listings get: it reads public repositories, whose releases and tags any
+token may list, and no private repository's contents, the minted one's
+included. `Permissions::ContentsRead` (`{"contents": "read", "metadata":
+"read"}`) is what mise gets for a listing kept for the repository alone,
+enough to list the repository's own releases and tags.
+`Credentials::repository_id` answers the numeric id the mint names, which
+keys what such a listing serves. GitHub answers the token with the
 `permissions`, `repositories` and `repository_selection` it minted. The full
 installation mint stays body-less. Scoped tokens share the cache and the
 single-flight lock, keyed by (installation, repository, permission set), so
 two repositories mint separately and a fuller token never answers a narrower
-mint. Only App installation credentials answer `scoped_token` (and
-`mints_scoped_tokens`); every other credential returns `None`, and the
-actions.lock tool and mise use the run's own token. A
+mint. Only App installation credentials answer `scoped_token`,
+`repository_id` and `mints_scoped_tokens`; every other credential returns
+`None`, and the actions.lock tool and mise use the run's own token. A
 real-installation proof lives ignored in `crates/github/tests/app.rs`: set
 `PATCHULA_TEST_APP_ID`, `PATCHULA_TEST_APP_KEY_FILE`,
 `PATCHULA_TEST_INSTALLATION`, `PATCHULA_TEST_REPO` and

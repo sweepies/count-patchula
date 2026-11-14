@@ -1,7 +1,7 @@
 //! GitHub App JWTs and per-installation access tokens. No credentials reach SQLite.
 use crate::{
-    Credentials, Error, Permissions, Response, Result, Token, Transport, base_headers, join_api,
-    pagination::next_link, valid_api_url,
+    Credentials, Error, Permissions, RepositoryId, Response, Result, Token, Transport,
+    base_headers, join_api, pagination::next_link, valid_api_url,
 };
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
@@ -470,6 +470,14 @@ impl Credentials for Installation {
     }
     fn mints_scoped_tokens(&self) -> bool {
         true
+    }
+    fn repository_id(&self, repository: &str) -> Option<RepositoryId<'_>> {
+        let repository = repository.to_owned();
+        Some(Box::pin(async move {
+            self.app
+                .repository_id(self.id, &repository, Utc::now().timestamp())
+                .await
+        }))
     }
     fn scoped_token(&self, repository: &str, permissions: Permissions) -> Option<Token<'_>> {
         let app = self.app.clone();

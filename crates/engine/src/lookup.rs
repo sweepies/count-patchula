@@ -98,17 +98,17 @@ fn listed_ids(
     }
 }
 
-/// For each `Public` mise key, the first repository (in batch order) whose
-/// dependency asked for it: the repository its scoped token is minted for.
-fn mise_vias(work: &[Work]) -> MiseVias {
+/// For each scoped mise key, the first repository (in batch order) whose
+/// dependency asked for it: the repository its token is minted for.
+pub(crate) fn mise_vias(work: &[Work]) -> MiseVias {
     let mut vias = MiseVias::new();
     for repo in work {
         for dep in &repo.dependencies {
             if let Some(key) = &dep.needs.catalog_key
-                && key.2 == MiseAccess::Public
+                && key.2 != MiseAccess::Run
+                && let Some(via) = Engine::mise_repository(repo)
             {
-                vias.entry(key.clone())
-                    .or_insert_with(|| repo.report.repository.clone());
+                vias.entry(key.clone()).or_insert(via);
             }
         }
     }

@@ -345,28 +345,36 @@ starting mise. A manual retry replaces it, and only successful lookups are
 stored.
 
 Whom a listing serves follows the token mise was handed (see
-[scoped tokens](/internals/github-client/#app-tokens)). The engine decides it
-per repository and dependency (`Engine::mise_access`), and it is the third
-element of the batch's lookup key and part of the `catalog` scope:
+[scoped tokens](/internals/github-client/#app-tokens)). `Sources::mise_access`
+decides it from the tool and the repository the lookup is made for (its name
+and visibility), and it is the third element of the batch's lookup key and
+part of the `catalog` scope. Release notes look a repository's mise tools up
+through a client made for that repository, so they get the same access and
+read the same listings.
 
-- `public` when the token is scoped to a repository the tool is not released
-  from. Such a token sees that repository and public data only, so the
+- `public`, with a `metadata: read` token scoped to a repository that asked
+  for the tool. That token reads no repository's private releases (not even
+  the minted one's, should the tool name it under an old name), so the
   listing is public, and one lookup in the batch serves every repository that
-  asks for it, with the token of the first of them. A tool is not released
-  from the repository when every GitHub repository its backend names
-  (`github:`, `ubi:`, `aqua:`, `packslip:`, `cargo:` with a GitHub URL, or each
-  backend the registry snapshot lists for a shorthand) is another one, or its
-  backend reads a package registry or is a core tool. When the Count cannot
-  tell (`go:`, `http:`, `spm:`, an unlisted shorthand and the like), the
-  listing is public only for a repository GitHub reports as public.
-- The run's credential scope and the repository otherwise: the listing of a
-  tool released from the repository, or of an unknown one in a private
-  repository (or one whose visibility was not read), serves that repository
-  alone.
+  asks for it. A tool is listed this way when every GitHub repository its
+  backend names (`github:`, `ubi:`, `aqua:`, `packslip:`, `cargo:` with a
+  GitHub URL, or each backend the registry snapshot lists for a shorthand) is
+  another one, or its backend reads a package registry or is a core tool.
+  When the Count cannot tell (`go:`, `http:`, `spm:`, an unlisted shorthand
+  and the like), the listing is public only for a repository GitHub reports
+  as public.
+- The run's credential scope and the repository's numeric id otherwise, with
+  a `contents: read` token: the listing of a tool released from the
+  repository, or of an unknown one in a private repository (or one whose
+  visibility was not read), serves that repository alone. The id is the one
+  the mint names, so a new repository under a renamed one's name reads none
+  of its listings or catalogs.
 - The run's credential scope for credentials that cannot mint a scoped token
   (a personal token, an Action's own token) and for a local directory: mise
   gets the run's token, and the listing serves only that credential, never a
   scoped lookup.
 
-Off github.com no token reaches mise, so every listing there is public. Release
-notes and flake inputs still hand mise and nix the run's token.
+A batch lookup checks that its key's access is the one the repository it is
+made for gives, and fails otherwise: a public key never runs without a
+repository to mint for. Off github.com no token reaches mise, so every listing
+there is public. Flake inputs still hand nix the run's token.
