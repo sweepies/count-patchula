@@ -38,5 +38,5 @@ notes-adapter	3	crates/notes/src/,crates/versioning/src/,crates/words/src/,crate
 source-head	3	crates/datasource/src/github.rs,crates/datasource/src/releases.graphql,crates/github/src/,crates/github/graphql/schema.docs.graphql,crates/http/src/derive.rs	graphql_client,serde,serde_json	09929910dfad4ea42dea0963278d5cb66b0c383823e4411ccb4d86ac817011c7
 tag-catalog	3	crates/datasource/src/github.rs,crates/datasource/src/catalog.rs,crates/github/src/	serde,serde_json,sha2	a4af1eddc13847d30c069e6a27e932062ded279de088520e163848dcbbe2574d
 tag-object	3	crates/datasource/src/github.rs,crates/datasource/src/catalog.rs,crates/github/src/	serde,serde_json	d052f0094ec7fef5573e3998ee98d8ba1f2998a63a0b699a69b17179dc49ea4e
-osv-advisory	1	crates/datasource/src/advisories.rs,crates/words/src/,crates/http/src/cached.rs,crates/http/src/tracked.rs	serde,serde_json	bfdf815c7782a807e6bc0344351b7697746398d00e42f4c705a522e488ca0a90
+osv-advisory	2	crates/datasource/src/advisories.rs,crates/words/src/,crates/http/src/cached.rs,crates/http/src/tracked.rs	cvss,serde,serde_json	3eb90cdc7b64290c0d49eb76f40b3a36a79fddded356d6a86c46a24c8ebfd7f1
 release-notes	3	crates/notes/src/releases.rs,crates/github/src/	serde,serde_json	468b139e8a81c9c3b2a17cd56c1ebfcc888ea78d95c67db26db8e65290006ccf

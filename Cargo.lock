@@ -703,6 +703,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cvss"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11147ff68f855ef1b74c07e9b64489d0967baf41047e82505e13f0a96cf41360"
+
+[[package]]
 name = "darling"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2385,6 +2391,7 @@ version = "0.8.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
+ "cvss",
  "futures-util",
  "graphql_client",
  "libyaml-safer",

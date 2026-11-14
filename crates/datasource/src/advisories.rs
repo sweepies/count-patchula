@@ -36,7 +36,9 @@ pub struct Advisory {
     pub modified: String,
     pub aliases: Vec<String>,
     pub summary: Option<String>,
-    /// The advisory database's own rating: low, moderate, high or critical.
+    /// The advisory database's own rating — low, moderate, high or
+    /// critical — or, when it gives none, the qualitative rating of the
+    /// record's CVSS vector.
     #[serde(default, deserialize_with = "patchula_words::severity")]
     pub severity: Option<Severity>,
     pub affected: Vec<Affected>,
@@ -76,7 +78,17 @@ struct Record {
     #[serde(default)]
     database_specific: Option<Value>,
     #[serde(default)]
+    severity: Vec<RecordSeverity>,
+    #[serde(default)]
     affected: Vec<RecordAffected>,
+}
+/// One of OSV's `severity` entries: a CVSS vector under `CVSS_V2`,
+/// `CVSS_V3` or `CVSS_V4`, or another scheme the Count doesn't read.
+#[derive(Deserialize)]
+struct RecordSeverity {
+    #[serde(rename = "type")]
+    kind: String,
+    score: String,
 }
 #[derive(Deserialize)]
 struct RecordAffected {
@@ -86,6 +98,8 @@ struct RecordAffected {
     ranges: Vec<RecordRange>,
     #[serde(default)]
     versions: Vec<String>,
+    #[serde(default)]
+    severity: Vec<RecordSeverity>,
 }
 #[derive(Deserialize)]
 struct RecordPackage {
@@ -107,7 +121,15 @@ impl From<Record> for Advisory {
             .database_specific
             .as_ref()
             .and_then(|d| d["severity"].as_str())
-            .and_then(Severity::advisory);
+            .and_then(Severity::advisory)
+            .or_else(|| {
+                cvss_severity(
+                    record
+                        .severity
+                        .iter()
+                        .chain(record.affected.iter().flat_map(|a| &a.severity)),
+                )
+            });
         let event = |(kind, version): (String, String)| match kind.as_str() {
             "introduced" => Some(Event::Introduced(version)),
             "fixed" => Some(Event::Fixed(version)),
@@ -149,6 +171,37 @@ impl From<Record> for Advisory {
     }
 }
 
+/// The qualitative rating of the newest CVSS version among `entries`: v4,
+/// then v3.1 or v3.0, then v2. Several vectors of that version (one per
+/// affected package) give the most severe. A vector that doesn't parse is
+/// skipped, so a record with none that does is unrated. CVSS's "none"
+/// (a 0.0 score) has no word in the Count's vocabulary and is unrated too.
+/// v2 has no Critical band: its High covers 7.0–10.0.
+fn cvss_severity<'a>(entries: impl Iterator<Item = &'a RecordSeverity>) -> Option<Severity> {
+    let generation = |vector: &cvss::Cvss| match vector {
+        cvss::Cvss::CvssV40(_) => 3,
+        cvss::Cvss::CvssV30(_) | cvss::Cvss::CvssV31(_) => 2,
+        _ => 1,
+    };
+    let vectors: Vec<cvss::Cvss> = entries
+        .filter(|e| matches!(e.kind.as_str(), "CVSS_V2" | "CVSS_V3" | "CVSS_V4"))
+        .filter_map(|e| e.score.trim().parse().ok())
+        .collect();
+    let newest = vectors.iter().map(generation).max()?;
+    let rating = vectors
+        .iter()
+        .filter(|v| generation(v) == newest)
+        .map(cvss::Cvss::severity)
+        .max()?;
+    match rating {
+        cvss::Severity::None => None,
+        cvss::Severity::Low => Some(Severity::Low),
+        cvss::Severity::Medium => Some(Severity::Moderate),
+        cvss::Severity::High => Some(Severity::High),
+        cvss::Severity::Critical => Some(Severity::Critical),
+    }
+}
+
 #[derive(Deserialize)]
 struct Batch {
     results: Vec<BatchResult>,
@@ -180,7 +233,7 @@ pub(crate) struct AdvisoryScope {
 }
 impl State for Stored {
     const NAMESPACE: &'static str = "osv-advisory";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
     // Code-versioned: the stored advisory is this build's `Record`-to-
     // `Advisory` mapping of the record the scope's id names.
     const CODE_VERSIONED: bool = true;
@@ -500,6 +553,175 @@ mod tests {
     }
 
     /// The latest modification time wins; one that does not parse loses.
+    /// The severity the Count gives an OSV record with this
+    /// `database_specific` and these top-level `severity` entries.
+    fn rated(database_specific: Value, entries: &[(&str, &str)]) -> Option<Severity> {
+        let severity: Vec<Value> = entries
+            .iter()
+            .map(|(kind, score)| json!({"type": kind, "score": score}))
+            .collect();
+        let record: Record = serde_json::from_value(json!({
+            "id": "TEST-1",
+            "database_specific": database_specific,
+            "severity": severity,
+        }))
+        .unwrap();
+        Advisory::from(record).severity
+    }
+    fn v3(vector: &str) -> Option<Severity> {
+        rated(Value::Null, &[("CVSS_V3", vector)])
+    }
+
+    #[test]
+    fn the_rsa_timing_advisory_is_moderate() {
+        // RUSTSEC-2023-0071 as OSV serves it: no label, a CVSS 3.1 vector at
+        // the top level and again in the RustSec-specific `cvss`.
+        let record: Record = serde_json::from_value(json!({
+            "id": "RUSTSEC-2023-0071",
+            "modified": "2024-01-01T00:00:00Z",
+            "database_specific": {"license": "CC0-1.0"},
+            "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"}],
+            "affected": [{
+                "package": {"ecosystem": "crates.io", "name": "rsa"},
+                "database_specific": {"cvss": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"},
+                "ranges": [{"type": "SEMVER", "events": [{"introduced": "0.0.0-0"}]}],
+            }],
+        }))
+        .unwrap();
+        assert_eq!(Advisory::from(record).severity, Some(Severity::Moderate));
+    }
+
+    #[test]
+    fn cvss_3_vectors_rate_by_the_spec_bands() {
+        // Scores from the FIRST CVSS v3.1 specification and user guide
+        // examples, checked against the crate's base score.
+        for (vector, score, severity) in [
+            // Shellshock, CVE-2014-6271.
+            (
+                "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                9.8,
+                Some(Severity::Critical),
+            ),
+            (
+                "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+                10.0,
+                Some(Severity::Critical),
+            ),
+            // Heartbleed, CVE-2014-0160.
+            (
+                "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                7.5,
+                Some(Severity::High),
+            ),
+            // phpMyAdmin reflected XSS, CVE-2013-1937.
+            (
+                "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+                6.1,
+                Some(Severity::Moderate),
+            ),
+            (
+                "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                5.9,
+                Some(Severity::Moderate),
+            ),
+            (
+                "CVSS:3.1/AV:P/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N",
+                1.6,
+                Some(Severity::Low),
+            ),
+            (
+                "CVSS:3.0/AV:P/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N",
+                1.6,
+                Some(Severity::Low),
+            ),
+            // No impact scores 0.0, CVSS's "none": unrated.
+            ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N", 0.0, None),
+        ] {
+            let parsed: cvss::Cvss = vector.parse().unwrap();
+            assert_eq!(parsed.score(), score, "{vector}");
+            assert_eq!(v3(vector), severity, "{vector}");
+        }
+    }
+
+    #[test]
+    fn a_label_wins_over_a_vector() {
+        let critical = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H";
+        assert_eq!(
+            rated(json!({"severity": "LOW"}), &[("CVSS_V3", critical)]),
+            Some(Severity::Low)
+        );
+        // A word outside the vocabulary is no label: the vector rates it.
+        assert_eq!(
+            rated(json!({"severity": "UNKNOWN"}), &[("CVSS_V3", critical)]),
+            Some(Severity::Critical)
+        );
+    }
+
+    #[test]
+    fn an_invalid_or_missing_vector_is_unrated() {
+        assert_eq!(rated(Value::Null, &[]), None);
+        assert_eq!(v3("CVSS:3.1/AV:N/AC:L"), None);
+        assert_eq!(v3("CVSS:3.1/AV:X/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"), None);
+        assert_eq!(v3("not a vector"), None);
+        assert_eq!(v3(""), None);
+        assert_eq!(rated(Value::Null, &[("Ubuntu", "high")]), None);
+        // An invalid newer vector doesn't hide a valid older one.
+        assert_eq!(
+            rated(
+                Value::Null,
+                &[
+                    ("CVSS_V4", "CVSS:4.0/AV:N/garbage"),
+                    ("CVSS_V3", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"),
+                ]
+            ),
+            Some(Severity::High)
+        );
+    }
+
+    #[test]
+    fn cvss_2_has_no_critical_band() {
+        // NVD's v2 bands: Low 0.0–3.9, Medium 4.0–6.9, High 7.0–10.0.
+        let v2 = |vector| rated(Value::Null, &[("CVSS_V2", vector)]);
+        assert_eq!(v2("AV:N/AC:L/Au:N/C:C/I:C/A:C"), Some(Severity::High));
+        assert_eq!(v2("AV:N/AC:M/Au:N/C:P/I:N/A:N"), Some(Severity::Moderate));
+        assert_eq!(v2("AV:L/AC:H/Au:M/C:P/I:N/A:N"), Some(Severity::Low));
+    }
+
+    #[test]
+    fn the_newest_cvss_version_wins() {
+        let v4_critical = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N";
+        let parsed: cvss::Cvss = v4_critical.parse().unwrap();
+        assert_eq!(parsed.score(), 9.3);
+        let v3_low = "CVSS:3.1/AV:P/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N";
+        let v2_high = "AV:N/AC:L/Au:N/C:C/I:C/A:C";
+        assert_eq!(
+            rated(
+                Value::Null,
+                &[("CVSS_V3", v3_low), ("CVSS_V4", v4_critical)]
+            ),
+            Some(Severity::Critical)
+        );
+        assert_eq!(
+            rated(Value::Null, &[("CVSS_V2", v2_high), ("CVSS_V3", v3_low)]),
+            Some(Severity::Low)
+        );
+    }
+
+    #[test]
+    fn per_package_vectors_give_the_most_severe() {
+        let record: Record = serde_json::from_value(json!({
+            "id": "TEST-2",
+            "affected": [
+                {"package": {"ecosystem": "PyPI", "name": "a"},
+                 "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:P/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"}]},
+                {"package": {"ecosystem": "PyPI", "name": "b"},
+                 "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"}]},
+            ],
+        }))
+        .unwrap();
+        assert_eq!(Advisory::from(record).severity, Some(Severity::High));
+    }
+
     #[test]
     fn the_later_modification_wins() {
         assert!(later("2026-11-12T00:00:00Z", "2026-11-01T00:00:00Z"));
