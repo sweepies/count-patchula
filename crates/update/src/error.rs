@@ -32,8 +32,6 @@ pub enum PlanError {
     MissingExtractedFile(String),
     #[error("missing extraction commit")]
     MissingExtractionCommit,
-    #[error("missing base")]
-    MissingBase,
     #[error("{} is reserved for the batch PR; rename the update group", .0)]
     BatchReserved(String),
     /// The evaluator's refusal, in lookup's own words.
@@ -69,7 +67,7 @@ mod tests {
 
     #[test]
     fn plan_error_text_is_frozen() {
-        let cases: [(PlanError, &str); 7] = [
+        let cases: [(PlanError, &str); 6] = [
             (
                 PlanError::BranchName,
                 "prs.branch produces an invalid Git branch name",
@@ -86,7 +84,6 @@ mod tests {
                 PlanError::MissingExtractionCommit,
                 "missing extraction commit",
             ),
-            (PlanError::MissingBase, "missing base"),
             (
                 PlanError::BatchReserved("patchula/batch".into()),
                 "patchula/batch is reserved for the batch PR; rename the update group",

@@ -1,12 +1,50 @@
 //! A `Plan` builder for tests, behind the `testing` feature: tests draft the
-//! plan they need instead of poking fields, so the fields can go private
-//! without touching them again.
+//! plan they need, and `Plan`'s fields stay private.
 use super::{Change, Kind, Plan, Stage};
 use crate::batch;
 use patchula_lockfiles as contract;
 use patchula_report::{BranchAction, FileAction};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
+/// A planned branch action on `branch` in `o/r`, as the update's tests
+/// write it.
+pub fn action(branch: &str) -> BranchAction {
+    BranchAction {
+        repository: "o/r".into(),
+        branch: branch.into(),
+        base_commit: "b".repeat(40),
+        status: patchula_report::BranchStatus::Planned,
+        reason: None,
+        message: "m".into(),
+        previous_commit: None,
+        commit: None,
+        verified: None,
+        lockfile_pending: false,
+        files: Vec::new(),
+    }
+}
+/// An npm minor bump of `package` in `package.json` from 1.0.0 to 1.1.0,
+/// with release notes on.
+pub fn change(package: &str) -> Change {
+    Change {
+        registry: None,
+        source: patchula_words::Source::Npm,
+        package: package.into(),
+        file: "package.json".into(),
+        current: "1.0.0".into(),
+        current_version: None,
+        value: Some("1.1.0".into()),
+        version: Some("1.1.0".into()),
+        digest: None,
+        kind: patchula_words::Update::Minor,
+        merge: false,
+        labels: Vec::new(),
+        release_notes: true,
+        body_notes: Vec::new(),
+        advisories: Vec::new(),
+        image: None,
+    }
+}
 /// The draft's lockfile jobs, moving the plan to `Built` when a later stage
 /// was drafted — the plan owes the tools again.
 fn owed(plan: &mut Plan) -> &mut Vec<contract::Job> {
@@ -34,7 +72,7 @@ fn removed(plan: &mut Plan) -> &mut BTreeSet<String> {
 
 /// A plan under construction. `build` returns the plan exactly as drafted:
 /// nothing is recomputed, so an explicit or absent fingerprint reaches
-/// commit trailers and transcripts as it did when tests poked the field.
+/// commit trailers and transcripts as given.
 pub struct Draft {
     plan: Plan,
 }
@@ -95,10 +133,6 @@ impl Draft {
         self.plan.contents.insert(path.into(), content.into());
         self
     }
-    /// The draft's contents, for a test that edits them in place.
-    pub fn contents_mut(&mut self) -> &mut BTreeMap<String, String> {
-        &mut self.plan.contents
-    }
     /// The report entry for a file the plan changes, as the planner records
     /// it.
     pub fn file(mut self, file: FileAction) -> Self {
@@ -109,10 +143,6 @@ impl Draft {
     pub fn delete(mut self, path: impl Into<String>) -> Self {
         removed(&mut self.plan).insert(path.into());
         self
-    }
-    /// The draft's deleted set, for a test that edits it in place.
-    pub fn deleted_mut(&mut self) -> &mut BTreeSet<String> {
-        removed(&mut self.plan)
     }
     /// The `actions.lock` refs a maintenance relock advanced.
     pub fn moved_refs(mut self, moved: Vec<contract::MovedRef>) -> Self {
@@ -142,8 +172,8 @@ impl Draft {
         }
         self
     }
-    /// An explicit plan fingerprint; unset, the draft keeps what it was made
-    /// with, so the bytes the trailer carries match the test's past.
+    /// An explicit plan fingerprint; unset, the draft keeps the one it was
+    /// made with, which is what the trailer carries.
     pub fn fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
         self.plan.fingerprint = fingerprint.into();
         self

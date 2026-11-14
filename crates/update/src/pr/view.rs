@@ -271,4 +271,4 @@ pub(crate) fn admit(
 }
 
 #[cfg(test)]
-mod oracle;
+mod tests;

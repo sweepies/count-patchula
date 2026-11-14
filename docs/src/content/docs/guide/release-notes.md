@@ -118,6 +118,10 @@ out. The package then gets one notice, linking to upstream's release history:
 either "the Count left some release notes out", or, when upstream's own history
 couldn't be read in full, "these release notes may be incomplete".
 
+When fetching a package's notes fails outright (a network or registry error),
+its section says the Count could not read them this run, and the PR body is not
+treated as settled: the next run fetches the notes again and rewrites it.
+
 Two edits keep upstream text from making noise:
 
 - `@mentions` in upstream prose get a zero-width joiner after the `@`, so

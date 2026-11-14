@@ -36,20 +36,6 @@ fn metadata(dep: &patchula_manager::Dependency) -> DependencyMetadata {
     }
 }
 
-/// The write receipts patchula_update stores, read through the same
-/// namespace and scope.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Receipts(Value);
-#[derive(serde::Serialize)]
-struct ReceiptsScope {
-    repository: String,
-    branch_prefix: String,
-}
-impl patchula_cache::State for Receipts {
-    const NAMESPACE: &'static str = "verified-write-receipts";
-    const VERSION: u32 = 1;
-    type Scope = ReceiptsScope;
-}
 fn setup(
     target: &str,
     lock: bool,
@@ -1830,15 +1816,10 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
     patchula_update::save_receipts(&cache, &repo, &config, &plans, &lifecycle)
         .await
         .unwrap();
-    let receipts = cache
-        .state::<Receipts>(&ReceiptsScope {
-            repository: repo.repository.clone(),
-            branch_prefix: config.prs.branch.clone(),
-        })
+    let receipts = patchula_update::stored_receipts(&cache, &repo.repository, &config.prs.branch)
         .await
         .unwrap()
-        .unwrap()
-        .0;
+        .unwrap();
     assert_eq!(
         receipts["writes"]
             .as_object()

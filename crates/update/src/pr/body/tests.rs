@@ -2,51 +2,13 @@
 //! closures, body reuse and the room `Draft` leaves the fetches.
 use super::*;
 use crate::markers;
-use crate::plan::testing;
+use crate::plan::testing::{self, action, change};
 use crate::{Change, Plan};
 use patchula_github::model;
-use patchula_report::BranchAction;
-use patchula_words::{Recheck, Source, Update as UpdateKind};
+use patchula_words::Recheck;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// A planned branch action on `branch`, as the update's tests write it.
-fn action(branch: &str) -> BranchAction {
-    BranchAction {
-        repository: "o/r".into(),
-        branch: branch.into(),
-        base_commit: "b".repeat(40),
-        status: patchula_report::BranchStatus::Planned,
-        reason: None,
-        message: "m".into(),
-        previous_commit: None,
-        commit: None,
-        verified: None,
-        lockfile_pending: false,
-        files: Vec::new(),
-    }
-}
-/// An npm minor bump on `package`, with release notes on.
-fn change(package: &str) -> Change {
-    Change {
-        registry: None,
-        source: Source::Npm,
-        package: package.into(),
-        file: "package.json".into(),
-        current: "1.0.0".into(),
-        current_version: None,
-        value: Some("1.1.0".into()),
-        version: Some("1.1.0".into()),
-        digest: None,
-        kind: UpdateKind::Minor,
-        merge: false,
-        labels: Vec::new(),
-        release_notes: true,
-        body_notes: Vec::new(),
-        advisories: Vec::new(),
-        image: None,
-    }
-}
 /// A plan on `branch` with the marker identity the parser insists on.
 fn update_plan(branch: &str, changes: Vec<Change>) -> Plan {
     testing::Draft::new(action(branch))
@@ -255,7 +217,7 @@ fn the_draft_stops_asking_when_the_body_has_no_room() {
     let mut fetched = Vec::new();
     while let Some(key) = draft.next() {
         fetched.push(key);
-        draft.push(&notes);
+        draft.push(Some(&notes));
     }
     assert_eq!(fetched.len(), 8);
     assert!(
@@ -279,13 +241,36 @@ fn the_draft_stops_asking_when_the_body_has_no_room() {
         ..Default::default()
     };
     assert!(draft.next().is_some());
-    draft.push(&big);
+    draft.push(Some(&big));
     assert!(draft.next().is_none());
     assert!(
         draft
             .finish()
             .contains("Out of room for more release notes.")
     );
+}
+
+/// A failed release-notes fetch says so in its section, never "could not
+/// be resolved", and the body it leaves is not reused: the next run
+/// fetches again.
+#[test]
+fn a_failed_notes_fetch_is_named_and_never_reused() {
+    let permits = BTreeMap::new();
+    let bodies = bodies(&permits);
+    let plan = update_plan("patchula/a-1.x", vec![change("a")]);
+    let (_, marker) = bodies.intent(&plan);
+    let mut draft = bodies.draft(&plan);
+    assert!(draft.next().is_some());
+    draft.push(None);
+    let failed = draft.finish();
+    assert!(failed.contains("### a\n\nThe Count could not read these release notes this run"));
+    assert!(!failed.contains("could not be resolved"));
+    assert!(!bodies.reusable(&plan, Some(&pr(&failed)), &marker));
+    // The same body with the notes read is settled and reused.
+    let mut draft = bodies.draft(&plan);
+    assert!(draft.next().is_some());
+    draft.push(Some(&patchula_notes::Notes::default()));
+    assert!(bodies.reusable(&plan, Some(&pr(&draft.finish())), &marker));
 }
 
 /// `unticked` clears the re-check box and leaves the rest of the body.

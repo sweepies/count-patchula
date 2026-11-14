@@ -1,10 +1,9 @@
-//! The plan-side tests of `lockfiles/tests.rs`: every test that exercises
-//! planning and batching — `plan()`, `batch_plan()`, `maintenance()` and
-//! `job()` — rather than running a tool, plus the goldens pinning the bytes
-//! the lockfile contract freezes: `Job`'s wire shape and set order, the
-//! built and maintenance fingerprints, the maintenance `update_key` and the
-//! report reasons `job()` errors and generation failures produce. The
-//! tool-run tests stay in patchula-tools' `lockfiles::tests`.
+//! Planning and batching tests — `plan()`, `batch_plan()`, `maintenance()`
+//! and `job()` — plus the goldens pinning the bytes the lockfile contract
+//! freezes: `Job`'s wire shape and set order, the built and maintenance
+//! fingerprints, the maintenance `update_key` and the report reasons
+//! `job()` errors and generation failures produce. Tests that run a tool
+//! live in patchula-tools.
 use super::*;
 use crate::maintenance::{defer_completed_refresh, maintenance, record_refresh};
 use patchula_lockfiles::{self as contract, Ecosystem, Job, Scope};
