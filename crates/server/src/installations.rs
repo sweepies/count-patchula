@@ -87,6 +87,8 @@ impl Resolver {
                 installation,
                 expires_at: now + TTL_SECONDS,
             };
+            tracing::debug!(target: "patchula_server", installation_target = %target,
+                installation, "storing the installation mapping");
             self.cache
                 .installation_put(self.app.id(), target.clone(), mapping, now)
                 .await

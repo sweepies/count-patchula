@@ -36,6 +36,22 @@ impl Logs {
     }
 }
 
+/// Adds a permit to its semaphore for each "storing the installation
+/// mapping" event, so a test can wait for that write to begin.
+struct Storing(Arc<tokio::sync::Semaphore>);
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Storing {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        if event
+            .metadata()
+            .fields()
+            .field("installation_target")
+            .is_some()
+        {
+            self.0.add_permits(1);
+        }
+    }
+}
+
 async fn error_kind(response: axum::response::Response) -> String {
     let body = axum::body::to_bytes(response.into_body(), 1024)
         .await
@@ -801,58 +817,52 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
     let blocker = rusqlite::Connection::open(&path).unwrap();
     blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
     let router = router(state, Arc::new(AtomicBool::new(true)));
-    let deliver = |event: &'static str, action: &'static str| {
+    // Every delivery's events reach `storing`: the resolver announces the
+    // installation mapping write it is about to make.
+    let storing = Arc::new(tokio::sync::Semaphore::new(0));
+    let dispatch = {
+        use tracing_subscriber::layer::SubscriberExt;
+        tracing::Dispatch::new(tracing_subscriber::registry().with(Storing(storing.clone())))
+    };
+    let mut deliveries = Vec::new();
+    for (event, action) in [("push", ""), ("issues", "edited"), ("check_run", "created")] {
+        use tracing::instrument::WithSubscriber;
         let router = router.clone();
         let mut value = payload();
         value.as_object_mut().unwrap().remove("installation");
         value["action"] = json!(action);
-        tokio::spawn(async move {
-            router
-                .oneshot(request(
-                    serde_json::to_vec(&value).unwrap(),
-                    event,
-                    &event.replace('_', "-"),
-                ))
-                .await
-                .unwrap()
-        })
-    };
-    let events = [("push", ""), ("issues", "edited"), ("check_run", "created")];
-    let mut deliveries: Vec<_> = events
-        .iter()
-        .map(|(event, action)| deliver(event, action))
-        .collect();
+        deliveries.push(tokio::spawn(
+            async move {
+                router
+                    .oneshot(request(
+                        serde_json::to_vec(&value).unwrap(),
+                        event,
+                        &event.replace('_', "-"),
+                    ))
+                    .await
+                    .unwrap()
+            }
+            .with_subscriber(dispatch.clone()),
+        ));
+    }
     // Lookup uses the App JWT without waiting for the startup token mint's mutex.
     tokio::time::timeout(Duration::from_secs(5), transport.lookup_started.notified())
         .await
         .unwrap();
-    // Run every task until it is parked. On this current-thread runtime a
-    // paused clock moves only once no task can run, so the 1 ms sleep
-    // returns exactly then, and no timer further out fires. No delivery can
-    // be acknowledged while its write is locked out: one that has answered
-    // by now gave up on the lock (the database's own busy timeout, which a
-    // loaded machine can reach) and answered 503, so GitHub redelivers it.
-    tokio::time::pause();
-    tokio::time::sleep(Duration::from_millis(1)).await;
-    tokio::time::resume();
-    let mut redeliver = Vec::new();
-    for (index, delivery) in deliveries.iter_mut().enumerate() {
-        if delivery.is_finished() {
-            let response = delivery.await.unwrap();
-            assert_eq!(
-                response.status(),
-                StatusCode::SERVICE_UNAVAILABLE,
-                "a delivery was acknowledged while its write was locked out"
-            );
-            assert_eq!(error_kind(response).await, "cache-busy");
-            redeliver.push(index);
-        }
-    }
+    // One delivery is now storing the installation mapping against the
+    // locked database, and the others wait on its single-flight lookup:
+    // none can answer until a write lands, and none has.
+    tokio::time::timeout(Duration::from_secs(5), storing.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    assert!(
+        deliveries.iter().all(|task| !task.is_finished()),
+        "a delivery answered while its write was locked out"
+    );
     blocker.execute_batch("COMMIT").unwrap();
-    for &index in &redeliver {
-        let (event, action) = events[index];
-        deliveries[index] = deliver(event, action);
-    }
+    // Every delivery comes through the contention accepted.
     for delivery in deliveries {
         let response = tokio::time::timeout(Duration::from_secs(5), delivery)
             .await
@@ -862,10 +872,7 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
             panic!("delivery failed: {}", error_kind(response).await);
         }
     }
-    // The deliveries in flight together shared one installation lookup.
-    if redeliver.is_empty() {
-        assert_eq!(transport.lookups.load(Ordering::SeqCst), 1);
-    }
+    assert_eq!(transport.lookups.load(Ordering::SeqCst), 1);
     stop.send(true).unwrap();
     transport.finish_mint.notify_one();
     tokio::time::timeout(Duration::from_secs(5), worker)
