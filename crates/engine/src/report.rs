@@ -12,6 +12,9 @@ struct ReportCtx<'a> {
     lookups: &'a Lookups,
     sent: &'a Mutex<BTreeSet<Sent>>,
     now: DateTime<Utc>,
+    /// The repository's `security.quietImages`, compiled once: each image
+    /// pattern and the reason its warnings are silenced.
+    quiet_images: &'a [(patchula_config::Patterns, &'a str)],
 }
 
 impl Engine {
@@ -36,12 +39,24 @@ impl Engine {
         now: DateTime<Utc>,
     ) {
         let mut files: BTreeMap<String, Vec<ReportDependency>> = BTreeMap::new();
+        // Validation compiled every pattern, so none fails here.
+        let quiet_images: Vec<_> = repo
+            .config
+            .iter()
+            .flat_map(|config| &config.security.quiet_images)
+            .filter_map(|(pattern, reason)| {
+                patchula_config::Patterns::compile(std::slice::from_ref(pattern))
+                    .ok()
+                    .map(|pattern| (pattern, reason.as_str()))
+            })
+            .collect();
         let ctx = ReportCtx {
             eval: repo.evaluator.as_ref(),
             config: repo.config.as_ref(),
             lookups,
             sent,
             now,
+            quiet_images: &quiet_images,
         };
         for dep in repo.dependencies.iter_mut() {
             let value = self.report_dependency(&mut repo.report, dep, &ctx).await;
@@ -73,8 +88,16 @@ impl Engine {
             lookups,
             sent,
             now,
+            quiet_images,
         } = *ctx;
         let mut proposals = std::mem::take(&mut dep.evaluation.updates);
+        // The dependency's catalog, when its read succeeded.
+        let catalog = dep
+            .needs
+            .catalog_key
+            .as_ref()
+            .and_then(|key| lookups.catalogs.get(key))
+            .and_then(|c| c.as_ref().ok());
         if let Some(eval) = eval
             && dep.needs.image
             && !dep.needs.ignored
@@ -149,19 +172,13 @@ impl Engine {
                 .get(&(dep.package.clone(), reference.to_owned()))
             {
                 match result {
-                    Ok(sha) => match eval.digest_proposal_with_catalog(
-                        &dep.dependency,
-                        sha,
-                        dep.needs
-                            .catalog_key
-                            .as_ref()
-                            .and_then(|key| lookups.catalogs.get(key))
-                            .and_then(|c| c.as_ref().ok()),
-                    ) {
-                        Ok(Some(proposal)) => proposals.push(proposal),
-                        Err(e) => report.warnings.push(format!("{}: {e}", dep.name)),
-                        Ok(None) => {}
-                    },
+                    Ok(sha) => {
+                        match eval.digest_proposal_with_catalog(&dep.dependency, sha, catalog) {
+                            Ok(Some(proposal)) => proposals.push(proposal),
+                            Err(e) => report.warnings.push(format!("{}: {e}", dep.name)),
+                            Ok(None) => {}
+                        }
+                    }
                     Err(e) => report.lookup_failures.push(lookup_failure(
                         &dep.dependency,
                         e,
@@ -190,15 +207,10 @@ impl Engine {
             }
             let platforms = &platforms;
             let before = image_side(&lookups.image_sboms, &dep.package, old, platforms);
-            let silenced = config
-                .security
-                .quiet_images
+            let silenced = quiet_images
                 .iter()
-                .find(|(pattern, _)| {
-                    patchula_config::Patterns::compile(std::slice::from_ref(*pattern))
-                        .is_ok_and(|p| p.matches_any(&dep.package, &dep.name))
-                })
-                .map(|(_, reason)| reason.clone());
+                .find(|(pattern, _)| pattern.matches_any(&dep.package, &dep.name))
+                .map(|(_, reason)| (*reason).to_owned());
             let silence = |mut check: patchula_report::ImageCheck| {
                 if check.state.warns() {
                     check.silenced.clone_from(&silenced);
@@ -240,13 +252,7 @@ impl Engine {
                     if secured {
                         proposal.fixes = check.fixed.iter().map(|f| f.id.clone()).collect();
                         proposal.fixes.dedup();
-                        let label = &config.security.label;
-                        if let Some(policy) = &mut proposal.policy
-                            && !label.is_empty()
-                            && !policy.labels.contains(label)
-                        {
-                            policy.labels.push(label.clone());
-                        }
+                        security_label(&mut proposal.policy, &config.security.label);
                     }
                     image_advisories.extend(verified);
                 }
@@ -268,12 +274,6 @@ impl Engine {
         if let (Some(eval), Some((query, found))) = (eval, &advisory) {
             // A transitive fix's marker asks whether its target sits inside
             // the committed cooldown, which only the catalog can date.
-            let catalog = dep
-                .needs
-                .catalog_key
-                .as_ref()
-                .and_then(|key| lookups.catalogs.get(key))
-                .and_then(|c| c.as_ref().ok());
             match eval.transitive_fix(&dep.dependency, (query, found), catalog, now) {
                 Ok(mut fix) => {
                     proposals.append(&mut fix.updates);
@@ -295,12 +295,8 @@ impl Engine {
                     continue;
                 };
                 proposal.fixes = patchula_lookup::fixes(&dep.dependency, query, found, target);
-                if let Some(policy) = &mut proposal.policy
-                    && !proposal.fixes.is_empty()
-                    && !label.is_empty()
-                    && !policy.labels.iter().any(|l| l == label)
-                {
-                    policy.labels.push(label.into());
+                if !proposal.fixes.is_empty() {
+                    security_label(&mut proposal.policy, label);
                 }
             }
         }
@@ -310,19 +306,15 @@ impl Engine {
         // The lookup worked; only the declaration cannot be rewritten to allow
         // the release, so it is a notice rather than a failure.
         for missed in std::mem::take(&mut dep.evaluation.not_proposed) {
-            report.notices.push(patchula_report::Notice {
-                manager: dep.manager,
-                path: dep.file.clone(),
-                line: Some(dep.location.line),
-                name: dep.name.clone(),
-                package: dep.package.clone(),
-                current: dep.current.clone(),
-                compare_url: dep.resolved.as_deref().and_then(|resolved| {
-                    patchula_notes::compare_url(dep.source, &dep.package, resolved, &missed.version)
-                }),
-                available: missed.version,
-                reason: Some(missed.reason),
+            let compare_url = dep.resolved.as_deref().and_then(|resolved| {
+                patchula_notes::compare_url(dep.source, &dep.package, resolved, &missed.version)
             });
+            report.notices.push(notice(
+                dep,
+                missed.version,
+                compare_url,
+                Some(missed.reason),
+            ));
         }
         if dep.proposing().edits == patchula_manager::Edits::ReportOnly {
             // Only copier update applies a template: report the
@@ -338,22 +330,11 @@ impl Engine {
                 .min_by_key(|p| rank(p.update_type))
                 .and_then(|p| p.new_version.clone())
             {
-                report.notices.push(patchula_report::Notice {
-                    manager: dep.manager,
-                    path: dep.file.clone(),
-                    line: Some(dep.location.line),
-                    name: dep.name.clone(),
-                    package: dep.package.clone(),
-                    current: dep.current.clone(),
-                    compare_url: patchula_notes::compare_url(
-                        dep.source,
-                        &dep.package,
-                        &dep.current,
-                        &available,
-                    ),
-                    available,
-                    reason: None,
-                });
+                let compare_url =
+                    patchula_notes::compare_url(dep.source, &dep.package, &dep.current, &available);
+                report
+                    .notices
+                    .push(notice(dep, available, compare_url, None));
             }
             proposals.clear();
             held_back.clear();
@@ -383,12 +364,6 @@ impl Engine {
                 stale.keys().cloned().collect::<Vec<_>>().join(", ")
             ));
         }
-        let catalog = dep
-            .needs
-            .catalog_key
-            .as_ref()
-            .and_then(|key| lookups.catalogs.get(key))
-            .and_then(|c| c.as_ref().ok());
         if dep.proposing().pin.commit && catalog.is_some_and(|c| c.versions.is_empty()) {
             report.warnings.push(format!(
                 "{}: registry returned an empty tag catalog; version lookup is unavailable",
@@ -440,14 +415,8 @@ impl Engine {
             registry: dep.registry.as_ref().map(|r| r.recorded().to_owned()),
             current: Current {
                 value: Some(dep.current.clone()),
-                version: catalog
-                    .and_then(|c| {
-                        eval.and_then(|eval| {
-                            eval.resolved_current_version(&dep.dependency, c)
-                                .ok()
-                                .flatten()
-                        })
-                    })
+                version: resolved
+                    .clone()
                     .or_else(|| dep.resolved.clone())
                     .or_else(|| {
                         let scheme = patchula_versioning::Ecosystem::of(dep.scheme, dep.source);
@@ -519,5 +488,35 @@ impl Engine {
                         .contains(&Sent::of(&dep.dependency)),
             }),
         }
+    }
+}
+
+/// Give a security fix the configured `label`, once.
+fn security_label(policy: &mut Option<patchula_report::UpdatePolicy>, label: &str) {
+    if let Some(policy) = policy
+        && !label.is_empty()
+        && !policy.labels.iter().any(|l| l == label)
+    {
+        policy.labels.push(label.to_owned());
+    }
+}
+
+/// A notice that `available` is out for `dep` without a proposal for it.
+fn notice(
+    dep: &Dep,
+    available: String,
+    compare_url: Option<String>,
+    reason: Option<String>,
+) -> patchula_report::Notice {
+    patchula_report::Notice {
+        manager: dep.manager,
+        path: dep.file.clone(),
+        line: Some(dep.location.line),
+        name: dep.name.clone(),
+        package: dep.package.clone(),
+        current: dep.current.clone(),
+        compare_url,
+        available,
+        reason,
     }
 }

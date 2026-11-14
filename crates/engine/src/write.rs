@@ -125,6 +125,7 @@ impl Write<'_> {
             .await?;
         // Every write needs the inventory read during lookup; a missing one
         // is a broken invariant, failed closed rather than assumed away.
+        // `inventory` is `None` exactly on a dry run from here on.
         let inventory = if self.dry_run {
             None
         } else {
@@ -248,8 +249,8 @@ impl Write<'_> {
             self.lockfiles(repo, &mut plans, &mut snapshot, &config)
                 .await;
         }
-        let cleanup = match (self.dry_run, repo.degraded(), inventory) {
-            (false, false, Some(inventory)) => self.cleanup(repo, &plans, inventory).await,
+        let cleanup = match (repo.degraded(), inventory) {
+            (false, Some(inventory)) => self.cleanup(repo, &plans, inventory).await,
             _ => Ok(Vec::new()),
         };
         match cleanup {
@@ -264,10 +265,8 @@ impl Write<'_> {
                 return Ok(written);
             }
         }
-        if !self.dry_run {
-            self.engine.progress.stage(Stage::Writing, plans.len());
-        }
         if let Some(inventory) = inventory {
+            self.engine.progress.stage(Stage::Writing, plans.len());
             self.publish(
                 &mut plans,
                 &snapshot,

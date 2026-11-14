@@ -53,6 +53,11 @@ pub struct Listing {
     pub hidden: Vec<Hidden>,
 }
 
+/// The Git tree modes of a symlink, an executable file and a plain file.
+pub(crate) const SYMLINK_MODE: &str = "120000";
+pub(crate) const EXECUTABLE_MODE: &str = "100755";
+pub(crate) const FILE_MODE: &str = "100644";
+
 /// What reading a repository's files gives extraction and the snapshot.
 pub struct View {
     /// Every path the tree carries, selected or not.
@@ -115,7 +120,7 @@ pub async fn view<S: Source>(
     // public registry, where its name may be someone else's.
     let linked: BTreeSet<String> = entries
         .iter()
-        .filter(|entry| entry.mode == "120000")
+        .filter(|entry| entry.mode == SYMLINK_MODE)
         .map(|entry| entry.path.as_str())
         .chain(
             hidden
@@ -136,7 +141,7 @@ pub async fn view<S: Source>(
         {
             continue;
         }
-        if entry.mode == "120000" {
+        if entry.mode == SYMLINK_MODE {
             files.insert(entry.path.clone(), Text::Unread(Unread::Failed));
         } else {
             wanted.push(entry.clone());
@@ -162,7 +167,7 @@ pub async fn view<S: Source>(
         let mut wanted = Vec::new();
         for path in more {
             match by_path.get(path.as_str()) {
-                Some(entry) if entry.mode != "120000" => wanted.push((*entry).clone()),
+                Some(entry) if entry.mode != SYMLINK_MODE => wanted.push((*entry).clone()),
                 _ => {
                     files.insert(path, Text::Unread(Unread::Failed));
                 }
@@ -301,7 +306,7 @@ pub fn list_local(dir: &Path) -> Result<Listing> {
             Ok(meta) if meta.is_symlink() => entries.push(Entry {
                 path: relative,
                 sha: None,
-                mode: "120000".into(),
+                mode: SYMLINK_MODE.into(),
             }),
             Ok(meta) if meta.is_file() => entries.push(Entry {
                 path: relative,
@@ -326,14 +331,14 @@ pub fn list_local(dir: &Path) -> Result<Listing> {
 fn local_mode(meta: &std::fs::Metadata) -> String {
     use std::os::unix::fs::PermissionsExt;
     if meta.permissions().mode() & 0o100 != 0 {
-        "100755".into()
+        EXECUTABLE_MODE.into()
     } else {
-        "100644".into()
+        FILE_MODE.into()
     }
 }
 #[cfg(not(unix))]
 fn local_mode(_: &std::fs::Metadata) -> String {
-    "100644".into()
+    FILE_MODE.into()
 }
 
 /// The local working tree's blob source: files are read synchronously
@@ -461,7 +466,7 @@ mod tests {
         Entry {
             path: path.into(),
             sha: Some(path.into()),
-            mode: "100644".into(),
+            mode: FILE_MODE.into(),
         }
     }
     fn config(pkl: &str) -> Config {

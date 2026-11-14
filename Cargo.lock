@@ -2419,6 +2419,7 @@ dependencies = [
  "patchula-cache",
  "patchula-config",
  "patchula-datasource",
+ "patchula-engine",
  "patchula-github",
  "patchula-http",
  "patchula-lookup",
@@ -2438,6 +2439,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

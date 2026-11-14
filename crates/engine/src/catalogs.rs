@@ -33,8 +33,10 @@ pub(super) type Evidence = BTreeMap<LookupKey, CatalogEvidence>;
 fn reuse_hours(wait_hours: u32) -> Option<u32> {
     (wait_hours != 0).then(|| wait_hours.saturating_sub(1).clamp(1, 24))
 }
+/// Milliseconds in an hour, the unit catalog timestamps are kept in.
+const MS_PER_HOUR: i64 = 3_600_000;
 fn eligible(fetched: i64, now: i64, hours: u32) -> bool {
-    now >= fetched && now.saturating_sub(fetched) < i64::from(hours) * 3_600_000
+    now >= fetched && now.saturating_sub(fetched) < i64::from(hours) * MS_PER_HOUR
 }
 impl Engine {
     fn catalog_scope(&self, key: &LookupKey) -> CatalogScope {
@@ -59,23 +61,21 @@ impl Engine {
         let mut forced = BTreeSet::new();
         let cached = stream::iter(keys)
             .map(|key| async move {
-                let saved = if !force.contains(&key)
-                    && reuse_hours(*waits.get(&key).unwrap_or(&0)).is_some()
-                {
+                let hours = reuse_hours(*waits.get(&key).unwrap_or(&0));
+                let saved = if !force.contains(&key) && hours.is_some() {
                     self.cache.state::<Saved>(&self.catalog_scope(&key)).await?
                 } else {
                     None
                 };
-                Ok::<_, Error>((key, saved))
+                Ok::<_, Error>((key, hours, saved))
             })
             .buffer_unordered(READ_FAN_OUT)
             .collect::<Vec<_>>()
             .await;
         for cached in cached {
-            let (key, saved) = cached?;
+            let (key, hours, saved) = cached?;
             if let Some(saved) = saved.filter(|saved| {
-                reuse_hours(*waits.get(&key).unwrap_or(&0))
-                    .is_some_and(|hours| eligible(saved.fetched_at, now.timestamp_millis(), hours))
+                hours.is_some_and(|hours| eligible(saved.fetched_at, now.timestamp_millis(), hours))
             }) {
                 let fetched_at = DateTime::from_timestamp_millis(saved.fetched_at)
                     .ok_or_else(|| Error::Invalid("invalid catalog timestamp".into()))?;
@@ -153,12 +153,6 @@ impl State for Controls {
     type Scope = CredentialScope;
 }
 impl Engine {
-    fn catalog_controls_scope(&self, repo: &str) -> CredentialScope {
-        CredentialScope {
-            repository: repo.into(),
-            credential_scope: self.github.credential_scope().into(),
-        }
-    }
     /// Whether each dependency is under a manual retry this run: the
     /// dashboard controls' retry box, a recheck, a ticked branch box, or a
     /// create/recreate whose saved controls name it. Parallel to
@@ -173,7 +167,7 @@ impl Engine {
         {
             let saved = self
                 .cache
-                .state::<Controls>(&self.catalog_controls_scope(&repo.report.repository))
+                .state::<Controls>(&self.credential_scope(&repo.report.repository))
                 .await?;
             if let Some(saved) = saved {
                 for (name, entries) in controls
@@ -234,7 +228,9 @@ impl Engine {
                 .iter()
                 .map(|dep| dep.dependency.clone())
                 .collect();
-            if let Ok(plans) = patchula_update::plan(
+            // A plan error leaves the saved controls as they are: an empty
+            // set would quietly un-retry every ticked box on the next run.
+            let plans = match patchula_update::plan(
                 &repo.report,
                 config,
                 &dependencies,
@@ -243,29 +239,35 @@ impl Engine {
                 since,
                 now,
             ) {
-                for plan in plans {
-                    let dependencies: BTreeSet<_> = plan
-                        .changes()
-                        .iter()
-                        .flat_map(|change| {
-                            repo.dependencies
-                                .iter()
-                                .filter(move |dep| {
-                                    change.touches(
-                                        &dep.file,
-                                        dep.source,
-                                        &dep.package,
-                                        dep.registry.as_ref().map(|r| r.recorded()),
-                                    )
-                                })
-                                .map(|dep| patchula_update::identity::extracted_key(dep))
-                        })
-                        .collect();
-                    controls
-                        .branches
-                        .insert(plan.action().branch.clone(), dependencies.clone());
-                    controls.targets.insert(plan.update_key(), dependencies);
+                Ok(plans) => plans,
+                Err(error) => {
+                    tracing::warn!(target: "patchula_engine", repository = %repo.report.repository,
+                        %error, "catalog controls not saved: the plan failed");
+                    continue;
                 }
+            };
+            for plan in plans {
+                let dependencies: BTreeSet<_> = plan
+                    .changes()
+                    .iter()
+                    .flat_map(|change| {
+                        repo.dependencies
+                            .iter()
+                            .filter(move |dep| {
+                                change.touches(
+                                    &dep.file,
+                                    dep.source,
+                                    &dep.package,
+                                    dep.registry.as_ref().map(|r| r.recorded()),
+                                )
+                            })
+                            .map(|dep| patchula_update::identity::extracted_key(dep))
+                    })
+                    .collect();
+                controls
+                    .branches
+                    .insert(plan.action().branch.clone(), dependencies.clone());
+                controls.targets.insert(plan.update_key(), dependencies);
             }
             for file in &repo.report.package_files {
                 for dep in &file.dependencies {
@@ -276,24 +278,16 @@ impl Engine {
                         .flat_map(|meta| &meta.held_back)
                     {
                         let key = patchula_update::identity::dependency_key(&file.path, dep);
-                        for version in std::iter::once(&held.version).chain(&held.versions) {
-                            controls.targets.insert(
-                                patchula_update::identity::held_target(
-                                    &key,
-                                    version,
-                                    held.update_type.as_str(),
-                                ),
-                                BTreeSet::from([key.clone()]),
-                            );
+                        for (.., target) in crate::held_targets(&key, held) {
+                            controls
+                                .targets
+                                .insert(target, BTreeSet::from([key.clone()]));
                         }
                     }
                 }
             }
             self.cache
-                .set_state(
-                    &self.catalog_controls_scope(&repo.report.repository),
-                    &controls,
-                )
+                .set_state(&self.credential_scope(&repo.report.repository), &controls)
                 .await?;
         }
         Ok(())

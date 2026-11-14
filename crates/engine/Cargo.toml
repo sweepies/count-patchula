@@ -8,6 +8,9 @@ repository.workspace = true
 publish.workspace = true
 [lints]
 workspace = true
+[features]
+# The token and transport constructors the engine's own tests build with.
+testing = []
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 patchula-cache = { path = "../cache" }
@@ -28,11 +31,14 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing = "0.1"
 futures-util = "0.3"
 futures-executor = "0.3"
 graphql_client = { version = "0.16", default-features = false, features = ["graphql_query_derive"] }
 base64 = "0.23"
 [dev-dependencies]
+patchula-update = { path = "../update", features = ["testing"] }
+patchula-engine = { path = ".", features = ["testing"] }
 patchula-cache = { path = "../cache", features = ["paused-clock"] }
 sha2 = "0.11.1"
 tokio = { workspace = true, features = ["test-util"] }

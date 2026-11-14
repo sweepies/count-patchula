@@ -10,21 +10,6 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-/// The write receipts patchula_update stores, read through the same
-/// namespace and scope.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Receipts(Value);
-#[derive(serde::Serialize)]
-struct ReceiptsScope {
-    repository: String,
-    branch_prefix: String,
-}
-impl patchula_cache::State for Receipts {
-    const NAMESPACE: &'static str = "verified-write-receipts";
-    const VERSION: u32 = 1;
-    type Scope = ReceiptsScope;
-}
-
 /// The sandbox repository and the scripted registry and advisory hosts
 /// every write test shares: GitHub comes from the shared
 /// [`FakeGitHub`]; `registry.npmjs.org` and `api.osv.dev` are scripted
@@ -983,15 +968,10 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
                 dashboard.contains("## Merged") && dashboard.contains("merged by patchula"),
                 "{case}: {dashboard}"
             );
-            let receipts = cache
-                .state::<Receipts>(&ReceiptsScope {
-                    repository: "demo/sandbox".into(),
-                    branch_prefix: "patchula/".into(),
-                })
+            let receipts = patchula_update::stored_receipts(&cache, "demo/sandbox", "patchula/")
                 .await
                 .unwrap()
-                .unwrap()
-                .0;
+                .unwrap();
             assert!(
                 receipts["writes"].as_object().unwrap().is_empty(),
                 "merged heads must not remain eligible for another merge"
@@ -2647,6 +2627,20 @@ async fn an_invalid_branch_prefix_fails_the_repository() {
 async fn an_undecodable_write_receipt_is_a_miss_and_rewritten() {
     let fake = sandbox(base_files(), None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    // Written under the receipts' namespace and version in a shape they
+    // cannot decode; the scope matches patchula_update's.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct Receipts(Value);
+    #[derive(serde::Serialize)]
+    struct ReceiptsScope {
+        repository: String,
+        branch_prefix: String,
+    }
+    impl patchula_cache::State for Receipts {
+        const NAMESPACE: &'static str = "verified-write-receipts";
+        const VERSION: u32 = 1;
+        type Scope = ReceiptsScope;
+    }
     cache
         .set_state(
             &ReceiptsScope {
