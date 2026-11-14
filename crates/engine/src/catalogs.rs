@@ -18,10 +18,20 @@ pub(crate) struct CatalogScope {
     versions_host: bool,
     package: PackageId,
     credential_scope: String,
+    /// Whom a mise catalog was listed for; `Run` for every other source.
+    access: CatalogAccess,
+}
+/// A key's `MiseAccess` with a repository named by its numeric id, so a
+/// repository that later takes a renamed one's name never reads its views.
+#[derive(Serialize)]
+enum CatalogAccess {
+    Run,
+    Public,
+    Repository(u64),
 }
 impl State for Saved {
     const NAMESPACE: &'static str = "catalog";
-    const VERSION: u32 = 6;
+    const VERSION: u32 = 7;
     // Code-versioned: the view is datasource output decoded into `Catalog`;
     // a stale-but-decodable view from a release whose transforms moved is
     // worse than a miss.
@@ -39,12 +49,22 @@ fn eligible(fetched: i64, now: i64, hours: u32) -> bool {
     now >= fetched && now.saturating_sub(fetched) < i64::from(hours) * MS_PER_HOUR
 }
 impl Engine {
-    fn catalog_scope(&self, key: &LookupKey) -> CatalogScope {
-        CatalogScope {
+    /// `key`'s stored view's scope; `None` when its repository's id cannot
+    /// be read, and then nothing is reused or stored for it.
+    async fn catalog_scope(&self, key: &LookupKey) -> Option<CatalogScope> {
+        let access = match &key.2 {
+            MiseAccess::Run => CatalogAccess::Run,
+            MiseAccess::Public => CatalogAccess::Public,
+            MiseAccess::Repository(repository) => {
+                CatalogAccess::Repository(self.github.scoped_repository_id(repository)?.await.ok()?)
+            }
+        };
+        Some(CatalogScope {
             versions_host: key.0,
             package: key.1.clone(),
             credential_scope: self.github.credential_scope().into(),
-        }
+            access,
+        })
     }
     pub(super) async fn age_catalogs(
         &self,
@@ -52,6 +72,7 @@ impl Engine {
         waits: &BTreeMap<LookupKey, u32>,
         force: &BTreeSet<LookupKey>,
         sources: &Sources,
+        vias: &MiseVias,
         now: DateTime<Utc>,
     ) -> Result<(Catalogs, Evidence, BTreeSet<LookupKey>)> {
         let mut results = Catalogs::new();
@@ -62,10 +83,11 @@ impl Engine {
         let cached = stream::iter(keys)
             .map(|key| async move {
                 let hours = reuse_hours(*waits.get(&key).unwrap_or(&0));
-                let saved = if !force.contains(&key) && hours.is_some() {
-                    self.cache.state::<Saved>(&self.catalog_scope(&key)).await?
-                } else {
-                    None
+                let saved = match self.catalog_scope(&key).await {
+                    Some(scope) if !force.contains(&key) && hours.is_some() => {
+                        self.cache.state::<Saved>(&scope).await?
+                    }
+                    _ => None,
                 };
                 Ok::<_, Error>((key, hours, saved))
             })
@@ -99,8 +121,8 @@ impl Engine {
         }
         let fresh = sources.revalidating();
         let ((mut fetched, sent), (forced, sent_forced)) = tokio::join!(
-            self.catalogs(ordinary, sources),
-            self.catalogs(forced, &fresh)
+            self.catalogs(ordinary, sources, vias),
+            self.catalogs(forced, &fresh, vias)
         );
         fetched.extend(forced);
         credentialed.extend(sent);
@@ -121,9 +143,12 @@ impl Engine {
                         reused: false,
                     },
                 );
+                let Some(scope) = self.catalog_scope(key).await else {
+                    continue;
+                };
                 self.cache
                     .set_state(
-                        &self.catalog_scope(key),
+                        &scope,
                         &Saved {
                             fetched_at: now.timestamp_millis(),
                             catalog: catalog.clone(),
@@ -145,7 +170,7 @@ pub(crate) struct Controls {
 }
 impl State for Controls {
     const NAMESPACE: &'static str = "catalog-controls";
-    const VERSION: u32 = 6;
+    const VERSION: u32 = 7;
     // Code-versioned: the stored keys come from `identity` and `plan`
     // code, and a key written by older code that no longer matches its
     // dependency quietly un-retries a ticked box.

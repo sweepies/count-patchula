@@ -8,7 +8,7 @@ mod governor;
 pub mod model;
 mod pagination;
 pub use blobs::blob_sha;
-pub use credentials::{Credentials, Token};
+pub use credentials::{Credentials, Permissions, RepositoryId, Token};
 pub use governor::{PrimaryLimit, Stats};
 pub use pagination::{GraphqlPage, next_link};
 pub use patchula_http::{Network, Response, Transport};
@@ -291,6 +291,34 @@ impl Client {
             .and_then(|value| value.strip_prefix("Bearer "))
             .map(str::to_owned)
             .ok_or(Error::Configuration)
+    }
+
+    /// A token narrowed to `repository` and `permissions`, for a tool the
+    /// Count runs on that repository's behalf; `None` when the credentials
+    /// cannot mint one (only a GitHub App installation can).
+    pub fn scoped_token(
+        &self,
+        repository: &str,
+        permissions: Permissions,
+    ) -> Option<credentials::Token<'_>> {
+        self.0
+            .credentials
+            .as_ref()?
+            .scoped_token(repository, permissions)
+    }
+
+    /// The numeric id of the repository `scoped_token` mints for under
+    /// `repository`; `None` when the credentials cannot mint.
+    pub fn scoped_repository_id(&self, repository: &str) -> Option<RepositoryId<'_>> {
+        self.0.credentials.as_ref()?.repository_id(repository)
+    }
+
+    /// Whether `scoped_token` mints, without minting.
+    pub fn mints_scoped_tokens(&self) -> bool {
+        self.0
+            .credentials
+            .as_ref()
+            .is_some_and(|credentials| credentials.mints_scoped_tokens())
     }
 
     /// Renews refreshable credentials now, so a request started before the

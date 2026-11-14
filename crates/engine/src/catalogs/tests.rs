@@ -53,7 +53,11 @@ fn engine(cache: Cache, registry: Arc<Registry>, token: &str) -> Engine {
         .with_versions_host(false)
 }
 fn key(package: &str) -> LookupKey {
-    (false, PackageId::public(Source::Npm, package))
+    (
+        false,
+        PackageId::public(Source::Npm, package),
+        MiseAccess::Run,
+    )
 }
 fn now() -> DateTime<Utc> {
     "2026-10-15T12:00:00Z".parse().unwrap()
@@ -70,6 +74,7 @@ async fn read(engine: &Engine, wait: u32, now: DateTime<Utc>, force: bool) -> (C
                 BTreeSet::new()
             },
             &engine.sources,
+            &MiseVias::new(),
             now,
         )
         .await
@@ -421,4 +426,137 @@ async fn a_rule_error_reuses_no_catalog_and_the_evaluation_reports_it() {
         panic!("the rule error is the evaluation's error");
     };
     assert!(error.contains(">>1"), "{error}");
+}
+
+/// Installation credentials whose repository ids a test can move.
+#[derive(Default)]
+struct Installation(std::sync::Mutex<BTreeMap<String, u64>>);
+impl patchula_github::Credentials for Installation {
+    fn scope(&self) -> &str {
+        "installation"
+    }
+    fn token(&self) -> patchula_github::Token<'_> {
+        Box::pin(async { Ok("installation-token".to_owned()) })
+    }
+    fn mints_scoped_tokens(&self) -> bool {
+        true
+    }
+    fn scoped_token(
+        &self,
+        repository: &str,
+        _: patchula_github::Permissions,
+    ) -> Option<patchula_github::Token<'_>> {
+        let token = format!("scoped-{repository}");
+        Some(Box::pin(async move { Ok(token) }))
+    }
+    fn repository_id(&self, repository: &str) -> Option<patchula_github::RepositoryId<'_>> {
+        let mut ids = self.0.lock().unwrap();
+        let next = 100 + ids.len() as u64;
+        let id = *ids.entry(repository.into()).or_insert(next);
+        Some(Box::pin(async move { Ok(id) }))
+    }
+}
+
+/// One package's views under `Run`, `Public` and a repository's own access
+/// are separate entries: none is reused for another, each is reused for
+/// itself, and a repository's view is not reused for a new repository
+/// under its old name.
+#[tokio::test]
+async fn views_are_kept_per_access_and_a_repository_view_by_its_id() {
+    let credentials = Arc::new(Installation::default());
+    let engine = Engine::from_settings(
+        &patchula_config::settings::Settings::default(),
+        Vec::new(),
+        Auth::Credentials(credentials.clone()),
+        4,
+        patchula_words::Recheck::NextRun,
+        memory().await,
+        Arc::new(Registry::default()),
+    )
+    .unwrap();
+    let at = |access: MiseAccess| (false, PackageId::public(Source::Npm, "fixture"), access);
+    let keys = [
+        at(MiseAccess::Run),
+        at(MiseAccess::Public),
+        at(MiseAccess::Repository("acme/app".into())),
+        at(MiseAccess::Repository("acme/api".into())),
+    ];
+    let read = |key: LookupKey| {
+        let engine = &engine;
+        async move {
+            let (catalogs, evidence, _) = engine
+                .age_catalogs(
+                    BTreeSet::from([key.clone()]),
+                    &BTreeMap::from([(key.clone(), 24)]),
+                    &BTreeSet::new(),
+                    &engine.sources,
+                    &MiseVias::new(),
+                    now(),
+                )
+                .await
+                .unwrap();
+            assert!(catalogs[&key].is_ok());
+            evidence[&key].reused
+        }
+    };
+    for key in &keys {
+        assert!(!read(key.clone()).await, "{key:?} reused another's view");
+    }
+    for key in &keys {
+        assert!(read(key.clone()).await, "{key:?} not reused");
+    }
+    credentials.0.lock().unwrap().insert("acme/app".into(), 2);
+    assert!(!read(keys[2].clone()).await);
+    assert!(read(keys[3].clone()).await);
+}
+
+/// The second fetch pass computes its vias from the work as it stands, so
+/// a lockfile package promoted after the first pass is looked up for the
+/// repository that asked for it.
+#[test]
+fn vias_follow_promoted_dependencies() {
+    let mise = |package: &str, access: MiseAccess| {
+        let dependency = Dependency {
+            package: package.into(),
+            ..patchula_manager::testing::dependency(
+                patchula_words::Manager::Mise,
+                DependencyKind::Tool,
+                Source::Mise,
+            )
+        };
+        let key = (false, dependency.id(), access);
+        Dep {
+            dependency,
+            needs: Needs {
+                catalog_key: Some(key),
+                ..Needs::default()
+            },
+            evaluation: Evaluation::default(),
+        }
+    };
+    let mut work = vec![
+        Work {
+            private: Some(true),
+            ..Work::empty(repo_report("acme/app", Status::Complete, None), None)
+        },
+        Work {
+            private: Some(false),
+            ..Work::empty(repo_report("acme/site", Status::Complete, None), None)
+        },
+    ];
+    work[1].dependencies.push(mise("jq", MiseAccess::Public));
+    work[1].dependencies.push(mise("node", MiseAccess::Run));
+    let first = crate::lookup::mise_vias(&work);
+    assert_eq!(first.len(), 1);
+    // Promoted after the first pass: acme/app now asks for jq too, and for
+    // a tool of its own.
+    work[0].dependencies.push(mise("jq", MiseAccess::Public));
+    work[0].dependencies.push(mise(
+        "go:example.com/tool",
+        MiseAccess::Repository("acme/app".into()),
+    ));
+    let second = crate::lookup::mise_vias(&work);
+    let names: Vec<_> = second.values().map(|via| via.name.as_str()).collect();
+    assert_eq!(names, ["acme/app", "acme/app"]);
+    assert_eq!(second.len(), 2);
 }

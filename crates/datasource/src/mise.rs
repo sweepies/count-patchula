@@ -3,10 +3,55 @@ use super::*;
 use patchula_mise::{Lookup, Query, Release};
 use std::sync::Arc;
 
+/// Who a mise listing is made for, which decides the GitHub token mise is
+/// handed and who may reuse what it printed. Every other lookup is `Run`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum MiseAccess {
+    /// The run's own token, its listing kept under the run's credential
+    /// scope: credentials that cannot mint a repository-scoped token, and a
+    /// local directory.
+    #[default]
+    Run,
+    /// A `metadata: read` token scoped to a repository that asked for the
+    /// tool. Without `contents` it reads no repository's releases but public
+    /// ones (not even its own under an old name), so the listing is public
+    /// and every repository shares it.
+    Public,
+    /// A `contents: read` token scoped to this repository (its name,
+    /// lowercased), its listing kept for this repository alone: the tool is
+    /// released from it, or the Count cannot tell where the tool comes from
+    /// and the repository may be private.
+    Repository(String),
+}
+
+/// The repository mise lookups are made for: its name and visibility as
+/// GitHub reported it (`None` when not read counts as private).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MiseRepository {
+    pub name: String,
+    pub private: Option<bool>,
+}
+
+/// The scope rule alone: the access a lookup for `tool` in `repository`
+/// gets when the run's credentials can mint repository-scoped tokens.
+pub fn mise_scope_rule(tool: &str, repository: &MiseRepository) -> MiseAccess {
+    let name = repository.name.to_ascii_lowercase();
+    match patchula_mise::github_sources(tool) {
+        Some(sources) if !sources.contains(&name) => MiseAccess::Public,
+        None if repository.private == Some(false) => MiseAccess::Public,
+        _ => MiseAccess::Repository(name),
+    }
+}
+
+/// The scope a public listing is kept under: shared by every credential.
+const PUBLIC_SCOPE: &str = "public";
+
 #[derive(Serialize)]
 struct ListingScope {
     tool: String,
     prefix: String,
+    /// `public`, the run's credential scope, or the run's credential scope
+    /// and the repository a scoped token was minted for.
     credential_scope: String,
     mise_version: String,
     versions_host: bool,
@@ -23,7 +68,7 @@ impl FetchedAt for Listing {
 }
 impl State for Listing {
     const NAMESPACE: &'static str = "mise-ls-remote";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
     type Scope = ListingScope;
 }
 
@@ -54,34 +99,141 @@ impl Client {
     pub fn mise_lookup(&self) -> Result<&Arc<Lookup>> {
         self.mise.as_ref().ok_or(Error::NoMise)
     }
-    /// Only a token for github.com is passed to mise.
-    pub async fn mise_token(&self) -> Option<String> {
+    /// The access a mise lookup for `tool` made for `repository` gets: the
+    /// one place the token mise is handed is chosen. Without a repository
+    /// (a local directory) or with credentials that cannot mint a
+    /// repository-scoped token, mise gets the run's own.
+    pub fn mise_access(&self, repository: Option<&MiseRepository>, tool: &str) -> MiseAccess {
+        match repository {
+            Some(repository) if self.github.mints_scoped_tokens() => {
+                mise_scope_rule(tool, repository)
+            }
+            _ => MiseAccess::Run,
+        }
+    }
+    /// This client's mise lookups are made for `repository`, each with the
+    /// access `mise_access` gives it.
+    pub fn with_mise_repository(mut self, repository: Option<MiseRepository>) -> Self {
+        self.mise_repository = repository;
+        self.mise_expected = None;
+        self
+    }
+    /// The repository this client's mise lookups are made for.
+    pub fn mise_repository(&self) -> Option<&MiseRepository> {
+        self.mise_repository.as_ref()
+    }
+    /// A batch lookup under a key's `access`, made for `via`: a repository
+    /// that asked for it. A lookup whose access `via` does not give fails
+    /// rather than run with another token — a `Public` key with no
+    /// repository among them.
+    pub fn with_mise_access(mut self, access: MiseAccess, via: Option<MiseRepository>) -> Self {
+        self.mise_repository = via;
+        self.mise_expected = Some(access);
+        self
+    }
+    /// `tool`'s access on this client, checked against the batch key's.
+    fn tool_access(&self, tool: &str) -> Result<MiseAccess> {
+        let access = self.mise_access(self.mise_repository.as_ref(), tool);
+        match &self.mise_expected {
+            Some(expected) if *expected != access => {
+                Err(Error::Github(patchula_github::Error::Configuration))
+            }
+            _ => Ok(access),
+        }
+    }
+    /// The run's own token, for a tool that reads GitHub itself; only a
+    /// token for github.com is handed out.
+    pub async fn run_tool_token(&self) -> Option<String> {
         if self.github.versions_host_eligible() {
             self.github.token().await.ok()
         } else {
             None
         }
     }
-    fn mise_scope(&self, lookup: &Lookup, tool: &str, prefix: Option<&str>) -> ListingScope {
-        ListingScope {
+    /// The token mise is handed under `access`: the run's for `Run`, else a
+    /// token scoped to the repository with the permissions the access names,
+    /// which fails the lookup rather than fall back to a broader one. Only a
+    /// token for github.com is handed out.
+    async fn mise_token(&self, access: &MiseAccess) -> Result<Option<String>> {
+        if !self.github.versions_host_eligible() {
+            return Ok(None);
+        }
+        let (repository, permissions) = match access {
+            MiseAccess::Run => return Ok(self.github.token().await.ok()),
+            MiseAccess::Public => (
+                self.mise_repository
+                    .as_ref()
+                    .map(|repository| repository.name.as_str())
+                    .ok_or(patchula_github::Error::Configuration)?,
+                patchula_github::Permissions::MetadataRead,
+            ),
+            MiseAccess::Repository(repository) => (
+                repository.as_str(),
+                patchula_github::Permissions::ContentsRead,
+            ),
+        };
+        let token = self
+            .github
+            .scoped_token(repository, permissions)
+            .ok_or(patchula_github::Error::Configuration)?
+            .await?;
+        Ok(Some(token))
+    }
+    /// Whom a listing under `access` serves. A repository's own listing is
+    /// keyed by the numeric id its token is minted for, so a repository that
+    /// later takes the name never reads it. No token reaches mise off
+    /// github.com, so such a listing is public too.
+    async fn listing_credential_scope(&self, access: &MiseAccess) -> Result<String> {
+        if !self.github.versions_host_eligible() {
+            return Ok(PUBLIC_SCOPE.into());
+        }
+        Ok(match access {
+            MiseAccess::Run => self.github.credential_scope().into(),
+            MiseAccess::Public => PUBLIC_SCOPE.into(),
+            MiseAccess::Repository(repository) => format!(
+                "{}:{}",
+                self.github.credential_scope(),
+                self.github
+                    .scoped_repository_id(repository)
+                    .ok_or(patchula_github::Error::Configuration)?
+                    .await?
+            ),
+        })
+    }
+    async fn mise_scope(
+        &self,
+        lookup: &Lookup,
+        tool: &str,
+        prefix: Option<&str>,
+        access: &MiseAccess,
+    ) -> Result<ListingScope> {
+        Ok(ListingScope {
             tool: tool.into(),
             prefix: prefix.unwrap_or_default().into(),
-            credential_scope: self.github.credential_scope().into(),
+            credential_scope: self.listing_credential_scope(access).await?,
             mise_version: lookup.version().into(),
             versions_host: self.use_versions_host,
-        }
+        })
+    }
+    /// The backend mise picks for `tool`, asked with the token the tool's
+    /// access gives, as its listing is.
+    pub async fn mise_backend(&self, tool: &str) -> Result<String> {
+        let access = self.tool_access(tool)?;
+        let token = self.mise_token(&access).await?;
+        Ok(self.mise_lookup()?.backend(tool, token.as_deref()).await?)
     }
     /// One tool's listing, from the store while fresh and from mise otherwise.
     /// A manual retry skips the stored listing.
     pub async fn mise_releases(&self, tool: &str, prefix: Option<&str>) -> Result<Vec<Release>> {
         patchula_mise::check(tool)?;
         let lookup = self.mise_lookup()?;
-        let scope = self.mise_scope(lookup, tool, prefix);
+        let access = self.tool_access(tool)?;
+        let scope = self.mise_scope(lookup, tool, prefix, &access).await?;
         let now = chrono::Utc::now().timestamp_millis();
         if let Some(saved) = self.fresh_state::<Listing>(&scope).await? {
             return Ok(saved.releases);
         }
-        let token = self.mise_token().await;
+        let token = self.mise_token(&access).await?;
         let releases = lookup
             .ls_remote(&Query {
                 tool,

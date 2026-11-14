@@ -242,7 +242,8 @@ impl Runner {
     /// as Renovate hands its token to tools.
     async fn actions_lock_token(&self, repository: &str) -> Result<ToolToken, String> {
         if let Some(credentials) = &self.credentials
-            && let Some(token) = credentials.scoped_token(repository)
+            && let Some(token) =
+                credentials.scoped_token(repository, patchula_github::Permissions::MetadataRead)
         {
             return Ok(ToolToken {
                 token: token

@@ -1,7 +1,7 @@
 //! GitHub App JWTs and per-installation access tokens. No credentials reach SQLite.
 use crate::{
-    Credentials, Error, Response, Result, Token, Transport, base_headers, join_api,
-    pagination::next_link, valid_api_url,
+    Credentials, Error, Permissions, RepositoryId, Response, Result, Token, Transport,
+    base_headers, join_api, pagination::next_link, valid_api_url,
 };
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
@@ -71,18 +71,12 @@ struct MintScope {
     repository: u64,
     permissions: Permissions,
 }
-/// One exact `permissions` object a scoped mint may request.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Permissions {
-    /// `{"metadata": "read"}` — repository metadata reads only; the token
-    /// reads public repositories as any authenticated caller does.
-    MetadataRead,
-}
 impl MintScope {
     /// The request body this scope mints with.
     fn body(&self) -> Value {
         let permissions = match self.permissions {
             Permissions::MetadataRead => json!({"metadata": "read"}),
+            Permissions::ContentsRead => json!({"contents": "read", "metadata": "read"}),
         };
         json!({"repository_ids": [self.repository], "permissions": permissions})
     }
@@ -348,14 +342,14 @@ impl App {
     fn forget_repository(&self, installation: u64, repository: &str) {
         lock(&self.repository_ids).remove(&(installation, repository.to_ascii_lowercase()));
     }
-    /// `installation`'s token narrowed to `repository`'s numeric id with
-    /// `metadata: read` only: what a lockfile tool gets. The token reads
-    /// the named repository's metadata and public repositories, as any
-    /// authenticated caller does.
+    /// `installation`'s token narrowed to `repository`'s numeric id and
+    /// `permissions`. Beyond them the token reads public repositories, as
+    /// any authenticated caller does.
     async fn scoped_token_at(
         &self,
         installation: u64,
         repository: u64,
+        permissions: Permissions,
         now: i64,
     ) -> Result<Minted> {
         if !valid_id(installation) || !valid_id(repository) {
@@ -366,7 +360,7 @@ impl App {
                 installation,
                 scope: Some(MintScope {
                     repository,
-                    permissions: Permissions::MetadataRead,
+                    permissions,
                 }),
             },
             now,
@@ -382,11 +376,14 @@ impl App {
         &self,
         installation: u64,
         repository: &str,
+        permissions: Permissions,
         now: i64,
     ) -> Result<String> {
         for _ in 0..2 {
             let id = self.repository_id(installation, repository, now).await?;
-            let minted = self.scoped_token_at(installation, id, now).await;
+            let minted = self
+                .scoped_token_at(installation, id, permissions, now)
+                .await;
             let minted = match minted {
                 Ok(minted) => minted,
                 Err(error) => {
@@ -471,13 +468,29 @@ impl Credentials for Installation {
     fn token(&self) -> Token<'_> {
         Box::pin(self.app.token_at(self.id, Utc::now().timestamp()))
     }
-    fn scoped_token(&self, repository: &str) -> Option<Token<'_>> {
+    fn mints_scoped_tokens(&self) -> bool {
+        true
+    }
+    fn repository_id(&self, repository: &str) -> Option<RepositoryId<'_>> {
+        let repository = repository.to_owned();
+        Some(Box::pin(async move {
+            self.app
+                .repository_id(self.id, &repository, Utc::now().timestamp())
+                .await
+        }))
+    }
+    fn scoped_token(&self, repository: &str, permissions: Permissions) -> Option<Token<'_>> {
         let app = self.app.clone();
         let installation = self.id;
         let repository = repository.to_owned();
         Some(Box::pin(async move {
-            app.scoped_token_for(installation, &repository, Utc::now().timestamp())
-                .await
+            app.scoped_token_for(
+                installation,
+                &repository,
+                permissions,
+                Utc::now().timestamp(),
+            )
+            .await
         }))
     }
 }
@@ -618,19 +631,43 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
             .unwrap()
             .timestamp();
-        let first = app.scoped_token_at(10, 42, now).await.unwrap().value;
+        let first = app
+            .scoped_token_at(10, 42, Permissions::MetadataRead, now)
+            .await
+            .unwrap()
+            .value;
         assert_eq!(
-            app.scoped_token_at(10, 42, now + 3479).await.unwrap().value,
+            app.scoped_token_at(10, 42, Permissions::MetadataRead, now + 3479)
+                .await
+                .unwrap()
+                .value,
             first
         );
         assert_eq!(transport.0.load(Ordering::SeqCst), 1);
-        assert_ne!(app.scoped_token_at(10, 43, now).await.unwrap().value, first);
-        assert_ne!(app.token_at(10, now).await.unwrap(), first);
         assert_ne!(
-            app.scoped_token_at(10, 42, now + 3480).await.unwrap().value,
+            app.scoped_token_at(10, 43, Permissions::MetadataRead, now)
+                .await
+                .unwrap()
+                .value,
             first
         );
-        assert_eq!(transport.0.load(Ordering::SeqCst), 4);
+        // The same repository with another permission set is its own mint.
+        assert_ne!(
+            app.scoped_token_at(10, 42, Permissions::ContentsRead, now)
+                .await
+                .unwrap()
+                .value,
+            first
+        );
+        assert_ne!(app.token_at(10, now).await.unwrap(), first);
+        assert_ne!(
+            app.scoped_token_at(10, 42, Permissions::MetadataRead, now + 3480)
+                .await
+                .unwrap()
+                .value,
+            first
+        );
+        assert_eq!(transport.0.load(Ordering::SeqCst), 5);
     }
 
     /// Answers the App metadata and installations endpoints; the second
@@ -771,7 +808,9 @@ mod tests {
             .unwrap()
             .extend([(1, "acme/old".to_owned()), (2, "acme/app".to_owned())]);
         assert_eq!(
-            app.scoped_token_for(10, "Acme/App", now).await.unwrap(),
+            app.scoped_token_for(10, "Acme/App", Permissions::MetadataRead, now)
+                .await
+                .unwrap(),
             "scoped-2"
         );
         // A repository whose mint never names it is refused.
@@ -789,7 +828,9 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            fresh.scoped_token_for(10, "acme/app", now).await,
+            fresh
+                .scoped_token_for(10, "acme/app", Permissions::MetadataRead, now)
+                .await,
             Err(Error::Json)
         ));
     }

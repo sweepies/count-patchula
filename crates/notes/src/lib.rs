@@ -119,7 +119,7 @@ struct ChangelogScope {
 }
 impl State for ParsedChangelog {
     const NAMESPACE: &'static str = "changelog";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
     const CODE_VERSIONED: bool = true;
     type Scope = ChangelogScope;
 }
@@ -333,6 +333,17 @@ impl Client {
             release_bodies: Default::default(),
         }
     }
+    /// This client's mise lookups are made for `repository`, with the access
+    /// its own lookups had; the in-memory note reads stay shared, keyed by
+    /// that access where a mise lookup feeds them.
+    pub fn with_mise_repository(
+        &self,
+        repository: Option<patchula_datasource::MiseRepository>,
+    ) -> Self {
+        let mut client = self.clone();
+        client.sources = client.sources.with_mise_repository(repository);
+        client
+    }
     async fn note_read(
         &self,
         key: &str,
@@ -361,7 +372,13 @@ impl Client {
         id: &PackageId,
         target: &str,
     ) -> Result<Option<Repository>> {
-        let key = serde_json::to_string(&("note-source", id, target))?;
+        // A mise tool's source comes from a listing made with the
+        // repository's access, so only lookups with the same access share it.
+        let access = (id.source == Source::Mise).then(|| {
+            self.sources
+                .mise_access(self.sources.mise_repository(), &id.name)
+        });
+        let key = serde_json::to_string(&("note-source", id, target, access))?;
         let bytes = self
             .note_read(&key, async {
                 Ok(serde_json::to_vec(

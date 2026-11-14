@@ -77,15 +77,26 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   names for them refused before mise starts. A backend prefix mise does not
   know fails in mise, which runs no plugin for it. Nothing installs during a lookup
   (`MISE_AUTO_INSTALL=0`).
-- With the GitHub token he runs with, as `MISE_GITHUB_TOKEN`, only when he
-  talks to github.com, and no other credential: mise's `gh` login, credential
-  command and Git credential helper lookups are off.
+- With a GitHub token as `MISE_GITHUB_TOKEN`, only when he talks to
+  github.com, and no other credential: mise's `gh` login, credential command
+  and Git credential helper lookups are off. As a GitHub App (`patchula serve`,
+  `--all-repos` with App credentials, or an Action run on several
+  repositories) the token is a read-only one he mints for the repository the
+  lookup is for, so a repository's `mise.toml` sees only that repository and
+  public tools, never another private repository the App can read. Release
+  notes for a mise tool look it up the same way. With a
+  personal token, or the token of an Action run on its own repository, mise
+  gets that token.
 - With a three-minute limit per lookup and at most four running at once.
 
 What happens to a listing:
 
-- It is cached for an hour, per tool, token scope and mirror setting. A manual
-  retry, or a failed lookup, asks mise again.
+- It is cached for an hour, per tool, mirror setting and who may see it. A
+  tool released from another repository, or from a package registry, lists
+  public data, which every repository shares. A tool released from the
+  repository itself, or one whose source the Count cannot tell (a `go:` or
+  `http:` tool, say) in a private repository, is listed for that repository
+  alone. A manual retry, or a failed lookup, asks mise again.
 - The Node LTS line comes from `mise ls-remote node lts`. When that listing
   fails or is empty, the catalog stays whole without LTS evidence, so only a
   dependency on the LTS channel reports it.

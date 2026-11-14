@@ -112,6 +112,11 @@ impl Write<'_> {
             .iter()
             .map(|dep| dep.dependency.clone())
             .collect();
+        // Release notes look mise tools up as the repository's own lookups
+        // did, with the same token and listing scope.
+        let note_sources = self
+            .note_sources
+            .with_mise_repository(Engine::mise_repository(work));
         let repo = &mut work.report;
         let since = self.engine.last_run(&repo.repository).await?;
         let mut plans = match self.plans(repo, &config, &dependencies, &snapshot, since) {
@@ -242,7 +247,7 @@ impl Write<'_> {
         // generation, cleanup and publication instead of behind them.
         let notes = lifecycle.as_ref().map(|state| {
             let ranges = state.note_ranges(&plans);
-            let sources = self.note_sources.clone();
+            let sources = note_sources.clone();
             tokio::spawn(async move { sources.prepare_release_notes(&ranges).await })
         });
         if inventory.is_some() {
@@ -283,7 +288,7 @@ impl Write<'_> {
                 let _ = notes.await;
             }
             state
-                .publish_with_sources(&self.engine.github, &self.note_sources, &mut plans)
+                .publish_with_sources(&self.engine.github, &note_sources, &mut plans)
                 .await;
             let settlement = self
                 .settle(repo, &config, inventory, &mut plans, Some(&mut *state))

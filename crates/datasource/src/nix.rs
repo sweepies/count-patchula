@@ -55,7 +55,7 @@ impl Client {
         let resolved = match self.fresh_state::<Resolved>(&scope).await? {
             Some(saved) => saved,
             None => {
-                let token = self.mise_token().await;
+                let token = self.run_tool_token().await;
                 let output = flakes
                     .prefetch(reference, token.as_deref())
                     .await

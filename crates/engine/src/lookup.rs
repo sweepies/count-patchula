@@ -98,6 +98,23 @@ fn listed_ids(
     }
 }
 
+/// For each scoped mise key, the first repository (in batch order) whose
+/// dependency asked for it: the repository its token is minted for.
+pub(crate) fn mise_vias(work: &[Work]) -> MiseVias {
+    let mut vias = MiseVias::new();
+    for repo in work {
+        for dep in &repo.dependencies {
+            if let Some(key) = &dep.needs.catalog_key
+                && key.2 != MiseAccess::Run
+                && let Some(via) = Engine::mise_repository(repo)
+            {
+                vias.entry(key.clone()).or_insert(via);
+            }
+        }
+    }
+    vias
+}
+
 impl Engine {
     /// Stage: discovery — the repositories to scan, their config overrides,
     /// and the hashes the lookup hints are scoped by.
@@ -198,7 +215,15 @@ impl Engine {
             let work: Vec<_> = stream::iter(repos.iter().cloned())
                 .map(|repo| async move {
                     let (scanned, early) = match local {
-                        Some(dir) => (self.scan_local(dir, &repo, override_config).await, None),
+                        Some(dir) => (
+                            self.scan_local(dir, &repo, override_config)
+                                .await
+                                .map(|work| Work {
+                                    local: true,
+                                    ..work
+                                }),
+                            None,
+                        ),
                         None => {
                             // The inventory reads beside the head check,
                             // under the branch prefix an override declares,
@@ -435,7 +460,7 @@ impl Engine {
         let config = repo.config.as_ref();
         // The key and query are kept even without an evaluator: another
         // repository's dependency may have fetched what they share.
-        let catalog_key = Some(self.catalog_key(dep, config));
+        let catalog_key = Some(self.catalog_key(repo, dep));
         let advisory = patchula_lookup::advisory_query(dep);
         let Some(eval) = &repo.evaluator else {
             return Needs {
@@ -693,12 +718,14 @@ impl Engine {
             Ok(merged)
         };
         let fresh_sources = &self.sources.revalidating();
+        let vias = mise_vias(work);
         let (remaining, refs, advisories) = tokio::join!(
             self.age_catalogs(
                 plan.keys.clone(),
                 &plan.waits,
                 &plan.forced,
                 &self.sources,
+                &vias,
                 now
             ),
             self.digests(current_refs, fresh_sources, true, sent),
@@ -784,12 +811,15 @@ impl Engine {
         }
         if !vulnerable.is_empty() {
             self.progress.stage(Stage::Lookup, vulnerable.len());
+            // Promoted lockfile packages may name keys the first pass had not.
+            let vias = mise_vias(work);
             let (fresh, evidence, credentialed) = self
                 .age_catalogs(
                     vulnerable,
                     &BTreeMap::new(),
                     &BTreeSet::new(),
                     &self.sources,
+                    &vias,
                     now,
                 )
                 .await?;
