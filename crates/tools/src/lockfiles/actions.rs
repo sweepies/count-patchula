@@ -1,9 +1,11 @@
-//! `.github/workflows/actions.lock` through `gh actions-lock`, run only
-//! over the edited workflows the lock already lists — Renovate runs the
-//! whole directory, which would let someone else's broken pin hold the
-//! Count's update. `--no-onboard` and `--no-narrow` are never dropped:
-//! the Count adds nothing to the lockfile and rewrites no `uses:` ref it
-//! did not edit.
+//! `.github/workflows/actions.lock` through `gh actions-lock`. An update
+//! runs only over the edited workflows the lock already lists — Renovate
+//! runs the whole directory, which would let someone else's broken pin
+//! hold the Count's update. Lockfile maintenance runs `--relock` over the
+//! whole directory, which advances moved refs and prunes workflows that no
+//! longer exist. `--no-onboard` and `--no-narrow` are never dropped: the
+//! Count adds nothing to the lockfile and rewrites no `uses:` ref it did
+//! not edit.
 use super::*;
 
 /// `gh-actions-lock`'s mise spec: its release assets are bare binaries
@@ -40,27 +42,36 @@ pub(super) static DESCRIPTOR: Tool = Tool {
 struct Report {
     findings: Vec<Finding>,
 }
+/// One finding as the tool's `format.Finding` writes it: `remediation` and
+/// `retryable` are `omitempty`, so absent means empty.
 #[derive(serde::Deserialize)]
 struct Finding {
     category: String,
     severity: String,
     detail: String,
     remediation: Option<String>,
+    #[serde(default)]
     retryable: bool,
     workflow: Option<String>,
 }
 
-/// The entries the regenerated lockfile records: each workflow's
-/// `owner/repo@ref` list, and every entry's resolved commit under
-/// `dependencies:`.
+/// The entries a lockfile records: each workflow's `owner/repo@ref` list,
+/// and every entry's resolved commit under `dependencies:`. The tool
+/// leaves out either map when it is empty (`marshalDeterministic`): a lock
+/// whose listed workflows use no remote action has no `dependencies:`.
 #[derive(serde::Deserialize)]
 struct Written {
+    #[serde(default)]
     workflows: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
     dependencies: BTreeMap<String, WrittenEntry>,
 }
 #[derive(serde::Deserialize)]
 struct WrittenEntry {
     commit: Option<String>,
+    /// The entries a composite action's steps use.
+    #[serde(default)]
+    uses: Vec<String>,
 }
 
 /// What the base lockfile cannot say means it is corrupt or newer than
@@ -90,7 +101,7 @@ fn held(reason: &str, detail: &str) -> Failure {
 /// error the fix run could not have resolved — `ref-changed`, `stale`
 /// and `not-pinned` are what the run rewrites, so the real cause sits
 /// beside them.
-fn classify(stdout: &str) -> Result<Option<String>, String> {
+fn classify(stdout: &str, waiting: &str) -> Result<Option<String>, String> {
     let report: Report = serde_json::from_str(stdout)
         .map_err(|e| format!("unparseable gh-actions-lock findings: {e}"))?;
     let detail = |finding: &Finding| {
@@ -110,7 +121,7 @@ fn classify(stdout: &str) -> Result<Option<String>, String> {
         .find(|finding| blocking(finding) && finding.retryable)
     {
         return Ok(Some(format!(
-            "GitHub was unreachable or rate-limited; the update waits for the next run\n{}",
+            "GitHub was unreachable or rate-limited; {waiting} waits for the next run\n{}",
             detail(finding)
         )));
     }
@@ -161,13 +172,140 @@ fn exit_two(stderr: &str) -> String {
     }
 }
 
+/// One `gh-actions-lock` invocation's captured result.
+struct Outcome {
+    code: u8,
+    stdout: String,
+    stderr: String,
+}
+
+/// What every `gh-actions-lock` invocation of one run shares: the pinned
+/// version, the whitelisted environment with the granted token, and the
+/// scratch directory the shell writes the streams and status to.
+struct Session {
+    version: String,
+    env: Vec<(String, String)>,
+    secrets: Vec<String>,
+    scratch: PathBuf,
+}
+
+impl Session {
+    /// The tool's arguments behind the shell that captures its streams.
+    fn args(flags: &[&str], paths: &[String]) -> Vec<String> {
+        ["-c", SHELL, "gh-actions-lock"]
+            .into_iter()
+            .chain(flags.iter().copied())
+            .map(str::to_owned)
+            .chain(paths.iter().cloned())
+            .collect()
+    }
+    /// Run the tool with `args` from the tree root and read back what the
+    /// shell captured, masked.
+    async fn invoke(
+        &self,
+        runner: &Runner,
+        driver: &Path,
+        root: &Path,
+        args: Vec<String>,
+    ) -> Result<Outcome, Failure> {
+        runner
+            .tool(
+                driver,
+                Invocation {
+                    descriptor: &DESCRIPTOR,
+                    tools: vec![(ACTIONS_LOCK_SPEC.into(), self.version.clone())],
+                    bin: caches::Bin::ActionsLock,
+                    cwd: Some(root.to_path_buf()),
+                    env: self.env.clone(),
+                    credentials: Vec::new(),
+                    secrets: self.secrets.clone(),
+                    public: false,
+                    args,
+                },
+            )
+            .await?;
+        let read = |name: &str| {
+            std::fs::read_to_string(self.scratch.join(name))
+                .map(|text| redact(&self.secrets, &text))
+                .map_err(|e| Failure::Text(e.to_string()))
+        };
+        let code = read("status")?
+            .trim()
+            .parse::<u8>()
+            .map_err(|e| Failure::Text(e.to_string()))?;
+        Ok(Outcome {
+            code,
+            stdout: read("stdout")?,
+            stderr: read("stderr")?,
+        })
+    }
+}
+
 impl Runner {
+    /// The session for `repository`'s run: the pinned version, the token
+    /// granted and masked, `gh` and `git` off the PATH and the tool on
+    /// github.com.
+    async fn actions_session(
+        &self,
+        driver: &Path,
+        root: &Path,
+        repository: &str,
+    ) -> Result<Session, Failure> {
+        let defaults = tool_defaults()?;
+        let version = defaults["tools"][ACTIONS_LOCK_SPEC]
+            .as_str()
+            .ok_or("invalid tool defaults")?
+            .to_owned();
+        // The scratch directory the shell writes the run's streams and
+        // status to, and an empty PATH: `gh` and `git` stay unreachable
+        // whatever the sandbox has, and `GH_HOST` keeps the tool on
+        // github.com anyway.
+        let scratch = driver.join("actions-lock");
+        let empty_path = scratch.join("path");
+        std::fs::create_dir_all(&empty_path).map_err(|e| e.to_string())?;
+        let token = self.actions_lock_token(repository).await?;
+        tracing::info!(kind = ?token.kind, %repository, "actions.lock token granted");
+        let mut env = vec![
+            ("GH_HOST".into(), "github.com".into()),
+            ("GH_REPO".into(), repository.into()),
+            (
+                "GH_ACTIONS_LOCK_REPO_ROOT".into(),
+                root.to_string_lossy().into_owned(),
+            ),
+            ("CI".into(), "false".into()),
+            ("PATH".into(), empty_path.to_string_lossy().into_owned()),
+            (
+                "ACTIONS_LOCK_STDOUT".into(),
+                scratch.join("stdout").to_string_lossy().into_owned(),
+            ),
+            (
+                "ACTIONS_LOCK_STDERR".into(),
+                scratch.join("stderr").to_string_lossy().into_owned(),
+            ),
+            (
+                "ACTIONS_LOCK_STATUS".into(),
+                scratch.join("status").to_string_lossy().into_owned(),
+            ),
+        ];
+        let mut secrets = Vec::new();
+        token.grant(&mut env, &mut secrets);
+        Ok(Session {
+            version,
+            env,
+            secrets,
+            scratch,
+        })
+    }
+
     /// Regenerate the listed workflows' `actions.lock` entries around the
-    /// update's edits, or hold the update with the tool's reason.
+    /// update's edits, or hold the update with the tool's reason. `unread`
+    /// is the workflows and action files the checkout left out for not
+    /// being regular files.
     pub(super) async fn actions_lock(
         &self,
         context: context::Context<'_>,
         work: &Work<'_>,
+        unread: &BTreeSet<String>,
     ) -> Result<(), Failure> {
         let context::Context {
             driver,
@@ -186,9 +324,14 @@ impl Runner {
         // that call an edited in-repository action file through `$/`:
         // the tool locks a `$/` composite's remote `uses:` under each
         // caller, and never a `./` one. Callers are resolved in the
-        // edited tree; what cannot be resolved holds the update.
+        // edited tree; what cannot be resolved holds the update, a file
+        // the checkout left out included: the tool would follow a link
+        // the tree does not hold.
         let keys: BTreeSet<String> = listed.keys().cloned().collect();
         let read = |path: &str| -> Result<Option<String>, String> {
+            if unread.contains(path) {
+                return Err("not a regular file".into());
+            }
             match std::fs::read_to_string(root.join(path)) {
                 Ok(text) => Ok(Some(text)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -218,128 +361,244 @@ impl Runner {
         if scope.is_empty() {
             return Ok(());
         }
-        let defaults = tool_defaults()?;
-        let version = defaults["tools"][ACTIONS_LOCK_SPEC]
-            .as_str()
-            .ok_or("invalid tool defaults")?;
-        // The scratch directory the shell writes the run's streams and
-        // status to, and an empty PATH: `gh` and `git` stay unreachable
-        // whatever the sandbox has, and `GH_HOST` keeps the tool on
-        // github.com anyway.
-        let scratch = driver.join("actions-lock");
-        let empty_path = scratch.join("path");
-        std::fs::create_dir_all(&empty_path).map_err(|e| e.to_string())?;
-        let token = self.actions_lock_token(work.repository).await?;
-        tracing::info!(kind = ?token.kind, repository = %work.repository, "actions.lock token granted");
-        let mut env = vec![
-            ("GH_HOST".into(), "github.com".into()),
-            ("GH_REPO".into(), work.repository.into()),
-            (
-                "GH_ACTIONS_LOCK_REPO_ROOT".into(),
-                root.to_string_lossy().into_owned(),
-            ),
-            ("CI".into(), "false".into()),
-            ("PATH".into(), empty_path.to_string_lossy().into_owned()),
-            (
-                "ACTIONS_LOCK_STDOUT".into(),
-                scratch.join("stdout").to_string_lossy().into_owned(),
-            ),
-            (
-                "ACTIONS_LOCK_STDERR".into(),
-                scratch.join("stderr").to_string_lossy().into_owned(),
-            ),
-            (
-                "ACTIONS_LOCK_STATUS".into(),
-                scratch.join("status").to_string_lossy().into_owned(),
-            ),
-        ];
-        let mut secrets = Vec::new();
-        token.grant(&mut env, &mut secrets);
-        let run = |args: Vec<String>, secrets: Vec<String>| Invocation {
-            descriptor: &DESCRIPTOR,
-            tools: vec![(ACTIONS_LOCK_SPEC.into(), version.into())],
-            bin: caches::Bin::ActionsLock,
-            cwd: Some(root.to_path_buf()),
-            env: env.clone(),
-            credentials: Vec::new(),
-            secrets,
-            public: false,
-            args,
-        };
-        let mut fix = vec![
-            "-c".into(),
-            SHELL.into(),
-            "gh-actions-lock".into(),
-            "--no-interactive".into(),
-            "--no-onboard".into(),
-            "--no-narrow".into(),
-            "--ignore-local-actions".into(),
-            "--json=valid,findings".into(),
-        ];
-        fix.extend(scope.iter().cloned());
-        self.tool(driver, run(fix, secrets.clone())).await?;
-        let code = std::fs::read_to_string(scratch.join("status"))
-            .map_err(|e| e.to_string())?
-            .trim()
-            .parse::<u8>()
-            .map_err(|e| e.to_string())?;
-        let stdout = redact(
-            &secrets,
-            &std::fs::read_to_string(scratch.join("stdout")).map_err(|e| e.to_string())?,
-        );
-        let stderr = redact(
-            &secrets,
-            &std::fs::read_to_string(scratch.join("stderr")).map_err(|e| e.to_string())?,
-        );
-        match code {
-            0 => {}
-            1 => {
-                return Err(match classify(&stdout).map_err(Failure::Text)? {
-                    Some(reason) => Failure::Text(format!("actions.lock: {reason}")),
-                    None => held("blocking findings the fix run did not resolve", &stdout),
-                });
-            }
-            _ => return Err(held(&exit_two(&stderr), "")),
-        }
+        let session = self.actions_session(driver, root, work.repository).await?;
+        let fix = session
+            .invoke(self, driver, root, Session::args(FIX_FLAGS, &scope))
+            .await?;
+        check(&fix, "the update")?;
         // `valid` on stdout is not proof: `--no-onboard` exits 0 while
         // refusing to cover an action. The tool's own coverage check runs
         // offline on the same paths, then the lock is read back against
         // the edit.
-        let mut verify = vec![
-            "-c".into(),
-            SHELL.into(),
-            "gh-actions-lock".into(),
-            "--verify-local".into(),
-            "--ignore-local-actions".into(),
-            "--json".into(),
-        ];
-        verify.extend(scope.iter().cloned());
-        self.tool(driver, run(verify, secrets.clone())).await?;
-        let verified = std::fs::read_to_string(scratch.join("status"))
-            .map_err(|e| e.to_string())?
-            .trim()
-            .parse::<u8>()
-            .map_err(|e| e.to_string())?;
-        if verified != 0 {
-            let stdout = redact(
-                &secrets,
-                &std::fs::read_to_string(scratch.join("stdout")).map_err(|e| e.to_string())?,
-            );
-            let stderr = redact(
-                &secrets,
-                &std::fs::read_to_string(scratch.join("stderr")).map_err(|e| e.to_string())?,
-            );
-            let reason = classify(&stdout)
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| exit_two(&stderr));
-            return Err(held(
-                "an action the lockfile does not list yet; the Count never onboards",
-                &reason,
-            ));
-        }
+        verify(self, &session, driver, root, &scope).await?;
         prove(root, work, &scope, &composites, config)
     }
+
+    /// Lockfile maintenance: `--relock` over the whole workflow directory,
+    /// which advances the refs that moved upstream in the workflows the
+    /// lock lists and prunes listed workflows that no longer exist. It
+    /// never onboards, and it may change nothing but `actions.lock`:
+    /// `before` is the tree as the run found it, and `unread` the
+    /// workflows and action files the checkout left out for not being
+    /// regular files. Answers the moved refs the regenerated lock now
+    /// follows.
+    pub(super) async fn actions_relock(
+        &self,
+        context: context::Context<'_>,
+        work: &Work<'_>,
+        before: &BTreeMap<String, String>,
+        unread: &BTreeSet<String>,
+    ) -> Result<Vec<contract::MovedRef>, Failure> {
+        let context::Context {
+            driver,
+            root,
+            baseline,
+            ..
+        } = context;
+        let Some(base) = baseline.get(contract::ACTIONS_LOCK) else {
+            return Err("actions.lock job without the lockfile".into());
+        };
+        let Some(listed) = contract::actions_lock_workflows(&base.content) else {
+            return Err(corrupt());
+        };
+        // Nothing listed is nothing to relock, and `--no-onboard` would
+        // add nothing.
+        if listed.is_empty() {
+            return Ok(Vec::new());
+        }
+        // What the regenerated lock must list: every listed workflow the
+        // repository still holds. The tool keeps exactly the workflows it
+        // discovers directly under `.github/workflows/`; one the checkout
+        // left out is still the repository's, so a relock that drops it
+        // fails rather than publishes the drop.
+        let kept: BTreeSet<String> = listed
+            .into_keys()
+            .filter(|path| {
+                patchula_manager::roles::github_workflow(path)
+                    && (before.contains_key(path) || unread.contains(path))
+            })
+            .collect();
+        let session = self.actions_session(driver, root, work.repository).await?;
+        let mut flags = FIX_FLAGS.to_vec();
+        flags.insert(flags.len() - 1, "--relock");
+        // No paths: only a whole-directory run prunes deleted workflows.
+        let fix = session
+            .invoke(self, driver, root, Session::args(&flags, &[]))
+            .await?;
+        check(&fix, "maintenance")?;
+        // Workflows and action files stay byte-identical: a narrowing or
+        // migration rewrite is never published by maintenance.
+        let after = collect(root)?;
+        if let Some(path) = before
+            .keys()
+            .chain(after.keys())
+            .find(|path| *path != contract::ACTIONS_LOCK && before.get(*path) != after.get(*path))
+        {
+            return Err(held(
+                "the tool modified a file other than actions.lock",
+                &format!("tool modified unexpected file {path}"),
+            ));
+        }
+        // The tool removes a lockfile it pruned empty. That is the change
+        // only when every workflow the lock listed is gone.
+        let Some(lock) = after.get(contract::ACTIONS_LOCK) else {
+            if kept.is_empty() {
+                return Ok(Vec::new());
+            }
+            return Err(held(
+                "the relock removed the lockfile while workflows it lists remain",
+                &kept.into_iter().collect::<Vec<_>>().join("\n"),
+            ));
+        };
+        let relocked = contract::actions_lock_workflows(lock).ok_or_else(|| {
+            Failure::Text("actions.lock: unparseable regenerated lockfile".into())
+        })?;
+        let relisted: BTreeSet<String> = relocked.into_keys().collect();
+        if relisted != kept {
+            let detail = kept
+                .symmetric_difference(&relisted)
+                .map(|path| {
+                    if kept.contains(path) {
+                        format!("dropped {path}")
+                    } else {
+                        format!("added {path}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(held(
+                "the relock changed which workflows the lockfile lists",
+                &detail,
+            ));
+        }
+        // The tool's own coverage check, offline, over the workflows the
+        // lock lists: an unlisted workflow is not this run's and would
+        // always fail it.
+        let scope: Vec<String> = kept.into_iter().collect();
+        if !scope.is_empty() {
+            verify(self, &session, driver, root, &scope).await?;
+        }
+        moved(&base.content, lock)
+    }
+}
+
+/// The flags every fix run passes; `--json=valid,findings` stays last.
+const FIX_FLAGS: &[&str] = &[
+    "--no-interactive",
+    "--no-onboard",
+    "--no-narrow",
+    "--ignore-local-actions",
+    "--json=valid,findings",
+];
+
+/// A fix run's exit status as the run's verdict: 0 passes, 1 holds with
+/// the finding that names the cause — `waiting` is what waits when GitHub
+/// was unreachable — and anything else holds with the tool's stderr.
+fn check(fix: &Outcome, waiting: &str) -> Result<(), Failure> {
+    match fix.code {
+        0 => Ok(()),
+        1 => Err(
+            match classify(&fix.stdout, waiting).map_err(Failure::Text)? {
+                Some(reason) => Failure::Text(format!("actions.lock: {reason}")),
+                None => held("blocking findings the fix run did not resolve", &fix.stdout),
+            },
+        ),
+        _ => Err(held(&exit_two(&fix.stderr), "")),
+    }
+}
+
+/// `--verify-local` over `scope`: every action ref those workflows hold
+/// has its lock entry, or the run holds — `--no-onboard` exits 0 while
+/// refusing to cover one.
+async fn verify(
+    runner: &Runner,
+    session: &Session,
+    driver: &Path,
+    root: &Path,
+    scope: &[String],
+) -> Result<(), Failure> {
+    let verified = session
+        .invoke(
+            runner,
+            driver,
+            root,
+            Session::args(
+                &["--verify-local", "--ignore-local-actions", "--json"],
+                scope,
+            ),
+        )
+        .await?;
+    if verified.code == 0 {
+        return Ok(());
+    }
+    let reason = classify(&verified.stdout, "the run")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| exit_two(&verified.stderr));
+    Err(held(
+        "an action the lockfile does not list yet; the Count never onboards",
+        &reason,
+    ))
+}
+
+/// The refs a `--relock` advanced: every entry both locks hold whose
+/// commit changed, under each workflow the regenerated lock reaches it
+/// from through `workflows:` and the composites' `uses:`. The lock, not
+/// the run's `ref-moved` findings, is the record: the tool reports a
+/// finding for a moved direct ref but not for one inside a composite,
+/// which it re-pins with the composite's whole closure.
+fn moved(base: &str, lock: &str) -> Result<Vec<contract::MovedRef>, Failure> {
+    let read = |text: &str| -> Result<Written, Failure> {
+        serde_yaml_ng::from_str(text)
+            .map_err(|e| Failure::Text(format!("actions.lock: unparseable lockfile: {e}")))
+    };
+    let canonical = |key: &str| contract::actions_lock_pin(key).unwrap_or_else(|| key.to_owned());
+    let commits = |written: &Written| -> BTreeMap<String, String> {
+        written
+            .dependencies
+            .iter()
+            .filter_map(|(key, entry)| {
+                let commit = entry.commit.as_deref()?;
+                let commit = commit.strip_prefix("sha1-").unwrap_or(commit);
+                Some((canonical(key), commit.to_ascii_lowercase()))
+            })
+            .collect()
+    };
+    let (base, lock) = (read(base)?, read(lock)?);
+    let (before, after) = (commits(&base), commits(&lock));
+    let uses: BTreeMap<String, Vec<String>> = lock
+        .dependencies
+        .iter()
+        .map(|(key, entry)| {
+            (
+                canonical(key),
+                entry.uses.iter().map(|u| canonical(u)).collect(),
+            )
+        })
+        .collect();
+    let mut moved = BTreeSet::new();
+    for (workflow, roots) in &lock.workflows {
+        let mut reached = BTreeSet::new();
+        let mut queue: Vec<String> = roots.iter().map(|root| canonical(root)).collect();
+        while let Some(key) = queue.pop() {
+            if reached.insert(key.clone()) {
+                queue.extend(uses.get(&key).into_iter().flatten().cloned());
+            }
+        }
+        for key in reached {
+            if let (Some(from), Some(to)) = (before.get(&key), after.get(&key))
+                && from != to
+            {
+                moved.insert(contract::MovedRef {
+                    workflow: workflow.clone(),
+                    dependency: key,
+                    from: from.clone(),
+                    to: to.clone(),
+                });
+            }
+        }
+    }
+    Ok(moved.into_iter().collect())
 }
 
 /// The lock the tool wrote names every step-level `uses:` in the files

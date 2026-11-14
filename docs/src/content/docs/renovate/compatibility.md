@@ -138,7 +138,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | `uv.lock`, `poetry.lock` | yes |
 | `packages.lock.json`, `Gemfile.lock`, `composer.lock` | yes |
 | `mise.lock`, `flake.lock`, `apm.lock.yaml` | yes |
-| `actions.lock` | yes, for workflows the lockfile already lists |
+| `actions.lock` | yes, for workflows the lockfile already lists; lockfile maintenance relocks moved refs |
 | `bun.lockb`, `Chart.lock`, `gradle.lockfile`, `Pipfile.lock`, `pdm.lock`, `pylock.toml` | no; updates beside them hold as lockfile-pending |
 
 ## Options and features

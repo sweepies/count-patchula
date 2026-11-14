@@ -6,7 +6,7 @@ use patchula_update::maintenance::{
     MaintenanceSuccess, maintenance, record_refresh, refresh_scope,
 };
 use patchula_update::testing::Draft;
-use patchula_update::{Blob, Plan, Snapshot, blob_sha};
+use patchula_update::{Blob, Hold, Plan, Snapshot, blob_sha};
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 /// One plan through the batch entry point, as the engine calls it.
@@ -87,6 +87,9 @@ struct ActionsRun {
     /// The `.github/workflows/actions.lock` text the run writes; `None`
     /// leaves the file as the checkout left it.
     lock: Option<String>,
+    /// Whether the run removes `actions.lock`, as the tool does when it
+    /// prunes the lockfile empty.
+    removes_lock: bool,
     /// Other tree writes, for a run that must be rejected.
     extra: Vec<(String, String)>,
 }
@@ -374,6 +377,9 @@ impl Executor for Fixture {
                     .unwrap();
                 if let Some(lock) = &answer.lock {
                     write(&root, contract::ACTIONS_LOCK, lock).unwrap();
+                }
+                if answer.removes_lock {
+                    std::fs::remove_file(root.join(contract::ACTIONS_LOCK)).unwrap();
                 }
                 for (path, content) in &answer.extra {
                     write(&root, path, content).unwrap();
@@ -7764,6 +7770,7 @@ async fn an_action_update_carries_the_regenerated_lock() {
                 stdout: "{\"valid\":true,\"findings\":[]}".into(),
                 stderr: String::new(),
                 lock: Some(new_lock.clone()),
+                removes_lock: false,
                 extra: Vec::new(),
             },
             ActionsRun {
@@ -7771,6 +7778,7 @@ async fn an_action_update_carries_the_regenerated_lock() {
                 stdout: "{}".into(),
                 stderr: String::new(),
                 lock: None,
+                removes_lock: false,
                 extra: Vec::new(),
             },
         ],
@@ -8139,6 +8147,7 @@ async fn blocking_findings_hold_the_update() {
                 stdout: findings.clone(),
                 stderr: String::new(),
                 lock: None,
+                removes_lock: false,
                 extra: Vec::new(),
             }],
         );
@@ -8194,6 +8203,7 @@ async fn a_tool_failure_names_the_hold() {
                 stdout: String::new(),
                 stderr: stderr.into(),
                 lock: None,
+                removes_lock: false,
                 extra: Vec::new(),
             }],
         );
@@ -8277,6 +8287,7 @@ async fn a_valid_report_still_verifies_locally() {
                 stdout: "{\"valid\":true,\"findings\":[]}".into(),
                 stderr: String::new(),
                 lock: Some(new_lock),
+                removes_lock: false,
                 extra: Vec::new(),
             },
             ActionsRun {
@@ -8284,6 +8295,7 @@ async fn a_valid_report_still_verifies_locally() {
                 stdout: "{\"findings\":[{\"category\":\"not-pinned\",\"severity\":\"error\",\"detail\":\"uses is not locked\",\"retryable\":false}]}".into(),
                 stderr: String::new(),
                 lock: None,
+                removes_lock: false,
                 extra: Vec::new(),
             },
         ],
@@ -8321,7 +8333,22 @@ async fn actions_prepared(
     edits: &[(&str, String)],
     runs: Vec<ActionsRun>,
 ) -> (Plan, Vec<Vec<String>>) {
-    let executor = fixture_actions_runs(files.clone(), runs);
+    actions_prepared_with(files, &[], edits, runs).await
+}
+
+/// `actions_prepared` over a tree whose `modes` entries ls-tree advertises
+/// with that mode and type instead of a regular blob.
+async fn actions_prepared_with(
+    files: &BTreeMap<String, String>,
+    modes: &[(&str, &str)],
+    edits: &[(&str, String)],
+    runs: Vec<ActionsRun>,
+) -> (Plan, Vec<Vec<String>>) {
+    let mut executor = fixture_actions_runs(files.clone(), runs);
+    Arc::get_mut(&mut executor).unwrap().modes = modes
+        .iter()
+        .map(|(path, mode)| ((*path).to_owned(), (*mode).to_owned()))
+        .collect();
     let temp = tempfile::tempdir().unwrap();
     let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
         .with_executor(executor.clone());
@@ -8350,6 +8377,7 @@ fn actions_clean(lock: &str) -> Vec<ActionsRun> {
             stdout: "{\"valid\":true,\"findings\":[]}".into(),
             stderr: String::new(),
             lock: Some(lock.to_owned()),
+            removes_lock: false,
             extra: Vec::new(),
         },
         ActionsRun {
@@ -8357,6 +8385,7 @@ fn actions_clean(lock: &str) -> Vec<ActionsRun> {
             stdout: "{}".into(),
             stderr: String::new(),
             lock: None,
+            removes_lock: false,
             extra: Vec::new(),
         },
     ]
@@ -8570,6 +8599,7 @@ async fn a_write_beside_the_lock_is_rejected() {
             stdout: "{}".into(),
             stderr: String::new(),
             lock: Some("version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7.0.1'\ndependencies:\n    'actions/checkout@v7.0.1':\n        ref: 'v7.0.1'\n        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'\n".into()),
+            removes_lock: false,
             extra: vec![(".github/workflows/ci.yml.orig".into(), "orig\n".into())],
         }],
     );
@@ -8618,6 +8648,7 @@ async fn the_token_never_reaches_a_reason() {
             stdout: String::new(),
             stderr: "authorization failed for offline-installation\n".into(),
             lock: None,
+            removes_lock: false,
             extra: Vec::new(),
         }],
     );
@@ -8663,6 +8694,7 @@ async fn an_unchanged_lock_is_not_a_failure() {
                 stdout: "{}".into(),
                 stderr: String::new(),
                 lock: Some(lock.clone()),
+                removes_lock: false,
                 extra: Vec::new(),
             },
             ActionsRun {
@@ -8670,6 +8702,7 @@ async fn an_unchanged_lock_is_not_a_failure() {
                 stdout: "{}".into(),
                 stderr: String::new(),
                 lock: None,
+                removes_lock: false,
                 extra: Vec::new(),
             },
         ],
@@ -8690,6 +8723,725 @@ async fn an_unchanged_lock_is_not_a_failure() {
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
     assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
     assert_eq!(p.contents()[contract::ACTIONS_LOCK], lock);
+}
+
+/// `actions/checkout@v7` as a lock records it under `ci.yml`, at `commit`.
+fn relock_lock(commit: &str) -> String {
+    format!(
+        "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7'\ndependencies:\n    'actions/checkout@v7':\n        ref: 'v7'\n        commit: 'sha1-{commit}'\n"
+    )
+}
+const RELOCK_FROM: &str = "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0";
+const RELOCK_TO: &str = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+
+/// A repository with a listed `ci.yml` on `actions/checkout@v7`, an
+/// unlisted `release.yml`, and the lock at `RELOCK_FROM`.
+fn relock_files() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7"),
+        ),
+        (
+            ".github/workflows/release.yml".into(),
+            actions_workflow("actions/setup-node@v6"),
+        ),
+        (contract::ACTIONS_LOCK.into(), relock_lock(RELOCK_FROM)),
+    ])
+}
+
+/// The `--json=valid,findings` a relock that advanced `actions/checkout@v7`
+/// prints: the `ref-moved` warning as the tool words it.
+fn ref_moved_stdout() -> String {
+    serde_json::json!({
+        "valid": true,
+        "findings": [{
+            "workflow": ".github/workflows/ci.yml",
+            "category": "ref-moved",
+            "severity": "warning",
+            "confidence": "high",
+            "dependency": "actions/checkout@v7",
+            "detail": "ref v7 now resolves to 3d3c42e, lockfile pins 9c091bb",
+            "remediation": "run `gh actions-lock --relock` to refresh the lock entry"
+        }]
+    })
+    .to_string()
+}
+
+/// One maintenance plan over `files`, the fake tool answering `runs` in
+/// order: the plan, the report warnings the run gave, every
+/// `gh-actions-lock` invocation's arguments, and its environment.
+async fn relock_prepared(
+    files: &BTreeMap<String, String>,
+    runs: Vec<ActionsRun>,
+) -> (
+    Plan,
+    Vec<String>,
+    Vec<Vec<String>>,
+    Vec<BTreeMap<std::ffi::OsString, std::ffi::OsString>>,
+) {
+    relock_prepared_with(files, &[], runs).await
+}
+
+/// `relock_prepared` over a tree whose `modes` entries ls-tree advertises
+/// with that mode and type instead of a regular blob.
+async fn relock_prepared_with(
+    files: &BTreeMap<String, String>,
+    modes: &[(&str, &str)],
+    runs: Vec<ActionsRun>,
+) -> (
+    Plan,
+    Vec<String>,
+    Vec<Vec<String>>,
+    Vec<BTreeMap<std::ffi::OsString, std::ffi::OsString>>,
+) {
+    let mut executor = fixture_actions_runs(files.clone(), runs);
+    Arc::get_mut(&mut executor).unwrap().modes = modes
+        .iter()
+        .map(|(path, mode)| ((*path).to_owned(), (*mode).to_owned()))
+        .collect();
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(executor.clone());
+    let mut snap = snapshot(files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snap, &[], None, monday())
+        .unwrap()
+        .unwrap();
+    assert!(
+        p.lock_jobs()
+            .iter()
+            .any(|job| job.ecosystem == Ecosystem::Actions),
+        "{:?}",
+        p.lock_jobs()
+    );
+    let warnings = patchula_update::lock_all(
+        &runner,
+        std::slice::from_mut(&mut p),
+        &mut snap,
+        &config,
+        &|| {},
+    )
+    .await;
+    let calls = executor.calls.lock().unwrap().clone();
+    let envs = executor.envs.lock().unwrap().clone();
+    let (runs, envs) = calls
+        .into_iter()
+        .zip(envs)
+        .filter(|(args, _)| args.iter().any(|arg| arg == "/bin/sh"))
+        .unzip();
+    (p, warnings, runs, envs)
+}
+
+/// A clean relock that writes `lock` and prints `stdout`, then a clean
+/// `--verify-local`.
+fn relock_clean(stdout: &str, lock: Option<&str>) -> Vec<ActionsRun> {
+    vec![
+        ActionsRun {
+            code: 0,
+            stdout: stdout.to_owned(),
+            stderr: String::new(),
+            lock: lock.map(str::to_owned),
+            removes_lock: false,
+            extra: Vec::new(),
+        },
+        ActionsRun {
+            code: 0,
+            stdout: "{\"valid\":true,\"findings\":[]}".into(),
+            stderr: String::new(),
+            lock: None,
+            removes_lock: false,
+            extra: Vec::new(),
+        },
+    ]
+}
+
+/// Maintenance relocks the whole workflow directory: `--relock` with the
+/// fix run's flags and no paths, the token granted as `GH_TOKEN`, never
+/// `--accept-moved` or `--migrate-local-actions`. The proof is
+/// `--verify-local` over the workflows the regenerated lock lists — not
+/// the unlisted `release.yml`, which it would always fail — and the
+/// commit holds `actions.lock` alone, with the moved ref recorded for the
+/// pull request body.
+#[tokio::test]
+async fn maintenance_relocks_the_whole_workflow_directory() {
+    let lock = relock_lock(RELOCK_TO);
+    let (p, warnings, runs, envs) = relock_prepared(
+        &relock_files(),
+        relock_clean(&ref_moved_stdout(), Some(&lock)),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    let (fix, verify) = (&runs[0], &runs[1]);
+    for flag in [
+        "--no-interactive",
+        "--no-onboard",
+        "--no-narrow",
+        "--ignore-local-actions",
+        "--relock",
+        "--json=valid,findings",
+    ] {
+        assert!(fix.contains(&flag.to_owned()), "{fix:?}");
+    }
+    for flag in ["--accept-moved", "--migrate-local-actions"] {
+        assert!(!fix.contains(&flag.to_owned()), "{fix:?}");
+    }
+    assert!(
+        !fix.iter()
+            .any(|arg| arg.ends_with(".yml") || arg.ends_with(".yaml")),
+        "{fix:?}"
+    );
+    assert!(verify.contains(&"--verify-local".to_owned()), "{verify:?}");
+    let paths: Vec<&String> = verify.iter().filter(|arg| arg.ends_with(".yml")).collect();
+    assert_eq!(paths, [".github/workflows/ci.yml"], "{verify:?}");
+    for env in &envs {
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("GH_TOKEN")),
+            Some(&std::ffi::OsString::from("offline-installation"))
+        );
+    }
+    let written: Vec<&str> = p.action().files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(written, [contract::ACTIONS_LOCK]);
+    assert_eq!(p.contents()[contract::ACTIONS_LOCK], lock);
+    assert_eq!(
+        p.moved_refs(),
+        [contract::MovedRef {
+            workflow: ".github/workflows/ci.yml".into(),
+            dependency: "actions/checkout@v7".into(),
+            from: RELOCK_FROM.into(),
+            to: RELOCK_TO.into(),
+        }]
+    );
+}
+
+/// The moved refs are what the lock records as changed: an entry both
+/// locks hold whose commit moved, under every listed workflow that reaches
+/// it, directly or through a composite's `uses:`. An entry whose commit
+/// stayed, or one only the new lock holds, did not move.
+#[tokio::test]
+async fn moved_refs_follow_the_lock_through_composites() {
+    let lock = |setup_go: &str| {
+        format!(
+            "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'octo/setup@v1'\n    '.github/workflows/release.yml':\n        - 'actions/checkout@v7'\n        - 'actions/setup-go@v5'\ndependencies:\n    'actions/checkout@v7':\n        ref: 'v7'\n        commit: 'sha1-{RELOCK_TO}'\n    'actions/setup-go@v5':\n        ref: 'v5'\n        commit: 'sha1-{setup_go}'\n    'octo/setup@v1':\n        ref: 'v1'\n        commit: 'sha1-{}'\n        uses:\n            - 'actions/setup-go@v5'\n",
+            "f".repeat(40)
+        )
+    };
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("octo/setup@v1"),
+        ),
+        (
+            ".github/workflows/release.yml".into(),
+            actions_workflow("actions/checkout@v7"),
+        ),
+        (contract::ACTIONS_LOCK.into(), lock(&"a".repeat(40))),
+    ]);
+    let (p, _, _, _) = relock_prepared(
+        &files,
+        relock_clean(
+            "{\"valid\":true,\"findings\":[]}",
+            Some(&lock(&"b".repeat(40))),
+        ),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let moved = |workflow: &str| contract::MovedRef {
+        workflow: workflow.into(),
+        dependency: "actions/setup-go@v5".into(),
+        from: "a".repeat(40),
+        to: "b".repeat(40),
+    };
+    assert_eq!(
+        p.moved_refs(),
+        [
+            moved(".github/workflows/ci.yml"),
+            moved(".github/workflows/release.yml")
+        ]
+    );
+}
+
+/// A current lock relocks to the same bytes: no diff, so no maintenance
+/// change and no moved refs.
+#[tokio::test]
+async fn a_current_lock_makes_no_maintenance_change() {
+    let (p, warnings, runs, _) = relock_prepared(
+        &relock_files(),
+        relock_clean("{\"valid\":true,\"findings\":[]}", None),
+    )
+    .await;
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(p.held(&Hold::LockfilesCurrent), "{:?}", p.action());
+    assert!(p.action().files.is_empty(), "{:?}", p.action());
+    assert!(p.moved_refs().is_empty());
+}
+
+/// A relock is classified as an update run is: a retryable finding waits
+/// for the next run, a blocking one — an `unreachable-pin` in any listed
+/// workflow — fails with its category and detail, a tool failure with its
+/// stderr's last line, and a lockfile the strict reader refuses starts no
+/// run. With nothing else to publish the failure is the branch's.
+#[tokio::test]
+async fn relock_failures_are_classified_as_update_runs_are() {
+    let finding = |category: &str, retryable: bool| {
+        serde_json::json!({
+            "valid": false,
+            "findings": [{
+                "workflow": ".github/workflows/ci.yml",
+                "category": category,
+                "severity": "error",
+                "dependency": "actions/checkout@v7",
+                "detail": format!("{category} detail"),
+                "retryable": retryable
+            }]
+        })
+        .to_string()
+    };
+    for (stdout, stderr, code, want) in [
+        (
+            finding("reachability-unknown", true),
+            String::new(),
+            1,
+            "GitHub was unreachable or rate-limited; maintenance waits for the next run",
+        ),
+        (
+            finding("unreachable-pin", false),
+            String::new(),
+            1,
+            "a pin is no longer in upstream history\nunreachable-pin: unreachable-pin detail",
+        ),
+        (
+            String::new(),
+            "Error: lockfile version v0.0.9 is newer than this gh-actions-lock understands\n"
+                .into(),
+            2,
+            "a corrupt or newer lockfile: Error: lockfile version v0.0.9",
+        ),
+    ] {
+        let (p, _, runs, _) = relock_prepared(
+            &relock_files(),
+            vec![ActionsRun {
+                code,
+                stdout,
+                stderr,
+                lock: None,
+                removes_lock: false,
+                extra: Vec::new(),
+            }],
+        )
+        .await;
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+        let reason = p.action().reason.clone().unwrap();
+        assert!(reason.contains(want), "{reason}");
+    }
+    // A lockfile the strict reader refuses is corrupt before any run.
+    let mut files = relock_files();
+    files.insert(contract::ACTIONS_LOCK.into(), "workflows: [broken\n".into());
+    let (p, _, runs, _) = relock_prepared(&files, relock_clean("{}", None)).await;
+    assert!(runs.is_empty(), "{runs:?}");
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("a corrupt or newer lockfile")),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// Maintenance changes nothing but `actions.lock`: a relock that rewrote
+/// a workflow fails the job, and the workflow is published as it was.
+#[tokio::test]
+async fn a_relock_that_rewrites_a_workflow_fails() {
+    let (p, _, _, _) = relock_prepared(
+        &relock_files(),
+        vec![ActionsRun {
+            code: 0,
+            stdout: ref_moved_stdout(),
+            stderr: String::new(),
+            lock: Some(relock_lock(RELOCK_TO)),
+            removes_lock: false,
+            extra: vec![(
+                ".github/workflows/ci.yml".into(),
+                actions_workflow("actions/checkout@v7.0.1"),
+            )],
+        }],
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(
+        p.action()
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("unexpected file .github/workflows/ci.yml")),
+        "{:?}",
+        p.action().reason
+    );
+}
+
+/// A failed relock holds only itself: the repository's other maintenance
+/// jobs still publish, the tree goes back to what they left — a lock or
+/// workflow the relock rewrote is not carried — and the reason is a report
+/// warning instead.
+#[tokio::test]
+async fn a_failed_relock_holds_no_other_maintenance_job() {
+    let mut files = relock_files();
+    files.insert("go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into());
+    files.insert("go.sum".into(), "{}\n".into());
+    // The tool omits `retryable` when false, as `format.Finding` does.
+    for (run, want) in [
+        (
+            ActionsRun {
+                code: 1,
+                stdout: serde_json::json!({
+                    "valid": false,
+                    "findings": [{
+                        "workflow": ".github/workflows/ci.yml",
+                        "category": "unreachable-pin",
+                        "severity": "error",
+                        "detail": "pin gone"
+                    }]
+                })
+                .to_string(),
+                stderr: String::new(),
+                lock: None,
+                removes_lock: false,
+                extra: Vec::new(),
+            },
+            "actions.lock: a pin is no longer in upstream history",
+        ),
+        (
+            ActionsRun {
+                code: 0,
+                stdout: ref_moved_stdout(),
+                stderr: String::new(),
+                lock: Some(relock_lock(RELOCK_TO)),
+                removes_lock: false,
+                extra: vec![(
+                    ".github/workflows/ci.yml".into(),
+                    actions_workflow("actions/checkout@v7.0.1"),
+                )],
+            },
+            "tool modified unexpected file .github/workflows/ci.yml",
+        ),
+    ] {
+        let (p, warnings, _, _) = relock_prepared(&files, vec![run]).await;
+        assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+        let written: Vec<&str> = p.action().files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(written, ["go.sum"], "{written:?}");
+        assert!(p.moved_refs().is_empty());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains(want), "{warnings:?}");
+    }
+}
+
+/// Output quoting the granted token never reaches a maintenance reason.
+#[tokio::test]
+async fn the_token_never_reaches_a_relock_reason() {
+    let (p, _, _, _) = relock_prepared(
+        &relock_files(),
+        vec![ActionsRun {
+            code: 2,
+            stdout: String::new(),
+            stderr: "authorization failed for offline-installation\n".into(),
+            lock: None,
+            removes_lock: false,
+            extra: Vec::new(),
+        }],
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.clone().unwrap();
+    assert!(!reason.contains("offline-installation"), "{reason}");
+}
+
+/// The tool leaves `dependencies:` out of a lock whose listed workflows
+/// use no remote action. Such a lock relocks to itself: no change, and no
+/// failure reading it back.
+#[tokio::test]
+async fn a_lock_without_dependencies_relocks_cleanly() {
+    let lock = "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/lint.yml': []\n";
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/lint.yml".into(),
+            "name: lint\non: push\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n".into(),
+        ),
+        (contract::ACTIONS_LOCK.into(), lock.into()),
+    ]);
+    let (p, warnings, runs, _) = relock_prepared(
+        &files,
+        relock_clean("{\"valid\":true,\"findings\":[]}", None),
+    )
+    .await;
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(p.held(&Hold::LockfilesCurrent), "{:?}", p.action());
+    assert!(p.moved_refs().is_empty());
+}
+
+/// The run's error for a `$/` action file the tool cannot inspect, as
+/// `diagnose` words it.
+fn self_repository_stdout() -> String {
+    serde_json::json!({
+        "valid": false,
+        "findings": [{
+            "workflow": ".github/workflows/ci.yml",
+            "category": "invalid-self-repository-ref",
+            "severity": "error",
+            "detail": "can't inspect self repository action $/.github/actions/setup: no action.yml",
+            "remediation": "fix the `$/…` action path so its dependencies can be inspected"
+        }]
+    })
+    .to_string()
+}
+
+/// An action file or workflow that is a link, which only the Actions tool
+/// reads, stays out of the checkout instead of failing it: the relock
+/// fails on the missing file with the tool's reason, and the repository's
+/// other maintenance jobs still publish.
+#[tokio::test]
+async fn a_linked_action_file_holds_only_the_relock() {
+    let mut files = relock_files();
+    files.insert("go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into());
+    files.insert("go.sum".into(), "{}\n".into());
+    files.insert(
+        ".github/actions/setup/action.yml".into(),
+        "../../shared/action.yml".into(),
+    );
+    let (p, warnings, runs, _) = relock_prepared_with(
+        &files,
+        &[(".github/actions/setup/action.yml", "120000 blob")],
+        vec![ActionsRun {
+            code: 1,
+            stdout: self_repository_stdout(),
+            stderr: String::new(),
+            lock: None,
+            removes_lock: false,
+            extra: Vec::new(),
+        }],
+    )
+    .await;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let written: Vec<&str> = p.action().files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(written, ["go.sum"], "{written:?}");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("invalid-self-repository-ref"),
+        "{warnings:?}"
+    );
+    // A listed workflow that is a link is still the repository's: the
+    // tool, not finding it, prunes it, and the drop is refused.
+    let (p, warnings, _, _) = relock_prepared_with(
+        &files,
+        &[(".github/workflows/ci.yml", "120000 blob")],
+        vec![ActionsRun {
+            code: 0,
+            stdout: "{\"valid\":true,\"findings\":[]}".into(),
+            stderr: String::new(),
+            lock: None,
+            removes_lock: true,
+            extra: Vec::new(),
+        }],
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let written: Vec<&str> = p.action().files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(written, ["go.sum"], "{written:?}");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("the relock removed the lockfile while workflows it lists remain"),
+        "{warnings:?}"
+    );
+}
+
+/// The update path over the same tree: a link the update does not edit
+/// stays out of the checkout, and the update is held with the tool's
+/// reason. A `$/` walk for an edited composite that reaches the link
+/// cannot say which workflows the tool relocks, so it holds before any
+/// run.
+#[tokio::test]
+async fn a_linked_action_file_holds_the_update_with_a_reason() {
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            ".github/actions/setup/action.yml".into(),
+            "../../shared/action.yml".into(),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml"]),
+        ),
+    ]);
+    let link = [(".github/actions/setup/action.yml", "120000 blob")];
+    let (p, runs) = actions_prepared_with(
+        &files,
+        &link,
+        &[(
+            ".github/workflows/ci.yml",
+            actions_workflow("actions/checkout@v7.0.1"),
+        )],
+        vec![ActionsRun {
+            code: 1,
+            stdout: self_repository_stdout(),
+            stderr: String::new(),
+            lock: None,
+            removes_lock: false,
+            extra: Vec::new(),
+        }],
+    )
+    .await;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.clone().unwrap();
+    assert!(reason.contains("invalid-self-repository-ref"), "{reason}");
+    // An edited composite whose callers' walk reaches the link.
+    let composite =
+        |step: &str| format!("name: a\nruns:\n  using: composite\n  steps:\n    - uses: {step}\n");
+    let mut files = files;
+    files.insert(
+        ".github/workflows/ci.yml".into(),
+        actions_workflow("$/.github/actions/setup"),
+    );
+    files.insert(
+        ".github/actions/build/action.yml".into(),
+        composite("actions/checkout@v7.0.0"),
+    );
+    let (p, runs) = actions_prepared_with(
+        &files,
+        &link,
+        &[(
+            ".github/actions/build/action.yml",
+            composite("actions/checkout@v7.0.1"),
+        )],
+        actions_clean("version: 'v0.0.3'\n"),
+    )
+    .await;
+    assert!(runs.is_empty(), "{runs:?}");
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.clone().unwrap();
+    assert!(
+        reason.contains(".github/actions/setup/action.yml: not a regular file"),
+        "{reason}"
+    );
+}
+
+/// When every workflow the lock lists is gone, the relock prunes them all
+/// and the tool removes the lockfile: the maintenance change is that
+/// removal. While a listed workflow remains, a removed lockfile fails the
+/// job.
+#[tokio::test]
+async fn a_relock_that_prunes_every_listed_workflow_removes_the_lock() {
+    let mut files = relock_files();
+    files.remove(".github/workflows/ci.yml");
+    let removes = |stdout: &str| ActionsRun {
+        code: 0,
+        stdout: stdout.to_owned(),
+        stderr: String::new(),
+        lock: None,
+        removes_lock: true,
+        extra: Vec::new(),
+    };
+    let (p, warnings, runs, _) =
+        relock_prepared(&files, vec![removes("{\"valid\":true,\"findings\":[]}")]).await;
+    // Nothing is left to verify.
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let written: Vec<&str> = p.action().files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(written, [contract::ACTIONS_LOCK]);
+    assert!(
+        p.deleted().contains(contract::ACTIONS_LOCK),
+        "{:?}",
+        p.deleted()
+    );
+    assert!(p.moved_refs().is_empty());
+    // `ci.yml` is still there.
+    let (p, _, _, _) = relock_prepared(
+        &relock_files(),
+        vec![removes("{\"valid\":true,\"findings\":[]}")],
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let reason = p.action().reason.clone().unwrap();
+    assert!(
+        reason.contains("the relock removed the lockfile while workflows it lists remain"),
+        "{reason}"
+    );
+    assert!(reason.contains(".github/workflows/ci.yml"), "{reason}");
+}
+
+/// The regenerated lock must list exactly the listed workflows the
+/// repository still holds: a relock may drop a deleted one, never one
+/// that exists, and never add one. The proof scope is that set, not what
+/// the tool wrote.
+#[tokio::test]
+async fn a_relock_may_drop_only_deleted_workflows() {
+    let lock = |workflows: &[&str], commit: &str| {
+        let mut text = "version: 'v0.0.3'\nworkflows:\n".to_owned();
+        for workflow in workflows {
+            text.push_str(&format!(
+                "    '{workflow}':\n        - 'actions/checkout@v7'\n"
+            ));
+        }
+        text.push_str(&format!(
+            "dependencies:\n    'actions/checkout@v7':\n        ref: 'v7'\n        commit: 'sha1-{commit}'\n"
+        ));
+        text
+    };
+    let (ci, lint, gone, release) = (
+        ".github/workflows/ci.yml",
+        ".github/workflows/lint.yml",
+        ".github/workflows/gone.yml",
+        ".github/workflows/release.yml",
+    );
+    let mut files = relock_files();
+    files.insert(lint.into(), actions_workflow("actions/checkout@v7"));
+    files.insert(
+        contract::ACTIONS_LOCK.into(),
+        lock(&[ci, gone, lint], RELOCK_FROM),
+    );
+    for (relocked, dropped) in [
+        (lock(&[ci], RELOCK_TO), format!("dropped {lint}")),
+        (
+            lock(&[ci, lint, release], RELOCK_TO),
+            format!("added {release}"),
+        ),
+    ] {
+        let (p, _, runs, _) = relock_prepared(
+            &files,
+            relock_clean("{\"valid\":true,\"findings\":[]}", Some(&relocked)),
+        )
+        .await;
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+        let reason = p.action().reason.clone().unwrap();
+        assert!(
+            reason.contains("the relock changed which workflows the lockfile lists"),
+            "{reason}"
+        );
+        assert!(reason.contains(&dropped), "{reason}");
+    }
+    // Dropping the deleted `gone.yml` is the relock's to do, and the
+    // proof covers the two that remain.
+    let relocked = lock(&[ci, lint], RELOCK_TO);
+    let (p, _, runs, _) = relock_prepared(
+        &files,
+        relock_clean("{\"valid\":true,\"findings\":[]}", Some(&relocked)),
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    let paths: Vec<&String> = runs[1].iter().filter(|arg| arg.ends_with(".yml")).collect();
+    assert_eq!(paths, [ci, lint], "{runs:?}");
 }
 
 /// The pinned tool end to end over a `$/` composite: `ci.yml` calls
@@ -8801,5 +9553,135 @@ async fn real_actions_lock_run_regenerates_the_listed_lock() {
         "{:?}",
         p.contents()
     );
+    proxy.assert_finished();
+}
+
+/// The header `gh actions-lock` writes above every lock.
+const LOCK_HEADER: &str = "# This file is machine-generated by `gh actions-lock`.\n# Do not edit by hand; run `gh actions-lock` to update.\n# Docs: https://gh.io/actions-lockfile\nversion: 'v0.0.3'\n";
+
+/// One maintenance plan over `files` with the pinned tool behind `proxy`.
+async fn real_relock(
+    files: &BTreeMap<String, String>,
+    proxy: &Arc<real_actions_lock::GitHubProxy>,
+) -> Plan {
+    let executor = fixture_actions_lock(files.clone(), proxy.clone());
+    let temp = tempfile::tempdir().unwrap();
+    let runner =
+        Runner::new(temp.path().join("worktrees"), proxy.token()).with_executor(executor.clone());
+    let mut snapshot = snapshot(files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
+        .unwrap()
+        .unwrap();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    p
+}
+
+/// `actions/checkout@v7` locked under `ci.yml` at `commit`.
+fn checkout_v7_lock(commit: &str) -> String {
+    format!(
+        "{LOCK_HEADER}workflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7'\ndependencies:\n    'actions/checkout@v7':\n        ref: 'v7'\n        commit: 'sha1-{commit}'\n        owner_id: 44036562\n        repo_id: 197814629\n"
+    )
+}
+
+/// Case 3, direct: the pinned tool's `--relock` advances a floating
+/// `actions/checkout@v7` the lock recorded at v7.0.0's commit, under the
+/// listed `ci.yml`, and the plan carries the moved ref for the body. The unlisted `release.yml` is not onboarded and no workflow is
+/// touched: the commit holds `actions.lock` alone.
+#[tokio::test]
+async fn real_actions_lock_relocks_a_moved_direct_ref() {
+    const V700: &str = "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0";
+    const V701: &str = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+    let proxy = real_actions_lock::GitHubProxy::start("actions-lock-relock-direct");
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7"),
+        ),
+        (
+            ".github/workflows/release.yml".into(),
+            actions_workflow("actions/setup-node@v6"),
+        ),
+        (contract::ACTIONS_LOCK.into(), checkout_v7_lock(V700)),
+    ]);
+    let p = real_relock(&files, &proxy).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let written: Vec<&str> = p.action().files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(written, [contract::ACTIONS_LOCK]);
+    assert_eq!(p.contents()[contract::ACTIONS_LOCK], checkout_v7_lock(V701));
+    assert_eq!(
+        p.moved_refs(),
+        [contract::MovedRef {
+            workflow: ".github/workflows/ci.yml".into(),
+            dependency: "actions/checkout@v7".into(),
+            from: V700.into(),
+            to: V701.into(),
+        }]
+    );
+    proxy.assert_finished();
+}
+
+/// `cli/gh-extension-precompile@v2.1.0`, a composite that uses the
+/// floating `actions/setup-go@v5`, locked under `ci.yml` with setup-go at
+/// `setup_go`.
+fn precompile_lock(setup_go: &str) -> String {
+    format!(
+        "{LOCK_HEADER}workflows:\n    '.github/workflows/ci.yml':\n        - 'cli/gh-extension-precompile@v2.1.0'\ndependencies:\n    'actions/attest-build-provenance@36fa7d009e22618ca7cd599486979b8150596c74':\n        ref: 'predicate@1.1.4'\n        commit: 'sha1-36fa7d009e22618ca7cd599486979b8150596c74'\n        owner_id: 44036562\n        repo_id: 760702757\n    'actions/attest-build-provenance@v1':\n        ref: 'v1'\n        commit: 'sha1-ef244123eb79f2f7a7e75d99086184180e6d0018'\n        owner_id: 44036562\n        repo_id: 760702757\n        uses:\n            - 'actions/attest-build-provenance@36fa7d009e22618ca7cd599486979b8150596c74'\n            - 'actions/attest@67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d'\n    'actions/attest@67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d':\n        ref: 'v1.4.1'\n        commit: 'sha1-67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d'\n        owner_id: 44036562\n        repo_id: 760701061\n    'actions/setup-go@v5':\n        ref: 'v5'\n        commit: 'sha1-{setup_go}'\n        owner_id: 44036562\n        repo_id: 192624594\n    'cli/gh-extension-precompile@v2.1.0':\n        ref: 'v2.1.0'\n        commit: 'sha1-9e2237c30f869ad3bcaed6a4be2cd43564dd421b'\n        owner_id: 59704711\n        repo_id: 421583656\n        uses:\n            - 'actions/attest-build-provenance@v1'\n            - 'actions/setup-go@v5'\n"
+    )
+}
+
+/// Case 3, transitive: the relock advances a floating ref inside a public
+/// composite — `actions/setup-go@v5`, which
+/// `cli/gh-extension-precompile@v2.1.0` uses — that the lock recorded at
+/// v5.4.0's commit. The tool reports no `ref-moved` finding for it — it
+/// re-pins the composite's closure — so the moved ref comes from the lock.
+#[tokio::test]
+async fn real_actions_lock_relocks_a_moved_transitive_ref() {
+    const V540: &str = "0aaccfd150d50ccaeb58ebd88d36e91967a5f35b";
+    const V5: &str = "40f1582b2485089dde7abd97c1529aa768e1baff";
+    let proxy = real_actions_lock::GitHubProxy::start("actions-lock-relock-transitive");
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("cli/gh-extension-precompile@v2.1.0"),
+        ),
+        (contract::ACTIONS_LOCK.into(), precompile_lock(V540)),
+    ]);
+    let p = real_relock(&files, &proxy).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let written: Vec<&str> = p.action().files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(written, [contract::ACTIONS_LOCK]);
+    assert_eq!(p.contents()[contract::ACTIONS_LOCK], precompile_lock(V5));
+    assert_eq!(
+        p.moved_refs(),
+        [contract::MovedRef {
+            workflow: ".github/workflows/ci.yml".into(),
+            dependency: "actions/setup-go@v5".into(),
+            from: V540.into(),
+            to: V5.into(),
+        }]
+    );
+    proxy.assert_finished();
+}
+
+/// Case 3, current: a lock whose floating ref still resolves where it is
+/// recorded relocks to the same bytes — no diff, so no maintenance change.
+#[tokio::test]
+async fn real_actions_lock_relock_of_a_current_lock_changes_nothing() {
+    let proxy = real_actions_lock::GitHubProxy::start("actions-lock-relock-current");
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7"),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            checkout_v7_lock("3d3c42e5aac5ba805825da76410c181273ba90b1"),
+        ),
+    ]);
+    let p = real_relock(&files, &proxy).await;
+    assert!(p.held(&Hold::LockfilesCurrent), "{:?}", p.action());
+    assert!(p.action().files.is_empty(), "{:?}", p.action());
+    assert!(p.moved_refs().is_empty());
     proxy.assert_finished();
 }

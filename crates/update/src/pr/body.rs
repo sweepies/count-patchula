@@ -41,6 +41,14 @@ impl Bodies<'_> {
             for file in &plan.action().files {
                 append(&mut text, &format!("\n- {}", cell(&file.path)), 18_000);
             }
+            moved_section(&mut text, plan.moved_refs());
+            if plan.deleted().contains(patchula_lockfiles::ACTIONS_LOCK) {
+                append(
+                    &mut text,
+                    "\n\nEvery workflow `actions.lock` listed is gone, so the lockfile is removed.\n",
+                    18_000,
+                );
+            }
         }
         for c in plan.changes() {
             let target = format!(
@@ -734,6 +742,42 @@ fn truncate(text: &str, limit: usize) -> String {
         end -= 1;
     }
     text[..end].into()
+}
+/// The refs a maintenance relock advanced in `actions.lock`, one line
+/// each under its workflow; nothing when none moved.
+fn moved_section(text: &mut String, moved: &[patchula_lockfiles::MovedRef]) {
+    if moved.is_empty() {
+        return;
+    }
+    append(
+        text,
+        "\n\nRefs that moved upstream, now locked at their new commits:\n",
+        18_000,
+    );
+    let mut workflows: BTreeMap<&str, Vec<&patchula_lockfiles::MovedRef>> = BTreeMap::new();
+    for entry in moved {
+        workflows.entry(&entry.workflow).or_default().push(entry);
+    }
+    for (workflow, entries) in workflows {
+        append(text, &format!("\n- {}", code(workflow)), 18_000);
+        for entry in entries {
+            append(
+                text,
+                &format!(
+                    "\n  - {} now resolves to {}; the lock had {}",
+                    code(&entry.dependency),
+                    code(short(&entry.to)),
+                    code(short(&entry.from))
+                ),
+                18_000,
+            );
+        }
+    }
+    append(text, "\n", 18_000);
+}
+/// A commit SHA as the moved-ref list shows it: its first seven characters.
+fn short(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }
 fn safe(text: &str) -> String {
     text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")

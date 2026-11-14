@@ -77,6 +77,89 @@ fn pr(text: &str) -> model::PullRequest {
     .expect("a complete REST pull request")
 }
 
+/// A maintenance body lists the refs a relock advanced, one plain line
+/// each under its workflow, and only when there are some; the list joins
+/// the content hash, so a new moved ref rewrites the body.
+#[test]
+fn the_moved_ref_list_is_rendered_only_when_refs_moved() {
+    let permits = BTreeMap::new();
+    let bodies = bodies(&permits);
+    let file = patchula_report::FileAction {
+        path: ".github/workflows/actions.lock".into(),
+        blob_sha: String::new(),
+        diff: String::new(),
+    };
+    let plan = |moved: Vec<patchula_lockfiles::MovedRef>| {
+        testing::Draft::new(action("patchula/lock-file-maintenance"))
+            .maintenance()
+            .identity("a".repeat(64))
+            .file(file.clone())
+            .moved_refs(moved)
+            .build()
+    };
+    let (quiet, quiet_marker) = bodies.intent(&plan(Vec::new()));
+    assert!(!quiet.contains("moved upstream"), "{quiet}");
+    let moved =
+        |workflow: &str, dependency: &str, from: char, to: char| patchula_lockfiles::MovedRef {
+            workflow: workflow.into(),
+            dependency: dependency.into(),
+            from: from.to_string().repeat(40),
+            to: to.to_string().repeat(40),
+        };
+    let (text, marker) = bodies.intent(&plan(vec![
+        moved(".github/workflows/ci.yml", "actions/checkout@v7", 'a', 'b'),
+        moved(".github/workflows/ci.yml", "actions/setup-go@v5", 'c', 'd'),
+        moved(
+            ".github/workflows/release.yml",
+            "actions/checkout@v7",
+            'a',
+            'b',
+        ),
+    ]));
+    assert!(
+        text.contains(concat!(
+            "\n- .github/workflows/actions.lock\n\n",
+            "Refs that moved upstream, now locked at their new commits:\n",
+            "\n- `.github/workflows/ci.yml`",
+            "\n  - `actions/checkout@v7` now resolves to `bbbbbbb`; the lock had `aaaaaaa`",
+            "\n  - `actions/setup-go@v5` now resolves to `ddddddd`; the lock had `ccccccc`",
+            "\n- `.github/workflows/release.yml`",
+            "\n  - `actions/checkout@v7` now resolves to `bbbbbbb`; the lock had `aaaaaaa`\n",
+        )),
+        "{text}"
+    );
+    assert_ne!(marker, quiet_marker);
+}
+
+/// A relock that pruned the last listed workflow removes `actions.lock`,
+/// and the maintenance body says so; a relock that kept it says nothing.
+#[test]
+fn a_removed_actions_lock_is_named_in_the_maintenance_body() {
+    let permits = BTreeMap::new();
+    let bodies = bodies(&permits);
+    let file = patchula_report::FileAction {
+        path: ".github/workflows/actions.lock".into(),
+        blob_sha: String::new(),
+        diff: String::new(),
+    };
+    let draft = || {
+        testing::Draft::new(action("patchula/lock-file-maintenance"))
+            .maintenance()
+            .identity("a".repeat(64))
+            .file(file.clone())
+    };
+    let line = "Every workflow `actions.lock` listed is gone, so the lockfile is removed.";
+    let (kept, kept_marker) = bodies.intent(&draft().build());
+    assert!(!kept.contains(line), "{kept}");
+    let (removed, removed_marker) =
+        bodies.intent(&draft().delete(".github/workflows/actions.lock").build());
+    assert!(
+        removed.contains(&format!("\n- .github/workflows/actions.lock\n\n{line}\n")),
+        "{removed}"
+    );
+    assert_ne!(removed_marker, kept_marker);
+}
+
 /// The closure texts: what the PR said, cut to the marker's budget, then
 /// the marker that says why it closed.
 #[test]

@@ -290,7 +290,7 @@ impl Runner {
         let driver = run.path().join("driver");
         std::fs::create_dir_all(&driver).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        let (baseline, cargo_configs) = self.checkout(work, &root, &driver).await?;
+        let (baseline, cargo_configs, unread) = self.checkout(work, &root, &driver).await?;
         // Backstop for the engine's refusal: every file the tools can
         // read and the engine would check was checked before any of them
         // runs, so a committed credential can never fetch into the shared
@@ -324,6 +324,11 @@ impl Runner {
             .map(|j| (j.ecosystem, j.directory.clone()))
             .collect();
         let mut warnings = Vec::new();
+        let mut moved = Vec::new();
+        // A maintenance relock of actions.lock that fails holds only
+        // itself: the tree goes back to what the other jobs left, and the
+        // failure fails the branch only when nothing else changed.
+        let mut relock_failure = None;
         for (ecosystem, directory) in groups {
             let tool = descriptor(ecosystem);
             let versions = if tool.versions {
@@ -383,7 +388,17 @@ impl Runner {
                 Ecosystem::Php => self.composer_lock(context, &jobs).await?,
                 Ecosystem::Nix => self.flake_lock(context, &jobs).await?,
                 Ecosystem::Apm => self.apm_lock(context).await?,
-                Ecosystem::Actions => self.actions_lock(context, work).await?,
+                Ecosystem::Actions if work.maintenance => {
+                    let before = collect(&root)?;
+                    match self.actions_relock(context, work, &before, &unread).await {
+                        Ok(refs) => moved = refs,
+                        Err(failure) => {
+                            restore(&root, &before)?;
+                            relock_failure = Some(failure);
+                        }
+                    }
+                }
+                Ecosystem::Actions => self.actions_lock(context, work, &unread).await?,
             }
         }
         // Only manifests and lockfiles can enter the API commit. Reject links,
@@ -417,7 +432,17 @@ impl Runner {
                 },
             );
         }
-        Ok(Generated { files, warnings })
+        if let Some(failure) = relock_failure {
+            if files.is_empty() {
+                return Err(failure);
+            }
+            warnings.push(failure.to_string());
+        }
+        Ok(Generated {
+            files,
+            warnings,
+            moved,
+        })
     }
     /// Evict aged and oversized tool-cache partitions, at most once an hour
     /// per cache root per process, without holding the generation up. Lock
@@ -812,6 +837,21 @@ fn write(root: &Path, path: &str, content: &str) -> Result<(), String> {
     let target = root.join(path);
     std::fs::create_dir_all(target.parent().ok_or("missing parent")?).map_err(|e| e.to_string())?;
     std::fs::write(target, content).map_err(|e| e.to_string())
+}
+/// Put the tree back to `files`, a `collect` of it: every file whose text
+/// differs is rewritten, and every file not in `files` removed.
+fn restore(root: &Path, files: &BTreeMap<String, String>) -> Result<(), String> {
+    let now = collect(root)?;
+    for path in now.keys().filter(|path| !files.contains_key(*path)) {
+        std::fs::remove_file(root.join(path)).map_err(|e| e.to_string())?;
+    }
+    for (path, content) in files
+        .iter()
+        .filter(|(path, content)| now.get(*path) != Some(content))
+    {
+        write(root, path, content)?;
+    }
+    Ok(())
 }
 fn collect(root: &Path) -> Result<BTreeMap<String, String>, String> {
     fn walk(root: &Path, dir: &Path, files: &mut BTreeMap<String, String>) -> Result<(), String> {

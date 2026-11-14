@@ -4,7 +4,10 @@ use super::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_github::blob_sha;
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 impl Runner {
     async fn git(
@@ -52,12 +55,23 @@ impl Runner {
                 failure,
             })
     }
+    /// Check `work`'s base tree out into `root`: the baseline files, the
+    /// Cargo configurations read for their registries, and the workflows
+    /// and action files only the Actions tool reads that the checkout left
+    /// out for not being regular files.
     pub(super) async fn checkout(
         &self,
         work: &Work<'_>,
         root: &Path,
         driver: &Path,
-    ) -> Result<(BTreeMap<String, BaseFile>, BTreeMap<String, String>), Failure> {
+    ) -> Result<
+        (
+            BTreeMap<String, BaseFile>,
+            BTreeMap<String, String>,
+            BTreeSet<String>,
+        ),
+        Failure,
+    > {
         let clones = self.cache.join("clones");
         std::fs::create_dir_all(&clones).map_err(|e| e.to_string())?;
         let name = hash(work.repository.as_bytes());
@@ -159,6 +173,7 @@ impl Runner {
             .await?;
         let mut entries = BTreeMap::new();
         let mut cargo_configs = BTreeMap::new();
+        let mut unread = BTreeSet::new();
         // The Actions tool reads every workflow the lock may list and every
         // in-repository action definition; nothing checks them out unless
         // the work holds an Actions job.
@@ -170,7 +185,8 @@ impl Runner {
             let actions = actions
                 && (patchula_manager::roles::github_workflow(path)
                     || patchula_manager::roles::action_file(path));
-            if !materialized(path) && !cargo && !actions && !work.edits.contains_key(path) {
+            let needed = materialized(path) || work.edits.contains_key(path);
+            if !needed && !cargo && !actions {
                 continue;
             }
             if !safe_path(path) {
@@ -189,6 +205,13 @@ impl Runner {
                 continue;
             }
             if !regular {
+                // A link or submodule only the Actions tool would read stays
+                // out of the tree: the tool fails on the missing file as it
+                // fails on any, and that holds the Actions job alone.
+                if actions && !needed {
+                    unread.insert(path.to_owned());
+                    continue;
+                }
                 return Err(format!("unsupported checkout mode for {path}").into());
             }
             entries.insert(path.to_owned(), (oid.to_owned(), mode.to_owned()));
@@ -229,7 +252,7 @@ impl Runner {
         let cargo_configs = self
             .cargo_configs(&clone, base, driver, cargo_configs)
             .await?;
-        Ok((baseline, cargo_configs))
+        Ok((baseline, cargo_configs, unread))
     }
 
     /// Whether `path` is a Cargo configuration at or above a project the

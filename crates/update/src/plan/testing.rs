@@ -114,6 +114,11 @@ impl Draft {
     pub fn deleted_mut(&mut self) -> &mut BTreeSet<String> {
         removed(&mut self.plan)
     }
+    /// The `actions.lock` refs a maintenance relock advanced.
+    pub fn moved_refs(mut self, moved: Vec<contract::MovedRef>) -> Self {
+        self.plan.moved_refs = moved;
+        self
+    }
     /// A lockfile job the plan still owes.
     pub fn lock_job(mut self, job: contract::Job) -> Self {
         owed(&mut self.plan).push(job);

@@ -166,6 +166,51 @@ fn mise_lock_maintenance_respects_refresh_and_unlocked_manifests_need_no_job() {
     assert_eq!(plan.lock_jobs()[0].ecosystem, Ecosystem::Mise);
 }
 
+/// Maintenance plans an Actions job for `.github/workflows/actions.lock`
+/// when the file exists and the Actions manager is enabled, beside the
+/// repository's other refresh jobs; workflows without the lockfile plan
+/// none.
+#[test]
+fn actions_lock_maintenance_needs_the_lockfile() {
+    let workflow = "name: ci\non: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v7\n";
+    let mut files = BTreeMap::from([
+        (".github/workflows/ci.yml".to_owned(), workflow.to_owned()),
+        ("Cargo.lock".to_owned(), "version = 4\n".to_owned()),
+    ]);
+    let config = config();
+    let jobs = |files: &BTreeMap<String, String>| {
+        maintenance(&repo(), &config, &snapshot(files), &[], None, monday())
+            .unwrap()
+            .unwrap()
+            .lock_jobs()
+            .iter()
+            .map(|job| (job.ecosystem, job.directory.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(jobs(&files), [(Ecosystem::Cargo, String::new())]);
+    files.insert(
+        contract::ACTIONS_LOCK.to_owned(),
+        "version: 'v0.0.3'\nworkflows: {}\ndependencies: {}\n".to_owned(),
+    );
+    assert_eq!(
+        jobs(&files),
+        [
+            (Ecosystem::Cargo, String::new()),
+            (Ecosystem::Actions, ".github/workflows".to_owned()),
+        ]
+    );
+    // The same leaf outside `.github/workflows/` is not the lockfile.
+    let elsewhere = BTreeMap::from([(
+        ".github/actions.lock".to_owned(),
+        "version: 'v0.0.3'\n".to_owned(),
+    )]);
+    assert!(
+        maintenance(&repo(), &config, &snapshot(&elsewhere), &[], None, monday())
+            .unwrap()
+            .is_none()
+    );
+}
+
 /// A job's scope is an enum in memory but its wire shape is the flat field
 /// layout it always was: job identities feed branch and plan hashes, so the
 /// bytes cannot drift.

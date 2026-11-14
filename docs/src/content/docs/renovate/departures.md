@@ -235,6 +235,13 @@ See [container image rebuilds](/guide/security/#container-image-rebuilds).
 - **The Count:** Runs it only over the edited workflows the lockfile already lists, with `--no-onboard` and `--no-narrow` always set: the Count never adds a workflow or an action to the lockfile and never rewrites a `uses:` ref he did not edit. Local `./` composites are never locked, so an update inside one makes no run; a `$/` composite is relocked under the listed workflows that call it
 - **Why:** Someone else's broken or unpinned action in an unlisted workflow must not hold the Count's update, and a run that onboards would grow the lockfile he was never asked to write
 
+Lockfile maintenance also runs the tool, with `--relock` over the whole
+directory: refs that moved upstream, such as a floating `v7`, are advanced
+to their new commits, listed workflows that no longer exist are dropped, and
+the maintenance PR lists each moved ref. Renovate's documentation does not
+describe a relock, so a Renovate user should expect `actions.lock` in the
+maintenance PR. No release-age wait applies to what the relock picks up.
+
 The run authenticates with the run's own GitHub token — a scoped
 installation token on the App server, the token the run was given for the
 CLI and the GitHub Action, as Renovate hands its token to tools — and
