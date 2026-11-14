@@ -356,11 +356,15 @@ impl Runner {
     /// Uninstall versions no run has completed with. An install cut short (a
     /// timeout, a crash) can leave a directory mise treats as installed but
     /// that holds no binaries; only a recorded run proves an install works.
+    /// Rust goes through rustup, and the pinned mise package is also what
+    /// version lookups run, which install it without recording a use, so
+    /// neither is ever uninstalled here.
     pub(super) async fn clear_unproven(&self, tools: &[(String, String)]) {
         let usage = read_usage(&self.mise_data);
         for (tool, version) in tools {
             let spec = format!("{tool}@{version}");
             if tool != "rust"
+                && tool != patchula_mise::PACKAGE
                 && !usage.contains_key(&spec)
                 && let Err(error) = self.mise(vec!["uninstall".into(), spec]).await
                 && !error.contains("is not installed")

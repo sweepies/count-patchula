@@ -3532,6 +3532,70 @@ impl Executor for Recorder {
     }
 }
 
+/// The lock walk follows symlinked directories and matches names as bytes,
+/// so a directory whose name is not UTF-8 is still searched; the NuGet
+/// config walk searches such directories too but does not follow links.
+#[cfg(unix)]
+#[test]
+fn dotnet_walks_keep_their_link_and_name_rules() {
+    use std::os::unix::ffi::OsStrExt;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("tree");
+    let outside = temp.path().join("outside");
+    let odd = root.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(&odd).unwrap();
+    std::fs::create_dir_all(root.join("obj")).unwrap();
+    std::fs::write(outside.join("packages.lock.json"), "{}").unwrap();
+    std::fs::write(outside.join("nuget.config"), "<configuration/>").unwrap();
+    std::fs::write(odd.join("packages.lock.json"), "{}").unwrap();
+    std::fs::write(odd.join("NuGet.Config"), "<configuration/>").unwrap();
+    std::fs::write(root.join("obj/packages.lock.json"), "{}").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+    let mut locks = Vec::new();
+    dotnet::locks(&root, &mut locks);
+    locks.sort();
+    let mut expected = vec![
+        odd.join("packages.lock.json"),
+        root.join("linked/packages.lock.json"),
+    ];
+    expected.sort();
+    assert_eq!(locks, expected);
+    let mut configs = Vec::new();
+    dotnet::nuget_configs(&root, &mut configs);
+    assert_eq!(configs.len(), 1, "{configs:?}");
+    assert_eq!(configs[0].as_deref().unwrap(), "<configuration/>");
+}
+
+/// A store that was never prewarmed has no usage record for the pinned mise,
+/// which version lookups install and run: a first `mise lock` must not
+/// uninstall it from under them. Other unproven tools are still cleared.
+#[tokio::test]
+async fn clearing_unproven_tools_keeps_the_pinned_mise() {
+    let temp = tempfile::tempdir().unwrap();
+    let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+    let runner = Runner::new(temp.path().join("worktrees"), "x").with_executor(recorder.clone());
+    runner
+        .clear_unproven(&[
+            (patchula_mise::PACKAGE.into(), default_version("mise")),
+            ("node".into(), "20.0.0".into()),
+        ])
+        .await;
+    let calls = recorder.0.lock().unwrap().clone();
+    assert!(
+        calls
+            .iter()
+            .any(|args| args.ends_with(&["uninstall".into(), "node@20.0.0".into()])),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|args| args
+            .iter()
+            .any(|arg| arg.starts_with(patchula_mise::PACKAGE))),
+        "{calls:?}"
+    );
+}
+
 /// Unused tool versions are pruned from the runner's own store; pinned
 /// defaults and recently used versions stay, and prewarming installs defaults.
 #[tokio::test]

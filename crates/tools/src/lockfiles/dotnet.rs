@@ -70,9 +70,29 @@ fn target(cwd: &Path) -> Result<PathBuf, String> {
     Err("no solution or project to restore".into())
 }
 
-/// Every file under `dir` outside `obj/`, `bin/` and `.git/`, with its
-/// leaf name.
-fn project_files(dir: &Path, found: &mut dyn FnMut(PathBuf, &str)) {
+/// Every `packages.lock.json` under `dir`, outside `obj/`, `bin/` and
+/// `.git/`. Symlinked directories are followed.
+pub(super) fn locks(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path
+                .file_name()
+                .is_some_and(|n| n != "obj" && n != "bin" && n != ".git")
+            {
+                locks(&path, out);
+            }
+        } else if path.file_name().is_some_and(|n| n == "packages.lock.json") {
+            out.push(path);
+        }
+    }
+}
+/// The text of every `nuget.config` under `dir`, in any case, or why it
+/// could not be read. Symlinked directories are not followed.
+pub(super) fn nuget_configs(dir: &Path, out: &mut Vec<std::io::Result<String>>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -80,39 +100,22 @@ fn project_files(dir: &Path, found: &mut dyn FnMut(PathBuf, &str)) {
         let Ok(kind) = entry.file_type() else {
             continue;
         };
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
+        let path = entry.path();
         if kind.is_dir() {
-            if !matches!(name, "obj" | "bin" | ".git") {
-                project_files(&entry.path(), found);
+            if path
+                .file_name()
+                .is_some_and(|n| n != "obj" && n != "bin" && n != ".git")
+            {
+                nuget_configs(&path, out);
             }
-        } else {
-            found(entry.path(), name);
+        } else if entry
+            .file_name()
+            .to_str()
+            .is_some_and(patchula_manager::roles::nuget_config)
+        {
+            out.push(std::fs::read_to_string(&path));
         }
     }
-}
-/// Every `packages.lock.json` under `dir`.
-fn locks(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    project_files(dir, &mut |path, name| {
-        if name == "packages.lock.json" {
-            out.push(path);
-        }
-    });
-    out
-}
-/// The text of every `nuget.config` under `dir`, in any case, or why it
-/// could not be read.
-fn nuget_configs(dir: &Path) -> Vec<std::io::Result<String>> {
-    let mut out = Vec::new();
-    project_files(dir, &mut |path, name| {
-        if patchula_manager::roles::nuget_config(name) {
-            out.push(std::fs::read_to_string(path));
-        }
-    });
-    out
 }
 /// Restore writes `obj/` intermediates, which never belong in a commit.
 fn remove_intermediates(dir: &Path) -> Result<(), String> {
@@ -163,7 +166,9 @@ impl Runner {
             ..
         } = context;
         let cwd = root.join(directory);
-        let before: BTreeMap<_, _> = locks(&cwd)
+        let mut before = Vec::new();
+        locks(&cwd, &mut before);
+        let before: BTreeMap<_, _> = before
             .into_iter()
             .map(|p| {
                 let text = std::fs::read_to_string(&p).unwrap_or_default();
@@ -179,7 +184,9 @@ impl Runner {
         let credentials = if self.registries.is_empty() {
             (Vec::new(), Vec::new())
         } else {
-            nuget_configs(root)
+            let mut configs = Vec::new();
+            nuget_configs(root, &mut configs);
+            configs
                 .iter()
                 .map(|text| {
                     text.as_deref()
