@@ -497,7 +497,10 @@ replace it. Windows work as for updates: the first run after a window time
 picks it up, however often the Count runs. A maintenance resolve has no
 update to take a wait from, so for Cargo the run holds everything it newly
 locks to the strictest active `waitHours` any update class reaches on any
-of the repository's crates.io dependencies.
+of the repository's crates.io dependencies. When a rule cannot be evaluated
+for one of them (a `current` filter that is not a valid requirement, say),
+maintenance is held with that error, named for the dependency, rather than
+relocking with no wait; a Cargo update's job is held the same way.
 Failures do not count as a completed refresh, and a closed maintenance PR can
 come back the following week.
 

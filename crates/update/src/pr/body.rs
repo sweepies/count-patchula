@@ -413,7 +413,8 @@ fn unreadable_notes(package: &str, source: &patchula_notes::Repository, budget: 
     if budget < 512 {
         return String::new();
     }
-    let package = markers::cut_bytes(&safe(package), 160).replace(['\n', '\r'], " ");
+    let package =
+        patchula_datasource::upstream::truncate(&safe(package), 160).replace(['\n', '\r'], " ");
     if source.url.len() <= 512 && source.url.len() + package.len() + 160 <= budget {
         format!(
             "### {package}\n\nThe Count could not read these release notes; [view upstream]({}).\n",
@@ -425,7 +426,8 @@ fn unreadable_notes(package: &str, source: &patchula_notes::Repository, budget: 
 }
 /// The section for a package whose release-notes fetch failed this run.
 fn failed_notes(package: &str) -> String {
-    let package = markers::cut_bytes(&safe(package), 160).replace(['\n', '\r'], " ");
+    let package =
+        patchula_datasource::upstream::truncate(&safe(package), 160).replace(['\n', '\r'], " ");
     format!(
         "### {package}\n\nThe Count could not read these release notes this run; he will try again on the next.\n"
     )
@@ -478,7 +480,8 @@ pub(crate) fn same_owner(a: &str, b: &str) -> bool {
 /// The title a plan's PR gets: its commit message on one line, in GitHub's
 /// limit.
 pub(crate) fn title(plan: &Plan) -> String {
-    markers::cut_bytes(&plan.action().message.replace(['\n', '\r'], " "), 250).to_owned()
+    patchula_datasource::upstream::truncate(&plan.action().message.replace(['\n', '\r'], " "), 250)
+        .to_owned()
 }
 /// The body with its re-check box unticked: the acknowledgement after a
 /// tick was honoured.
@@ -870,12 +873,12 @@ fn safe(text: &str) -> String {
 }
 /// Text as an inline code span, cut to 240 bytes.
 fn code(text: &str) -> String {
-    crate::text::code(markers::cut_bytes(text, 240))
+    crate::text::code(patchula_datasource::upstream::truncate(text, 240))
 }
 /// A table cell of generated text: package names, versions, files. Those are
 /// data and stay as they are.
 fn cell(text: &str) -> String {
-    markers::cut_bytes(
+    patchula_datasource::upstream::truncate(
         &safe(text).replace('|', "\\|").replace(['\n', '\r'], " "),
         240,
     )
@@ -888,7 +891,7 @@ fn prose_cell(text: &str) -> String {
 fn append(text: &mut String, addition: &str, limit: usize) {
     let remaining = limit.saturating_sub(text.len());
     if remaining > 0 {
-        text.push_str(markers::cut_bytes(addition, remaining));
+        text.push_str(patchula_datasource::upstream::truncate(addition, remaining));
     }
 }
 

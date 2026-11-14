@@ -885,15 +885,26 @@ fn build(
                 // wait for unnamed crates comes from the effective wait the
                 // dependency's rules give the update's own kind, and a
                 // fix's from `security.apply`, so Cargo does not hold a
-                // fresh fix that lookup proposed.
+                // fresh fix that lookup proposed. A rule error holds the
+                // plan: Cargo never runs with a wait the rules did not give.
                 if update.policy.is_none() && job.ecosystem == contract::Ecosystem::Cargo {
-                    job.wait_hours = if update.fixes.is_empty() {
+                    let wait = if update.fixes.is_empty() {
                         evaluator.routine_wait_hours(dep, update.update_type)
                     } else {
                         evaluator.security_wait_hours(dep, update.update_type)
                     };
+                    match wait {
+                        Ok(wait) => {
+                            job.wait_hours = wait;
+                            lock_jobs.insert(job);
+                        }
+                        Err(error) => {
+                            keep(&mut hold, Hold::Blocked(format!("{}: {error}", dep.name)));
+                        }
+                    }
+                } else {
+                    lock_jobs.insert(job);
                 }
-                lock_jobs.insert(job);
             }
             // An in-repository action file is in actions.lock only through
             // a listed workflow that calls it with `$/`; when that cannot

@@ -368,7 +368,57 @@ fn effective_rules_include_zero_age_exceptions() {
     for dep in dependencies(&config) {
         assert_eq!(
             eval.catalog_wait_hours(&dep),
-            if dep.name == "fixture" { 0 } else { 72 }
+            Ok(if dep.name == "fixture" { 0 } else { 72 })
         );
     }
+}
+
+/// A rule the evaluator cannot apply to a dependency reuses no catalog for
+/// it, and its evaluation reports the rule error as the lookup failure.
+#[tokio::test]
+async fn a_rule_error_reuses_no_catalog_and_the_evaluation_reports_it() {
+    let engine = engine(memory().await, Arc::new(Registry::default()), "offline");
+    let config = patchula_config::load_files(
+        "/repo/patchula.pkl",
+        BTreeMap::from([(
+            "/repo/patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 72 }\nrules = new Listing { new Rule { select { current = \"semver:>>1\" }; apply { waitHours = 72 } } }\n".into(),
+        )]),
+    )
+    .unwrap();
+    let dep = Scanner::new(&config)
+        .unwrap()
+        .extract(&BTreeMap::from([(
+            "Cargo.toml".into(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntokio = \"1.39.0\"\n"
+                .into(),
+        )]))
+        .unwrap()
+        .dependencies
+        .remove(0);
+    let eval = Evaluator::new(&config, Default::default()).unwrap();
+    assert!(eval.catalog_wait_hours(&dep).is_err());
+    let work = Work {
+        evaluator: Some(eval),
+        ..Work::empty(
+            crate::repo_report("demo/app", Status::Complete, None),
+            Some(config.clone()),
+        )
+    };
+    let needs = engine.needs(&work, &dep, false);
+    assert!(needs.versions);
+    assert_eq!(reuse_hours(needs.wait_hours), None);
+    let catalog = Catalog {
+        versions: Vec::new(),
+        dist_tags: Default::default(),
+    };
+    let Err(error) = work
+        .evaluator
+        .as_ref()
+        .unwrap()
+        .evaluate_at(&dep, &catalog, now())
+    else {
+        panic!("the rule error is the evaluation's error");
+    };
+    assert!(error.contains(">>1"), "{error}");
 }

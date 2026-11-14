@@ -58,7 +58,7 @@
 ## Lookup warnings and errors
 
 - [ ] Try that lookup again: `patchula-cache` (crates, `crates/cli/Cargo.toml`, `crates/datasource/Cargo.toml`, `crates/http/Cargo.toml`) <!-- patchula-action:{"action":"retry","target":"TARGET"} -->
-  - Lookup failed (crates, not-found): registry HTTP 404
+  - Lookup failed (crates, not-found): HTTP 404
 
 <details>
 <summary>Every dependency found (10 in 7 files)</summary>

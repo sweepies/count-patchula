@@ -2019,10 +2019,10 @@ fn a_committed_cargo_cooldown_is_a_floor_the_rules_wait_cannot_lower() {
     assert_eq!(major.version, "2.0.0");
     assert_eq!(major.eligible_at, "2026-10-24T12:00:00Z");
     // A shared catalog stays fresh for the longest wait on it.
-    assert_eq!(eval.catalog_wait_hours(&dep), 336);
+    assert_eq!(eval.catalog_wait_hours(&dep), Ok(336));
     // With no committed cooldown the same catalog answers as before.
     let plain = dependency("crate-a");
-    assert_eq!(eval.catalog_wait_hours(&plain), 24);
+    assert_eq!(eval.catalog_wait_hours(&plain), Ok(24));
     let result = eval.evaluate_at(&plain, &versions, now).unwrap();
     assert_eq!(result.updates.len(), 3, "{:?}", result.updates);
 }
@@ -2128,4 +2128,39 @@ fn an_undated_release_is_never_held_by_a_cargo_cooldown() {
         .evaluate_at(&dep, &versions, instant("2026-10-15T12:00:00Z"))
         .unwrap();
     assert_eq!(result.updates[0].new_version.as_deref(), Some("1.0.1"));
+}
+
+/// A rule whose `current` filter cannot be evaluated against `dep`: an
+/// invalid Cargo requirement, checked because a git rev is not a version.
+fn broken_current_rule() -> (Evaluator, Dependency) {
+    let path = "/repo/patchula.pkl";
+    let config = patchula_config::load_files(
+        path,
+        std::collections::BTreeMap::from([(
+            path.into(),
+            "amends \"PatchulaConfig.pkl\"\nrules = new Listing { new Rule { select { current = \"semver:>>1\" }; apply { waitHours = 72 } } }\n".into(),
+        )]),
+    )
+    .unwrap();
+    let mut dep = dependency("crate-a");
+    dep.manager = Manager::Cargo;
+    dep.file = "Cargo.toml".into();
+    dep.source = Source::Crates;
+    dep.current = "0123456789abcdef0123456789abcdef01234567".into();
+    (Evaluator::new(&config, Default::default()).unwrap(), dep)
+}
+
+#[test]
+fn a_rule_error_is_the_wait_error_never_a_wait_of_zero() {
+    let (eval, dep) = broken_current_rule();
+    assert!(eval.catalog_wait_hours(&dep).is_err());
+    assert!(
+        eval.lockfile_wait_hours(std::slice::from_ref(&dep))
+            .is_err()
+    );
+    assert!(eval.routine_wait_hours(&dep, Update::Minor).is_err());
+    assert!(eval.security_wait_hours(&dep, Update::Minor).is_err());
+    // Lockfile maintenance's wait has no error from a dependency outside
+    // crates.io.
+    assert_eq!(eval.lockfile_wait_hours(&[dependency("left-pad")]), Ok(0));
 }

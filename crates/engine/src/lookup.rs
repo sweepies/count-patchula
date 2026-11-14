@@ -431,7 +431,7 @@ impl Engine {
 
     /// What the batch fetches and checks for `dep`, decided once its
     /// evaluator exists. `retried` marks a manual retry this run.
-    fn needs(&self, repo: &Work, dep: &Dependency, retried: bool) -> Needs {
+    pub(super) fn needs(&self, repo: &Work, dep: &Dependency, retried: bool) -> Needs {
         let config = repo.config.as_ref();
         // The key and query are kept even without an evaluator: another
         // repository's dependency may have fetched what they share.
@@ -462,8 +462,11 @@ impl Engine {
             });
         let image = matches!(dep.source, Source::Docker | Source::Oci);
         Needs {
+            // A rule error reuses no catalog (a wait of 0 fetches fresh),
+            // and the dependency's evaluation reports the error as its
+            // lookup failure.
             wait_hours: if versions || forge {
-                eval.catalog_wait_hours(dep)
+                eval.catalog_wait_hours(dep).unwrap_or(0)
             } else {
                 0
             },

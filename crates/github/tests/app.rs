@@ -103,8 +103,7 @@ async fn a_scoped_mint_posts_repository_ids_and_metadata_read() {
     );
     assert!(
         github
-            .state()
-            .requests
+            .requests()
             .iter()
             .any(|(method, path)| method == "GET" && path == "/repos/demo/app"),
         "the numeric id is read with the installation token"

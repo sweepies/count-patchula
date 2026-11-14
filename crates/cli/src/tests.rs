@@ -136,7 +136,7 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
         hosts.clear();
         {
             let mut state = github.state();
-            state.requests.clear();
+            state.log.clear();
             state.writes.clear();
         }
         // Exactly the main CLI dispatch: only network I/O and token lookup are
@@ -691,7 +691,7 @@ async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
             "package": "is-number",
             "datasource": "npm",
             "kind": "network",
-            "message": "registry HTTP 503",
+            "message": "HTTP 503",
         }])
     );
     assert!(

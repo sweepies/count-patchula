@@ -108,16 +108,19 @@ impl<'a> Effective<'a> {
 }
 impl Evaluator {
     /// Shared catalogs use the shortest active update-class wait. A zero-age
-    /// rule keeps normal freshness even if another class waits longer.
-    pub fn catalog_wait_hours(&self, dep: &Dependency) -> u32 {
-        Update::ALL
-            .iter()
-            .copied()
-            .filter_map(|kind| self.effective(dep, kind).ok())
-            .filter(|effective| effective.policy.active)
-            .map(|effective| effective.policy.wait_hours)
-            .min()
-            .unwrap_or(0)
+    /// rule keeps normal freshness even if another class waits longer. A rule
+    /// error is the error, never a wait of 0.
+    pub fn catalog_wait_hours(&self, dep: &Dependency) -> Result<u32> {
+        let mut shortest = None;
+        for kind in Update::ALL.iter().copied() {
+            let effective = self.effective(dep, kind)?;
+            if effective.policy.active {
+                shortest = Some(shortest.map_or(effective.policy.wait_hours, |w: u32| {
+                    w.min(effective.policy.wait_hours)
+                }));
+            }
+        }
+        Ok(shortest.unwrap_or(0))
     }
     /// Effective class exclusions, including digest policy, are report evidence.
     pub fn disabled_updates(&self, dep: &Dependency) -> Result<Vec<Update>> {
@@ -515,42 +518,44 @@ impl Evaluator {
     /// to when no update names them — the crates a `--precise` update
     /// resolves past, and everything lockfile maintenance re-resolves: the
     /// strictest effective wait the rules give the repository's crates.io
-    /// dependencies, over every update class.
-    pub fn lockfile_wait_hours(&self, deps: &[Dependency]) -> u32 {
-        deps.iter()
-            .filter(|dep| dep.source == Source::Crates)
-            .flat_map(|dep| Update::ALL.iter().copied().map(move |kind| (dep, kind)))
-            .filter_map(|(dep, kind)| self.effective(dep, kind).ok())
-            .filter(|effective| effective.policy.active)
-            .map(|effective| effective.policy.wait_hours)
-            .max()
-            .unwrap_or(0)
+    /// dependencies, over every update class. A rule error is the error,
+    /// named for its dependency, never a wait of 0.
+    pub fn lockfile_wait_hours(&self, deps: &[Dependency]) -> Result<u32> {
+        let mut strictest = 0;
+        for dep in deps.iter().filter(|dep| dep.source == Source::Crates) {
+            for kind in Update::ALL.iter().copied() {
+                let effective = self
+                    .effective(dep, kind)
+                    .map_err(|error| format!("{}: {error}", dep.name))?;
+                if effective.policy.active {
+                    strictest = strictest.max(effective.policy.wait_hours);
+                }
+            }
+        }
+        Ok(strictest)
     }
     /// The wait a rebuilt routine Cargo job holds the crates it newly locks
     /// to: the effective wait the rules give `dep` for the update's own
     /// kind — a batched minor waits as a minor, not the strictest wait any
     /// kind carries — as `security_wait_hours` answers for a fix.
-    pub fn routine_wait_hours(&self, dep: &Dependency, kind: Update) -> u32 {
+    pub fn routine_wait_hours(&self, dep: &Dependency, kind: Update) -> Result<u32> {
         self.effective(dep, kind)
             .map(|effective| effective.policy.wait_hours)
-            .unwrap_or(0)
     }
     /// The wait a security fix of `kind` for `dep` runs under in Cargo:
     /// `security.apply` over the rules, with the Cargo cooldown floor lifted
     /// as it is for every fix. A batch's rebuilt update records no policy,
     /// so its fix job takes this rather than the strictest routine wait,
     /// which Cargo would hold a fresh fix against.
-    pub fn security_wait_hours(&self, dep: &Dependency, kind: Update) -> u32 {
-        self.effective(dep, kind)
-            .map(|mut effective| {
-                effective.unfloor();
-                effective.apply(
-                    &self.config.security.apply,
-                    self.security_permitted.as_ref(),
-                );
-                effective.policy.wait_hours
-            })
-            .unwrap_or(0)
+    pub fn security_wait_hours(&self, dep: &Dependency, kind: Update) -> Result<u32> {
+        self.effective(dep, kind).map(|mut effective| {
+            effective.unfloor();
+            effective.apply(
+                &self.config.security.apply,
+                self.security_permitted.as_ref(),
+            );
+            effective.policy.wait_hours
+        })
     }
     /// A lockfile-only package's one update: the lowest fixed release that
     /// fixes the most of its advisories without a breaking change, under

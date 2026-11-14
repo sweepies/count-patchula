@@ -116,9 +116,9 @@ fn repository() -> Repository {
         "repository":"sweepies/count-patchula","status":"complete","reason":null,
         "warnings":[],
         "lookupFailures":[
-            {"manager":"cargo","path":"crates/cli/Cargo.toml","name":"patchula-cache","package":"patchula-cache","datasource":"crates","kind":"not-found","message":"registry HTTP 404"},
-            {"manager":"cargo","path":"crates/datasource/Cargo.toml","name":"patchula-cache","package":"patchula-cache","datasource":"crates","kind":"not-found","message":"registry HTTP 404"},
-            {"manager":"cargo","path":"crates/http/Cargo.toml","name":"patchula-cache","package":"patchula-cache","datasource":"crates","kind":"not-found","message":"registry HTTP 404"}
+            {"manager":"cargo","path":"crates/cli/Cargo.toml","name":"patchula-cache","package":"patchula-cache","datasource":"crates","kind":"not-found","message":"HTTP 404"},
+            {"manager":"cargo","path":"crates/datasource/Cargo.toml","name":"patchula-cache","package":"patchula-cache","datasource":"crates","kind":"not-found","message":"HTTP 404"},
+            {"manager":"cargo","path":"crates/http/Cargo.toml","name":"patchula-cache","package":"patchula-cache","datasource":"crates","kind":"not-found","message":"HTTP 404"}
         ],
         "packageFiles":[
             {"path":"Cargo.lock","dependencies":[
