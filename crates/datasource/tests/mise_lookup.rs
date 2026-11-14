@@ -571,3 +571,91 @@ async fn public_listings_are_shared_and_repository_listings_are_not() {
     source.lookup(&jq).await.unwrap();
     assert_eq!(lookups(), 6);
 }
+
+/// Options travel to mise on the tool argument, and a listing made with one
+/// set of options serves no other set, nor the tool without them.
+#[tokio::test]
+async fn listings_are_kept_apart_by_their_options() {
+    const MINIMAL: &str = r#"rust[profile="minimal"]"#;
+    const DEFAULT: &str = r#"rust[profile="default"]"#;
+    let replay = Arc::new(MiseReplay::new(vec![
+        run(&["rust"], listing(&["1.99.0"])),
+        run(&[MINIMAL], listing(&["1.100.0"])),
+        run(&[DEFAULT], listing(&["1.101.0"])),
+    ]));
+    let cache = memory().await;
+    let source = client(Some(&replay), cache.clone(), "a-token");
+    let newest = |catalog: patchula_datasource::Catalog| catalog.versions[0].version.clone();
+    for (tool, version) in [
+        ("rust", "1.99.0"),
+        (MINIMAL, "1.100.0"),
+        (DEFAULT, "1.101.0"),
+        (MINIMAL, "1.100.0"),
+    ] {
+        let catalog = source
+            .lookup(&patchula_config::PackageId::public(Source::Mise, tool))
+            .await
+            .unwrap();
+        assert_eq!(newest(catalog), version, "{tool}");
+    }
+    // The second minimal lookup read what the first stored.
+    assert_eq!(
+        replay.lookups(),
+        ["rust", MINIMAL, DEFAULT]
+            .map(|tool| ["ls-remote", "--json", "--prerelease", "--", tool].map(String::from))
+    );
+    // Options with no host in them leave the token as the tool's access gives it.
+    assert_eq!(
+        replay.calls().last().unwrap().env["MISE_GITHUB_TOKEN"],
+        "a-token"
+    );
+}
+
+/// mise sends its GitHub token to any host that looks like a GitHub API, so
+/// a tool whose options may name a host gets none, whatever its access. Its
+/// listing is public, and its options keep it apart from the tool's
+/// github.com listing.
+#[tokio::test]
+async fn options_that_may_name_a_host_get_no_token() {
+    const ELSEWHERE: &str = r#"github:acme/tool[api_url="https://ghe.example/api/v3"]"#;
+    let replay = Arc::new(MiseReplay::new(vec![
+        run(&[ELSEWHERE], listing(&["2.0.0"])),
+        run(&["github:acme/tool"], listing(&["1.0.0"])),
+    ]));
+    let cache = memory().await;
+    let elsewhere = patchula_config::PackageId::public(Source::Mise, ELSEWHERE);
+    let credentials = Arc::new(Installation::default());
+    let source = installation(&replay, cache.clone(), credentials);
+    let as_repo = |name: &str, private| {
+        source
+            .clone()
+            .with_mise_repository(Some(repository(name, Some(private))))
+    };
+    // A tool with options is one the Count cannot place: the repository's own.
+    assert_eq!(
+        mise_scope_rule(ELSEWHERE, &repository("acme/app", Some(true))),
+        MiseAccess::Repository("acme/app".into())
+    );
+    as_repo("acme/app", true).lookup(&elsewhere).await.unwrap();
+    let calls = replay.calls();
+    let last = calls.last().unwrap();
+    assert!(!last.env.contains_key("MISE_GITHUB_TOKEN"));
+    // Public: another repository and the run's own lookup reuse it.
+    as_repo("acme/api", true).lookup(&elsewhere).await.unwrap();
+    source.lookup(&elsewhere).await.unwrap();
+    client(Some(&replay), cache.clone(), "run-token")
+        .lookup(&elsewhere)
+        .await
+        .unwrap();
+    assert_eq!(replay.lookups().len(), 1);
+    // The tool without options is listed on its own, with a token.
+    let catalog = as_repo("acme/app", true)
+        .lookup(&patchula_config::PackageId::public(
+            Source::Mise,
+            "github:acme/tool",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(catalog.versions[0].version, "1.0.0");
+    assert_eq!(token(&replay), "scoped-acme/app-MetadataRead");
+}

@@ -10,7 +10,7 @@ mod registry;
 mod sandbox;
 
 pub use lookup::{Bootstrap, Lookup, PACKAGE, Query, Release, bootstrap};
-pub use policy::check;
+pub use policy::{bracketed, check, options_name_a_host, split};
 pub use registry::{backends, github_sources, listed_github_repository};
 pub use sandbox::sandbox_env;
 

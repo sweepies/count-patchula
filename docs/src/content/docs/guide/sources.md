@@ -71,14 +71,23 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   (`MISE_NO_CONFIG`), env templates (`MISE_NO_ENV`) or hooks
   (`MISE_NO_HOOKS`), so neither your global configuration nor a repository's
   `mise.toml` can apply.
-- With tool names validated first: no leading `-`, no bracketed options and no
-  `@version` selector.
+- With the tool's options passed on as mise reads them, in brackets on the
+  tool argument: the options in its table, sorted and written one way, or the
+  brackets on its name as written (an entry with both is refused). mise
+  applies them as it does when it installs; nothing installs, so options that
+  only matter then never run.
+- With tool names and options validated first: no leading `-` in the name or
+  in any option key or string value, no `@` outside an npm scope, no
+  `@version` selector, length limits, and options only in the Count's own
+  form (`key="value"` pairs joined by `,`) or mise's plain `key=value` one.
 - With the backends `asdf` and `vfox` disabled (`MISE_DISABLE_BACKENDS`), and
   names for them refused before mise starts. A backend prefix mise does not
   know fails in mise, which runs no plugin for it. Nothing installs during a lookup
   (`MISE_AUTO_INSTALL=0`).
 - With a GitHub token as `MISE_GITHUB_TOKEN`, only when he talks to
-  github.com, and no other credential: mise's `gh` login, credential command
+  github.com and the tool's options name no host (none holds a `:`, as every
+  URL does: mise would send the token to any host that looks like a GitHub
+  API), and no other credential: mise's `gh` login, credential command
   and Git credential helper lookups are off. As a GitHub App (`patchula serve`,
   `--all-repos` with App credentials, or an Action run on several
   repositories) the token is a read-only one he mints for the repository the
@@ -91,12 +100,13 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
 
 What happens to a listing:
 
-- It is cached for an hour, per tool, mirror setting and who may see it. A
-  tool released from another repository, or from a package registry, lists
-  public data, which every repository shares. A tool released from the
-  repository itself, or one whose source the Count cannot tell (a `go:` or
-  `http:` tool, say) in a private repository, is listed for that repository
-  alone. A manual retry, or a failed lookup, asks mise again.
+- It is cached for an hour, per tool, options, mirror setting and who may
+  see it. A tool released from another repository, or from a package
+  registry, lists public data, which every repository shares. A tool released
+  from the repository itself, or one whose source the Count cannot tell (a
+  `go:` or `http:` tool, or any tool with options) in a private repository,
+  is listed for that repository alone. A listing made without a token is
+  public. A manual retry, or a failed lookup, asks mise again.
 - The Node LTS line comes from `mise ls-remote node lts`. When that listing
   fails or is empty, the catalog stays whole without LTS evidence, so only a
   dependency on the LTS channel reports it.
@@ -124,9 +134,9 @@ its lookup where a mise configuration there holds
 anything but `tools`, `tasks`, `task_config`, `vars`, `env`, `settings`,
 `min_version`, `redactions` and `wrappers`, sets a `MISE_*` variable, or sets anything
 but a few plain settings such as `experimental` and `lockfile`; where a
-`.miserc.toml`, `.miserc.local.toml` or `.config/miserc.toml` exists; where
-the tool's own entry has options beyond `version` and `os`; or where the
-Count cannot read the configuration.
+`.miserc.toml`, `.miserc.local.toml` or `.config/miserc.toml` exists; or
+where the Count cannot read the configuration. Options on the tool's own
+entry do not fail it: they go to mise with the lookup.
 
 A mise configuration is a file under a name mise reads one by, and no
 other: `mise.toml`, `.mise.toml` and `.config/mise.toml`; `config.toml` in a

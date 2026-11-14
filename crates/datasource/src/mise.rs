@@ -48,7 +48,13 @@ const PUBLIC_SCOPE: &str = "public";
 
 #[derive(Serialize)]
 struct ListingScope {
+    /// The tool's name, without its options.
     tool: String,
+    /// The options passed to mise in brackets, as the tool argument carries
+    /// them: canonical when the Count wrote them from the entry's table, as
+    /// written when the name carried them. One set of options never shares
+    /// another's listing.
+    options: String,
     prefix: String,
     /// `public`, the run's credential scope, or the run's credential scope
     /// and the repository a scoped token was minted for.
@@ -68,7 +74,7 @@ impl FetchedAt for Listing {
 }
 impl State for Listing {
     const NAMESPACE: &'static str = "mise-ls-remote";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     type Scope = ListingScope;
 }
 
@@ -79,7 +85,7 @@ const GIT_REF: &str = "HEAD";
 const NODE_VERSIONS: &str = "actions/node-versions";
 
 fn is_node(tool: &str) -> bool {
-    matches!(tool, "node" | "core:node")
+    matches!(patchula_mise::split(tool).0, "node" | "core:node")
 }
 
 fn date(raw: &str) -> String {
@@ -153,9 +159,11 @@ impl Client {
     /// The token mise is handed under `access`: the run's for `Run`, else a
     /// token scoped to the repository with the permissions the access names,
     /// which fails the lookup rather than fall back to a broader one. Only a
-    /// token for github.com is handed out.
-    async fn mise_token(&self, access: &MiseAccess) -> Result<Option<String>> {
-        if !self.github.versions_host_eligible() {
+    /// token for github.com is handed out, and none for a tool whose options
+    /// may name a host: mise sends its GitHub token to any host that looks
+    /// like a GitHub API.
+    async fn mise_token(&self, access: &MiseAccess, tool: &str) -> Result<Option<String>> {
+        if !self.hands_mise_a_token(tool) {
             return Ok(None);
         }
         let (repository, permissions) = match access {
@@ -179,12 +187,18 @@ impl Client {
             .await?;
         Ok(Some(token))
     }
+    /// Whether mise is handed a GitHub token for `tool`: only on github.com,
+    /// and never when the tool's options may name a host.
+    fn hands_mise_a_token(&self, tool: &str) -> bool {
+        self.github.versions_host_eligible() && !patchula_mise::options_name_a_host(tool)
+    }
     /// Whom a listing under `access` serves. A repository's own listing is
     /// keyed by the numeric id its token is minted for, so a repository that
-    /// later takes the name never reads it. No token reaches mise off
-    /// github.com, so such a listing is public too.
-    async fn listing_credential_scope(&self, access: &MiseAccess) -> Result<String> {
-        if !self.github.versions_host_eligible() {
+    /// later takes the name never reads it. A listing made with no token
+    /// (off github.com, or for options that may name a host) is public too:
+    /// its options key it apart from the tool's github.com listing.
+    async fn listing_credential_scope(&self, access: &MiseAccess, tool: &str) -> Result<String> {
+        if !self.hands_mise_a_token(tool) {
             return Ok(PUBLIC_SCOPE.into());
         }
         Ok(match access {
@@ -207,10 +221,12 @@ impl Client {
         prefix: Option<&str>,
         access: &MiseAccess,
     ) -> Result<ListingScope> {
+        let (name, options) = patchula_mise::split(tool);
         Ok(ListingScope {
-            tool: tool.into(),
+            tool: name.into(),
+            options: options.unwrap_or_default().into(),
             prefix: prefix.unwrap_or_default().into(),
-            credential_scope: self.listing_credential_scope(access).await?,
+            credential_scope: self.listing_credential_scope(access, tool).await?,
             mise_version: lookup.version().into(),
             versions_host: self.use_versions_host,
         })
@@ -219,7 +235,7 @@ impl Client {
     /// access gives, as its listing is.
     pub async fn mise_backend(&self, tool: &str) -> Result<String> {
         let access = self.tool_access(tool)?;
-        let token = self.mise_token(&access).await?;
+        let token = self.mise_token(&access, tool).await?;
         Ok(self.mise_lookup()?.backend(tool, token.as_deref()).await?)
     }
     /// One tool's listing, from the store while fresh and from mise otherwise.
@@ -233,7 +249,7 @@ impl Client {
         if let Some(saved) = self.fresh_state::<Listing>(&scope).await? {
             return Ok(saved.releases);
         }
-        let token = self.mise_token(&access).await?;
+        let token = self.mise_token(&access, tool).await?;
         let releases = lookup
             .ls_remote(&Query {
                 tool,

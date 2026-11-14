@@ -304,6 +304,15 @@ impl Dependency {
     pub fn id(&self) -> PackageId {
         PackageId::new(self.source, self.registry.clone(), &self.package)
     }
+    /// The package without the options a mise tool carries in brackets:
+    /// `rust` for `rust[profile="minimal"]`. Rules select a tool by either.
+    pub fn bare_package(&self) -> &str {
+        if self.source == Source::Mise {
+            patchula_mise::split(&self.package).0
+        } else {
+            &self.package
+        }
+    }
     /// The kinds rules select this dependency by: its own, plus
     /// `reference-data` for a package on the reference data list.
     pub fn kinds(&self) -> Vec<DependencyKind> {

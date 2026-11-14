@@ -6,18 +6,29 @@ use std::{
 };
 use toml_edit::{Document, Value};
 
-/// Backends that list versions only from options in the tool's table, which
-/// the Count never passes to mise, so a lookup would always come back empty.
-const UNLISTED: &[(&str, &str)] = &[
+/// Backends that list versions only with one of these options on the tool,
+/// so a lookup without any of them would always come back empty.
+const UNLISTED: &[(&str, &[&str], &str)] = &[
     (
         "http:",
-        "mise's http backend lists versions only with version_list_url, which the Count does not pass",
+        &["version_list_url"],
+        "mise's http backend lists versions only with version_list_url, which its entry does not set",
     ),
     (
         "s3:",
-        "mise's s3 backend lists versions only with version_list_url or version_prefix, which the Count does not pass",
+        &["version_list_url", "version_prefix"],
+        "mise's s3 backend lists versions only with version_list_url or version_prefix, which its entry does not set",
     ),
 ];
+
+/// Whether the bracketed options of `tool` set `key`.
+fn sets(tool: &str, key: &str) -> bool {
+    patchula_mise::split(tool).1.is_some_and(|options| {
+        options
+            .split([',', '{', '['])
+            .any(|pair| pair.split_once('=').is_some_and(|(k, _)| k == key))
+    })
+}
 
 /// Whether a directory walk for task files skips `below`, a path relative
 /// to the walk's root, as configuration. mise's
@@ -165,6 +176,7 @@ pub(super) fn extract(
                             name,
                             version,
                             offset + start..offset + start + version.len(),
+                            None,
                         );
                         search = start + version.len();
                     }
@@ -202,32 +214,49 @@ impl Reader<'_, '_> {
     fn tools_in(&mut self, tools: &dyn toml_edit::TableLike, prefix: &str) {
         for (name, item) in tools.iter() {
             if let Some(value) = item.as_value() {
-                self.collect(prefix, name, value);
-            } else if let Some(value) = item.get("version").and_then(|v| v.as_value()) {
-                self.collect(prefix, name, value);
+                self.collect(prefix, name, value, None);
+            } else if let Some(table) = item.as_table_like()
+                && let Some(value) = table.get("version").and_then(|v| v.as_value())
+            {
+                self.collect(prefix, name, value, Some(table));
             }
         }
     }
-    fn collect(&mut self, prefix: &str, name: &str, value: &Value) {
+    /// `entry` is the table the version sits in, whose other keys are the
+    /// tool's options.
+    fn collect(
+        &mut self,
+        prefix: &str,
+        name: &str,
+        value: &Value,
+        entry: Option<&dyn toml_edit::TableLike>,
+    ) {
         match value {
             Value::String(v) => {
                 let span = value.span().expect("immutable parser retains spans");
-                self.add(prefix, name, v.value(), span);
+                self.add(prefix, name, v.value(), span, entry);
             }
             Value::Array(values) => {
                 for value in values.iter() {
-                    self.collect(prefix, name, value);
+                    self.collect(prefix, name, value, entry);
                 }
             }
             Value::InlineTable(table) => {
                 if let Some(value) = table.get("version") {
-                    self.collect(prefix, name, value);
+                    self.collect(prefix, name, value, Some(table));
                 }
             }
             _ => {}
         }
     }
-    fn add(&mut self, prefix: &str, name: &str, version: &str, span: std::ops::Range<usize>) {
+    fn add(
+        &mut self,
+        prefix: &str,
+        name: &str,
+        version: &str,
+        span: std::ops::Range<usize>,
+        entry: Option<&dyn toml_edit::TableLike>,
+    ) {
         let (path, text) = (self.path, self.text);
         let (start, end) = (span.start, span.end);
         if ["path:", "ref:", "prefix:", "system"]
@@ -236,7 +265,20 @@ impl Reader<'_, '_> {
         {
             return;
         }
-        if let Some((_, reason)) = UNLISTED.iter().find(|(p, _)| name.starts_with(p)) {
+        // mise applies the options on the entry when it lists versions as
+        // when it installs, so the Count passes them along in brackets.
+        let (package, registry) = match entry.map(|entry| patchula_mise::bracketed(name, entry)) {
+            None => (name.to_owned(), None),
+            Some(Ok(package)) => (package, None),
+            Some(Err(why)) => (
+                name.to_owned(),
+                origins::Named::Unusable(why.to_string()).registry(),
+            ),
+        };
+        if let Some((_, _, reason)) = UNLISTED
+            .iter()
+            .find(|(p, keys, _)| name.starts_with(p) && !keys.iter().any(|key| sets(&package, key)))
+        {
             self.skipped.push(Skipped {
                 manager: Manager::Mise,
                 file: path.into(),
@@ -277,7 +319,7 @@ impl Reader<'_, '_> {
                 EditForm::Scalar(Syntax::Toml)
             },
             name: name.into(),
-            package: name.into(),
+            package,
             kind: DependencyKind::Tool,
             current: version.into(),
             resolved,
@@ -286,7 +328,7 @@ impl Reader<'_, '_> {
             scheme: Scheme::Loose,
             extract: None,
             included_by: self.included_by.map(str::to_owned),
-            registry: None,
+            registry,
         });
     }
 }
@@ -772,90 +814,14 @@ fn project_redirect(
         .and_then(|check| check(dir, tool, files, feeds))
 }
 
-/// Options on the tool's entry, in any of `configs` or its own file,
-/// beyond its version and platforms, such as install arguments or an API
-/// URL, which can change where it comes from. The reason names the options
-/// when every one is plainly a name.
-fn tool_options(dep: &Dependency, configs: &[&str], files: &Files) -> Option<String> {
-    let options = |entry: &toml_edit::Item| {
-        let keys = |table: &dyn toml_edit::TableLike| {
-            table
-                .iter()
-                .map(|(key, _)| key.to_owned())
-                .filter(|key| !matches!(key.as_str(), "version" | "os" | "minimum_release_age"))
-                .collect::<Vec<_>>()
-        };
-        match entry {
-            toml_edit::Item::Value(Value::Array(values)) => values
-                .iter()
-                .filter_map(|v| v.as_inline_table())
-                .flat_map(|t| keys(t))
-                .collect(),
-            entry => entry.as_table_like().map(keys).unwrap_or_default(),
-        }
-    };
-    let task_tools =
-        |task: &toml_edit::Item| task.get("tools").and_then(|t| t.get(&dep.name)).cloned();
-    for file in configs.iter().copied().chain([dep.file.as_str()]) {
-        let Some(doc) = files
-            .get(file)
-            .and_then(|t| Document::parse(t.read().ok()?).ok())
-        else {
-            continue;
-        };
-        let mut entries = Vec::new();
-        if file == dep.file && dep.included_by.is_some() {
-            // A task file holds tasks as top-level tables.
-            entries.extend(doc.iter().filter_map(|(_, task)| task_tools(task)));
-        } else {
-            if let Some(tools) = doc.get("tools").and_then(|t| t.as_table_like()) {
-                entries.extend(tools.get(&dep.name).cloned());
-            }
-            let tasks = doc.get("tasks").and_then(|t| t.as_table_like());
-            entries.extend(
-                tasks
-                    .into_iter()
-                    .flat_map(|t| t.iter())
-                    .filter_map(|(_, task)| task_tools(task)),
-            );
-        }
-        let mut keys: Vec<String> = Vec::new();
-        for key in entries.iter().flat_map(options) {
-            if !keys.contains(&key) {
-                keys.push(key);
-            }
-        }
-        if keys.is_empty() {
-            continue;
-        }
-        let named: Option<Vec<String>> = keys
-            .iter()
-            .map(|key| crate::origins::shown(key).map(|key| format!("`{key}`")))
-            .collect();
-        return Some(match named.as_deref() {
-            Some([one]) => format!(
-                "its entry in {file} sets {one}, which may move where mise installs it from"
-            ),
-            Some([rest @ .., last]) => format!(
-                "its entry in {file} sets {} and {last}, which may move where mise installs it from",
-                rest.join(", ")
-            ),
-            _ => {
-                format!("its entry in {file} has options that may move where mise installs it from")
-            }
-        });
-    }
-    None
-}
-
 /// Why the lookup of the mise tool `dep` cannot be taken to list what mise
 /// installs: the Count lists versions in a sandbox without the project's
 /// configuration, while mise installs a tool with it. A mise configuration
 /// governing the tool's folder, one above it or one below it that holds
 /// anything but plain tables and settings, or `[env]` that could redirect
-/// one of the tool's backends; one the Count cannot read; options on the
-/// tool's own entry; or the project's own registry settings for a package
-/// backend fail the lookup.
+/// one of the tool's backends; one the Count cannot read; or the project's
+/// own registry settings for a package backend fail the lookup. Options on
+/// the tool's own entry do not: they travel with the tool to mise.
 pub(crate) fn redirected(
     dep: &Dependency,
     configs: &[&str],
@@ -876,9 +842,9 @@ pub(crate) fn redirected(
     if let Some(including) = &dep.included_by {
         dirs.push(config_root(including).unwrap_or_default());
     }
-    let mut kinds = backends(&dep.package);
-    kinds.push(format!("tool:{}", dep.package));
-    let mut related = Vec::new();
+    let tool = patchula_mise::split(&dep.package).0;
+    let mut kinds = backends(tool);
+    kinds.push(format!("tool:{tool}"));
     for config in configs {
         let folder = config_root(config).unwrap_or_default();
         if !dirs
@@ -887,7 +853,6 @@ pub(crate) fn redirected(
         {
             continue;
         }
-        related.push(*config);
         let text = files.get(*config)?;
         let Some(redirected) = text
             .read()
@@ -902,13 +867,10 @@ pub(crate) fn redirected(
             ));
         }
     }
-    if let Some(reason) = tool_options(dep, &related, files) {
-        return Some(reason);
-    }
     dirs.iter().find_map(|dir| {
         kinds
             .iter()
-            .find_map(|kind| project_redirect(kind, dir, &dep.package, files, feeds))
+            .find_map(|kind| project_redirect(kind, dir, tool, files, feeds))
     })
 }
 

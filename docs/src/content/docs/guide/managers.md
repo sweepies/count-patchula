@@ -165,13 +165,17 @@ tool on a publisher's domain. An existing `mise.lock` is regenerated with the
 update. mise runs in a [sandbox](/guide/sources/#mise-lookups), with the
 Count's own pinned mise and none of your configuration.
 
-Some tools are refused for safety (plugin backends, tool options, Git-ref
+A tool's options, in its table (`rust = { version = "1.100.0", profile =
+"minimal" }`) or in brackets on its name
+(`"github:org/tool[bin=tool]"`), go to mise with the lookup, so it lists
+versions the way it installs them, `api_url` and `version_list_url`
+included. Some tools are refused for safety (plugin backends, Git-ref
 installs); see [mise lookups](/guide/sources/#mise-lookups).
 
-`http:` and `s3:` tools are skipped with a reason, not looked up. mise lists their
-versions only from options in the tool's table (`version_list_url`, or
-`version_prefix` for s3), which the Count does not pass to mise, so there is
-nothing to ask. They are not counted as lookup failures.
+`http:` and `s3:` tools without `version_list_url` (or `version_prefix` for s3)
+are skipped with a reason, not looked up: mise lists their versions only from
+those options, so there is nothing to ask. They are not counted as lookup
+failures.
 
 ## Cargo, Go and Terraform
 

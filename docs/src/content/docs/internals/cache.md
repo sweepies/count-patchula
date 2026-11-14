@@ -338,8 +338,9 @@ GraphQL reads resolve the refs currently needed without revalidating the lists.
 ## mise listings
 
 What `mise ls-remote --json` printed is stored as `mise-ls-remote` state, since
-it has no validators. The scope holds the tool (and a version prefix such as
-`lts`), whom the listing serves, whether mise may read the mise-versions mirror
+it has no validators. The scope holds the tool, its options (the bracketed
+text the tool argument carries, so one set of options never shares another's
+listing), a version prefix such as `lts`, whom the listing serves, whether mise may read the mise-versions mirror
 and the pinned mise version. A listing younger than an hour is reused without
 starting mise. A manual retry replaces it, and only successful lookups are
 stored.
@@ -360,9 +361,9 @@ read the same listings.
   backend names (`github:`, `ubi:`, `aqua:`, `packslip:`, `cargo:` with a
   GitHub URL, or each backend the registry snapshot lists for a shorthand) is
   another one, or its backend reads a package registry or is a core tool.
-  When the Count cannot tell (`go:`, `http:`, `spm:`, an unlisted shorthand
-  and the like), the listing is public only for a repository GitHub reports
-  as public.
+  When the Count cannot tell (`go:`, `http:`, `spm:`, an unlisted shorthand,
+  any tool with options and the like), the listing is public only for a
+  repository GitHub reports as public.
 - The run's credential scope and the repository's numeric id otherwise, with
   a `contents: read` token: the listing of a tool released from the
   repository, or of an unknown one in a private repository (or one whose
@@ -377,4 +378,7 @@ read the same listings.
 A batch lookup checks that its key's access is the one the repository it is
 made for gives, and fails otherwise: a public key never runs without a
 repository to mint for. Off github.com no token reaches mise, so every listing
-there is public. Flake inputs still hand nix the run's token.
+there is public. Nor does one for a tool whose options hold a `:` and so may
+name a host (`api_url`, `version_list_url`), since mise sends
+`MISE_GITHUB_TOKEN` to any host that looks like a GitHub API; that listing is
+public too, kept apart from the tool's github.com listing by its options. Flake inputs still hand nix the run's token.

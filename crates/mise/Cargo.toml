@@ -17,6 +17,7 @@ serde_json.workspace = true
 tempfile = "3"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+toml_edit = "0.25.17"
 
 [dev-dependencies]
 patchula-testkit = { path = "../testkit" }

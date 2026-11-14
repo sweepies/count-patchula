@@ -125,7 +125,7 @@ See [GitHub Actions](/guide/github-actions/).
 - **The Count:** Asks the pinned mise to list each tool (`mise ls-remote --json --prerelease`) in a sandbox, and reports the tool's own name as its package with the source `mise`
 - **Why:** Every backend mise can list works, with mise's own registry and version rules
 
-Rules and branch names use the tool's name: `jq`, not `jqlang/jq`, and `patchula/jq-1.x`. `asdf:` and `vfox:` tools, and registry names that only have a plugin backend, are refused with a warning, because their plugins are code from the repository being read. See [mise lookups](/guide/sources/#mise-lookups).
+Rules and branch names use the tool's name: `jq`, not `jqlang/jq`, and `patchula/jq-1.x`. A tool's options travel with it in brackets, so its package is `rust[profile="minimal"]` for `rust = { version = "1.100.0", profile = "minimal" }`; a rule's `packages` selects it by the bare name, `rust`. `asdf:` and `vfox:` tools, and registry names that only have a plugin backend, are refused with a warning, because their plugins are code from the repository being read. See [mise lookups](/guide/sources/#mise-lookups).
 
 As a GitHub App, the Count hands mise a read-only token scoped to the repository being read, not the installation's token. A tool released from another private repository the App can read, such as `github:your-org/internal-cli`, is not found from a different repository, where Renovate's installation token would list it.
 

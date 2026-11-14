@@ -51,8 +51,12 @@ const REGISTRY_BACKENDS: &[&str] = &["cargo", "conda", "gem", "npm", "pipx", "py
 /// Count cannot tell: a backend that reads arbitrary hosts or Go modules, a
 /// shorthand the registry snapshot does not list, or one with a backend
 /// like that. For a shorthand every backend the snapshot lists counts,
-/// since mise picks the first one usable on its host.
+/// since mise picks the first one usable on its host. Options on the tool
+/// can send any backend elsewhere, so a tool with options is `None`.
 pub fn github_sources(tool: &str) -> Option<BTreeSet<String>> {
+    if crate::policy::split(tool).1.is_some() {
+        return None;
+    }
     if tool.contains(':') {
         return backend_sources(tool);
     }
@@ -144,6 +148,8 @@ mod tests {
             ("spm:org/tool", None),
             ("gitlab:org/tool", None),
             ("unknown-shorthand", None),
+            ("github:org/tool[bin=tool]", None),
+            ("rust[profile=\"minimal\"]", None),
         ] {
             assert_eq!(github_sources(tool), sources, "{tool}");
         }
