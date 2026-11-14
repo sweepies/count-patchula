@@ -575,6 +575,16 @@ fn vulnerabilities(repo: &Repository) -> Vec<Vulnerability<'_>> {
     found
 }
 
+/// The manifests a vulnerability is declared in: named up to two, counted
+/// past that.
+fn manifests(files: &[&str]) -> String {
+    if files.len() > 2 {
+        format!("{} manifests", files.len())
+    } else {
+        files.join(", ")
+    }
+}
+
 /// Vulnerabilities, failed lookups, notices, skipped values and warnings.
 fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
     let vulnerabilities = vulnerabilities(repo);
@@ -616,11 +626,12 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
                             .map_or("no fix yet".into(), |v| format!("fixed in {v}")),
                         Paint::Plain,
                     ),
-                    (v.files.join(", "), Paint::Dim),
+                    (manifests(&v.files), Paint::Dim),
                 ]
             })
             .collect();
-        let lines = style.lines(indent + 2, &rows, usize::MAX);
+        // The manifests give way to a narrow terminal, as paths do elsewhere.
+        let lines = style.lines(indent + 2, &rows, 4);
         for (line, v) in lines.iter().zip(&vulnerabilities) {
             let _ = writeln!(out, "{line}");
             if let Some(summary) = &v.advisory.summary {

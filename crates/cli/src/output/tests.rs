@@ -214,7 +214,7 @@ fn a_terminal_fits_rows_to_its_width_but_leaves_links_whole() {
     // A row too wide even with its flexible column cut keeps every version.
     assert!(
         text.contains(
-            "lodash 4.17.20  GHSA-35jh-r3h4-6jhm (CVE-2021-23337)  fixed in 4.17.21  package.json\n"
+            "lodash 4.17.20  GHSA-35jh-r3h4-6jhm (CVE-2021-23337)  fixed in 4.17.21  package…\n"
         ),
         "{text}"
     );
@@ -246,15 +246,18 @@ fn one_advisory_on_one_version_in_two_manifests_is_one_vulnerability() {
             "packageFiles": [
                 {"path": "crates/github/Cargo.toml", "dependencies": [rsa("0.9.10")]},
                 {"path": "crates/server/Cargo.toml", "dependencies": [rsa("0.9.10")]},
-                {"path": "legacy/Cargo.toml", "dependencies": [rsa("0.8.0")]}
+                {"path": "legacy/Cargo.toml", "dependencies": [rsa("0.8.0")]},
+                {"path": "a/Cargo.toml", "dependencies": [rsa("0.7.0")]},
+                {"path": "b/Cargo.toml", "dependencies": [rsa("0.7.0")]},
+                {"path": "c/Cargo.toml", "dependencies": [rsa("0.7.0")]}
             ],
             "warnings": [], "skipped": [], "notices": [], "lookupFailures": []
         }]
     }))
     .unwrap();
     let text = report_text(&report);
-    assert!(summary(&text).contains("2 vulnerabilities"), "{text}");
-    assert!(text.contains("Vulnerabilities (2)\n"), "{text}");
+    assert!(summary(&text).contains("3 vulnerabilities"), "{text}");
+    assert!(text.contains("Vulnerabilities (3)\n"), "{text}");
     assert!(
         text.contains(
             "  moderate  rsa 0.9.10  RUSTSEC-2023-0071 (CVE-2023-49092)  no fix yet  \
@@ -264,6 +267,13 @@ fn one_advisory_on_one_version_in_two_manifests_is_one_vulnerability() {
     );
     assert!(
         text.contains("  moderate  rsa 0.8.0   RUSTSEC-2023-0071 (CVE-2023-49092)  no fix yet  legacy/Cargo.toml\n"),
+        "{text}"
+    );
+    // Past two manifests, they're counted.
+    assert!(
+        text.contains(
+            "  moderate  rsa 0.7.0   RUSTSEC-2023-0071 (CVE-2023-49092)  no fix yet  3 manifests\n"
+        ),
         "{text}"
     );
 }

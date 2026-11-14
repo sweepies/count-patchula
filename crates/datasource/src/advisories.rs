@@ -77,18 +77,34 @@ struct Record {
     summary: Option<String>,
     #[serde(default)]
     database_specific: Option<Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "severities")]
     severity: Vec<RecordSeverity>,
     #[serde(default)]
     affected: Vec<RecordAffected>,
 }
 /// One of OSV's `severity` entries: a CVSS vector under `CVSS_V2`,
-/// `CVSS_V3` or `CVSS_V4`, or another scheme the Count doesn't read.
+/// `CVSS_V3` or `CVSS_V4`, or another scheme, such as `Ubuntu`, whose
+/// score may be a rating word.
 #[derive(Deserialize)]
 struct RecordSeverity {
     #[serde(rename = "type")]
     kind: String,
     score: String,
+}
+/// OSV `severity` entries, leniently: `null` or a value that isn't a list is
+/// none, and an entry that doesn't fit the schema is skipped, so one odd
+/// entry can't fail the record and every lookup that needs it.
+fn severities<'de, D>(deserializer: D) -> std::result::Result<Vec<RecordSeverity>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Array(entries) => entries
+            .into_iter()
+            .filter_map(|e| serde_json::from_value(e).ok())
+            .collect(),
+        _ => Vec::new(),
+    })
 }
 #[derive(Deserialize)]
 struct RecordAffected {
@@ -98,7 +114,7 @@ struct RecordAffected {
     ranges: Vec<RecordRange>,
     #[serde(default)]
     versions: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "severities")]
     severity: Vec<RecordSeverity>,
 }
 #[derive(Deserialize)]
@@ -116,20 +132,30 @@ struct RecordRange {
 
 impl From<Record> for Advisory {
     fn from(record: Record) -> Self {
-        // OSV says "medium" where the Count says "moderate".
+        // The database's own rating first: `database_specific.severity`,
+        // then a rating word under a non-CVSS scheme such as Ubuntu's; the
+        // CVSS vectors only when neither is there. OSV says "medium" where
+        // the Count says "moderate".
+        let entries = || {
+            record
+                .severity
+                .iter()
+                .chain(record.affected.iter().flat_map(|a| &a.severity))
+        };
         let severity = record
             .database_specific
             .as_ref()
             .and_then(|d| d["severity"].as_str())
             .and_then(Severity::advisory)
             .or_else(|| {
-                cvss_severity(
-                    record
-                        .severity
-                        .iter()
-                        .chain(record.affected.iter().flat_map(|a| &a.severity)),
-                )
-            });
+                // Several labels (one per affected package) give the most
+                // severe, which sorts first.
+                entries()
+                    .filter(|e| !is_cvss(e))
+                    .filter_map(|e| Severity::advisory(e.score.trim()))
+                    .min()
+            })
+            .or_else(|| cvss_severity(entries().filter(|e| is_cvss(e))));
         let event = |(kind, version): (String, String)| match kind.as_str() {
             "introduced" => Some(Event::Introduced(version)),
             "fixed" => Some(Event::Fixed(version)),
@@ -171,35 +197,45 @@ impl From<Record> for Advisory {
     }
 }
 
+fn is_cvss(entry: &RecordSeverity) -> bool {
+    matches!(entry.kind.as_str(), "CVSS_V2" | "CVSS_V3" | "CVSS_V4")
+}
+
 /// The qualitative rating of the newest CVSS version among `entries`: v4,
 /// then v3.1 or v3.0, then v2. Several vectors of that version (one per
 /// affected package) give the most severe. A vector that doesn't parse is
-/// skipped, so a record with none that does is unrated. CVSS's "none"
-/// (a 0.0 score) has no word in the Count's vocabulary and is unrated too.
-/// v2 has no Critical band: its High covers 7.0–10.0.
+/// skipped, so a record with none that does is unrated. A 0.0 score (CVSS's
+/// "none"; v2 has no such band and would call it low) has no word in the
+/// Count's vocabulary and is unrated too. v2 has no Critical band: its High
+/// covers 7.0–10.0.
 fn cvss_severity<'a>(entries: impl Iterator<Item = &'a RecordSeverity>) -> Option<Severity> {
     let generation = |vector: &cvss::Cvss| match vector {
         cvss::Cvss::CvssV40(_) => 3,
         cvss::Cvss::CvssV30(_) | cvss::Cvss::CvssV31(_) => 2,
         _ => 1,
     };
+    let rating = |vector: &cvss::Cvss| {
+        if vector.score() == 0.0 {
+            return None;
+        }
+        match vector.severity() {
+            cvss::Severity::None => None,
+            cvss::Severity::Low => Some(Severity::Low),
+            cvss::Severity::Medium => Some(Severity::Moderate),
+            cvss::Severity::High => Some(Severity::High),
+            cvss::Severity::Critical => Some(Severity::Critical),
+        }
+    };
     let vectors: Vec<cvss::Cvss> = entries
-        .filter(|e| matches!(e.kind.as_str(), "CVSS_V2" | "CVSS_V3" | "CVSS_V4"))
         .filter_map(|e| e.score.trim().parse().ok())
         .collect();
     let newest = vectors.iter().map(generation).max()?;
-    let rating = vectors
+    // The most severe sorts first; an unrated vector only when all are.
+    vectors
         .iter()
         .filter(|v| generation(v) == newest)
-        .map(cvss::Cvss::severity)
-        .max()?;
-    match rating {
-        cvss::Severity::None => None,
-        cvss::Severity::Low => Some(Severity::Low),
-        cvss::Severity::Medium => Some(Severity::Moderate),
-        cvss::Severity::High => Some(Severity::High),
-        cvss::Severity::Critical => Some(Severity::Critical),
-    }
+        .filter_map(rating)
+        .min()
 }
 
 #[derive(Deserialize)]
@@ -552,7 +588,6 @@ mod tests {
             .unwrap();
     }
 
-    /// The latest modification time wins; one that does not parse loses.
     /// The severity the Count gives an OSV record with this
     /// `database_specific` and these top-level `severity` entries.
     fn rated(database_specific: Value, entries: &[(&str, &str)]) -> Option<Severity> {
@@ -664,7 +699,7 @@ mod tests {
         assert_eq!(v3("CVSS:3.1/AV:X/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"), None);
         assert_eq!(v3("not a vector"), None);
         assert_eq!(v3(""), None);
-        assert_eq!(rated(Value::Null, &[("Ubuntu", "high")]), None);
+        assert_eq!(rated(Value::Null, &[("Ubuntu", "not-a-word")]), None);
         // An invalid newer vector doesn't hide a valid older one.
         assert_eq!(
             rated(
@@ -676,6 +711,72 @@ mod tests {
             ),
             Some(Severity::High)
         );
+    }
+
+    #[test]
+    fn a_zero_score_is_unrated_in_every_version() {
+        assert_eq!(v3("CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N"), None);
+        // cvss calls a v2 0.0 low; the Count leaves it unrated.
+        assert_eq!(
+            rated(Value::Null, &[("CVSS_V2", "AV:N/AC:L/Au:N/C:N/I:N/A:N")]),
+            None
+        );
+        assert_eq!(
+            rated(
+                Value::Null,
+                &[(
+                    "CVSS_V4",
+                    "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N"
+                )]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_scheme_label_wins_over_a_vector() {
+        // UBUNTU-CVE-2023-4863: Ubuntu rates it medium beside an 8.8 vector.
+        let high = "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H";
+        assert_eq!(
+            rated(Value::Null, &[("CVSS_V3", high), ("Ubuntu", "medium")]),
+            Some(Severity::Moderate)
+        );
+        // database_specific's label outranks it.
+        assert_eq!(
+            rated(
+                json!({"severity": "LOW"}),
+                &[("Ubuntu", "high"), ("CVSS_V3", high)]
+            ),
+            Some(Severity::Low)
+        );
+        // A word outside the vocabulary leaves the vector to rate it.
+        assert_eq!(
+            rated(Value::Null, &[("Ubuntu", "negligible"), ("CVSS_V3", high)]),
+            Some(Severity::High)
+        );
+    }
+
+    #[test]
+    fn odd_severity_entries_are_skipped_not_fatal() {
+        let record: Record = serde_json::from_value(json!({
+            "id": "TEST-3",
+            "severity": [
+                {"type": "CVSS_V3"},
+                {"score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"},
+                {"type": "CVSS_V3", "score": 9.8},
+                "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                null,
+                {"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"},
+            ],
+            "affected": [{"package": {"ecosystem": "PyPI", "name": "a"}, "severity": null}],
+        }))
+        .unwrap();
+        assert_eq!(Advisory::from(record).severity, Some(Severity::High));
+        for severity in [json!(null), json!("high"), json!({"type": "CVSS_V3"})] {
+            let record: Record =
+                serde_json::from_value(json!({"id": "TEST-4", "severity": severity})).unwrap();
+            assert_eq!(Advisory::from(record).severity, None);
+        }
     }
 
     #[test]
@@ -722,6 +823,7 @@ mod tests {
         assert_eq!(Advisory::from(record).severity, Some(Severity::High));
     }
 
+    /// The latest modification time wins; one that does not parse loses.
     #[test]
     fn the_later_modification_wins() {
         assert!(later("2026-11-12T00:00:00Z", "2026-11-01T00:00:00Z"));
