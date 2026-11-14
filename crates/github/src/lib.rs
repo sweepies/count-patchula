@@ -139,6 +139,16 @@ struct Inner {
     options: Options,
     governor: Governor,
     decoding: Arc<tokio::sync::Semaphore>,
+    /// A fixed token's reach, probed at most once: see [`Client::probe_reach`].
+    reach: tokio::sync::OnceCell<Option<SoleRepository>>,
+}
+
+/// The one repository a fixed token reaches, as GitHub reported it: its
+/// `owner/name` in lowercase and its numeric id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoleRepository {
+    pub name: String,
+    pub id: u64,
 }
 
 /// Clone this handle across the batch: token, connection pool, governor and stats
@@ -255,6 +265,7 @@ impl Client {
             credential_scope,
             options,
             governor,
+            reach: tokio::sync::OnceCell::new(),
         }))
     }
 
@@ -293,24 +304,76 @@ impl Client {
             .ok_or(Error::Configuration)
     }
 
-    /// A token narrowed to `repository` and `permissions`, for a tool the
-    /// Count runs on that repository's behalf; `None` when the credentials
-    /// cannot mint one (only a GitHub App installation can).
+    /// A token that reaches no further than `repository`, for a tool the
+    /// Count runs on that repository's behalf: one an App installation mints
+    /// for it with `permissions`, or a fixed token [`Client::probe_reach`]
+    /// found reaching that repository alone, whatever its permissions there.
+    /// `None` otherwise.
     pub fn scoped_token(
         &self,
         repository: &str,
         permissions: Permissions,
     ) -> Option<credentials::Token<'_>> {
-        self.0
-            .credentials
-            .as_ref()?
-            .scoped_token(repository, permissions)
+        match &self.0.credentials {
+            Some(credentials) => credentials.scoped_token(repository, permissions),
+            None => self
+                .reaches_only(repository)
+                .then(|| Box::pin(self.token()) as credentials::Token<'_>),
+        }
     }
 
-    /// The numeric id of the repository `scoped_token` mints for under
-    /// `repository`; `None` when the credentials cannot mint.
+    /// The numeric id of the repository `scoped_token` answers for under
+    /// `repository`; `None` exactly when `scoped_token` is.
     pub fn scoped_repository_id(&self, repository: &str) -> Option<RepositoryId<'_>> {
-        self.0.credentials.as_ref()?.repository_id(repository)
+        match &self.0.credentials {
+            Some(credentials) => credentials.repository_id(repository),
+            None => {
+                let id = self.sole_repository()?.id;
+                self.reaches_only(repository)
+                    .then(|| Box::pin(async move { Ok(id) }) as RepositoryId<'_>)
+            }
+        }
+    }
+
+    /// For a fixed token, the one repository it reaches, asked of GitHub
+    /// once per client: `GET /installation/repositories` answers an
+    /// installation token, a workflow's `GITHUB_TOKEN` included, with what
+    /// it reaches. `None` when it reaches more than one repository, when
+    /// GitHub will not say (a personal token gets a 403), when the probe
+    /// fails, and for refreshable credentials, which mint instead.
+    pub async fn probe_reach(&self) -> Option<&SoleRepository> {
+        self.0
+            .reach
+            .get_or_init(|| async {
+                if self.0.credentials.is_some() {
+                    return None;
+                }
+                let reach: model::TokenReach = self
+                    .get_fresh("installation/repositories?per_page=2")
+                    .await
+                    .ok()?;
+                match reach.repositories.as_slice() {
+                    [only] if reach.total_count == 1 => Some(SoleRepository {
+                        name: only.full_name.to_ascii_lowercase(),
+                        id: only.id,
+                    }),
+                    _ => None,
+                }
+            })
+            .await
+            .as_ref()
+    }
+
+    /// What [`Client::probe_reach`] found, without probing: `None` before
+    /// it has answered.
+    pub fn sole_repository(&self) -> Option<&SoleRepository> {
+        self.0.reach.get()?.as_ref()
+    }
+
+    /// Whether this fixed token was found to reach `repository` alone.
+    pub fn reaches_only(&self, repository: &str) -> bool {
+        self.sole_repository()
+            .is_some_and(|sole| sole.name.eq_ignore_ascii_case(repository))
     }
 
     /// Whether `scoped_token` mints, without minting.

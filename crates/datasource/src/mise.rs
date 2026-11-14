@@ -11,19 +11,22 @@ pub enum MiseAccess {
     /// scope: a trusted repository, and a local directory.
     #[default]
     Run,
-    /// No GitHub token: an untrusted repository under credentials that
-    /// cannot mint a repository-scoped token. The listing reads public data
-    /// alone, so it is public and every repository shares it.
+    /// No GitHub token: an untrusted repository under a token that reaches
+    /// further than it, or whose reach GitHub will not report (a personal
+    /// token). The listing reads public data alone, so it is public and
+    /// every repository shares it.
     Anonymous,
     /// A `metadata: read` token scoped to a repository that asked for the
     /// tool. Without `contents` it reads no repository's releases but public
     /// ones (not even its own under an old name), so the listing is public
     /// and every repository shares it.
     Public,
-    /// A `contents: read` token scoped to this repository (its name,
-    /// lowercased), its listing kept for this repository alone: the tool is
-    /// released from it, or the Count cannot tell where the tool comes from
-    /// and the repository may be private.
+    /// A token that reaches this repository (its name, lowercased) alone,
+    /// its listing kept for this repository alone: a minted `contents: read`
+    /// token where the tool is released from it, or the Count cannot tell
+    /// where the tool comes from and the repository may be private; or, for
+    /// every tool, the run's own token when GitHub reports that it reaches
+    /// only this repository.
     Repository(String),
 }
 
@@ -107,9 +110,14 @@ impl Client {
     /// The access a mise lookup for `tool` made for `repository` gets: the
     /// one place the token mise is handed is chosen. A trusted repository,
     /// or none (a local directory), gets the run's own token. An untrusted
-    /// one gets a token scoped to it as the scope rule says, or none when
-    /// the credentials cannot mint one: the run's would reach further than
-    /// the repository.
+    /// one gets a token that reaches no further than itself: one minted for
+    /// it as the scope rule says, or the run's own when GitHub reported that
+    /// it reaches this repository alone. That token's permissions cannot be
+    /// narrowed to `metadata`, so even a tool from elsewhere is listed for
+    /// this repository alone: it could read the repository's releases under
+    /// an old name. Any other token reaches further, or cannot show it does
+    /// not, and mise gets none. The run's reach must be probed first
+    /// (`patchula_github::Client::probe_reach`); unprobed counts as wider.
     pub fn mise_access(&self, repository: Option<&MiseRepository>, tool: &str) -> MiseAccess {
         match repository {
             None => MiseAccess::Run,
@@ -118,6 +126,9 @@ impl Client {
             }
             Some(repository) if self.github.mints_scoped_tokens() => {
                 mise_scope_rule(tool, repository)
+            }
+            Some(repository) if self.github.reaches_only(&repository.name) => {
+                MiseAccess::Repository(repository.name.to_ascii_lowercase())
             }
             Some(_) => MiseAccess::Anonymous,
         }

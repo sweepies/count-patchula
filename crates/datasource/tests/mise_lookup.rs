@@ -495,8 +495,8 @@ async fn mise_gets_a_token_scoped_to_the_repository_with_the_access_permissions(
 }
 
 /// A token run cannot mint a scoped token: a trusted repository's lookups
-/// get the run's token, and an untrusted one's get none, as the run's reaches
-/// further than the repository. Untrusted listings are public and shared;
+/// get the run's token, and an untrusted one's get none while nothing shows
+/// the run's reaches no further than the repository (its reach unprobed). Untrusted listings are public and shared;
 /// the run's listing is never served to them.
 #[tokio::test]
 async fn a_token_run_hands_its_token_only_to_trusted_repositories() {
@@ -527,6 +527,144 @@ async fn a_token_run_hands_its_token_only_to_trusted_repositories() {
         .unwrap();
     as_repo(trusted("acme/other")).lookup(&jq).await.unwrap();
     assert_eq!(lookups(), 2);
+}
+
+/// Answers `installation/repositories`, a fixed token's reach probe, with
+/// one status and body.
+struct Reach(reqwest::StatusCode, &'static str);
+impl Transport for Reach {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        assert_eq!(request.url().path(), "/installation/repositories");
+        Box::pin(async move {
+            Ok(Response {
+                status: self.0,
+                headers: reqwest::header::HeaderMap::default(),
+                body: self.1.as_bytes().to_vec(),
+                stale: None,
+            })
+        })
+    }
+}
+/// A token run whose token's reach GitHub answers with `status` and `body`,
+/// probed.
+async fn probed(
+    replay: &Arc<MiseReplay>,
+    status: reqwest::StatusCode,
+    body: &'static str,
+) -> Client {
+    let cache = memory().await;
+    let transport = Arc::new(Reach(status, body));
+    let github = patchula_github::Client::with_transport(
+        "run-token",
+        cache.clone(),
+        patchula_github::Options::default(),
+        transport.clone(),
+    )
+    .unwrap();
+    github.probe_reach().await;
+    Client::new(
+        github,
+        patchula_datasource::cached(cache.clone(), transport, 2).unwrap(),
+        cache,
+    )
+    .with_mise(Arc::new(Lookup::new(
+        replay.clone(),
+        "mise".into(),
+        "/var/lib/patchula/tools".into(),
+        "2026.10.11".into(),
+    )))
+}
+
+/// A token GitHub reports reaching only the repository being read is that
+/// repository's scoped token: an untrusted repository's lookups get it, each
+/// listed for the repository alone, since its permissions cannot be narrowed
+/// to public data. A token that reaches further, or whose reach cannot be
+/// read, gives an untrusted repository none.
+#[tokio::test]
+async fn a_token_reaching_only_the_repository_is_its_scoped_token() {
+    let jq = patchula_config::PackageId::public(Source::Mise, "jq");
+    let replay = self::replay();
+    let lookups = || replay.lookups().len();
+    let source = probed(
+        &replay,
+        reqwest::StatusCode::OK,
+        r#"{"total_count":1,"repositories":[{"id":7,"full_name":"Acme/App"}]}"#,
+    )
+    .await;
+    let app = repository("acme/app", Some(true));
+    assert_eq!(
+        source.mise_access(Some(&app), "jq"),
+        MiseAccess::Repository("acme/app".into())
+    );
+    assert_eq!(
+        source.mise_access(Some(&repository("acme/other", Some(false))), "jq"),
+        MiseAccess::Anonymous
+    );
+    source
+        .clone()
+        .with_mise_repository(Some(app.clone()))
+        .lookup(&jq)
+        .await
+        .unwrap();
+    assert_eq!(token(&replay), "run-token");
+    assert_eq!(lookups(), 1);
+    // Another repository the token does not reach shares nothing with it.
+    source
+        .clone()
+        .with_mise_repository(Some(repository("acme/other", Some(false))))
+        .lookup(&jq)
+        .await
+        .unwrap();
+    assert_eq!(lookups(), 2);
+    assert!(
+        !replay
+            .calls()
+            .last()
+            .unwrap()
+            .env
+            .contains_key("MISE_GITHUB_TOKEN")
+    );
+    source
+        .clone()
+        .with_mise_repository(Some(app))
+        .lookup(&jq)
+        .await
+        .unwrap();
+    assert_eq!(lookups(), 2);
+
+    for (status, body) in [
+        (
+            reqwest::StatusCode::OK,
+            r#"{"total_count":2,"repositories":[{"id":7,"full_name":"acme/app"},{"id":8,"full_name":"acme/api"}]}"#,
+        ),
+        (
+            reqwest::StatusCode::FORBIDDEN,
+            r#"{"message":"You must authenticate with an installation access token in order to list repositories for an installation."}"#,
+        ),
+    ] {
+        let replay = self::replay();
+        let source = probed(&replay, status, body).await;
+        let app = repository("acme/app", Some(true));
+        assert_eq!(
+            source.mise_access(Some(&app), "jq"),
+            MiseAccess::Anonymous,
+            "{status}"
+        );
+        source
+            .with_mise_repository(Some(app))
+            .lookup(&jq)
+            .await
+            .unwrap();
+        assert!(
+            !replay
+                .calls()
+                .last()
+                .unwrap()
+                .env
+                .contains_key("MISE_GITHUB_TOKEN"),
+            "{status}"
+        );
+    }
 }
 
 /// A batch key's access must be the one its repository gives: a `Public`

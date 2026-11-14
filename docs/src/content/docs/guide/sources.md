@@ -88,10 +88,19 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
     repositories) gets a read-only token he mints for that repository, so its
     `mise.toml` sees only that repository and public tools, never another
     private repository the App can read.
-  - An untrusted repository read with a personal token or an Action's token
-    gets none, as that token cannot be narrowed to the repository. mise
-    looks its tools up anonymously: public tools resolve, under GitHub's
-    lower rate limit for requests without a token, and private ones do not.
+  - An untrusted repository read with a token he cannot mint from (a
+    personal token, or a token handed to an Action) gets that token only
+    when it reaches that repository alone. He asks GitHub once per run
+    (`GET /installation/repositories`), which answers for an installation
+    token, such as one `actions/create-github-app-token` makes for the
+    workflow's own repository, or a workflow's `GITHUB_TOKEN`. The token
+    can't be narrowed to read-only, so every listing made with it is kept
+    for that repository alone.
+  - Any other untrusted repository gets no token: a token that reaches
+    other repositories too, or whose reach GitHub won't report (a personal
+    token), or a run where the question failed. mise looks its tools up
+    anonymously: public tools resolve, under GitHub's lower rate limit for
+    requests without a token, and private ones do not.
 
   Release notes for a mise tool look it up the same way.
 - With a three-minute limit per lookup and at most four running at once.
@@ -139,7 +148,8 @@ Trust a repository only if its writers may run code as the Count, on his
 machine, with his filesystem, network and credentials: trusting it says they
 count as you. Today trust decides one thing, the GitHub token a repository's
 mise lookups get. An untrusted repository may point the Count at any host or
-package, but gets no credential wider than the repository itself.
+package, but gets no credential wider than the repository itself. The
+[threat model](/internals/threat-model/) sets out what each side may cause.
 
 ### Package backends and the project's settings
 

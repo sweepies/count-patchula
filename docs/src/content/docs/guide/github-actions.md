@@ -137,10 +137,12 @@ cannot read. Releases older than the command key by their version. Where a repos
 [`.github/workflows/actions.lock`](/guide/managers/#actions-lock), the
 lockfile tool authenticates with the token the run was given — the
 `token` input's token — scoped to the repository when the App can mint one.
-mise lookups get the `token` input's token only for repositories the
-settings' [`trustedRepositories`](/guide/sources/#trusted-repositories) names;
-for any other repository mise looks tools up without a token, so a tool
-released from a private repository resolves only from a trusted one.
+mise lookups get the `token` input's token for repositories the settings'
+[`trustedRepositories`](/guide/sources/#trusted-repositories) names, and for
+the one repository the token reaches when that is all it reaches. An App
+token made for the workflow's own repository qualifies, so a run on that
+repository needs no settings. A token reaching more repositories gives an
+untrusted one no token, and mise looks its tools up anonymously.
 
 A run where a repository changed underneath it — a push moved the default
 branch while the Count was publishing, say — stops rather than write against

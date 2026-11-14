@@ -318,6 +318,25 @@ pub struct InstallationRepositories {
     pub repositories: Vec<ListedRepository>,
 }
 
+/// `GET /installation/repositories?per_page=2`, read to learn what a fixed
+/// token reaches: how many repositories, and the first two.
+#[derive(Clone, Debug, Deserialize)]
+pub struct TokenReach {
+    /// `total_count` — required.
+    pub total_count: u64,
+    /// `repositories` — required.
+    pub repositories: Vec<ReachedRepository>,
+}
+
+/// A repository in [`TokenReach`], trimmed to its name and id.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ReachedRepository {
+    /// `id` — required.
+    pub id: u64,
+    /// `full_name` — required.
+    pub full_name: String,
+}
+
 /// A repository as `GET /user/repos` and `GET /installation/repositories`
 /// list it — the `repository` schema, trimmed to the fields consumers read.
 #[derive(Clone, Debug, Deserialize)]

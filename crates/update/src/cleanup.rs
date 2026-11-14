@@ -59,7 +59,7 @@ pub(crate) struct NotOursScope {
 }
 impl State for NotOurs {
     const NAMESPACE: &'static str = "not-ours";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
     const CODE_VERSIONED: bool = true;
     type Scope = NotOursScope;
 }

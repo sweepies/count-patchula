@@ -41,8 +41,18 @@ single-flight lock, keyed by (installation, repository, permission set), so
 two repositories mint separately and a fuller token never answers a narrower
 mint. Only App installation credentials answer `scoped_token`,
 `repository_id` and `mints_scoped_tokens`; every other credential returns
-`None`: the actions.lock tool then uses the run's own token, and mise gets
-it only for a trusted repository and no token otherwise. A
+`None`, with one exception: a fixed token that `Client::probe_reach` found
+reaching one repository alone. Once per client, it asks
+`GET /installation/repositories?per_page=2`, which answers an installation
+token, a workflow's `GITHUB_TOKEN` included. A `total_count` of 1 records
+that repository's lowercased name and id. A 403 (a personal token), more
+repositories, or a failed or undecodable answer records nothing.
+`scoped_token` and `repository_id` then answer for that repository with the
+run's token and the probed id, whatever the requested permissions, since the
+token reaches nothing else. The engine probes only when an untrusted
+repository looks a mise tool up, before any lookup key is chosen. An
+unprobed token reaches nothing as far as `reaches_only` is concerned. The
+actions.lock tool still uses the run's own token without a mint. A
 real-installation proof lives ignored in `crates/github/tests/app.rs`: set
 `PATCHULA_TEST_APP_ID`, `PATCHULA_TEST_APP_KEY_FILE`,
 `PATCHULA_TEST_INSTALLATION`, `PATCHULA_TEST_REPO` and

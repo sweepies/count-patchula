@@ -868,3 +868,119 @@ async fn content_hour_budget_fails_before_sending_when_wait_exceeds_budget() {
     );
     assert_eq!(github.stats().await.requests, 500);
 }
+
+/// Answers `installation/repositories` with one status and body, counting
+/// the requests.
+struct Reach {
+    status: reqwest::StatusCode,
+    body: &'static str,
+    requests: AtomicUsize,
+}
+impl Transport for Reach {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        assert_eq!(request.url().path(), "/installation/repositories");
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            Ok(Response {
+                status: self.status,
+                headers: reqwest::header::HeaderMap::new(),
+                body: self.body.as_bytes().to_vec(),
+                stale: None,
+            })
+        })
+    }
+}
+
+async fn reach_client(
+    status: reqwest::StatusCode,
+    body: &'static str,
+) -> (tempfile::TempDir, Client, Arc<Reach>) {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = Cache::open(
+        directory.path().join("cache.sqlite"),
+        CacheOptions::default(),
+    )
+    .await
+    .unwrap();
+    let transport = Arc::new(Reach {
+        status,
+        body,
+        requests: AtomicUsize::new(0),
+    });
+    let client =
+        Client::with_transport(TOKEN, cache, Options::default(), transport.clone()).unwrap();
+    (directory, client, transport)
+}
+
+/// A fixed token GitHub reports reaching one repository is that
+/// repository's scoped token, asked once per client; one reaching more, or
+/// whose reach GitHub refuses to list (a personal token), is no
+/// repository's.
+#[tokio::test]
+async fn a_fixed_token_reaching_one_repository_is_scoped_to_it() {
+    let (_directory, client, transport) = reach_client(
+        reqwest::StatusCode::OK,
+        r#"{"total_count":1,"repositories":[{"id":42,"full_name":"Acme/App"}]}"#,
+    )
+    .await;
+    // Unprobed, the token is no repository's.
+    assert!(!client.reaches_only("acme/app"));
+    assert!(
+        client
+            .scoped_token("acme/app", patchula_github::Permissions::ContentsRead)
+            .is_none()
+    );
+    let sole = client.probe_reach().await.cloned().unwrap();
+    assert_eq!(sole.name, "acme/app");
+    assert_eq!(sole.id, 42);
+    client.probe_reach().await;
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
+    assert!(client.reaches_only("ACME/app"));
+    assert!(!client.reaches_only("acme/other"));
+    let token = client
+        .scoped_token("acme/app", patchula_github::Permissions::MetadataRead)
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(token, TOKEN);
+    assert_eq!(
+        client
+            .scoped_repository_id("acme/app")
+            .unwrap()
+            .await
+            .unwrap(),
+        42
+    );
+    assert!(
+        client
+            .scoped_token("acme/other", patchula_github::Permissions::MetadataRead)
+            .is_none()
+    );
+    assert!(client.scoped_repository_id("acme/other").is_none());
+
+    for (status, body) in [
+        (
+            reqwest::StatusCode::OK,
+            r#"{"total_count":2,"repositories":[{"id":42,"full_name":"acme/app"},{"id":43,"full_name":"acme/api"}]}"#,
+        ),
+        // More than the page shows still reaches more.
+        (
+            reqwest::StatusCode::OK,
+            r#"{"total_count":3,"repositories":[{"id":42,"full_name":"acme/app"}]}"#,
+        ),
+        (
+            reqwest::StatusCode::FORBIDDEN,
+            r#"{"message":"You must authenticate with an installation access token in order to list repositories for an installation."}"#,
+        ),
+        (reqwest::StatusCode::OK, r#"{"unexpected":true}"#),
+    ] {
+        let (_directory, client, _) = reach_client(status, body).await;
+        assert!(client.probe_reach().await.is_none(), "{status} {body}");
+        assert!(!client.reaches_only("acme/app"), "{status} {body}");
+        assert!(
+            client
+                .scoped_token("acme/app", patchula_github::Permissions::ContentsRead)
+                .is_none()
+        );
+    }
+}

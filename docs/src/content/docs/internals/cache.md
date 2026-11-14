@@ -370,16 +370,24 @@ For an untrusted repository:
   When the Count cannot tell (`go:`, `http:`, `spm:`, an unlisted shorthand
   and the like), the listing is public only for a repository GitHub reports
   as public.
-- The run's credential scope and the repository's numeric id otherwise, with
-  a `contents: read` token: the listing of a tool released from the
+- The run's credential scope and the repository's numeric id otherwise,
+  with a `contents: read` token: the listing of a tool released from the
   repository, or of an unknown one in a private repository (or one whose
   visibility was not read), serves that repository alone. The id is the one
   the mint names, so a new repository under a renamed one's name reads none
   of its listings or catalogs.
-- `public`, with no token, under credentials that cannot mint a scoped one (a
-  personal token, an Action's own token): the run's token reaches further
-  than the repository. The `catalog` scope files these with the `metadata:
-  read` views, which read the same public data.
+- The same, for every tool, with the run's own token when the run cannot
+  mint and GitHub reports that the token reaches this repository alone. That
+  token can't be narrowed to `metadata`, so it could read the repository's
+  releases under an old name, and none of its listings is public.
+- `public`, with no token, when the run cannot mint and its token reaches
+  further than the repository, or cannot show that it doesn't (a personal
+  token, a multi-repository installation token, a failed probe). The
+  `catalog` scope files these with the `metadata: read` views, which read the
+  same public data.
+
+The threat model behind these rules is in
+[Threat model](/internals/threat-model/).
 
 A batch lookup checks that its key's access is the one the repository it is
 made for gives, and fails otherwise: a public key never runs without a

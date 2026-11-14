@@ -415,6 +415,7 @@ impl Engine {
         };
         let phase = PhaseTrace::new("lookup");
         let started = Instant::now();
+        self.probe_token_reach(&work).await;
         let plan = self.plan_lookups(&mut work, discovery).await?;
         self.fetch_lookups(&plan, &mut work, &mut lookups, now, sent)
             .await?;
@@ -453,6 +454,26 @@ impl Engine {
             image,
             policy,
         })
+    }
+
+    /// Before any mise key is chosen: whether a token that cannot mint
+    /// reaches one repository alone, asked once per run, and only when an
+    /// untrusted repository looks a mise tool up.
+    pub(super) async fn probe_token_reach(&self, work: &[Work]) {
+        if self.github.mints_scoped_tokens() {
+            return;
+        }
+        let asks = work.iter().any(|repo| {
+            !repo.local
+                && repo.trust == Trust::Untrusted
+                && repo
+                    .dependencies
+                    .iter()
+                    .any(|dep| dep.dependency.source == Source::Mise)
+        });
+        if asks {
+            self.github.probe_reach().await;
+        }
     }
 
     /// What the batch fetches and checks for `dep`, decided once its

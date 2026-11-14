@@ -1779,6 +1779,84 @@ mod tests {
         assert_eq!(installation.mise_access(&app, &npm), MiseAccess::Run);
     }
 
+    /// Answers a fixed token's reach probe with one repository, counting.
+    struct SoleReach(std::sync::atomic::AtomicUsize);
+    impl Transport for SoleReach {
+        fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+            assert_eq!(request.url().path(), "/installation/repositories");
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Ok(patchula_http::Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: br#"{"total_count":1,"repositories":[{"id":7,"full_name":"acme/app"}]}"#
+                        .to_vec(),
+                    stale: None,
+                })
+            })
+        }
+    }
+
+    /// A token run probes its token's reach once, and only when an
+    /// untrusted repository looks a mise tool up; a token reaching that
+    /// repository alone is then its scoped token.
+    #[tokio::test]
+    async fn a_token_run_probes_its_reach_only_for_untrusted_mise_lookups() {
+        let transport = Arc::new(SoleReach(Default::default()));
+        let settings = patchula_config::settings::Settings {
+            trusted_repositories: vec!["acme/trusted".into()],
+            ..Default::default()
+        };
+        let engine = Engine::from_settings(
+            &settings,
+            Vec::new(),
+            Auth::Token("t".into()),
+            4,
+            patchula_words::Recheck::NextRun,
+            Cache::open(":memory:", Default::default()).await.unwrap(),
+            transport.clone(),
+        )
+        .unwrap();
+        let tool = patchula_manager::testing::dependency(
+            patchula_words::Manager::Mise,
+            DependencyKind::Tool,
+            Source::Mise,
+        );
+        let work = |name: &str, deps: Vec<Dependency>| {
+            let mut work = Work {
+                private: Some(true),
+                trust: engine.trust(name, false),
+                ..Work::empty(repo_report(name, Status::Complete, None), None)
+            };
+            work.dependencies = deps.into_iter().map(Dep::new).collect();
+            work
+        };
+        let npm = Dependency {
+            source: Source::Npm,
+            ..tool.clone()
+        };
+        engine
+            .probe_token_reach(&[
+                work("acme/trusted", vec![tool.clone()]),
+                work("acme/app", vec![npm]),
+            ])
+            .await;
+        assert_eq!(transport.0.load(Ordering::SeqCst), 0);
+        let app = work("acme/app", vec![tool.clone()]);
+        assert_eq!(engine.mise_access(&app, &tool), MiseAccess::Anonymous);
+        engine.probe_token_reach(std::slice::from_ref(&app)).await;
+        engine.probe_token_reach(std::slice::from_ref(&app)).await;
+        assert_eq!(transport.0.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            engine.mise_access(&app, &tool),
+            MiseAccess::Repository("acme/app".into())
+        );
+        assert_eq!(
+            engine.mise_access(&work("acme/api", Vec::new()), &tool),
+            MiseAccess::Anonymous
+        );
+    }
+
     /// Settings whose `trustedRepositories` do not compile build no engine.
     #[tokio::test]
     async fn invalid_trusted_repositories_build_no_engine() {

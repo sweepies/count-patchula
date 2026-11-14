@@ -127,7 +127,7 @@ See [GitHub Actions](/guide/github-actions/).
 
 Rules and branch names use the tool's name: `jq`, not `jqlang/jq`, and `patchula/jq-1.x`. `asdf:` and `vfox:` tools, and registry names that only have a plugin backend, are refused with a warning, because their plugins are code from the repository being read. See [mise lookups](/guide/sources/#mise-lookups).
 
-Unless the operator [trusts the repository](/guide/sources/#trusted-repositories), the Count hands mise a read-only token scoped to the repository being read as a GitHub App, and no token with a personal or Action token, which cannot be narrowed. A tool released from another private repository, such as `github:your-org/internal-cli`, is then not found, where Renovate's token would list it. List the repositories that need such tools in `trustedRepositories`; nothing is trusted by default.
+Unless the operator [trusts the repository](/guide/sources/#trusted-repositories), the Count hands mise a token that reaches no further than the repository being read: one he mints for it as a GitHub App, or the run's token when GitHub reports that it reaches that repository alone. Otherwise, as with a personal token, mise gets none. A tool released from another private repository, such as `github:your-org/internal-cli`, is then not found, where Renovate's token would list it. List the repositories that need such tools in `trustedRepositories`; nothing is trusted by default.
 
 ### Nix flake inputs {#nix-flake-inputs}
 

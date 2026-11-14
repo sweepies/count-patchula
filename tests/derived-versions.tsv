@@ -41,7 +41,7 @@ oci-config-notes	1	crates/datasource/src/docker.rs,crates/datasource/src/upstrea
 oci-tags	1	crates/datasource/src/docker.rs,crates/http/src/derive.rs	serde,serde_json	1793d5ba9d90c2f7d4f7cc78cbdb2bf199bc463dbfa454c8296e3e13f6fa1808
 image-platform	3	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json,sha2	27914c918d53cef3cd1fb7b1cb4882cb189b3658e2f719f07fe88ad208fdbe5e
 sbom-os	3	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	base64,serde,serde_json,sha2	27914c918d53cef3cd1fb7b1cb4882cb189b3658e2f719f07fe88ad208fdbe5e
-github-release-head	4	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	90de1d5d0ae9b0ca961e6d7723f2b48ad8553710df39402af75c12d37f28c0a8
+github-release-head	5	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	97c8ecc48281b59d357a184d05b6528ba08417a939eba7e9a43875f3e74b600c
 anonymous-registry-pull-token	1	crates/datasource/src/docker.rs	chrono,serde,serde_json	e8d7be4142dd9b7f394b4f633656f200b7003bd1fec689a051750576ef313cd3
 notes-adapter-listing	5	crates/notes/src/adapters.rs,crates/http/src/derive.rs	serde,serde_json	c693de1bf383042dfa5ba7ae9b7158ad98392e1eead155b86e35625e53c9bb61
 parsed-postgres-sgml	5	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	71e0ca0d7dfc360177f28a4d7c040b996306ca4763a919f1ce12513adf30aaaf
