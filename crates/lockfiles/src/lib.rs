@@ -27,7 +27,14 @@ pub enum Ecosystem {
     Php,
     Nix,
     Apm,
+    /// `.github/workflows/actions.lock`, for the workflows it already lists.
+    Actions,
 }
+
+/// The GitHub Actions workflow lockfile's one path: not a leaf name
+/// matched anywhere in the tree.
+pub const ACTIONS_LOCK: &str = ".github/workflows/actions.lock";
+
 /// What a lock job asks its ecosystem's tool to do.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Scope {
@@ -450,9 +457,31 @@ pub fn job(
         Manager::Terraform if dep.source == Source::Terraform => directory(&dep.file),
         // Terraform sources outside the registry have no lock entry to regenerate.
         Manager::Terraform => return Ok(None),
+        // actions.lock sits beside the workflows it lists: a step-level
+        // action edit in a `.github/workflows/` workflow asks for it
+        // regenerated. An in-repository `action.yml` edit needs it only
+        // when a listed workflow calls the file through `$/`, which paths
+        // cannot tell: `actions_composite_job` decides from the contents.
+        // Nothing else the manager extracts — reusable workflows, images,
+        // setup inputs, runner labels — is in the lock.
+        Manager::GithubActions => {
+            if dep.kind != patchula_words::DependencyKind::Action
+                || !patchula_manager::roles::github_workflow(&dep.file)
+                || !paths.contains(ACTIONS_LOCK)
+            {
+                return Ok(None);
+            }
+            return Ok(Some(Job {
+                ecosystem: Ecosystem::Actions,
+                directory: ".github/workflows".into(),
+                scope: Scope::Directory,
+                exact_version: false,
+                publish_age_allow: false,
+                wait_hours: 0,
+            }));
+        }
         // No lockfile the Count generates.
-        Manager::GithubActions
-        | Manager::Dockerfile
+        Manager::Dockerfile
         | Manager::Compose
         | Manager::Kubernetes
         | Manager::Kustomize
@@ -563,6 +592,9 @@ pub fn refresh(ecosystem: Ecosystem) -> Refresh {
         Ecosystem::Php => Refresh::Locks(&[Manager::Composer]),
         Ecosystem::Nix => Refresh::LocksBesideManifest(&[Manager::Nix]),
         Ecosystem::Apm => Refresh::LocksBesideManifest(&[Manager::Apm]),
+        // Regenerating a listed workflow's entries on its own is `--relock`,
+        // which maintenance does not run.
+        Ecosystem::Actions => Refresh::Never,
     }
 }
 
@@ -610,6 +642,259 @@ pub fn same_release(locked: &str, requested: &str) -> bool {
     locked == requested || (!requested.contains('+') && locked.split('+').next() == Some(requested))
 }
 
+/// What an `actions.lock` lists under `workflows:`: each workflow's
+/// repository path and its canonical `owner/repo@ref` entries. Read as
+/// strictly as `gh actions-lock`'s parser reads it (actions-lockfile's
+/// `checkWorkflowPathKey` and `ParsePin`): a path key that is empty,
+/// absolute, holds a control character, a backslash or a colon, or
+/// climbs with `..`, or an entry that is not a repository-scoped pin, is
+/// `None` — corrupt, or a newer format — never an empty map.
+pub fn actions_lock_workflows(text: &str) -> Option<BTreeMap<String, BTreeSet<String>>> {
+    #[derive(Deserialize)]
+    struct Lock {
+        workflows: BTreeMap<String, Option<Vec<String>>>,
+    }
+    let lock = serde_yaml_ng::from_str::<Lock>(text).ok()?;
+    lock.workflows
+        .into_iter()
+        .map(|(path, entries)| {
+            let safe = !path.is_empty()
+                && !path.starts_with('/')
+                && !path
+                    .chars()
+                    .any(|c| c <= '\u{1f}' || c == '\u{7f}' || c == '\\' || c == ':')
+                && !path.split('/').any(|segment| segment == "..");
+            if !safe {
+                return None;
+            }
+            let entries = entries
+                .unwrap_or_default()
+                .iter()
+                .map(|entry| actions_lock_pin(entry))
+                .collect::<Option<BTreeSet<_>>>()?;
+            Some((path, entries))
+        })
+        .collect()
+}
+
+/// The canonical key `gh actions-lock` writes for an `owner/repo@ref`
+/// pin: owner and repository lowercased, a full commit SHA lowercased,
+/// any other ref as written (git refs are case-sensitive). `None` for
+/// anything actions-lockfile's `ParsePin` rejects: no `@` (the first one
+/// splits), an empty owner, repository or ref, a ref holding `:`, or a
+/// sub-path.
+pub fn actions_lock_pin(pin: &str) -> Option<String> {
+    let (repository, reference) = pin.split_once('@')?;
+    let (owner, repo) = repository.split_once('/')?;
+    if owner.is_empty()
+        || repo.is_empty()
+        || repo.contains('/')
+        || reference.is_empty()
+        || reference.contains(':')
+    {
+        return None;
+    }
+    Some(actions_lock_key(repository, reference))
+}
+
+/// The lock key for repository `owner/repo` at `reference`, canonical as
+/// `gh actions-lock` writes it (actions-lockfile's `Pin.Canonical` and
+/// gh-actions-lock's `CanonicalRef`).
+pub fn actions_lock_key(repository: &str, reference: &str) -> String {
+    let full_sha =
+        matches!(reference.len(), 40 | 64) && reference.bytes().all(|b| b.is_ascii_hexdigit());
+    let reference = if full_sha {
+        reference.to_ascii_lowercase()
+    } else {
+        reference.to_owned()
+    };
+    format!("{}@{reference}", repository.to_ascii_lowercase())
+}
+
+/// How a caller reads a repository file for `actions_lock_callers`:
+/// `Ok(None)` when the path does not exist, `Err` when it exists but its
+/// text is not at hand.
+pub type ReadFile<'a> = dyn Fn(&str) -> Result<Option<String>, String> + 'a;
+
+/// How deep gh-actions-lock follows `$/` composites before it gives up
+/// (`maxYAMLWalkDepth`).
+const SELF_ACTION_DEPTH: usize = 100;
+
+/// The workflows among `listed` whose step-level `uses:` reach the
+/// in-repository action file `file` through gh-actions-lock's
+/// same-repository syntax `$/<dir>`, followed as the tool's
+/// `ScanSelfRepositoryActions` follows it: a bare `$/` value (one with an
+/// `@` is invalid and never followed) at `jobs.<id>.steps[*]` or inside a
+/// `parallel:` group names the directory `<dir>`, cleaned like
+/// `filepath.Join` and kept inside the repository, whose `action.yml` —
+/// else `action.yaml` — is read; a composite's own `runs.steps[*]` `$/`
+/// values are followed in turn. The tool locks every remote `uses:` it
+/// finds there under the calling workflow, so these are the workflows an
+/// edit to `file` relocks. A local `./` action is never followed.
+///
+/// Whatever the tool would fail to read on the way — a workflow or
+/// action file that does not parse, a path that leaves the repository, a
+/// file whose text is not at hand, a chain deeper than the tool follows
+/// — leaves the answer unknown, and is an `Err` naming it rather than a
+/// guess.
+pub fn actions_lock_callers(
+    file: &str,
+    listed: &BTreeSet<String>,
+    read: &ReadFile<'_>,
+) -> Result<BTreeSet<String>, String> {
+    let unknown = |what: String| {
+        format!("which workflows the lockfile tool relocks for {file} is unknown: {what}")
+    };
+    let yaml = |path: &str, text: &str| {
+        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text)
+            .map_err(|e| unknown(format!("{path} does not parse: {e}")))
+    };
+    let text = |path: &str| read(path).map_err(|e| unknown(format!("{path}: {e}")));
+    let uses = |steps: Option<&serde_yaml_ng::Value>| -> Vec<String> {
+        steps
+            .and_then(|steps| steps.as_sequence())
+            .into_iter()
+            .flatten()
+            .filter_map(|step| step.get("uses")?.as_str().map(|u| u.trim().to_owned()))
+            .collect()
+    };
+    let self_action = |value: &str| value.starts_with("$/") && !value.contains('@');
+    let mut callers = BTreeSet::new();
+    for workflow in listed
+        .iter()
+        .filter(|w| patchula_manager::roles::github_workflow(w))
+    {
+        let Some(content) = text(workflow)? else {
+            continue;
+        };
+        let document = yaml(workflow, &content)?;
+        let mut pending: Vec<(String, usize)> = Vec::new();
+        if let Some(jobs) = document.get("jobs").and_then(|jobs| jobs.as_mapping()) {
+            for job in jobs.values() {
+                let steps = job.get("steps");
+                let mut found = uses(steps);
+                for step in steps.and_then(|s| s.as_sequence()).into_iter().flatten() {
+                    found.extend(uses(step.get("parallel")));
+                }
+                pending.extend(found.into_iter().filter(|u| self_action(u)).map(|u| (u, 0)));
+            }
+        }
+        let mut seen = BTreeSet::new();
+        while let Some((reference, depth)) = pending.pop() {
+            if !seen.insert(reference.clone()) {
+                continue;
+            }
+            if depth > SELF_ACTION_DEPTH {
+                return Err(unknown(format!(
+                    "{workflow} nests `$/` actions deeper than the tool follows"
+                )));
+            }
+            // `filepath.Join(repoRoot, rel)`: empty and `.` segments go,
+            // `..` climbs, and climbing out of the repository is refused.
+            let mut segments: Vec<&str> = Vec::new();
+            for segment in reference["$/".len()..].split('/') {
+                match segment {
+                    "" | "." => {}
+                    ".." => {
+                        if segments.pop().is_none() {
+                            return Err(unknown(format!(
+                                "{workflow} names {reference}, outside the repository"
+                            )));
+                        }
+                    }
+                    segment => segments.push(segment),
+                }
+            }
+            let directory = segments.join("/");
+            let mut action = None;
+            for name in ["action.yml", "action.yaml"] {
+                let path = if directory.is_empty() {
+                    name.to_owned()
+                } else {
+                    format!("{directory}/{name}")
+                };
+                if let Some(content) = text(&path)? {
+                    action = Some((path, content));
+                    break;
+                }
+            }
+            // A directory without an action file reaches nothing.
+            let Some((path, content)) = action else {
+                continue;
+            };
+            if path == file {
+                callers.insert(workflow.clone());
+            }
+            let definition = yaml(&path, &content)?;
+            let runs = definition.get("runs");
+            // The tool decodes `runs.steps[*].uses` into a typed struct:
+            // a `runs` that is no mapping, `steps` that are no sequence
+            // or a step that is no mapping fail it.
+            let steps = runs.and_then(|runs| runs.get("steps"));
+            let malformed = runs.is_some_and(|runs| !runs.is_mapping() && !runs.is_null())
+                || steps.is_some_and(|steps| {
+                    !steps.is_null()
+                        && steps.as_sequence().is_none_or(|steps| {
+                            steps
+                                .iter()
+                                .any(|step| !step.is_mapping() && !step.is_null())
+                        })
+                });
+            if malformed {
+                return Err(unknown(format!(
+                    "{path} is not an action definition the tool reads"
+                )));
+            }
+            if runs
+                .and_then(|runs| runs.get("using"))
+                .and_then(|u| u.as_str())
+                != Some("composite")
+            {
+                continue;
+            }
+            pending.extend(
+                uses(steps)
+                    .into_iter()
+                    .filter(|u| self_action(u))
+                    .map(|u| (u, depth + 1)),
+            );
+        }
+    }
+    Ok(callers)
+}
+
+/// The Actions job a step-level action edit in an in-repository action
+/// file needs, which `job()` cannot tell from paths alone: one when a
+/// workflow the base lock lists calls the file through `$/`, none when no
+/// listed workflow does — a `./` composite, or one nothing calls — and an
+/// `Err` when the lockfile or the workflows cannot say.
+pub fn actions_composite_job(
+    dep: &Dependency,
+    paths: &BTreeSet<String>,
+    read: &ReadFile<'_>,
+) -> Result<Option<Job>, String> {
+    if dep.manager != Manager::GithubActions
+        || dep.kind != patchula_words::DependencyKind::Action
+        || patchula_manager::roles::github_workflow(&dep.file)
+        || !patchula_manager::roles::action_file(&dep.file)
+        || !paths.contains(ACTIONS_LOCK)
+    {
+        return Ok(None);
+    }
+    let lock = read(ACTIONS_LOCK)?.ok_or("actions.lock is not readable")?;
+    let listed = actions_lock_workflows(&lock)
+        .ok_or("actions.lock: a corrupt or newer lockfile; regenerate it with `gh actions-lock`")?;
+    let callers = actions_lock_callers(&dep.file, &listed.into_keys().collect(), read)?;
+    Ok((!callers.is_empty()).then(|| Job {
+        ecosystem: Ecosystem::Actions,
+        directory: ".github/workflows".into(),
+        scope: Scope::Directory,
+        exact_version: false,
+        publish_age_allow: false,
+        wait_hours: 0,
+    }))
+}
+
 /// The ecosystem `manager`'s lockfile work runs through, or `None` for a
 /// manager whose changes never produce a lockfile job. `job()`'s dispatch
 /// and `validate_targets`' proof lists both read this one mapping, so
@@ -628,8 +913,8 @@ pub fn ecosystem(manager: Manager) -> Option<Ecosystem> {
         Manager::Go => Some(Ecosystem::Go),
         Manager::Pyproject => Some(Ecosystem::Python),
         Manager::Terraform => Some(Ecosystem::Terraform),
+        Manager::GithubActions => Some(Ecosystem::Actions),
         Manager::Helm
-        | Manager::GithubActions
         | Manager::Dockerfile
         | Manager::Compose
         | Manager::Kubernetes

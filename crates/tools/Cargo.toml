@@ -20,6 +20,7 @@ patchula-mise = { path = "../mise" }
 patchula-process = { path = "../process" }
 patchula-versioning = { path = "../versioning" }
 patchula-words = { path = "../words" }
+serde = { workspace = true }
 serde_json.workspace = true
 reqwest.workspace = true
 tokio.workspace = true

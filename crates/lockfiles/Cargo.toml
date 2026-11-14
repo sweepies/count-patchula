@@ -17,3 +17,4 @@ patchula-report = { path = "../report" }
 patchula-words = { path = "../words" }
 patchula-process = { path = "../process" }
 serde.workspace = true
+serde_yaml_ng = "0.10.0"

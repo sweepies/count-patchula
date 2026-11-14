@@ -311,7 +311,9 @@ fn add(
             None,
         )
     } else {
-        let Some((name, reference)) = reference.rsplit_once('@') else {
+        // The first `@` ends the name, as the runner and gh-actions-lock
+        // read it: a ref such as `release@2024` keeps its own `@`.
+        let Some((name, reference)) = reference.split_once('@') else {
             return Ok(());
         };
         let Some((name, package, source)) = repository(name, bare) else {
@@ -609,7 +611,14 @@ pub fn replacement(
     } else {
         '@'
     };
-    let at = scalar.rfind(separator).ok_or("action scalar has no ref")?;
+    // An action's ref starts after the first `@`, where extraction split
+    // it; an APM ref after the last `#`.
+    let at = if dep.manager == Manager::Apm {
+        scalar.rfind(separator)
+    } else {
+        scalar.find(separator)
+    }
+    .ok_or("action scalar has no ref")?;
     let old_ref = scalar[at + 1..].trim_end_matches(['\'', '"', ' ', '\t', '\r']);
     let end = at + 1 + old_ref.len();
     let mut result = format!(
@@ -708,6 +717,12 @@ impl crate::Ecosystem for Descriptor {
                 Advisories::BySource
             },
         }
+    }
+    /// The lockfile is read into the snapshot without being extracted
+    /// from: which workflows it lists is the pinning fact, and its
+    /// `uses:` entries are the tool's, not dependencies to update.
+    fn registry_file(&self, path: &str) -> bool {
+        path == ".github/workflows/actions.lock"
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
         let leaf = path.rsplit('/').next().unwrap_or(path);

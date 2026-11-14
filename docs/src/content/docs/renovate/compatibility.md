@@ -138,6 +138,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | `uv.lock`, `poetry.lock` | yes |
 | `packages.lock.json`, `Gemfile.lock`, `composer.lock` | yes |
 | `mise.lock`, `flake.lock`, `apm.lock.yaml` | yes |
+| `actions.lock` | yes, for workflows the lockfile already lists |
 | `bun.lockb`, `Chart.lock`, `gradle.lockfile`, `Pipfile.lock`, `pdm.lock`, `pylock.toml` | no; updates beside them hold as lockfile-pending |
 
 ## Options and features
@@ -151,7 +152,7 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 | `groupName` | `group` |
 | `separateMajorMinor` and friends | one PR per update line by default |
 | `rangeStrategy` | `versions`: `exact`, `preserve` or `widen` |
-| `pinDigests` | `digest`, on by default for actions and images |
+| `pinDigests` | `digest`, on by default for actions and images; in a workflow `actions.lock` lists, no *new* step-level SHA pin is added ([why](/renovate/departures/#actions-lock-pinning)) |
 | `minimumReleaseAge` | `waitHours`, 24 by default |
 | Cargo's committed `global-min-publish-age` | read as a floor under `waitHours` for the crates.io dependencies it reaches; security fixes bypass it, and the lockfile run's Cargo enforces it on transitive crates too |
 | `schedule`, `timezone` | cron `windows` with a zone; no natural-language schedules |

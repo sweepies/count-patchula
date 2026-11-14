@@ -130,7 +130,10 @@ build these files on one organization module.
 
 The cache, with HTTP validators, write receipts and the lockfile tools, is
 saved after every run and restored on the next, so later runs are much faster
-than the first.
+than the first. Where a repository keeps
+[`.github/workflows/actions.lock`](/guide/managers/#actions-lock), the
+lockfile tool authenticates with the token the run was given — the
+`token` input's token — scoped to the repository when the App can mint one.
 
 A run where a repository changed underneath it — a push moved the default
 branch while the Count was publishing, say — stops rather than write against

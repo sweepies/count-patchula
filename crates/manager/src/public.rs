@@ -1143,6 +1143,21 @@ fn nuget_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
     None
 }
 
+/// A workflow, an action definition or the lockfile can name private
+/// repositories no static read rules out, so none is ever public-only.
+/// The run's scoped token and the tool's `repo-unavailable` finding fail
+/// closed on what it cannot read.
+fn actions_verdict(path: &str, _text: &str, _files: &Files) -> Option<bool> {
+    use crate::roles as taxonomy;
+    if taxonomy::github_workflow(path)
+        || taxonomy::action_file(path)
+        || path == ".github/workflows/actions.lock"
+    {
+        return Some(false);
+    }
+    None
+}
+
 /// The verdict rule `manager`'s ecosystem applies, if it has one.
 fn verdict_rule(manager: patchula_words::Manager) -> Option<VerdictRule> {
     match manager {
@@ -1152,6 +1167,7 @@ fn verdict_rule(manager: patchula_words::Manager) -> Option<VerdictRule> {
         patchula_words::Manager::Composer => Some(composer_verdict),
         patchula_words::Manager::Cargo => Some(cargo_verdict),
         patchula_words::Manager::Nuget => Some(nuget_verdict),
+        patchula_words::Manager::GithubActions => Some(actions_verdict),
         _ => None,
     }
 }

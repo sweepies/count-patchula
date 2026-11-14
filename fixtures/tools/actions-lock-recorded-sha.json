@@ -1,0 +1,3014 @@
+{
+  "schema_version": 1,
+  "provenance": "Recorded by patchula from the request URLs; never imported from other bots",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner0: String!, $name0: String!, $expr0: String!, $yml0: String!, $yaml0: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner object(expression: $expr0) { ... on Commit { oid file: file(path: $yml0) { object { ... on Blob { text } } } fileYaml: file(path: $yaml0) { object { ... on Blob { text } } } } } } }",
+            "variables": {
+              "expr0": "v7.0.1^{commit}",
+              "name0": "checkout",
+              "owner0": "actions",
+              "yaml0": "action.yaml",
+              "yml0": "action.yml"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sat, 14 Nov 2026 01:03:41 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v4; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B0A6:3372F4:4E6546:781EA0:6AF7B36C"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4921"
+          ],
+          "x-ratelimit-reset": [
+            "1794620669"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "79"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "a0": {
+                "nameWithOwner": "actions/checkout",
+                "object": {
+                  "file": {
+                    "object": {
+                      "text": "name: 'Checkout'\r\ndescription: 'Checkout a Git repository at a particular version'\r\ninputs:\r\n  repository:\r\n    description: 'Repository name with owner. For example, actions/checkout'\r\n    default: ${{ github.repository }}\r\n  ref:\r\n    description: >\r\n      The branch, tag or SHA to checkout. When checking out the repository that\r\n      triggered a workflow, this defaults to the reference or SHA for that\r\n      event.  Otherwise, uses the default branch.\r\n  token:\r\n    description: >\r\n      Personal access token (PAT) used to fetch the repository. The PAT is configured\r\n      with the local git config, which enables your scripts to run authenticated git\r\n      commands. The post-job step removes the PAT.\r\n\r\n\r\n      We recommend using a service account with the least permissions necessary.\r\n      Also when generating a new PAT, select the least scopes necessary.\r\n\r\n\r\n      [Learn more about creating and using encrypted secrets](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/creating-and-using-encrypted-secrets)\r\n    default: ${{ github.token }}\r\n  ssh-key:\r\n    description: >\r\n      SSH key used to fetch the repository. The SSH key is configured with the local\r\n      git config, which enables your scripts to run authenticated git commands.\r\n      The post-job step removes the SSH key.\r\n\r\n\r\n      We recommend using a service account with the least permissions necessary.\r\n\r\n\r\n      [Learn more about creating and using\r\n      encrypted secrets](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/creating-and-using-encrypted-secrets)\r\n  ssh-known-hosts:\r\n    description: >\r\n      Known hosts in addition to the user and global host key database. The public\r\n      SSH keys for a host may be obtained using the utility `ssh-keyscan`. For example,\r\n      `ssh-keyscan github.com`. The public key for github.com is always implicitly added.\r\n  ssh-strict:\r\n    description: >\r\n      Whether to perform strict host key checking. When true, adds the options `StrictHostKeyChecking=yes`\r\n      and `CheckHostIP=no` to the SSH command line. Use the input `ssh-known-hosts` to\r\n      configure additional hosts.\r\n    default: true\r\n  ssh-user:\r\n    description: >\r\n      The user to use when connecting to the remote SSH host. By default 'git' is used.\r\n    default: git\r\n  persist-credentials:\r\n    description: 'Whether to configure the token or SSH key with the local git config'\r\n    default: true\r\n  path:\r\n    description: 'Relative path under $GITHUB_WORKSPACE to place the repository'\r\n  clean:\r\n    description: 'Whether to execute `git clean -ffdx && git reset --hard HEAD` before fetching'\r\n    default: true\r\n  filter:\r\n    description: >\r\n      Partially clone against a given filter.\r\n      Overrides sparse-checkout if set.\r\n    default: null\r\n  sparse-checkout:\r\n    description: >\r\n      Do a sparse checkout on given patterns.\r\n      Each pattern should be separated with new lines.\r\n    default: null\r\n  sparse-checkout-cone-mode:\r\n    description: >\r\n      Specifies whether to use cone-mode when doing a sparse checkout.\r\n    default: true\r\n  fetch-depth:\r\n    description: 'Number of commits to fetch. 0 indicates all history for all branches and tags.'\r\n    default: 1\r\n  fetch-tags:\r\n    description: 'Whether to fetch tags, even if fetch-depth > 0.'\r\n    default: false\r\n  show-progress:\r\n    description: 'Whether to show progress status output when fetching.'\r\n    default: true\r\n  lfs:\r\n    description: 'Whether to download Git-LFS files'\r\n    default: false\r\n  submodules:\r\n    description: >\r\n      Whether to checkout submodules: `true` to checkout submodules or `recursive` to\r\n      recursively checkout submodules.\r\n\r\n\r\n      When the `ssh-key` input is not provided, SSH URLs beginning with `git@github.com:` are\r\n      converted to HTTPS.\r\n    default: false\r\n  set-safe-directory:\r\n    description: Add repository path as safe.directory for Git global config by running `git config --global --add safe.directory <path>`\r\n    default: true\r\n  github-server-url:\r\n    description: The base URL for the GitHub instance that you are trying to clone from, will use environment defaults to fetch from the same instance that the workflow is running from unless specified. Example URLs are https://github.com or https://my-ghes-server.example.com\r\n    required: false\r\n  allow-unsafe-pr-checkout:\r\n    description: >\r\n      Required to check out fork pull request code from a workflow triggered by\r\n      `pull_request_target` or `workflow_run`. These workflows run with the\r\n      base repository's GITHUB_TOKEN, secrets, default-branch cache scope, and\r\n      runner access; fetching and executing a fork's code in that trusted\r\n      context commonly leads to \"pwn request\" vulnerabilities. Set to `true`\r\n      only after reviewing the risks at https://gh.io/securely-using-pull_request_target.\r\n    default: false\r\noutputs:\r\n  ref:\r\n    description: 'The branch, tag or SHA that was checked out'\r\n  commit:\r\n    description: 'The commit SHA that was checked out'\r\nruns:\r\n  using: node24\r\n  main: dist/index.js\r\n  post: dist/index.js\r\n"
+                    }
+                  },
+                  "fileYaml": null,
+                  "oid": "3d3c42e5aac5ba805825da76410c181273ba90b1"
+                }
+              }
+            },
+            "errors": [
+              {
+                "locations": [
+                  {
+                    "column": 264,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'action.yaml'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "fileYaml"
+                ],
+                "type": "NOT_FOUND"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner0: String!, $name0: String!, $expr0: String!, $yml0: String!, $yaml0: String!, $docker0: String!, $dockerLower0: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner object(expression: $expr0) { ... on Commit { oid file: file(path: $yml0) { object { ... on Blob { text } } } fileYaml: file(path: $yaml0) { object { ... on Blob { text } } } dockerfile: file(path: $docker0) { oid } dockerfileLower: file(path: $dockerLower0) { oid } } } } }",
+            "variables": {
+              "docker0": "Dockerfile",
+              "dockerLower0": "dockerfile",
+              "expr0": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0^{commit}",
+              "name0": "checkout",
+              "owner0": "actions",
+              "yaml0": "action.yaml",
+              "yml0": "action.yml"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sat, 14 Nov 2026 01:03:41 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v4; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B0A6:3372F4:4E68BA:7823F8:6AF7B36D"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4920"
+          ],
+          "x-ratelimit-reset": [
+            "1794620669"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "80"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "a0": {
+                "nameWithOwner": "actions/checkout",
+                "object": {
+                  "dockerfile": null,
+                  "dockerfileLower": null,
+                  "file": {
+                    "object": {
+                      "text": "name: 'Checkout'\r\ndescription: 'Checkout a Git repository at a particular version'\r\ninputs:\r\n  repository:\r\n    description: 'Repository name with owner. For example, actions/checkout'\r\n    default: ${{ github.repository }}\r\n  ref:\r\n    description: >\r\n      The branch, tag or SHA to checkout. When checking out the repository that\r\n      triggered a workflow, this defaults to the reference or SHA for that\r\n      event.  Otherwise, uses the default branch.\r\n  token:\r\n    description: >\r\n      Personal access token (PAT) used to fetch the repository. The PAT is configured\r\n      with the local git config, which enables your scripts to run authenticated git\r\n      commands. The post-job step removes the PAT.\r\n\r\n\r\n      We recommend using a service account with the least permissions necessary.\r\n      Also when generating a new PAT, select the least scopes necessary.\r\n\r\n\r\n      [Learn more about creating and using encrypted secrets](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/creating-and-using-encrypted-secrets)\r\n    default: ${{ github.token }}\r\n  ssh-key:\r\n    description: >\r\n      SSH key used to fetch the repository. The SSH key is configured with the local\r\n      git config, which enables your scripts to run authenticated git commands.\r\n      The post-job step removes the SSH key.\r\n\r\n\r\n      We recommend using a service account with the least permissions necessary.\r\n\r\n\r\n      [Learn more about creating and using\r\n      encrypted secrets](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/creating-and-using-encrypted-secrets)\r\n  ssh-known-hosts:\r\n    description: >\r\n      Known hosts in addition to the user and global host key database. The public\r\n      SSH keys for a host may be obtained using the utility `ssh-keyscan`. For example,\r\n      `ssh-keyscan github.com`. The public key for github.com is always implicitly added.\r\n  ssh-strict:\r\n    description: >\r\n      Whether to perform strict host key checking. When true, adds the options `StrictHostKeyChecking=yes`\r\n      and `CheckHostIP=no` to the SSH command line. Use the input `ssh-known-hosts` to\r\n      configure additional hosts.\r\n    default: true\r\n  ssh-user:\r\n    description: >\r\n      The user to use when connecting to the remote SSH host. By default 'git' is used.\r\n    default: git\r\n  persist-credentials:\r\n    description: 'Whether to configure the token or SSH key with the local git config'\r\n    default: true\r\n  path:\r\n    description: 'Relative path under $GITHUB_WORKSPACE to place the repository'\r\n  clean:\r\n    description: 'Whether to execute `git clean -ffdx && git reset --hard HEAD` before fetching'\r\n    default: true\r\n  filter:\r\n    description: >\r\n      Partially clone against a given filter.\r\n      Overrides sparse-checkout if set.\r\n    default: null\r\n  sparse-checkout:\r\n    description: >\r\n      Do a sparse checkout on given patterns.\r\n      Each pattern should be separated with new lines.\r\n    default: null\r\n  sparse-checkout-cone-mode:\r\n    description: >\r\n      Specifies whether to use cone-mode when doing a sparse checkout.\r\n    default: true\r\n  fetch-depth:\r\n    description: 'Number of commits to fetch. 0 indicates all history for all branches and tags.'\r\n    default: 1\r\n  fetch-tags:\r\n    description: 'Whether to fetch tags, even if fetch-depth > 0.'\r\n    default: false\r\n  show-progress:\r\n    description: 'Whether to show progress status output when fetching.'\r\n    default: true\r\n  lfs:\r\n    description: 'Whether to download Git-LFS files'\r\n    default: false\r\n  submodules:\r\n    description: >\r\n      Whether to checkout submodules: `true` to checkout submodules or `recursive` to\r\n      recursively checkout submodules.\r\n\r\n\r\n      When the `ssh-key` input is not provided, SSH URLs beginning with `git@github.com:` are\r\n      converted to HTTPS.\r\n    default: false\r\n  set-safe-directory:\r\n    description: Add repository path as safe.directory for Git global config by running `git config --global --add safe.directory <path>`\r\n    default: true\r\n  github-server-url:\r\n    description: The base URL for the GitHub instance that you are trying to clone from, will use environment defaults to fetch from the same instance that the workflow is running from unless specified. Example URLs are https://github.com or https://my-ghes-server.example.com\r\n    required: false\r\n  allow-unsafe-pr-checkout:\r\n    description: >\r\n      Required to check out fork pull request code from a workflow triggered by\r\n      `pull_request_target` or `workflow_run`. These workflows run with the\r\n      base repository's GITHUB_TOKEN, secrets, default-branch cache scope, and\r\n      runner access; fetching and executing a fork's code in that trusted\r\n      context commonly leads to \"pwn request\" vulnerabilities. Set to `true`\r\n      only after reviewing the risks at https://gh.io/securely-using-pull_request_target.\r\n    default: false\r\noutputs:\r\n  ref:\r\n    description: 'The branch, tag or SHA that was checked out'\r\n  commit:\r\n    description: 'The commit SHA that was checked out'\r\nruns:\r\n  using: node24\r\n  main: dist/index.js\r\n  post: dist/index.js\r\n"
+                    }
+                  },
+                  "fileYaml": null,
+                  "oid": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                }
+              }
+            },
+            "errors": [
+              {
+                "locations": [
+                  {
+                    "column": 307,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'action.yaml'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "fileYaml"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 372,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'Dockerfile'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "dockerfile"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 413,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'dockerfile'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "dockerfileLower"
+                ],
+                "type": "NOT_FOUND"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner0: String!, $name0: String!, $oid0: GitObjectID!, $tag0: String!, $head0: String!, $tagRef0: String!, $headRef0: String!, $owner1: String!, $name1: String!, $oid1: GitObjectID!, $tag1: String!, $head1: String!, $tagRef1: String!, $headRef1: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid0) { oid } tag: object(expression: $tag0) { oid } head: object(expression: $head0) { oid } tagRef: ref(qualifiedName: $tagRef0) { name } headRef: ref(qualifiedName: $headRef0) { name } } a1: repository(owner: $owner1, name: $name1) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid1) { oid } tag: object(expression: $tag1) { oid } head: object(expression: $head1) { oid } tagRef: ref(qualifiedName: $tagRef1) { name } headRef: ref(qualifiedName: $headRef1) { name } } }",
+            "variables": {
+              "head0": "refs/heads/v7.0.0^{commit}",
+              "head1": "refs/heads/v7.0.1^{commit}",
+              "headRef0": "refs/heads/v7.0.0",
+              "headRef1": "refs/heads/v7.0.1",
+              "name0": "checkout",
+              "name1": "checkout",
+              "oid0": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+              "oid1": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+              "owner0": "actions",
+              "owner1": "actions",
+              "tag0": "refs/tags/v7.0.0^{commit}",
+              "tag1": "refs/tags/v7.0.1^{commit}",
+              "tagRef0": "refs/tags/v7.0.0",
+              "tagRef1": "refs/tags/v7.0.1"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sat, 14 Nov 2026 01:03:41 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v4; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B0A6:3372F4:4E68B9:7823F5:6AF7B36D"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4919"
+          ],
+          "x-ratelimit-reset": [
+            "1794620669"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "81"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "a0": {
+                "commit": {
+                  "oid": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                },
+                "databaseId": 197814629,
+                "head": null,
+                "headRef": null,
+                "nameWithOwner": "actions/checkout",
+                "owner": {
+                  "databaseId": 44036562
+                },
+                "tag": {
+                  "oid": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                },
+                "tagRef": {
+                  "name": "v7.0.0"
+                }
+              },
+              "a1": {
+                "commit": {
+                  "oid": "3d3c42e5aac5ba805825da76410c181273ba90b1"
+                },
+                "databaseId": 197814629,
+                "head": null,
+                "headRef": null,
+                "nameWithOwner": "actions/checkout",
+                "owner": {
+                  "databaseId": 44036562
+                },
+                "tag": {
+                  "oid": "3d3c42e5aac5ba805825da76410c181273ba90b1"
+                },
+                "tagRef": {
+                  "name": "v7.0.1"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/actions/checkout/tags?per_page=100",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sat, 14 Nov 2026 01:03:42 GMT"
+          ],
+          "etag": [
+            "W/\"0b0ba7b8679105501668a0b41def299b95d15cfb2a61ca31e2653262eb093898\""
+          ],
+          "last-modified": [
+            "Fri, 13 Nov 2026 18:40:43 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            ""
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v3; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B0A6:3372F4:4E6CF9:782A5E:6AF7B36D"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4926"
+          ],
+          "x-ratelimit-reset": [
+            "1794619196"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "74"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": [
+            {
+              "commit": {
+                "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "url": "https://api.github.com/repos/actions/checkout/commits/3d3c42e5aac5ba805825da76410c181273ba90b1"
+              },
+              "name": "v7.0.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Ny4wLjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v7.0.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v7.0.1"
+            },
+            {
+              "commit": {
+                "sha": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+                "url": "https://api.github.com/repos/actions/checkout/commits/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+              },
+              "name": "v7.0.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Ny4wLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v7.0.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v7.0.0"
+            },
+            {
+              "commit": {
+                "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "url": "https://api.github.com/repos/actions/checkout/commits/3d3c42e5aac5ba805825da76410c181273ba90b1"
+              },
+              "name": "v7",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Nw==",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v7",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v7"
+            },
+            {
+              "commit": {
+                "sha": "d23441a48e516b6c34aea4fa41551a30e30af803",
+                "url": "https://api.github.com/repos/actions/checkout/commits/d23441a48e516b6c34aea4fa41551a30e30af803"
+              },
+              "name": "v6.1.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Ni4xLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v6.1.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v6.1.0"
+            },
+            {
+              "commit": {
+                "sha": "df4cb1c069e1874edd31b4311f1884172cec0e10",
+                "url": "https://api.github.com/repos/actions/checkout/commits/df4cb1c069e1874edd31b4311f1884172cec0e10"
+              },
+              "name": "v6.0.3",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Ni4wLjM=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v6.0.3",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v6.0.3"
+            },
+            {
+              "commit": {
+                "sha": "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+                "url": "https://api.github.com/repos/actions/checkout/commits/de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+              },
+              "name": "v6.0.2",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Ni4wLjI=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v6.0.2",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v6.0.2"
+            },
+            {
+              "commit": {
+                "sha": "8e8c483db84b4bee98b60c0593521ed34d9990e8",
+                "url": "https://api.github.com/repos/actions/checkout/commits/8e8c483db84b4bee98b60c0593521ed34d9990e8"
+              },
+              "name": "v6.0.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Ni4wLjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v6.0.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v6.0.1"
+            },
+            {
+              "commit": {
+                "sha": "1af3b93b6815bc44a9784bd300feb67ff0d1eeb3",
+                "url": "https://api.github.com/repos/actions/checkout/commits/1af3b93b6815bc44a9784bd300feb67ff0d1eeb3"
+              },
+              "name": "v6.0.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Ni4wLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v6.0.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v6.0.0"
+            },
+            {
+              "commit": {
+                "sha": "d23441a48e516b6c34aea4fa41551a30e30af803",
+                "url": "https://api.github.com/repos/actions/checkout/commits/d23441a48e516b6c34aea4fa41551a30e30af803"
+              },
+              "name": "v6",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Ng==",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v6",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v6"
+            },
+            {
+              "commit": {
+                "sha": "71cf2267d89c5cb81562390fa70a37fa40b1305e",
+                "url": "https://api.github.com/repos/actions/checkout/commits/71cf2267d89c5cb81562390fa70a37fa40b1305e"
+              },
+              "name": "v6-beta",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Ni1iZXRh",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v6-beta",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v6-beta"
+            },
+            {
+              "commit": {
+                "sha": "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+                "url": "https://api.github.com/repos/actions/checkout/commits/fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
+              },
+              "name": "v5.1.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NS4xLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v5.1.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v5.1.0"
+            },
+            {
+              "commit": {
+                "sha": "93cb6efe18208431cddfb8368fd83d5badbf9bfd",
+                "url": "https://api.github.com/repos/actions/checkout/commits/93cb6efe18208431cddfb8368fd83d5badbf9bfd"
+              },
+              "name": "v5.0.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NS4wLjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v5.0.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v5.0.1"
+            },
+            {
+              "commit": {
+                "sha": "08c6903cd8c0fde910a37f88322edcfb5dd907a8",
+                "url": "https://api.github.com/repos/actions/checkout/commits/08c6903cd8c0fde910a37f88322edcfb5dd907a8"
+              },
+              "name": "v5.0.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NS4wLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v5.0.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v5.0.0"
+            },
+            {
+              "commit": {
+                "sha": "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+                "url": "https://api.github.com/repos/actions/checkout/commits/fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
+              },
+              "name": "v5",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NQ==",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v5",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v5"
+            },
+            {
+              "commit": {
+                "sha": "11d5960a326750d5838078e36cf38b85af677262",
+                "url": "https://api.github.com/repos/actions/checkout/commits/11d5960a326750d5838078e36cf38b85af677262"
+              },
+              "name": "v4.4.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC40LjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.4.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.4.0"
+            },
+            {
+              "commit": {
+                "sha": "34e114876b0b11c390a56381ad16ebd13914f8d5",
+                "url": "https://api.github.com/repos/actions/checkout/commits/34e114876b0b11c390a56381ad16ebd13914f8d5"
+              },
+              "name": "v4.3.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4zLjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.3.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.3.1"
+            },
+            {
+              "commit": {
+                "sha": "08eba0b27e820071cde6df949e0beb9ba4906955",
+                "url": "https://api.github.com/repos/actions/checkout/commits/08eba0b27e820071cde6df949e0beb9ba4906955"
+              },
+              "name": "v4.3.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4zLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.3.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.3.0"
+            },
+            {
+              "commit": {
+                "sha": "11bd71901bbe5b1630ceea73d27597364c9af683",
+                "url": "https://api.github.com/repos/actions/checkout/commits/11bd71901bbe5b1630ceea73d27597364c9af683"
+              },
+              "name": "v4.2.2",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4yLjI=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.2.2",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.2.2"
+            },
+            {
+              "commit": {
+                "sha": "eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871",
+                "url": "https://api.github.com/repos/actions/checkout/commits/eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871"
+              },
+              "name": "v4.2.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4yLjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.2.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.2.1"
+            },
+            {
+              "commit": {
+                "sha": "d632683dd7b4114ad314bca15554477dd762a938",
+                "url": "https://api.github.com/repos/actions/checkout/commits/d632683dd7b4114ad314bca15554477dd762a938"
+              },
+              "name": "v4.2.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4yLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.2.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.2.0"
+            },
+            {
+              "commit": {
+                "sha": "692973e3d937129bcbf40652eb9f2f61becf3332",
+                "url": "https://api.github.com/repos/actions/checkout/commits/692973e3d937129bcbf40652eb9f2f61becf3332"
+              },
+              "name": "v4.1.7",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4xLjc=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.1.7",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.1.7"
+            },
+            {
+              "commit": {
+                "sha": "a5ac7e51b41094c92402da3b24376905380afc29",
+                "url": "https://api.github.com/repos/actions/checkout/commits/a5ac7e51b41094c92402da3b24376905380afc29"
+              },
+              "name": "v4.1.6",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4xLjY=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.1.6",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.1.6"
+            },
+            {
+              "commit": {
+                "sha": "44c2b7a8a4ea60a981eaca3cf939b5f4305c123b",
+                "url": "https://api.github.com/repos/actions/checkout/commits/44c2b7a8a4ea60a981eaca3cf939b5f4305c123b"
+              },
+              "name": "v4.1.5",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4xLjU=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.1.5",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.1.5"
+            },
+            {
+              "commit": {
+                "sha": "0ad4b8fadaa221de15dcec353f45205ec38ea70b",
+                "url": "https://api.github.com/repos/actions/checkout/commits/0ad4b8fadaa221de15dcec353f45205ec38ea70b"
+              },
+              "name": "v4.1.4",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4xLjQ=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.1.4",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.1.4"
+            },
+            {
+              "commit": {
+                "sha": "1d96c772d19495a3b5c517cd2bc0cb401ea0529f",
+                "url": "https://api.github.com/repos/actions/checkout/commits/1d96c772d19495a3b5c517cd2bc0cb401ea0529f"
+              },
+              "name": "v4.1.3",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4xLjM=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.1.3",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.1.3"
+            },
+            {
+              "commit": {
+                "sha": "9bb56186c3b09b4f86b1c65136769dd318469633",
+                "url": "https://api.github.com/repos/actions/checkout/commits/9bb56186c3b09b4f86b1c65136769dd318469633"
+              },
+              "name": "v4.1.2",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4xLjI=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.1.2",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.1.2"
+            },
+            {
+              "commit": {
+                "sha": "b4ffde65f46336ab88eb53be808477a3936bae11",
+                "url": "https://api.github.com/repos/actions/checkout/commits/b4ffde65f46336ab88eb53be808477a3936bae11"
+              },
+              "name": "v4.1.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4xLjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.1.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.1.1"
+            },
+            {
+              "commit": {
+                "sha": "8ade135a41bc03ea155e62e844d188df1ea18608",
+                "url": "https://api.github.com/repos/actions/checkout/commits/8ade135a41bc03ea155e62e844d188df1ea18608"
+              },
+              "name": "v4.1.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4xLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.1.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.1.0"
+            },
+            {
+              "commit": {
+                "sha": "1e31de5234b9f8995739874a8ce0492dc87873e2",
+                "url": "https://api.github.com/repos/actions/checkout/commits/1e31de5234b9f8995739874a8ce0492dc87873e2"
+              },
+              "name": "v4.0.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NC4wLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4.0.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4.0.0"
+            },
+            {
+              "commit": {
+                "sha": "11d5960a326750d5838078e36cf38b85af677262",
+                "url": "https://api.github.com/repos/actions/checkout/commits/11d5960a326750d5838078e36cf38b85af677262"
+              },
+              "name": "v4",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92NA==",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v4",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v4"
+            },
+            {
+              "commit": {
+                "sha": "a37ce9120846195fa4ece8f58b268e6043cb2f26",
+                "url": "https://api.github.com/repos/actions/checkout/commits/a37ce9120846195fa4ece8f58b268e6043cb2f26"
+              },
+              "name": "v3.7.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My43LjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.7.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.7.0"
+            },
+            {
+              "commit": {
+                "sha": "f43a0e5ff2bd294095638e18286ca9a3d1956744",
+                "url": "https://api.github.com/repos/actions/checkout/commits/f43a0e5ff2bd294095638e18286ca9a3d1956744"
+              },
+              "name": "v3.6.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My42LjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.6.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.6.0"
+            },
+            {
+              "commit": {
+                "sha": "c85c95e3d7251135ab7dc9ce3241c5835cc595a9",
+                "url": "https://api.github.com/repos/actions/checkout/commits/c85c95e3d7251135ab7dc9ce3241c5835cc595a9"
+              },
+              "name": "v3.5.3",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My41LjM=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.5.3",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.5.3"
+            },
+            {
+              "commit": {
+                "sha": "8e5e7e5ab8b370d6c329ec480221332ada57f0ab",
+                "url": "https://api.github.com/repos/actions/checkout/commits/8e5e7e5ab8b370d6c329ec480221332ada57f0ab"
+              },
+              "name": "v3.5.2",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My41LjI=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.5.2",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.5.2"
+            },
+            {
+              "commit": {
+                "sha": "83b7061638ee4956cf7545a6f7efe594e5ad0247",
+                "url": "https://api.github.com/repos/actions/checkout/commits/83b7061638ee4956cf7545a6f7efe594e5ad0247"
+              },
+              "name": "v3.5.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My41LjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.5.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.5.1"
+            },
+            {
+              "commit": {
+                "sha": "8f4b7f84864484a7bf31766abe9204da3cbe65b3",
+                "url": "https://api.github.com/repos/actions/checkout/commits/8f4b7f84864484a7bf31766abe9204da3cbe65b3"
+              },
+              "name": "v3.5.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My41LjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.5.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.5.0"
+            },
+            {
+              "commit": {
+                "sha": "24cb9080177205b6e8c946b17badbe402adc938f",
+                "url": "https://api.github.com/repos/actions/checkout/commits/24cb9080177205b6e8c946b17badbe402adc938f"
+              },
+              "name": "v3.4.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My40LjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.4.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.4.0"
+            },
+            {
+              "commit": {
+                "sha": "ac593985615ec2ede58e132d2e21d2b1cbd6127c",
+                "url": "https://api.github.com/repos/actions/checkout/commits/ac593985615ec2ede58e132d2e21d2b1cbd6127c"
+              },
+              "name": "v3.3.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My4zLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.3.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.3.0"
+            },
+            {
+              "commit": {
+                "sha": "755da8c3cf115ac066823e79a1e1788f8940201b",
+                "url": "https://api.github.com/repos/actions/checkout/commits/755da8c3cf115ac066823e79a1e1788f8940201b"
+              },
+              "name": "v3.2.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My4yLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.2.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.2.0"
+            },
+            {
+              "commit": {
+                "sha": "93ea575cb5d8a053eaa0ac8fa3b40d7e05a33cc8",
+                "url": "https://api.github.com/repos/actions/checkout/commits/93ea575cb5d8a053eaa0ac8fa3b40d7e05a33cc8"
+              },
+              "name": "v3.1.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My4xLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.1.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.1.0"
+            },
+            {
+              "commit": {
+                "sha": "2541b1294d2704b0964813337f33b291d3f8596b",
+                "url": "https://api.github.com/repos/actions/checkout/commits/2541b1294d2704b0964813337f33b291d3f8596b"
+              },
+              "name": "v3.0.2",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My4wLjI=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.0.2",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.0.2"
+            },
+            {
+              "commit": {
+                "sha": "dcd71f646680f2efd8db4afa5ad64fdcba30e748",
+                "url": "https://api.github.com/repos/actions/checkout/commits/dcd71f646680f2efd8db4afa5ad64fdcba30e748"
+              },
+              "name": "v3.0.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My4wLjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.0.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.0.1"
+            },
+            {
+              "commit": {
+                "sha": "a12a3943b4bdde767164f792f33f40b04645d846",
+                "url": "https://api.github.com/repos/actions/checkout/commits/a12a3943b4bdde767164f792f33f40b04645d846"
+              },
+              "name": "v3.0.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92My4wLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3.0.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3.0.0"
+            },
+            {
+              "commit": {
+                "sha": "a37ce9120846195fa4ece8f58b268e6043cb2f26",
+                "url": "https://api.github.com/repos/actions/checkout/commits/a37ce9120846195fa4ece8f58b268e6043cb2f26"
+              },
+              "name": "v3",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mw==",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v3",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v3"
+            },
+            {
+              "commit": {
+                "sha": "0717577d45739eb3c851188b29f50ed6c0b2194e",
+                "url": "https://api.github.com/repos/actions/checkout/commits/0717577d45739eb3c851188b29f50ed6c0b2194e"
+              },
+              "name": "v2.8.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi44LjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.8.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.8.0"
+            },
+            {
+              "commit": {
+                "sha": "ee0669bd1cc54295c223e0bb666b733df41de1c5",
+                "url": "https://api.github.com/repos/actions/checkout/commits/ee0669bd1cc54295c223e0bb666b733df41de1c5"
+              },
+              "name": "v2.7.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi43LjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.7.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.7.0"
+            },
+            {
+              "commit": {
+                "sha": "dc323e67f16fb5f7663d20ff7941f27f5809e9b6",
+                "url": "https://api.github.com/repos/actions/checkout/commits/dc323e67f16fb5f7663d20ff7941f27f5809e9b6"
+              },
+              "name": "v2.6.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi42LjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.6.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.6.0"
+            },
+            {
+              "commit": {
+                "sha": "e2f20e631ae6d7dd3b768f56a5d2af784dd54791",
+                "url": "https://api.github.com/repos/actions/checkout/commits/e2f20e631ae6d7dd3b768f56a5d2af784dd54791"
+              },
+              "name": "v2.5.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi41LjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.5.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.5.0"
+            },
+            {
+              "commit": {
+                "sha": "7884fcad6b5d53d10323aee724dc68d8b9096a2e",
+                "url": "https://api.github.com/repos/actions/checkout/commits/7884fcad6b5d53d10323aee724dc68d8b9096a2e"
+              },
+              "name": "v2.4.2",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi40LjI=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.4.2",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.4.2"
+            },
+            {
+              "commit": {
+                "sha": "f25a3a9f25bd5f4c5d77189cab02ff357b5aedeb",
+                "url": "https://api.github.com/repos/actions/checkout/commits/f25a3a9f25bd5f4c5d77189cab02ff357b5aedeb"
+              },
+              "name": "v2.4.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi40LjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.4.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.4.1"
+            },
+            {
+              "commit": {
+                "sha": "ec3a7ce113134d7a93b817d10a8272cb61118579",
+                "url": "https://api.github.com/repos/actions/checkout/commits/ec3a7ce113134d7a93b817d10a8272cb61118579"
+              },
+              "name": "v2.4.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi40LjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.4.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.4.0"
+            },
+            {
+              "commit": {
+                "sha": "1e204e9a9253d643386038d443f96446fa156a97",
+                "url": "https://api.github.com/repos/actions/checkout/commits/1e204e9a9253d643386038d443f96446fa156a97"
+              },
+              "name": "v2.3.5",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi4zLjU=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.3.5",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.3.5"
+            },
+            {
+              "commit": {
+                "sha": "5a4ac9002d0be2fb38bd78e4b4dbde5606d7042f",
+                "url": "https://api.github.com/repos/actions/checkout/commits/5a4ac9002d0be2fb38bd78e4b4dbde5606d7042f"
+              },
+              "name": "v2.3.4",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi4zLjQ=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.3.4",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.3.4"
+            },
+            {
+              "commit": {
+                "sha": "a81bbbf8298c0fa03ea29cdc473d45769f953675",
+                "url": "https://api.github.com/repos/actions/checkout/commits/a81bbbf8298c0fa03ea29cdc473d45769f953675"
+              },
+              "name": "v2.3.3",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi4zLjM=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.3.3",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.3.3"
+            },
+            {
+              "commit": {
+                "sha": "2036a08e25fa78bbd946711a407b529a0a1204bf",
+                "url": "https://api.github.com/repos/actions/checkout/commits/2036a08e25fa78bbd946711a407b529a0a1204bf"
+              },
+              "name": "v2.3.2",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi4zLjI=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.3.2",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.3.2"
+            },
+            {
+              "commit": {
+                "sha": "28c7f3d2b5162b5ddd3dfd9a45aa55eaf396478b",
+                "url": "https://api.github.com/repos/actions/checkout/commits/28c7f3d2b5162b5ddd3dfd9a45aa55eaf396478b"
+              },
+              "name": "v2.3.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi4zLjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.3.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.3.1"
+            },
+            {
+              "commit": {
+                "sha": "b4483adec309c0d01a5435c5e24eb40de5773ad9",
+                "url": "https://api.github.com/repos/actions/checkout/commits/b4483adec309c0d01a5435c5e24eb40de5773ad9"
+              },
+              "name": "v2.3.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi4zLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.3.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.3.0"
+            },
+            {
+              "commit": {
+                "sha": "aabbfeb2ce60b5bd82389903509092c4648a9713",
+                "url": "https://api.github.com/repos/actions/checkout/commits/aabbfeb2ce60b5bd82389903509092c4648a9713"
+              },
+              "name": "v2.2.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi4yLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.2.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.2.0"
+            },
+            {
+              "commit": {
+                "sha": "86f86b36ef15e6570752e7175f451a512eac206b",
+                "url": "https://api.github.com/repos/actions/checkout/commits/86f86b36ef15e6570752e7175f451a512eac206b"
+              },
+              "name": "v2.1.1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi4xLjE=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.1.1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.1.1"
+            },
+            {
+              "commit": {
+                "sha": "01aecccf739ca6ff86c0539fbc67a7a5007bbc81",
+                "url": "https://api.github.com/repos/actions/checkout/commits/01aecccf739ca6ff86c0539fbc67a7a5007bbc81"
+              },
+              "name": "v2.1.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi4xLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.1.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.1.0"
+            },
+            {
+              "commit": {
+                "sha": "722adc63f1aa60a57ec37892e133b1d319cae598",
+                "url": "https://api.github.com/repos/actions/checkout/commits/722adc63f1aa60a57ec37892e133b1d319cae598"
+              },
+              "name": "v2.0.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi4wLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2.0.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2.0.0"
+            },
+            {
+              "commit": {
+                "sha": "0717577d45739eb3c851188b29f50ed6c0b2194e",
+                "url": "https://api.github.com/repos/actions/checkout/commits/0717577d45739eb3c851188b29f50ed6c0b2194e"
+              },
+              "name": "v2",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mg==",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2"
+            },
+            {
+              "commit": {
+                "sha": "a6747255bd19d7a757dbdda8c654a9f84db19839",
+                "url": "https://api.github.com/repos/actions/checkout/commits/a6747255bd19d7a757dbdda8c654a9f84db19839"
+              },
+              "name": "v2-beta",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92Mi1iZXRh",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v2-beta",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v2-beta"
+            },
+            {
+              "commit": {
+                "sha": "50fbc622fc4ef5163becd7fab6573eac35f8462e",
+                "url": "https://api.github.com/repos/actions/checkout/commits/50fbc622fc4ef5163becd7fab6573eac35f8462e"
+              },
+              "name": "v1.2.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92MS4yLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v1.2.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v1.2.0"
+            },
+            {
+              "commit": {
+                "sha": "0b496e91ec7ae4428c3ed2eeb4c3a40df431f2cc",
+                "url": "https://api.github.com/repos/actions/checkout/commits/0b496e91ec7ae4428c3ed2eeb4c3a40df431f2cc"
+              },
+              "name": "v1.1.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92MS4xLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v1.1.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v1.1.0"
+            },
+            {
+              "commit": {
+                "sha": "af513c7a016048ae468971c52ed77d9562c7c819",
+                "url": "https://api.github.com/repos/actions/checkout/commits/af513c7a016048ae468971c52ed77d9562c7c819"
+              },
+              "name": "v1.0.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92MS4wLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v1.0.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v1.0.0"
+            },
+            {
+              "commit": {
+                "sha": "50fbc622fc4ef5163becd7fab6573eac35f8462e",
+                "url": "https://api.github.com/repos/actions/checkout/commits/50fbc622fc4ef5163becd7fab6573eac35f8462e"
+              },
+              "name": "v1",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy92MQ==",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/v1",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/v1"
+            },
+            {
+              "commit": {
+                "sha": "af513c7a016048ae468971c52ed77d9562c7c819",
+                "url": "https://api.github.com/repos/actions/checkout/commits/af513c7a016048ae468971c52ed77d9562c7c819"
+              },
+              "name": "1.0.0",
+              "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvdGFncy8xLjAuMA==",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/refs/tags/1.0.0",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/refs/tags/1.0.0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/actions/checkout/releases?per_page=30",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "text",
+          "value": ""
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "cache-control": [
+            "private, max-age=60, s-maxage=60"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sat, 14 Nov 2026 01:03:42 GMT"
+          ],
+          "etag": [
+            "W/\"199540797292b22461ca89e79e3c1176f01332d41f86bbd1ea112a4d4afb3ebb\""
+          ],
+          "link": [
+            "<https://api.github.com/repositories/197814629/releases?per_page=30&page=2>; rel=\"next\", <https://api.github.com/repositories/197814629/releases?per_page=30&page=2>; rel=\"last\""
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-api-version-selected": [
+            "2022-11-28"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v3; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B0A6:3372F4:4E6F41:782DF9:6AF7B36E"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4925"
+          ],
+          "x-ratelimit-reset": [
+            "1794619196"
+          ],
+          "x-ratelimit-resource": [
+            "core"
+          ],
+          "x-ratelimit-used": [
+            "75"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": [
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/356804776/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/55104035?v=4",
+                "events_url": "https://api.github.com/users/aiqiaoy/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/aiqiaoy/followers",
+                "following_url": "https://api.github.com/users/aiqiaoy/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/aiqiaoy/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/aiqiaoy",
+                "id": 55104035,
+                "login": "aiqiaoy",
+                "node_id": "MDQ6VXNlcjU1MTA0MDM1",
+                "organizations_url": "https://api.github.com/users/aiqiaoy/orgs",
+                "received_events_url": "https://api.github.com/users/aiqiaoy/received_events",
+                "repos_url": "https://api.github.com/users/aiqiaoy/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/aiqiaoy/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/aiqiaoy/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/aiqiaoy",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* skip running unsafe pr check if input is default by @aiqiaoy in https://github.com/actions/checkout/pull/2518\r\n* trim only ascii whitespace for branch by @aiqiaoy in https://github.com/actions/checkout/pull/2521\r\n* escape values passed to --unset by @aiqiaoy in https://github.com/actions/checkout/pull/2530\r\n* Various dependency updates \r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v7...v7.0.1",
+              "created_at": "2026-07-17T18:45:11Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v7.0.1",
+              "id": 356804776,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v7.0.1",
+              "node_id": "RE_kwDOC8ppZc4VRGio",
+              "prerelease": false,
+              "published_at": "2026-07-20T15:10:05Z",
+              "reactions": {
+                "+1": 8,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 5,
+                "heart": 0,
+                "hooray": 11,
+                "laugh": 0,
+                "rocket": 2,
+                "total_count": 26,
+                "url": "https://api.github.com/repos/actions/checkout/releases/356804776/reactions"
+              },
+              "tag_name": "v7.0.1",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v7.0.1",
+              "target_commitish": "main",
+              "updated_at": "2026-07-20T16:15:53Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/356804776/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/356804776",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v7.0.1"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/356814296/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/55104035?v=4",
+                "events_url": "https://api.github.com/users/aiqiaoy/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/aiqiaoy/followers",
+                "following_url": "https://api.github.com/users/aiqiaoy/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/aiqiaoy/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/aiqiaoy",
+                "id": 55104035,
+                "login": "aiqiaoy",
+                "node_id": "MDQ6VXNlcjU1MTA0MDM1",
+                "organizations_url": "https://api.github.com/users/aiqiaoy/orgs",
+                "received_events_url": "https://api.github.com/users/aiqiaoy/received_events",
+                "repos_url": "https://api.github.com/users/aiqiaoy/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/aiqiaoy/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/aiqiaoy/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/aiqiaoy",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* **[BREAKING]** backport `allow-unsafe-pr-checkout` to v6 by @aiqiaoy in https://github.com/actions/checkout/pull/2500\r\n* backport fixes to releases-v6 by @aiqiaoy in https://github.com/actions/checkout/pull/2527\r\n\r\nhttps://github.blog/changelog/2026-06-18-safer-pull_request_target-defaults-for-github-actions-checkout/ for more details about this breaking change\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v6.0.3...v6.1.0",
+              "created_at": "2026-07-16T19:43:33Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v6.1.0",
+              "id": 356814296,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v6.1.0",
+              "node_id": "RE_kwDOC8ppZc4VRI3Y",
+              "prerelease": false,
+              "published_at": "2026-07-20T15:23:28Z",
+              "reactions": {
+                "+1": 0,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 2,
+                "hooray": 0,
+                "laugh": 2,
+                "rocket": 0,
+                "total_count": 4,
+                "url": "https://api.github.com/repos/actions/checkout/releases/356814296/reactions"
+              },
+              "tag_name": "v6.1.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v6.1.0",
+              "target_commitish": "releases/v6",
+              "updated_at": "2026-07-20T15:23:28Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/356814296/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/356814296",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v6.1.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/356817418/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/55104035?v=4",
+                "events_url": "https://api.github.com/users/aiqiaoy/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/aiqiaoy/followers",
+                "following_url": "https://api.github.com/users/aiqiaoy/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/aiqiaoy/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/aiqiaoy",
+                "id": 55104035,
+                "login": "aiqiaoy",
+                "node_id": "MDQ6VXNlcjU1MTA0MDM1",
+                "organizations_url": "https://api.github.com/users/aiqiaoy/orgs",
+                "received_events_url": "https://api.github.com/users/aiqiaoy/received_events",
+                "repos_url": "https://api.github.com/users/aiqiaoy/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/aiqiaoy/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/aiqiaoy/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/aiqiaoy",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* **[BREAKING]** backport `allow-unsafe-pr-checkout` to v5 by @aiqiaoy in https://github.com/actions/checkout/pull/2501\r\n* backport fixes to releases-v5 by @aiqiaoy in https://github.com/actions/checkout/pull/2523\r\n\r\nhttps://github.blog/changelog/2026-06-18-safer-pull_request_target-defaults-for-github-actions-checkout/ for more details about this breaking change\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v5.0.1...v5.1.0",
+              "created_at": "2026-07-16T19:43:40Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v5.1.0",
+              "id": 356817418,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v5.1.0",
+              "node_id": "RE_kwDOC8ppZc4VRJoK",
+              "prerelease": false,
+              "published_at": "2026-07-20T15:27:58Z",
+              "reactions": {
+                "+1": 0,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 0,
+                "hooray": 0,
+                "laugh": 2,
+                "rocket": 0,
+                "total_count": 2,
+                "url": "https://api.github.com/repos/actions/checkout/releases/356817418/reactions"
+              },
+              "tag_name": "v5.1.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v5.1.0",
+              "target_commitish": "releases/v5",
+              "updated_at": "2026-07-20T15:36:40Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/356817418/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/356817418",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v5.1.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/356823819/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/55104035?v=4",
+                "events_url": "https://api.github.com/users/aiqiaoy/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/aiqiaoy/followers",
+                "following_url": "https://api.github.com/users/aiqiaoy/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/aiqiaoy/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/aiqiaoy",
+                "id": 55104035,
+                "login": "aiqiaoy",
+                "node_id": "MDQ6VXNlcjU1MTA0MDM1",
+                "organizations_url": "https://api.github.com/users/aiqiaoy/orgs",
+                "received_events_url": "https://api.github.com/users/aiqiaoy/received_events",
+                "repos_url": "https://api.github.com/users/aiqiaoy/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/aiqiaoy/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/aiqiaoy/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/aiqiaoy",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* **[BREAKING]** backport `allow-unsafe-pr-checkout` to v4 by @aiqiaoy in https://github.com/actions/checkout/pull/2502\r\n* backport fixes to releases-v4 by @aiqiaoy in https://github.com/actions/checkout/pull/2524\r\n\r\nhttps://github.blog/changelog/2026-06-18-safer-pull_request_target-defaults-for-github-actions-checkout/ for more details about this breaking change\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.3.1...v4.4.0",
+              "created_at": "2026-07-16T19:43:47Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.4.0",
+              "id": 356823819,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v4.4.0",
+              "node_id": "RE_kwDOC8ppZc4VRLML",
+              "prerelease": false,
+              "published_at": "2026-07-20T15:36:10Z",
+              "reactions": {
+                "+1": 0,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 0,
+                "hooray": 0,
+                "laugh": 1,
+                "rocket": 0,
+                "total_count": 1,
+                "url": "https://api.github.com/repos/actions/checkout/releases/356823819/reactions"
+              },
+              "tag_name": "v4.4.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.4.0",
+              "target_commitish": "releases/v4",
+              "updated_at": "2026-07-20T15:36:10Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/356823819/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/356823819",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.4.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/356826054/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/55104035?v=4",
+                "events_url": "https://api.github.com/users/aiqiaoy/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/aiqiaoy/followers",
+                "following_url": "https://api.github.com/users/aiqiaoy/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/aiqiaoy/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/aiqiaoy",
+                "id": 55104035,
+                "login": "aiqiaoy",
+                "node_id": "MDQ6VXNlcjU1MTA0MDM1",
+                "organizations_url": "https://api.github.com/users/aiqiaoy/orgs",
+                "received_events_url": "https://api.github.com/users/aiqiaoy/received_events",
+                "repos_url": "https://api.github.com/users/aiqiaoy/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/aiqiaoy/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/aiqiaoy/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/aiqiaoy",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* **[BREAKING]** backport `allow-unsafe-pr-checkout` to v3 by @aiqiaoy in https://github.com/actions/checkout/pull/2503\r\n* backport fixes to releases-v3 by @aiqiaoy in https://github.com/actions/checkout/pull/2525\r\n\r\nhttps://github.blog/changelog/2026-06-18-safer-pull_request_target-defaults-for-github-actions-checkout/ for more details about this breaking change\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v3.6.0...v3.7.0",
+              "created_at": "2026-07-16T19:44:07Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v3.7.0",
+              "id": 356826054,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v3.7.0",
+              "node_id": "RE_kwDOC8ppZc4VRLvG",
+              "prerelease": false,
+              "published_at": "2026-07-20T15:40:05Z",
+              "reactions": {
+                "+1": 1,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 0,
+                "hooray": 0,
+                "laugh": 1,
+                "rocket": 0,
+                "total_count": 2,
+                "url": "https://api.github.com/repos/actions/checkout/releases/356826054/reactions"
+              },
+              "tag_name": "v3.7.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v3.7.0",
+              "target_commitish": "releases/v3",
+              "updated_at": "2026-07-20T15:40:05Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/356826054/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/356826054",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v3.7.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/356828175/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/55104035?v=4",
+                "events_url": "https://api.github.com/users/aiqiaoy/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/aiqiaoy/followers",
+                "following_url": "https://api.github.com/users/aiqiaoy/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/aiqiaoy/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/aiqiaoy",
+                "id": 55104035,
+                "login": "aiqiaoy",
+                "node_id": "MDQ6VXNlcjU1MTA0MDM1",
+                "organizations_url": "https://api.github.com/users/aiqiaoy/orgs",
+                "received_events_url": "https://api.github.com/users/aiqiaoy/received_events",
+                "repos_url": "https://api.github.com/users/aiqiaoy/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/aiqiaoy/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/aiqiaoy/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/aiqiaoy",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* **[BREAKING]** backport `allow-unsafe-pr-checkout` to v2 by @aiqiaoy in https://github.com/actions/checkout/pull/2504\r\n* backport fixes to releases-v2 by @aiqiaoy in https://github.com/actions/checkout/pull/2526\r\n\r\nhttps://github.blog/changelog/2026-06-18-safer-pull_request_target-defaults-for-github-actions-checkout/ for more details about this breaking change\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v2.7.0...v2.8.0",
+              "created_at": "2026-07-16T19:43:54Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v2.8.0",
+              "id": 356828175,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v2.8.0",
+              "node_id": "RE_kwDOC8ppZc4VRMQP",
+              "prerelease": false,
+              "published_at": "2026-07-20T15:43:41Z",
+              "reactions": {
+                "+1": 0,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 2,
+                "heart": 0,
+                "hooray": 0,
+                "laugh": 1,
+                "rocket": 2,
+                "total_count": 5,
+                "url": "https://api.github.com/repos/actions/checkout/releases/356828175/reactions"
+              },
+              "tag_name": "v2.8.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v2.8.0",
+              "target_commitish": "releases/v2",
+              "updated_at": "2026-07-20T15:43:41Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/356828175/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/356828175",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v2.8.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/341435225/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/55104035?v=4",
+                "events_url": "https://api.github.com/users/aiqiaoy/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/aiqiaoy/followers",
+                "following_url": "https://api.github.com/users/aiqiaoy/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/aiqiaoy/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/aiqiaoy",
+                "id": 55104035,
+                "login": "aiqiaoy",
+                "node_id": "MDQ6VXNlcjU1MTA0MDM1",
+                "organizations_url": "https://api.github.com/users/aiqiaoy/orgs",
+                "received_events_url": "https://api.github.com/users/aiqiaoy/received_events",
+                "repos_url": "https://api.github.com/users/aiqiaoy/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/aiqiaoy/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/aiqiaoy/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/aiqiaoy",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* block checking out fork pr for pull_request_target and workflow_run by @aiqiaoy in https://github.com/actions/checkout/pull/2454\r\n* Bump actions/publish-immutable-action from 0.0.3 to 0.0.4 in the minor-actions-dependencies group across 1 directory by @dependabot[bot] in https://github.com/actions/checkout/pull/2458\r\n* Bump flatted from 3.3.1 to 3.4.2 by @dependabot[bot] in https://github.com/actions/checkout/pull/2460\r\n* Bump js-yaml from 4.1.0 to 4.2.0 by @dependabot[bot] in https://github.com/actions/checkout/pull/2461\r\n* Bump @actions/core and @actions/tool-cache and Remove uuid by @dependabot[bot] in https://github.com/actions/checkout/pull/2459\r\n* upgrade module to esm and update dependencies by @aiqiaoy in https://github.com/actions/checkout/pull/2463\r\n* Bump the minor-npm-dependencies group across 1 directory with 3 updates by @dependabot[bot] in https://github.com/actions/checkout/pull/2462\r\n* getting ready for checkout v7 release by @aiqiaoy in https://github.com/actions/checkout/pull/2464\r\n* update error wording by @aiqiaoy in https://github.com/actions/checkout/pull/2467\r\n\r\n## New Contributors\r\n* @aiqiaoy made their first contribution in https://github.com/actions/checkout/pull/2454\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v6.0.3...v7.0.0",
+              "created_at": "2026-06-17T17:51:53Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v7.0.0",
+              "id": 341435225,
+              "immutable": false,
+              "mentions_count": 2,
+              "name": "v7.0.0",
+              "node_id": "RE_kwDOC8ppZc4UWeNZ",
+              "prerelease": false,
+              "published_at": "2026-06-18T13:53:05Z",
+              "reactions": {
+                "+1": 13,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 4,
+                "heart": 7,
+                "hooray": 15,
+                "laugh": 1,
+                "rocket": 13,
+                "total_count": 53,
+                "url": "https://api.github.com/repos/actions/checkout/releases/341435225/reactions"
+              },
+              "tag_name": "v7.0.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v7.0.0",
+              "target_commitish": "main",
+              "updated_at": "2026-06-18T13:53:05Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/341435225/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/341435225",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v7.0.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/333171095/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/12280011?v=4",
+                "events_url": "https://api.github.com/users/yaananth/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/yaananth/followers",
+                "following_url": "https://api.github.com/users/yaananth/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/yaananth/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/yaananth",
+                "id": 12280011,
+                "login": "yaananth",
+                "node_id": "MDQ6VXNlcjEyMjgwMDEx",
+                "organizations_url": "https://api.github.com/users/yaananth/orgs",
+                "received_events_url": "https://api.github.com/users/yaananth/received_events",
+                "repos_url": "https://api.github.com/users/yaananth/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/yaananth/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/yaananth/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/yaananth",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Update changelog by @ericsciple in https://github.com/actions/checkout/pull/2357\r\n* fix: expand merge commit SHA regex and add SHA-256 test cases by @yaananth in https://github.com/actions/checkout/pull/2414\r\n* Fix checkout init for SHA-256 repositories by @yaananth in https://github.com/actions/checkout/pull/2439\r\n* Update changelog for v6.0.3 by @yaananth in https://github.com/actions/checkout/pull/2446\r\n\r\n## New Contributors\r\n* @yaananth made their first contribution in https://github.com/actions/checkout/pull/2414\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v6...v6.0.3",
+              "created_at": "2026-06-02T14:34:25Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v6.0.3",
+              "id": 333171095,
+              "immutable": false,
+              "mentions_count": 2,
+              "name": "v6.0.3",
+              "node_id": "RE_kwDOC8ppZc4T28mX",
+              "prerelease": false,
+              "published_at": "2026-06-02T14:35:13Z",
+              "reactions": {
+                "+1": 10,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 4,
+                "heart": 2,
+                "hooray": 0,
+                "laugh": 0,
+                "rocket": 5,
+                "total_count": 21,
+                "url": "https://api.github.com/repos/actions/checkout/releases/333171095/reactions"
+              },
+              "tag_name": "v6.0.3",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v6.0.3",
+              "target_commitish": "main",
+              "updated_at": "2026-06-02T14:35:13Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/333171095/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/333171095",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v6.0.3"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/275599519/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/12102068?v=4",
+                "events_url": "https://api.github.com/users/ericsciple/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/ericsciple/followers",
+                "following_url": "https://api.github.com/users/ericsciple/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/ericsciple/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/ericsciple",
+                "id": 12102068,
+                "login": "ericsciple",
+                "node_id": "MDQ6VXNlcjEyMTAyMDY4",
+                "organizations_url": "https://api.github.com/users/ericsciple/orgs",
+                "received_events_url": "https://api.github.com/users/ericsciple/received_events",
+                "repos_url": "https://api.github.com/users/ericsciple/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/ericsciple/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/ericsciple/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/ericsciple",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Add orchestration_id to git user-agent when ACTIONS_ORCHESTRATION_ID is set by @TingluoHuang in https://github.com/actions/checkout/pull/2355\r\n* Fix tag handling: preserve annotations and explicit fetch-tags by @ericsciple in https://github.com/actions/checkout/pull/2356\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v6.0.1...v6.0.2",
+              "created_at": "2026-01-09T19:42:23Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v6.0.2",
+              "id": 275599519,
+              "immutable": false,
+              "mentions_count": 2,
+              "name": "v6.0.2",
+              "node_id": "RE_kwDOC8ppZc4QbVCf",
+              "prerelease": false,
+              "published_at": "2026-01-09T19:53:28Z",
+              "reactions": {
+                "+1": 20,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 3,
+                "heart": 11,
+                "hooray": 5,
+                "laugh": 0,
+                "rocket": 5,
+                "total_count": 44,
+                "url": "https://api.github.com/repos/actions/checkout/releases/275599519/reactions"
+              },
+              "tag_name": "v6.0.2",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v6.0.2",
+              "target_commitish": "main",
+              "updated_at": "2026-01-22T16:41:24Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/275599519/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/275599519",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v6.0.2"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/266805251/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/12102068?v=4",
+                "events_url": "https://api.github.com/users/ericsciple/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/ericsciple/followers",
+                "following_url": "https://api.github.com/users/ericsciple/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/ericsciple/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/ericsciple",
+                "id": 12102068,
+                "login": "ericsciple",
+                "node_id": "MDQ6VXNlcjEyMTAyMDY4",
+                "organizations_url": "https://api.github.com/users/ericsciple/orgs",
+                "received_events_url": "https://api.github.com/users/ericsciple/received_events",
+                "repos_url": "https://api.github.com/users/ericsciple/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/ericsciple/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/ericsciple/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/ericsciple",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Update all references from v5 and v4 to v6 by @ericsciple in https://github.com/actions/checkout/pull/2314\r\n* Add worktree support for persist-credentials includeIf by @ericsciple in https://github.com/actions/checkout/pull/2327\r\n* Clarify v6 README by @ericsciple in https://github.com/actions/checkout/pull/2328\r\n\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v6...v6.0.1",
+              "created_at": "2025-12-02T02:08:49Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v6.0.1",
+              "id": 266805251,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v6.0.1",
+              "node_id": "RE_kwDOC8ppZc4P5yAD",
+              "prerelease": false,
+              "published_at": "2025-12-02T16:38:59Z",
+              "reactions": {
+                "+1": 6,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 3,
+                "heart": 8,
+                "hooray": 6,
+                "laugh": 0,
+                "rocket": 3,
+                "total_count": 26,
+                "url": "https://api.github.com/repos/actions/checkout/releases/266805251/reactions"
+              },
+              "tag_name": "v6.0.1",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v6.0.1",
+              "target_commitish": "main",
+              "updated_at": "2025-12-02T16:38:59Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/266805251/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/266805251",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v6.0.1"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/264050659/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/12102068?v=4",
+                "events_url": "https://api.github.com/users/ericsciple/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/ericsciple/followers",
+                "following_url": "https://api.github.com/users/ericsciple/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/ericsciple/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/ericsciple",
+                "id": 12102068,
+                "login": "ericsciple",
+                "node_id": "MDQ6VXNlcjEyMTAyMDY4",
+                "organizations_url": "https://api.github.com/users/ericsciple/orgs",
+                "received_events_url": "https://api.github.com/users/ericsciple/received_events",
+                "repos_url": "https://api.github.com/users/ericsciple/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/ericsciple/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/ericsciple/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/ericsciple",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Update README to include Node.js 24 support details and requirements by @salmanmkc in https://github.com/actions/checkout/pull/2248\r\n* Persist creds to a separate file by @ericsciple in https://github.com/actions/checkout/pull/2286\r\n* v6-beta by @ericsciple in https://github.com/actions/checkout/pull/2298\r\n* update readme/changelog for v6 by @ericsciple in https://github.com/actions/checkout/pull/2311\r\n\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v5.0.0...v6.0.0",
+              "created_at": "2025-11-20T16:20:04Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v6.0.0",
+              "id": 264050659,
+              "immutable": false,
+              "mentions_count": 2,
+              "name": "v6.0.0",
+              "node_id": "RE_kwDOC8ppZc4PvRfj",
+              "prerelease": false,
+              "published_at": "2025-11-20T16:24:08Z",
+              "reactions": {
+                "+1": 12,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 2,
+                "heart": 6,
+                "hooray": 10,
+                "laugh": 0,
+                "rocket": 4,
+                "total_count": 34,
+                "url": "https://api.github.com/repos/actions/checkout/releases/264050659/reactions"
+              },
+              "tag_name": "v6.0.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v6.0.0",
+              "target_commitish": "main",
+              "updated_at": "2025-11-20T16:24:08Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/264050659/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/264050659",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v6.0.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/263017964/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/12102068?v=4",
+                "events_url": "https://api.github.com/users/ericsciple/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/ericsciple/followers",
+                "following_url": "https://api.github.com/users/ericsciple/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/ericsciple/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/ericsciple",
+                "id": 12102068,
+                "login": "ericsciple",
+                "node_id": "MDQ6VXNlcjEyMTAyMDY4",
+                "organizations_url": "https://api.github.com/users/ericsciple/orgs",
+                "received_events_url": "https://api.github.com/users/ericsciple/received_events",
+                "repos_url": "https://api.github.com/users/ericsciple/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/ericsciple/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/ericsciple/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/ericsciple",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Port v6 cleanup to v5 by @ericsciple in https://github.com/actions/checkout/pull/2301\r\n\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v5...v5.0.1",
+              "created_at": "2025-11-13T21:22:10Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v5.0.1",
+              "id": 263017964,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v5.0.1",
+              "node_id": "RE_kwDOC8ppZc4PrVXs",
+              "prerelease": false,
+              "published_at": "2025-11-17T15:57:55Z",
+              "reactions": {
+                "+1": 3,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 2,
+                "heart": 6,
+                "hooray": 0,
+                "laugh": 1,
+                "rocket": 4,
+                "total_count": 16,
+                "url": "https://api.github.com/repos/actions/checkout/releases/263017964/reactions"
+              },
+              "tag_name": "v5.0.1",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v5.0.1",
+              "target_commitish": "releases/v5",
+              "updated_at": "2025-11-17T15:57:55Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/263017964/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/263017964",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v5.0.1"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/263020818/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/12102068?v=4",
+                "events_url": "https://api.github.com/users/ericsciple/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/ericsciple/followers",
+                "following_url": "https://api.github.com/users/ericsciple/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/ericsciple/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/ericsciple",
+                "id": 12102068,
+                "login": "ericsciple",
+                "node_id": "MDQ6VXNlcjEyMTAyMDY4",
+                "organizations_url": "https://api.github.com/users/ericsciple/orgs",
+                "received_events_url": "https://api.github.com/users/ericsciple/received_events",
+                "repos_url": "https://api.github.com/users/ericsciple/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/ericsciple/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/ericsciple/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/ericsciple",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Port v6 cleanup to v4 by @ericsciple in https://github.com/actions/checkout/pull/2305\r\n\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4...v4.3.1",
+              "created_at": "2025-11-13T23:20:02Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.3.1",
+              "id": 263020818,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v4.3.1",
+              "node_id": "RE_kwDOC8ppZc4PrWES",
+              "prerelease": false,
+              "published_at": "2025-11-17T16:06:48Z",
+              "reactions": {
+                "+1": 3,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 2,
+                "heart": 6,
+                "hooray": 2,
+                "laugh": 0,
+                "rocket": 6,
+                "total_count": 19,
+                "url": "https://api.github.com/repos/actions/checkout/releases/263020818/reactions"
+              },
+              "tag_name": "v4.3.1",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.3.1",
+              "target_commitish": "releases/v4",
+              "updated_at": "2025-11-17T16:06:48Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/263020818/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/263020818",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.3.1"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/259356540/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/12102068?v=4",
+                "events_url": "https://api.github.com/users/ericsciple/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/ericsciple/followers",
+                "following_url": "https://api.github.com/users/ericsciple/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/ericsciple/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/ericsciple",
+                "id": 12102068,
+                "login": "ericsciple",
+                "node_id": "MDQ6VXNlcjEyMTAyMDY4",
+                "organizations_url": "https://api.github.com/users/ericsciple/orgs",
+                "received_events_url": "https://api.github.com/users/ericsciple/received_events",
+                "repos_url": "https://api.github.com/users/ericsciple/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/ericsciple/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/ericsciple/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/ericsciple",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n\r\nUpdated persist-credentials to store the credentials under `$RUNNER_TEMP` instead of directly in the local git config.\r\n\r\nThis requires a minimum Actions Runner version of [v2.329.0](https://github.com/actions/runner/releases/tag/v2.329.0) to access the persisted credentials for [Docker container action](https://docs.github.com/en/actions/tutorials/use-containerized-services/create-a-docker-container-action) scenarios.",
+              "created_at": "2025-11-03T19:40:10Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v6-beta",
+              "id": 259356540,
+              "immutable": false,
+              "name": "v6-beta",
+              "node_id": "RE_kwDOC8ppZc4PdXd8",
+              "prerelease": true,
+              "published_at": "2025-11-03T19:42:16Z",
+              "reactions": {
+                "+1": 3,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 0,
+                "hooray": 3,
+                "laugh": 0,
+                "rocket": 4,
+                "total_count": 10,
+                "url": "https://api.github.com/repos/actions/checkout/releases/259356540/reactions"
+              },
+              "tag_name": "v6-beta",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v6-beta",
+              "target_commitish": "main",
+              "updated_at": "2025-11-03T19:42:50Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/259356540/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/259356540",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v6-beta"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/239008119/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/32169182?v=4",
+                "events_url": "https://api.github.com/users/salmanmkc/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/salmanmkc/followers",
+                "following_url": "https://api.github.com/users/salmanmkc/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/salmanmkc/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/salmanmkc",
+                "id": 32169182,
+                "login": "salmanmkc",
+                "node_id": "MDQ6VXNlcjMyMTY5MTgy",
+                "organizations_url": "https://api.github.com/users/salmanmkc/orgs",
+                "received_events_url": "https://api.github.com/users/salmanmkc/received_events",
+                "repos_url": "https://api.github.com/users/salmanmkc/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/salmanmkc/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/salmanmkc/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/salmanmkc",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Update actions checkout to use node 24 by @salmanmkc in https://github.com/actions/checkout/pull/2226\r\n* Prepare v5.0.0 release by @salmanmkc in https://github.com/actions/checkout/pull/2238\r\n\r\n## ⚠️ Minimum Compatible Runner Version\r\n\r\n**v2.327.1**  \r\n[Release Notes](https://github.com/actions/runner/releases/tag/v2.327.1)\r\n\r\nMake sure your runner is updated to this version or newer to use this release.\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4...v5.0.0",
+              "created_at": "2025-08-11T12:35:28Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v5.0.0",
+              "id": 239008119,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v5.0.0",
+              "node_id": "RE_kwDOC8ppZc4OPvl3",
+              "prerelease": false,
+              "published_at": "2025-08-11T12:39:13Z",
+              "reactions": {
+                "+1": 21,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 9,
+                "hooray": 7,
+                "laugh": 0,
+                "rocket": 19,
+                "total_count": 56,
+                "url": "https://api.github.com/repos/actions/checkout/releases/239008119/reactions"
+              },
+              "tag_name": "v5.0.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v5.0.0",
+              "target_commitish": "main",
+              "updated_at": "2025-08-11T12:39:13Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/239008119/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/239008119",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v5.0.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/238970441/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/32169182?v=4",
+                "events_url": "https://api.github.com/users/salmanmkc/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/salmanmkc/followers",
+                "following_url": "https://api.github.com/users/salmanmkc/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/salmanmkc/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/salmanmkc",
+                "id": 32169182,
+                "login": "salmanmkc",
+                "node_id": "MDQ6VXNlcjMyMTY5MTgy",
+                "organizations_url": "https://api.github.com/users/salmanmkc/orgs",
+                "received_events_url": "https://api.github.com/users/salmanmkc/received_events",
+                "repos_url": "https://api.github.com/users/salmanmkc/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/salmanmkc/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/salmanmkc/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/salmanmkc",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* docs: update README.md by @motss in https://github.com/actions/checkout/pull/1971\r\n* Add internal repos for checking out multiple repositories by @mouismail in https://github.com/actions/checkout/pull/1977\r\n* Documentation update - add recommended permissions to Readme by @benwells in https://github.com/actions/checkout/pull/2043\r\n* Adjust positioning of user email note and permissions heading by @joshmgross in https://github.com/actions/checkout/pull/2044\r\n* Update README.md by @nebuk89 in https://github.com/actions/checkout/pull/2194\r\n* Update CODEOWNERS for actions by @TingluoHuang in https://github.com/actions/checkout/pull/2224\r\n* Update package dependencies by @salmanmkc in https://github.com/actions/checkout/pull/2236\r\n* Prepare release v4.3.0 by @salmanmkc in https://github.com/actions/checkout/pull/2237\r\n\r\n## New Contributors\r\n* @motss made their first contribution in https://github.com/actions/checkout/pull/1971\r\n* @mouismail made their first contribution in https://github.com/actions/checkout/pull/1977\r\n* @benwells made their first contribution in https://github.com/actions/checkout/pull/2043\r\n* @nebuk89 made their first contribution in https://github.com/actions/checkout/pull/2194\r\n* @salmanmkc made their first contribution in https://github.com/actions/checkout/pull/2236\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4...v4.3.0",
+              "created_at": "2025-08-11T10:30:37Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.3.0",
+              "id": 238970441,
+              "immutable": false,
+              "mentions_count": 7,
+              "name": "v4.3.0",
+              "node_id": "RE_kwDOC8ppZc4OPmZJ",
+              "prerelease": false,
+              "published_at": "2025-08-11T10:32:57Z",
+              "reactions": {
+                "+1": 6,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 4,
+                "hooray": 1,
+                "laugh": 0,
+                "rocket": 4,
+                "total_count": 15,
+                "url": "https://api.github.com/repos/actions/checkout/releases/238970441/reactions"
+              },
+              "tag_name": "v4.3.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.3.0",
+              "target_commitish": "main",
+              "updated_at": "2025-08-11T10:32:57Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/238970441/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/238970441",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.3.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/181497215/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/81404201?v=4",
+                "events_url": "https://api.github.com/users/jww3/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/jww3/followers",
+                "following_url": "https://api.github.com/users/jww3/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/jww3/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/jww3",
+                "id": 81404201,
+                "login": "jww3",
+                "node_id": "MDQ6VXNlcjgxNDA0MjAx",
+                "organizations_url": "https://api.github.com/users/jww3/orgs",
+                "received_events_url": "https://api.github.com/users/jww3/received_events",
+                "repos_url": "https://api.github.com/users/jww3/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/jww3/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/jww3/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/jww3",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* `url-helper.ts` now leverages well-known environment variables by @jww3 in https://github.com/actions/checkout/pull/1941\r\n* Expand unit test coverage for `isGhes` by @jww3 in https://github.com/actions/checkout/pull/1946\r\n\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.2.1...v4.2.2",
+              "created_at": "2024-10-23T14:24:28Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.2.2",
+              "id": 181497215,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v4.2.2",
+              "node_id": "RE_kwDOC8ppZc4K0W1_",
+              "prerelease": false,
+              "published_at": "2024-10-23T14:46:00Z",
+              "reactions": {
+                "+1": 22,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 5,
+                "heart": 11,
+                "hooray": 4,
+                "laugh": 1,
+                "rocket": 1,
+                "total_count": 44,
+                "url": "https://api.github.com/repos/actions/checkout/releases/181497215/reactions"
+              },
+              "tag_name": "v4.2.2",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.2.2",
+              "target_commitish": "main",
+              "updated_at": "2024-10-23T14:46:00Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/181497215/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/181497215",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.2.2"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/178733059/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/16631042?v=4",
+                "events_url": "https://api.github.com/users/joshmgross/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/joshmgross/followers",
+                "following_url": "https://api.github.com/users/joshmgross/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/joshmgross/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/joshmgross",
+                "id": 16631042,
+                "login": "joshmgross",
+                "node_id": "MDQ6VXNlcjE2NjMxMDQy",
+                "organizations_url": "https://api.github.com/users/joshmgross/orgs",
+                "received_events_url": "https://api.github.com/users/joshmgross/received_events",
+                "repos_url": "https://api.github.com/users/joshmgross/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/joshmgross/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/joshmgross/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/joshmgross",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Check out other refs/* by commit if provided, fall back to ref by @orhantoy in https://github.com/actions/checkout/pull/1924\r\n\r\n## New Contributors\r\n* @Jcambass made their first contribution in https://github.com/actions/checkout/pull/1919\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.2.0...v4.2.1",
+              "created_at": "2024-10-07T16:38:04Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.2.1",
+              "id": 178733059,
+              "immutable": false,
+              "mentions_count": 2,
+              "name": "v4.2.1",
+              "node_id": "RE_kwDOC8ppZc4Kp0AD",
+              "prerelease": false,
+              "published_at": "2024-10-07T16:44:53Z",
+              "reactions": {
+                "+1": 6,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 3,
+                "hooray": 4,
+                "laugh": 0,
+                "rocket": 0,
+                "total_count": 13,
+                "url": "https://api.github.com/repos/actions/checkout/releases/178733059/reactions"
+              },
+              "tag_name": "v4.2.1",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.2.1",
+              "target_commitish": "main",
+              "updated_at": "2024-10-07T16:44:53Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/178733059/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/178733059",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.2.1"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/176907399/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/16631042?v=4",
+                "events_url": "https://api.github.com/users/joshmgross/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/joshmgross/followers",
+                "following_url": "https://api.github.com/users/joshmgross/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/joshmgross/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/joshmgross",
+                "id": 16631042,
+                "login": "joshmgross",
+                "node_id": "MDQ6VXNlcjE2NjMxMDQy",
+                "organizations_url": "https://api.github.com/users/joshmgross/orgs",
+                "received_events_url": "https://api.github.com/users/joshmgross/received_events",
+                "repos_url": "https://api.github.com/users/joshmgross/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/joshmgross/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/joshmgross/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/joshmgross",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Add Ref and Commit outputs by @lucacome in https://github.com/actions/checkout/pull/1180\r\n* Dependabot updates in https://github.com/actions/checkout/pull/1777 & https://github.com/actions/checkout/pull/1872\r\n\r\n## New Contributors\r\n* @yasonk made their first contribution in https://github.com/actions/checkout/pull/1869\r\n* @lucacome made their first contribution in https://github.com/actions/checkout/pull/1180\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.1.7...v4.2.0",
+              "created_at": "2024-09-25T17:51:15Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.2.0",
+              "id": 176907399,
+              "immutable": false,
+              "mentions_count": 2,
+              "name": "v4.2.0",
+              "node_id": "RE_kwDOC8ppZc4Ki2SH",
+              "prerelease": false,
+              "published_at": "2024-09-25T17:52:55Z",
+              "reactions": {
+                "+1": 10,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 3,
+                "hooray": 2,
+                "laugh": 0,
+                "rocket": 2,
+                "total_count": 17,
+                "url": "https://api.github.com/repos/actions/checkout/releases/176907399/reactions"
+              },
+              "tag_name": "v4.2.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.2.0",
+              "target_commitish": "main",
+              "updated_at": "2024-09-25T17:52:55Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/176907399/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/176907399",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.2.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/160156077/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/16631042?v=4",
+                "events_url": "https://api.github.com/users/joshmgross/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/joshmgross/followers",
+                "following_url": "https://api.github.com/users/joshmgross/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/joshmgross/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/joshmgross",
+                "id": 16631042,
+                "login": "joshmgross",
+                "node_id": "MDQ6VXNlcjE2NjMxMDQy",
+                "organizations_url": "https://api.github.com/users/joshmgross/orgs",
+                "received_events_url": "https://api.github.com/users/joshmgross/received_events",
+                "repos_url": "https://api.github.com/users/joshmgross/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/joshmgross/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/joshmgross/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/joshmgross",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Bump the minor-npm-dependencies group across 1 directory with 4 updates by @dependabot in https://github.com/actions/checkout/pull/1739\r\n* Bump actions/checkout from 3 to 4 by @dependabot in https://github.com/actions/checkout/pull/1697\r\n* Check out other refs/* by commit by @orhantoy in https://github.com/actions/checkout/pull/1774\r\n* Pin actions/checkout's own workflows to a known, good, stable version. by @jww3 in https://github.com/actions/checkout/pull/1776\r\n\r\n## New Contributors\r\n* @orhantoy made their first contribution in https://github.com/actions/checkout/pull/1774\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.1.6...v4.1.7",
+              "created_at": "2024-06-12T18:41:43Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.1.7",
+              "id": 160156077,
+              "immutable": false,
+              "mentions_count": 3,
+              "name": "v4.1.7",
+              "node_id": "RE_kwDOC8ppZc4Ji8mt",
+              "prerelease": false,
+              "published_at": "2024-06-12T19:05:21Z",
+              "reactions": {
+                "+1": 7,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 2,
+                "heart": 6,
+                "hooray": 3,
+                "laugh": 2,
+                "rocket": 6,
+                "total_count": 26,
+                "url": "https://api.github.com/repos/actions/checkout/releases/160156077/reactions"
+              },
+              "tag_name": "v4.1.7",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.1.7",
+              "target_commitish": "main",
+              "updated_at": "2024-06-12T19:05:21Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/160156077/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/160156077",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.1.7"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/156134994/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/13227161?v=4",
+                "events_url": "https://api.github.com/users/cory-miller/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/cory-miller/followers",
+                "following_url": "https://api.github.com/users/cory-miller/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/cory-miller/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/cory-miller",
+                "id": 13227161,
+                "login": "cory-miller",
+                "node_id": "MDQ6VXNlcjEzMjI3MTYx",
+                "organizations_url": "https://api.github.com/users/cory-miller/orgs",
+                "received_events_url": "https://api.github.com/users/cory-miller/received_events",
+                "repos_url": "https://api.github.com/users/cory-miller/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/cory-miller/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/cory-miller/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/cory-miller",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Check platform to set archive extension appropriately by @cory-miller in https://github.com/actions/checkout/pull/1732\r\n* Update for 4.1.6 release by @cory-miller in https://github.com/actions/checkout/pull/1733\r\n\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.1.5...v4.1.6",
+              "created_at": "2024-05-16T18:08:36Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.1.6",
+              "id": 156134994,
+              "immutable": false,
+              "mentions_count": 1,
+              "name": "v4.1.6",
+              "node_id": "RE_kwDOC8ppZc4JTm5S",
+              "prerelease": false,
+              "published_at": "2024-05-16T18:11:28Z",
+              "reactions": {
+                "+1": 5,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 1,
+                "heart": 3,
+                "hooray": 2,
+                "laugh": 1,
+                "rocket": 5,
+                "total_count": 17,
+                "url": "https://api.github.com/repos/actions/checkout/releases/156134994/reactions"
+              },
+              "tag_name": "v4.1.6",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.1.6",
+              "target_commitish": "main",
+              "updated_at": "2024-05-16T18:11:28Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/156134994/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/156134994",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.1.6"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/154447209/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/13227161?v=4",
+                "events_url": "https://api.github.com/users/cory-miller/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/cory-miller/followers",
+                "following_url": "https://api.github.com/users/cory-miller/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/cory-miller/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/cory-miller",
+                "id": 13227161,
+                "login": "cory-miller",
+                "node_id": "MDQ6VXNlcjEzMjI3MTYx",
+                "organizations_url": "https://api.github.com/users/cory-miller/orgs",
+                "received_events_url": "https://api.github.com/users/cory-miller/received_events",
+                "repos_url": "https://api.github.com/users/cory-miller/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/cory-miller/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/cory-miller/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/cory-miller",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Update NPM dependencies by @cory-miller in https://github.com/actions/checkout/pull/1703\r\n* Bump github/codeql-action from 2 to 3 by @dependabot in https://github.com/actions/checkout/pull/1694\r\n* Bump actions/setup-node from 1 to 4 by @dependabot in https://github.com/actions/checkout/pull/1696\r\n* Bump actions/upload-artifact from 2 to 4 by @dependabot in https://github.com/actions/checkout/pull/1695\r\n* README: Suggest `user.email` to be `41898282+github-actions[bot]@users.noreply.github.com` by @cory-miller in https://github.com/actions/checkout/pull/1707\r\n\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.1.4...v4.1.5",
+              "created_at": "2024-04-30T15:50:54Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.1.5",
+              "id": 154447209,
+              "immutable": false,
+              "mentions_count": 2,
+              "name": "v4.1.5",
+              "node_id": "RE_kwDOC8ppZc4JNK1p",
+              "prerelease": false,
+              "published_at": "2024-05-06T17:39:01Z",
+              "reactions": {
+                "+1": 9,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 3,
+                "heart": 7,
+                "hooray": 5,
+                "laugh": 2,
+                "rocket": 6,
+                "total_count": 32,
+                "url": "https://api.github.com/repos/actions/checkout/releases/154447209/reactions"
+              },
+              "tag_name": "v4.1.5",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.1.5",
+              "target_commitish": "main",
+              "updated_at": "2024-05-08T19:55:37Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/154447209/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/154447209",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.1.5"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/152610036/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/81404201?v=4",
+                "events_url": "https://api.github.com/users/jww3/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/jww3/followers",
+                "following_url": "https://api.github.com/users/jww3/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/jww3/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/jww3",
+                "id": 81404201,
+                "login": "jww3",
+                "node_id": "MDQ6VXNlcjgxNDA0MjAx",
+                "organizations_url": "https://api.github.com/users/jww3/orgs",
+                "received_events_url": "https://api.github.com/users/jww3/received_events",
+                "repos_url": "https://api.github.com/users/jww3/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/jww3/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/jww3/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/jww3",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Disable `extensions.worktreeConfig` when disabling `sparse-checkout` by @jww3 in https://github.com/actions/checkout/pull/1692\r\n* Add dependabot config by @cory-miller in https://github.com/actions/checkout/pull/1688\r\n* Bump word-wrap from 1.2.3 to 1.2.5 by @dependabot in https://github.com/actions/checkout/pull/1643\r\n* Bump the minor-actions-dependencies group with 2 updates by @dependabot in https://github.com/actions/checkout/pull/1693\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.1.3...v4.1.4",
+              "created_at": "2024-04-24T13:29:05Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.1.4",
+              "id": 152610036,
+              "immutable": false,
+              "mentions_count": 3,
+              "name": "v4.1.4",
+              "node_id": "RE_kwDOC8ppZc4JGKT0",
+              "prerelease": false,
+              "published_at": "2024-04-24T13:33:24Z",
+              "reactions": {
+                "+1": 6,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 1,
+                "heart": 7,
+                "hooray": 3,
+                "laugh": 1,
+                "rocket": 7,
+                "total_count": 25,
+                "url": "https://api.github.com/repos/actions/checkout/releases/152610036/reactions"
+              },
+              "tag_name": "v4.1.4",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.1.4",
+              "target_commitish": "main",
+              "updated_at": "2024-04-25T12:29:22Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/152610036/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/152610036",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.1.4"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/151811654/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/13227161?v=4",
+                "events_url": "https://api.github.com/users/cory-miller/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/cory-miller/followers",
+                "following_url": "https://api.github.com/users/cory-miller/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/cory-miller/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/cory-miller",
+                "id": 13227161,
+                "login": "cory-miller",
+                "node_id": "MDQ6VXNlcjEzMjI3MTYx",
+                "organizations_url": "https://api.github.com/users/cory-miller/orgs",
+                "received_events_url": "https://api.github.com/users/cory-miller/received_events",
+                "repos_url": "https://api.github.com/users/cory-miller/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/cory-miller/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/cory-miller/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/cory-miller",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Update `actions/checkout` version in `update-main-version.yml` by @jww3 in https://github.com/actions/checkout/pull/1650\r\n* Check git version before attempting to disable `sparse-checkout` by @jww3 in https://github.com/actions/checkout/pull/1656\r\n* Add SSH user parameter by @cory-miller in https://github.com/actions/checkout/pull/1685\r\n\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.1.2...v4.1.3",
+              "created_at": "2024-04-18T19:29:55Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.1.3",
+              "id": 151811654,
+              "immutable": false,
+              "mentions_count": 2,
+              "name": "v4.1.3",
+              "node_id": "RE_kwDOC8ppZc4JDHZG",
+              "prerelease": false,
+              "published_at": "2024-04-19T14:56:44Z",
+              "reactions": {
+                "+1": 8,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 1,
+                "heart": 6,
+                "hooray": 3,
+                "laugh": 1,
+                "rocket": 4,
+                "total_count": 23,
+                "url": "https://api.github.com/repos/actions/checkout/releases/151811654/reactions"
+              },
+              "tag_name": "v4.1.3",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.1.3",
+              "target_commitish": "main",
+              "updated_at": "2024-04-22T14:16:44Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/151811654/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/151811654",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.1.3"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/146018896/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/81404201?v=4",
+                "events_url": "https://api.github.com/users/jww3/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/jww3/followers",
+                "following_url": "https://api.github.com/users/jww3/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/jww3/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/jww3",
+                "id": 81404201,
+                "login": "jww3",
+                "node_id": "MDQ6VXNlcjgxNDA0MjAx",
+                "organizations_url": "https://api.github.com/users/jww3/orgs",
+                "received_events_url": "https://api.github.com/users/jww3/received_events",
+                "repos_url": "https://api.github.com/users/jww3/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/jww3/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/jww3/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/jww3",
+                "user_view_type": "public"
+              },
+              "body": "We are investigating the following issue with this release and have rolled-back the `v4` tag to point to `v4.1.1`\r\n* `sparse-checkout` is not available on git versions prior to 2.27.0 (see https://github.com/actions/checkout/issues/1651)\r\n\r\n## What's Changed\r\n* Fix: Disable sparse checkout whenever `sparse-checkout` option is not present @dscho in https://github.com/actions/checkout/pull/1598\r\n* Bump tough-cookie from 4.0.0 to 4.1.3 by @dependabot in https://github.com/actions/checkout/pull/1406\r\n* Bump @babel/traverse from 7.20.5 to 7.24.0 by @dependabot in https://github.com/actions/checkout/pull/1642\r\n\r\n## New Contributors\r\n* @jww3 made their first contribution in https://github.com/actions/checkout/pull/1616\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.1.1...v4.1.2",
+              "created_at": "2024-03-12T11:11:01Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.1.2",
+              "id": 146018896,
+              "immutable": false,
+              "mentions_count": 3,
+              "name": "v4.1.2",
+              "node_id": "RE_kwDOC8ppZc4ItBJQ",
+              "prerelease": false,
+              "published_at": "2024-03-12T11:22:04Z",
+              "reactions": {
+                "+1": 4,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 2,
+                "hooray": 1,
+                "laugh": 0,
+                "rocket": 4,
+                "total_count": 11,
+                "url": "https://api.github.com/repos/actions/checkout/releases/146018896/reactions"
+              },
+              "tag_name": "v4.1.2",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.1.2",
+              "target_commitish": "main",
+              "updated_at": "2024-04-22T14:17:00Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/146018896/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/146018896",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.1.2"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/125455956/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/13227161?v=4",
+                "events_url": "https://api.github.com/users/cory-miller/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/cory-miller/followers",
+                "following_url": "https://api.github.com/users/cory-miller/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/cory-miller/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/cory-miller",
+                "id": 13227161,
+                "login": "cory-miller",
+                "node_id": "MDQ6VXNlcjEzMjI3MTYx",
+                "organizations_url": "https://api.github.com/users/cory-miller/orgs",
+                "received_events_url": "https://api.github.com/users/cory-miller/received_events",
+                "repos_url": "https://api.github.com/users/cory-miller/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/cory-miller/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/cory-miller/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/cory-miller",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Update CODEOWNERS to Launch team by @joshmgross in https://github.com/actions/checkout/pull/1510\r\n* Correct link to GitHub Docs by @peterbe in https://github.com/actions/checkout/pull/1511\r\n* Link to release page from what's new section by @cory-miller in https://github.com/actions/checkout/pull/1514\r\n\r\n## New Contributors\r\n* @joshmgross made their first contribution in https://github.com/actions/checkout/pull/1510\r\n* @peterbe made their first contribution in https://github.com/actions/checkout/pull/1511\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.1.0...v4.1.1",
+              "created_at": "2023-10-17T15:52:30Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.1.1",
+              "id": 125455956,
+              "immutable": false,
+              "mentions_count": 3,
+              "name": "v4.1.1",
+              "node_id": "RE_kwDOC8ppZc4Hek5U",
+              "prerelease": false,
+              "published_at": "2023-10-17T15:53:17Z",
+              "reactions": {
+                "+1": 16,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 4,
+                "hooray": 7,
+                "laugh": 0,
+                "rocket": 9,
+                "total_count": 36,
+                "url": "https://api.github.com/repos/actions/checkout/releases/125455956/reactions"
+              },
+              "tag_name": "v4.1.1",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.1.1",
+              "target_commitish": "main",
+              "updated_at": "2023-10-18T13:28:24Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/125455956/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/125455956",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.1.1"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/119811169/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/32135588?v=4",
+                "events_url": "https://api.github.com/users/takost/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/takost/followers",
+                "following_url": "https://api.github.com/users/takost/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/takost/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/takost",
+                "id": 32135588,
+                "login": "takost",
+                "node_id": "MDQ6VXNlcjMyMTM1NTg4",
+                "organizations_url": "https://api.github.com/users/takost/orgs",
+                "received_events_url": "https://api.github.com/users/takost/received_events",
+                "repos_url": "https://api.github.com/users/takost/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/takost/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/takost/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/takost",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Update default runtime to node20 by @takost in https://github.com/actions/checkout/pull/1436\r\n* Support fetching without the --progress option by @simonbaird in https://github.com/actions/checkout/pull/1067\r\n* Release 4.0.0 by @takost in https://github.com/actions/checkout/pull/1447\r\n\r\n## New Contributors\r\n* @takost made their first contribution in https://github.com/actions/checkout/pull/1436\r\n* @simonbaird made their first contribution in https://github.com/actions/checkout/pull/1067\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v3...v4.0.0",
+              "created_at": "2023-10-17T15:38:19Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.0.0",
+              "id": 119811169,
+              "immutable": false,
+              "mentions_count": 2,
+              "name": "v4.0.0",
+              "node_id": "RE_kwDOC8ppZc4HJCxh",
+              "prerelease": false,
+              "published_at": "2023-10-17T15:41:17Z",
+              "reactions": {
+                "+1": 37,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 10,
+                "heart": 14,
+                "hooray": 27,
+                "laugh": 1,
+                "rocket": 16,
+                "total_count": 105,
+                "url": "https://api.github.com/repos/actions/checkout/releases/119811169/reactions"
+              },
+              "tag_name": "v4.0.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.0.0",
+              "target_commitish": "main",
+              "updated_at": "2023-10-17T15:41:17Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/119811169/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/119811169",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.0.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/122256472/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/13227161?v=4",
+                "events_url": "https://api.github.com/users/cory-miller/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/cory-miller/followers",
+                "following_url": "https://api.github.com/users/cory-miller/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/cory-miller/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/cory-miller",
+                "id": 13227161,
+                "login": "cory-miller",
+                "node_id": "MDQ6VXNlcjEzMjI3MTYx",
+                "organizations_url": "https://api.github.com/users/cory-miller/orgs",
+                "received_events_url": "https://api.github.com/users/cory-miller/received_events",
+                "repos_url": "https://api.github.com/users/cory-miller/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/cory-miller/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/cory-miller/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/cory-miller",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Update README.md for V4 by @sivapalan in https://github.com/actions/checkout/pull/1452\r\n* Add support for partial checkout filters by @finleygn in https://github.com/actions/checkout/pull/1396\r\n* Prepare 4.1.0 release by @cory-miller in https://github.com/actions/checkout/pull/1496\r\n\r\n## New Contributors\r\n* @sivapalan made their first contribution in https://github.com/actions/checkout/pull/1452\r\n* @finleygn made their first contribution in https://github.com/actions/checkout/pull/1396\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v4.0.0...v4.1.0",
+              "created_at": "2023-09-22T17:40:21Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v4.1.0",
+              "id": 122256472,
+              "immutable": false,
+              "mentions_count": 3,
+              "name": "v4.1.0",
+              "node_id": "RE_kwDOC8ppZc4HSXxY",
+              "prerelease": false,
+              "published_at": "2023-09-22T17:42:49Z",
+              "reactions": {
+                "+1": 10,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 5,
+                "hooray": 8,
+                "laugh": 0,
+                "rocket": 9,
+                "total_count": 32,
+                "url": "https://api.github.com/repos/actions/checkout/releases/122256472/reactions"
+              },
+              "tag_name": "v4.1.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v4.1.0",
+              "target_commitish": "main",
+              "updated_at": "2023-09-22T17:43:02Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/122256472/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/122256472",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v4.1.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/118562650/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/19689611?v=4",
+                "events_url": "https://api.github.com/users/luketomlinson/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/luketomlinson/followers",
+                "following_url": "https://api.github.com/users/luketomlinson/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/luketomlinson/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/luketomlinson",
+                "id": 19689611,
+                "login": "luketomlinson",
+                "node_id": "MDQ6VXNlcjE5Njg5NjEx",
+                "organizations_url": "https://api.github.com/users/luketomlinson/orgs",
+                "received_events_url": "https://api.github.com/users/luketomlinson/received_events",
+                "repos_url": "https://api.github.com/users/luketomlinson/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/luketomlinson/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/luketomlinson/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/luketomlinson",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Mark test scripts with Bash'isms to be run via Bash by @dscho in https://github.com/actions/checkout/pull/1377\r\n* Add option to fetch tags even if fetch-depth > 0 by @RobertWieczoreck in https://github.com/actions/checkout/pull/579\r\n* Release 3.6.0 by @luketomlinson in https://github.com/actions/checkout/pull/1437\r\n\r\n## New Contributors\r\n* @RobertWieczoreck made their first contribution in https://github.com/actions/checkout/pull/579\r\n* @luketomlinson made their first contribution in https://github.com/actions/checkout/pull/1437\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v3.5.3...v3.6.0",
+              "created_at": "2023-08-24T13:54:47Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v3.6.0",
+              "id": 118562650,
+              "immutable": false,
+              "mentions_count": 3,
+              "name": "v3.6.0",
+              "node_id": "RE_kwDOC8ppZc4HER9a",
+              "prerelease": false,
+              "published_at": "2023-08-24T13:56:41Z",
+              "reactions": {
+                "+1": 10,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 6,
+                "hooray": 4,
+                "laugh": 0,
+                "rocket": 7,
+                "total_count": 27,
+                "url": "https://api.github.com/repos/actions/checkout/releases/118562650/reactions"
+              },
+              "tag_name": "v3.6.0",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v3.6.0",
+              "target_commitish": "main",
+              "updated_at": "2023-08-24T14:29:50Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/118562650/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/118562650",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v3.6.0"
+            },
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/checkout/releases/107995616/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/1750815?v=4",
+                "events_url": "https://api.github.com/users/TingluoHuang/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/TingluoHuang/followers",
+                "following_url": "https://api.github.com/users/TingluoHuang/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/TingluoHuang/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/TingluoHuang",
+                "id": 1750815,
+                "login": "TingluoHuang",
+                "node_id": "MDQ6VXNlcjE3NTA4MTU=",
+                "organizations_url": "https://api.github.com/users/TingluoHuang/orgs",
+                "received_events_url": "https://api.github.com/users/TingluoHuang/received_events",
+                "repos_url": "https://api.github.com/users/TingluoHuang/repos",
+                "site_admin": true,
+                "starred_url": "https://api.github.com/users/TingluoHuang/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/TingluoHuang/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/TingluoHuang",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n* Fix: Checkout Issue in self hosted runner due to faulty submodule check-ins by @megamanics in https://github.com/actions/checkout/pull/1196\r\n* Fix typos found by codespell by @DimitriPapadopoulos in https://github.com/actions/checkout/pull/1287\r\n* Add support for sparse checkouts by @dscho and @dfdez in https://github.com/actions/checkout/pull/1369\r\n* Release v3.5.3 by @TingluoHuang in https://github.com/actions/checkout/pull/1376\r\n\r\n## New Contributors\r\n* @megamanics made their first contribution in https://github.com/actions/checkout/pull/1196\r\n* @DimitriPapadopoulos made their first contribution in https://github.com/actions/checkout/pull/1287\r\n* @dfdez made their first contribution in https://github.com/actions/checkout/pull/1369\r\n\r\n**Full Changelog**: https://github.com/actions/checkout/compare/v3...v3.5.3",
+              "created_at": "2023-06-09T14:47:54Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/checkout/releases/tag/v3.5.3",
+              "id": 107995616,
+              "immutable": false,
+              "mentions_count": 5,
+              "name": "v3.5.3",
+              "node_id": "RE_kwDOC8ppZc4Gb-Hg",
+              "prerelease": false,
+              "published_at": "2023-06-09T15:05:56Z",
+              "reactions": {
+                "+1": 9,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 5,
+                "heart": 8,
+                "hooray": 5,
+                "laugh": 0,
+                "rocket": 5,
+                "total_count": 32,
+                "url": "https://api.github.com/repos/actions/checkout/releases/107995616/reactions"
+              },
+              "tag_name": "v3.5.3",
+              "tarball_url": "https://api.github.com/repos/actions/checkout/tarball/v3.5.3",
+              "target_commitish": "c85c95e3d7251135ab7dc9ce3241c5835cc595a9",
+              "updated_at": "2023-06-12T14:25:28Z",
+              "upload_url": "https://uploads.github.com/repos/actions/checkout/releases/107995616/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/checkout/releases/107995616",
+              "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v3.5.3"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

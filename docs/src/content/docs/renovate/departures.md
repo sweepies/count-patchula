@@ -189,6 +189,14 @@ For an opt-in LTS rule, see [lookup policy](/guide/lookup-policy/#release-channe
 
 See [tooling warnings](/guide/auto-merge/#tooling-warnings).
 
+### No new step-level SHA pins in locked workflows {#actions-lock-pinning}
+
+- **Renovate:** `pinDigests` pins every action reference to a commit SHA
+- **The Count:** In a workflow `.github/workflows/actions.lock` lists, he adds no *new* SHA pin to a step's `uses:` — the lockfile records the commit itself, so `gh actions-lock` would treat his pin as something to unpin. An existing pin still moves with its update, `jobs.<id>.uses` reusable workflows still pin, and workflows the lockfile does not list pin as before
+- **Why:** Two tools writing the same line disagree about who owns the ref; the lockfile is the pin
+
+See [actions.lock](/guide/managers/#github-actions).
+
 ### Reference data merges itself {#reference-data}
 
 - **Renovate:** No built-in category; release age, schedules and automerge apply as configured
@@ -220,3 +228,16 @@ See [container image rebuilds](/guide/security/#container-image-rebuilds).
 - **Renovate:** Regenerates npm, pnpm and Yarn locks with npm, pnpm and Yarn
 - **The Count:** Regenerates `aube-lock.yaml`, `pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json` and Yarn Classic `yarn.lock` with aube; `lockfiles.npmEngine = "npm"` restores native npm for npm lockfiles. Berry `yarn.lock` stays with Yarn
 - **Why:** Lockfile updates are 10 to 30 times faster; [why aube](/guide/lockfiles/#why-aube-for-npm-pnpm-and-yarn-classic) lists how its output differs from each tool's
+
+### actions.lock {#actions-lock}
+
+- **Renovate:** Runs `gh actions-lock` over the whole `.github/workflows` directory
+- **The Count:** Runs it only over the edited workflows the lockfile already lists, with `--no-onboard` and `--no-narrow` always set: the Count never adds a workflow or an action to the lockfile and never rewrites a `uses:` ref he did not edit. Local `./` composites are never locked, so an update inside one makes no run; a `$/` composite is relocked under the listed workflows that call it
+- **Why:** Someone else's broken or unpinned action in an unlisted workflow must not hold the Count's update, and a run that onboards would grow the lockfile he was never asked to write
+
+The run authenticates with the run's own GitHub token — a scoped
+installation token on the App server, the token the run was given for the
+CLI and the GitHub Action, as Renovate hands its token to tools — and
+reaches github.com only. An action the token cannot read, such as a
+private one, holds the update with the reason rather than publishing a
+lock that drops it. See [actions.lock](/guide/managers/#github-actions).

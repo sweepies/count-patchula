@@ -6,7 +6,7 @@ use patchula_report::{BranchStatus, Report, Status};
 use patchula_testkit::github::{self, FakeGitHub, Hosts, State};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -1899,6 +1899,193 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
             .iter()
             .all(|(p, _)| p.contains("/issues"))
     );
+    check_transcript();
+}
+
+/// A lockfile executor for an Actions job: the repository's git calls
+/// materialize `files`, and the shell-wrapped `gh-actions-lock` reports
+/// success through the stream and status files the driver reads, then
+/// leaves `lock` as the regenerated `.github/workflows/actions.lock`.
+struct ActionsTools {
+    files: BTreeMap<String, String>,
+    lock: String,
+}
+impl patchula_process::Executor for ActionsTools {
+    fn run(
+        &self,
+        spec: patchula_process::CommandSpec,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<u8>, patchula_process::Failure>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move {
+            if spec.args.iter().any(|s| s == "uninstall") {
+                return Ok(Vec::new());
+            }
+            if spec.args.iter().any(|s| s == "git") {
+                if let Some(i) = spec.args.iter().position(|s| s == "init") {
+                    let path = std::path::Path::new(&spec.args[i + 2]);
+                    std::fs::create_dir_all(path).unwrap();
+                    std::fs::write(path.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+                }
+                if spec.args.iter().any(|s| s == "ls-tree") {
+                    return Ok(self
+                        .files
+                        .iter()
+                        .map(|(path, content)| {
+                            format!(
+                                "100644 blob {}\t{path}\0",
+                                patchula_github::blob_sha(content.as_bytes())
+                            )
+                        })
+                        .collect::<String>()
+                        .into_bytes());
+                }
+                if let Some(i) = spec.args.iter().position(|s| s == "checkout") {
+                    let root = std::path::Path::new(
+                        spec.args
+                            .iter()
+                            .find_map(|s| s.strip_prefix("--work-tree="))
+                            .unwrap(),
+                    );
+                    for path in &spec.args[i + 3..] {
+                        let target = root.join(path);
+                        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+                        std::fs::write(target, &self.files[path]).unwrap();
+                    }
+                }
+                return Ok(Vec::new());
+            }
+            if spec.args.iter().any(|s| s == "/bin/sh") {
+                let env = |key: &str| {
+                    spec.env
+                        .get(std::ffi::OsStr::new(key))
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                };
+                std::fs::write(env("ACTIONS_LOCK_STDOUT"), "{}").unwrap();
+                std::fs::write(env("ACTIONS_LOCK_STDERR"), "").unwrap();
+                std::fs::write(env("ACTIONS_LOCK_STATUS"), "0").unwrap();
+                let lock = std::path::Path::new(&env("GH_ACTIONS_LOCK_REPO_ROOT"))
+                    .join(".github/workflows/actions.lock");
+                std::fs::write(lock, &self.lock).unwrap();
+            }
+            Ok(Vec::new())
+        })
+    }
+}
+
+/// A `uses:` digest update in a listed workflow commits the workflow and
+/// the regenerated `actions.lock` together.
+#[tokio::test(start_paused = true)]
+async fn an_actions_update_commits_the_workflow_and_its_lock() {
+    let old = "d".repeat(40);
+    let new = "e".repeat(40);
+    let workflow = |pin: &str| {
+        format!(
+            "name: ci\non: push\njobs:\n  t:\n    steps:\n      - uses: actions/checkout@{pin} # v4.3.0\n"
+        )
+    };
+    let lock = |pin: &str| {
+        format!(
+            "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@{pin}'\ndependencies:\n    'actions/checkout@{pin}':\n        ref: 'v4.3.0'\n        commit: 'sha1-{pin}'\n"
+        )
+    };
+    let files = BTreeMap::from([
+        (
+            "patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"github-actions\" }\n".into(),
+        ),
+        (".github/workflows/ci.yml".into(), workflow(&old)),
+        (".github/workflows/actions.lock".into(), lock(&old)),
+    ]);
+    let fake = sandbox(files.clone(), None, vec![]);
+    fake.github
+        .seed_files("main", &"b".repeat(40), &files, vec![]);
+    {
+        let github = fake.github.clone();
+        fake.hosts
+            .script("mise-versions.jdx.dev", move |request, _| {
+                let path = request.url().path().to_owned();
+                let (repo, kind) = path
+                    .strip_prefix("/data/github/")
+                    .and_then(|doc| doc.rsplit_once('/'))
+                    .expect("a versions-host read");
+                let state = github.state();
+                let upstream = &state.repositories[repo];
+                github::json(
+                    200,
+                    match kind {
+                        "releases.json" => upstream.mirror_releases.clone(),
+                        "tags.json" => upstream.mirror_tags.clone(),
+                        _ => panic!("unexpected read {path}"),
+                    },
+                )
+            });
+    }
+    {
+        let mut state = fake.state();
+        let repo = state.repositories.get_mut("actions/checkout").unwrap();
+        for (tag, sha) in [("v4.3.0", &old), ("v4.3.1", &new)] {
+            repo.refs.insert(format!("refs/tags/{tag}"), sha.clone());
+            repo.commits.insert(sha.clone(), json!({"sha":sha}));
+            repo.releases.push(json!({
+                "tagName":tag,"publishedAt":"2026-10-01T00:00:00Z",
+                "isDraft":false,"isPrerelease":false}));
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let runner = patchula_tools::Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(Arc::new(ActionsTools {
+            files: files.clone(),
+            lock: lock(&new),
+        }));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false)
+        .with_lockfile_runner(runner);
+    let report = engine
+        .run(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        report.repositories[0].status,
+        Status::Complete,
+        "{report:?}"
+    );
+    let branch = &report.actions.unwrap().branches[0];
+    assert_eq!(branch.status, BranchStatus::Created, "{branch:?}");
+    let written: BTreeSet<&str> = branch.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        written,
+        BTreeSet::from([".github/workflows/ci.yml", ".github/workflows/actions.lock"]),
+        "{written:?}"
+    );
+    {
+        let state = fake.state();
+        let blobs: Vec<&str> = state.repo().blobs.values().map(String::as_str).collect();
+        assert!(
+            blobs.iter().any(|blob| blob.contains(&new)),
+            "no written workflow pins the update"
+        );
+        assert!(
+            blobs
+                .iter()
+                .any(|blob| blob.contains(&format!("sha1-{new}"))),
+            "no written lockfile records the update"
+        );
+    }
     check_transcript();
 }
 

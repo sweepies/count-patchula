@@ -2496,6 +2496,7 @@ dependencies = [
  "patchula-report",
  "patchula-words",
  "serde",
+ "serde_yaml_ng",
 ]
 
 [[package]]
@@ -2685,6 +2686,7 @@ dependencies = [
  "reqwest",
  "roxmltree",
  "rustls",
+ "serde",
  "serde_json",
  "serde_yaml_ng",
  "tempfile",

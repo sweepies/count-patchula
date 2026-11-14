@@ -32,7 +32,7 @@ pub fn maintenance(
     // dependency, so its directory waits the strictest effective wait the
     // rules give the repository's Cargo dependencies.
     if jobs.iter().any(|job| job.ecosystem == Ecosystem::Cargo) {
-        let wait = patchula_lookup::Evaluator::new(config)
+        let wait = patchula_lookup::Evaluator::new(config, Default::default())
             .map_err(PlanError::Lookup)?
             .lockfile_wait_hours(dependencies);
         for job in &mut jobs {

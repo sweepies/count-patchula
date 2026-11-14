@@ -172,7 +172,7 @@ async fn cached_held_back_versions_become_eligible_without_a_catalog_request() {
     let registry = Arc::new(Registry::default());
     let config = config();
     let dep = dependencies(&config).remove(0);
-    let eval = Evaluator::new(&config).unwrap();
+    let eval = Evaluator::new(&config, Default::default()).unwrap();
     let first = engine(cache.clone(), registry.clone(), "offline");
     let (catalogs, evidence) = read(&first, 24, now(), false).await;
     let catalog = catalogs[&key("fixture")].as_ref().unwrap();
@@ -293,7 +293,7 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
 #[test]
 fn effective_rules_include_zero_age_exceptions() {
     let config = patchula_config::load_files("/repo/patchula.pkl",BTreeMap::from([("/repo/patchula.pkl".into(),"amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 72 }\nrules = new Listing { new Rule { select { packages = new Listing { \"fixture\" }; updates = new Listing { \"minor\" } }; apply { waitHours = 0 } } }\n".into())])).unwrap();
-    let eval = Evaluator::new(&config).unwrap();
+    let eval = Evaluator::new(&config, Default::default()).unwrap();
     for dep in dependencies(&config) {
         assert_eq!(
             eval.catalog_wait_hours(&dep),

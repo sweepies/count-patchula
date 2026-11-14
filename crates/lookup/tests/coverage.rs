@@ -32,7 +32,7 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
             .extract(&files)
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert!(extraction.warnings.is_empty());
-        let evaluator = patchula_lookup::Evaluator::new(&config).unwrap();
+        let evaluator = patchula_lookup::Evaluator::new(&config, Default::default()).unwrap();
         for dep in &extraction.dependencies {
             patchula_versioning::Ecosystem::of(dep.scheme, dep.source);
             if evaluator.needs_lookup(dep) {

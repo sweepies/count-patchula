@@ -319,7 +319,7 @@ fn a_fix_skips_the_release_age_wait_and_group_but_other_releases_still_wait() {
     let mut config =
         patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
     config.defaults.group = Some("all".into());
-    let eval = patchula_lookup::Evaluator::new(&config).unwrap();
+    let eval = patchula_lookup::Evaluator::new(&config, Default::default()).unwrap();
     let dep = dependency(Source::Npm, "lodash", "4.17.11", None);
     let q = advisory_query(&dep).unwrap();
     let found = vec![Arc::new(advisory(
@@ -410,7 +410,7 @@ fn the_lowest_release_fixing_the_most_is_proposed_past_permitted_filters() {
             patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
         config.defaults.permitted = permitted.map(Into::into);
         config.security.lowest_fix = lowest_fix;
-        let eval = patchula_lookup::Evaluator::new(&config).unwrap();
+        let eval = patchula_lookup::Evaluator::new(&config, Default::default()).unwrap();
         eval.evaluate_with(
             &dep,
             &catalog,
@@ -446,6 +446,7 @@ fn the_lowest_release_fixing_the_most_is_proposed_past_permitted_filters() {
 fn lockfile_only_crates_get_the_lowest_compatible_fix() {
     let eval = patchula_lookup::Evaluator::new(
         &patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap(),
+        Default::default(),
     )
     .unwrap();
     let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
@@ -495,6 +496,7 @@ fn a_package_from_its_own_registry_gets_no_public_advisories() {
 fn a_transitive_fix_needs_a_parseable_current_version() {
     let eval = patchula_lookup::Evaluator::new(
         &patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap(),
+        Default::default(),
     )
     .unwrap();
     let mut dep = dependency(Source::Crates, "bogus", "bogus", Some("bogus"));
@@ -507,6 +509,7 @@ fn a_transitive_fix_needs_a_parseable_current_version() {
 fn a_transitive_fix_is_suppressed_when_the_matched_rule_deactivates_updates() {
     let eval = patchula_lookup::Evaluator::new(
         &patchula_config::load(std::path::Path::new("../../examples/go-module.pkl")).unwrap(),
+        Default::default(),
     )
     .unwrap();
     let mut dep = dependency(Source::Crates, "1password/cli", "1.0.0", Some("1.0.0"));
@@ -531,6 +534,7 @@ fn a_transitive_fix_is_suppressed_when_the_matched_rule_deactivates_updates() {
 fn a_fix_bypasses_a_committed_cargo_cooldown_and_the_proposal_says_so() {
     let eval = patchula_lookup::Evaluator::new(
         &patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap(),
+        Default::default(),
     )
     .unwrap();
     let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
@@ -648,6 +652,7 @@ fn a_fix_bypasses_a_committed_cargo_cooldown_and_the_proposal_says_so() {
 fn a_transitive_fix_inside_the_cooldown_is_marked_the_same_way() {
     let eval = patchula_lookup::Evaluator::new(
         &patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap(),
+        Default::default(),
     )
     .unwrap();
     let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
@@ -727,6 +732,7 @@ fn a_transitive_fix_inside_the_cooldown_is_marked_the_same_way() {
 fn a_transitive_crates_catalog_only_dates_its_fix() {
     let eval = patchula_lookup::Evaluator::new(
         &patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap(),
+        Default::default(),
     )
     .unwrap();
     let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
@@ -778,7 +784,7 @@ fn a_transitive_fix_waits_out_security_applys_wait() {
     let mut config =
         patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
     config.security.apply.wait_hours = Some(48);
-    let eval = patchula_lookup::Evaluator::new(&config).unwrap();
+    let eval = patchula_lookup::Evaluator::new(&config, Default::default()).unwrap();
     let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
     dep.kind = DependencyKind::Transitive;
     dep.file = "Cargo.lock".into();
@@ -825,7 +831,7 @@ fn a_transitive_fix_inside_a_committed_cooldown_still_waits_for_security_apply()
     let mut config =
         patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
     config.security.apply.wait_hours = Some(168);
-    let eval = patchula_lookup::Evaluator::new(&config).unwrap();
+    let eval = patchula_lookup::Evaluator::new(&config, Default::default()).unwrap();
     let mut dep = dependency(Source::Crates, "time", "0.3.20", Some("0.3.20"));
     dep.kind = DependencyKind::Transitive;
     dep.file = "Cargo.lock".into();

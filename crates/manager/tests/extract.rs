@@ -142,6 +142,27 @@ fn action_comment_digest_only_and_ref_models_keep_edit_format() {
     assert!(deps[2].digest.is_none());
 }
 
+/// The first `@` ends an action's name, as the runner and gh-actions-lock
+/// split a `uses:`: a branch named `release@2024` is the ref whole, and an
+/// edit replaces all of it.
+#[test]
+fn an_action_ref_keeps_its_own_at_sign() {
+    let text = "jobs:\n  a:\n    steps:\n      - uses: org/action/path@release@2024 # note\n";
+    let files = read_files([(".github/workflows/test.yml".into(), text.into())]);
+    let deps = Scanner::new(&config())
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies;
+    assert_eq!(deps.len(), 1);
+    assert_eq!(deps[0].package, "org/action");
+    assert_eq!(deps[0].current, "release@2024");
+    assert_eq!(
+        patchula_manager::action_replacement(&deps[0], text, "release-2025", None).unwrap(),
+        "org/action/path@release-2025 # note"
+    );
+}
+
 #[test]
 fn hosted_runner_literals_preserve_families_and_skip_self_hosted_and_expressions() {
     let text = "jobs:\n  a:\n    runs-on: ubuntu-latest\n  b:\n    runs-on: [macos-15, windows-2025, ubuntu-24.04-arm]\n  c:\n    runs-on:\n      - macos-26-intel\n  d:\n    runs-on: [self-hosted, ubuntu-22.04]\n  e:\n    runs-on: ${{ matrix.os }}\n  f:\n    runs-on: custom-linux\n";

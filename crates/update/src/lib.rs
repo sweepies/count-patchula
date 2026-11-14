@@ -32,7 +32,8 @@ mod state_parity;
 pub use plan::testing;
 mod write;
 pub use plan::{
-    Blob, Change, Hold, Plan, Snapshot, blob_sha, branch_name, lock_all, plan, unified,
+    Blob, Change, Hold, Plan, Snapshot, actions_locked_workflows, blob_sha, branch_name, lock_all,
+    plan, unified,
 };
 pub use write::{REF_UPDATE, apply_all};
 
