@@ -118,9 +118,14 @@ out. The package then gets one notice, linking to upstream's release history:
 either "the Count left some release notes out", or, when upstream's own history
 couldn't be read in full, "these release notes may be incomplete".
 
-When fetching a package's notes fails outright (a network or registry error),
-its section says the Count could not read them this run, and the PR body is not
-treated as settled: the next run fetches the notes again and rewrites it.
+When fetching a package's notes fails in a way that may pass (the network, a
+timeout, a server error or a rate limit), its section says the Count could not
+read them this run. The PR body is then not treated as settled: the run keeps no
+write receipt for that branch, so the next run renders the body again, fetches
+the notes again and rewrites it. A failure that would repeat every run, such as
+a registry that does not know the package or a Go vanity host without `go-get`
+metadata, reads as "release notes unavailable: source repository could not be
+resolved", and the body settles as usual.
 
 Two edits keep upstream text from making noise:
 

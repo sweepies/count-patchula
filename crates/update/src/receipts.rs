@@ -1593,7 +1593,10 @@ pub async fn save_receipts(
                 },
             );
         }
-        if !crate::pull_requests::published(plan.action().status)
+        // A body with a retryable release-notes failure is not settled:
+        // without a receipt the next run renders it, and fetches, again.
+        if lifecycle.unsettled(plan)
+            || !crate::pull_requests::published(plan.action().status)
             || plan.action().verified != Some(true)
             || !lifecycle.actions.iter().any(|a| {
                 a.branch == plan.action().branch && crate::pull_requests::pr_published(a.status)

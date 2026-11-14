@@ -1623,6 +1623,138 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
     }
     check_transcript();
 }
+/// A body with a retryable release-notes failure gets no write receipt:
+/// the next run, with nothing else changed, is not restored from one and
+/// fetches the notes again. Its lasting failure then settles the body.
+#[tokio::test(start_paused = true)]
+async fn a_retryable_notes_failure_is_fetched_again_on_the_next_run() {
+    use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+    let (config, repo) = pr_config();
+    let with_notes = |plan: Plan| {
+        let mut draft = Draft::from(plan);
+        draft.changes_mut()[0].source = Source::Npm;
+        draft.changes_mut()[0].package = "left-pad".into();
+        draft.changes_mut()[0].release_notes = true;
+        draft.build()
+    };
+    let (p, snapshot) = make_plan("22.0.0");
+    let mut p = with_notes(p);
+    let server = fake(&snapshot);
+    let hosts = Arc::new(patchula_testkit::github::Hosts::new(server.clone()));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let status = Arc::new(AtomicU16::new(503));
+    {
+        let (reads, status) = (reads.clone(), status.clone());
+        hosts.script("registry.npmjs.org", move |_, _| {
+            reads.fetch_add(1, Ordering::SeqCst);
+            patchula_http::Response {
+                status: reqwest::StatusCode::from_u16(status.load(Ordering::SeqCst)).unwrap(),
+                headers: Default::default(),
+                body: b"{}".to_vec(),
+                stale: None,
+            }
+        });
+    }
+    let github = Client::with_transport(
+        "offline",
+        Cache::open(":memory:", Default::default()).await.unwrap(),
+        Default::default(),
+        hosts.clone(),
+    )
+    .unwrap();
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let body = || {
+        server.state().repo().prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    // Run 1: the registry answers 503.
+    let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut p),
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    patchula_update::apply_all(
+        &github,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+        "main",
+        "patchula[bot]",
+        config.prs.rebase,
+        false,
+    )
+    .await;
+    publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
+    assert!(reads.load(Ordering::SeqCst) > 0);
+    assert!(body().contains("could not read these release notes this run"));
+    patchula_update::save_receipts(&cache, &repo, &config, std::slice::from_ref(&p), &lifecycle)
+        .await
+        .unwrap();
+    // Run 2: nothing else changed; the registry no longer knows the
+    // package, a lasting answer.
+    status.store(404, Ordering::SeqCst);
+    reads.store(0, Ordering::SeqCst);
+    let (next, _) = make_plan("22.0.0");
+    let mut next = with_notes(next);
+    let inventory = patchula_update::Inventory::read(&github, &cache, &repo, &config)
+        .await
+        .unwrap();
+    let outcome = patchula_update::restore_inventory(
+        &cache,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut next),
+        Default::default(),
+        None,
+        &inventory,
+    )
+    .await
+    .unwrap();
+    assert_ne!(outcome, patchula_update::RestoreOutcome::Complete);
+    assert_eq!(next.action().status, BranchStatus::Planned);
+    let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        std::slice::from_mut(&mut next),
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    patchula_update::apply_all(
+        &github,
+        std::slice::from_mut(&mut next),
+        &snapshot,
+        "main",
+        "patchula[bot]",
+        config.prs.rebase,
+        false,
+    )
+    .await;
+    publish(&mut lifecycle, &github, std::slice::from_mut(&mut next)).await;
+    assert!(
+        reads.load(Ordering::SeqCst) > 0,
+        "run 2 fetches the notes again"
+    );
+    let settled = body();
+    assert!(
+        settled.contains("source repository could not be resolved"),
+        "{settled}"
+    );
+    assert!(!settled.contains("could not read these release notes"));
+    check_transcript();
+}
 #[tokio::test(start_paused = true)]
 async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
     let mut servers = Vec::new();

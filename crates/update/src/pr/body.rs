@@ -355,6 +355,11 @@ impl Draft<'_> {
         self.notes.push(&section, usize::MAX);
         self.notes.push("\n", usize::MAX);
     }
+    /// Whether a fetch failed in a way a later run may not: the finished
+    /// body is then not settled.
+    pub(crate) fn unsettled(&self) -> bool {
+        self.failed
+    }
     /// The finished body: the visible text fitted around the permit and
     /// controls, the start marker and the tail's hidden markers. Every
     /// hidden marker was reserved before the visible text was added, so

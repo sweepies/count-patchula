@@ -580,7 +580,12 @@ pub struct Lifecycle {
     /// an unreadable PR is simply never the one acted on.
     complete: bool,
     pub actions: Vec<PullRequestAction>,
+    /// Each release-notes fetch this run made: the notes, or `None` when
+    /// it failed in a way a later run may not.
     notes: BTreeMap<(PackageId, String, String), Option<patchula_notes::Notes>>,
+    /// Branches whose body this run holds a retryable fetch failure: no
+    /// write receipt may settle them, so the next run renders them again.
+    unsettled: BTreeSet<String>,
     pub(crate) recheck: Recheck,
     merge_settings: Option<crate::automerge::Settings>,
     maintenance_policy: patchula_config::Policy,
@@ -673,6 +678,7 @@ impl Lifecycle {
             complete: page.complete,
             actions: Vec::new(),
             notes: BTreeMap::new(),
+            unsettled: BTreeSet::new(),
             recheck,
             merge_settings: None,
             maintenance_policy: config.defaults.clone(),
@@ -1233,23 +1239,59 @@ impl Lifecycle {
             if !self.notes.contains_key(&key) {
                 let note = match sources.release_notes(&key.0, &key.1, &key.2).await {
                     Ok(note) => Some(note),
-                    Err(error) => {
+                    Err(error) if retryable(&error) => {
                         tracing::warn!(
                             package = %key.0.name,
                             from = %key.1,
                             to = %key.2,
                             %error,
-                            "release notes fetch failed"
+                            "release notes fetch failed; the next run retries it"
                         );
                         None
+                    }
+                    // A lasting failure renders as notes without a source,
+                    // settled: another run would fail the same way.
+                    Err(error) => {
+                        tracing::debug!(
+                            package = %key.0.name,
+                            from = %key.1,
+                            to = %key.2,
+                            %error,
+                            "release notes source not resolved"
+                        );
+                        Some(patchula_notes::Notes::default())
                     }
                 };
                 self.notes.insert(key.clone(), note);
             }
             draft.push(self.notes[&key].as_ref());
         }
+        if draft.unsettled() {
+            self.unsettled.insert(plan.action().branch.clone());
+        } else {
+            self.unsettled.remove(&plan.action().branch);
+        }
         draft.finish()
     }
+    /// Whether `plan`'s body holds a fetch failure a later run may not
+    /// repeat, so no receipt may settle it.
+    pub(crate) fn unsettled(&self, plan: &Plan) -> bool {
+        self.unsettled.contains(&plan.action().branch)
+    }
+}
+
+/// Whether a release-notes fetch that failed with `error` may succeed on a
+/// later run: the network, a server error or a rate limit. Anything else —
+/// a package GitHub or a registry does not know, an unsafe name, an answer
+/// the notes cannot use — fails the same way every run.
+pub(crate) fn retryable(error: &patchula_notes::Error) -> bool {
+    use patchula_words::LookupErrorKind;
+    let kind = match error {
+        patchula_notes::Error::Source(error) => error.kind(),
+        patchula_notes::Error::Earlier(failure) => failure.kind,
+        patchula_notes::Error::Upstream(_) => return false,
+    };
+    matches!(kind, LookupErrorKind::Network | LookupErrorKind::RateLimit)
 }
 
 #[cfg(test)]
@@ -1410,5 +1452,47 @@ mod closed_pulls_tests {
             read.values()
                 .any(|pulls| pulls.as_ref().is_ok_and(|p| !p.is_empty()))
         );
+    }
+}
+
+#[cfg(test)]
+mod notes_failure_tests {
+    use super::retryable;
+    use patchula_datasource::{Error, Failure};
+    use patchula_http::{CacheError, Error as HttpError};
+    use patchula_notes::Error as NotesError;
+    use patchula_words::LookupErrorKind;
+
+    /// The network, a server error and a rate limit may pass on a later
+    /// run; the rest fail the same way every run.
+    #[test]
+    fn only_transient_notes_failures_are_retried() {
+        let source = |error| NotesError::Source(error);
+        let earlier = |kind| {
+            NotesError::Earlier(Failure {
+                kind,
+                message: String::new(),
+            })
+        };
+        for transient in [
+            source(Error::Http(CacheError::Transport(HttpError::Timeout))),
+            source(Error::Http(CacheError::Status(503))),
+            source(Error::Http(CacheError::Status(429))),
+            source(Error::RateLimit(60)),
+            earlier(LookupErrorKind::Network),
+            earlier(LookupErrorKind::RateLimit),
+        ] {
+            assert!(retryable(&transient), "{transient}");
+        }
+        for lasting in [
+            source(Error::Http(CacheError::Status(404))),
+            source(Error::Invalid),
+            source(Error::Http(CacheError::Document)),
+            earlier(LookupErrorKind::NotFound),
+            earlier(LookupErrorKind::Other),
+            NotesError::Upstream("no go-get meta"),
+        ] {
+            assert!(!retryable(&lasting), "{lasting}");
+        }
     }
 }
