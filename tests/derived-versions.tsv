@@ -2,54 +2,58 @@
 # the release. Columns: representation name, version, comma-separated source
 # files whose text produces the derived bytes (the owning crate's file
 # first), comma-separated Cargo.lock packages whose locked versions the
-# derive's bytes depend on (`-` when none), and the sha256 of all of it
-# (each file as `path\0bytes\0`, each package as `name\0versions\0`, in
-# listed order).
+# derive's bytes depend on (`-` when none), and the sha256 of the sources
+# (each file as `path\0bytes\0`, in listed order).
 #
 # The version lives at the `Derived::new` or `representation` call site; the
 # parity test in the owning crate (derive_parity.rs) checks this table and
 # that every `Derived::new("<name>"` in the crate's sources is registered.
-# When a transform's source — or one of its listed dependencies' locked
-# versions — changes, the test fails naming the new hash: bump the version
-# and update this row in the same commit. A row must list every file the
-# derive reads bytes through; whole files are hashed, so a formatting or
-# comment edit in a listed file also needs the bump (batch cosmetic edits
-# in these files). `crates/http/src/derive.rs` is in every transform's set
-# because it feeds and parses the body.
+# When a transform's source changes, the test fails naming the new hash:
+# bump the version and update this row in the same commit. A row must list
+# every file the derive reads bytes through; whole files are hashed, so a
+# formatting or comment edit in a listed file also needs the bump (batch
+# cosmetic edits in these files). `crates/http/src/derive.rs` is in every
+# transform's set because it feeds and parses the body.
+#
+# The listed packages are not hashed here. The cache's build script
+# fingerprints their locked versions into the representation
+# (`name@vN~<fingerprint>`), so a dependency bump misses exactly the bodies
+# whose row lists it, with no version bump. The parity test only checks
+# that every listed package is in Cargo.lock, so a typo fails.
 #
 # name	version	sources	deps	sha256
-npm-catalog-v2	1	crates/datasource/src/compact.rs,crates/datasource/src/catalog.rs,crates/versioning/src/lib.rs,crates/http/src/derive.rs	nodejs-semver,semver,serde,serde_json	a87cdd49c1f907160bd0a564a7766b6ee09acf8caafb83a97701702d1515ebfa
-crates-catalog-v2	1	crates/datasource/src/compact.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	6b68569f3f99e2e09a4caf66533919c6109fea4e3bf3127f4c938c0224b191b7
-pypi-catalog-v2	1	crates/datasource/src/compact.rs,crates/datasource/src/catalog.rs,crates/versioning/src/lib.rs,crates/versioning/src/extended.rs,crates/http/src/derive.rs	pep440_rs,semver,serde,serde_json	53bb7b8c54a153ad69cfa7b2d8f32264f9e2ec46fe075b93483a1f5782d1f45e
-terraform-catalog	3	crates/datasource/src/registries.rs,crates/datasource/src/catalog.rs,crates/versioning/src/lib.rs,crates/versioning/src/extended.rs,crates/http/src/derive.rs	pep440_rs,semver,serde,serde_json	052130b20da91453f0b409958aadcf575fcb8ef1232ad6d6e1e8322c06de21c3
-helm-index	3	crates/datasource/src/helm.rs,crates/datasource/src/registries.rs,crates/datasource/src/catalog.rs,crates/datasource/src/upstream.rs,crates/versioning/src/lib.rs,crates/http/src/derive.rs	libyaml-safer,nodejs-semver,semver,serde,serde_json	2fdc8c164df316310645ac71d9918fc0020b93e079a4d2b1a68eaa9dcacd11ab
-pypi-index-catalog	3	crates/datasource/src/registries.rs,crates/datasource/src/catalog.rs,crates/versioning/src/lib.rs,crates/versioning/src/extended.rs,crates/http/src/derive.rs	pep440_rs,semver,serde,serde_json	052130b20da91453f0b409958aadcf575fcb8ef1232ad6d6e1e8322c06de21c3
-pypi-simple-catalog	3	crates/datasource/src/registries.rs,crates/datasource/src/catalog.rs,crates/versioning/src/lib.rs,crates/versioning/src/extended.rs,crates/http/src/derive.rs	pep440_rs,semver,serde,serde_json	052130b20da91453f0b409958aadcf575fcb8ef1232ad6d6e1e8322c06de21c3
-nuget-flat	1	crates/datasource/src/nuget.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	6a08a514af82e43bf09d9c8936278d6536108e45fc0fe26abced949beb87d6ac
-nuget-registration	1	crates/datasource/src/nuget.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	6a08a514af82e43bf09d9c8936278d6536108e45fc0fe26abced949beb87d6ac
-nuget-registration-page	1	crates/datasource/src/nuget.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	6a08a514af82e43bf09d9c8936278d6536108e45fc0fe26abced949beb87d6ac
-maven-metadata	1	crates/datasource/src/maven.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	a4c4e1eb3fc7ca650e562de88b30f8f0c625fe3c95a980a7def3d802d92634e8
-packagist-p2	1	crates/datasource/src/packagist.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	fd6757d0554bdd43919f3ae5eac1ef558f8dd4cf1679077ab386707291d2d2ba
-rubygems-versions	1	crates/datasource/src/rubygems.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	ba93666d7207114aed2e9a3d1ac077f702d6711c6e24723f9efbac6355ae18ec
-forge-gitlab-tags	1	crates/datasource/src/forge.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	721c9f06cef27db507c4573c838916f89bc1c73bb84f2f754969ff7383871340
-forge-gitea-tags	1	crates/datasource/src/forge.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	721c9f06cef27db507c4573c838916f89bc1c73bb84f2f754969ff7383871340
-oci-config-notes	1	crates/datasource/src/docker.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json	5192902cc159d591bbcbfe205fb436dff5aa9e5f0dce5a8c923e535380dbb26e
-oci-tags	1	crates/datasource/src/docker.rs,crates/http/src/derive.rs	serde,serde_json	db6bf88ba73ccee437f7816c8f010d4bd30ccfe2bdf002e33654ff96a5339b28
-image-platform	3	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json,sha2	e64d2c60c92809fcfc32f5f48d15cd2083275c6cb3039d6b1318af417feb7e13
-sbom-os	3	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	base64,serde,serde_json,sha2	1364d3916ac679ea0c25334f213ab6eaf8b9853c291643c41b84405c1968c672
-github-release-head	3	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	c11c02b8f4b9c1a2073b6e8acc887915350f42df58affc5513a3122e193cde24
-anonymous-registry-pull-token	1	crates/datasource/src/docker.rs	chrono,serde,serde_json	7ca7670f9cc3a6522110293d443abf760c6fe57a546a9c6b37dd6c173d485271
-notes-adapter-listing	3	crates/notes/src/adapters.rs,crates/http/src/derive.rs	serde,serde_json	f16343229577e1a40992b7629830d44bf765fa28041c13d4f1ecd84bf44d3e11
-parsed-postgres-sgml	3	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	616e76890a955294977bfb771ffd6b2921da7a8cbf8e470a64988cdea79603b4
-parsed-go-history	3	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	616e76890a955294977bfb771ffd6b2921da7a8cbf8e470a64988cdea79603b4
-notes-changelog-directory	1	crates/notes/src/changelog.rs,crates/http/src/derive.rs	serde,serde_json	b5bb9d58412515bc0a53b94201a8afd436615fe01b78c6404ac8da3242e82f02
-parsed-changelog	1	crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	base64,regex,serde,serde_json	c120a4470ecf29a594ea514575d31d5ca6922331a09b0dc2e5aa0330552bc44d
-notes-gitlab-releases	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	a2b6422f7071cbb550ba55cba891de3aa12a8dd8d38c5e6b38df15aa7ba51183
-notes-gitea-releases	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	a2b6422f7071cbb550ba55cba891de3aa12a8dd8d38c5e6b38df15aa7ba51183
-notes-forge-tags	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	a2b6422f7071cbb550ba55cba891de3aa12a8dd8d38c5e6b38df15aa7ba51183
-notes-forge-files	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	a2b6422f7071cbb550ba55cba891de3aa12a8dd8d38c5e6b38df15aa7ba51183
-notes-forge-changelog	1	crates/notes/src/forge.rs,crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	regex,serde,serde_json	7e0423beb19d9c803e57d71e07d8d7ee5a457d71ab54d9feb36dda7eded50556
-notes-source-npm	1	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	a001446bf05fd2ceead695440a8765b351e1c15256577c92ad6f4520f211500e
-notes-source-crates	1	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	a001446bf05fd2ceead695440a8765b351e1c15256577c92ad6f4520f211500e
-notes-source-pypi	1	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	a001446bf05fd2ceead695440a8765b351e1c15256577c92ad6f4520f211500e
-notes-mise-versions	1	crates/notes/src/mirror.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json	25a76d14dbcd63b8c03a275a1a3c4ba35962d9fb535cad09a8a68203e27b66c7
+npm-catalog-v2	1	crates/datasource/src/compact.rs,crates/datasource/src/catalog.rs,crates/versioning/src/lib.rs,crates/http/src/derive.rs	nodejs-semver,semver,serde,serde_json	b43cb926b446d69581b66af1a582849e63725a213ec09aa4ffbe1b686182bcd5
+crates-catalog-v2	1	crates/datasource/src/compact.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	d01b9d453bb9357758141cb182dd33f5e524b808cb709473404b0b12615c50e0
+pypi-catalog-v2	1	crates/datasource/src/compact.rs,crates/datasource/src/catalog.rs,crates/versioning/src/lib.rs,crates/versioning/src/extended.rs,crates/http/src/derive.rs	pep440_rs,semver,serde,serde_json	0d0165e6d105c04d536a4d34e3cc7ae9b640ad7f25cffb8a754295c5dde56dab
+terraform-catalog	3	crates/datasource/src/registries.rs,crates/datasource/src/catalog.rs,crates/versioning/src/lib.rs,crates/versioning/src/extended.rs,crates/http/src/derive.rs	pep440_rs,semver,serde,serde_json	f0fec4e0f298a10ed8faa19915c663f347e27279572bfbcc157d2c73434287cb
+helm-index	3	crates/datasource/src/helm.rs,crates/datasource/src/registries.rs,crates/datasource/src/catalog.rs,crates/datasource/src/upstream.rs,crates/versioning/src/lib.rs,crates/http/src/derive.rs	libyaml-safer,nodejs-semver,semver,serde,serde_json	ce3bdd17c7d5893229a489196948798676811ebec32c614c6c7de550763a86b2
+pypi-index-catalog	3	crates/datasource/src/registries.rs,crates/datasource/src/catalog.rs,crates/versioning/src/lib.rs,crates/versioning/src/extended.rs,crates/http/src/derive.rs	pep440_rs,semver,serde,serde_json	f0fec4e0f298a10ed8faa19915c663f347e27279572bfbcc157d2c73434287cb
+pypi-simple-catalog	3	crates/datasource/src/registries.rs,crates/datasource/src/catalog.rs,crates/versioning/src/lib.rs,crates/versioning/src/extended.rs,crates/http/src/derive.rs	pep440_rs,semver,serde,serde_json	f0fec4e0f298a10ed8faa19915c663f347e27279572bfbcc157d2c73434287cb
+nuget-flat	1	crates/datasource/src/nuget.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	bc42a5545769095282a0318d76ecf81fdc6575d3989e70e89f25367af67fac3a
+nuget-registration	1	crates/datasource/src/nuget.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	bc42a5545769095282a0318d76ecf81fdc6575d3989e70e89f25367af67fac3a
+nuget-registration-page	1	crates/datasource/src/nuget.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	bc42a5545769095282a0318d76ecf81fdc6575d3989e70e89f25367af67fac3a
+maven-metadata	1	crates/datasource/src/maven.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	bbabbf88f0c0066693e051f39c4e0d11601a98a3336ebb5d090619b5a3ba78cc
+packagist-p2	1	crates/datasource/src/packagist.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	7bfa0d811a18ecf511a6820778224e0158687e4098cf5c49e6c6b822ca231f16
+rubygems-versions	1	crates/datasource/src/rubygems.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	991f4be0f35501aafd852b1bd9c4686c269500a7accf0cf80c79ef520c454ef1
+forge-gitlab-tags	1	crates/datasource/src/forge.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	6ed4867515d816f3986119b17d4e9fc207bacdb7db0dc715e595ff523fe9c25d
+forge-gitea-tags	1	crates/datasource/src/forge.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json	6ed4867515d816f3986119b17d4e9fc207bacdb7db0dc715e595ff523fe9c25d
+oci-config-notes	1	crates/datasource/src/docker.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json	19b21631041de28b28ba16a6ab6f52dfae0e8336077fde4a9fde94f755fe8dc7
+oci-tags	1	crates/datasource/src/docker.rs,crates/http/src/derive.rs	serde,serde_json	1793d5ba9d90c2f7d4f7cc78cbdb2bf199bc463dbfa454c8296e3e13f6fa1808
+image-platform	3	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json,sha2	27914c918d53cef3cd1fb7b1cb4882cb189b3658e2f719f07fe88ad208fdbe5e
+sbom-os	3	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	base64,serde,serde_json,sha2	27914c918d53cef3cd1fb7b1cb4882cb189b3658e2f719f07fe88ad208fdbe5e
+github-release-head	3	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	605877daff1c2baba2d8eac62f531ed0bd0d325c3a3f3015b6a1530875669641
+anonymous-registry-pull-token	1	crates/datasource/src/docker.rs	chrono,serde,serde_json	e8d7be4142dd9b7f394b4f633656f200b7003bd1fec689a051750576ef313cd3
+notes-adapter-listing	3	crates/notes/src/adapters.rs,crates/http/src/derive.rs	serde,serde_json	e263df6c39dbbeffba69a019e11156047d641375751ce2b2648e4e0594125f37
+parsed-postgres-sgml	3	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	88e9f22ae8c9476b14877f6642394b029ce0c62fdd1e59587364b3194da3813e
+parsed-go-history	3	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	88e9f22ae8c9476b14877f6642394b029ce0c62fdd1e59587364b3194da3813e
+notes-changelog-directory	1	crates/notes/src/changelog.rs,crates/http/src/derive.rs	serde,serde_json	b28b1e0b0a53e8d78b4ed36d9d211445e6def5e79dd71bbb1e3b51dabf98b10f
+parsed-changelog	1	crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	base64,regex,serde,serde_json	7ca6ab66ce0ae0763b95a1b74f1c933cbe981d1f9a7f12ebf6d6ea42cbfe6c43
+notes-gitlab-releases	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	6a531ac87a6f5fc97d73023486b38f6db9580a69bbc8be30117585472da364c2
+notes-gitea-releases	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	6a531ac87a6f5fc97d73023486b38f6db9580a69bbc8be30117585472da364c2
+notes-forge-tags	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	6a531ac87a6f5fc97d73023486b38f6db9580a69bbc8be30117585472da364c2
+notes-forge-files	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	6a531ac87a6f5fc97d73023486b38f6db9580a69bbc8be30117585472da364c2
+notes-forge-changelog	1	crates/notes/src/forge.rs,crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	regex,serde,serde_json	ebc4a3c430b8db1fc93d2fff8586d788248126c4432677a090a162f523fb4834
+notes-source-npm	1	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	1a38f4bc261af82f5cd87fc95db6503b8a1c17b630ae55edea6759525be709b1
+notes-source-crates	1	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	1a38f4bc261af82f5cd87fc95db6503b8a1c17b630ae55edea6759525be709b1
+notes-source-pypi	1	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	1a38f4bc261af82f5cd87fc95db6503b8a1c17b630ae55edea6759525be709b1
+notes-mise-versions	1	crates/notes/src/mirror.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json	1bebc4a0e97ddbaea0fa5f66ee60d3e1eb4695559b86db896f808d53b4a2a267

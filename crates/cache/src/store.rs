@@ -2,7 +2,7 @@ use crate::{Error, HttpEntry, Options, Release, ReleaseList, Result};
 
 /// Each migration sets `user_version` to its own number; a cache at version
 /// N runs the ones after it.
-pub(crate) const MIGRATIONS: [&str; 14] = [
+pub(crate) const MIGRATIONS: [&str; 15] = [
     include_str!("migrations/001.sql"),
     include_str!("migrations/002.sql"),
     include_str!("migrations/003.sql"),
@@ -17,8 +17,29 @@ pub(crate) const MIGRATIONS: [&str; 14] = [
     include_str!("migrations/012.sql"),
     include_str!("migrations/013.sql"),
     include_str!("migrations/014.sql"),
+    include_str!("migrations/015.sql"),
 ];
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+
+/// The state rows under a tabled name (`?1`: `[name, current key]` pairs)
+/// whose namespace is not the name's current key.
+pub(crate) const PRUNE_STATE: &str = "\
+DELETE FROM state WHERE rowid IN (
+  SELECT state.rowid FROM json_each(?1) AS row JOIN state
+    ON state.namespace >= json_extract(row.value, '$[0]') || '@v'
+   AND state.namespace < json_extract(row.value, '$[0]') || '@w'
+  WHERE state.namespace <> json_extract(row.value, '$[1]')
+)";
+
+/// The HTTP rows whose derived representation is under a tabled name
+/// (`?1`: `[name, current key]` pairs) but is not its current key.
+pub(crate) const PRUNE_HTTP: &str = "\
+DELETE FROM http WHERE rowid IN (
+  SELECT http.rowid FROM json_each(?1) AS row JOIN http
+    ON http.representation >= json_extract(row.value, '$[0]') || '@v'
+   AND http.representation < json_extract(row.value, '$[0]') || '@w'
+  WHERE http.representation <> json_extract(row.value, '$[1]')
+)";
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -114,6 +135,7 @@ impl Store {
             path,
             options,
         };
+        store.prune()?;
         store.evict()?;
         Ok(store)
     }
@@ -238,6 +260,25 @@ impl Store {
             "DELETE FROM state WHERE namespace=?1 AND scope=?2",
             params![namespace, scope],
         )?;
+        Ok(())
+    }
+
+    /// Delete every state row and derived HTTP body kept under a tabled
+    /// name's key other than the one this build reads: an older version or
+    /// an older dependency fingerprint is never read again. One indexed
+    /// join per table: each name's keys are the range `name@v..name@w`
+    /// (names hold no `@`), found through the state primary key and the
+    /// `http_representation` index.
+    fn prune(&self) -> Result<()> {
+        let states = self
+            .conn
+            .execute(PRUNE_STATE, [crate::current_keys(crate::STATE_ROWS)])?;
+        let bodies = self
+            .conn
+            .execute(PRUNE_HTTP, [crate::current_keys(crate::DERIVED_ROWS)])?;
+        if states + bodies > 0 {
+            tracing::debug!(states, bodies, "pruned superseded cache keys");
+        }
         Ok(())
     }
 

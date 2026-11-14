@@ -3,7 +3,7 @@ use crate::{
     Credential, RequestTrace, Response, Stale, Transport, conditional,
     credentials::{matching, mirrored},
 };
-use patchula_cache::{Cache, HttpEntry};
+use patchula_cache::{Cache, HttpEntry, representation};
 use reqwest::{
     Method, Request, StatusCode, Url,
     header::{self, HeaderValue},
@@ -287,16 +287,6 @@ fn validate_url(url: &Url) -> Result<(), Error> {
     Ok(())
 }
 
-/// The cache `representation` for a locally derived body: `"{name}@v{version}"`.
-/// `@v` starts the version, so a name never contains `@` or `+`.
-pub fn representation(name: &str, version: u32) -> String {
-    debug_assert!(
-        patchula_cache::plain(name),
-        "a representation name has no @ or +"
-    );
-    format!("{name}@v{version}")
-}
-
 /// A body the client derives from a fetched document and caches under its
 /// own representation. `version` is the transform's own version: bump it when
 /// the compaction code changes what bytes it produces, never for a release;
@@ -325,7 +315,7 @@ impl<E> Derived<E> {
     ) -> Self {
         assert!(
             patchula_cache::plain(name),
-            "a derived name is nonempty and has no @ or +"
+            "a derived name is nonempty and has no @, ~ or +"
         );
         Self {
             name,

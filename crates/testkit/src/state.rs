@@ -495,9 +495,10 @@ fn coverage(declared: &BTreeMap<String, Declared>) {
 /// Every registered state has a row whose version and source hash still
 /// hold, every code-versioned state the crate's sources declare is
 /// registered, no row is stale, and every `impl State` in the workspace
-/// is a row or an exemption. On a source or locked dependency change the
-/// failure names the new hash; bump the state's `VERSION` and update its
-/// row in the same commit.
+/// is a row or an exemption. On a source change the failure names the
+/// new hash; bump the state's `VERSION` and update its row in the same
+/// commit. A listed crate must be in Cargo.lock; its locked version keys
+/// the cache entry, not the row.
 pub fn check(krate: &str, registered: &std::collections::BTreeMap<&'static str, u32>) {
     let declared = declared();
     let mine = declared

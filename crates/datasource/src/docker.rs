@@ -152,7 +152,7 @@ fn token_key(host: &str, path: &str) -> Result<HttpKey> {
         &format!("https://{host}/v2/{path}/"),
         BTreeMap::new(),
     )?
-    .representation(&patchula_http::representation(
+    .representation(&patchula_cache::representation(
         PULL_TOKEN_REPRESENTATION.0,
         PULL_TOKEN_REPRESENTATION.1,
     )))

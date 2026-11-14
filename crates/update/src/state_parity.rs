@@ -1,8 +1,9 @@
 //! `tests/state-versions.tsv` guards every code-versioned state this
 //! crate registers: its `VERSION` names the code that derives the value,
-//! the row hashes the source files, trees and locked dependency versions
-//! that derivation reads, and a change to any of them fails here until
-//! the version is bumped and the row updated in the same commit.
+//! the row hashes the source files and trees that derivation reads, and a
+//! change to any of them fails here until the version is bumped and the
+//! row updated in the same commit. The locked versions of the row's listed
+//! crates key the cache entry instead, so a bump of one needs neither.
 use crate::cleanup::NotOurs;
 use patchula_cache::State;
 
