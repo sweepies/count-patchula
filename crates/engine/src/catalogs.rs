@@ -221,16 +221,16 @@ impl Engine {
             if repo.report.status != Status::Complete {
                 continue;
             }
-            let mut controls = Controls::default();
             let since = self.last_run(&repo.report.repository).await?;
             let dependencies: Vec<Dependency> = repo
                 .dependencies
                 .iter()
                 .map(|dep| dep.dependency.clone())
                 .collect();
-            // A plan error leaves the saved controls as they are: an empty
-            // set would quietly un-retry every ticked box on the next run.
-            let plans = match patchula_update::plan(
+            // A plan error keeps the plan-derived controls the last run saved:
+            // an empty set would quietly un-retry every ticked box on the
+            // next run. This run's held-back targets are saved either way.
+            let (mut controls, plans) = match patchula_update::plan(
                 &repo.report,
                 config,
                 &dependencies,
@@ -239,11 +239,16 @@ impl Engine {
                 since,
                 now,
             ) {
-                Ok(plans) => plans,
+                Ok(plans) => (Controls::default(), plans),
                 Err(error) => {
                     tracing::warn!(target: "patchula_engine", repository = %repo.report.repository,
-                        %error, "catalog controls not saved: the plan failed");
-                    continue;
+                        %error, "the plan failed; the saved branch controls stand");
+                    let saved = self
+                        .cache
+                        .state::<Controls>(&self.credential_scope(&repo.report.repository))
+                        .await?
+                        .unwrap_or_default();
+                    (saved, Vec::new())
                 }
             };
             for plan in plans {
