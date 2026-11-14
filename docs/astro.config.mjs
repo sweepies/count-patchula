@@ -137,6 +137,7 @@ const sidebar = [
       { label: "Engine", slug: "internals/engine" },
       { label: "SQLite cache", slug: "internals/cache" },
       { label: "GitHub client", slug: "internals/github-client" },
+      { label: "Threat model", slug: "internals/threat-model" },
       { label: "Image SBOM advisories", slug: "internals/image-sboms" },
       { label: "HTTP fixtures", slug: "internals/http-testing" },
     ],
