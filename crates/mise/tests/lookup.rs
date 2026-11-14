@@ -231,7 +231,7 @@ async fn plugin_backends_and_unsafe_arguments_never_reach_mise() {
     for tool in [
         "asdf:mise-plugins/asdf-tiny",
         "vfox:version-fox/vfox-cmake",
-        "github:jdx/mise[api_url=http://127.0.0.1:9]@1",
+        "github:jdx/mise[bin=mise]@1",
         "pypi:black[extras=-x]",
         "pypi:black[extras=\"--index-url=x\"]",
         "pypi:black[extras=x@1]",
