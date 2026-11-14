@@ -1,7 +1,7 @@
 //! GitHub App JWTs and per-installation access tokens. No credentials reach SQLite.
 use crate::{
-    ACCEPT, API_VERSION, Credentials, Error, Response, Result, Token, Transport, USER_AGENT,
-    join_api, pagination::next_link, valid_api_url,
+    Credentials, Error, Response, Result, Token, Transport, base_headers, join_api,
+    pagination::next_link, valid_api_url,
 };
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
@@ -17,6 +17,25 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+/// How far a JWT's issue time is set back, for clock drift with GitHub.
+const JWT_BACKDATE: i64 = 60;
+/// How long a JWT is valid after now; GitHub allows ten minutes.
+const JWT_LIFETIME: i64 = 540;
+/// A cached installation token is renewed this long before it expires.
+const TOKEN_MARGIN: i64 = 120;
+
+/// Whether `id` is a GitHub id the Count accepts: positive and within
+/// `i64`, the bound configuration and the cache keep ids to.
+pub(crate) fn valid_id(id: u64) -> bool {
+    id > 0 && i64::try_from(id).is_ok()
+}
+
+/// Whether `repo` is an `owner/name` pair of plain path segments.
+fn valid_repo(repo: &str) -> bool {
+    repo.split_once('/')
+        .is_some_and(|(owner, name)| valid_segment(owner) && valid_segment(name))
+}
+
 #[derive(Serialize)]
 struct Claims {
     iat: i64,
@@ -24,8 +43,15 @@ struct Claims {
     iss: String,
 }
 struct CachedToken {
-    value: String,
+    minted: Minted,
     expires: i64,
+}
+/// A minted token, and for a scoped mint the `full_name` of the repository
+/// GitHub narrowed it to.
+#[derive(Clone)]
+struct Minted {
+    value: String,
+    repository: Option<String>,
 }
 
 /// What a cached installation token covers: the whole installation, or one
@@ -62,13 +88,21 @@ impl MintScope {
     }
 }
 
+/// One mint's cached token, locked while it is minted.
+type MintSlot = Arc<Mutex<Option<CachedToken>>>;
+
 /// Deliberately no Debug implementation: contains the signing key and access tokens.
 pub struct App {
     id: u64,
     key: EncodingKey,
     api_url: Url,
     transport: Arc<dyn Transport>,
-    tokens: Mutex<BTreeMap<Mint, CachedToken>>,
+    /// One slot per mint, so a mint for one installation never waits on
+    /// another's.
+    tokens: std::sync::Mutex<BTreeMap<Mint, MintSlot>>,
+    /// Repository ids by installation and lowercased `owner/name`, read
+    /// once for scoped mints.
+    repository_ids: std::sync::Mutex<BTreeMap<(u64, String), u64>>,
 }
 impl App {
     pub fn new(
@@ -86,7 +120,8 @@ impl App {
             key,
             api_url: crate::api_root(&api_url),
             transport,
-            tokens: Mutex::new(BTreeMap::new()),
+            tokens: Default::default(),
+            repository_ids: Default::default(),
         }))
     }
     pub fn installation(self: &Arc<Self>, id: u64) -> Arc<dyn Credentials> {
@@ -101,8 +136,7 @@ impl App {
     }
     /// Resolve only this App's installation, authenticated with its JWT.
     pub async fn repository_installation(&self, repo: &str) -> Result<Option<u64>> {
-        let parts: Vec<_> = repo.split('/').collect();
-        if parts.len() != 2 || !parts.iter().all(|part| valid_segment(part)) {
+        if !valid_repo(repo) {
             return Err(Error::Configuration);
         }
         self.lookup_installation(&format!("repos/{repo}/installation"))
@@ -126,7 +160,7 @@ impl App {
         };
         value["id"]
             .as_u64()
-            .filter(|id| *id > 0 && *id <= i64::MAX as u64)
+            .filter(|id| valid_id(*id))
             .map(Some)
             .ok_or(Error::Json)
     }
@@ -134,8 +168,8 @@ impl App {
         jsonwebtoken::encode(
             &Header::new(Algorithm::RS256),
             &Claims {
-                iat: now - 60,
-                exp: now + 540,
+                iat: now - JWT_BACKDATE,
+                exp: now + JWT_LIFETIME,
                 iss: self.id.to_string(),
             },
             &self.key,
@@ -150,8 +184,8 @@ impl App {
     }
     /// The App surface's one request shape: a bearer — the JWT, or a minted
     /// installation token for the reads a scoped mint needs — plus an
-    /// optional JSON body. `None` sends no body: the full-installation mint
-    /// stays exactly the body-less request it always was.
+    /// optional JSON body. `None` sends no body, as the full-installation
+    /// mint requires.
     async fn request_as(
         &self,
         method: Method,
@@ -164,16 +198,7 @@ impl App {
             HeaderValue::from_str(&format!("Bearer {bearer}")).map_err(|_| Error::Configuration)?;
         auth.set_sensitive(true);
         request.headers_mut().insert(header::AUTHORIZATION, auth);
-        request
-            .headers_mut()
-            .insert(header::ACCEPT, HeaderValue::from_static(ACCEPT));
-        request
-            .headers_mut()
-            .insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT));
-        request.headers_mut().insert(
-            "x-github-api-version",
-            HeaderValue::from_static(API_VERSION),
-        );
+        base_headers(request.headers_mut());
         if let Some(body) = body {
             request.headers_mut().insert(
                 header::CONTENT_TYPE,
@@ -185,7 +210,7 @@ impl App {
             .transport
             .send(request)
             .await
-            .map_err(|_| Error::Transport)?;
+            .map_err(Error::Transport)?;
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
         }
@@ -265,7 +290,7 @@ impl App {
                 ids.push(
                     entry["id"]
                         .as_u64()
-                        .filter(|id| *id > 0)
+                        .filter(|id| valid_id(*id))
                         .ok_or(Error::Json)?,
                 );
             }
@@ -276,24 +301,29 @@ impl App {
         Err(Error::Pagination)
     }
     async fn token_at(&self, id: u64, now: i64) -> Result<String> {
-        if id == 0 {
+        if !valid_id(id) {
             return Err(Error::Configuration);
         }
-        self.mint(
-            Mint {
-                installation: id,
-                scope: None,
-            },
-            now,
-        )
-        .await
+        Ok(self
+            .mint(
+                Mint {
+                    installation: id,
+                    scope: None,
+                },
+                now,
+            )
+            .await?
+            .value)
     }
     /// `repository`'s numeric id, read with `installation`'s token: the
     /// `repository_ids` a scoped mint must name.
     async fn repository_id(&self, installation: u64, repository: &str, now: i64) -> Result<u64> {
-        let parts: Vec<_> = repository.split('/').collect();
-        if parts.len() != 2 || !parts.iter().all(|part| valid_segment(part)) {
+        if !valid_repo(repository) {
             return Err(Error::Configuration);
+        }
+        let key = (installation, repository.to_ascii_lowercase());
+        if let Some(id) = lock(&self.repository_ids).get(&key) {
+            return Ok(*id);
         }
         let token = self.token_at(installation, now).await?;
         let value = self
@@ -307,10 +337,16 @@ impl App {
         {
             return Err(Error::Json);
         }
-        value["id"]
+        let id = value["id"]
             .as_u64()
-            .filter(|id| *id > 0 && *id <= i64::MAX as u64)
-            .ok_or(Error::Json)
+            .filter(|id| valid_id(*id))
+            .ok_or(Error::Json)?;
+        lock(&self.repository_ids).insert(key, id);
+        Ok(id)
+    }
+    /// Forget `repository`'s cached id, after a scoped mint for it failed.
+    fn forget_repository(&self, installation: u64, repository: &str) {
+        lock(&self.repository_ids).remove(&(installation, repository.to_ascii_lowercase()));
     }
     /// `installation`'s token narrowed to `repository`'s numeric id with
     /// `metadata: read` only: what a lockfile tool gets. The token reads
@@ -321,8 +357,8 @@ impl App {
         installation: u64,
         repository: u64,
         now: i64,
-    ) -> Result<String> {
-        if installation == 0 || repository == 0 {
+    ) -> Result<Minted> {
+        if !valid_id(installation) || !valid_id(repository) {
             return Err(Error::Configuration);
         }
         self.mint(
@@ -337,20 +373,54 @@ impl App {
         )
         .await
     }
-    async fn mint(&self, key: Mint, now: i64) -> Result<String> {
-        // Single flight: simultaneous readiness, Git and API requests cannot mint twice.
-        let mut tokens = self.tokens.lock().await;
-        if let Some(token) = tokens.get(&key).filter(|token| token.expires > now + 120) {
-            return Ok(token.value.clone());
+    /// `installation`'s token narrowed to the repository named `repository`.
+    /// The mint must come back narrowed to that name: a cached id a rename
+    /// and recreate left stale names another repository, so on a mismatch
+    /// the id is read again and minted once more, and a second mismatch is
+    /// an error rather than a token for the wrong repository.
+    async fn scoped_token_for(
+        &self,
+        installation: u64,
+        repository: &str,
+        now: i64,
+    ) -> Result<String> {
+        for _ in 0..2 {
+            let id = self.repository_id(installation, repository, now).await?;
+            let minted = self.scoped_token_at(installation, id, now).await;
+            let minted = match minted {
+                Ok(minted) => minted,
+                Err(error) => {
+                    self.forget_repository(installation, repository);
+                    return Err(error);
+                }
+            };
+            if minted
+                .repository
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(repository))
+            {
+                return Ok(minted.value);
+            }
+            self.forget_repository(installation, repository);
+        }
+        Err(Error::Json)
+    }
+    async fn mint(&self, key: Mint, now: i64) -> Result<Minted> {
+        // Single flight per mint: simultaneous readiness, Git and API
+        // requests cannot mint the same token twice.
+        let path = format!("app/installations/{}/access_tokens", key.installation);
+        let body = key.scope.as_ref().map(MintScope::body);
+        let slot = lock(&self.tokens).entry(key).or_default().clone();
+        let mut saved = slot.lock().await;
+        if let Some(token) = saved
+            .as_ref()
+            .filter(|token| token.expires > now + TOKEN_MARGIN)
+        {
+            return Ok(token.minted.clone());
         }
         let jwt = self.jwt(now)?;
         let value = self
-            .request_json_as(
-                Method::POST,
-                &format!("app/installations/{}/access_tokens", key.installation),
-                &jwt,
-                key.scope.as_ref().map(MintScope::body),
-            )
+            .request_json_as(Method::POST, &path, &jwt, body)
             .await?;
         let token = value["token"]
             .as_str()
@@ -360,18 +430,27 @@ impl App {
             DateTime::parse_from_rfc3339(value["expires_at"].as_str().ok_or(Error::Json)?)
                 .map_err(|_| Error::Json)?
                 .timestamp();
-        if expires <= now + 120 {
+        if expires <= now + TOKEN_MARGIN {
             return Err(Error::Configuration);
         }
-        tokens.insert(
-            key,
-            CachedToken {
-                value: token.into(),
-                expires,
-            },
-        );
-        Ok(token.into())
+        let minted = Minted {
+            value: token.into(),
+            repository: value["repositories"][0]["full_name"]
+                .as_str()
+                .map(str::to_owned),
+        };
+        *saved = Some(CachedToken {
+            minted: minted.clone(),
+            expires,
+        });
+        Ok(minted)
     }
+}
+/// A map lock; a panicking holder cannot leave a map entry half-written.
+fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 fn valid_segment(value: &str) -> bool {
     !value.is_empty()
@@ -397,9 +476,8 @@ impl Credentials for Installation {
         let installation = self.id;
         let repository = repository.to_owned();
         Some(Box::pin(async move {
-            let now = Utc::now().timestamp();
-            let repository = app.repository_id(installation, &repository, now).await?;
-            app.scoped_token_at(installation, repository, now).await
+            app.scoped_token_for(installation, &repository, Utc::now().timestamp())
+                .await
         }))
     }
 }
@@ -494,16 +572,16 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
             .unwrap()
             .timestamp();
-        let first = app.scoped_token_at(10, 42, now).await.unwrap();
+        let first = app.scoped_token_at(10, 42, now).await.unwrap().value;
         assert_eq!(
-            app.scoped_token_at(10, 42, now + 3479).await.unwrap(),
+            app.scoped_token_at(10, 42, now + 3479).await.unwrap().value,
             first
         );
         assert_eq!(transport.0.load(Ordering::SeqCst), 1);
-        assert_ne!(app.scoped_token_at(10, 43, now).await.unwrap(), first);
+        assert_ne!(app.scoped_token_at(10, 43, now).await.unwrap().value, first);
         assert_ne!(app.token_at(10, now).await.unwrap(), first);
         assert_ne!(
-            app.scoped_token_at(10, 42, now + 3480).await.unwrap(),
+            app.scoped_token_at(10, 42, now + 3480).await.unwrap().value,
             first
         );
         assert_eq!(transport.0.load(Ordering::SeqCst), 4);
@@ -581,6 +659,130 @@ mod tests {
         // The suspended installation is skipped and the Link header's second
         // page is followed.
         assert_eq!(app.installations().await.unwrap(), vec![10, 30]);
+    }
+
+    /// An installation whose `acme/app` id and per-id names a test steers:
+    /// `GET repos/acme/app` reads the current id, and a scoped mint names
+    /// the repository its id has now.
+    struct Renames {
+        current: std::sync::Mutex<u64>,
+        names: std::sync::Mutex<BTreeMap<u64, String>>,
+    }
+    impl Transport for Renames {
+        fn send(&self, request: Request) -> Exchange<'_> {
+            let path = request.url().path().to_ascii_lowercase();
+            let body: Value = request
+                .body()
+                .and_then(|body| body.as_bytes())
+                .map_or(Value::Null, |body| serde_json::from_slice(body).unwrap());
+            let answer = if path.ends_with("/repos/acme/app") {
+                json!({"full_name": "acme/app", "id": *self.current.lock().unwrap()})
+            } else {
+                let expires = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+                match body["repository_ids"][0].as_u64() {
+                    Some(id) => {
+                        let name = self.names.lock().unwrap()[&id].clone();
+                        json!({"token": format!("scoped-{id}"), "expires_at": expires,
+                               "repositories": [{"id": id, "full_name": name}]})
+                    }
+                    None => json!({"token": "full", "expires_at": expires}),
+                }
+            };
+            Box::pin(async move {
+                Ok(Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: header::HeaderMap::new(),
+                    body: serde_json::to_vec(&answer).unwrap(),
+                    stale: None,
+                })
+            })
+        }
+    }
+
+    /// After a rename and recreate, the cached id names the renamed
+    /// repository: the mint comes back narrowed to another name, so the id
+    /// is read again and the token is minted for the repository asked for.
+    /// A mint that still names another repository is an error.
+    #[tokio::test]
+    async fn a_stale_repository_id_is_read_again_and_a_mismatch_fails_closed() {
+        use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
+        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let transport = Arc::new(Renames {
+            current: std::sync::Mutex::new(1),
+            names: std::sync::Mutex::new(BTreeMap::from([(1, "acme/app".to_owned())])),
+        });
+        let app = App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            Url::parse("https://api.github.com").unwrap(),
+        )
+        .unwrap();
+        let now = Utc::now().timestamp();
+        assert_eq!(app.repository_id(10, "acme/app", now).await.unwrap(), 1);
+        // `acme/app` is renamed to `acme/old` and a new `acme/app` created.
+        *transport.current.lock().unwrap() = 2;
+        transport
+            .names
+            .lock()
+            .unwrap()
+            .extend([(1, "acme/old".to_owned()), (2, "acme/app".to_owned())]);
+        assert_eq!(
+            app.scoped_token_for(10, "Acme/App", now).await.unwrap(),
+            "scoped-2"
+        );
+        // A repository whose mint never names it is refused.
+        transport
+            .names
+            .lock()
+            .unwrap()
+            .insert(2, "acme/elsewhere".to_owned());
+        *transport.current.lock().unwrap() = 2;
+        let fresh = App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            Url::parse("https://api.github.com").unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            fresh.scoped_token_for(10, "acme/app", now).await,
+            Err(Error::Json)
+        ));
+    }
+
+    /// Answers every request with one JSON body.
+    struct Answer(Value);
+    impl Transport for Answer {
+        fn send(&self, _: Request) -> Exchange<'_> {
+            let body = serde_json::to_vec(&self.0).unwrap();
+            Box::pin(async move {
+                Ok(Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: header::HeaderMap::new(),
+                    body,
+                    stale: None,
+                })
+            })
+        }
+    }
+
+    /// An installation id past `i64` is refused like every other GitHub id
+    /// the App reads, not handed on to configuration and the cache.
+    #[tokio::test]
+    async fn an_installation_id_past_i64_is_invalid() {
+        use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
+        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let app = App::new(
+            1,
+            pem.as_bytes(),
+            Arc::new(Answer(serde_json::json!([{"id": 1_u64 << 63}]))),
+            Url::parse("https://api.github.com").unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(app.installations().await, Err(Error::Json)));
     }
 
     /// Every installations page links back to itself: pagination must stop

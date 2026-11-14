@@ -17,11 +17,8 @@ fn versions(
         .iter()
         .filter_map(|e| {
             Some(Version {
-                version: e["version"].as_str()?.into(),
                 published_at: e["time"].as_str().map(str::to_owned),
-                digest: None,
-                deprecated: false,
-                yanked: false,
+                ..Version::new(e["version"].as_str()?.into())
             })
         })
         .collect();

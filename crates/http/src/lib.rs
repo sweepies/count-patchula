@@ -78,13 +78,32 @@ impl From<Response> for Streaming {
     }
 }
 
-/// Network errors intentionally discard reqwest's URL-bearing error details.
-#[derive(Debug, thiserror::Error)]
+/// Network errors keep only their kind: reqwest's URL-bearing details are
+/// discarded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("HTTP transport failed")]
     Network,
+    /// The request or its body did not finish in time.
+    #[error("HTTP request timed out")]
+    Timeout,
+    /// No connection: name resolution, TCP or TLS failed.
+    #[error("HTTP connection failed")]
+    Connect,
     #[error("HTTP client could not be configured")]
     Configuration,
+}
+impl Error {
+    /// The redacted kind of a reqwest failure.
+    fn of(error: &reqwest::Error) -> Self {
+        if error.is_timeout() {
+            Error::Timeout
+        } else if error.is_connect() {
+            Error::Connect
+        } else {
+            Error::Network
+        }
+    }
 }
 
 pub type Exchange<'a> = Pin<Box<dyn Future<Output = Result<Response, Error>> + Send + 'a>>;
@@ -101,6 +120,9 @@ pub trait Transport: Send + Sync {
         Box::pin(async move { self.send(request).await.map(Streaming::from) })
     }
 }
+
+/// The User-Agent every request the Count sends carries.
+pub const USER_AGENT: &str = concat!("patchula/", env!("CARGO_PKG_VERSION"));
 
 /// One shared reqwest connection pool per batch; clones share its pool.
 #[derive(Clone)]
@@ -121,7 +143,7 @@ impl Network {
     fn build(loopback_http: bool) -> Result<Self, Error> {
         use std::time::Duration;
         reqwest::Client::builder()
-            .user_agent(concat!("patchula/", env!("CARGO_PKG_VERSION")))
+            .user_agent(USER_AGENT)
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(60))
@@ -153,75 +175,75 @@ impl Network {
     }
 }
 
+impl Network {
+    /// Run one exchange on a runtime worker and `read` its answer there.
+    /// Bodies can be hundreds of megabytes, so reading and inflating them
+    /// must not block the engine task. `Span::current` is the request's trace
+    /// span, so `protocol` and the transport's own events keep landing on it.
+    /// A spawned task gets a copy of the caller's task-locals, so nothing in
+    /// here may record or read `tracked`: credential use is recorded in the
+    /// caller before `send`, and a record made here would be lost.
+    async fn spawn_exchange<T, F>(
+        &self,
+        request: Request,
+        read: impl FnOnce(reqwest::Response) -> F + Send + 'static,
+    ) -> Result<T, Error>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, Error>> + Send,
+    {
+        if !self.allowed(request.url()) {
+            return Err(Error::Network);
+        }
+        let client = self.client.clone();
+        let exchange = AbortOnDrop(tokio::spawn(
+            async move {
+                let response = client
+                    .execute(request)
+                    .await
+                    .map_err(|error| Error::of(&error))?;
+                tracing::Span::current()
+                    .record("protocol", tracing::field::debug(response.version()));
+                read(response).await
+            }
+            .instrument(tracing::Span::current()),
+        ));
+        match exchange.await {
+            Ok(result) => result,
+            Err(join) if join.is_panic() => std::panic::resume_unwind(join.into_panic()),
+            Err(_) => Err(Error::Network),
+        }
+    }
+}
+
 impl Transport for Network {
     fn send(&self, request: Request) -> Exchange<'_> {
-        Box::pin(async move {
-            if !self.allowed(request.url()) {
-                return Err(Error::Network);
-            }
-            // Bodies can be hundreds of megabytes: run the exchange on a
-            // runtime worker so reading and inflating them does not block the
-            // engine task. `Span::current` is the request's trace span, so
-            // `protocol` and the transport's own events keep landing on it.
-            // A spawned task gets a copy of the caller's task-locals, so nothing
-            // in here may record or read `tracked`: credential use is recorded
-            // in the caller before `send`, and a record made here would be lost.
-            let client = self.client.clone();
-            let exchange = AbortOnDrop(tokio::spawn(
-                async move {
-                    let response = client.execute(request).await.map_err(|_| Error::Network)?;
-                    tracing::Span::current()
-                        .record("protocol", tracing::field::debug(response.version()));
-                    let status = response.status();
-                    let headers = response.headers().clone();
-                    let body = Vec::from(response.bytes().await.map_err(|_| Error::Network)?);
-                    Ok(Response {
-                        status,
-                        headers,
-                        body,
-                        stale: None,
-                    })
-                }
-                .instrument(tracing::Span::current()),
-            ));
-            match exchange.await {
-                Ok(result) => result,
-                Err(join) if join.is_panic() => std::panic::resume_unwind(join.into_panic()),
-                Err(_) => Err(Error::Network),
-            }
-        })
+        Box::pin(self.spawn_exchange(request, |response| async move {
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = Vec::from(response.bytes().await.map_err(|error| Error::of(&error))?);
+            Ok(Response {
+                status,
+                headers,
+                body,
+                stale: None,
+            })
+        }))
     }
 
     /// The exchange of `send`, with the body left as decoded chunks the
     /// caller's task feeds to a derive worker rather than collecting here.
     fn send_streaming(&self, request: Request) -> StreamingExchange<'_> {
-        Box::pin(async move {
-            if !self.allowed(request.url()) {
-                return Err(Error::Network);
-            }
-            let client = self.client.clone();
-            let exchange = AbortOnDrop(tokio::spawn(
-                async move {
-                    let response = client.execute(request).await.map_err(|_| Error::Network)?;
-                    tracing::Span::current()
-                        .record("protocol", tracing::field::debug(response.version()));
-                    Ok(Streaming {
-                        status: response.status(),
-                        headers: response.headers().clone(),
-                        body: Box::pin(futures_util::StreamExt::map(
-                            response.bytes_stream(),
-                            |chunk| chunk.map_err(|_| Error::Network),
-                        )),
-                    })
-                }
-                .instrument(tracing::Span::current()),
-            ));
-            match exchange.await {
-                Ok(result) => result,
-                Err(join) if join.is_panic() => std::panic::resume_unwind(join.into_panic()),
-                Err(_) => Err(Error::Network),
-            }
-        })
+        Box::pin(self.spawn_exchange(request, |response| async move {
+            Ok(Streaming {
+                status: response.status(),
+                headers: response.headers().clone(),
+                body: Box::pin(futures_util::StreamExt::map(
+                    response.bytes_stream(),
+                    |chunk| chunk.map_err(|error| Error::of(&error)),
+                )),
+            })
+        }))
     }
 }
 

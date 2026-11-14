@@ -132,8 +132,7 @@ impl Client {
                     published_at: entry.and_then(|e| e.published.clone()),
                     deprecated: entry.is_some_and(|e| e.deprecated),
                     yanked: entry.is_some_and(|e| !e.listed),
-                    digest: None,
-                    version,
+                    ..Version::new(version)
                 }
             })
             .collect();

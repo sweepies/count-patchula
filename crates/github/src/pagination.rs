@@ -124,9 +124,11 @@ impl<T: DeserializeOwned> GraphqlPage<T> {
             end_cursor: Option<String>,
         }
         let connection = data.pointer(pointer).ok_or(Error::Pagination)?;
-        let nodes =
-            serde_json::from_value(connection.get("nodes").ok_or(Error::Pagination)?.clone())
-                .map_err(|_| Error::Json)?;
+        let nodes = connection.get("nodes").ok_or(Error::Pagination)?;
+        let nodes = serde_path_to_error::deserialize(nodes).map_err(|error| Error::Decode {
+            operation: format!("the GraphQL connection at {pointer:?}"),
+            path: crate::safe_path(error.path()),
+        })?;
         let info: Info =
             serde_json::from_value(connection.get("pageInfo").ok_or(Error::Pagination)?.clone())
                 .map_err(|_| Error::Pagination)?;

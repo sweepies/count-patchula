@@ -996,6 +996,11 @@ fn helm_walk(body: &mut dyn Read) -> std::result::Result<Vec<u8>, CacheError> {
         .map(|(name, entries)| {
             let mut chart = HelmChart::default();
             for v in entries {
+                // The walk rejects an entry without a version, as serde's
+                // `Chart` does, so none is skipped here.
+                let Some(version) = v.version else {
+                    continue;
+                };
                 let sources = v
                     .sources
                     .as_ref()
@@ -1016,16 +1021,13 @@ fn helm_walk(body: &mut dyn Read) -> std::result::Result<Vec<u8>, CacheError> {
                         .and_then(Yaml::as_str),
                 );
                 if !notes.is_empty() {
-                    chart
-                        .notes
-                        .insert(v.version.clone().unwrap_or_default(), notes);
+                    chart.notes.insert(version.clone(), notes);
                 }
                 chart.catalog.versions.push(Version {
-                    version: v.version.unwrap_or_default(),
                     published_at: v.created,
                     digest: v.digest,
                     deprecated: v.deprecated,
-                    yanked: false,
+                    ..Version::new(version)
                 });
             }
             sort(&mut chart.catalog.versions, Ecosystem::Npm);
@@ -1084,11 +1086,10 @@ mod tests {
                         chart.notes.insert(v.version.clone(), notes);
                     }
                     chart.catalog.versions.push(Version {
-                        version: v.version,
                         published_at: v.created,
                         digest: v.digest,
                         deprecated: v.deprecated,
-                        yanked: false,
+                        ..Version::new(v.version)
                     });
                 }
                 sort(&mut chart.catalog.versions, Ecosystem::Npm);

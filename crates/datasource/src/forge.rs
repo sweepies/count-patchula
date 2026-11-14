@@ -10,23 +10,18 @@ const PAGES: u32 = 10;
 fn gitlab(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     tags(body, |t| {
         Some(Version {
-            version: t["name"].as_str()?.into(),
             // Annotated tags carry their own date; commit dates never count.
             published_at: t["created_at"].as_str().map(str::to_owned),
             digest: t["commit"]["id"].as_str().map(str::to_owned),
-            deprecated: false,
-            yanked: false,
+            ..Version::new(t["name"].as_str()?.into())
         })
     })
 }
 fn gitea(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     tags(body, |t| {
         Some(Version {
-            version: t["name"].as_str()?.into(),
-            published_at: None,
             digest: t["commit"]["sha"].as_str().map(str::to_owned),
-            deprecated: false,
-            yanked: false,
+            ..Version::new(t["name"].as_str()?.into())
         })
     })
 }

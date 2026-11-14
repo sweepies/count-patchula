@@ -27,7 +27,29 @@ use std::{collections::HashSet, fmt, sync::Arc, time::Duration};
 
 const ACCEPT: &str = "application/vnd.github+json";
 const API_VERSION: &str = "2022-11-28";
-const USER_AGENT: &str = concat!("patchula/", env!("CARGO_PKG_VERSION"));
+/// Redirects one REST read follows before it fails.
+const MAX_REDIRECTS: usize = 10;
+/// The largest write burst the content governor allows: under GitHub's 80
+/// content requests a minute, with room for reads the same minute.
+pub const MAX_WRITE_BURST: usize = 19;
+
+/// The headers every GitHub request carries.
+pub(crate) fn base_headers(headers: &mut header::HeaderMap) {
+    headers.insert(header::ACCEPT, HeaderValue::from_static(ACCEPT));
+    headers.insert(
+        "x-github-api-version",
+        HeaderValue::from_static(API_VERSION),
+    );
+    headers.insert(
+        header::USER_AGENT,
+        HeaderValue::from_static(patchula_http::USER_AGENT),
+    );
+}
+
+/// Lowercase hex of `bytes`.
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 /// The representation-selecting headers every GitHub GET sends; they are the
 /// cache key's `sent` headers.
 pub(crate) const SENT: &[(&str, &str)] =
@@ -39,8 +61,9 @@ pub enum Error {
     Configuration,
     #[error("invalid GitHub API URL or origin")]
     Url,
-    #[error("GitHub HTTP transport failed")]
-    Transport,
+    /// The transport failed; only its redacted kind is kept.
+    #[error("GitHub {0}")]
+    Transport(patchula_http::Error),
     #[error("GitHub cache operation failed")]
     Cache,
     #[error("GitHub returned HTTP {0}")]
@@ -65,6 +88,10 @@ pub enum Error {
     Pagination,
     #[error("GitHub returned 304 without a cached body")]
     MissingBody,
+    /// A REST read redirected to a URL it already visited, or more than
+    /// `MAX_REDIRECTS` times.
+    #[error("GitHub redirects loop or exceed the redirect budget")]
+    Redirect,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -147,10 +174,7 @@ impl Client {
         Self::check_options(&options)?;
         // `exchange` swaps in a fresh token per request, so requests carry no
         // Authorization until then; a path that skipped the swap gets a 401.
-        let credential_scope = Sha256::digest(credentials.scope().as_bytes())
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let credential_scope = hex(&Sha256::digest(credentials.scope().as_bytes()));
         Ok(Self::assemble(
             Some(credentials),
             None,
@@ -183,10 +207,7 @@ impl Client {
         let mut authorization =
             HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| Error::Configuration)?;
         authorization.set_sensitive(true);
-        let credential_scope = Sha256::digest(authorization.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let credential_scope = hex(&Sha256::digest(authorization.as_bytes()));
         Ok(Self::assemble(
             None,
             Some(authorization),
@@ -202,7 +223,7 @@ impl Client {
             || options.concurrency > patchula_http::MAX_CONCURRENCY
             || options.max_pages == 0
             || options.max_retries > 10
-            || !(1..=19).contains(&options.write_burst)
+            || !(1..=MAX_WRITE_BURST).contains(&options.write_burst)
             || !valid_api_url(&options.api_url)
         {
             return Err(Error::Configuration);
@@ -328,12 +349,7 @@ impl Client {
         if let Some(authorization) = &self.0.authorization {
             headers.insert(header::AUTHORIZATION, authorization.clone());
         }
-        headers.insert(header::ACCEPT, HeaderValue::from_static(ACCEPT));
-        headers.insert(
-            "x-github-api-version",
-            HeaderValue::from_static(API_VERSION),
-        );
-        headers.insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT));
+        base_headers(headers);
         request
     }
 
@@ -391,7 +407,7 @@ impl Client {
                 .await;
             let response = match result {
                 Ok(response) => response,
-                Err(_) => return Err(Error::Transport),
+                Err(error) => return Err(Error::Transport(error)),
             };
             self.0.governor.observe(resource, &response).await;
             // Update the shared cooldown before releasing the in-flight permit.
@@ -501,9 +517,9 @@ impl Client {
     ) -> Result<Option<Response>> {
         let mut url = self.url(path)?;
         let mut visited = HashSet::new();
-        for _ in 0..10 {
+        for _ in 0..MAX_REDIRECTS {
             if !visited.insert(url.clone()) {
-                return Err(Error::Pagination);
+                return Err(Error::Redirect);
             }
             let mut request = self.request(Method::GET, url.clone());
             // One key per request: the client sends a fixed header set, so any
@@ -590,7 +606,7 @@ impl Client {
             }
             return Ok(Some(response));
         }
-        Err(Error::Pagination)
+        Err(Error::Redirect)
     }
 
     pub async fn graphql<T: DeserializeOwned>(&self, query: &str, variables: Value) -> Result<T> {
@@ -630,7 +646,7 @@ impl Client {
 
 /// `path` with every segment that is not a field name or an index replaced
 /// by `?`, so a response's own keys cannot carry text into an error.
-fn safe_path(path: &serde_path_to_error::Path) -> String {
+pub(crate) fn safe_path(path: &serde_path_to_error::Path) -> String {
     let segments: Vec<String> = path
         .iter()
         .map(|segment| match segment {
@@ -801,8 +817,6 @@ pub(crate) fn text<'a>(response: &'a Response, name: &str) -> Option<&'a str> {
     response.headers.get(name)?.to_str().ok()
 }
 
-/// Whether `url` is a usable API root: HTTPS, a host, no credentials, query
-/// or fragment.
 /// An API base as a directory URL, so relative paths join under it:
 /// `https://ghe.example/api/v3` and `https://ghe.example/api/v3/` are the same root.
 pub(crate) fn api_root(url: &Url) -> Url {
@@ -813,6 +827,8 @@ pub(crate) fn api_root(url: &Url) -> Url {
     root
 }
 
+/// Whether `url` is a usable API root: HTTPS, a host, no credentials, query
+/// or fragment.
 pub(crate) fn valid_api_url(url: &Url) -> bool {
     url.scheme() == "https"
         && url.host_str().is_some()
@@ -838,6 +854,8 @@ pub(crate) fn join_api(base: &Url, path: &str) -> Result<Url> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use serde_json::json;
 
     #[test]
     fn a_decode_path_keeps_field_names_and_masks_response_text() {
@@ -869,9 +887,6 @@ mod tests {
         );
         assert!(decode::<serde_json::Value>(br#" {"a":1} "#, "GET probe".into()).is_ok());
     }
-
-    use super::*;
-    use serde_json::json;
 
     #[test]
     fn graphql_messages_are_joined_and_truncated() {

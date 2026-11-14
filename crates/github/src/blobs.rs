@@ -34,11 +34,7 @@ pub fn blob_sha(content: &[u8]) -> String {
     let mut digest = Sha1::new();
     digest.update(format!("blob {}\0", content.len()));
     digest.update(content);
-    digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    crate::hex(&digest.finalize())
 }
 
 /// The content of a REST blob representation.
@@ -158,7 +154,7 @@ impl Client {
         let data = match self.graphql::<Value>(&query, variables).await {
             Ok(data) => data,
             Err(Error::Status(status @ (401 | 403))) => return Err(Error::Status(status)),
-            Err(Error::Graphql(_) | Error::Status(_) | Error::RateLimit | Error::Transport) => {
+            Err(Error::Graphql(_) | Error::Status(_) | Error::RateLimit | Error::Transport(_)) => {
                 return Ok(Vec::new());
             }
             Err(error) => return Err(error),

@@ -14,11 +14,8 @@ fn versions(
         };
         let ruby = value["platform"] == "ruby";
         let version = Version {
-            version: number.into(),
             published_at: value["created_at"].as_str().map(str::to_owned),
-            digest: None,
-            deprecated: false,
-            yanked: false,
+            ..Version::new(number.into())
         };
         // Prefer the plain `ruby` platform's date for a version.
         if ruby || !seen.contains_key(number) {

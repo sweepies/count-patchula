@@ -110,11 +110,19 @@ async fn a_scoped_mint_posts_repository_ids_and_metadata_read() {
         "the numeric id is read with the installation token"
     );
 
-    // Cached: the same repository does not mint again, and a different
-    // repository mints its own token.
+    // Cached: the same repository does not mint again or read its id
+    // again, and a different repository mints its own token.
     assert_eq!(
         credentials.scoped_token("demo/app").unwrap().await.unwrap(),
         token
+    );
+    assert_eq!(
+        github
+            .requests()
+            .iter()
+            .filter(|(method, path)| method == "GET" && path == "/repos/demo/app")
+            .count(),
+        1
     );
     let other = credentials
         .scoped_token("demo/worker")

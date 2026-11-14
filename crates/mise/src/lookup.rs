@@ -10,6 +10,10 @@ use std::{
 
 /// The mise package the Count pins, installed into its own tool store.
 pub const PACKAGE: &str = "aqua:jdx/mise";
+/// A scratch directory that could not be made, as the run's failure.
+fn io(error: std::io::Error) -> Error {
+    Error::Failed(Failure::Io(error.to_string()))
+}
 /// The literal arguments every spec starts with and the bootstrap argv is
 /// built from, defined once here for the code that builds and reads it.
 const NO_CONFIG: &str = "--no-config";
@@ -21,6 +25,8 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_secs(180);
 /// A slow host can take most of this to serve the mise archive once.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(1800);
 const OUTPUT_LIMIT: usize = 16 << 20;
+/// What an install may print; only its failure is read.
+const INSTALL_OUTPUT_LIMIT: usize = 1 << 16;
 const PARALLEL: usize = 4;
 
 /// One version in a `mise ls-remote --json` listing. Backends leave out what
@@ -167,10 +173,10 @@ impl Lookup {
         versions_host: bool,
         configure: impl FnOnce(&mut CommandSpec),
     ) -> Result<Vec<u8>, Error> {
-        let scratch = tempfile::tempdir().map_err(|e| Error::Failed(Failure::Io(e.to_string())))?;
+        let scratch = tempfile::tempdir().map_err(io)?;
         let (home, work) = (scratch.path().join("home"), scratch.path().join("work"));
         for dir in [&home, &work] {
-            std::fs::create_dir_all(dir).map_err(|e| Error::Failed(Failure::Io(e.to_string())))?;
+            std::fs::create_dir_all(dir).map_err(io)?;
         }
         let mut spec = self.spec(&home, &work, token, versions_host);
         configure(&mut spec);
@@ -182,7 +188,7 @@ impl Lookup {
                 self.run(token, true, |spec| {
                     spec.args.extend([INSTALL.into(), pinned(&self.version)]);
                     spec.timeout = INSTALL_TIMEOUT;
-                    spec.output_limit = 1 << 16;
+                    spec.output_limit = INSTALL_OUTPUT_LIMIT;
                 })
                 .await
                 .map(drop)
@@ -211,7 +217,7 @@ impl Lookup {
             .slots
             .acquire()
             .await
-            .map_err(|e| Error::Failed(Failure::Io(e.to_string())))?;
+            .expect("the lookup never closes its slots");
         self.install(query.token).await?;
         let mut args = vec!["ls-remote", "--json", "--prerelease", "--", query.tool];
         args.extend(query.prefix);
@@ -234,7 +240,7 @@ impl Lookup {
             .slots
             .acquire()
             .await
-            .map_err(|e| Error::Failed(Failure::Io(e.to_string())))?;
+            .expect("the lookup never closes its slots");
         self.install(token).await?;
         let out = self
             .run(token, true, |spec| {

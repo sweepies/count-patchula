@@ -102,11 +102,8 @@ impl Client {
         let mut versions: Vec<Version> = releases
             .into_iter()
             .map(|release| Version {
-                version: release.version,
                 published_at: release.created_at.as_deref().map(date),
-                digest: None,
-                deprecated: false,
-                yanked: false,
+                ..Version::new(release.version)
             })
             .collect();
         sort(&mut versions, Ecosystem::Loose);
@@ -139,19 +136,18 @@ impl Client {
     }
     /// The `lts` dist-tag `actions/node-versions` catalogs carry. Its
     /// releases are GitHub releases, which mise does not list, so the
-    /// evidence is nodejs.org's. A failed read leaves the catalog without
-    /// it: stable setup-node targets remain usable during a Node-index
-    /// outage, and an explicit LTS policy fails closed without this
-    /// evidence.
+    /// evidence is nodejs.org's (see `node_lts`). A failed read leaves the
+    /// catalog without it: stable setup-node targets remain usable during a
+    /// Node-index outage, and an explicit LTS policy fails closed without
+    /// this evidence.
     pub(super) async fn node_lts_tags(&self, package: &str) -> BTreeMap<String, String> {
         if !package.eq_ignore_ascii_case(NODE_VERSIONS) {
             return BTreeMap::new();
         }
         self.node_lts().await.unwrap_or_default()
     }
-    /// The LTS evidence nodejs.org publishes, for `actions/node-versions`: its
-    /// releases are GitHub releases, so mise does not list them.
-    pub(super) async fn node_lts(&self) -> Result<BTreeMap<String, String>> {
+    /// The LTS evidence nodejs.org's release index publishes.
+    async fn node_lts(&self) -> Result<BTreeMap<String, String>> {
         let response = self
             .http
             .get("https://nodejs.org/dist/index.json", "application/json")

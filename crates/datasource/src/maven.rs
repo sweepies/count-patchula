@@ -85,16 +85,7 @@ impl Client {
             )
             .await?;
         let listed: Vec<String> = serde_json::from_slice(&response.body)?;
-        let mut versions: Vec<Version> = listed
-            .into_iter()
-            .map(|version| Version {
-                version,
-                published_at: None,
-                digest: None,
-                deprecated: false,
-                yanked: false,
-            })
-            .collect();
+        let mut versions: Vec<Version> = listed.into_iter().map(Version::new).collect();
         sort(&mut versions, Ecosystem::Maven);
         let dates = futures_util::future::join_all(versions.iter().take(DATED).map(|v| {
             let url = format!("{base}/{0}/{artifact}-{0}.pom", v.version);

@@ -77,14 +77,12 @@ impl Client {
         };
         Ok(Catalog {
             versions: vec![Version {
-                version: resolved.revision.clone(),
                 published_at: resolved
                     .last_modified
                     .and_then(|t| chrono::DateTime::<chrono::Utc>::from_timestamp(t, 0))
                     .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-                digest: Some(resolved.revision),
-                deprecated: false,
-                yanked: false,
+                digest: Some(resolved.revision.clone()),
+                ..Version::new(resolved.revision)
             }],
             dist_tags: BTreeMap::new(),
         })

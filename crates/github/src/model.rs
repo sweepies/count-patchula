@@ -24,8 +24,8 @@ pub struct Repository {
     /// `node_id` — required; the repository's global node id, which the
     /// `updateRefs` mutation takes as `repositoryId`.
     pub node_id: String,
-    /// `allow_auto_merge` — whether native auto-merge is on; absent reads
-    /// as off, the `as_bool() == Some(true)` the indexing before this did.
+    /// `allow_auto_merge` — whether native auto-merge is on; only `true`
+    /// reads as on, and an absent value as off.
     pub allow_auto_merge: Option<bool>,
     /// `allow_squash_merge` — same.
     pub allow_squash_merge: Option<bool>,
@@ -184,8 +184,8 @@ pub struct PullRequest {
     /// `html_url` — required.
     pub html_url: String,
     /// `state` — required; the schema enumerates `open` and `closed`. A
-    /// string, not an enum: an unfamiliar value reads as neither, the same
-    /// failure direction the raw comparisons had.
+    /// string, not an enum: an unfamiliar value reads as neither open nor
+    /// closed.
     pub state: String,
     /// `title` — required.
     pub title: String,

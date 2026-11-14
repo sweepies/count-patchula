@@ -20,14 +20,25 @@ pub struct Version {
     pub deprecated: bool,
     pub yanked: bool,
 }
+impl Version {
+    /// A listed version with no date or digest, neither deprecated nor
+    /// yanked.
+    pub fn new(version: String) -> Self {
+        Self {
+            version,
+            published_at: None,
+            digest: None,
+            deprecated: false,
+            yanked: false,
+        }
+    }
+}
 impl From<Release> for Version {
     fn from(r: Release) -> Self {
         Self {
-            version: r.version,
             published_at: r.published_at,
             digest: r.digest,
-            deprecated: false,
-            yanked: false,
+            ..Self::new(r.version)
         }
     }
 }

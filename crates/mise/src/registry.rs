@@ -1,6 +1,6 @@
-//! The published registry snapshot, used for one thing: telling which GitHub
-//! repositories the mise-versions mirror lists, so that plain GitHub lookups
-//! read the mirror only where it has data. Tool lookups never read it.
+//! The published registry snapshot: which GitHub repositories the
+//! mise-versions mirror lists, so that plain GitHub lookups read the mirror
+//! only where it has data, and the backends it lists for a short tool name.
 use std::{collections::BTreeMap, collections::BTreeSet, sync::LazyLock};
 
 static REGISTRY: LazyLock<BTreeMap<String, Vec<String>>> = LazyLock::new(|| {
@@ -39,8 +39,9 @@ pub fn backends(tool: &str) -> &'static [String] {
     REGISTRY.get(tool).map_or(&[], Vec::as_slice)
 }
 
-/// Route authenticated non-registry repositories directly, including private
-/// upstreams. Never discover that exception by retrying a mirror 404.
+/// Whether the snapshot lists `owner/repo`, case-insensitively. A lookup
+/// reads the mirror only for a listed repository rather than discovering
+/// an unlisted one by a mirror 404.
 pub fn listed_github_repository(package: &str) -> bool {
     REPOSITORIES.contains(&package.to_ascii_lowercase())
 }

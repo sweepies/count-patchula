@@ -16,6 +16,7 @@ futures-util = "0.3"
 patchula-cache = { path = "../cache" }
 patchula-config = { path = "../config" }
 patchula-datasource = { path = "../datasource" }
+patchula-github = { path = "../github" }
 patchula-http = { path = "../http" }
 patchula-mise = { path = "../mise" }
 patchula-versioning = { path = "../versioning" }
@@ -25,10 +26,9 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng = "0.10.0"
+thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-bytes = "1"
-patchula-github = { path = "../github" }
 patchula-testkit = { path = "../testkit" }
 tempfile = "3.27.0"

@@ -1645,6 +1645,41 @@ async fn gitlab_releases_link_to_gitlab_and_keep_references_on_that_forge() {
     );
 }
 
+/// A forge's releases follow the GitHub budget: the newest versions in
+/// range are taken first, whatever order the API lists them in.
+#[tokio::test]
+async fn forge_releases_take_the_newest_versions_within_the_budget() {
+    let releases: Vec<Value> = (0..=40)
+        .map(|patch| {
+            json!({"tag_name":format!("gl-pkg@1.0.{patch}"),"description":format!("Patch {patch}"),"upcoming_release":false})
+        })
+        .collect();
+    let routes = routes(&[
+        (
+            "https://registry.npmjs.org/gl-pkg/1.0.40",
+            json!({"repository":{"url":"git+https://gitlab.com/grp/proj.git"}}),
+        ),
+        (
+            "https://gitlab.com/api/v4/projects/grp%2Fproj/releases?per_page=100",
+            Value::Array(releases),
+        ),
+    ]);
+    let notes = notes(routes, memory().await)
+        .await
+        .release_notes(
+            &patchula_config::PackageId::public(Source::Npm, "gl-pkg"),
+            "1.0.0",
+            "1.0.40",
+        )
+        .await
+        .unwrap();
+    let versions: Vec<_> = notes.sections.iter().map(|s| s.version.as_str()).collect();
+    assert_eq!(versions.len(), 32);
+    assert_eq!(versions.first(), Some(&"1.0.40"));
+    assert_eq!(versions.last(), Some(&"1.0.9"));
+    assert!(notes.incomplete);
+}
+
 #[tokio::test]
 async fn gitea_without_release_text_falls_back_to_its_root_changelog() {
     let base = "https://codeberg.org/api/v1/repos/owner/repo";

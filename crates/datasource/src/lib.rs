@@ -23,7 +23,6 @@ mod packagist;
 mod registries;
 pub mod upstream;
 pub use registries::HelmChart;
-pub use upstream::truncate;
 mod rubygems;
 mod rules;
 use patchula_cache::{Cache, Release, State};
@@ -60,8 +59,6 @@ pub enum Error {
     Invalid,
     #[error("{0}")]
     Registry(String),
-    #[error("release-note read failed: {0}")]
-    Notes(String),
     #[error("registry rate limit reached; retry after {0} seconds")]
     RateLimit(u64),
     #[error(
@@ -77,21 +74,24 @@ impl Error {
         match self {
             Error::Http(CacheError::Status(status))
             | Error::Github(GithubError::Status(status)) => status_kind(*status),
-            Error::Http(CacheError::Transport(HttpError::Network))
-            | Error::Github(GithubError::Transport) => LookupErrorKind::Network,
+            Error::Http(CacheError::Transport(
+                HttpError::Network | HttpError::Timeout | HttpError::Connect,
+            ))
+            | Error::Github(GithubError::Transport(_)) => LookupErrorKind::Network,
             Error::Http(CacheError::Document)
             | Error::Github(GithubError::Json | GithubError::Decode { .. })
             | Error::Json(_)
             | Error::Mise(patchula_mise::Error::Unreadable(_)) => LookupErrorKind::Parse,
-            Error::Github(GithubError::RateLimit) | Error::RateLimit(_) => {
-                LookupErrorKind::RateLimit
-            }
+            Error::Github(GithubError::RateLimit)
+            | Error::Http(CacheError::Throttled(_))
+            | Error::RateLimit(_) => LookupErrorKind::RateLimit,
             Error::Mise(patchula_mise::Error::Empty(_)) | Error::NoReleases { .. } => {
                 LookupErrorKind::NotFound
             }
             Error::Http(
                 CacheError::Worker
                 | CacheError::Configuration
+                | CacheError::Metadata
                 | CacheError::MissingBody
                 | CacheError::Cache(_)
                 | CacheError::Transport(HttpError::Configuration),
@@ -102,6 +102,7 @@ impl Error {
                 | GithubError::Cache
                 | GithubError::Graphql(_)
                 | GithubError::Pagination
+                | GithubError::Redirect
                 | GithubError::MissingBody,
             )
             | Error::Cache(_)
@@ -110,8 +111,7 @@ impl Error {
             | Error::NoNix
             | Error::Nix(_)
             | Error::Invalid
-            | Error::Registry(_)
-            | Error::Notes(_) => LookupErrorKind::Other,
+            | Error::Registry(_) => LookupErrorKind::Other,
         }
     }
 }
@@ -393,16 +393,7 @@ impl Client {
             .get(&format!("{prefix}/list"), "text/plain")
             .await?;
         let text = std::str::from_utf8(&response.body).map_err(|_| Error::Invalid)?;
-        let mut versions: Vec<Version> = text
-            .lines()
-            .map(|v| Version {
-                version: v.into(),
-                published_at: None,
-                digest: None,
-                deprecated: false,
-                yanked: false,
-            })
-            .collect();
+        let mut versions: Vec<Version> = text.lines().map(|v| Version::new(v.into())).collect();
         sort(&mut versions, Ecosystem::Go);
         // Go prefers a tagged release over prereleases and only needs a default
         // branch pseudo-version when no tags exist. Keep @latest for that case.
@@ -433,11 +424,8 @@ impl Client {
             )?;
             let latest_version = latest["Version"].as_str().ok_or(Error::Invalid)?.to_owned();
             versions.push(Version {
-                version: latest_version.clone(),
                 published_at: latest["Time"].as_str().map(str::to_owned),
-                digest: None,
-                deprecated: false,
-                yanked: false,
+                ..Version::new(latest_version.clone())
             });
             latest_version
         };
@@ -540,13 +528,7 @@ fn runners(package: &str) -> Result<Catalog> {
         .get(package)
         .ok_or(Error::Invalid)?
         .iter()
-        .map(|v| Version {
-            version: v.clone(),
-            published_at: None,
-            digest: None,
-            deprecated: false,
-            yanked: false,
-        })
+        .map(|v| Version::new(v.clone()))
         .collect();
     Ok(Catalog {
         versions,
