@@ -21,6 +21,10 @@ use std::{
 use store::Store;
 use tokio::sync::{mpsc, oneshot};
 
+/// The newest database schema this build reads and writes. A database at a
+/// higher schema is rejected with [`Error::FutureSchema`].
+pub const SCHEMA: usize = store::MIGRATIONS.len();
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("cache database operation failed")]
@@ -33,7 +37,7 @@ pub enum Error {
     Worker,
     #[error("cache URL must be absolute HTTP(S) without credentials")]
     Url,
-    #[error("cache schema {0} is newer than supported schema {max}", max = store::MIGRATIONS.len())]
+    #[error("cache schema {0} is newer than supported schema {SCHEMA}")]
     FutureSchema(i64),
     #[error("cache integrity check failed")]
     Corrupt,

@@ -15,7 +15,7 @@ mod tui;
 mod updates;
 mod user;
 
-use cli::{App, AuthCommand, Command, ConfigCommand, ToolsCommand};
+use cli::{App, AuthCommand, CacheCommand, Command, ConfigCommand, ToolsCommand};
 use patchula_process::Executor as _;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
@@ -243,6 +243,7 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
             .await
         }
         Command::Auth(auth) => auth_command(app, auth, services).await,
+        Command::Cache(cache) => cache_command(cache),
         Command::Config(config) => config_command(app, config),
         Command::Lookup(options) => batch(app, options, None, services).await,
         Command::Run(options) => batch(app, &options.lookup, Some(options), services).await,
@@ -293,6 +294,15 @@ async fn auth_command(
     writeln!(io::stdout().lock(), "{result}")
         .map(|_| 0)
         .map_err(fail)
+}
+
+/// `patchula cache schema`: print the cache schema this binary supports.
+fn cache_command(cache: &cli::Cache) -> Result<u8, (u8, miette::Report)> {
+    match cache.command {
+        CacheCommand::Schema => writeln!(io::stdout().lock(), "{}", patchula_cache::SCHEMA)
+            .map(|_| 0)
+            .map_err(fail),
+    }
 }
 
 /// `patchula config ...`: print or validate configuration and operator settings.
