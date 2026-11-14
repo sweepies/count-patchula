@@ -4,6 +4,10 @@ require: [mise]
 local_fallback: false   # a run that lands on this pod must never count
 sync:
   exclude: [.git, node_modules, .venv, target, docs/node_modules]
+  # Compare contents, not size and mtime: rsync's quick check otherwise skips a
+  # changed file whose size and mtime match the VM's copy, and rr still reports
+  # the sync as a success.
+  flags: [--checksum]
 tasks:
   test:
     run: mise run test:unit
