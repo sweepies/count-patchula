@@ -580,9 +580,8 @@ pub struct Lifecycle {
     /// an unreadable PR is simply never the one acted on.
     complete: bool,
     pub actions: Vec<PullRequestAction>,
-    /// Each release-notes fetch this run made: the notes, or `None` when
-    /// it failed in a way a later run may not.
-    notes: BTreeMap<(PackageId, String, String), Option<patchula_notes::Notes>>,
+    /// What each release-notes fetch this run made came back with.
+    notes: BTreeMap<(PackageId, String, String), crate::pr::body::Fetched>,
     /// Branches whose body this run holds a retryable fetch failure: no
     /// write receipt may settle them, so the next run renders them again.
     unsettled: BTreeSet<String>,
@@ -1237,9 +1236,10 @@ impl Lifecycle {
         let mut draft = bodies.draft(plan);
         while let Some(key) = draft.next() {
             if !self.notes.contains_key(&key) {
+                use crate::pr::body::Fetched;
                 let note = match sources.release_notes(&key.0, &key.1, &key.2).await {
-                    Ok(note) => Some(note),
-                    Err(error) if retryable(&error) => {
+                    Ok(note) => Fetched::Read(note),
+                    Err(error) if !lasting(&error, &key.0) => {
                         tracing::warn!(
                             package = %key.0.name,
                             from = %key.1,
@@ -1247,24 +1247,30 @@ impl Lifecycle {
                             %error,
                             "release notes fetch failed; the next run retries it"
                         );
-                        None
+                        Fetched::Transient
                     }
-                    // A lasting failure renders as notes without a source,
-                    // settled: another run would fail the same way.
+                    // A lasting failure settles: another run would fail the
+                    // same way. The source, when it resolved, keeps its link.
                     Err(error) => {
+                        let source = sources
+                            .source_repository(&key.0, &key.2)
+                            .await
+                            .ok()
+                            .flatten();
                         tracing::debug!(
                             package = %key.0.name,
                             from = %key.1,
                             to = %key.2,
                             %error,
-                            "release notes source not resolved"
+                            resolved = source.is_some(),
+                            "release notes not read"
                         );
-                        Some(patchula_notes::Notes::default())
+                        Fetched::Lasting(source)
                     }
                 };
                 self.notes.insert(key.clone(), note);
             }
-            draft.push(self.notes[&key].as_ref());
+            draft.push(&self.notes[&key]);
         }
         if draft.unsettled() {
             self.unsettled.insert(plan.action().branch.clone());
@@ -1280,18 +1286,27 @@ impl Lifecycle {
     }
 }
 
-/// Whether a release-notes fetch that failed with `error` may succeed on a
-/// later run: the network, a server error or a rate limit. Anything else —
-/// a package GitHub or a registry does not know, an unsafe name, an answer
-/// the notes cannot use — fails the same way every run.
-pub(crate) fn retryable(error: &patchula_notes::Error) -> bool {
+/// Whether a release-notes fetch for `id` that failed with `error` would
+/// fail the same way on every run: an unsafe package name or a tool name
+/// mise's policy refuses, a package or
+/// release the upstream does not know, an upstream answer the notes cannot
+/// use. Anything else — the network, a server error, a rate limit, the
+/// cache, a garbled answer, a refused credential — may pass, so it stays
+/// unsettled. A memoised failure keeps only its kind, so of those only
+/// `NotFound` reads as lasting.
+pub(crate) fn lasting(error: &patchula_notes::Error, id: &PackageId) -> bool {
     use patchula_words::LookupErrorKind;
-    let kind = match error {
-        patchula_notes::Error::Source(error) => error.kind(),
-        patchula_notes::Error::Earlier(failure) => failure.kind,
-        patchula_notes::Error::Upstream(_) => return false,
-    };
-    matches!(kind, LookupErrorKind::Network | LookupErrorKind::RateLimit)
+    if !patchula_datasource::package_name_safe(&id.name)
+        || (id.source == patchula_words::Source::Mise && patchula_mise::check(&id.name).is_err())
+    {
+        return true;
+    }
+    match error {
+        patchula_notes::Error::Upstream(_)
+        | patchula_notes::Error::Source(patchula_datasource::Error::Invalid) => true,
+        patchula_notes::Error::Source(error) => error.kind() == LookupErrorKind::NotFound,
+        patchula_notes::Error::Earlier(failure) => failure.kind == LookupErrorKind::NotFound,
+    }
 }
 
 #[cfg(test)]
@@ -1457,16 +1472,19 @@ mod closed_pulls_tests {
 
 #[cfg(test)]
 mod notes_failure_tests {
-    use super::retryable;
+    use super::lasting;
+    use patchula_config::PackageId;
     use patchula_datasource::{Error, Failure};
+    use patchula_github::Error as GithubError;
     use patchula_http::{CacheError, Error as HttpError};
     use patchula_notes::Error as NotesError;
-    use patchula_words::LookupErrorKind;
+    use patchula_words::{LookupErrorKind, Source};
 
-    /// The network, a server error and a rate limit may pass on a later
-    /// run; the rest fail the same way every run.
+    /// Only a condition every run would repeat settles; the network, the
+    /// cache, a garbled answer and every other fault stay unsettled.
     #[test]
-    fn only_transient_notes_failures_are_retried() {
+    fn only_lasting_notes_failures_settle() {
+        let id = PackageId::public(Source::Npm, "left-pad");
         let source = |error| NotesError::Source(error);
         let earlier = |kind| {
             NotesError::Earlier(Failure {
@@ -1474,25 +1492,42 @@ mod notes_failure_tests {
                 message: String::new(),
             })
         };
-        for transient in [
+        for passing in [
             source(Error::Http(CacheError::Transport(HttpError::Timeout))),
             source(Error::Http(CacheError::Status(503))),
             source(Error::Http(CacheError::Status(429))),
+            source(Error::Http(CacheError::Status(403))),
             source(Error::RateLimit(60)),
-            earlier(LookupErrorKind::Network),
-            earlier(LookupErrorKind::RateLimit),
-        ] {
-            assert!(retryable(&transient), "{transient}");
-        }
-        for lasting in [
-            source(Error::Http(CacheError::Status(404))),
-            source(Error::Invalid),
+            source(Error::Http(CacheError::Worker)),
             source(Error::Http(CacheError::Document)),
-            earlier(LookupErrorKind::NotFound),
+            source(Error::Cache(patchula_cache::Error::Io(
+                std::io::Error::other("database is locked"),
+            ))),
+            source(Error::Github(GithubError::Pagination)),
+            earlier(LookupErrorKind::Network),
+            earlier(LookupErrorKind::Parse),
             earlier(LookupErrorKind::Other),
-            NotesError::Upstream("no go-get meta"),
         ] {
-            assert!(!retryable(&lasting), "{lasting}");
+            assert!(!lasting(&passing, &id), "{passing}");
         }
+        for repeating in [
+            source(Error::Http(CacheError::Status(404))),
+            source(Error::Http(CacheError::Status(410))),
+            source(Error::Invalid),
+            earlier(LookupErrorKind::NotFound),
+            NotesError::Upstream("missing release alias"),
+        ] {
+            assert!(lasting(&repeating, &id), "{repeating}");
+        }
+        // An unsafe name, or a tool name mise refuses, never resolves,
+        // whatever the read said.
+        let unsafe_name = PackageId::public(Source::Npm, "../etc");
+        assert!(lasting(&earlier(LookupErrorKind::Other), &unsafe_name));
+        let refused = PackageId::public(Source::Mise, "@scope/package");
+        assert!(lasting(&earlier(LookupErrorKind::Other), &refused));
+        assert!(!lasting(
+            &earlier(LookupErrorKind::Other),
+            &PackageId::public(Source::Mise, "node")
+        ));
     }
 }

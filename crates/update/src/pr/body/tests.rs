@@ -217,7 +217,7 @@ fn the_draft_stops_asking_when_the_body_has_no_room() {
     let mut fetched = Vec::new();
     while let Some(key) = draft.next() {
         fetched.push(key);
-        draft.push(Some(&notes));
+        draft.push(&Fetched::Read(notes.clone()));
     }
     assert_eq!(fetched.len(), 8);
     assert!(
@@ -241,7 +241,7 @@ fn the_draft_stops_asking_when_the_body_has_no_room() {
         ..Default::default()
     };
     assert!(draft.next().is_some());
-    draft.push(Some(&big));
+    draft.push(&Fetched::Read(big));
     assert!(draft.next().is_none());
     assert!(
         draft
@@ -261,16 +261,39 @@ fn a_failed_notes_fetch_is_named_and_never_reused() {
     let (_, marker) = bodies.intent(&plan);
     let mut draft = bodies.draft(&plan);
     assert!(draft.next().is_some());
-    draft.push(None);
+    draft.push(&Fetched::Transient);
     let failed = draft.finish();
     assert!(failed.contains("### a\n\nThe Count could not read these release notes this run"));
     assert!(!failed.contains("could not be resolved"));
     assert!(!bodies.reusable(&plan, Some(&pr(&failed)), &marker));
-    // The same body with the notes read is settled and reused.
+    // A lasting failure with no source says so, and settles.
     let mut draft = bodies.draft(&plan);
     assert!(draft.next().is_some());
-    draft.push(Some(&patchula_notes::Notes::default()));
-    assert!(bodies.reusable(&plan, Some(&pr(&draft.finish())), &marker));
+    draft.push(&Fetched::Lasting(None));
+    let unresolved = draft.finish();
+    assert!(unresolved.contains("source repository could not be resolved"));
+    assert!(bodies.reusable(&plan, Some(&pr(&unresolved)), &marker));
+}
+
+/// A lasting failure after the source resolved keeps the source's link and
+/// says the notes could not be read, not that the source was not found;
+/// the body settles.
+#[test]
+fn a_resolved_source_with_unreadable_notes_keeps_its_link() {
+    let permits = BTreeMap::new();
+    let bodies = bodies(&permits);
+    let plan = update_plan("patchula/a-1.x", vec![change("a")]);
+    let (_, marker) = bodies.intent(&plan);
+    let mut draft = bodies.draft(&plan);
+    assert!(draft.next().is_some());
+    let source = patchula_notes::Repository::from_url("https://github.com/o/r").unwrap();
+    draft.push(&Fetched::Lasting(Some(source)));
+    let body = draft.finish();
+    assert!(body.contains(
+        "### a\n\nThe Count could not read these release notes; [view upstream](https://github.com/o/r)."
+    ));
+    assert!(!body.contains("could not be resolved"));
+    assert!(bodies.reusable(&plan, Some(&pr(&body)), &marker));
 }
 
 /// `unticked` clears the re-check box and leaves the rest of the body.

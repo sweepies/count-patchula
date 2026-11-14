@@ -2715,6 +2715,7 @@ dependencies = [
  "patchula-lockfiles",
  "patchula-lookup",
  "patchula-manager",
+ "patchula-mise",
  "patchula-notes",
  "patchula-process",
  "patchula-report",

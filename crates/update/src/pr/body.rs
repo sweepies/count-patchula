@@ -334,19 +334,23 @@ impl Draft<'_> {
         None
     }
     /// The answer to the fetch [`next`](Draft::next) named, rendered into
-    /// the body within the room left: the notes, or `None` when the fetch
-    /// failed. A failed fetch says so in its section and keeps the body
-    /// from being reused, so the next run fetches again.
-    pub(crate) fn push(&mut self, notes: Option<&patchula_notes::Notes>) {
+    /// the body within the room left. A transient failure says so in its
+    /// section and keeps the body from being reused, so the next run
+    /// fetches again.
+    pub(crate) fn push(&mut self, fetched: &Fetched) {
         let change = self
             .pending
             .take()
             .expect("push answers the fetch next() named");
         // Two bytes for the newlines around the section.
         let budget = self.notes.room(NOTES_SECTION_CAP + 2).saturating_sub(2);
-        let section = match notes {
-            Some(notes) => notes.render(&change.package, budget),
-            None => {
+        let section = match fetched {
+            Fetched::Read(notes) => notes.render(&change.package, budget),
+            Fetched::Lasting(None) => {
+                patchula_notes::Notes::default().render(&change.package, budget)
+            }
+            Fetched::Lasting(Some(source)) => unreadable_notes(&change.package, source, budget),
+            Fetched::Transient => {
                 self.failed = true;
                 failed_notes(&change.package)
             }
@@ -391,6 +395,32 @@ impl Draft<'_> {
         let mut body = crate::body::Body::new(BODY_LIMIT, markers::START.len() + 1 + tail.len());
         body.push(&visible, usize::MAX);
         format!("{}\n{}{}", markers::START, body.text(), tail)
+    }
+}
+/// What a release-notes fetch came back with.
+pub(crate) enum Fetched {
+    /// The notes.
+    Read(patchula_notes::Notes),
+    /// A failure every run would repeat, with the source repository when
+    /// it resolved before the notes failed.
+    Lasting(Option<patchula_notes::Repository>),
+    /// A failure a later run may not repeat.
+    Transient,
+}
+/// The section for a package whose source resolved but whose notes could
+/// not be read, linking the source when it fits `budget`.
+fn unreadable_notes(package: &str, source: &patchula_notes::Repository, budget: usize) -> String {
+    if budget < 512 {
+        return String::new();
+    }
+    let package = markers::cut_bytes(&safe(package), 160).replace(['\n', '\r'], " ");
+    if source.url.len() <= 512 && source.url.len() + package.len() + 160 <= budget {
+        format!(
+            "### {package}\n\nThe Count could not read these release notes; [view upstream]({}).\n",
+            safe(&source.url)
+        )
+    } else {
+        format!("### {package}\n\nThe Count could not read these release notes.\n")
     }
 }
 /// The section for a package whose release-notes fetch failed this run.
