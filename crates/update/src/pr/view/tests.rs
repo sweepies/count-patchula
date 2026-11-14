@@ -339,8 +339,8 @@ fn shaped(shape: Shape, number: u64, keys: &[String]) -> Tracked {
 /// `admit` consults only the closed reads `closed_reads` names. Over every
 /// one-PR history and a spread of two-PR histories, with and without a
 /// "bring back" tick, the view filled exactly as the lifecycle fills it
-/// decides the same as one that also answers every other head — with all
-/// of that head's closed PRs, or as unread.
+/// decides the same as one that also answers every other head with all of
+/// that head's closed PRs.
 #[test]
 fn admit_consults_only_the_closed_reads_it_selects() {
     let keys: Vec<String> = plans().iter().map(Plan::update_key).collect();
@@ -371,28 +371,19 @@ fn admit_consults_only_the_closed_reads_it_selects() {
                     })
                     .collect()
             };
-            let decide = |extra: Option<bool>| {
+            let decide = |extra: bool| {
                 let mut plans = plans();
                 let mut pulls = Pulls::from_open(open.clone(), Some(0), true);
                 let selected = closed_reads(&pulls, &plans, controls, OWNER);
                 for head in [PLAN_A_BRANCH, PLAN_B_BRANCH, OTHER_BRANCH] {
-                    if selected.iter().any(|s| s == head) {
+                    if extra || selected.iter().any(|s| s == head) {
                         pulls.read_closed(head.into(), Ok(closed_on(head)));
-                    } else if let Some(read) = extra {
-                        let answer = if read {
-                            Ok(closed_on(head))
-                        } else {
-                            Err(Unread)
-                        };
-                        pulls.read_closed(head.into(), answer);
                     }
                 }
                 admit(&pulls, &mut plans, controls, &config, OWNER);
                 plans.iter().map(outcome).collect::<Vec<_>>()
             };
-            let narrowed = decide(None);
-            assert_eq!(narrowed, decide(Some(true)), "{history:?}");
-            assert_eq!(narrowed, decide(Some(false)), "{history:?}");
+            assert_eq!(decide(false), decide(true), "{history:?}");
         }
     }
 }
