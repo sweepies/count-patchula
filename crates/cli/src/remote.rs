@@ -22,12 +22,7 @@ const CHOICES: &str = "repositories.json";
 const DISCOVERY_PAGES: u32 = 5;
 
 type Result<T> = std::result::Result<T, (u8, miette::Report)>;
-fn fail(message: impl std::fmt::Display) -> (u8, miette::Report) {
-    (1, miette::miette!("{message}"))
-}
-fn usage(message: impl std::fmt::Display) -> (u8, miette::Report) {
-    (2, miette::miette!("{message}"))
-}
+use crate::{fail, usage};
 
 /// The server named by `PATCHULA_SERVER`, if it is set.
 pub fn configured(services: &Services) -> Result<Option<String>> {

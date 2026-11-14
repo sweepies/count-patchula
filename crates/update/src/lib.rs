@@ -22,7 +22,7 @@ pub use receipts::{
     RestoreOutcome, restore_inventory, save_receipts,
 };
 #[cfg(feature = "testing")]
-pub use receipts::{LEGACY_INVENTORY_QUERY, read_legacy_inventory, seed_receipts};
+pub use receipts::{seed_receipts, stored_receipts};
 pub use settle::{Settlement, settle};
 mod plan;
 mod pr;
@@ -39,4 +39,11 @@ pub use write::{REF_UPDATE, apply_all};
 
 pub mod pull_requests;
 pub mod tooling;
+
+/// The cache scope of state kept per repository.
+pub(crate) fn repository_scope(repository: &str) -> patchula_cache::RepositoryScope {
+    patchula_cache::RepositoryScope {
+        repository: repository.into(),
+    }
+}
 pub use pull_requests::{BODY_LIMIT, Lifecycle};

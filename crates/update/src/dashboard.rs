@@ -57,11 +57,7 @@ fn checked_actions(body: &str) -> BTreeSet<Action> {
         let target = match &action {
             Action::Recheck(t) | Action::Create(t) | Action::Recreate(t) | Action::Retry(t) => t,
         };
-        if target.len() != 64
-            || !target
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
+        if !is_key(target) {
             continue;
         }
         let entry = counts.entry(action).or_default();
@@ -84,7 +80,9 @@ impl Controls {
     pub fn apply(&mut self, plans: &mut [Plan], dependencies: &[patchula_manager::Dependency]) {
         for plan in plans {
             let key = plan.update_key();
-            let permits: BTreeSet<_> = plan
+            // The held targets this plan's changes move, one per
+            // dependency each change touches.
+            let targets: BTreeSet<String> = plan
                 .changes()
                 .iter()
                 .flat_map(|c| {
@@ -105,36 +103,17 @@ impl Controls {
                                 .map(|v| held_target(&extracted_key(d), v, c.kind.as_str()))
                         })
                 })
-                .filter(|target| self.age_permits.contains(target))
+                .collect();
+            let permits: BTreeSet<_> = targets
+                .iter()
+                .filter(|target| self.age_permits.contains(*target))
+                .cloned()
                 .collect();
             if !permits.is_empty() {
                 self.branch_permits
                     .insert(plan.action().branch.clone(), permits);
             }
-            let age_click = plan.changes().iter().any(|c| {
-                dependencies
-                    .iter()
-                    .filter(|d| {
-                        c.touches(
-                            &d.file,
-                            d.source,
-                            &d.package,
-                            d.registry.as_ref().map(Registry::recorded),
-                        )
-                    })
-                    .any(|d| {
-                        c.version
-                            .as_deref()
-                            .or(c.value.as_deref())
-                            .is_some_and(|v| {
-                                self.create.contains(&held_target(
-                                    &extracted_key(d),
-                                    v,
-                                    c.kind.as_str(),
-                                ))
-                            })
-                    })
-            });
+            let age_click = targets.iter().any(|target| self.create.contains(target));
             if age_click {
                 self.create.insert(key.clone());
             }
@@ -187,6 +166,13 @@ impl Controls {
 pub(crate) fn permit_marker(permits: &BTreeSet<String>) -> String {
     format!("{}\n", markers::hidden(markers::PERMITS, permits))
 }
+/// Whether `text` is an update key: 64 lowercase hex digits.
+fn is_key(text: &str) -> bool {
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
 fn pr_permits(body: &str) -> BTreeSet<String> {
     let Some(json) = markers::section_line(body, markers::PERMITS, 32_000) else {
         return BTreeSet::new();
@@ -194,12 +180,7 @@ fn pr_permits(body: &str) -> BTreeSet<String> {
     let Ok(permits) = serde_json::from_str::<BTreeSet<String>>(json) else {
         return BTreeSet::new();
     };
-    if permits.iter().any(|t| {
-        t.len() != 64
-            || !t
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    }) {
+    if !permits.iter().all(|t| is_key(t)) {
         return BTreeSet::new();
     }
     permits
@@ -208,11 +189,6 @@ fn pr_permits(body: &str) -> BTreeSet<String> {
 struct Permits {
     actor: String,
     targets: BTreeSet<String>,
-}
-fn repository_scope(repo: &str) -> patchula_cache::RepositoryScope {
-    patchula_cache::RepositoryScope {
-        repository: repo.into(),
-    }
 }
 impl State for Permits {
     const NAMESPACE: &'static str = "dashboard-age-permits";
@@ -225,7 +201,7 @@ pub async fn load_permits(
     actor: &str,
 ) -> Result<BTreeSet<String>, Error> {
     Ok(cache
-        .state::<Permits>(&repository_scope(repo))
+        .state::<Permits>(&crate::repository_scope(repo))
         .await?
         .filter(|p| p.actor == actor)
         .map(|p| p.targets)
@@ -239,7 +215,7 @@ pub async fn save_permits(
 ) -> Result<(), Error> {
     Ok(cache
         .set_state(
-            &repository_scope(repo),
+            &crate::repository_scope(repo),
             &Permits {
                 actor: actor.into(),
                 targets,
@@ -1138,7 +1114,7 @@ impl State for Receipt {
 /// The dashboard issue the Count last wrote in `repo`.
 pub async fn issue_number(cache: &Cache, repo: &str) -> Option<u64> {
     cache
-        .state::<Receipt>(&repository_scope(repo))
+        .state::<Receipt>(&crate::repository_scope(repo))
         .await
         .ok()?
         .map(|receipt| receipt.number)
@@ -1164,21 +1140,14 @@ pub async fn reconcile(
         }
         // A closed dashboard is no longer the repository's dashboard.
         return Ok(cache
-            .clear_state::<Receipt>(&repository_scope(&repo.repository))
+            .clear_state::<Receipt>(&crate::repository_scope(&repo.repository))
             .await?);
     }
     let digest = hash(body.as_bytes());
-    let previous = cache
-        .state::<Receipt>(&repository_scope(&repo.repository))
-        .await?;
     let number = if let Some(existing) = existing {
         let number = existing.number as u64;
         let current = existing.body.as_str();
-        let unchanged = previous
-            .as_ref()
-            .is_some_and(|r| r.number == number && r.actor == inventory.actor && r.hash == digest)
-            && crate::pr::body::body_hash(current) == digest;
-        if !unchanged && crate::pr::body::body_hash(current) != digest {
+        if crate::pr::body::body_hash(current) != digest {
             // The run's controls were read from `current`, which the
             // early inventory may have sampled a whole extraction ago.
             // Re-read the one issue: a body that moved since is a
@@ -1204,7 +1173,7 @@ pub async fn reconcile(
     };
     Ok(cache
         .set_state(
-            &repository_scope(&repo.repository),
+            &crate::repository_scope(&repo.repository),
             &Receipt {
                 number,
                 actor: inventory.actor.clone(),
@@ -1317,37 +1286,12 @@ mod tests {
     /// batch carries the update's key and has an open PR.
     #[test]
     fn a_batched_fix_reports_the_batch_prs_number() {
-        use patchula_report::BranchStatus;
-        let action = |branch: &str| patchula_report::BranchAction {
-            repository: "o/r".into(),
-            branch: branch.into(),
-            base_commit: "b".repeat(40),
-            status: BranchStatus::Planned,
-            reason: None,
-            message: "m".into(),
-            previous_commit: None,
-            commit: None,
-            verified: None,
-            lockfile_pending: false,
-            files: Vec::new(),
-        };
+        use crate::plan::testing::action;
         let change = || crate::Change {
-            source: patchula_words::Source::Npm,
-            package: "shared".into(),
-            registry: None,
-            file: "package.json".into(),
-            current: "1.0.0".into(),
-            current_version: None,
             value: Some("1.2.0".into()),
             version: Some("1.2.0".into()),
-            digest: None,
-            kind: patchula_words::Update::Minor,
-            merge: false,
-            labels: Vec::new(),
             release_notes: false,
-            body_notes: Vec::new(),
-            advisories: Vec::new(),
-            image: None,
+            ..crate::plan::testing::change("shared")
         };
         let mut held = crate::plan::testing::Draft::new(action("patchula/shared-1.x"))
             .change(change())

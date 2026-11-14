@@ -188,13 +188,9 @@ impl Engine {
         now: DateTime<Utc>,
     ) -> Result<BTreeSet<String>> {
         let now_ms = now.timestamp_millis();
-        let credential_scope = self.github.credential_scope().to_owned();
         let mut candidates = Vec::new();
         for repo in repositories {
-            let scope = CredentialScope {
-                repository: repo.clone(),
-                credential_scope: credential_scope.clone(),
-            };
+            let scope = self.credential_scope(repo);
             let Some(state) = self.cache.state::<QuietRun>(&scope).await? else {
                 continue;
             };
@@ -279,19 +275,7 @@ impl Engine {
         let mut report = repo_report(repo, Status::Complete, None);
         report.default_branch = Some(state.branch.clone());
         report.commit = Some(state.commit.clone());
-        report.warnings = cached.extraction.warnings.clone();
-        report.skipped = skipped(&cached.extraction.skipped);
-        Ok(Some(Work {
-            dependencies: cached
-                .extraction
-                .dependencies
-                .into_iter()
-                .map(Dep::new)
-                .collect(),
-            locked: cached.extraction.locked,
-            snapshot: cached.snapshot,
-            ..Work::empty(report, Some(config))
-        }))
+        Ok(Some(Work::from_extraction(report, config, cached)))
     }
 
     /// A complete run's stored answer for the sweep: the row's lookup hash,
@@ -318,10 +302,7 @@ impl Engine {
         } else {
             None
         };
-        let scope = CredentialScope {
-            repository: work.report.repository.clone(),
-            credential_scope: self.github.credential_scope().into(),
-        };
+        let scope = self.credential_scope(&work.report.repository);
         self.cache
             .set_state(
                 &scope,

@@ -383,8 +383,12 @@ async fn record_repository(
         })
         .collect();
     let dashboard = patchula_update::dashboard::issue_number(cache, name).await;
-    let merged = patchula_update::automerge::merged(cache, name)
+    let merged = patchula_update::automerge::merged(cache, name, bot)
         .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(repository = name, %error, "cannot read the auto-merge history");
+            Vec::new()
+        })
         .iter()
         .filter_map(|pr| {
             Some(Merged {
@@ -476,24 +480,17 @@ async fn open_pulls(client: &Client, bot: &str, repo: &str) -> Option<Vec<Value>
             .ok()?;
         let pulls: Vec<Value> = serde_json::from_slice(&response.body).ok()?;
         let full = pulls.len() == 100;
-        owned.extend(pulls.into_iter().filter(|pr| {
-            serde_json::from_value::<patchula_github::model::PullRequest>(pr.clone())
-                .ok()
-                .as_ref()
-                .is_some_and(|pull| patchula_update::pull_requests::owned_pr(pull, bot, repo))
+        // Each owned PR, with its number for the read of its own.
+        owned.extend(pulls.into_iter().filter_map(|pr| {
+            let pull = patchula_github::model::PullRequest::deserialize(&pr).ok()?;
+            patchula_update::pull_requests::owned_pr(&pull, bot, repo).then_some((pull.number, pr))
         }));
         if !full {
             break;
         }
     }
     let owned = futures_util::stream::iter(owned)
-        .map(|pr| async move {
-            let Some(number) = GithubPull::deserialize(&pr)
-                .ok()
-                .and_then(|pull| pull.number)
-            else {
-                return pr;
-            };
+        .map(|(number, pr)| async move {
             client
                 .get(&format!("repos/{repo}/pulls/{number}"))
                 .await
@@ -510,7 +507,14 @@ async fn open_pulls(client: &Client, bot: &str, repo: &str) -> Option<Vec<Value>
 struct Reject(StatusCode, &'static str, &'static str);
 impl IntoResponse for Reject {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"errorKind": self.1, "error": self.2}))).into_response()
+        (
+            self.0,
+            Json(crate::remote::protocol::RejectBody {
+                error_kind: self.1.into(),
+                error: self.2.into(),
+            }),
+        )
+            .into_response()
     }
 }
 fn unknown() -> Reject {

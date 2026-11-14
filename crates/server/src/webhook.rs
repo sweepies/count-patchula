@@ -25,48 +25,57 @@ use std::sync::{
 pub const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
 /// The fields of a webhook payload the server reads, typed. Everything else
-/// is ignored; `pull_request` stays a `Value` because `patchula_update`'s
-/// ownership check reads it as JSON. A missing field reads as `None`, the
-/// same as the key being absent.
+/// is ignored, and a missing field reads as `None`, the same as the key
+/// being absent.
 #[derive(Deserialize)]
 pub(crate) struct Payload {
-    #[serde(default)]
     pub action: Option<String>,
-    #[serde(default)]
     pub installation: Option<Installation>,
-    #[serde(default)]
     pub repository: Option<Repository>,
-    #[serde(default)]
     pub sender: Option<Actor>,
-    #[serde(default)]
     pub organization: Option<Actor>,
-    #[serde(default)]
     pub issue: Option<Issue>,
-    #[serde(default)]
-    pub pull_request: Option<Value>,
-    #[serde(default)]
+    /// `None` too when the object is not a whole pull request: such a PR
+    /// is never the Count's.
+    #[serde(default, deserialize_with = "pull_request")]
+    pub pull_request: Option<patchula_github::model::PullRequest>,
     pub changes: Option<Changes>,
-    #[serde(default)]
     pub check_suite: Option<Checks>,
-    #[serde(default)]
     pub check_run: Option<Checks>,
-    #[serde(default)]
     pub repositories: Option<Vec<Repository>>,
-    #[serde(default)]
     pub repositories_added: Option<Vec<Repository>>,
-    #[serde(default)]
     pub repositories_removed: Option<Vec<Repository>>,
-    #[serde(default)]
     pub deleted: Option<bool>,
-    #[serde(default, rename = "ref")]
+    #[serde(rename = "ref")]
     pub reference: Option<String>,
 }
 impl Payload {
-    /// The typed view of an already-validated payload `Value`.
-    #[cfg(test)]
-    pub(crate) fn parse(value: &Value) -> Option<Self> {
-        serde_json::from_value(value.clone()).ok()
+    /// Whether the bot itself sent the event; logins compare without case.
+    fn from(&self, bot: &str) -> bool {
+        self.sender
+            .as_ref()
+            .and_then(|sender| sender.login.as_deref())
+            .is_some_and(|login| login.eq_ignore_ascii_case(bot))
     }
+    /// The event's installation, when the settings allow it.
+    fn allowed_installation(&self, settings: &Settings) -> Option<u64> {
+        self.installation
+            .as_ref()
+            .and_then(|installation| installation.id)
+            .filter(|id| settings.installation_allowed(*id))
+    }
+}
+/// Whether `event`'s `action` gives the App repositories: a new
+/// installation, or repositories added to one.
+fn adds_repositories(event: &str, action: &str) -> bool {
+    (event == "installation" && action == "created")
+        || (event == "installation_repositories" && action == "added")
+}
+/// A payload's `pull_request`, or `None` when it does not decode.
+fn pull_request<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<patchula_github::model::PullRequest>, D::Error> {
+    Ok(Option::<Value>::deserialize(deserializer)?.and_then(|pr| serde_json::from_value(pr).ok()))
 }
 #[derive(Deserialize)]
 pub(crate) struct Installation {
@@ -300,13 +309,7 @@ pub async fn receive(
         return StatusCode::OK.into_response();
     }
     let mut resolution = None;
-    if payload.installation.is_none()
-        && !payload
-            .sender
-            .as_ref()
-            .and_then(|sender| sender.login.as_deref())
-            .is_some_and(|login| login.eq_ignore_ascii_case(&state.bot_login))
-    {
+    if payload.installation.is_none() && !payload.from(&state.bot_login) {
         let resolved = match &state.resolver {
             Some(resolver) => resolver.resolve(&payload).await,
             None => Ok(None),
@@ -521,20 +524,10 @@ pub(crate) fn ignored_reason(
     settings: &Settings,
     bot: &str,
 ) -> &'static str {
-    if payload
-        .sender
-        .as_ref()
-        .and_then(|sender| sender.login.as_deref())
-        .is_some_and(|s| s.eq_ignore_ascii_case(bot))
-    {
+    if payload.from(bot) {
         return "own-bot ignored";
     }
-    let Some(id) = payload
-        .installation
-        .as_ref()
-        .and_then(|installation| installation.id)
-        .filter(|id| settings.installation_allowed(*id))
-    else {
+    let Some(id) = payload.allowed_installation(settings) else {
         return "not allowlisted";
     };
     let Some(trigger) = Trigger::of(event, payload.action.as_deref().unwrap_or("")) else {
@@ -544,9 +537,7 @@ pub(crate) fn ignored_reason(
         return "trigger disabled";
     }
     if matches!(event, "installation" | "installation_repositories") {
-        return if (event == "installation" && payload.action.as_deref() == Some("created"))
-            || (event == "installation_repositories" && payload.action.as_deref() == Some("added"))
-        {
+        return if adds_repositories(event, payload.action.as_deref().unwrap_or("")) {
             "not allowlisted"
         } else {
             "unrelated event or action"
@@ -568,27 +559,16 @@ pub(crate) fn classify(
     settings: &Settings,
     bot: &str,
 ) -> Vec<Work> {
-    if payload
-        .sender
-        .as_ref()
-        .and_then(|sender| sender.login.as_deref())
-        .is_some_and(|s| s.eq_ignore_ascii_case(bot))
-    {
+    if payload.from(bot) {
         return Vec::new();
     }
-    let Some(id) = payload
-        .installation
-        .as_ref()
-        .and_then(|installation| installation.id)
-        .filter(|id| settings.installation_allowed(*id))
-    else {
+    let Some(id) = payload.allowed_installation(settings) else {
         return Vec::new();
     };
     let action = payload.action.as_deref().unwrap_or("");
     if Trigger::of(event, action) == Some(Trigger::Installation)
         && Trigger::Installation.enabled(&settings.server.triggers)
-        && ((event == "installation" && action == "created")
-            || (event == "installation_repositories" && action == "added"))
+        && adds_repositories(event, action)
     {
         let repos = if event == "installation" {
             &payload.repositories
@@ -659,14 +639,8 @@ pub(crate) fn classify(
         .and_then(|changes| changes.body.as_ref())
         .and_then(|body| body.from.as_deref());
     let issue = payload.issue.as_ref();
-    let null = Value::Null;
-    let pr = serde_json::from_value::<patchula_github::model::PullRequest>(
-        payload.pull_request.clone().unwrap_or(null),
-    )
-    .ok();
-    let owned = pr
-        .as_ref()
-        .is_some_and(|pr| patchula_update::pull_requests::owned_pr(pr, bot, repo));
+    let pr = payload.pull_request.as_ref();
+    let owned = pr.is_some_and(|pr| patchula_update::pull_requests::owned_pr(pr, bot, repo));
     let trigger = match Trigger::of(event, action) {
         Some(t) if t.enabled(&settings.server.triggers) => match t {
             Trigger::Push => {
@@ -682,7 +656,7 @@ pub(crate) fn classify(
                     && issue
                         .and_then(|issue| issue.user.as_ref())
                         .and_then(|user| user.login.as_deref())
-                        == Some(bot)
+                        .is_some_and(|login| login.eq_ignore_ascii_case(bot))
                     && patchula_update::markers::dashboard(after)
                     && before.is_some_and(|before| {
                         patchula_update::dashboard::Controls::checkbox_edited(before, after)
@@ -695,7 +669,7 @@ pub(crate) fn classify(
                     && before.is_some_and(|before| {
                         patchula_update::pull_requests::controls_edited(
                             before,
-                            pr.as_ref().and_then(|pr| pr.body.as_deref()).unwrap_or(""),
+                            pr.and_then(|pr| pr.body.as_deref()).unwrap_or(""),
                         )
                     })
             }

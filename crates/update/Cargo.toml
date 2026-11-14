@@ -14,6 +14,8 @@ workspace = true
 testing = []
 
 [dependencies]
+patchula-datasource = { path = "../datasource" }
+patchula-mise = { path = "../mise" }
 patchula-notes = { path = "../notes" }
 patchula-cache = { path = "../cache" }
 patchula-config = { path = "../config" }
@@ -42,6 +44,5 @@ patchula-words = { path = "../words" }
 patchula-update = { path = ".", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
 patchula-http = { path = "../http" }
-patchula-datasource = { path = "../datasource" }
 patchula-testkit = { path = "../testkit" }
 tempfile = "3"

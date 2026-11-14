@@ -67,7 +67,7 @@ mod inventory {
     /// `inventory-last.graphql` — the closing re-read of the fields the
     /// first page answers once: the split walk gathers them from its first
     /// page, so a walk that paged asks them again and the last answer
-    /// wins, as it did when every page carried them.
+    /// wins.
     #[derive(GraphQLQuery)]
     #[graphql(
         schema_path = "../github/graphql/schema.docs.graphql",
@@ -510,6 +510,9 @@ struct Receipts {
     writes: BTreeMap<String, Receipt>,
     closed: BTreeMap<String, ClosedReceipt>,
 }
+/// The most closed receipts one read can check: `nodes(ids:)` takes at
+/// most 100 IDs, and a set larger than that is unusable.
+const CLOSED_RECEIPTS: usize = 100;
 #[derive(Serialize, Deserialize)]
 struct ClosedReceipt {
     actor: String,
@@ -582,9 +585,7 @@ fn default_branch_prefix() -> &'static str {
 async fn mark_prefix(cache: &Cache, repository: &str, prefix: &str) -> Result<(), Error> {
     cache
         .set_state(
-            &RepositoryScope {
-                repository: repository.into(),
-            },
+            &crate::repository_scope(repository),
             &ReceiptsPrefix {
                 prefix: prefix.into(),
                 saved: chrono::Utc::now().timestamp(),
@@ -646,8 +647,8 @@ struct PrStateBase {
     repo: Value,
 }
 impl PrState {
-    /// From the REST view the write lifecycle stores — every scalar the
-    /// receipt compares passes through verbatim, as before.
+    /// From the REST view the write lifecycle stores: every scalar the
+    /// receipt compares passes through verbatim.
     fn from_rest(pr: &model::PullRequest) -> Self {
         Self {
             number: json!(pr.number),
@@ -837,17 +838,22 @@ impl Inventory {
         repository: &Repository,
         config: &Config,
     ) -> Result<Self, Error> {
-        Self::read_documents(
+        let saved = cache
+            .state::<ReceiptsPrefix>(&crate::repository_scope(&repository.repository))
+            .await?;
+        let head = Head::Scan {
+            name: repository.default_branch.as_deref(),
+            oid: repository.commit.as_deref(),
+        };
+        Prepared::look_up(
             client,
             cache,
             &repository.repository,
             &config.prs.branch,
-            Head::Scan {
-                name: repository.default_branch.as_deref(),
-                oid: repository.commit.as_deref(),
-            },
-            DOCUMENTS,
+            saved,
         )
+        .await?
+        .read(client, cache, head)
         .await
     }
     /// Everything a read beside the scan's head check needs from the
@@ -867,9 +873,7 @@ impl Inventory {
     ) -> Result<Beside, Error> {
         client.ready().await?;
         let saved = cache
-            .state::<ReceiptsPrefix>(&RepositoryScope {
-                repository: repository.into(),
-            })
+            .state::<ReceiptsPrefix>(&crate::repository_scope(repository))
             .await?;
         let prefix = match declared {
             Some(prefix) => prefix.to_owned(),
@@ -878,28 +882,8 @@ impl Inventory {
                 |saved| saved.prefix.clone(),
             ),
         };
-        let prepared =
-            Prepared::look_up(client, cache, repository, &prefix, saved, DOCUMENTS).await?;
+        let prepared = Prepared::look_up(client, cache, repository, &prefix, saved).await?;
         Ok(Beside { prefix, prepared })
-    }
-    /// A read over `documents`.
-    async fn read_documents(
-        client: &Client,
-        cache: &Cache,
-        repository: &str,
-        branch_prefix: &str,
-        head: Head<'_>,
-        documents: Documents,
-    ) -> Result<Self, Error> {
-        let saved = cache
-            .state::<ReceiptsPrefix>(&RepositoryScope {
-                repository: repository.into(),
-            })
-            .await?;
-        Prepared::look_up(client, cache, repository, branch_prefix, saved, documents)
-            .await?
-            .read(client, cache, head)
-            .await
     }
     async fn walk(
         client: &Client,
@@ -926,7 +910,7 @@ impl Inventory {
         };
         let data: InventoryData = client
             .graphql(
-                request.documents.first,
+                INVENTORY_QUERY,
                 variables(&Value::Null, &Value::Null, &filter),
             )
             .await?;
@@ -979,11 +963,11 @@ impl Inventory {
                 return Err(Error::Refused("inventory page budget exceeded".into()).into());
             }
             let document = if !refs.done && !issues.done {
-                request.documents.next
+                INVENTORY_NEXT_QUERY
             } else if !refs.done {
-                request.documents.refs
+                INVENTORY_REFS_QUERY
             } else {
-                request.documents.issues
+                INVENTORY_ISSUES_QUERY
             };
             let data: ContinuationData = client
                 .graphql(document, variables(&refs.next, &issues.next, &filter))
@@ -1002,14 +986,12 @@ impl Inventory {
         // A walk that paged ends on the closing read: the fields only the
         // first page answered — `nodes(ids:$closed)`, the merge settings
         // and the default branch's rules, history and update rule — are
-        // re-asked so the newest answer wins, as it did when every page
-        // carried them. The same actor and head checks hold it honest.
-        if pages > 1
-            && let Some(last) = request.documents.last
-        {
+        // re-asked so the newest answer wins. The same actor and head
+        // checks hold it honest.
+        if pages > 1 {
             let data: InventoryData = client
                 .graphql(
-                    last,
+                    INVENTORY_LAST_QUERY,
                     json!({"owner":request.owner,"name":request.name,
                         "closed":request.closed_ids}),
                 )
@@ -1085,7 +1067,7 @@ impl Inventory {
     }
     /// `merged_prs` and `unsettled`, read once the walk gathered every page.
     async fn finish(&mut self, cache: &Cache, repo: &str) -> Result<(), Error> {
-        self.merged_prs = crate::automerge::load_history(cache, repo, &self.actor).await?;
+        self.merged_prs = crate::automerge::merged(cache, repo, &self.actor).await?;
         // Labels and associated pull requests come back only to their
         // first page; anything past it — or unreadable — is invisible
         // here, so the branch cannot settle from receipts.
@@ -1145,7 +1127,6 @@ struct Prepared {
     owner: String,
     name: String,
     closed_ids: Vec<Value>,
-    documents: Documents,
     ref_query: Option<String>,
     scope: ActorScope,
     hint: Option<String>,
@@ -1159,7 +1140,6 @@ impl Prepared {
         repository: &str,
         branch_prefix: &str,
         saved: Option<ReceiptsPrefix>,
-        documents: Documents,
     ) -> Result<Self, Error> {
         let receipts = cache
             .state::<Receipts>(&receipts_scope(repository, branch_prefix))
@@ -1171,11 +1151,10 @@ impl Prepared {
         // longer prove the walk may skip every other branch. Without
         // receipts, without the marker, or with a marker naming another
         // prefix — a first run, a cold cache, a changed prefix or a flip
-        // back — the walk covers every branch as before: that run is a
+        // back — the walk covers every branch: that run is a
         // full write whose cleanup lists every branch itself and whose
         // restore marks the prefix again.
         let ref_query = (receipts.is_some()
-            && documents.ref_query
             && saved.is_some_and(|saved| saved.prefix == branch_prefix))
         .then(|| branch_prefix.to_owned());
         let receipts = receipts.unwrap_or_default();
@@ -1183,7 +1162,7 @@ impl Prepared {
             .closed
             .values()
             .map(|r| r.pr["node_id"].clone())
-            .take(100)
+            .take(CLOSED_RECEIPTS)
             .collect();
         let (owner, name) = repository
             .split_once('/')
@@ -1197,7 +1176,6 @@ impl Prepared {
             owner: owner.to_owned(),
             name: name.to_owned(),
             closed_ids,
-            documents,
             ref_query,
             scope,
             hint,
@@ -1220,7 +1198,6 @@ impl Prepared {
                     owner: &self.owner,
                     name: &self.name,
                     closed_ids: &self.closed_ids,
-                    documents: &self.documents,
                     actor: hint,
                     ref_query: self.ref_query.as_deref(),
                 },
@@ -1269,68 +1246,10 @@ struct Request<'a> {
     owner: &'a str,
     name: &'a str,
     closed_ids: &'a [Value],
-    documents: &'a Documents,
     actor: Option<&'a str>,
     /// The branch prefix `refs(query:)` narrows the walk to when a write
     /// receipt exists for it — `None` sends no `query` argument at all.
     ref_query: Option<&'a str>,
-}
-/// The documents a read walks: the first page asks everything once; each
-/// continuation asks every connection that still has a page. `last` is the
-/// closing re-read of the fields only the first page asks, sent when the
-/// walk took more than one request so the newest answer wins; `None` when
-/// `first` already re-read them on every page (the legacy document).
-/// `ref_query` marks the documents as declaring `$refQuery` on `refs`, so
-/// a stored receipt may narrow the walk to the branch prefix.
-struct Documents {
-    first: &'static str,
-    next: &'static str,
-    refs: &'static str,
-    issues: &'static str,
-    last: Option<&'static str>,
-    ref_query: bool,
-}
-const DOCUMENTS: Documents = Documents {
-    first: INVENTORY_QUERY,
-    next: INVENTORY_NEXT_QUERY,
-    refs: INVENTORY_REFS_QUERY,
-    issues: INVENTORY_ISSUES_QUERY,
-    last: Some(INVENTORY_LAST_QUERY),
-    ref_query: true,
-};
-
-/// The pre-split inventory document, kept so the differential test can
-/// build an `Inventory` exactly the way releases before the split did.
-#[cfg(feature = "testing")]
-pub const LEGACY_INVENTORY_QUERY: &str = include_str!("../tests/fixtures/legacy-inventory.graphql");
-/// The differential-test entry: the same walk over the pre-split document,
-/// which answers both connections on every page it is sent for.
-#[cfg(feature = "testing")]
-pub async fn read_legacy_inventory(
-    client: &Client,
-    cache: &Cache,
-    repository: &Repository,
-    config: &Config,
-) -> Result<Inventory, Error> {
-    Inventory::read_documents(
-        client,
-        cache,
-        &repository.repository,
-        &config.prs.branch,
-        Head::Scan {
-            name: repository.default_branch.as_deref(),
-            oid: repository.commit.as_deref(),
-        },
-        Documents {
-            first: LEGACY_INVENTORY_QUERY,
-            next: LEGACY_INVENTORY_QUERY,
-            refs: LEGACY_INVENTORY_QUERY,
-            issues: LEGACY_INVENTORY_QUERY,
-            last: None,
-            ref_query: false,
-        },
-    )
-    .await
 }
 /// The receipt set a full write leaves behind, emptied: enough state for
 /// the read to take the prefix walk without a real write. For tests and
@@ -1345,6 +1264,19 @@ pub async fn seed_receipts(cache: &Cache, repository: &str, config: &Config) -> 
         .await
         .map_err(Error::Cache)?;
     mark_prefix(cache, repository, &config.prs.branch).await
+}
+/// The write receipts `repository` holds under the branch `prefix`, as
+/// JSON. For tests that inspect what a run stored.
+#[cfg(feature = "testing")]
+pub async fn stored_receipts(
+    cache: &Cache,
+    repository: &str,
+    prefix: &str,
+) -> Result<Option<Value>, Error> {
+    Ok(cache
+        .state::<Receipts>(&receipts_scope(repository, prefix))
+        .await?
+        .map(|receipts| serde_json::to_value(receipts).expect("serializable receipts")))
 }
 /// One connection's walk: the last cursor sent, the cursors already seen
 /// (a repeat fails rather than looping) and the nodes gathered so far.
@@ -1400,10 +1332,9 @@ pub async fn restore_inventory(
         Some(receipts) => receipts,
         None => Receipts::default(),
     };
-    if (receipts.writes.is_empty() && receipts.closed.is_empty() || receipts.closed.len() > 100)
-        && plans
-            .iter()
-            .any(|p| p.action().status == BranchStatus::Planned)
+    if (receipts.writes.is_empty() && receipts.closed.is_empty()
+        || receipts.closed.len() > CLOSED_RECEIPTS)
+        && pending
     {
         return Ok(not_restored(repository, plans, "unusable-receipts"));
     }
@@ -1441,7 +1372,7 @@ pub async fn restore_inventory(
             && matches!(&r.target, Some(RefTarget::Commit(c))
                 if c.author.as_ref().and_then(|a| a.user.as_ref()).is_some_and(|u| u.login == actor)
                     && (c.committer.as_ref().and_then(|a| a.user.as_ref())
-                        .is_some_and(|u| u.login == actor || u.login == "web-flow"))
+                        .is_some_and(|u| u.login == actor || u.login == crate::cleanup::WEB_FLOW))
                     && c.signature.as_ref().is_some_and(|s| s.is_valid)
                     && (name.starts_with(&config.prs.branch)
                         || crate::trailers::version(&c.message)))
@@ -1454,38 +1385,16 @@ pub async fn restore_inventory(
         let result = if plan.retry() {
             Err("checkbox-recheck")
         } else if let Some(receipt) = receipts.closed.get(&plan.action().branch) {
-            if receipt.actor != actor {
-                Err("actor-mismatch")
-            } else if receipt.intent != intent(plan, config, recheck, server) {
-                Err("intent-changed")
-            } else if !closed.items.iter().flatten().any(|pr| match pr {
-                ClosedNode::PullRequest(pr) => {
-                    receipt.pr["node_id"].as_str() == Some(pr.id.as_str())
-                        && pr.state == PullRequestState::CLOSED
-                        && !pr.merged
-                        && crate::pr::body::body_hash(&pr.body)
-                            == crate::pr::body::body_hash(receipt.pr["body"].as_str().unwrap_or(""))
-                        && pr.author.as_ref().map(actor_login).as_deref() == Some(actor)
-                        && pr.head_repository.as_ref().is_some_and(|r| {
-                            crate::pull_requests::same_repository(
-                                &r.name_with_owner,
-                                &repository.repository,
-                            )
-                        })
-                        && pr.base_repository.as_ref().is_some_and(|r| {
-                            crate::pull_requests::same_repository(
-                                &r.name_with_owner,
-                                &repository.repository,
-                            )
-                        })
-                }
-                _ => false,
-            }) {
-                Err("pr-state-changed")
-            } else {
-                plan.hold(crate::plan::Hold::ClosedByOwner);
-                Ok(())
-            }
+            restore_closed(
+                receipt,
+                closed,
+                &repository.repository,
+                actor,
+                plan,
+                config,
+                recheck,
+                server,
+            )
         } else {
             restore_write(&receipts, refs, actor, plan, config, recheck, server)
         };
@@ -1526,6 +1435,49 @@ pub async fn restore_inventory(
     } else {
         RestoreOutcome::Partial
     })
+}
+
+/// Settle `plan` from its closed receipt: the PR the owner closed is still
+/// closed, unmerged and unchanged, so the plan stays held.
+#[allow(clippy::too_many_arguments)]
+fn restore_closed(
+    receipt: &ClosedReceipt,
+    closed: &Page<ClosedNode>,
+    repository: &str,
+    actor: &str,
+    plan: &mut Plan,
+    config: &Config,
+    recheck: Recheck,
+    server: Option<&str>,
+) -> Result<(), &'static str> {
+    if receipt.actor != actor {
+        return Err("actor-mismatch");
+    }
+    if receipt.intent != intent(plan, config, recheck, server) {
+        return Err("intent-changed");
+    }
+    let same_repository = |r: &Option<NamedRepository>| {
+        r.as_ref()
+            .is_some_and(|r| crate::pull_requests::same_repository(&r.name_with_owner, repository))
+    };
+    let unchanged = closed.items.iter().flatten().any(|pr| match pr {
+        ClosedNode::PullRequest(pr) => {
+            receipt.pr["node_id"].as_str() == Some(pr.id.as_str())
+                && pr.state == PullRequestState::CLOSED
+                && !pr.merged
+                && crate::pr::body::body_hash(&pr.body)
+                    == crate::pr::body::body_hash(receipt.pr["body"].as_str().unwrap_or(""))
+                && pr.author.as_ref().map(actor_login).as_deref() == Some(actor)
+                && same_repository(&pr.head_repository)
+                && same_repository(&pr.base_repository)
+        }
+        _ => false,
+    });
+    if !unchanged {
+        return Err("pr-state-changed");
+    }
+    plan.hold(crate::plan::Hold::ClosedByOwner);
+    Ok(())
 }
 
 fn restore_write(
@@ -1641,21 +1593,13 @@ pub async fn save_receipts(
                 },
             );
         }
-        if !matches!(
-            plan.action().status,
-            BranchStatus::Created
-                | BranchStatus::Updated
-                | BranchStatus::Rebased
-                | BranchStatus::Unchanged
-        ) || plan.action().verified != Some(true)
+        // A body with a retryable release-notes failure is not settled:
+        // without a receipt the next run renders it, and fetches, again.
+        if lifecycle.unsettled(plan)
+            || !crate::pull_requests::published(plan.action().status)
+            || plan.action().verified != Some(true)
             || !lifecycle.actions.iter().any(|a| {
-                a.branch == plan.action().branch
-                    && matches!(
-                        a.status,
-                        patchula_report::PullRequestStatus::Created
-                            | patchula_report::PullRequestStatus::Updated
-                            | patchula_report::PullRequestStatus::Unchanged
-                    )
+                a.branch == plan.action().branch && crate::pull_requests::pr_published(a.status)
             })
         {
             continue;

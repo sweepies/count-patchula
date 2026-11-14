@@ -3,7 +3,7 @@ use crate::error::Error;
 use crate::{
     Inventory, Plan,
     pr::body::body_hash,
-    pull_requests::{Tracked, body, owned_pr},
+    pull_requests::{MergeNote, Tracked, body, merge_requested, owned_pr},
 };
 use chrono::{DateTime, Utc};
 use patchula_cache::{Cache, State};
@@ -16,9 +16,8 @@ use serde_json::{Value, json};
 /// One auto-merge history row: the fields the dashboard's merged section,
 /// the server's public page and [`merged`] read, persisted under
 /// `auto-merge-history` v1. Every field is `Option` so a row missing any
-/// of them still decodes the way the old full-REST rows did; a row that
-/// is not an object at all is dropped at decode, as invisible as the
-/// fieldless `Value` it was before.
+/// of them still decodes; a row that is not an object at all is dropped
+/// at decode.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MergedPr {
     /// `number` — rows dedupe and sort by it.
@@ -62,7 +61,7 @@ struct History {
     prs: Vec<MergedPr>,
 }
 /// Element-wise row decode: a row that fails is invisible, never fatal to
-/// the rest — the same leeway `Vec<Value>` gave.
+/// the rest.
 fn merged_prs<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<MergedPr>, D::Error> {
@@ -71,41 +70,20 @@ fn merged_prs<'de, D: serde::Deserializer<'de>>(
         .filter_map(|row| MergedPr::deserialize(row).ok())
         .collect())
 }
-#[derive(Serialize)]
-struct HistoryScope {
-    repository: String,
-}
-fn history_scope(repo: &str) -> HistoryScope {
-    HistoryScope {
-        repository: repo.into(),
-    }
-}
 impl State for History {
     const NAMESPACE: &'static str = "auto-merge-history";
     const VERSION: u32 = 1;
-    type Scope = HistoryScope;
+    type Scope = patchula_cache::RepositoryScope;
 }
-pub(crate) async fn load_history(
-    cache: &Cache,
-    repo: &str,
-    actor: &str,
-) -> Result<Vec<MergedPr>, Error> {
+/// The PRs `actor` last recorded merging in `repo`, oldest first, at most
+/// 20. History another actor recorded is none of `actor`'s.
+pub async fn merged(cache: &Cache, repo: &str, actor: &str) -> Result<Vec<MergedPr>, Error> {
     Ok(cache
-        .state::<History>(&history_scope(repo))
+        .state::<History>(&crate::repository_scope(repo))
         .await?
         .filter(|h| h.actor == actor)
         .map(|h| h.prs)
         .unwrap_or_default())
-}
-/// The PRs the Count last recorded merging in `repo`, oldest first, at most 20.
-pub async fn merged(cache: &Cache, repo: &str) -> Vec<MergedPr> {
-    cache
-        .state::<History>(&history_scope(repo))
-        .await
-        .ok()
-        .flatten()
-        .map(|h| h.prs)
-        .unwrap_or_default()
 }
 async fn save_history(
     cache: &Cache,
@@ -133,7 +111,7 @@ async fn save_history(
     }
     Ok(cache
         .set_state(
-            &history_scope(repo),
+            &crate::repository_scope(repo),
             &History {
                 actor: inventory.actor.clone(),
                 prs,
@@ -205,9 +183,6 @@ impl Settings {
             delete_branch: repo.delete_branch_on_merge == Some(true),
         }
     }
-}
-pub(crate) fn requested(plan: &Plan, config: &Config) -> bool {
-    crate::pull_requests::merge_requested(plan, &config.defaults)
 }
 fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
     if repo.degraded() {
@@ -282,8 +257,7 @@ async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, Error> {
             |_| false,
         )
         .await?;
-    // A null or unreadable context node reads as not-green, as it did when
-    // the nodes were `Value`s without a `__typename`.
+    // A null or unreadable context node reads as not-green.
     Ok(!checks.is_empty()
         && checks.iter().all(|c| match c {
             Some(ChecksContext::CheckRun(run)) => {
@@ -385,12 +359,12 @@ async fn one(
     inventory: &Inventory,
     repo: &Repository,
     pr: &mut Tracked,
-) -> Result<(PullRequestStatus, String), Error> {
+) -> Result<(PullRequestStatus, MergeNote), Error> {
     let head_oid = json!(pr.pr.head.sha);
     if pr.pr.base.branch != repo.default_branch.as_deref().unwrap_or_default() {
         return Ok((
             PullRequestStatus::Protected,
-            "auto-merge blocked: PR no longer targets the default branch".into(),
+            MergeNote::Reason("auto-merge blocked: PR no longer targets the default branch".into()),
         ));
     }
     let settings = &inventory.merge_settings;
@@ -406,10 +380,7 @@ async fn one(
             pr.set_auto_merge(true);
         }
         if pr.pr.auto_merge.is_some() {
-            return Ok((
-                PullRequestStatus::Unchanged,
-                "native auto-merge enabled".into(),
-            ));
+            return Ok((PullRequestStatus::Unchanged, MergeNote::Native));
         }
     }
     let number = pr.pr.number;
@@ -419,7 +390,7 @@ async fn one(
     if !same_head(&fresh, &pr.pr, &inventory.actor, &repo.repository) {
         return Ok((
             PullRequestStatus::Protected,
-            "auto-merge blocked: ownership or receipt head changed".into(),
+            MergeNote::Reason("auto-merge blocked: ownership or receipt head changed".into()),
         ));
     }
     if fresh.draft != Some(false)
@@ -428,14 +399,16 @@ async fn one(
     {
         return Ok((
             PullRequestStatus::Skipped,
-            "auto-merge waiting: GitHub mergeability/protection is not clean".into(),
+            MergeNote::Reason(
+                "auto-merge waiting: GitHub mergeability/protection is not clean".into(),
+            ),
         ));
     }
     if !green(client, &repo.repository, &head).await? {
         return Ok((
             PullRequestStatus::Skipped,
-            "auto-merge waiting: at least one check is required and all checks/statuses must pass"
-                .into(),
+            MergeNote::Reason("auto-merge waiting: at least one check is required and all checks/statuses must pass"
+                .into()),
         ));
     }
     // Recheck ownership/protections after pagination, then use a head lease on the
@@ -448,7 +421,7 @@ async fn one(
     {
         return Ok((
             PullRequestStatus::Protected,
-            "auto-merge blocked: PR changed during check inspection".into(),
+            MergeNote::Reason("auto-merge blocked: PR changed during check inspection".into()),
         ));
     }
     let result = client
@@ -460,7 +433,7 @@ async fn one(
     if !result.merged {
         return Ok((
             PullRequestStatus::Skipped,
-            "auto-merge refused by GitHub; retry on a later run".into(),
+            MergeNote::Reason("auto-merge refused by GitHub; retry on a later run".into()),
         ));
     }
     let mut reason = format!("merged by patchula ({method}); all current-head checks passed");
@@ -487,7 +460,7 @@ async fn one(
     }
     // The cached PR keeps GitHub's shape: merged_at is when it merged.
     pr.mark_merged(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    Ok((PullRequestStatus::Merged, reason))
+    Ok((PullRequestStatus::Merged, MergeNote::Reason(reason)))
 }
 
 /// Only `cached_pr` restored from a prior verified receipt is eligible. A newly
@@ -503,37 +476,38 @@ pub async fn reconcile(
 ) -> Vec<PullRequestAction> {
     let mut actions = Vec::new();
     for plan in plans.iter_mut() {
-        if !requested(plan, config) || plan.action().status != BranchStatus::Unchanged {
+        if !merge_requested(plan, &config.defaults)
+            || plan.action().status != BranchStatus::Unchanged
+        {
             continue;
         }
         let Some(pr) = plan.restored_pr_mut() else {
             continue;
         };
+        let (number, url) = (pr.pr.number, pr.pr.html_url.clone());
         // Check policy independently of manual create/schedule/age permits.
-        let proof = pr.clone();
         let allowed = policy_allows(repo, plan, now);
         let pr = plan.restored_pr_mut().expect("restored receipt");
-        let (status, reason) = if !allowed {
-            (PullRequestStatus::Skipped, "auto-merge waiting: release age, schedule or lookup evidence does not permit merging".into())
+        let (status, note) = if !allowed {
+            (PullRequestStatus::Skipped, MergeNote::Reason("auto-merge waiting: release age, schedule or lookup evidence does not permit merging".into()))
         } else {
             one(client, inventory, repo, pr).await.unwrap_or_else(|e| {
                 (
                     crate::pull_requests::failure_status(&e),
-                    format!("auto-merge: {e}"),
+                    MergeNote::Reason(format!("auto-merge: {e}")),
                 )
             })
         };
-        pr.set_merge_note(Some(crate::pull_requests::MergeNote::Reason(
-            reason.clone(),
-        )));
+        let reason = note.text().to_owned();
+        pr.set_merge_note(Some(note));
         if status == PullRequestStatus::Merged {
             plan.merged();
         }
         actions.push(PullRequestAction {
             repository: repo.repository.clone(),
             branch: plan.action().branch.clone(),
-            number: Some(proof.pr.number),
-            url: Some(proof.pr.html_url.clone()),
+            number: Some(number),
+            url: Some(url),
             status,
             reason: Some(reason),
         });
@@ -563,7 +537,7 @@ pub async fn reconcile(
 
 /// The dashboard's PR lists: the live pulls it renders, and the merged
 /// rows beside them — live merged PRs, recorded history and cached
-/// merges, deduplicated by number exactly as the combined list was.
+/// merges, deduplicated by number.
 pub fn dashboard_history(inventory: &Inventory, prs: Vec<Tracked>, plans: &[Plan]) -> DashboardPrs {
     // Untracked historical/native merges are not presented as fallback outcomes.
     let mut open: Vec<_> = prs
@@ -618,8 +592,8 @@ mod tests {
         serde_json::from_value(pull_request_json(number)).expect("a complete REST pull request")
     }
 
-    /// A row written before `MergedPr` — a whole REST pull object with the
-    /// `patchula_merge` key smuggled in — decodes into the same row.
+    /// A row stored as a whole REST pull object with a `patchula_merge` key
+    /// decodes into the same row.
     #[tokio::test]
     async fn history_rows_written_as_rest_pulls_still_decode() {
         #[derive(Serialize, Deserialize)]
@@ -630,12 +604,12 @@ mod tests {
         impl State for OldHistory {
             const NAMESPACE: &'static str = "auto-merge-history";
             const VERSION: u32 = 1;
-            type Scope = HistoryScope;
+            type Scope = patchula_cache::RepositoryScope;
         }
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         cache
             .set_state(
-                &history_scope("o/r"),
+                &crate::repository_scope("o/r"),
                 &OldHistory {
                     actor: "patchula[bot]".into(),
                     prs: vec![
@@ -649,14 +623,21 @@ mod tests {
                                 "repo":{"full_name":"o/r"}},
                             "base":{"ref":"main","repo":{"full_name":"o/r"}}}),
                         // A row that is not an object is invisible, never
-                        // fatal — the same leeway `Vec<Value>` gave.
+                        // fatal.
                         json!("not a pull request"),
                     ],
                 },
             )
             .await
             .unwrap();
-        let rows = merged(&cache, "o/r").await;
+        // Another actor's history is none of this one's.
+        assert!(
+            merged(&cache, "o/r", "renovate[bot]")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let rows = merged(&cache, "o/r", "patchula[bot]").await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].number, Some(42));
         assert_eq!(rows[0].title.as_deref(), Some("chore(deps): bump serde"));
@@ -684,7 +665,7 @@ mod tests {
             patchula_words::Recheck::NextRun,
             None,
         );
-        // The line the old `Vec<Value>` rendering produced for this row.
+        // The merged section's line for this row.
         assert!(
             text.contains("- #42: chore(deps): bump serde — merged by patchula (squash)\n"),
             "{text}"

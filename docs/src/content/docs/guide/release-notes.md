@@ -118,6 +118,19 @@ out. The package then gets one notice, linking to upstream's release history:
 either "the Count left some release notes out", or, when upstream's own history
 couldn't be read in full, "these release notes may be incomplete".
 
+When fetching a package's notes fails, the Count settles the body only if the
+failure would repeat every run: an unsafe package name, a registry or upstream
+that does not know the package or release, or an upstream answer the notes
+cannot use. If the source repository was never found, the section reads
+"release notes unavailable: source repository could not be resolved"; if it was
+found but its notes could not be read, the section says so and links the
+source. Any other failure (the network, a timeout, a server error, a rate limit,
+a refused credential, the Count's own cache) may pass, so the section says the
+Count could not read the notes this run. The PR body is then not treated as
+settled: the run keeps no write receipt for that branch, so the next run renders
+the body again, fetches the notes again and rewrites it. A host that no longer
+resolves counts as a network failure, so such a PR retries its notes every run.
+
 Two edits keep upstream text from making noise:
 
 - `@mentions` in upstream prose get a zero-width joiner after the `@`, so

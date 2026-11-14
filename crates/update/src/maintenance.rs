@@ -52,7 +52,10 @@ pub fn maintenance(
         BranchAction {
             repository: repository.repository.clone(),
             branch: branch_name(&config.prs.branch, "lock-file-maintenance")?,
-            base_commit: repository.commit.clone().ok_or(PlanError::MissingBase)?,
+            base_commit: repository
+                .commit
+                .clone()
+                .ok_or(PlanError::MissingExtractionCommit)?,
             status: BranchStatus::Planned,
             reason: None,
             message: format!("{} lock file maintenance", config.defaults.commit_prefix),
@@ -81,10 +84,9 @@ impl State for MaintenanceSuccess {
     const VERSION: u32 = 1;
     type Scope = patchula_cache::RepositoryScope;
 }
+/// The scope [`MaintenanceSuccess`] is kept under.
 pub fn refresh_scope(repo: &str) -> patchula_cache::RepositoryScope {
-    patchula_cache::RepositoryScope {
-        repository: repo.into(),
-    }
+    crate::repository_scope(repo)
 }
 pub async fn defer_completed_refresh(
     cache: &patchula_cache::Cache,
@@ -119,13 +121,7 @@ pub async fn record_refresh(
     {
         if plan.held(&Hold::LockfilesCurrent)
             || actions.iter().any(|a| {
-                a.branch == plan.action().branch
-                    && matches!(
-                        a.status,
-                        patchula_report::PullRequestStatus::Created
-                            | patchula_report::PullRequestStatus::Updated
-                            | patchula_report::PullRequestStatus::Unchanged
-                    )
+                a.branch == plan.action().branch && crate::pull_requests::pr_published(a.status)
             })
         {
             cache

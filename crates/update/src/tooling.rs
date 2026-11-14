@@ -116,14 +116,14 @@ impl Filter {
 #[derive(Clone, Debug)]
 struct Patterns(Vec<(bool, GlobMatcher)>);
 impl Patterns {
-    fn parse(value: &Yaml) -> Result<Self, ()> {
+    fn parse(value: &Yaml) -> Result<Self, Unknown> {
         let items = match value {
             Yaml::String(s) => vec![s.as_str()],
             Yaml::Sequence(items) => items
                 .iter()
-                .map(|i| i.as_str().ok_or(()))
+                .map(|i| i.as_str().ok_or(Unknown))
                 .collect::<Result<_, _>>()?,
-            _ => return Err(()),
+            _ => return Err(Unknown),
         };
         items
             .into_iter()
@@ -136,7 +136,7 @@ impl Patterns {
                     .literal_separator(true)
                     .build()
                     .map(|g| (negated, g.compile_matcher()))
-                    .map_err(|_| ())
+                    .map_err(|_| Unknown)
             })
             .collect::<Result<_, _>>()
             .map(Self)
@@ -173,9 +173,14 @@ fn key<'a>(map: &'a Mapping, name: &str) -> Option<&'a Yaml> {
         .map(|(_, v)| v)
 }
 
-fn workflow(path: &str, text: &str, branch: &str) -> Result<Workflow, ()> {
-    let document: Yaml = serde_yaml_ng::from_str(text).map_err(|_| ())?;
-    let map = document.as_mapping().ok_or(())?;
+/// A file the Count cannot read with certainty: what it would say is
+/// unknown, and the caller assumes the worst.
+#[derive(Debug)]
+struct Unknown;
+
+fn workflow(path: &str, text: &str, branch: &str) -> Result<Workflow, Unknown> {
+    let document: Yaml = serde_yaml_ng::from_str(text).map_err(|_| Unknown)?;
+    let map = document.as_mapping().ok_or(Unknown)?;
     let mut result = Workflow {
         name: key(map, "name")
             .and_then(Yaml::as_str)
@@ -183,11 +188,11 @@ fn workflow(path: &str, text: &str, branch: &str) -> Result<Workflow, ()> {
             .to_owned(),
         ..Default::default()
     };
-    let events: Vec<(&str, Option<&Mapping>)> = match key(map, "on").ok_or(())? {
+    let events: Vec<(&str, Option<&Mapping>)> = match key(map, "on").ok_or(Unknown)? {
         Yaml::String(event) => vec![(event.as_str(), None)],
         Yaml::Sequence(events) => events
             .iter()
-            .map(|e| e.as_str().map(|e| (e, None)).ok_or(()))
+            .map(|e| e.as_str().map(|e| (e, None)).ok_or(Unknown))
             .collect::<Result<_, _>>()?,
         Yaml::Mapping(events) => events
             .iter()
@@ -196,10 +201,10 @@ fn workflow(path: &str, text: &str, branch: &str) -> Result<Workflow, ()> {
                     Yaml::Mapping(m) => Some(m),
                     _ => None,
                 };
-                k.as_str().map(|k| (k, config)).ok_or(())
+                k.as_str().map(|k| (k, config)).ok_or(Unknown)
             })
             .collect::<Result<_, _>>()?,
-        _ => return Err(()),
+        _ => return Err(Unknown),
     };
     for (event, config) in events {
         let filter = |name: &str| {
@@ -231,10 +236,10 @@ fn workflow(path: &str, text: &str, branch: &str) -> Result<Workflow, ()> {
                 Some(Yaml::String(name)) => result.after.push(name.clone()),
                 Some(Yaml::Sequence(names)) => {
                     for name in names {
-                        result.after.push(name.as_str().ok_or(())?.to_owned());
+                        result.after.push(name.as_str().ok_or(Unknown)?.to_owned());
                     }
                 }
-                Some(_) => return Err(()),
+                Some(_) => return Err(Unknown),
                 None => {}
             },
             "push" => {
@@ -269,28 +274,28 @@ fn workflow(path: &str, text: &str, branch: &str) -> Result<Workflow, ()> {
 
 /// Whether a Woodpecker pipeline runs on pull requests, and on pushes to the
 /// default branch.
-fn pipeline(text: &str, branch: &str) -> Result<(bool, bool), ()> {
-    let document: Yaml = serde_yaml_ng::from_str(text).map_err(|_| ())?;
-    let map = document.as_mapping().ok_or(())?;
+fn pipeline(text: &str, branch: &str) -> Result<(bool, bool), Unknown> {
+    let document: Yaml = serde_yaml_ng::from_str(text).map_err(|_| Unknown)?;
+    let map = document.as_mapping().ok_or(Unknown)?;
     let conditions = match key(map, "when") {
         None => return Ok((true, true)),
         Some(Yaml::Sequence(items)) => items.iter().collect(),
         Some(when @ Yaml::Mapping(_)) => vec![when],
-        Some(_) => return Err(()),
+        Some(_) => return Err(Unknown),
     };
     let mut result = (false, false);
     for condition in conditions {
-        let condition = condition.as_mapping().ok_or(())?;
+        let condition = condition.as_mapping().ok_or(Unknown)?;
         let events: Option<Vec<&str>> = match key(condition, "event") {
             None => None,
             Some(Yaml::String(e)) => Some(vec![e.as_str()]),
             Some(Yaml::Sequence(items)) => Some(
                 items
                     .iter()
-                    .map(|i| i.as_str().ok_or(()))
+                    .map(|i| i.as_str().ok_or(Unknown))
                     .collect::<Result<_, _>>()?,
             ),
-            Some(_) => return Err(()),
+            Some(_) => return Err(Unknown),
         };
         let on = |event: &str| events.as_ref().is_none_or(|e| e.contains(&event));
         let matches = match key(condition, "branch") {
@@ -317,7 +322,7 @@ impl Evidence {
     pub fn read(snapshot: &Snapshot, branch: &str, inventory: &Inventory) -> Self {
         let (ci, delivery) = match files(snapshot, branch) {
             Ok((ci, delivery)) => (Some(ci), delivery),
-            Err(()) => (None, None),
+            Err(Unknown) => (None, None),
         };
         let branch = &inventory.default_branch;
         let branch_checks = branch
@@ -379,12 +384,12 @@ pub fn manifest(path: &str) -> bool {
 /// files and GitOps manifests. An unreadable workflow makes both unknown, and
 /// so does a YAML file that was never fetched, unless something else already
 /// ships every change: it could be a manifest.
-fn files(snapshot: &Snapshot, branch: &str) -> Result<(Ci, Option<Delivery>), ()> {
+fn files(snapshot: &Snapshot, branch: &str) -> Result<(Ci, Option<Delivery>), Unknown> {
     let mut ci = Ci::default();
     let mut delivery = Delivery::default();
     let mut workflows = Vec::new();
     for path in snapshot.paths.iter().filter(|p| reads(p)) {
-        let text = &snapshot.files.get(path).ok_or(())?.content;
+        let text = &snapshot.files.get(path).ok_or(Unknown)?.content;
         if woodpecker(path) {
             let (pull_requests, push) = pipeline(text, branch)?;
             ci.always |= pull_requests;
@@ -452,7 +457,7 @@ pub fn apply(
     let mut warnings = BTreeMap::<ToolingRule, ToolingWarning>::new();
     for plan in plans.iter_mut() {
         let mut callouts = Vec::new();
-        if crate::automerge::requested(plan, config) {
+        if crate::pull_requests::merge_requested(plan, &config.defaults) {
             let files: Vec<&str> = plan
                 .action()
                 .files

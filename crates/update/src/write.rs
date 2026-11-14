@@ -5,7 +5,7 @@ use futures_util::{FutureExt, StreamExt, stream};
 use patchula_config::Rebase;
 use patchula_github::{
     Client,
-    model::{Comparison, GitCommit, GitRef, Repository, Tree, TreeEntry},
+    model::{GitCommit, GitRef, Repository, Tree, TreeEntry},
 };
 use patchula_report::BranchStatus;
 use serde::Deserialize;
@@ -123,6 +123,11 @@ async fn prepare(
     })
 }
 
+/// The branches prepared at once, below the client's own concurrency.
+const PARALLEL_WRITES: usize = 4;
+/// The branch refs one `updateRefs` mutation moves.
+const REFS_PER_UPDATE: usize = 50;
+
 /// Shared base validation, bounded independent branch preparation and governed writes.
 /// `actor` is the run's one viewer login, read with the inventory. Dry runs
 /// end at the pure planner and send no GitHub requests here.
@@ -184,14 +189,14 @@ pub async fn apply_all(
         })
         .collect();
     stream::iter(writes)
-        .buffer_unordered(client.concurrency().min(4))
+        .buffer_unordered(client.concurrency().min(PARALLEL_WRITES))
         .collect::<Vec<_>>()
         .await;
     if let Ok(base) = &base {
-        // Bound each atomic mutation to fifty branch refs. The default branch is
-        // never named: rulesets that require pull requests reject even a no-op
-        // update of it.
-        for chunk in plans.chunks_mut(50) {
+        // Bound each atomic mutation to `REFS_PER_UPDATE` branch refs. The
+        // default branch is never named: rulesets that require pull requests
+        // reject even a no-op update of it.
+        for chunk in plans.chunks_mut(REFS_PER_UPDATE) {
             let eligible = |p: &Plan| {
                 pending.contains(&p.action().branch)
                     && matches!(
@@ -201,7 +206,7 @@ pub async fn apply_all(
             };
             let mut refs = Vec::new();
             for p in chunk.iter().filter(|p| eligible(p)) {
-                refs.push(json!({"name":format!("refs/heads/{}",p.action().branch),"beforeOid":p.action().previous_commit.as_deref().unwrap_or("0000000000000000000000000000000000000000"),"afterOid":p.action().commit,"force":true}));
+                refs.push(json!({"name":format!("refs/heads/{}",p.action().branch),"beforeOid":p.action().previous_commit.as_deref().unwrap_or(crate::cleanup::ZERO_OID),"afterOid":p.action().commit,"force":true}));
             }
             if refs.is_empty() {
                 continue;
@@ -311,17 +316,9 @@ async fn apply_inner(
             plan.protect("invalid recorded branch base; left untouched");
             return Ok(());
         };
-        let compare = match client
-            .get_fresh::<Comparison>(&format!(
-                "repos/{repo}/compare/{recorded}...{old}?per_page=100"
-            ))
-            .await
-        {
-            Err(patchula_github::Error::Status(404 | 422)) => {
-                plan.protect("recorded branch base is not a commit here; left untouched");
-                return Ok(());
-            }
-            result => result?,
+        let Some(compare) = crate::cleanup::compare(client, &repo, recorded, old).await? else {
+            plan.protect("recorded branch base is not a commit here; left untouched");
+            return Ok(());
         };
         let commits = &compare.commits;
         let total = compare.total_commits;
@@ -406,9 +403,9 @@ async fn apply_inner(
         .await?;
     let tree = tree.sha;
     let pending = if plan.action().lockfile_pending {
-        "\n\nLockfile pending: manifest-only test branch; regenerate before merging."
+        format!("\n\nLockfile pending: {}.", crate::plan::PENDING_BRANCH)
     } else {
-        ""
+        String::new()
     };
     let message = format!(
         "{}{}\n\n{}",

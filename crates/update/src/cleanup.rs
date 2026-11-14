@@ -22,6 +22,12 @@ pub(crate) fn recorded_base(message: &str) -> Option<&str> {
     })
 }
 
+/// The committer GitHub records for a commit it signed on the author's
+/// behalf.
+pub(crate) const WEB_FLOW: &str = "web-flow";
+/// The object ID a ref update names for a ref that does not exist.
+pub(crate) const ZERO_OID: &str = "0000000000000000000000000000000000000000";
+
 /// Whether every commit is the Count's own: by `actor`, verified and marked.
 pub(crate) fn all_ours(commits: &[Commit], actor: &str) -> bool {
     !commits.is_empty()
@@ -30,7 +36,7 @@ pub(crate) fn all_ours(commits: &[Commit], actor: &str) -> bool {
             c.author.as_ref().is_some_and(|a| a.login == actor)
                 && c.committer
                     .as_ref()
-                    .is_some_and(|a| a.login == actor || a.login == "web-flow")
+                    .is_some_and(|a| a.login == actor || a.login == WEB_FLOW)
                 && c.commit.verification.as_ref().is_some_and(|v| v.verified)
                 && trailers::version(message)
                 && trailers::branch(message).is_some()
@@ -58,6 +64,25 @@ impl State for NotOurs {
     type Scope = NotOursScope;
 }
 
+/// The commits from `base` to `head`, at most one page of them; `None`
+/// when GitHub cannot compare the two (404 or 422).
+pub(crate) async fn compare(
+    client: &Client,
+    repo: &str,
+    base: &str,
+    head: &str,
+) -> Result<Option<Comparison>, Error> {
+    match client
+        .get_fresh::<Comparison>(&format!(
+            "repos/{repo}/compare/{base}...{head}?per_page=100"
+        ))
+        .await
+    {
+        Err(patchula_github::Error::Status(404 | 422)) => Ok(None),
+        result => Ok(Some(result?)),
+    }
+}
+
 /// The compare and signature checks of [`owned`], once the tip's recorded
 /// base is known — from a fresh tip read, or from the inventory's copy of
 /// the same commit.
@@ -68,16 +93,10 @@ async fn proven(
     head: &str,
     actor: &str,
 ) -> Result<bool, Error> {
-    let history = match client
-        .get_fresh::<Comparison>(&format!(
-            "repos/{repo}/compare/{base}...{head}?per_page=100"
-        ))
-        .await
-    {
-        // A recorded base GitHub cannot compare is no evidence of ownership:
-        // the branch is not the Count's, and the run carries on.
-        Err(patchula_github::Error::Status(404 | 422)) => return Ok(false),
-        result => result?,
+    // A recorded base GitHub cannot compare is no evidence of ownership:
+    // the branch is not the Count's, and the run carries on.
+    let Some(history) = compare(client, repo, base, head).await? else {
+        return Ok(false);
     };
     Ok(history.total_commits == history.commits.len() as u64
         && history.commits.last().is_some_and(|c| c.sha == head)
@@ -114,7 +133,7 @@ enum Probe {
 /// branch still points at the commit the inventory saw, and `not-ours` state
 /// answers heads seen before. The rest are probed eight at a time, while
 /// deletions stay in list order, one at a time, and stop at the first failed
-/// probe, so the outcome on an error is unchanged. `inventory.actor` is the
+/// probe, so an error leaves every later branch in place. `inventory.actor` is the
 /// run's one viewer login, read with the inventory. Dry runs deliberately
 /// perform no API requests.
 #[allow(clippy::too_many_arguments)]
@@ -271,7 +290,7 @@ pub async fn delete_owned(
         return Err(Error::Refused("refusing to delete default branch".into()));
     }
     let result = client.graphql::<crate::write::RefUpdates>(REF_UPDATE, json!({"input":{"repositoryId":node,"refUpdates":[
-        {"name":format!("refs/heads/{branch}"),"beforeOid":head,"afterOid":"0000000000000000000000000000000000000000","force":true}
+        {"name":format!("refs/heads/{branch}"),"beforeOid":head,"afterOid":ZERO_OID,"force":true}
     ]}})).await?;
     if result.update_refs.is_none() {
         return Err(Error::Refused("missing deletion acknowledgement".into()));

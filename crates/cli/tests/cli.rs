@@ -296,7 +296,10 @@ fn server_startup_errors_are_json_and_never_echo_secret_values() {
     assert!(!stderr.contains("must-not-appear"));
     let log: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
     assert_eq!(log["level"], "ERROR");
-    assert_eq!(log["fields"]["error"], "invalid GitHub App credentials");
+    assert_eq!(
+        log["fields"]["error"],
+        "invalid GitHub App credentials: invalid GitHub client options or token"
+    );
 }
 
 #[test]

@@ -10,21 +10,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// The write receipts patchula_update stores, read through the same
-/// namespace and scope.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Receipts(Value);
-#[derive(serde::Serialize)]
-struct ReceiptsScope {
-    repository: String,
-    branch_prefix: String,
-}
-impl patchula_cache::State for Receipts {
-    const NAMESPACE: &'static str = "verified-write-receipts";
-    const VERSION: u32 = 1;
-    type Scope = ReceiptsScope;
-}
-
 /// A `demo/sandbox` GitHub holding the files every run starts with, behind
 /// a router scripting the npm registry and OSV. Three pull requests exist:
 /// `owner-closed-a` and `owner-closed-b` are closed, the third is an open
@@ -165,15 +150,10 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
         let cache = Cache::open_dir(&cache_path, Default::default())
             .await
             .unwrap();
-        let receipts = cache
-            .state::<Receipts>(&ReceiptsScope {
-                repository: "demo/sandbox".into(),
-                branch_prefix: "patchula/".into(),
-            })
+        let receipts = patchula_update::stored_receipts(&cache, "demo/sandbox", "patchula/")
             .await
             .unwrap()
-            .expect("CLI must persist receipts before returning")
-            .0;
+            .expect("CLI must persist receipts before returning");
         assert_eq!(receipts["writes"].as_object().unwrap().len(), 1);
         assert_eq!(receipts["closed"].as_object().unwrap().len(), 2);
         drop(cache);

@@ -20,24 +20,19 @@ pub struct Outcome {
 /// CLI: a hung git cannot stall copier forever. Callers run inside the
 /// binary's Tokio runtime, so the future is blocked on here.
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = futures_executor::block_on(patchula_process::SystemExecutor.run(
-        patchula_process::CommandSpec {
-            program: "git".into(),
-            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
-            cwd: dir.to_owned(),
-            env: std::env::vars_os().collect(),
-            secrets: Vec::new(),
-            timeout: crate::GIT_TIMEOUT,
-            output_limit: 1 << 24,
-            complete_output: true,
-        },
-    ))
-    .map_err(|failure| match failure {
-        patchula_process::Failure::Exited { stderr, .. } => {
-            format!("copier needs a git checkout: {}", stderr.trim())
-        }
-        failure => format!("copier needs git to check the working tree: {failure}"),
-    })?;
+    let output =
+        futures_executor::block_on(patchula_process::SystemExecutor.run(crate::git_command(
+            dir.to_owned(),
+            args,
+            std::env::vars_os().collect(),
+            crate::GitOutput::Complete,
+        )))
+        .map_err(|failure| match failure {
+            patchula_process::Failure::Exited { stderr, .. } => {
+                format!("copier needs a git checkout: {}", stderr.trim())
+            }
+            failure => format!("copier needs git to check the working tree: {failure}"),
+        })?;
     Ok(String::from_utf8_lossy(&output).into_owned())
 }
 
@@ -123,20 +118,24 @@ pub fn summary(name: &str, tag: &str, outcome: &Outcome) -> String {
     )
 }
 
+/// Git with a fixed identity in `dir`, for tests that build a checkout.
+#[cfg(test)]
+pub(crate) fn test_git(dir: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    fn git(dir: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-            .args(args)
-            .current_dir(dir)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?}");
-    }
+    use super::test_git as git;
     /// A checkout with one answers file, committed, and a fake copier that
     /// records its arguments and runs `body`.
     fn checkout(body: &str) -> (tempfile::TempDir, String) {

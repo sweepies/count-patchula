@@ -89,7 +89,7 @@ pub enum MergeNote {
     Reason(String),
 }
 impl MergeNote {
-    fn text(&self) -> &str {
+    pub(crate) fn text(&self) -> &str {
         match self {
             Self::Waiting => {
                 "auto-merge waiting for a later run with a verified receipt and passing checks"
@@ -99,9 +99,28 @@ impl MergeNote {
         }
     }
 }
+/// Whether a branch with `status` holds a commit its PR publishes: the
+/// write created, updated or rebased it, or it already held the plan.
+pub(crate) fn published(status: BranchStatus) -> bool {
+    matches!(
+        status,
+        BranchStatus::Created
+            | BranchStatus::Updated
+            | BranchStatus::Rebased
+            | BranchStatus::Unchanged
+    )
+}
+/// Whether a PR action with `status` left the PR open on the plan.
+pub(crate) fn pr_published(status: patchula_report::PullRequestStatus) -> bool {
+    use patchula_report::PullRequestStatus;
+    matches!(
+        status,
+        PullRequestStatus::Created | PullRequestStatus::Updated | PullRequestStatus::Unchanged
+    )
+}
 /// A pull request as the lifecycle carries it: the decoded REST object
 /// plus the Count's own merge note, for which GitHub's object has no
-/// place. What JSON smuggled in as a `patchula_merge` key is a field now.
+/// place.
 #[derive(Clone, Debug)]
 pub struct Tracked {
     /// The pull request itself.
@@ -156,65 +175,96 @@ impl From<model::PullRequest> for Tracked {
     }
 }
 /// The fields an inventory `PullRequest` projects onto the lifecycle's
-/// `Tracked` — what the old `rest_pr` used to synthesize as a
-/// REST object. `None` when the label page is incomplete: an unverified
+/// `Tracked`. `None` when the label page is incomplete: an unverified
 /// pull must not settle.
 pub(crate) fn tracked_pr(pr: &crate::receipts::InventoryPr) -> Option<Tracked> {
     let labels = pr.labels.as_ref()?;
     if !labels.complete {
         return None;
     }
-    Some(Tracked {
-        pr: model::PullRequest {
-            node_id: pr.id.clone(),
+    Some(Tracked::from(model::PullRequest {
+        labels: labels
+            .items
+            .iter()
+            .flatten()
+            .map(|l| model::Label {
+                name: l.name.clone(),
+            })
+            .collect(),
+        auto_merge: pr
+            .auto_merge_request
+            .is_some()
+            .then_some(model::AutoMerge {}),
+        ..projected(Projected {
+            id: pr.id.clone(),
             number: pr.number as u64,
-            html_url: pr.url.clone(),
+            url: pr.url.clone(),
             state: "open".into(),
             title: pr.title.clone(),
-            body: Some(pr.body.clone()),
-            user: pr.author.as_ref().map(|actor| model::Actor {
-                login: crate::receipts::actor_login(actor),
-            }),
-            draft: None,
-            labels: labels
-                .items
-                .iter()
-                .flatten()
-                .map(|l| model::Label {
-                    name: l.name.clone(),
-                })
-                .collect(),
-            merged_at: None,
-            auto_merge: pr
-                .auto_merge_request
-                .is_some()
-                .then_some(model::AutoMerge {}),
-            mergeable: None,
-            mergeable_state: None,
-            created_at: None,
-            updated_at: None,
-            head: model::PullRequestHead {
-                branch: pr.head_ref_name.clone(),
-                sha: pr.head_ref_oid.clone(),
-                repo: pr
-                    .head_repository
-                    .as_ref()
-                    .map(|r| model::PullRequestRepository {
-                        full_name: r.name_with_owner.clone(),
-                    }),
-            },
-            base: model::PullRequestBase {
-                branch: pr.base_ref_name.clone(),
-                repo: pr
-                    .base_repository
-                    .as_ref()
-                    .map(|r| model::PullRequestRepository {
-                        full_name: r.name_with_owner.clone(),
-                    }),
-            },
+            body: pr.body.clone(),
+            author: pr.author.as_ref(),
+            head_ref_name: pr.head_ref_name.clone(),
+            head_ref_oid: pr.head_ref_oid.clone(),
+            head_repository: pr
+                .head_repository
+                .as_ref()
+                .map(|r| r.name_with_owner.clone()),
+            base_ref_name: pr.base_ref_name.clone(),
+            base_repository: pr
+                .base_repository
+                .as_ref()
+                .map(|r| r.name_with_owner.clone()),
+        })
+    }))
+}
+/// The fields both GraphQL pull request reads select, as `projected`
+/// takes them.
+struct Projected<'a> {
+    id: String,
+    number: u64,
+    url: String,
+    state: String,
+    title: String,
+    body: String,
+    author: Option<&'a crate::receipts::Actor>,
+    head_ref_name: String,
+    head_ref_oid: String,
+    head_repository: Option<String>,
+    base_ref_name: String,
+    base_repository: Option<String>,
+}
+/// A GraphQL pull request as the REST object the lifecycle reads; fields
+/// the reads do not select stay unset.
+fn projected(pr: Projected<'_>) -> model::PullRequest {
+    let repository = |full_name| model::PullRequestRepository { full_name };
+    model::PullRequest {
+        node_id: pr.id,
+        number: pr.number,
+        html_url: pr.url,
+        state: pr.state,
+        title: pr.title,
+        body: Some(pr.body),
+        user: pr.author.map(|actor| model::Actor {
+            login: crate::receipts::actor_login(actor),
+        }),
+        draft: None,
+        labels: Vec::new(),
+        merged_at: None,
+        auto_merge: None,
+        mergeable: None,
+        mergeable_state: None,
+        created_at: None,
+        updated_at: None,
+        head: model::PullRequestHead {
+            branch: pr.head_ref_name,
+            sha: pr.head_ref_oid,
+            repo: pr.head_repository.map(repository),
         },
-        merge_note: None,
-    })
+        base: model::PullRequestBase {
+            branch: pr.base_ref_name,
+            repo: pr.base_repository.map(repository),
+        },
+    }
 }
 /// `ClosedPulls.nodes[]` element — the `PullRequest` fields the closed
 /// read selects. Non-null unless the schema marks them nullable (`author`,
@@ -252,43 +302,36 @@ struct ClosedPull {
     base_repository: Option<crate::receipts::NamedRepository>,
 }
 impl ClosedPull {
-    /// The node projected onto `Tracked` the way `tracked_pr` projects the
-    /// inventory's: fields this read does not select stay unset.
+    /// The node projected onto `Tracked`: fields this read does not select
+    /// stay unset.
     fn tracked(self) -> Tracked {
         Tracked::from(model::PullRequest {
-            node_id: self.id,
-            number: self.number,
-            html_url: self.url,
-            state: self.state.to_ascii_lowercase(),
-            title: self.title,
-            body: Some(self.body),
-            user: self.author.as_ref().map(|actor| model::Actor {
-                login: crate::receipts::actor_login(actor),
-            }),
-            draft: None,
-            labels: Vec::new(),
-            merged_at: None,
-            auto_merge: None,
-            mergeable: None,
-            mergeable_state: None,
             created_at: Some(self.created_at),
-            updated_at: None,
-            head: model::PullRequestHead {
-                branch: self.head_ref_name,
-                sha: self.head_ref_oid,
-                repo: self.head_repository.map(|r| model::PullRequestRepository {
-                    full_name: r.name_with_owner,
-                }),
-            },
-            base: model::PullRequestBase {
-                branch: self.base_ref_name,
-                repo: self.base_repository.map(|r| model::PullRequestRepository {
-                    full_name: r.name_with_owner,
-                }),
-            },
+            ..projected(Projected {
+                id: self.id,
+                number: self.number,
+                url: self.url,
+                state: self.state.to_ascii_lowercase(),
+                title: self.title,
+                body: self.body,
+                author: self.author.as_ref(),
+                head_ref_name: self.head_ref_name,
+                head_ref_oid: self.head_ref_oid,
+                head_repository: self.head_repository.map(|r| r.name_with_owner),
+                base_ref_name: self.base_ref_name,
+                base_repository: self.base_repository.map(|r| r.name_with_owner),
+            })
         })
     }
 }
+/// The branches one `ClosedPulls` document asks about, one alias each.
+const CLOSED_BRANCHES: usize = 25;
+/// The closed PRs one alias' page holds: GitHub's most.
+const CLOSED_PAGE: usize = 100;
+/// How often the PR head is re-read while it lags the published commit,
+/// the wait doubling from [`HEAD_RETRY_MS`] each time.
+const HEAD_RETRIES: u32 = 6;
+const HEAD_RETRY_MS: u64 = 100;
 /// The node selection every `ClosedPulls` alias carries.
 const CLOSED_NODE: &str = "id number url title body state merged createdAt \
     headRefName headRefOid baseRefName \
@@ -338,7 +381,7 @@ async fn page_closed_branch(
     let query = format!(
         "query ClosedPulls($owner: String!, $name: String!, $b0: String!, $after: String) {{ \
             repository(owner: $owner, name: $name) {{ \
-                b0: pullRequests(headRefName: $b0, states: [CLOSED], first: 100, after: $after, \
+                b0: pullRequests(headRefName: $b0, states: [CLOSED], first: {CLOSED_PAGE}, after: $after, \
                                  orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
                     pageInfo {{ hasNextPage endCursor }} nodes {{ {CLOSED_NODE} }} }} }} }}"
     );
@@ -361,7 +404,7 @@ async fn page_closed_branch(
     Ok(false)
 }
 /// The closed unmerged PRs of each branch in `branches` — one `ClosedPulls`
-/// document per up to 25 of them, each alias a `pullRequests` connection
+/// document per up to [`CLOSED_BRANCHES`] of them, each alias a `pullRequests` connection
 /// filtered server-side on `headRefName`/`CLOSED` and paged on its own.
 /// A branch ends `Err(Unread)` on a null or unreadable node, a missing
 /// alias or an unfinished page — `admit` protects its plan — while a
@@ -375,14 +418,14 @@ async fn closed_pulls(
         .split_once('/')
         .ok_or(Error::Refused("invalid repository".into()))?;
     let mut out = BTreeMap::new();
-    for chunk in branches.chunks(25) {
+    for chunk in branches.chunks(CLOSED_BRANCHES) {
         let parameters: String = (0..chunk.len())
             .map(|i| format!(", $b{i}: String!"))
             .collect();
         let fields: String = (0..chunk.len())
             .map(|i| {
                 format!(
-                    "b{i}: pullRequests(headRefName: $b{i}, states: [CLOSED], first: 100, \
+                    "b{i}: pullRequests(headRefName: $b{i}, states: [CLOSED], first: {CLOSED_PAGE}, \
                      orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
                      pageInfo {{ hasNextPage endCursor }} nodes {{ {CLOSED_NODE} }} }}"
                 )
@@ -537,7 +580,11 @@ pub struct Lifecycle {
     /// an unreadable PR is simply never the one acted on.
     complete: bool,
     pub actions: Vec<PullRequestAction>,
-    notes: BTreeMap<(PackageId, String, String), patchula_notes::Notes>,
+    /// What each release-notes fetch this run made came back with.
+    notes: BTreeMap<(PackageId, String, String), crate::pr::body::Fetched>,
+    /// Branches whose body this run holds a retryable fetch failure: no
+    /// write receipt may settle them, so the next run renders them again.
+    unsettled: BTreeSet<String>,
     pub(crate) recheck: Recheck,
     merge_settings: Option<crate::automerge::Settings>,
     maintenance_policy: patchula_config::Policy,
@@ -630,6 +677,7 @@ impl Lifecycle {
             complete: page.complete,
             actions: Vec::new(),
             notes: BTreeMap::new(),
+            unsettled: BTreeSet::new(),
             recheck,
             merge_settings: None,
             maintenance_policy: config.defaults.clone(),
@@ -640,9 +688,9 @@ impl Lifecycle {
             per_hour_oldest: None,
         };
         let owner = view::Owner { actor, repo };
-        // The hourly count only exists when `prs.perHour` is set: the same
-        // listing URL as the old whole-history read, walked only until a
-        // page ends with a PR created before the last hour — an element
+        // The hourly count only exists when `prs.perHour` is set: the pull
+        // listing, walked only until a page ends with a PR created before
+        // the last hour — an element
         // without a readable `created_at` never stops the walk.
         let mut recent = None;
         if state.complete && config.prs.per_hour.is_some() {
@@ -668,7 +716,7 @@ impl Lifecycle {
         }
         // Which branches `admit` will ask closed PRs about, and which open
         // owned PRs are obsolete, are decisions and live in the view; a
-        // degraded repository selects none, as it skipped them all before.
+        // degraded repository selects none.
         let desired: BTreeSet<String> = plans.iter().map(|p| p.action().branch.clone()).collect();
         let (closed_branches, obsolete) = {
             let pulls = view::Pulls::from_open(state.prs.iter().collect(), recent, state.complete);
@@ -818,7 +866,7 @@ impl Lifecycle {
     /// read over `Planned`, the status every publish outcome is written
     /// over. It only fills the notes client's caches: a range a publish
     /// never asks for costs reads, not a different body; a range it asks
-    /// for that this missed is fetched when the body renders, as today.
+    /// for that this missed is fetched when the body renders.
     pub fn note_ranges(&self, plans: &[Plan]) -> Vec<(PackageId, String, String)> {
         self.ranges(
             plans.iter().filter(|p| {
@@ -835,11 +883,7 @@ impl Lifecycle {
         let mut ranges = BTreeSet::new();
         let bodies = self.bodies();
         for plan in plans {
-            let existing = self.prs.iter().find(|p| {
-                p.pr.state == "open"
-                    && branch(&p.pr) == plan.action().branch
-                    && same_repo(&p.pr, &self.repo)
-            });
+            let existing = self.open_pr(plan);
             let (_, marker) = bodies.intent(plan);
             if bodies.reusable(plan, existing.map(|t| &t.pr), &marker) {
                 continue;
@@ -847,7 +891,7 @@ impl Lifecycle {
             let mut plan_ranges = BTreeSet::new();
             for key in plan.changes().iter().filter_map(notes_key) {
                 plan_ranges.insert(key);
-                if plan_ranges.len() == 8 {
+                if plan_ranges.len() == crate::pr::body::RELEASES_PER_BODY {
                     break;
                 }
             }
@@ -861,16 +905,11 @@ impl Lifecycle {
         sources: &patchula_notes::Client,
         plans: &mut [Plan],
     ) {
-        let ranges = self.ranges(plans.iter().filter(|p| {
-            p.restored_pr().is_none()
-                && matches!(
-                    p.action().status,
-                    BranchStatus::Created
-                        | BranchStatus::Updated
-                        | BranchStatus::Rebased
-                        | BranchStatus::Unchanged
-                )
-        }));
+        let ranges = self.ranges(
+            plans
+                .iter()
+                .filter(|p| p.restored_pr().is_none() && published(p.action().status)),
+        );
         sources.prepare_release_notes(&ranges).await;
         for plan in plans {
             if let Some(pr) = plan.restored_pr() {
@@ -878,13 +917,7 @@ impl Lifecycle {
                     .push(unchanged(&self.repo, &plan.action().branch, &pr.pr));
                 continue;
             }
-            if !matches!(
-                plan.action().status,
-                BranchStatus::Created
-                    | BranchStatus::Updated
-                    | BranchStatus::Rebased
-                    | BranchStatus::Unchanged
-            ) {
+            if !published(plan.action().status) {
                 continue;
             }
             if let Err(error) = self.publish_one(client, sources, plan).await {
@@ -912,25 +945,10 @@ impl Lifecycle {
         let Some(plan) = plans.iter().find(|p| p.batch_items().is_some()) else {
             return Ok(());
         };
-        if !matches!(
-            plan.action().status,
-            BranchStatus::Created
-                | BranchStatus::Updated
-                | BranchStatus::Rebased
-                | BranchStatus::Unchanged
-        ) {
+        if !published(plan.action().status) {
             return Ok(());
         }
-        let Some(number) = self
-            .prs
-            .iter()
-            .find(|p| {
-                p.pr.state == "open"
-                    && branch(&p.pr) == plan.action().branch
-                    && same_repo(&p.pr, &self.repo)
-            })
-            .map(|p| p.pr.number)
-        else {
+        let Some(number) = self.open_pr(plan).map(|p| p.pr.number) else {
             return Ok(());
         };
         let targets: Vec<_> = self
@@ -1020,15 +1038,7 @@ impl Lifecycle {
                     .into(),
             ));
         }
-        let existing = self
-            .prs
-            .iter()
-            .find(|p| {
-                p.pr.state == "open"
-                    && branch(&p.pr) == plan.action().branch
-                    && same_repo(&p.pr, &self.repo)
-            })
-            .cloned();
+        let existing = self.open_pr(plan).cloned();
         let text = self
             .render(sources, plan, existing.as_ref().map(|t| &t.pr))
             .await;
@@ -1075,12 +1085,13 @@ impl Lifecycle {
                         "PR head moved after branch publication to an unexpected commit; rerun",
                     ));
                 }
-                if attempt == 6 {
+                if attempt == HEAD_RETRIES {
                     return Err(Error::Raced(
                         "PR head has not reflected our published commit after bounded retries; rerun",
                     ));
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100 << attempt)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(HEAD_RETRY_MS << attempt))
+                    .await;
                 attempt += 1;
             };
             // Keep what others wrote as of this read, not the inventory's.
@@ -1183,6 +1194,14 @@ impl Lifecycle {
         Ok(())
     }
 
+    /// The open PR on `plan`'s branch in this repository, if any.
+    fn open_pr(&self, plan: &Plan) -> Option<&Tracked> {
+        self.prs.iter().find(|p| {
+            p.pr.state == "open"
+                && branch(&p.pr) == plan.action().branch
+                && same_repo(&p.pr, &self.repo)
+        })
+    }
     /// The fields body writing reads, as one value. `render` spells the
     /// literal out instead of calling this: a `&self` borrow would cover
     /// `self.notes`, which the fetch loop writes between pushes.
@@ -1217,56 +1236,90 @@ impl Lifecycle {
         let mut draft = bodies.draft(plan);
         while let Some(key) = draft.next() {
             if !self.notes.contains_key(&key) {
-                let note = sources
-                    .release_notes(&key.0, &key.1, &key.2)
-                    .await
-                    .unwrap_or_default();
+                use crate::pr::body::Fetched;
+                let note = match sources.release_notes(&key.0, &key.1, &key.2).await {
+                    Ok(note) => Fetched::Read(note),
+                    Err(error) if !lasting(&error, &key.0) => {
+                        tracing::warn!(
+                            package = %key.0.name,
+                            from = %key.1,
+                            to = %key.2,
+                            %error,
+                            "release notes fetch failed; the next run retries it"
+                        );
+                        Fetched::Transient
+                    }
+                    // A lasting failure settles: another run would fail the
+                    // same way. The source, when it resolved, keeps its link.
+                    Err(error) => {
+                        let source = sources
+                            .source_repository(&key.0, &key.2)
+                            .await
+                            .ok()
+                            .flatten();
+                        tracing::debug!(
+                            package = %key.0.name,
+                            from = %key.1,
+                            to = %key.2,
+                            %error,
+                            resolved = source.is_some(),
+                            "release notes not read"
+                        );
+                        Fetched::Lasting(source)
+                    }
+                };
                 self.notes.insert(key.clone(), note);
             }
             draft.push(&self.notes[&key]);
         }
+        if draft.unsettled() {
+            self.unsettled.insert(plan.action().branch.clone());
+        } else {
+            self.unsettled.remove(&plan.action().branch);
+        }
         draft.finish()
+    }
+    /// Whether `plan`'s body holds a fetch failure a later run may not
+    /// repeat, so no receipt may settle it.
+    pub(crate) fn unsettled(&self, plan: &Plan) -> bool {
+        self.unsettled.contains(&plan.action().branch)
+    }
+}
+
+/// Whether a release-notes fetch for `id` that failed with `error` would
+/// fail the same way on every run: an unsafe package name or a tool name
+/// mise's policy refuses, a package or
+/// release the upstream does not know, an upstream answer the notes cannot
+/// use. Anything else — the network, a server error, a rate limit, the
+/// cache, a garbled answer, a refused credential — may pass, so it stays
+/// unsettled. A memoised failure keeps only its kind, so of those only
+/// `NotFound` reads as lasting.
+pub(crate) fn lasting(error: &patchula_notes::Error, id: &PackageId) -> bool {
+    use patchula_words::LookupErrorKind;
+    if !patchula_datasource::package_name_safe(&id.name)
+        || (id.source == patchula_words::Source::Mise && patchula_mise::check(&id.name).is_err())
+    {
+        return true;
+    }
+    match error {
+        patchula_notes::Error::Upstream(_)
+        | patchula_notes::Error::Source(patchula_datasource::Error::Invalid) => true,
+        patchula_notes::Error::Source(error) => error.kind() == LookupErrorKind::NotFound,
+        patchula_notes::Error::Earlier(failure) => failure.kind == LookupErrorKind::NotFound,
     }
 }
 
 #[cfg(test)]
 mod merge_tests {
     use super::*;
-    use patchula_report::BranchStatus;
 
-    fn action(branch: &str) -> patchula_report::BranchAction {
-        patchula_report::BranchAction {
-            repository: "o/r".into(),
-            branch: branch.into(),
-            base_commit: "b".repeat(40),
-            status: BranchStatus::Planned,
-            reason: None,
-            message: "m".into(),
-            previous_commit: None,
-            commit: None,
-            verified: None,
-            lockfile_pending: false,
-            files: Vec::new(),
-        }
-    }
+    use crate::plan::testing::action;
+
     fn change(merge: bool) -> crate::Change {
         crate::Change {
-            source: patchula_words::Source::Npm,
-            package: "a".into(),
-            registry: None,
-            file: "package.json".into(),
-            current: "1.0.0".into(),
-            current_version: None,
-            value: Some("1.1.0".into()),
-            version: Some("1.1.0".into()),
-            digest: None,
-            kind: patchula_words::Update::Minor,
             merge,
-            labels: Vec::new(),
             release_notes: false,
-            body_notes: Vec::new(),
-            advisories: Vec::new(),
-            image: None,
+            ..crate::plan::testing::change("a")
         }
     }
 
@@ -1414,5 +1467,67 @@ mod closed_pulls_tests {
             read.values()
                 .any(|pulls| pulls.as_ref().is_ok_and(|p| !p.is_empty()))
         );
+    }
+}
+
+#[cfg(test)]
+mod notes_failure_tests {
+    use super::lasting;
+    use patchula_config::PackageId;
+    use patchula_datasource::{Error, Failure};
+    use patchula_github::Error as GithubError;
+    use patchula_http::{CacheError, Error as HttpError};
+    use patchula_notes::Error as NotesError;
+    use patchula_words::{LookupErrorKind, Source};
+
+    /// Only a condition every run would repeat settles; the network, the
+    /// cache, a garbled answer and every other fault stay unsettled.
+    #[test]
+    fn only_lasting_notes_failures_settle() {
+        let id = PackageId::public(Source::Npm, "left-pad");
+        let source = |error| NotesError::Source(error);
+        let earlier = |kind| {
+            NotesError::Earlier(Failure {
+                kind,
+                message: String::new(),
+            })
+        };
+        for passing in [
+            source(Error::Http(CacheError::Transport(HttpError::Timeout))),
+            source(Error::Http(CacheError::Status(503))),
+            source(Error::Http(CacheError::Status(429))),
+            source(Error::Http(CacheError::Status(403))),
+            source(Error::RateLimit(60)),
+            source(Error::Http(CacheError::Worker)),
+            source(Error::Http(CacheError::Document)),
+            source(Error::Cache(patchula_cache::Error::Io(
+                std::io::Error::other("database is locked"),
+            ))),
+            source(Error::Github(GithubError::Pagination)),
+            earlier(LookupErrorKind::Network),
+            earlier(LookupErrorKind::Parse),
+            earlier(LookupErrorKind::Other),
+        ] {
+            assert!(!lasting(&passing, &id), "{passing}");
+        }
+        for repeating in [
+            source(Error::Http(CacheError::Status(404))),
+            source(Error::Http(CacheError::Status(410))),
+            source(Error::Invalid),
+            earlier(LookupErrorKind::NotFound),
+            NotesError::Upstream("missing release alias"),
+        ] {
+            assert!(lasting(&repeating, &id), "{repeating}");
+        }
+        // An unsafe name, or a tool name mise refuses, never resolves,
+        // whatever the read said.
+        let unsafe_name = PackageId::public(Source::Npm, "../etc");
+        assert!(lasting(&earlier(LookupErrorKind::Other), &unsafe_name));
+        let refused = PackageId::public(Source::Mise, "@scope/package");
+        assert!(lasting(&earlier(LookupErrorKind::Other), &refused));
+        assert!(!lasting(
+            &earlier(LookupErrorKind::Other),
+            &PackageId::public(Source::Mise, "node")
+        ));
     }
 }

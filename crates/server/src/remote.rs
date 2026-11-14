@@ -21,7 +21,7 @@ use axum::{
 use futures_util::{FutureExt, future::BoxFuture};
 use patchula_cache::Cache;
 use patchula_config::settings::{Settings, valid_repo};
-use patchula_github::{Client, app::App};
+use patchula_github::app::App;
 use patchula_http::Transport;
 use patchula_report::Report;
 use sha2::{Digest, Sha256};
@@ -518,13 +518,16 @@ impl Api {
         repositories: &[String],
         login: &str,
     ) -> Result<(), Reject> {
-        let client = Client::with_credentials(
-            self.0.app.installation(installation),
-            self.0.cache.clone(),
-            patchula_engine::settings::github_options(&self.0.settings.current()),
-            self.0.transport.clone(),
+        let client = crate::runtime::installation_client(
+            &self.0.app,
+            installation,
+            &self.0.cache,
+            &self.0.settings.current(),
+            &self.0.transport,
         )
-        .map_err(|_| {
+        .map_err(|error| {
+            tracing::error!(target: "patchula_server", installation, %error,
+                "remote run cannot check push access");
             reject(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal-error",

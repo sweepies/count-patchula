@@ -249,24 +249,15 @@ impl Plan {
         cargo_cooldowns: BTreeMap<String, patchula_manager::CargoCooldown>,
     ) -> Self {
         Self {
-            failure: action.reason.as_deref().map(crate::text::failure),
-            action,
             kind: Kind::Maintenance,
-            contents: BTreeMap::new(),
             identity: hash(b"lock-file-maintenance"),
             fingerprint: fingerprint.clone(),
-            changes: Vec::new(),
-            retry: false,
-            tree: None,
             // The tools always run for maintenance, even with no jobs.
             stage: Stage::Built { jobs },
             input_fingerprint: fingerprint,
             public_only,
             cargo_cooldowns,
-            lock_warnings: Vec::new(),
-            moved_refs: Vec::new(),
-            tooling: Vec::new(),
-            hold: None,
+            ..Self::new(action)
         }
     }
     /// The branch action the report carries.
@@ -407,16 +398,11 @@ impl Plan {
     /// Hold the plan, unless a stronger hold already does; of equals, the
     /// later wins, as in [`keep`].
     pub fn hold(&mut self, hold: Hold) {
-        if self
-            .hold
-            .as_ref()
-            .is_some_and(|held| held.rank() > hold.rank())
-        {
-            return;
+        let text = hold.text().to_owned();
+        if keep(&mut self.hold, hold) {
+            self.action.status = BranchStatus::Skipped;
+            self.set_reason(Some(text));
         }
-        self.action.status = BranchStatus::Skipped;
-        self.set_reason(Some(hold.text().to_owned()));
-        self.hold = Some(hold);
     }
     /// Whether `hold` is what holds the plan.
     pub fn held(&self, hold: &Hold) -> bool {
@@ -573,9 +559,7 @@ impl Plan {
         self.action.status = status;
         self.tree = Some(tree);
         if self.action.lockfile_pending {
-            self.set_reason(Some(
-                "lockfile pending: manifest-only test branch; regenerate before merging".into(),
-            ));
+            self.set_reason(Some(format!("lockfile pending: {PENDING_BRANCH}")));
         }
     }
     /// The update branch already holds exactly this plan's tree.
@@ -832,11 +816,14 @@ fn no_manifest_edit(dep: &Dependency, update: &Update) -> bool {
 }
 
 /// Keep the stronger of `hold` and what `slot` holds, or the later of equals,
-/// so a plan with several problems of one kind names the last, as it did.
-fn keep(slot: &mut Option<Hold>, hold: Hold) {
-    if slot.as_ref().is_none_or(|held| held.rank() <= hold.rank()) {
+/// so a plan with several problems of one kind names the last. Answers
+/// whether `hold` took the slot.
+fn keep(slot: &mut Option<Hold>, hold: Hold) -> bool {
+    let wins = slot.as_ref().is_none_or(|held| held.rank() <= hold.rank());
+    if wins {
         *slot = Some(hold);
     }
+    wins
 }
 
 /// One branch plan from its items: edits, lock jobs, message and changes.
@@ -917,7 +904,9 @@ fn build(
                     lock_jobs.insert(job);
                 }
                 Ok(None) => {}
-                Err(reason) => keep(&mut hold, Hold::Blocked(reason)),
+                Err(reason) => {
+                    keep(&mut hold, Hold::Blocked(reason));
+                }
             },
             Err(error) => pending = Some(error),
         }
@@ -952,7 +941,9 @@ fn build(
                 .entry(dep.file.clone())
                 .or_default()
                 .extend(edits),
-            Err(error) => keep(&mut hold, Hold::Blocked(format!("{}: {error}", dep.file))),
+            Err(error) => {
+                keep(&mut hold, Hold::Blocked(format!("{}: {error}", dep.file)));
+            }
         }
     }
     if prefixes.len() > 1 {
@@ -973,15 +964,7 @@ fn build(
                 package: item.dep.package.clone(),
                 registry: item.dep.registry.clone(),
                 file: item.dep.file.clone(),
-                current: format!(
-                    "{}{}",
-                    item.dep.current,
-                    item.dep
-                        .digest
-                        .as_ref()
-                        .map(|d| format!("@{d}"))
-                        .unwrap_or_default()
-                ),
+                current: with_digest(&item.dep.current, item.dep.digest.as_deref()),
                 value: u.new_value.clone(),
                 version: u.new_version.clone(),
                 digest: u.new_digest.clone(),
@@ -1045,7 +1028,9 @@ fn build(
                 contents.insert(path, content);
             }
             Ok(_) => {}
-            Err(error) => keep(&mut hold, Hold::Blocked(format!("{path}: {error}"))),
+            Err(error) => {
+                keep(&mut hold, Hold::Blocked(format!("{path}: {error}")));
+            }
         }
     }
     let lockfile_only = items
@@ -1109,25 +1094,33 @@ fn build(
     } else {
         Stage::Built { jobs: lock_jobs }
     };
+    // `new` renders the failure from `action.reason`, the hold's text.
     Ok(Plan {
-        action,
         kind,
         contents,
         identity: hash(identity.as_bytes()),
         fingerprint: fingerprint.clone(),
         changes: changes.into_iter().collect(),
-        retry: false,
-        tree: None,
         stage,
-        input_fingerprint: fingerprint.clone(),
+        input_fingerprint: fingerprint,
         public_only: snapshot.public_only.clone(),
         cargo_cooldowns: snapshot.cargo_cooldowns.clone(),
-        tooling: Vec::new(),
-        failure: hold.as_ref().map(|hold| crate::text::failure(hold.text())),
         hold,
-        lock_warnings: Vec::new(),
-        moved_refs: Vec::new(),
+        ..Plan::new(action)
     })
+}
+
+/// What a branch written with its lockfile pending is, as its report
+/// reason and commit message say.
+pub(crate) const PENDING_BRANCH: &str = "manifest-only test branch; regenerate before merging";
+
+/// `value`, followed by `@digest` when there is one: how a change records
+/// a pinned version.
+pub(crate) fn with_digest(value: &str, digest: Option<&str>) -> String {
+    match digest {
+        Some(digest) => format!("{value}@{digest}"),
+        None => value.to_owned(),
+    }
 }
 
 /// A one-hunk unified diff of a file's change, as dry runs print it.
@@ -1348,7 +1341,7 @@ fn branch_identity(
         let line = line(dep, reported, update);
         (
             // A package from its own registry is another branch than the public
-            // package of its name; other identities stay as they were.
+            // package of its name; a public package's identity names no registry.
             match &dep.registry {
                 Some(registry) => {
                     serde_json::json!(["dependency", dep.source, dep.package, line, registry])
@@ -1458,16 +1451,7 @@ pub fn batch_plan(
                 )
             })
             .collect();
-        let current = |d: &Dependency| {
-            format!(
-                "{}{}",
-                d.current,
-                d.digest
-                    .as_ref()
-                    .map(|x| format!("@{x}"))
-                    .unwrap_or_default()
-            )
-        };
+        let current = |d: &Dependency| with_digest(&d.current, d.digest.as_deref());
         // A target names its file once, but the file can declare the dependency
         // several times, such as one action in many jobs; every declaration
         // the PR moved moves in the batch too.
@@ -1560,7 +1544,7 @@ pub fn batch_plan(
             advisories,
         })
         .collect();
-    let branch = branch_name(&config.prs.branch, "batch")?;
+    let branch = branch_name(&config.prs.branch, crate::batch::LABEL)?;
     let mut plan = build(
         repo,
         config,
@@ -1596,12 +1580,11 @@ pub fn batch_plan(
 
 #[cfg(test)]
 mod frozen_bytes {
-    //! Rule 3 pins: the bytes `registry` and `package` persist as — the
-    //! declaration key, the branch slug, the branch identity and the
-    //! serialized `Change` — computed from the code before `Registry` was
-    //! typed. Every registry form (public, URL, ambiguous, unusable) against
-    //! every package encoding (plain, `registry|name`, helm `repo|name`,
-    //! gradle plugin portal) must keep producing them.
+    //! The bytes `registry` and `package` persist as: the declaration key,
+    //! the branch name, the branch identity and the serialized `Change`.
+    //! Every registry form (public, URL, ambiguous, unusable) against every
+    //! package encoding (plain, `registry|name`, helm `repo|name`, gradle
+    //! plugin portal) must keep producing them.
     use super::*;
     use patchula_manager::{Dependency, EditForm, Location, Syntax};
     use patchula_words::{DependencyKind, Manager, Scheme};
@@ -1630,6 +1613,38 @@ mod frozen_bytes {
             extract: None,
             included_by: None,
             registry: registry.map(Registry::from_recorded),
+        }
+    }
+
+    fn reported(dep: &Dependency) -> patchula_report::Dependency {
+        patchula_report::Dependency {
+            manager: dep.manager,
+            name: dep.name.clone(),
+            occurrence: None,
+            package: dep.package.clone(),
+            registry: dep.registry.as_ref().map(|r| r.recorded().to_owned()),
+            current: patchula_report::Current {
+                value: None,
+                version: None,
+                digest: None,
+            },
+            updates: vec![],
+            metadata: None,
+        }
+    }
+
+    fn update() -> Update {
+        Update {
+            cooldown: None,
+            new_value: Some("1.2.0".into()),
+            new_version: Some("1.2.0".into()),
+            new_digest: None,
+            update_type: UpdateKind::Minor,
+            group: None,
+            policy: None,
+            release_age: None,
+            fixes: vec![],
+            image: None,
         }
     }
 
@@ -1819,25 +1834,24 @@ mod frozen_bytes {
                 key,
                 "key for {registry:?} {package}"
             );
-            assert_eq!(
-                package_slug(&dep.package),
-                pslug,
-                "package slug for {package}"
+            // A registry package shares its slug with the public one, so its
+            // branch carries the registry slug; a public one carries none.
+            let mut names = BTreeSet::from([(dep.source, dep.package.clone(), None)]);
+            names.insert((dep.source, dep.package.clone(), dep.registry.clone()));
+            let names = PackageNames::from([(package_slug(&dep.package), names)]);
+            let (identity_json, branch) = branch_identity(
+                &dep,
+                &reported(&dep),
+                &update(),
+                std::slice::from_ref(&dep),
+                &names,
+                None,
             );
-            assert_eq!(
-                dep.registry
-                    .as_ref()
-                    .map(|r| slug(r.recorded().trim_start_matches("https://"))),
-                rslug.map(str::to_owned),
-                "registry slug for {registry:?}"
-            );
-            let identity_json = match &dep.registry {
-                Some(registry) => {
-                    serde_json::json!(["dependency", dep.source, dep.package, "1.x", registry])
-                }
-                None => serde_json::json!(["dependency", dep.source, dep.package, "1.x"]),
-            }
-            .to_string();
+            let expected = match rslug {
+                Some(rslug) => format!("{rslug}-{pslug}-1.x"),
+                None => format!("{pslug}-1.x"),
+            };
+            assert_eq!(branch, expected, "branch for {registry:?} {package}");
             assert_eq!(
                 identity_json, identity,
                 "identity for {registry:?} {package}"
@@ -1861,9 +1875,9 @@ mod frozen_bytes {
         }
     }
 
-    /// `registry` was `Option<String>` and sorted as one: a plan's changes,
-    /// the PR body rows and the `patchula-targets` marker order by the
-    /// recorded string, not the enum's variant order. `None`, then
+    /// A plan's changes, the PR body rows and the `patchula-targets` marker
+    /// order registries by the recorded string, not the enum's variant
+    /// order. `None`, then
     /// `${NPM_REGISTRY}`, `ambiguous: …` and `https://…` is that order.
     #[test]
     fn mixed_registry_changes_keep_their_recorded_order() {
@@ -1936,7 +1950,7 @@ mod tests {
     use patchula_words::{DependencyKind, Manager, Scheme};
 
     /// A restored plan owes no lockfile work, so a restored maintenance plan
-    /// is ready and `record_refresh` counts it, as before the stage existed.
+    /// is ready and `record_refresh` counts it.
     #[test]
     fn a_restored_maintenance_plan_is_ready() {
         let mut plan = Plan::maintenance(

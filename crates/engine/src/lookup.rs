@@ -844,35 +844,24 @@ impl Engine {
                                 Ok(p) => {
                                     let dep_key =
                                         patchula_update::identity::extracted_key(&dep.dependency);
-                                    if let Some(held) = &mut held {
-                                        held.extend(p.held_back.iter().flat_map(|h| {
-                                            h.versions
-                                                .iter()
-                                                .chain(std::iter::once(&h.version))
-                                                .map(|v| {
-                                                    patchula_update::identity::held_target(
-                                                        &dep_key,
-                                                        v,
-                                                        h.update_type.as_str(),
-                                                    )
-                                                })
-                                        }));
-                                    }
-                                    let overrides: BTreeSet<_> = p
+                                    let targets: Vec<_> = p
                                         .held_back
                                         .iter()
-                                        .flat_map(|h| {
-                                            h.versions
-                                                .iter()
-                                                .chain(std::iter::once(&h.version))
-                                                .map(|v| (v.clone(), h.update_type.to_string()))
+                                        .flat_map(|h| crate::held_targets(&dep_key, h))
+                                        .collect();
+                                    if let Some(held) = &mut held {
+                                        held.extend(targets.iter().map(|(.., t)| t.clone()));
+                                    }
+                                    let mut permits = Vec::new();
+                                    let overrides: BTreeSet<_> = targets
+                                        .into_iter()
+                                        .filter(|(.., target)| {
+                                            repo.controls.create.contains(target)
+                                                || repo.controls.age_permits.contains(target)
                                         })
-                                        .filter(|(v, k)| {
-                                            let target = patchula_update::identity::held_target(
-                                                &dep_key, v, k,
-                                            );
-                                            repo.controls.create.contains(&target)
-                                                || repo.controls.age_permits.contains(&target)
+                                        .map(|(v, k, target)| {
+                                            permits.push(target);
+                                            (v.to_owned(), k.to_owned())
                                         })
                                         .collect();
                                     if overrides.is_empty() {
@@ -886,13 +875,7 @@ impl Engine {
                                             found,
                                         ) {
                                             Ok(p) => {
-                                                for (v, k) in overrides {
-                                                    repo.controls.age_permits.insert(
-                                                        patchula_update::identity::held_target(
-                                                            &dep_key, &v, &k,
-                                                        ),
-                                                    );
-                                                }
+                                                repo.controls.age_permits.extend(permits);
                                                 evaluation = p;
                                             }
                                             Err(e) => {
@@ -1013,16 +996,31 @@ impl Engine {
         sent: &Mutex<BTreeSet<Sent>>,
     ) -> Result<BTreeSet<DigestKey>> {
         // The revalidated complete tag namespace already carries peeled target
-        // commits. Reuse those for both current and proposed action tags instead
-        // of adding a serial /commits/{tag} round trip after policy evaluation.
+        // commits, which answer both current and proposed action tags without
+        // a /commits/{tag} request per tag.
+        // Each package's catalogs, in key order, so a package's lookups scan
+        // only its own.
+        let mut by_package: BTreeMap<&str, Vec<(&LookupKey, &_)>> = BTreeMap::new();
+        for (key, result) in &lookups.catalogs {
+            by_package
+                .entry(key.1.name.as_str())
+                .or_default()
+                .push((key, result));
+        }
+        let catalogs = |package: &str| by_package.get(package).into_iter().flatten().copied();
+        // A package whose GitHub tag catalog this run reused.
+        let reused_tags = |package: &str| {
+            lookups.evidence.iter().any(|(key, e)| {
+                key.1.source == Source::GithubTags && key.1.name == package && e.reused
+            })
+        };
         // Digests a catalog fetched this run carries: fresh, even on a retry.
         let mut carried = BTreeSet::new();
         for (package, reference) in keys.digests.keys() {
-            if let Some(Ok(catalog)) = lookups.catalogs.iter().find_map(|(key, result)| {
-                (key.1.name == *package
-                    && (key.1.source == Source::ForgeTags
-                        || (key.1.source == Source::GithubTags
-                            && lookups.evidence.get(key).is_none_or(|e| !e.reused))))
+            if let Some(Ok(catalog)) = catalogs(package).find_map(|(key, result)| {
+                (key.1.source == Source::ForgeTags
+                    || (key.1.source == Source::GithubTags
+                        && lookups.evidence.get(key).is_none_or(|e| !e.reused)))
                 .then_some(result)
             }) && let Some(digest) = catalog
                 .versions
@@ -1043,11 +1041,7 @@ impl Engine {
         let hinted_tags: BTreeSet<DigestKey> = keys
             .digests
             .keys()
-            .filter(|(package, _)| {
-                lookups.evidence.iter().any(|(key, e)| {
-                    key.1.source == Source::GithubTags && key.1.name == *package && e.reused
-                })
-            })
+            .filter(|(package, _)| reused_tags(package))
             .cloned()
             .collect();
         // A ref under a manual retry is read again when only a prior run's
@@ -1058,9 +1052,9 @@ impl Engine {
         // Forge refs resolve only through their tag catalog. A ref missing
         // from it is not sent to GitHub.
         keys.digests.retain(|(package, reference), _| {
-            let Some(result) = lookups.catalogs.iter().find_map(|(key, result)| {
-                (key.1.source == Source::ForgeTags && key.1.name == *package).then_some(result)
-            }) else {
+            let Some(result) = catalogs(package)
+                .find_map(|(key, result)| (key.1.source == Source::ForgeTags).then_some(result))
+            else {
                 return true;
             };
             if result.is_ok() {
@@ -1078,12 +1072,10 @@ impl Engine {
             .stage(Stage::Digests, keys.digests.len() + keys.images.len());
         // Mutable tags, other refs and image digests are independent, so they
         // resolve side by side rather than in three waves.
-        let (mutable, rest): (Vec<_>, Vec<_>) =
-            keys.digests.into_iter().partition(|((package, _), _)| {
-                lookups.evidence.iter().any(|(key, e)| {
-                    key.1.source == Source::GithubTags && key.1.name == *package && e.reused
-                })
-            });
+        let (mutable, rest): (Vec<_>, Vec<_>) = keys
+            .digests
+            .into_iter()
+            .partition(|((package, _), _)| reused_tags(package));
         let mutable_tags: BTreeSet<DigestKey> = mutable.into_iter().map(|(key, _)| key).collect();
         let digest_keys: BTreeMap<DigestKey, bool> = rest.into_iter().collect();
         let tags = async {
@@ -1091,8 +1083,7 @@ impl Engine {
             self.progress.advance(mutable_tags.len());
             found
         };
-        let fresh = self.sources.revalidating();
-        let fresh_sources = &fresh;
+        let fresh_sources = &self.sources.revalidating();
         let refs = self.digests(digest_keys, fresh_sources, true, sent);
         let images = stream::iter(keys.images)
             .map(|((package, tag), revalidate)| async move {
@@ -1104,9 +1095,7 @@ impl Engine {
                 let (result, credentialed) =
                     patchula_http::tracked(Box::pin(sources.registry_digest(&package, &tag))).await;
                 if credentialed {
-                    sent.lock()
-                        .expect("sent packages")
-                        .insert(Sent::Image(package.clone()));
+                    mark_sent(sent, Sent::Image(package.clone()));
                 }
                 let result = result.map_err(Failure::from);
                 self.progress.advance(1);
@@ -1185,8 +1174,7 @@ impl Engine {
                 ));
             }
         }
-        let fresh = self.sources.revalidating();
-        let fresh_sources = &fresh;
+        let fresh_sources = &self.sources.revalidating();
         let read_sboms = |reads: BTreeMap<(String, String, String), bool>| {
             stream::iter(reads)
                 .map(|((package, digest, platform), revalidate)| async move {
@@ -1200,9 +1188,7 @@ impl Engine {
                     ))
                     .await;
                     if credentialed {
-                        sent.lock()
-                            .expect("sent packages")
-                            .insert(Sent::Image(package.clone()));
+                        mark_sent(sent, Sent::Image(package.clone()));
                     }
                     let result = result.map_err(|e| e.to_string());
                     ((package, digest, platform), result)
@@ -1374,9 +1360,7 @@ impl Engine {
                 let (result, credentialed) =
                     patchula_http::tracked(Box::pin(sources.digest(&package, &reference))).await;
                 if credentialed {
-                    sent.lock()
-                        .expect("sent packages")
-                        .insert(Sent::Git(package.clone()));
+                    mark_sent(sent, Sent::Git(package.clone()));
                 }
                 let result = result.map_err(Failure::from);
                 if counted {
@@ -1388,4 +1372,9 @@ impl Engine {
             .collect()
             .await
     }
+}
+
+/// Record that a read for `package` carried credentials.
+fn mark_sent(sent: &Mutex<BTreeSet<Sent>>, package: Sent) {
+    sent.lock().expect("sent packages").insert(package);
 }

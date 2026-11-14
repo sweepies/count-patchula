@@ -99,6 +99,9 @@ pub fn items(
     items
 }
 
+/// The batch branch's label under the branch prefix.
+pub(crate) const LABEL: &str = "batch";
+
 /// Add the batch plan and skip the update plans it carries. Items whose targets the
 /// base already satisfies are complete and leave the batch.
 #[allow(clippy::too_many_arguments)]
@@ -114,7 +117,7 @@ pub fn apply(
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<BTreeSet<String>, PlanError> {
-    let name = crate::branch_name(&config.prs.branch, "batch")?;
+    let name = crate::branch_name(&config.prs.branch, LABEL)?;
     let items = items(prs, actor, &repository.repository, &name);
     let Some(plan) = crate::plan::batch_plan(
         repository,
@@ -183,22 +186,9 @@ mod tests {
 
     fn change(package: &str, value: &str) -> Change {
         Change {
-            registry: None,
-            source: patchula_words::Source::Npm,
-            package: package.into(),
-            file: "package.json".into(),
-            current: "1.0.0".into(),
-            current_version: None,
             value: Some(value.into()),
             version: Some(value.into()),
-            digest: None,
-            kind: patchula_words::Update::Minor,
-            merge: false,
-            labels: Vec::new(),
-            release_notes: true,
-            body_notes: Vec::new(),
-            advisories: Vec::new(),
-            image: None,
+            ..crate::plan::testing::change(package)
         }
     }
     fn pr(number: u64, branch: &str, body: String) -> pull_requests::Tracked {
@@ -451,7 +441,7 @@ mod tests {
             )]),
         )
         .unwrap();
-        let batch = crate::branch_name(&config.prs.branch, "batch").unwrap();
+        let batch = crate::branch_name(&config.prs.branch, LABEL).unwrap();
         let dep = Dependency {
             cooldown: None,
             manager: patchula_words::Manager::Npm,

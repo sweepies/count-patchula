@@ -1,18 +1,15 @@
-//! Differential coverage for the split inventory walk: the same seeded fake
-//! is read through the pre-split document (`read_legacy_inventory`) and
-//! through the new documents — once without an actor hint (unfiltered,
-//! restarting a paged issue connection on the answer's actor), once with
-//! the hint that read stored (`filterBy.createdBy`). Every value a caller
-//! could tell apart must be equal; the issue connection itself is equal
-//! only on the Count's own nodes, which is the filter's point.
+//! Coverage for the inventory walk: the same seeded fake is read once
+//! without an actor hint (unfiltered, restarting a paged issue connection
+//! on the answer's actor) and once with the hint that read stored
+//! (`filterBy.createdBy`). Every value a caller could tell apart must be
+//! equal; the hinted issue connection holds exactly the Count's own open
+//! issues, which is the filter's point.
 use patchula_cache::Cache;
 use patchula_config::Config;
 use patchula_github::Client;
 use patchula_report::Repository;
 use patchula_testkit::github::FakeGitHub;
-use patchula_update::{
-    Inventory, dashboard, markers::DASHBOARD as MARKER, read_legacy_inventory, restore_inventory,
-};
+use patchula_update::{Inventory, dashboard, markers::DASHBOARD as MARKER, restore_inventory};
 use patchula_words::Recheck;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -68,17 +65,15 @@ fn authored_by(issue: &Option<patchula_update::Issue>, login: &str) -> bool {
 }
 
 struct Reads {
-    legacy: Inventory,
     unfiltered: Inventory,
     filtered: Inventory,
 }
 
-/// The three reads over one seeded fake: the split documents first — the
-/// first read has no stored actor hint, so its first page asks unfiltered;
-/// a paged issue connection then restarts on the answer's `viewer.login`,
-/// which the read stores — then the pre-split document (which ignores the
-/// hint, its `issues` field having no `filterBy` argument), then a hinted
-/// read filtering issues by `createdBy` from its first page.
+/// The two reads over one seeded fake: the first has no stored actor hint,
+/// so its first page asks unfiltered, and a paged issue connection then
+/// restarts on the answer's `viewer.login`, which the read stores; the
+/// second is a hinted read filtering issues by `createdBy` from its first
+/// page.
 async fn reads(server: Arc<FakeGitHub>) -> (Cache, Config, Reads) {
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let client =
@@ -88,9 +83,6 @@ async fn reads(server: Arc<FakeGitHub>) -> (Cache, Config, Reads) {
     let unfiltered = Inventory::read(&client, &cache, &repo, &config)
         .await
         .unwrap();
-    let legacy = read_legacy_inventory(&client, &cache, &repo, &config)
-        .await
-        .unwrap();
     let filtered = Inventory::read(&client, &cache, &repo, &config)
         .await
         .unwrap();
@@ -98,15 +90,14 @@ async fn reads(server: Arc<FakeGitHub>) -> (Cache, Config, Reads) {
         cache,
         config,
         Reads {
-            legacy,
             unfiltered,
             filtered,
         },
     )
 }
 
-/// The reads gather the same inventory the legacy document gathered; the
-/// filtered walk's issue connection is compared by the caller.
+/// Two reads gather the same inventory; their issue connections are
+/// compared by the caller.
 fn same_values(a: &Inventory, b: &Inventory) {
     assert_eq!(a.actor, b.actor);
     assert_eq!(format!("{:?}", a.refs), format!("{:?}", b.refs));
@@ -170,20 +161,18 @@ async fn same_decisions(
     );
 }
 
-/// The filtered read's issue connection must hold exactly the unfiltered
-/// read's nodes authored by the actor — no more, no fewer.
-fn filtered_issues(legacy: &Inventory, filtered: &Inventory, actor: &str) {
-    let authored: Vec<&Option<patchula_update::Issue>> = legacy
-        .issues
-        .items
-        .iter()
-        .filter(|issue| authored_by(issue, actor))
-        .collect();
-    assert_eq!(
-        format!("{:?}", filtered.issues.items),
-        format!("{:?}", authored),
-        "filtered read must keep exactly the actor's issues"
+/// A filtered issue connection holds exactly the actor's `count` open
+/// issues: every node is the actor's, and none is missing.
+fn filtered_issues(filtered: &Inventory, count: usize) {
+    assert!(
+        filtered
+            .issues
+            .items
+            .iter()
+            .all(|issue| authored_by(issue, &filtered.actor)),
+        "filtered read must keep only the actor's issues"
     );
+    assert_eq!(filtered.issues.items.len(), count);
     assert!(filtered.issues.complete);
 }
 
@@ -193,7 +182,7 @@ fn check_transcript() {
 }
 
 /// Two dashboards on the Count's name — plus a dashboard another bot owns —
-/// must refuse the dashboard lookup identically through every document.
+/// refuse the dashboard lookup identically through both reads.
 #[tokio::test]
 async fn two_dashboards_and_a_foreign_one_refuse_alike() {
     let server = fake();
@@ -211,14 +200,11 @@ async fn two_dashboards_and_a_foreign_one_refuse_alike() {
     }
     let (cache, config, reads) = reads(server.clone()).await;
     let repo = repository();
-    same_values(&reads.legacy, &reads.unfiltered);
-    assert_eq!(
-        format!("{:?}", reads.legacy.issues),
-        format!("{:?}", reads.unfiltered.issues)
-    );
-    same_values(&reads.legacy, &reads.filtered);
-    filtered_issues(&reads.legacy, &reads.filtered, &reads.legacy.actor);
-    same_decisions(&cache, &repo, &config, &reads.legacy, &reads.filtered).await;
+    same_values(&reads.unfiltered, &reads.filtered);
+    // One page: the unfiltered read keeps every open issue.
+    assert_eq!(reads.unfiltered.issues.items.len(), 20);
+    filtered_issues(&reads.filtered, 2);
+    same_decisions(&cache, &repo, &config, &reads.unfiltered, &reads.filtered).await;
     check_transcript();
 }
 
@@ -239,12 +225,11 @@ async fn a_hundred_and_one_issues_decide_alike() {
     }
     let (cache, config, reads) = reads(server.clone()).await;
     let repo = repository();
-    same_values(&reads.legacy, &reads.unfiltered);
-    same_values(&reads.legacy, &reads.filtered);
-    filtered_issues(&reads.legacy, &reads.unfiltered, &reads.legacy.actor);
-    filtered_issues(&reads.legacy, &reads.filtered, &reads.legacy.actor);
-    assert_eq!(reads.legacy.issues.items.len(), 101);
-    same_decisions(&cache, &repo, &config, &reads.legacy, &reads.filtered).await;
+    same_values(&reads.unfiltered, &reads.filtered);
+    // The dashboard and every third filler from 3 to 99.
+    filtered_issues(&reads.unfiltered, 34);
+    filtered_issues(&reads.filtered, 34);
+    same_decisions(&cache, &repo, &config, &reads.unfiltered, &reads.filtered).await;
     check_transcript();
 }
 
@@ -270,19 +255,15 @@ async fn an_unfiltered_first_page_with_paged_issues_restarts_on_the_actor() {
     }
     let (cache, config, reads) = reads(server.clone()).await;
     let repo = repository();
-    same_values(&reads.legacy, &reads.unfiltered);
-    same_values(&reads.legacy, &reads.filtered);
-    assert_eq!(reads.legacy.issues.items.len(), 104);
-    assert_eq!(reads.unfiltered.issues.items.len(), 2);
-    filtered_issues(&reads.legacy, &reads.unfiltered, &reads.legacy.actor);
-    filtered_issues(&reads.legacy, &reads.filtered, &reads.legacy.actor);
-    same_decisions(&cache, &repo, &config, &reads.legacy, &reads.unfiltered).await;
-    same_decisions(&cache, &repo, &config, &reads.legacy, &reads.filtered).await;
+    same_values(&reads.unfiltered, &reads.filtered);
+    filtered_issues(&reads.unfiltered, 2);
+    filtered_issues(&reads.filtered, 2);
+    same_decisions(&cache, &repo, &config, &reads.unfiltered, &reads.filtered).await;
     check_transcript();
 }
 
-/// 250 branches force three `refs` pages; the continuations must gather
-/// exactly what the single document gathered.
+/// 250 branches force three `refs` pages; the continuations gather every
+/// branch.
 #[tokio::test]
 async fn two_hundred_and_fifty_branches_decide_alike() {
     let server = fake();
@@ -302,16 +283,16 @@ async fn two_hundred_and_fifty_branches_decide_alike() {
     seed_issue(&server, 1, &format!("dashboard {MARKER}"), actor_author());
     let (cache, config, reads) = reads(server.clone()).await;
     let repo = repository();
-    same_values(&reads.legacy, &reads.unfiltered);
-    same_values(&reads.legacy, &reads.filtered);
-    filtered_issues(&reads.legacy, &reads.filtered, &reads.legacy.actor);
-    assert_eq!(reads.legacy.refs.items.len(), 250);
-    same_decisions(&cache, &repo, &config, &reads.legacy, &reads.filtered).await;
+    same_values(&reads.unfiltered, &reads.filtered);
+    filtered_issues(&reads.filtered, 1);
+    assert_eq!(reads.unfiltered.refs.items.len(), 250);
+    assert!(reads.unfiltered.refs.complete);
+    same_decisions(&cache, &repo, &config, &reads.unfiltered, &reads.filtered).await;
     check_transcript();
 }
 
 /// An unreadable node — an issue node of the Count's missing the fields the
-/// projection needs — fails the connection closed through every document.
+/// projection needs — fails the connection closed through both reads.
 /// A ref whose pull requests page past the first marks the branch unsettled
 /// the same way.
 #[tokio::test]
@@ -327,24 +308,23 @@ async fn an_unreadable_node_fails_closed_alike() {
     server.state().settings.pr_next_page = Some("main".into());
     let (cache, config, reads) = reads(server.clone()).await;
     let repo = repository();
-    same_values(&reads.legacy, &reads.unfiltered);
-    same_values(&reads.legacy, &reads.filtered);
-    assert!(!reads.legacy.issues.complete && !reads.filtered.issues.complete);
+    same_values(&reads.unfiltered, &reads.filtered);
+    assert!(!reads.unfiltered.issues.complete && !reads.filtered.issues.complete);
     // The unreadable node is the actor's own, so the filtered connection
     // holds it too: same items, same incompleteness.
     assert_eq!(
-        format!("{:?}", reads.legacy.issues.items),
+        format!("{:?}", reads.unfiltered.issues.items),
         format!("{:?}", reads.filtered.issues.items)
     );
-    assert!(!reads.legacy.unsettled.is_empty());
-    same_decisions(&cache, &repo, &config, &reads.legacy, &reads.filtered).await;
+    assert!(!reads.unfiltered.unsettled.is_empty());
+    same_decisions(&cache, &repo, &config, &reads.unfiltered, &reads.filtered).await;
     check_transcript();
 }
 
 /// A broken issue node authored by someone else — one GitHub could not
 /// project — never reaches the hinted read: `filterBy.createdBy` reports it
 /// foreign, so it cannot be the actor's dashboard and can hide nothing of
-/// the Count's. The unfiltered and legacy reads still refuse it as an
+/// the Count's. The unfiltered read still refuses it as an
 /// incomplete issue inventory; an actor-authored broken node still fails
 /// closed in the filtered read too (`an_unreadable_node_fails_closed_alike`).
 #[tokio::test]
@@ -356,14 +336,12 @@ async fn a_foreign_unreadable_issue_node_is_never_received() {
         json!({"id":"broken","state":"OPEN","author":{"__typename":"Bot","login":"renovate"}}),
     );
     let reads = reads(server.clone()).await.2;
-    // The node fails to decode wherever it is read unfiltered.
-    assert!(!reads.legacy.issues.complete && !reads.unfiltered.issues.complete);
-    for inventory in [&reads.legacy, &reads.unfiltered] {
-        assert_eq!(
-            dashboard::issue(inventory).unwrap_err().to_string(),
-            "incomplete issue inventory"
-        );
-    }
+    // The node fails to decode where it is read unfiltered.
+    assert!(!reads.unfiltered.issues.complete);
+    assert_eq!(
+        dashboard::issue(&reads.unfiltered).unwrap_err().to_string(),
+        "incomplete issue inventory"
+    );
     // The hinted read asks only for the actor's issues, so the foreign
     // node is never sent: the connection is complete and holds the one
     // dashboard.
@@ -375,9 +353,8 @@ async fn a_foreign_unreadable_issue_node_is_never_received() {
             .map(|issue| issue.number),
         Some(1)
     );
-    same_values(&reads.legacy, &reads.unfiltered);
-    same_values(&reads.legacy, &reads.filtered);
-    filtered_issues(&reads.legacy, &reads.filtered, &reads.legacy.actor);
+    same_values(&reads.unfiltered, &reads.filtered);
+    filtered_issues(&reads.filtered, 1);
     check_transcript();
 }
 

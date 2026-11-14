@@ -42,6 +42,7 @@ console = "0.16.6"
 textwrap = "0.16.4"
 
 [dev-dependencies]
+patchula-update = { path = "../update", features = ["testing"] }
 patchula-testkit = { path = "../testkit" }
 tempfile = "3"
 sha2 = "0.11.1"

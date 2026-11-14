@@ -223,7 +223,7 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
     };
     engine
         .cache
-        .set_state(&engine.catalog_controls_scope("demo/app"), &mapping)
+        .set_state(&engine.credential_scope("demo/app"), &mapping)
         .await
         .unwrap();
     for mode in [
@@ -288,6 +288,77 @@ async fn checkbox_controls_refresh_only_the_selected_dependency_and_failures_do_
     let (cached, evidence) = read(&engine, 24, now(), false).await;
     assert!(cached[&key("fixture")].is_ok());
     assert!(evidence[&key("fixture")].reused);
+}
+
+/// A plan that fails keeps the saved plan-derived controls — saving an
+/// empty set would un-retry every box the next run reads them for — and
+/// still saves this run's held-back targets.
+#[tokio::test]
+async fn a_failed_plan_keeps_the_saved_controls() {
+    let cache = memory().await;
+    let engine = engine(cache, Arc::new(Registry::default()), "offline");
+    let config = config();
+    let dependencies = dependencies(&config);
+    let first = patchula_update::identity::extracted_key(&dependencies[0]);
+    let saved = Controls {
+        branches: BTreeMap::from([(
+            "patchula/fixture-2.x".into(),
+            BTreeSet::from([first.clone()]),
+        )]),
+        targets: BTreeMap::new(),
+    };
+    engine
+        .cache
+        .set_state(&engine.credential_scope("demo/app"), &saved)
+        .await
+        .unwrap();
+    // An update with no extraction commit: planning it fails.
+    let mut report = crate::repo_report("demo/app", Status::Complete, None);
+    report.package_files = serde_json::from_value(json!([{"path":"package.json","dependencies":[{
+        "manager":"npm","name":"fixture","package":"fixture",
+        "current":{"value":"1.0.0","version":"1.0.0","digest":null},
+        "updates":[{"newValue":"2.0.0","newVersion":"2.0.0","newDigest":null,
+            "updateType":"major","group":null}],
+        "metadata":{"source":"npm","kinds":[],"locations":[],"stale":{},"heldBack":[{
+            "version":"3.0.0","updateType":"major","publishedAt":"2026-10-15T00:00:00Z",
+            "eligibleAt":"2026-10-16T00:00:00Z"}]}
+    }]}]))
+    .unwrap();
+    let report_dep = report.package_files[0].dependencies[0].clone();
+    let work = Work {
+        dependencies: dependencies.into_iter().map(Dep::new).collect(),
+        ..Work::empty(report, Some(config))
+    };
+    assert!(
+        patchula_update::plan(
+            &work.report,
+            work.config.as_ref().unwrap(),
+            &work
+                .dependencies
+                .iter()
+                .map(|dep| dep.dependency.clone())
+                .collect::<Vec<_>>(),
+            &work.snapshot,
+            false,
+            None,
+            now(),
+        )
+        .is_err()
+    );
+    engine.save_catalog_controls(&[work], now()).await.unwrap();
+    let kept = engine
+        .cache
+        .state::<Controls>(&engine.credential_scope("demo/app"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.branches, saved.branches);
+    let held = patchula_update::identity::held_target(
+        &patchula_update::identity::dependency_key("package.json", &report_dep),
+        "3.0.0",
+        "major",
+    );
+    assert!(kept.targets.contains_key(&held), "{:?}", kept.targets);
 }
 
 #[test]
