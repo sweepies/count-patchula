@@ -19,12 +19,30 @@ const UNLISTED: &[(&str, &str)] = &[
     ),
 ];
 
+/// Whether a directory walk for task files skips `below`, a path relative
+/// to the walk's root, as configuration. mise's
+/// `is_mise_config_file_in_task_include` (`src/config/mod.rs`) matches
+/// `DEFAULT_CONFIG_FILENAMES` (see `config_root`) against the relative
+/// path and the file name. The walk never enters a hidden folder, and
+/// with no `MISE_ENV` that leaves `mise.toml` and `mise.local.toml` under
+/// any folder, and `mise/config.toml`, `mise/config.local.toml`,
+/// `mise/conf.d/*.toml` and `mise/conf.d/*/mise.toml` and
+/// `mise.local.toml` at the root.
+fn walk_config(below: &str) -> bool {
+    matches!(leaf(below), "mise.toml" | "mise.local.toml")
+        || matches!(
+            below.split('/').collect::<Vec<_>>()[..],
+            ["mise", "config.toml" | "config.local.toml"]
+                | ["mise", "conf.d", _]
+                | ["mise", "conf.d", _, "mise.toml" | "mise.local.toml"]
+        ) && below.ends_with(".toml")
+}
+
 /// The TOML files in `paths` that `include` names for a config in `directory`.
 /// mise accepts a file, a glob such as `tasks/*.toml`, or a directory, whose
 /// TOML files at any depth are task files, and `.` is the repository root. A
-/// directory walk skips what mise reads as configuration: hidden files and
-/// `mise.toml` or `mise.local.toml`. A path that leaves the repository names
-/// nothing.
+/// directory walk skips hidden files and what mise reads as configuration
+/// (`walk_config`). A path that leaves the repository names nothing.
 pub fn included_files<'a>(
     directory: &str,
     include: &str,
@@ -61,10 +79,10 @@ pub fn included_files<'a>(
     };
     // mise's walk prunes hidden directories as well as hidden files.
     let configuration = |path: &str| {
-        let leaf = leaf(path);
-        let below = path.strip_prefix(pattern.as_str()).unwrap_or(path);
-        below.split('/').any(|part| part.starts_with('.'))
-            || matches!(leaf, "mise.toml" | "mise.local.toml")
+        let below = path
+            .strip_prefix(pattern.as_str())
+            .map_or(path, |below| below.trim_start_matches('/'));
+        below.split('/').any(|part| part.starts_with('.')) || walk_config(below)
     };
     paths
         .filter(|path| {
@@ -423,39 +441,103 @@ const PLAIN_SETTINGS: [&str; 18] = [
     "task_timings",
 ];
 
-/// Whether `path` is a mise configuration file, under any name mise reads
-/// one by: `mise.toml` and `.mise.toml` with their `.local` and
-/// environment variants, `mise/` and `.mise/` folders, `.config/mise.toml`,
-/// `.config/mise/`, and their `conf.d` folders. `.miserc` files, which can
-/// choose the environment, count too.
-pub(crate) fn config_file(path: &str) -> bool {
-    let leaf = leaf(path);
-    let named = leaf
-        .strip_prefix('.')
-        .unwrap_or(leaf)
-        .strip_prefix("mise")
-        .is_some_and(|rest| rest == ".toml" || rest.starts_with('.') && rest.ends_with(".toml"));
-    let in_folder = ["mise/", ".mise/", ".config/mise/"].iter().any(|dir| {
-        let at = path
-            .find(dir)
-            .filter(|at| *at == 0 || path.as_bytes()[at - 1] == b'/');
-        at.is_some_and(|at| path[at + dir.len()..].ends_with(".toml"))
-    });
-    named || in_folder || path.ends_with(".config/mise.toml") || leaf.starts_with(".miserc")
+/// The folders mise reads configuration from inside a directory, beside
+/// that directory's own `mise.toml`.
+const CONFIG_FOLDERS: [&str; 3] = [".config/mise/", ".mise/", "mise/"];
+
+/// Whether `name` is `<stem>.toml` or `<stem>.<x>.toml` with `x` not
+/// empty: the plain file and its `.local`, environment and environment
+/// `.local` variants.
+fn variant(name: &str, stem: &str) -> bool {
+    name.strip_prefix(stem)
+        .and_then(|rest| rest.strip_suffix(".toml"))
+        .is_some_and(|rest| rest.is_empty() || rest.len() > 1 && rest.starts_with('.'))
 }
 
-/// The folder a mise configuration file governs: the one holding it, or
-/// the one above its `mise/`, `.mise/` or `.config/` folder.
-fn governed(config: &str) -> &str {
-    for dir in [".config/mise/", ".mise/", "mise/", ".config/"] {
-        if let Some(at) = config
-            .find(dir)
-            .filter(|at| *at == 0 || config.as_bytes()[at - 1] == b'/')
-        {
-            return &config[..at];
+/// The directory a mise configuration at `path` configures, with its
+/// trailing slash, or none when mise reads no configuration by that name.
+///
+/// The names, from mise 2026.10.11 (the version `defaults.toml` pins):
+/// `src/config/mod.rs` builds `DEFAULT_CONFIG_FILENAMES` from
+/// `SHARED_CONFIG_FILENAMES`, `LOCAL_OVERRIDE_CONFIG_FILENAMES` and
+/// `env_config_patterns`, each relative to a directory mise walks up
+/// through. With `<dir>` each of `.config/mise`, `.mise` and `mise`:
+///
+/// - `mise.toml`, `.mise.toml`, `.config/mise.toml`, and the
+///   `.local`, `<env>` and `<env>.local` variants of each
+///   (`mise.local.toml`, `.mise.prod.toml`, `.config/mise.prod.local.toml`);
+/// - `<dir>/config.toml` and its variants (`mise/config.local.toml`);
+/// - `.config/mise/mise.toml` and `.config/mise/mise.local.toml`, with
+///   no environment variants;
+/// - `<dir>/conf.d/*.toml`, any name, environment suffixed or not, but
+///   not a hidden one (`config_glob`);
+/// - `<dir>/conf.d/<folder>/mise.toml` and its variants, the folder not
+///   hidden (`is_conf_d_folder_file`).
+///
+/// `MISE_DEFAULT_CONFIG_FILENAME` and `MISE_OVERRIDE_CONFIG_FILENAMES`
+/// replace these only from the environment or a `.miserc.toml`, which
+/// counts below. `src/config/miserc.rs` (`find_miserc_files`) reads
+/// `.miserc.toml`, `.miserc.local.toml` and `.config/miserc.toml` in each
+/// directory; they can choose the environment and those overrides.
+/// `.tool-versions`, also in the list, holds versions only.
+///
+/// Every file named `mise.toml` or a variant configures its own
+/// directory, where mise reads it when run there. One mise reads from an
+/// ancestor, such as `.config/mise.toml` or `mise/conf.d/x.toml`,
+/// configures that ancestor: from there mise reads it in every folder
+/// below.
+fn config_root(path: &str) -> Option<&str> {
+    let leaf = leaf(path);
+    let dir = &path[..path.len() - leaf.len()];
+    // A folder form names the directory above the folder.
+    for folder in CONFIG_FOLDERS {
+        for (at, _) in path.match_indices(folder) {
+            if at != 0 && path.as_bytes()[at - 1] != b'/' {
+                continue;
+            }
+            let rest = &path[at + folder.len()..];
+            let read = match rest.split('/').collect::<Vec<_>>()[..] {
+                [name] => {
+                    variant(name, "config")
+                        || folder == ".config/mise/"
+                            && matches!(name, "mise.toml" | "mise.local.toml")
+                }
+                ["conf.d", name] => name.ends_with(".toml") && !name.starts_with('.'),
+                ["conf.d", fragment, name] => !fragment.starts_with('.') && variant(name, "mise"),
+                _ => false,
+            };
+            if read {
+                return Some(&path[..at]);
+            }
         }
     }
-    &config[..config.rfind('/').map_or(0, |i| i + 1)]
+    // `.config/mise.toml` and `.config/miserc.toml` name the directory
+    // above `.config`.
+    if let Some(above) = dir
+        .strip_suffix(".config/")
+        .filter(|above| above.is_empty() || above.ends_with('/'))
+        && (variant(leaf, "mise") || leaf == "miserc.toml")
+    {
+        return Some(above);
+    }
+    (variant(leaf, "mise")
+        || variant(leaf, ".mise")
+        || matches!(leaf, ".miserc.toml" | ".miserc.local.toml"))
+    .then_some(dir)
+}
+
+/// Whether `path` is a mise configuration file: one `config_root` names a
+/// directory for.
+pub(crate) fn config_file(path: &str) -> bool {
+    config_root(path).is_some()
+}
+
+/// Whether `path` is a `.miserc.toml`, which can rename every other
+/// configuration file and choose the environment.
+fn miserc(path: &str) -> bool {
+    matches!(leaf(path), ".miserc.toml" | ".miserc.local.toml")
+        || path == ".config/miserc.toml"
+        || path.ends_with("/.config/miserc.toml")
 }
 
 /// The backends `tool` can install with: its `backend:` prefix, or those
@@ -480,7 +562,7 @@ fn backends(tool: &str) -> Vec<String> {
 /// plain tables and settings above counts against every tool.
 fn redirected_backends(path: &str, text: &str) -> Option<BTreeSet<String>> {
     let mut out = BTreeSet::new();
-    if leaf(path).starts_with(".miserc") {
+    if miserc(path) {
         out.insert("*".to_owned());
         return Some(out);
     }
@@ -768,13 +850,13 @@ pub(crate) fn redirected(
     }
     let mut dirs = vec![&dep.file[..dep.file.rfind('/').map_or(0, |i| i + 1)]];
     if let Some(including) = &dep.included_by {
-        dirs.push(governed(including));
+        dirs.push(config_root(including).unwrap_or_default());
     }
     let mut kinds = backends(&dep.package);
     kinds.push(format!("tool:{}", dep.package));
     let mut related = Vec::new();
     for config in configs {
-        let folder = governed(config);
+        let folder = config_root(config).unwrap_or_default();
         if !dirs
             .iter()
             .any(|dir| dir.starts_with(folder) || folder.starts_with(*dir))
@@ -881,5 +963,134 @@ impl crate::Ecosystem for Descriptor {
                 Ok(())
             })),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every name mise 2026.10.11 reads configuration by, root and nested,
+    /// with the directory it configures.
+    #[test]
+    fn mise_config_names_are_the_ones_mise_reads() {
+        for (name, root) in [
+            ("mise.toml", ""),
+            ("mise.local.toml", ""),
+            ("mise.prod.toml", ""),
+            ("mise.prod.local.toml", ""),
+            ("mise.ci.linux.toml", ""),
+            (".mise.toml", ""),
+            (".mise.local.toml", ""),
+            (".mise.prod.toml", ""),
+            (".mise.prod.local.toml", ""),
+            (".config/mise.toml", ""),
+            (".config/mise.local.toml", ""),
+            (".config/mise.prod.toml", ""),
+            (".config/mise.prod.local.toml", ""),
+            (".config/mise/config.toml", ""),
+            (".config/mise/config.local.toml", ""),
+            (".config/mise/config.prod.toml", ""),
+            (".config/mise/config.prod.local.toml", ""),
+            (".config/mise/mise.toml", ""),
+            (".config/mise/mise.local.toml", ""),
+            (".config/mise/conf.d/node.toml", ""),
+            (".config/mise/conf.d/node.prod.toml", ""),
+            (".config/mise/conf.d/git/mise.toml", ""),
+            (".config/mise/conf.d/git/mise.local.toml", ""),
+            (".config/mise/conf.d/git/mise.prod.toml", ""),
+            (".mise/config.toml", ""),
+            (".mise/config.local.toml", ""),
+            (".mise/config.prod.toml", ""),
+            (".mise/conf.d/node.toml", ""),
+            (".mise/conf.d/git/mise.toml", ""),
+            (".mise/conf.d/git/mise.prod.local.toml", ""),
+            ("mise/config.toml", ""),
+            ("mise/config.local.toml", ""),
+            ("mise/config.prod.toml", ""),
+            ("mise/conf.d/node.toml", ""),
+            ("mise/conf.d/git/mise.toml", ""),
+            (".miserc.toml", ""),
+            (".miserc.local.toml", ""),
+            (".config/miserc.toml", ""),
+            // A `mise.toml` configures its own folder, wherever it is.
+            ("mise/mise.toml", "mise/"),
+            (".mise/mise.local.toml", ".mise/"),
+            (".config/mise/mise.prod.toml", ".config/mise/"),
+            ("tools/mise/mise.toml", "tools/mise/"),
+            (".config/.mise.toml", ".config/"),
+        ] {
+            assert_eq!(config_root(name), Some(root), "{name}");
+            let nested = format!("app/{name}");
+            assert_eq!(
+                config_root(&nested),
+                Some(format!("app/{root}").as_str()),
+                "{nested}"
+            );
+        }
+    }
+
+    /// Other TOML files in and around mise's folders are not configuration:
+    /// a crate named `mise`, task files, hidden `conf.d` files, names mise
+    /// does not read.
+    #[test]
+    fn other_toml_files_in_mise_folders_are_not_configuration() {
+        for name in [
+            "crates/mise/Cargo.toml",
+            "mise/Cargo.toml",
+            "mise/tools.toml",
+            "mise/tasks.toml",
+            "mise/tasks/build.toml",
+            ".mise/tools.toml",
+            ".mise/tasks/build.toml",
+            ".config/mise/tools.toml",
+            ".config/mise/settings.toml",
+            "mise/conf.d/.node.toml",
+            "mise/conf.d/node.json",
+            "mise/conf.d/git/tools.toml",
+            "nginx/conf.d/site.toml",
+            "mise/config/x.toml",
+            "mise/configs.toml",
+            "mise.toml.bak",
+            "mise..toml",
+            "mymise.toml",
+            "notmise/config.toml",
+            ".config/mise/config..toml",
+            ".miserc",
+            ".miserc.yaml",
+            "miserc.toml",
+            "x.config/miserc.toml",
+            ".tool-versions",
+        ] {
+            assert!(!config_file(name), "{name}");
+            assert!(!config_file(&format!("app/{name}")), "app/{name}");
+        }
+    }
+
+    /// A task-file walk skips what mise's walk would read as
+    /// configuration, and only that.
+    #[test]
+    fn task_walks_skip_only_what_mise_reads_as_configuration() {
+        let paths = [
+            "tasks/build.toml",
+            "tasks/mise.toml",
+            "tasks/sub/mise.local.toml",
+            "tasks/mise.prod.toml",
+            "tasks/mise/config.toml",
+            "tasks/mise/conf.d/x.toml",
+            "tasks/mise/conf.d/git/mise.toml",
+            "tasks/mise/tools.toml",
+            "tasks/sub/mise/config.toml",
+            "tasks/.hidden/x.toml",
+        ];
+        assert_eq!(
+            included_files("", "tasks", paths.into_iter()),
+            [
+                "tasks/build.toml",
+                "tasks/mise.prod.toml",
+                "tasks/mise/tools.toml",
+                "tasks/sub/mise/config.toml",
+            ]
+        );
     }
 }

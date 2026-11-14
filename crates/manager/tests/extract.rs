@@ -4681,3 +4681,64 @@ fn an_unread_mise_config_may_govern_any_other() {
         dep.registry
     );
 }
+
+/// A crate named `mise` is not mise configuration: its `Cargo.toml`
+/// under `crates/mise/` holds `[package]` and `[dependencies]`, which as
+/// mise settings would fail every mise tool's lookup.
+#[test]
+fn a_cargo_manifest_in_a_mise_folder_fails_no_mise_lookup() {
+    let tools =
+        "[tools]\njq = \"1.7.1\"\n\"npm:prettier\" = \"3.3.0\"\n\"cargo:ripgrep\" = \"14.0.0\"\n";
+    let manifest = "[package]\nname = \"patchula-mise\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n";
+    let mut config = config();
+    config.managers = vec![Manager::Mise, Manager::Cargo];
+    for (manifest_path, tasks_path) in [
+        ("crates/mise/Cargo.toml", "crates/mise/tasks.toml"),
+        ("mise/Cargo.toml", ".mise/tools.toml"),
+    ] {
+        let files = read_files([
+            ("mise.toml".into(), tools.into()),
+            (
+                "Cargo.toml".into(),
+                "[workspace]\nmembers = [\"crates/*\"]\n".into(),
+            ),
+            (manifest_path.into(), manifest.into()),
+            (tasks_path.into(), "[build]\nrun = \"cargo build\"\n".into()),
+        ]);
+        let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+        for name in ["jq", "npm:prettier", "cargo:ripgrep"] {
+            let dep = extraction
+                .dependencies
+                .iter()
+                .find(|d| d.file == "mise.toml" && d.name == name)
+                .unwrap_or_else(|| panic!("{name}"));
+            let registry = dep.registry.as_ref().map(|r| r.recorded());
+            assert!(
+                !fails(registry.map(str::to_owned)),
+                "{manifest_path} {name}: {registry:?}"
+            );
+        }
+    }
+    // A real configuration in the same folder still counts.
+    let files = read_files([
+        ("mise.toml".into(), tools.into()),
+        (
+            "mise/config.toml".into(),
+            "[settings]\nurl_replacements = { \"https://github.com\" = \"https://git.acme.dev\" }\n".into(),
+        ),
+    ]);
+    let extraction = Scanner::new(&config).unwrap().extract(&files).unwrap();
+    let dep = extraction
+        .dependencies
+        .iter()
+        .find(|d| d.name == "jq")
+        .unwrap();
+    assert!(
+        dep.registry
+            .as_ref()
+            .map(|r| r.recorded())
+            .is_some_and(|r| r.contains("mise/config.toml")),
+        "{:?}",
+        dep.registry
+    );
+}

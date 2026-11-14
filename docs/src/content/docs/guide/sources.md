@@ -109,13 +109,23 @@ the like, or variables loaded from files through `_.file` or `_.source`),
 or the project's own `.npmrc` or `.yarnrc.yml` mentioning a registry, any `pip.conf` or `pip.ini`, Python
 index settings, Cargo registry settings, or NuGet feeds other than
 nuget.org's, in the tool's folder, above it or below it. Every tool fails
-its lookup where a mise configuration there, under any name mise reads one
-by (`mise.local.toml`, `.config/mise/`, `conf.d` and the rest), holds
+its lookup where a mise configuration there holds
 anything but `tools`, `tasks`, `task_config`, `vars`, `env`, `settings`,
 `min_version`, `redactions` and `wrappers`, sets a `MISE_*` variable, or sets anything
 but a few plain settings such as `experimental` and `lockfile`; where a
-`.miserc` exists; where the tool's own entry has options beyond `version`
-and `os`; or where the Count cannot read the configuration.
+`.miserc.toml`, `.miserc.local.toml` or `.config/miserc.toml` exists; where
+the tool's own entry has options beyond `version` and `os`; or where the
+Count cannot read the configuration.
+
+A mise configuration is a file under a name mise reads one by, and no
+other: `mise.toml`, `.mise.toml` and `.config/mise.toml`; `config.toml` in a
+`mise/`, `.mise/` or `.config/mise/` folder; `.config/mise/mise.toml`; any
+TOML file directly in one of those folders' `conf.d/` that is not hidden; and
+`mise.toml` in a folder inside `conf.d/`. Each counts with its `.local`,
+environment and environment `.local` variants (`mise.local.toml`,
+`mise/config.prod.toml`, `.mise.ci.local.toml`). Other TOML files in those
+folders, such as the `Cargo.toml` of a crate in `crates/mise/`, are not
+configuration.
 
 ## mise-versions host
 

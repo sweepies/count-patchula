@@ -153,9 +153,9 @@ const NUGET_WRITABLE: &[&str] = &[
 ];
 
 /// mise's leaf-named files and the roles each plays. `mise::config_file`
-/// also covers the directory forms (`mise/tools.toml`,
-/// `.config/mise.toml`) no leaf name expresses; those get `settings` and
-/// `registry` only. Its names are `manifest_names(Mise)`'s plus `mise.lock`.
+/// also covers the other names mise reads configuration by
+/// (`mise/config.toml`, `.config/mise/conf.d/*.toml`, environment
+/// variants); those get `settings` and `registry` only. Its names are `manifest_names(Mise)`'s plus `mise.lock`.
 struct MiseFile {
     name: &'static str,
     /// `Descriptor::selected`: the Count parses the file for tools.
@@ -191,7 +191,14 @@ const MISE_FILES: &[MiseFile] = &[
         writable: false,
     },
     MiseFile {
-        name: ".miserc",
+        name: ".miserc.toml",
+        selected: false,
+        check: CredentialCheck::Undecided,
+        read: false,
+        writable: false,
+    },
+    MiseFile {
+        name: ".miserc.local.toml",
         selected: false,
         check: CredentialCheck::Undecided,
         read: false,
@@ -605,7 +612,8 @@ pub fn manifest_names(manager: Manager) -> &'static [&'static str] {
             "mise.toml",
             ".mise.toml",
             "mise.local.toml",
-            ".miserc",
+            ".miserc.toml",
+            ".miserc.local.toml",
             ".tool-versions",
         ],
         Manager::Nix => &["flake.nix"],
