@@ -93,7 +93,7 @@ jobs:
       # from this repository (RELEASE_PR): a fork could name its branch
       # release-next and make the task skip its tests.
       - if: env.RELEASE_PR == 'true'
-        uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: false
         env:
@@ -141,7 +141,7 @@ jobs:
           path: &mise-downloads ~/.cache/mise/downloads-cas
           key: &mise-downloads-key mise-downloads-${{ runner.os }}-${{ hashFiles('mise.lock') }}
           restore-keys: &mise-downloads-restore mise-downloads-${{ runner.os }}-
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: false
       - id: cargo-downloads
@@ -203,7 +203,7 @@ jobs:
           path: *mise-downloads
           key: *mise-downloads-key
           restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: false
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -259,7 +259,7 @@ jobs:
           path: *mise-downloads
           key: *mise-downloads-key
           restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: false
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -299,7 +299,7 @@ jobs:
           path: *mise-downloads
           key: *mise-downloads-key
           restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: false
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -345,7 +345,7 @@ jobs:
           path: *mise-downloads
           key: *mise-downloads-key
           restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -397,7 +397,7 @@ jobs:
           path: *mise-downloads
           key: *mise-downloads-key
           restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: false
       - run: mise run docs:build
