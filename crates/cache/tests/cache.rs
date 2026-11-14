@@ -272,7 +272,7 @@ async fn migrates_previous_schema_without_discarding_http_or_release_data() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        14
+        15
     );
 }
 
@@ -485,6 +485,24 @@ async fn migration_rebuilds_github_release_lists_stored_with_prereleases() {
         )
         .unwrap();
     }
+    let state = |conn: &rusqlite::Connection| -> Vec<String> {
+        conn.prepare("SELECT namespace || ' ' || scope FROM state ORDER BY namespace, scope")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap()
+    };
+    // Migration 011 drops only the github-releases source-head rows.
+    conn.execute_batch(include_str!("../src/migrations/011.sql"))
+        .unwrap();
+    assert_eq!(
+        state(&conn),
+        [
+            r#"source-head@v1 {"source":"other","package":"owner/repo"}"#,
+            r#"tag-catalog@v1 {"source":"github-releases","package":"owner/repo"}"#,
+        ]
+    );
     drop(conn);
     let cache = cache(&directory).await;
     let github = cache
@@ -501,21 +519,9 @@ async fn migration_rebuilds_github_release_lists_stored_with_prereleases() {
             .as_deref(),
         Some("v1.0.0")
     );
+    // Migration 015 drops the rest: both names are fingerprinted now.
     let conn = rusqlite::Connection::open(&path).unwrap();
-    let state: Vec<String> = conn
-        .prepare("SELECT namespace || ' ' || scope FROM state ORDER BY namespace, scope")
-        .unwrap()
-        .query_map([], |row| row.get(0))
-        .unwrap()
-        .collect::<std::result::Result<_, _>>()
-        .unwrap();
-    assert_eq!(
-        state,
-        [
-            r#"source-head@v1 {"source":"other","package":"owner/repo"}"#,
-            r#"tag-catalog@v1 {"source":"github-releases","package":"owner/repo"}"#,
-        ]
-    );
+    assert!(state(&conn).is_empty());
 }
 
 #[tokio::test]
@@ -575,6 +581,6 @@ async fn migration_counts_requeues_on_new_and_eleven_schema_queues() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        14
+        15
     );
 }

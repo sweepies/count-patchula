@@ -142,9 +142,10 @@ fn scan(dir: &Path, names: &mut BTreeSet<String>) {
 
 /// Every registered representation has a row whose version and source
 /// hash still hold, every representation the crate's sources declare is
-/// registered, and no row is stale. On a source or locked dependency
-/// change the failure names the new hash; bump the representation's
-/// version and update its row in the same commit.
+/// registered, and no row is stale. On a source change the failure names
+/// the new hash; bump the representation's version and update its row in
+/// the same commit. A listed crate must be in Cargo.lock; its locked
+/// version keys the cache entry, not the row.
 pub fn check(krate: &str, registered: &std::collections::BTreeMap<&'static str, u32>) {
     crate::versions::check("derived-versions.tsv", krate, registered, declared(krate));
 }

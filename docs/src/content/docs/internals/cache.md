@@ -66,15 +66,26 @@ straight into its derive worker, so the raw document is never held whole.
 The request's host permit is held until its body is read, so in-flight bodies
 stay inside the host limit. Reads that arrive already buffered derive under a
 four-job limit. A 304 updates only metadata and reuses the compact body. A
-derived representation is `name@v{VERSION}`, where the version belongs to the
-transform's own code rather than the release: a new release keeps the cached
-entries of every transform whose code did not change, and a change to one
-transform misses only that representation. `tests/derived-versions.tsv`
-guards the contract — it hashes the source files and locked dependency
-versions that produce each representation's bytes, and the owning crate's
-parity test fails when the code moves without a version bump; the
-maintenance step is to bump the `Derived`'s version and update the row in
-the same commit. A derive may only read code in its row's listed files, and
+derived representation is `name@v{VERSION}~{fingerprint}`, where the version
+belongs to the transform's own code rather than the release and the
+fingerprint to the locked versions of the crates it depends on: a new release
+keeps the cached entries of every transform whose code and dependencies did
+not change, and a change to one transform misses only that representation.
+`tests/derived-versions.tsv` guards the contract — it hashes the source files
+that produce each representation's bytes, and the owning crate's parity test
+fails when the code moves without a version bump; the maintenance step is to
+bump the `Derived`'s version and update the row in the same commit. The row
+also lists the Cargo.lock packages the bytes depend on. Those are not hashed:
+the cache crate's build script reads Cargo.lock and both tables and
+fingerprints each row's locked versions (the first 12 hex digits of a sha256)
+into its key, so a dependency bump, such as the Count's own update PRs on
+this repository, invalidates exactly the representations that list the crate
+and needs no version bump. A row listing `-` has no fingerprint and its key is
+plain `name@v{VERSION}`. The parity test checks only that every listed package
+is in Cargo.lock, so a typo fails, and the build fails outside the workspace
+rather than key without the lock. The fingerprint follows `~` because `+` is
+the retired per-build marker migration 014 deletes on sight; names may
+contain none of `@`, `~` or `+`. A derive may only read code in its row's listed files, and
 since whole files are hashed a formatting or comment edit in one forces a
 bump too — batch cosmetic edits in those files. The parity test also scans
 the crate's sources for `Derived::new("<name>"` (and the pull-token
@@ -82,7 +93,9 @@ representation constant), so a representation cannot exist without a row,
 and a listed file that is renamed fails naming the row and the missing
 file. Entries written
 under the retired `name+build` scheme are never read again and are deleted
-when the cache opens; raw and derived namespaces never share validators.
+when the cache opens, as are those under a fingerprinted name's plain
+`name@v{VERSION}` key from before fingerprints (migration 015); raw and
+derived namespaces never share validators.
 
 The default 256 MiB budget counts compressed HTTP body bytes. An access clock
 approximates LRU and evicts whole HTTP rows, validators included, until the
@@ -102,7 +115,8 @@ Typed values the Count keeps between runs (hints, extractions, catalog views,
 receipts and the like) live in `state`; the server queue, installations and
 repositories keep their own tables. A state row is one value, keyed by a
 namespace and a canonical-JSON scope. A `State` implementation names its
-`NAMESPACE` and `VERSION`, forming `name@v{VERSION}`, and declares the `Scope` struct
+`NAMESPACE` and `VERSION`, forming `name@v{VERSION}` (with a dependency
+fingerprint for a code-versioned state, below), and declares the `Scope` struct
 whose named fields say what the entry is about.
 Values are JSON. A stored value that fails to decode is a miss, logged at
 debug level; database errors remain errors. Each call site owns its value and
@@ -117,12 +131,15 @@ config, an extraction, a parsed changelog, a `not-ours` verdict — sets
 `CODE_VERSIONED` instead, and `VERSION` names the deriving code: a new
 release keeps the cached entries of every state whose derivation code did not
 change, and a change to one state's derivation misses only its namespace.
-`tests/state-versions.tsv` guards the contract — it hashes the source files,
-source trees (an entry ending `/` covers every file under it, so a file added
-to a listed tree fails too) and locked dependency versions the derivation
-reads, and the owning crate's parity test fails when the code moves without a
-version bump; the maintenance step is to bump the `VERSION` and update the
-row in the same commit. A derivation may only read code in its row's listed
+`tests/state-versions.tsv` guards the contract — it hashes the source files
+and source trees (an entry ending `/` covers every file under it, so a file
+added to a listed tree fails too) the derivation reads, and the owning crate's
+parity test fails when the code moves without a version bump; the maintenance
+step is to bump the `VERSION` and update the row in the same commit. The row's
+listed Cargo.lock packages key the entry the way they key a derived
+representation: the namespace is `name@v{VERSION}~{fingerprint}`, so a
+dependency bump misses exactly the states that list the crate, with no
+version bump. Exempt states carry no fingerprint. A derivation may only read code in its row's listed
 files and trees; over-include rather than miss, and batch cosmetic edits in
 listed files. The parity test also scans every `impl State` in the
 workspace's non-test sources — `#[cfg(test)]` modules and `tests/`
@@ -137,8 +154,10 @@ memo — is code-versioned. A state refetched within a bounded freshness
 window, or holding facts that are not code-derived — receipts, history,
 permits, run timestamps, hints — is exempt; a stale hint only costs a
 wasted read and never a wrong answer. Entries written under the
-retired `name@vN+build` scheme are never read again and are deleted when the
-cache opens.
+retired `name@vN+build` scheme, and those under a fingerprinted name's plain
+`name@vN` key from before fingerprints, are never read again and are deleted
+when the cache opens (migrations 014 and 015). Entries under an older version
+or fingerprint of the same name are not pruned.
 
 ## Schema and corruption
 

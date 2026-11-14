@@ -4,39 +4,45 @@
 # owning crate's file first; an entry ending `/` names every file under
 # that tree, so a new file in a listed tree fails the guard too),
 # comma-separated Cargo.lock packages whose locked versions the
-# derivation's bytes depend on (`-` when none), and the sha256 of all of
-# it (each file as `path\0bytes\0`, each package as `name\0versions\0`).
-# A tree's files hash in component-wise path order, so a directory sorts
-# before the file whose name it prefixes (`pypi/settings.rs` before
-# `pypi.rs`).
+# derivation's bytes depend on (`-` when none), and the sha256 of the
+# sources (each file as `path\0bytes\0`). A tree's files hash in
+# component-wise path order, so a directory sorts before the file whose
+# name it prefixes (`pypi/settings.rs` before `pypi.rs`).
 #
 # The version lives at the `State::VERSION` beside `CODE_VERSIONED`; the
 # parity test in the owning crate (state_parity, or the crate's
 # derive_parity module) checks this table and that every `CODE_VERSIONED`
-# impl in the crate's sources is registered. When a state's source — or
-# one of its listed dependencies' locked versions — changes, the test
-# fails naming the new hash: bump the version and update this row in the
-# same commit. A row must list every file the derivation reads bytes
-# through; whole files and trees are hashed, so a formatting or comment
-# edit in a listed file also needs the bump (batch cosmetic edits in
-# these files). Over-include rather than miss: when in doubt, list the
-# whole tree. Every `impl State` in non-test workspace source is either a
-# row here or an entry in tests/state-exempt.tsv; the coverage check in
-# the parity test fails on a state that is neither, on a listing whose
-# impl is gone, and on a flag that disagrees with the table.
+# impl in the crate's sources is registered. When a state's source
+# changes, the test fails naming the new hash: bump the version and
+# update this row in the same commit. A row must list every file the
+# derivation reads bytes through; whole files and trees are hashed, so a
+# formatting or comment edit in a listed file also needs the bump (batch
+# cosmetic edits in these files). Over-include rather than miss: when in
+# doubt, list the whole tree.
+#
+# The listed packages are not hashed here. The cache's build script
+# fingerprints their locked versions into the state's key
+# (`name@vN~<fingerprint>`), so a dependency bump misses exactly the
+# states that list it, with no version bump. The parity test only checks
+# that every listed package is in Cargo.lock, so a typo fails.
+#
+# Every `impl State` in non-test workspace source is either a row here or
+# an entry in tests/state-exempt.tsv; the coverage check in the parity
+# test fails on a state that is neither, on a listing whose impl is gone,
+# and on a flag that disagrees with the table.
 #
 # name	version	sources	deps	sha256
-extract	7	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl,crates/github/src/model.rs,crates/github/src/blobs.rs,crates/engine/src/repository-head.graphql,crates/github/graphql/schema.docs.graphql	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,percent-encoding,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	fb2846043cb3e78d5b8e6f360e1d9b930ac6381884356454710ea181da22df96
-files	7	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl,crates/github/src/model.rs,crates/github/src/blobs.rs,crates/engine/src/repository-head.graphql,crates/github/graphql/schema.docs.graphql	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,percent-encoding,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	fb2846043cb3e78d5b8e6f360e1d9b930ac6381884356454710ea181da22df96
-config	4	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl,crates/github/src/model.rs,crates/github/src/blobs.rs,crates/engine/src/repository-head.graphql,crates/github/graphql/schema.docs.graphql	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,percent-encoding,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	fb2846043cb3e78d5b8e6f360e1d9b930ac6381884356454710ea181da22df96
-config-files	4	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl,crates/github/src/model.rs,crates/github/src/blobs.rs,crates/engine/src/repository-head.graphql,crates/github/graphql/schema.docs.graphql	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,percent-encoding,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	fb2846043cb3e78d5b8e6f360e1d9b930ac6381884356454710ea181da22df96
-catalog	5	crates/engine/src/catalogs.rs,crates/datasource/src/,crates/versioning/src/,crates/words/src/,crates/engine/src/lib.rs,crates/config/src/package.rs,crates/http/src/derive.rs,crates/http/src/cached.rs,crates/http/src/tracked.rs	base64,chrono,nodejs-semver,pep440_rs,regex,semver,serde,serde_json,serde_yaml_ng,sha2	91b649400775c8280d7045192085daee023c7554bce63bd5bb30d1da6763c8db
-catalog-controls	5	crates/engine/src/catalogs.rs,crates/update/src/identity.rs,crates/update/src/plan.rs,crates/update/src/plan/,crates/report/src/lib.rs,crates/manager/src/lib.rs,crates/words/src/,crates/engine/src/,crates/manager/src/,crates/config/src/,crates/lookup/src/,crates/lockfiles/src/	serde,serde_json,sha2	b412ff34b1fbe714c2d02e6357049fc2ae45256f260c5f84bb622f049452ecce
-not-ours	2	crates/update/src/cleanup.rs,crates/update/src/trailers.rs,crates/github/src/model.rs	serde,serde_json	08ea4a091122f736e2d553cefef2c4f40585d19e4c38c0817761e824974aba47
-changelog	3	crates/notes/src/,crates/versioning/src/,crates/words/src/,crates/http/src/derive.rs,crates/http/src/cached.rs,crates/http/src/tracked.rs	base64,nodejs-semver,pep440_rs,regex,semver,serde,serde_json,serde_yaml_ng	3cf9774a4a81514b8f02d1c9beb5473bc7e78c3f37d9c477d6407240b96cc96f
-notes-adapter	3	crates/notes/src/,crates/versioning/src/,crates/words/src/,crates/http/src/derive.rs,crates/http/src/cached.rs,crates/http/src/tracked.rs	base64,nodejs-semver,pep440_rs,regex,semver,serde,serde_json,serde_yaml_ng	3cf9774a4a81514b8f02d1c9beb5473bc7e78c3f37d9c477d6407240b96cc96f
-source-head	3	crates/datasource/src/github.rs,crates/datasource/src/releases.graphql,crates/github/src/,crates/github/graphql/schema.docs.graphql,crates/http/src/derive.rs	graphql_client,serde,serde_json	d5f3794dd8bcc21a5477f34d260397d0084b842dfde05c03f1daeeb7bc6b728c
-tag-catalog	3	crates/datasource/src/github.rs,crates/datasource/src/catalog.rs,crates/github/src/	serde,serde_json,sha2	b9055b849e193d07a5bc3e9b0bafeeb5d2bad226b0de67adb51b7f4480d77725
-tag-object	3	crates/datasource/src/github.rs,crates/datasource/src/catalog.rs,crates/github/src/	serde,serde_json	72af89b636130620fe6f02705e1ac9d97700963f3c9a9dd7826c0b656e5f43c0
-osv-advisory	2	crates/datasource/src/advisories.rs,crates/words/src/,crates/http/src/cached.rs,crates/http/src/tracked.rs	cvss,serde,serde_json	3eb90cdc7b64290c0d49eb76f40b3a36a79fddded356d6a86c46a24c8ebfd7f1
-release-notes	3	crates/notes/src/releases.rs,crates/github/src/	serde,serde_json	bed46b7756e6b4beb0bea72ac014e82222878380f7ed6436f56efdce30e38dcc
+extract	7	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl,crates/github/src/model.rs,crates/github/src/blobs.rs,crates/engine/src/repository-head.graphql,crates/github/graphql/schema.docs.graphql	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,percent-encoding,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	a1f634a41c3a4fbac92c32dc4478e8e872d5dc855374eed0171bdd04baf57eb6
+files	7	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl,crates/github/src/model.rs,crates/github/src/blobs.rs,crates/engine/src/repository-head.graphql,crates/github/graphql/schema.docs.graphql	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,percent-encoding,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	a1f634a41c3a4fbac92c32dc4478e8e872d5dc855374eed0171bdd04baf57eb6
+config	4	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl,crates/github/src/model.rs,crates/github/src/blobs.rs,crates/engine/src/repository-head.graphql,crates/github/graphql/schema.docs.graphql	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,percent-encoding,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	a1f634a41c3a4fbac92c32dc4478e8e872d5dc855374eed0171bdd04baf57eb6
+config-files	4	crates/engine/src/lib.rs,crates/engine/src/repository.rs,crates/manager/src/,crates/mise/src/,crates/mise/registry.json,crates/config/src/,crates/words/src/,crates/versioning/src/,crates/update/src/plan.rs,crates/update/src/tooling.rs,PatchulaConfig.pkl,crates/github/src/model.rs,crates/github/src/blobs.rs,crates/engine/src/repository-head.graphql,crates/github/graphql/schema.docs.graphql	chrono,chrono-tz,cron,globset,hcl-edit,jsonc-parser,nodejs-semver,pep440_rs,percent-encoding,pklr,regex,roxmltree,semver,serde,serde_json,serde_yaml_ng,sha2,toml_edit,url,yaml-rust2	a1f634a41c3a4fbac92c32dc4478e8e872d5dc855374eed0171bdd04baf57eb6
+catalog	5	crates/engine/src/catalogs.rs,crates/datasource/src/,crates/versioning/src/,crates/words/src/,crates/engine/src/lib.rs,crates/config/src/package.rs,crates/http/src/derive.rs,crates/http/src/cached.rs,crates/http/src/tracked.rs	base64,chrono,nodejs-semver,pep440_rs,regex,semver,serde,serde_json,serde_yaml_ng,sha2	f42ae538edf74bba04d071f80843d7195e6ef39aee122c262081aad2b8031b94
+catalog-controls	5	crates/engine/src/catalogs.rs,crates/update/src/identity.rs,crates/update/src/plan.rs,crates/update/src/plan/,crates/report/src/lib.rs,crates/manager/src/lib.rs,crates/words/src/,crates/engine/src/,crates/manager/src/,crates/config/src/,crates/lookup/src/,crates/lockfiles/src/	serde,serde_json,sha2	da4cccd0f60d47b2a27aa89fb4471326ee6fc41316894ea32ffdcc669811f098
+not-ours	2	crates/update/src/cleanup.rs,crates/update/src/trailers.rs,crates/github/src/model.rs	serde,serde_json	7287e05b2411ede2b8417246a0bf33df56147ab9cd1ba0453c943514931da975
+changelog	3	crates/notes/src/,crates/versioning/src/,crates/words/src/,crates/http/src/derive.rs,crates/http/src/cached.rs,crates/http/src/tracked.rs	base64,nodejs-semver,pep440_rs,regex,semver,serde,serde_json,serde_yaml_ng	cba048293aaac6e81c0271553031b62a4960a5e7d7d0465c3e183c579a667074
+notes-adapter	3	crates/notes/src/,crates/versioning/src/,crates/words/src/,crates/http/src/derive.rs,crates/http/src/cached.rs,crates/http/src/tracked.rs	base64,nodejs-semver,pep440_rs,regex,semver,serde,serde_json,serde_yaml_ng	cba048293aaac6e81c0271553031b62a4960a5e7d7d0465c3e183c579a667074
+source-head	3	crates/datasource/src/github.rs,crates/datasource/src/releases.graphql,crates/github/src/,crates/github/graphql/schema.docs.graphql,crates/http/src/derive.rs	graphql_client,serde,serde_json	f4a3fd6d844c2fcdc7ba76e64aac6d84a0712089322aff5e4d52b2d790cab59e
+tag-catalog	3	crates/datasource/src/github.rs,crates/datasource/src/catalog.rs,crates/github/src/	serde,serde_json,sha2	9d7be64ae7266153d2fc740c3dca89a88c0d64a44e0bdb62b4ccedc3aec94fd6
+tag-object	3	crates/datasource/src/github.rs,crates/datasource/src/catalog.rs,crates/github/src/	serde,serde_json	9d7be64ae7266153d2fc740c3dca89a88c0d64a44e0bdb62b4ccedc3aec94fd6
+osv-advisory	2	crates/datasource/src/advisories.rs,crates/words/src/,crates/http/src/cached.rs,crates/http/src/tracked.rs	cvss,serde,serde_json	146ab8efb9d29225d3096084f231506f0944b690a646577845a783baed03da4f
+release-notes	3	crates/notes/src/releases.rs,crates/github/src/	serde,serde_json	de4171ca3c6c7f59e47dd3e4227bd66061297915a5882cbfa93d2af0bf991111

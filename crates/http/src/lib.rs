@@ -274,7 +274,6 @@ mod credentials;
 mod derive;
 pub use cached::{
     Bearer, Cached, Derived, Error as CacheError, NoRules, Options, RegistryRules, Stats,
-    representation,
 };
 pub use credentials::{Auth, Credential, entry_for, prefix as url_prefix};
 mod trace;

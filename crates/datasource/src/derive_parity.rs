@@ -43,8 +43,8 @@ async fn every_derive_reads_a_streamed_body_the_same() {
 }
 
 /// A derived body is versioned by its compaction code, not the release:
-/// `tests/derived-versions.tsv` hashes the files and locked dependency
-/// versions that produce its bytes, and every `Derived::new` in the crate
+/// `tests/derived-versions.tsv` hashes the files that produce its bytes,
+/// and every `Derived::new` in the crate
 /// must be registered in `derives()`. A change to one must bump its
 /// `Derived`'s version and update the row in the same commit; this failure
 /// names the new hash.
