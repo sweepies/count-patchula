@@ -4511,8 +4511,9 @@ os = "linux"
                 "github:github/gh-actions-lock[bin=gh-actions-lock]",
                 "0.4.1"
             ),
+            // mise lists a tool with its first request's options.
             found("node", "node", "22.1.0"),
-            found("node", r#"node[os=["linux"]]"#, "24.2.0"),
+            found("node", "node", "24.2.0"),
             found(
                 "http:tool",
                 r#"http:tool[url="https://x.example/{{ version }}",version_list_url="https://x.example/versions"]"#,
@@ -4559,6 +4560,153 @@ os = "linux"
         )
         .as_deref(),
         Some("settings in mise.toml may move where mise installs it from")
+    );
+}
+
+/// The full extraction of `files`, as (file, name, package, registry).
+fn mise_extract(files: &[(&str, &str)]) -> Vec<(String, String, String, Option<String>)> {
+    let files: Files = files
+        .iter()
+        .map(|(path, text)| ((*path).to_owned(), fixture(text)))
+        .collect();
+    let mut config = config();
+    config.managers = vec![Manager::Mise];
+    config.files = vec![patchula_config::FileSet {
+        manager: Manager::Mise,
+        paths: files.keys().cloned().collect(),
+    }];
+    Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .map(|d| {
+            (
+                d.file,
+                d.name,
+                d.package,
+                d.registry.map(|r| r.recorded().to_owned()),
+            )
+        })
+        .collect()
+}
+
+/// mise does not merge a tool's options across configuration files: the
+/// highest-precedence file's entry (`mise.local.toml` over `mise.toml` over
+/// `.tool-versions`, a folder's over its parent's) replaces the others
+/// whole, options included, as the pinned mise does. An array lists with
+/// its first request's options. Each entry is looked up with the options
+/// mise lists it with.
+#[test]
+fn mise_options_come_from_the_entry_mise_lists_with() {
+    let found = mise_extract(&[
+        (
+            "mise.toml",
+            "[tools]\njq = { version = \"1.7.1\", foo = \"base\" }\nnode = [{ version = \"24.2.0\", os = [\"linux\"] }, \"22.1.0\"]\n",
+        ),
+        (
+            "mise.local.toml",
+            "[tools]\njq = { version = \"1.7.0\", bar = \"local\" }\n",
+        ),
+        ("app/mise.toml", "[tools]\njq = \"1.6.0\"\n"),
+    ]);
+    let packages: Vec<_> = found
+        .iter()
+        .map(|(file, _, package, registry)| (file.as_str(), package.as_str(), registry.clone()))
+        .collect();
+    assert_eq!(
+        packages,
+        [
+            ("app/mise.toml", "jq", None),
+            ("mise.local.toml", r#"jq[bar="local"]"#, None),
+            ("mise.toml", r#"jq[foo="base"]"#, None),
+            ("mise.toml", r#"node[os=["linux"]]"#, None),
+            ("mise.toml", r#"node[os=["linux"]]"#, None),
+        ]
+    );
+}
+
+/// A task's tool is a runtime request: mise layers its [tools] entry's
+/// options under the task's own, choosing by version. The Count does not
+/// reproduce that, so a task's tool is refused when either has options in a
+/// table; brackets on its name are part of the tool and pass.
+#[test]
+fn mise_task_tools_with_options_are_refused() {
+    let found = mise_extract(&[
+        (
+            "mise.toml",
+            r#"[task_config]
+includes = ["tasks.toml"]
+[tools]
+jq = { version = "1.7.1", foo = "base" }
+[tasks.a]
+tools = { jq = "1.7.1", node = { version = "24.2.0", os = ["linux"] }, "github:o/r[bin=r]" = "1.0.0" }
+"#,
+        ),
+        ("tasks.toml", "[b.tools]\njq = \"1.7.0\"\nuv = \"0.13.6\"\n"),
+        // A folder below the task's is not part of its configuration.
+        (
+            "app/mise.toml",
+            "[tools]\nuv = { version = \"0.13.6\", foo = \"app\" }\n",
+        ),
+    ]);
+    let refused = |file: &str, name: &str| {
+        found
+            .iter()
+            .find(|(f, n, _, _)| f == file && n == name)
+            .unwrap_or_else(|| panic!("{file} {name}"))
+            .3
+            .clone()
+    };
+    let task = Some(
+        "mise layers the options of a task's tool over those of its [tools] entry in a way the \
+         Count does not reproduce, so a task's tool is looked up only when neither has options in \
+         a table"
+            .to_owned(),
+    );
+    assert_eq!(refused("mise.toml", "node"), task);
+    assert_eq!(refused("tasks.toml", "jq"), task);
+    assert_eq!(refused("tasks.toml", "uv"), None);
+    assert_eq!(refused("mise.toml", "github:o/r[bin=r]"), None);
+    let jq: Vec<_> = found
+        .iter()
+        .filter(|(f, n, _, _)| f == "mise.toml" && n == "jq")
+        .map(|(_, _, package, registry)| (package.as_str(), registry.clone()))
+        .collect();
+    assert_eq!(jq, [(r#"jq[foo="base"]"#, None), ("jq", task.clone())]);
+}
+
+/// http and s3 tools are skipped only without the option mise lists them
+/// with, read from the options as mise reads them; s3 reads it per platform
+/// too, http only at the top level. A refused entry fails its lookup rather
+/// than look skipped.
+#[test]
+fn mise_unlisted_backends_read_the_parsed_options() {
+    let found = mise_extract(&[(
+        "mise.toml",
+        r#"[tools]
+"s3:a" = { version = "1.0.0", platforms = { linux-x64 = { version_list_url = "s3://b/a.json" } } }
+"s3:b" = { version = "1.0.0", platforms_linux_x64_version_prefix = "tools/b/" }
+"http:c" = { version = "1.0.0", platforms = { linux-x64 = { version_list_url = "https://x.example/c" } } }
+"http:d[version_list_url=https://x.example/d]" = "1.0.0"
+"http:e[bin=e]" = { version = "1.0.0", version_list_url = "https://x.example/e" }
+"http:f" = { version = "1.0.0", url = "https://x.example/f", note = "a version_list_url=x" }
+"http:g" = { version = "1.0.0", url = 'https://x.example/{{ os(macos="darwin") }}' }
+"#,
+    )]);
+    let names: Vec<_> = found
+        .iter()
+        .map(|(_, name, _, registry)| (name.as_str(), registry.is_some()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("s3:a", false),
+            ("s3:b", false),
+            ("http:d[version_list_url=https://x.example/d]", false),
+            ("http:e[bin=e]", true),
+        ]
     );
 }
 

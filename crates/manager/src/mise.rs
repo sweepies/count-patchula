@@ -6,29 +6,60 @@ use std::{
 };
 use toml_edit::{Document, Value};
 
-/// Backends that list versions only with one of these options on the tool,
-/// so a lookup without any of them would always come back empty.
-const UNLISTED: &[(&str, &[&str], &str)] = &[
-    (
-        "http:",
-        &["version_list_url"],
-        "mise's http backend lists versions only with version_list_url, which its entry does not set",
-    ),
-    (
-        "s3:",
-        &["version_list_url", "version_prefix"],
-        "mise's s3 backend lists versions only with version_list_url or version_prefix, which its entry does not set",
-    ),
+/// A backend that lists versions only with one of `keys` among the tool's
+/// options, so a lookup without any of them would always come back empty.
+struct Unlisted {
+    prefix: &'static str,
+    keys: &'static [&'static str],
+    /// Whether mise also reads the keys per platform: under
+    /// `platforms.<os>-<arch>` or `platform.<os>-<arch>`, or flat as
+    /// `platforms_<os>_<arch>_<key>` (s3's `platform_string`). http reads
+    /// `version_list_url` at the top level only.
+    per_platform: bool,
+    reason: &'static str,
+}
+const UNLISTED: &[Unlisted] = &[
+    Unlisted {
+        prefix: "http:",
+        keys: &["version_list_url"],
+        per_platform: false,
+        reason: "mise's http backend lists versions only with version_list_url, which its entry does not set",
+    },
+    Unlisted {
+        prefix: "s3:",
+        keys: &["version_list_url", "version_prefix"],
+        per_platform: true,
+        reason: "mise's s3 backend lists versions only with version_list_url or version_prefix, which its entry does not set",
+    },
 ];
 
-/// Whether the bracketed options of `tool` set `key`.
-fn sets(tool: &str, key: &str) -> bool {
-    patchula_mise::split(tool).1.is_some_and(|options| {
-        options
-            .split([',', '{', '['])
-            .any(|pair| pair.split_once('=').is_some_and(|(k, _)| k == key))
-    })
+/// Whether `options`, as mise reads them, set `key`: at the top level, or
+/// per platform when the backend reads it so.
+fn sets(options: &toml_edit::InlineTable, key: &str, per_platform: bool) -> bool {
+    if options.contains_key(key) {
+        return true;
+    }
+    per_platform
+        && options.iter().any(|(name, value)| match value {
+            Value::InlineTable(platforms) if matches!(name, "platforms" | "platform") => {
+                platforms.iter().any(|(_, platform)| {
+                    platform
+                        .as_inline_table()
+                        .is_some_and(|p| p.contains_key(key))
+                })
+            }
+            _ => ["platforms_", "platform_"]
+                .iter()
+                .any(|prefix| name.starts_with(prefix) && name.ends_with(&format!("_{key}"))),
+        })
 }
+
+/// Why a task's tool with options is not looked up: mise layers the
+/// tool's `[tools]` options under a task's own when it runs the task, and
+/// which ones it picks depends on versions the Count does not resolve.
+const TASK_OPTIONS: &str = "mise layers the options of a task's tool over those of its [tools] entry \
+     in a way the Count does not reproduce, so a task's tool is looked up only when neither has \
+     options in a table";
 
 /// Whether a directory walk for task files skips `below`, a path relative
 /// to the walk's root, as configuration. mise's
@@ -237,8 +268,20 @@ impl Reader<'_, '_> {
                 self.add(prefix, name, v.value(), span, entry);
             }
             Value::Array(values) => {
+                // mise lists a tool with the options of its first request, so
+                // every version in the array is looked up with those.
+                let first = values.iter().next().and_then(Value::as_inline_table);
+                let listing = entry.or(first.map(|t| t as &dyn toml_edit::TableLike));
                 for value in values.iter() {
-                    self.collect(prefix, name, value, entry);
+                    match value {
+                        Value::InlineTable(table) => {
+                            if let Some(version @ Value::String(_)) = table.get("version") {
+                                self.collect(prefix, name, version, listing);
+                            }
+                        }
+                        Value::String(_) => self.collect(prefix, name, value, listing),
+                        _ => {}
+                    }
                 }
             }
             Value::InlineTable(table) => {
@@ -266,8 +309,16 @@ impl Reader<'_, '_> {
             return;
         }
         // mise applies the options on the entry when it lists versions as
-        // when it installs, so the Count passes them along in brackets.
+        // when it installs, so the Count passes them along in brackets. A
+        // task's tool is a runtime request to mise, whose table options it
+        // layers with the [tools] entry's (see `TASK_OPTIONS`).
+        let task = !prefix.is_empty();
+        let optioned = entry.is_some_and(|entry| entry.iter().any(|(key, _)| key != "version"));
         let (package, registry) = match entry.map(|entry| patchula_mise::bracketed(name, entry)) {
+            _ if task && optioned => (
+                name.to_owned(),
+                origins::Named::Unusable(TASK_OPTIONS.into()).registry(),
+            ),
             None => (name.to_owned(), None),
             Some(Ok(package)) => (package, None),
             Some(Err(why)) => (
@@ -275,10 +326,16 @@ impl Reader<'_, '_> {
                 origins::Named::Unusable(why.to_string()).registry(),
             ),
         };
-        if let Some((_, _, reason)) = UNLISTED
-            .iter()
-            .find(|(p, keys, _)| name.starts_with(p) && !keys.iter().any(|key| sets(&package, key)))
-        {
+        let options = patchula_mise::options(&package).unwrap_or_default();
+        // A refusal is the lookup's failure, not a skip.
+        if let Some(Unlisted { reason, .. }) = UNLISTED.iter().find(|unlisted| {
+            registry.is_none()
+                && name.starts_with(unlisted.prefix)
+                && !unlisted
+                    .keys
+                    .iter()
+                    .any(|key| sets(&options, key, unlisted.per_platform))
+        }) {
             self.skipped.push(Skipped {
                 manager: Manager::Mise,
                 file: path.into(),
@@ -845,6 +902,7 @@ pub(crate) fn redirected(
     let tool = patchula_mise::split(&dep.package).0;
     let mut kinds = backends(tool);
     kinds.push(format!("tool:{tool}"));
+    let mut related = Vec::new();
     for config in configs {
         let folder = config_root(config).unwrap_or_default();
         if !dirs
@@ -853,6 +911,7 @@ pub(crate) fn redirected(
         {
             continue;
         }
+        related.push(*config);
         let text = files.get(*config)?;
         let Some(redirected) = text
             .read()
@@ -867,11 +926,49 @@ pub(crate) fn redirected(
             ));
         }
     }
+    // mise layers onto a task's tool the [tools] entries of the task's own
+    // configuration hierarchy: its folder and those above it.
+    let task = dep.included_by.is_some() || dep.location.pointer.starts_with("/tasks/");
+    let task_dir = *dirs.last().expect("the file's own folder");
+    if task
+        && related.iter().any(|config| {
+            task_dir.starts_with(config_root(config).unwrap_or_default())
+                && tools_options(config, tool, files)
+        })
+    {
+        return Some(TASK_OPTIONS.into());
+    }
     dirs.iter().find_map(|dir| {
         kinds
             .iter()
             .find_map(|kind| project_redirect(kind, dir, tool, files, feeds))
     })
+}
+
+/// Whether `config`'s `[tools]` gives `tool` (its name without options)
+/// options: in brackets on the name, or beside the version in a table.
+fn tools_options(config: &str, tool: &str, files: &Files) -> bool {
+    let Some(doc) = files
+        .get(config)
+        .and_then(|text| Document::parse(text.read().ok()?).ok())
+    else {
+        return false;
+    };
+    let optioned = |table: &dyn toml_edit::TableLike| table.iter().any(|(key, _)| key != "version");
+    doc.get("tools")
+        .and_then(|tools| tools.as_table_like())
+        .into_iter()
+        .flat_map(|tools| tools.iter())
+        .filter(|(name, _)| patchula_mise::split(name).0 == tool)
+        .any(|(name, item)| {
+            name.contains('[')
+                || item.as_table_like().is_some_and(optioned)
+                || item.as_array().is_some_and(|values| {
+                    values
+                        .iter()
+                        .any(|v| v.as_inline_table().is_some_and(|t| optioned(t)))
+                })
+        })
 }
 
 pub(crate) static DESCRIPTOR: Descriptor = Descriptor;

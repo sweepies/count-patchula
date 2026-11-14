@@ -378,7 +378,11 @@ read the same listings.
 A batch lookup checks that its key's access is the one the repository it is
 made for gives, and fails otherwise: a public key never runs without a
 repository to mint for. Off github.com no token reaches mise, so every listing
-there is public. Nor does one for a tool whose options hold a `:` and so may
-name a host (`api_url`, `version_list_url`), since mise sends
-`MISE_GITHUB_TOKEN` to any host that looks like a GitHub API; that listing is
-public too, kept apart from the tool's github.com listing by its options. Flake inputs still hand nix the run's token.
+there is public.
+
+Options are part of the tool's package, so they are part of the lookup key,
+and a key's via is a repository whose own entry asked for exactly that tool
+and those options. A tool's options may send mise to another host
+(`api_url`), and mise hands its GitHub token to any host that looks like a
+GitHub API. That token is always minted for a repository that wrote the
+options, so it reaches no further than its writer already can. Flake inputs still hand nix the run's token.

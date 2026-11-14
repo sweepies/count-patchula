@@ -163,6 +163,9 @@ async fn mise_runs_pinned_in_an_empty_sandbox_with_only_the_given_token() {
             "TF_IN_AUTOMATION",
             "TF_INPUT",
             "TF_CLI_CONFIG_FILE",
+            "AWS_EC2_METADATA_DISABLED",
+            "AWS_CONFIG_FILE",
+            "AWS_SHARED_CREDENTIALS_FILE",
             "MISE_COLOR",
             "MISE_DATA_DIR",
             "MISE_NO_CONFIG",
@@ -179,6 +182,12 @@ async fn mise_runs_pinned_in_an_empty_sandbox_with_only_the_given_token() {
             assert!(allowed.contains(&key.as_str()), "unexpected variable {key}");
         }
         assert_eq!(env["PATH"], "/usr/local/bin:/usr/bin:/bin");
+        // No AWS credential reaches the s3 backend: none is inherited, its
+        // files are in the scratch home, and instance metadata is off.
+        assert_eq!(env["AWS_EC2_METADATA_DISABLED"], "true");
+        for key in ["AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"] {
+            assert!(env[key].starts_with(&home), "{key}");
+        }
     }
 }
 

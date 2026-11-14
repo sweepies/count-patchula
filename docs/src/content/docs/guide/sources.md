@@ -75,19 +75,37 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   tool argument: the options in its table, sorted and written one way, or the
   brackets on its name as written (an entry with both is refused). mise
   applies them as it does when it installs; nothing installs, so options that
-  only matter then never run.
+  only matter then never run. mise does not merge a tool's options across
+  configuration files (the highest-precedence file's entry replaces the
+  others whole), so each entry goes with its own. Every version in an array
+  goes with the first one's options, as mise lists the tool with them. A
+  task's tool is refused when it or the tool's `[tools]` entry has options
+  in a table, since mise layers the two by version in a way the Count does
+  not reproduce; brackets on a task tool's name are part of the tool and
+  pass.
 - With tool names and options validated first: no leading `-` in the name or
   in any option key or string value, no `@` outside an npm scope, no
   `@version` selector, length limits, and options only in the Count's own
-  form (`key="value"` pairs joined by `,`) or mise's plain `key=value` one.
+  form (`key="value"` pairs joined by `,`) or mise's plain `key=value` one,
+  whose values must not read as numbers, booleans or dates.
+- With options that point mise at any host followed, apart from cloud
+  instance-metadata endpoints: a URL whose host is, or resolves to, a
+  link-local address (169.254.0.0/16, fe80::/10), AWS's `fd00:ec2::254`,
+  `metadata.google.internal` or `metadata` is refused, since those hand out
+  the credentials of the machine the Count runs on and the answer would
+  become versions in a pull request. A host that does not resolve is refused
+  too. mise resolves the name again and follows redirects, so a host that
+  changes its answer or redirects there is not caught; block the metadata
+  endpoint in the network where that matters.
+- With no AWS credentials for mise's s3 backend: no `AWS_*` variable is
+  inherited, its config and credential files are in the scratch home, and
+  `AWS_EC2_METADATA_DISABLED` stops it fetching the machine's own.
 - With the backends `asdf` and `vfox` disabled (`MISE_DISABLE_BACKENDS`), and
   names for them refused before mise starts. A backend prefix mise does not
   know fails in mise, which runs no plugin for it. Nothing installs during a lookup
   (`MISE_AUTO_INSTALL=0`).
 - With a GitHub token as `MISE_GITHUB_TOKEN`, only when he talks to
-  github.com and the tool's options name no host (none holds a `:`, as every
-  URL does: mise would send the token to any host that looks like a GitHub
-  API), and no other credential: mise's `gh` login, credential command
+  github.com, and no other credential: mise's `gh` login, credential command
   and Git credential helper lookups are off. As a GitHub App (`patchula serve`,
   `--all-repos` with App credentials, or an Action run on several
   repositories) the token is a read-only one he mints for the repository the
@@ -95,7 +113,10 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   public tools, never another private repository the App can read. Release
   notes for a mise tool look it up the same way. With a
   personal token, or the token of an Action run on its own repository, mise
-  gets that token.
+  gets that token. A tool's options can send mise elsewhere (`api_url` for a
+  GitHub Enterprise server, say), and the token goes with them, as it does
+  when mise installs the tool: it is the token of a repository whose own
+  entry wrote those options, never another's.
 - With a three-minute limit per lookup and at most four running at once.
 
 What happens to a listing:

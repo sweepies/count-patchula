@@ -17,6 +17,10 @@ use std::{collections::BTreeMap, ffi::OsString, path::Path};
 /// - `MISE_DATA_DIR` is the Count's tool store, apart from the operator's own.
 /// - `HOME` and the `XDG_*` directories point into the scratch directory, so
 ///   caches, state, `gh`, netrc and Git credential files cannot be found.
+/// - The AWS SDK mise's s3 backend uses finds no credentials: no `AWS_*`
+///   variable is inherited, its config and credential files point into the
+///   scratch directory, and `AWS_EC2_METADATA_DISABLED` stops it asking the
+///   instance-metadata endpoint for the machine's own.
 pub fn sandbox_env(home: &Path, data: &Path) -> BTreeMap<OsString, OsString> {
     [
         ("PATH", OsString::from("/usr/local/bin:/usr/bin:/bin")),
@@ -56,6 +60,12 @@ pub fn sandbox_env(home: &Path, data: &Path) -> BTreeMap<OsString, OsString> {
         ("TF_IN_AUTOMATION", "1".into()),
         ("TF_INPUT", "0".into()),
         ("TF_CLI_CONFIG_FILE", "/dev/null".into()),
+        ("AWS_EC2_METADATA_DISABLED", "true".into()),
+        ("AWS_CONFIG_FILE", home.join("aws-config").into_os_string()),
+        (
+            "AWS_SHARED_CREDENTIALS_FILE",
+            home.join("aws-credentials").into_os_string(),
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.into(), v))

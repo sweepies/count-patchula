@@ -611,13 +611,14 @@ async fn listings_are_kept_apart_by_their_options() {
     );
 }
 
-/// mise sends its GitHub token to any host that looks like a GitHub API, so
-/// a tool whose options may name a host gets none, whatever its access. Its
-/// listing is public, and its options keep it apart from the tool's
-/// github.com listing.
+/// A tool whose options name another host gets the same token as any other
+/// lookup from the repository: one scoped to the repository whose own entry
+/// wrote them, which reaches nothing its writer cannot. Its options key its
+/// listing apart from the tool's github.com one, and a tool with options is
+/// one the Count cannot place, so a private repository keeps it to itself.
 #[tokio::test]
-async fn options_that_may_name_a_host_get_no_token() {
-    const ELSEWHERE: &str = r#"github:acme/tool[api_url="https://ghe.example/api/v3"]"#;
+async fn options_that_name_a_host_get_the_repository_token() {
+    const ELSEWHERE: &str = r#"github:acme/tool[api_url="https://192.0.2.10/api/v3"]"#;
     let replay = Arc::new(MiseReplay::new(vec![
         run(&[ELSEWHERE], listing(&["2.0.0"])),
         run(&["github:acme/tool"], listing(&["1.0.0"])),
@@ -631,24 +632,33 @@ async fn options_that_may_name_a_host_get_no_token() {
             .clone()
             .with_mise_repository(Some(repository(name, Some(private))))
     };
-    // A tool with options is one the Count cannot place: the repository's own.
     assert_eq!(
         mise_scope_rule(ELSEWHERE, &repository("acme/app", Some(true))),
         MiseAccess::Repository("acme/app".into())
     );
-    as_repo("acme/app", true).lookup(&elsewhere).await.unwrap();
-    let calls = replay.calls();
-    let last = calls.last().unwrap();
-    assert!(!last.env.contains_key("MISE_GITHUB_TOKEN"));
-    // Public: another repository and the run's own lookup reuse it.
+    assert_eq!(
+        mise_scope_rule(ELSEWHERE, &repository("acme/site", Some(false))),
+        MiseAccess::Public
+    );
+    let catalog = as_repo("acme/app", true).lookup(&elsewhere).await.unwrap();
+    assert_eq!(catalog.versions[0].version, "2.0.0");
+    assert_eq!(token(&replay), "scoped-acme/app-ContentsRead");
+    // Another private repository's lookup does not read acme/app's listing.
     as_repo("acme/api", true).lookup(&elsewhere).await.unwrap();
-    source.lookup(&elsewhere).await.unwrap();
-    client(Some(&replay), cache.clone(), "run-token")
+    assert_eq!(token(&replay), "scoped-acme/api-ContentsRead");
+    assert_eq!(replay.lookups().len(), 2);
+    // A public repository's listing is public, with a metadata-only token.
+    as_repo("acme/site", false)
         .lookup(&elsewhere)
         .await
         .unwrap();
-    assert_eq!(replay.lookups().len(), 1);
-    // The tool without options is listed on its own, with a token.
+    assert_eq!(token(&replay), "scoped-acme/site-MetadataRead");
+    as_repo("acme/docs", false)
+        .lookup(&elsewhere)
+        .await
+        .unwrap();
+    assert_eq!(replay.lookups().len(), 3);
+    // The tool without options is listed on its own.
     let catalog = as_repo("acme/app", true)
         .lookup(&patchula_config::PackageId::public(
             Source::Mise,
@@ -657,5 +667,5 @@ async fn options_that_may_name_a_host_get_no_token() {
         .await
         .unwrap();
     assert_eq!(catalog.versions[0].version, "1.0.0");
-    assert_eq!(token(&replay), "scoped-acme/app-MetadataRead");
+    assert_eq!(replay.lookups().len(), 4);
 }

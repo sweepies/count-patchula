@@ -16,9 +16,10 @@ serde.workspace = true
 serde_json.workspace = true
 tempfile = "3"
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["net", "sync"] }
 toml_edit = "0.25.17"
+url = "2.5.8"
 
 [dev-dependencies]
 patchula-testkit = { path = "../testkit" }
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "macros", "rt"] }

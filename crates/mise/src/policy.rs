@@ -20,13 +20,6 @@ pub fn split(tool: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// Whether `tool`'s options may name a host: any `:` in them, which every
-/// absolute URL has. mise sends `MISE_GITHUB_TOKEN` to any host whose URL
-/// looks like a GitHub API, so such a lookup is handed no token.
-pub fn options_name_a_host(tool: &str) -> bool {
-    split(tool).1.is_some_and(|options| options.contains(':'))
-}
-
 /// Tool arguments the Count lets through to `mise ls-remote`: a registry
 /// shorthand or `backend:tool` for any backend mise has, apart from the plugin
 /// backends, with options in brackets as mise reads them. An unknown backend
@@ -84,8 +77,9 @@ pub fn check(tool: &str) -> Result<(), Error> {
 
 /// Bracketed options mise reads one way only: the canonical TOML form
 /// `bracketed` writes, or mise's legacy `key=value,key=value` with plain
-/// values. No key or string value starts with `-`, and no `@` appears, so
-/// nothing reads as a flag or a version.
+/// values that TOML would not read as anything but a string. No key or
+/// string value starts with `-`, and no `@` appears, so nothing reads as a
+/// flag or a version.
 fn check_options(tool: &str, options: &str) -> Result<(), String> {
     if !tool.ends_with(']') {
         return Err("its options in brackets do not end the argument".into());
@@ -99,27 +93,39 @@ fn check_options(tool: &str, options: &str) -> Result<(), String> {
     if options.chars().any(char::is_control) {
         return Err("its options hold a control character".into());
     }
-    if legacy(options) {
+    // mise reads options as TOML when they parse as TOML, and as legacy
+    // pairs otherwise, so the canonical form is tried first.
+    if canonical(options).is_some() {
         return Ok(());
     }
-    let parsed = format!("_x_ = {{ {options} }}")
-        .parse::<toml_edit::DocumentMut>()
-        .ok()
-        .and_then(|doc| doc.get("_x_")?.as_inline_table().cloned())
-        .ok_or("its options are neither TOML nor `key=value` pairs")?;
-    match render_table(&parsed, false) {
-        Some(rendered) if rendered == options => Ok(()),
-        _ => Err(
-            "its options are not written in the one form the Count passes on: \
-             `key=\"value\"` pairs joined by `,`, with no spaces"
+    match legacy(options) {
+        Some(_) => Ok(()),
+        None => Err(
+            "its options are not written in a form the Count passes on: \
+             `key=\"value\"` pairs joined by `,` with no spaces, or plain `key=value` \
+             pairs whose values are not numbers, booleans or dates"
                 .into(),
         ),
     }
 }
 
+/// The options as TOML, when they are written exactly as `render_table`
+/// writes them.
+fn canonical(options: &str) -> Option<toml_edit::InlineTable> {
+    let parsed = format!("_x_ = {{ {options} }}")
+        .parse::<toml_edit::DocumentMut>()
+        .ok()?
+        .get("_x_")?
+        .as_inline_table()?
+        .clone();
+    (render_table(&parsed, false)? == options).then_some(parsed)
+}
+
 /// mise's legacy option form: `key=value` pairs joined by `,`, a segment
-/// without `=` continuing the previous value as mise reads it.
-fn legacy(options: &str) -> bool {
+/// without `=` continuing the previous value as mise reads it. Every value
+/// is a string to mise; one TOML would read otherwise (`1e5`, `0x10`, `1_0`,
+/// `true`, a date) is refused, so the two readings never disagree.
+fn legacy(options: &str) -> Option<toml_edit::InlineTable> {
     let plain = |value: &str| {
         !value.is_empty()
             && !value.starts_with('-')
@@ -127,15 +133,40 @@ fn legacy(options: &str) -> bool {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || "._/:+~%*-".contains(c))
     };
-    let mut first = true;
-    options.split(',').all(|segment| {
-        let ok = match segment.split_once('=') {
-            Some((key, value)) => key_ok(key) && plain(value),
-            None => !first && plain(segment),
-        };
-        first = false;
-        ok
-    })
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for segment in options.split(',') {
+        match (segment.split_once('='), pairs.last_mut()) {
+            (Some((key, value)), _) if key_ok(key) && plain(value) => {
+                pairs.push((key.into(), value.into()));
+            }
+            (None, Some((_, value))) if plain(segment) => {
+                value.push(',');
+                value.push_str(segment);
+            }
+            _ => return None,
+        }
+    }
+    let mut table = toml_edit::InlineTable::new();
+    for (key, value) in pairs {
+        let not_a_string = format!("x = {value}")
+            .parse::<toml_edit::DocumentMut>()
+            .ok()
+            .and_then(|doc| doc.get("x").map(|item| !item.is_str()))
+            .unwrap_or(false);
+        if not_a_string {
+            return None;
+        }
+        table.insert(&key, value.into());
+    }
+    Some(table)
+}
+
+/// The options `tool` carries in brackets, as mise reads them. `None` when
+/// it carries none or `check` would refuse them.
+pub fn options(tool: &str) -> Option<toml_edit::InlineTable> {
+    let options = split(tool).1?;
+    check(tool).ok()?;
+    canonical(options).or_else(|| legacy(options))
 }
 
 fn key_ok(key: &str) -> bool {
@@ -151,12 +182,18 @@ fn key_ok(key: &str) -> bool {
 /// cannot hold as written, is `None`.
 fn render(value: &Value, sort: bool) -> Option<String> {
     Some(match value {
+        // A string with a `"` is a literal string, which has no escapes and
+        // which mise's bracket splitter reads as quoted, as it does `"…"`.
         Value::String(s) => {
             let s = s.value();
-            if s.starts_with('-') || s.contains(['"', '\\']) || s.chars().any(char::is_control) {
+            if s.starts_with('-') || s.contains('\\') || s.chars().any(char::is_control) {
                 return None;
             }
-            format!("\"{s}\"")
+            match (s.contains('"'), s.contains('\'')) {
+                (false, _) => format!("\"{s}\""),
+                (true, false) => format!("'{s}'"),
+                (true, true) => return None,
+            }
         }
         Value::Integer(i) => i.value().to_string(),
         Value::Boolean(b) => b.value().to_string(),
@@ -222,8 +259,8 @@ pub fn bracketed(name: &str, entry: &dyn TableLike) -> Result<String, Error> {
     let Some(rendered) = render_table(&table, true) else {
         return refuse(
             "its entry has an option the Count does not pass to mise: a float, a date, \
-             a key that is not a plain name, or a string with a quote, backslash, \
-             control character or leading `-`",
+             a key that is not a plain name, or a string with both kinds of quote, a \
+             backslash, a control character or a leading `-`",
         );
     };
     let tool = format!("{name}[{rendered}]");
@@ -268,6 +305,10 @@ platforms = { linux-x64 = { url = "https://x/a" }, darwin = { url = "https://x/b
                 r#"rust[platforms={darwin={checksum="c",url="https://x/b"},linux-x64={url="https://x/a"}}]"#,
             ),
             (r#"version = "1""#, "rust"),
+            (
+                r#"url = 'https://x/{{ os(macos="darwin") }}'"#,
+                r#"rust[url='https://x/{{ os(macos="darwin") }}']"#,
+            ),
         ] {
             assert_eq!(bracketed("rust", &entry(text)).unwrap(), tool, "{text}");
         }
@@ -277,7 +318,7 @@ platforms = { linux-x64 = { url = "https://x/a" }, darwin = { url = "https://x/b
     fn options_the_count_cannot_pass_are_refused() {
         for text in [
             r#"bin = "-x""#,
-            r#"bin = "a\"b""#,
+            r#"bin = "a\"b'c""#,
             r#"bin = 'a\b'"#,
             "bin = 1.5",
             "bin = 1979-05-27",
@@ -328,6 +369,15 @@ platforms = { linux-x64 = { url = "https://x/a" }, darwin = { url = "https://x/b
             "github:o/r[=x]",
             "github:o/r[,bin=x]",
             "asdf:o/r[bin=x]",
+            // Legacy values TOML would read as something other than a string.
+            "github:o/r[n=1e5]",
+            "github:o/r[n=0x10]",
+            "github:o/r[n=1_0]",
+            "github:o/r[bin=x,n=1]",
+            "github:o/r[bin=x,flag=true]",
+            "github:o/r[when=1979-05-27]",
+            "github:o/r[n=inf]",
+            "github:o/r[bin=x,n=1e5]",
         ] {
             assert!(check(tool).is_err(), "{tool}");
         }
@@ -336,13 +386,17 @@ platforms = { linux-x64 = { url = "https://x/a" }, darwin = { url = "https://x/b
     }
 
     #[test]
-    fn only_options_with_a_colon_may_name_a_host() {
-        assert!(options_name_a_host(
-            r#"forgejo:o/r[api_url="https://codeberg.org/api/v1"]"#
-        ));
-        assert!(options_name_a_host("github:o/r[api_url=https:evil]"));
-        assert!(!options_name_a_host("github:o/r[bin=x]"));
-        assert!(!options_name_a_host("cargo:https://github.com/o/r"));
-        assert!(!options_name_a_host(r#"rust[profile="minimal"]"#));
+    fn bracketed_options_read_back_as_mise_reads_them() {
+        let read = |tool: &str| options(tool).map(|table| render_table(&table, true).unwrap());
+        assert_eq!(
+            read("aqua:org/tool[components=clippy,rustfmt,bin=x]").as_deref(),
+            Some(r#"bin="x",components="clippy,rustfmt""#)
+        );
+        assert_eq!(
+            read(r#"s3:tool[platforms={linux-x64={version_list_url="s3://b/v"}}]"#).as_deref(),
+            Some(r#"platforms={linux-x64={version_list_url="s3://b/v"}}"#)
+        );
+        assert_eq!(read("rust"), None);
+        assert_eq!(read("github:o/r[n=1e5]"), None);
     }
 }

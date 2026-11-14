@@ -560,3 +560,53 @@ fn vias_follow_promoted_dependencies() {
     assert_eq!(names, ["acme/app", "acme/app"]);
     assert_eq!(second.len(), 2);
 }
+
+/// A public key's token is minted for a repository whose own entry asked
+/// for exactly that tool and options: options are part of the package, so
+/// one repository's options never send another repository's token to the
+/// host they name.
+#[test]
+fn a_public_listing_with_options_is_fetched_for_a_repository_that_wrote_them() {
+    let mise = |package: &str| {
+        let dependency = Dependency {
+            package: package.into(),
+            ..patchula_manager::testing::dependency(
+                patchula_words::Manager::Mise,
+                DependencyKind::Tool,
+                Source::Mise,
+            )
+        };
+        let key = (false, dependency.id(), MiseAccess::Public);
+        Dep {
+            dependency,
+            needs: Needs {
+                catalog_key: Some(key),
+                ..Needs::default()
+            },
+            evaluation: Evaluation::default(),
+        }
+    };
+    const PLAIN: &str = "github:acme/tool";
+    const ELSEWHERE: &str = r#"github:acme/tool[api_url="https://ghe.example/api/v3"]"#;
+    let repo = |name: &str| Work {
+        private: Some(false),
+        ..Work::empty(repo_report(name, Status::Complete, None), None)
+    };
+    let mut work = vec![repo("acme/first"), repo("evil/second")];
+    work[0].dependencies.push(mise(PLAIN));
+    work[1].dependencies.push(mise(ELSEWHERE));
+    work[1].dependencies.push(mise(PLAIN));
+    let vias = crate::lookup::mise_vias(&work);
+    let via = |package: &str| {
+        let key = (
+            false,
+            patchula_config::PackageId::public(Source::Mise, package),
+            MiseAccess::Public,
+        );
+        vias[&key].name.clone()
+    };
+    assert_eq!(vias.len(), 2);
+    assert_eq!(via(PLAIN), "acme/first");
+    // Only evil/second wrote these options, so only its token can go there.
+    assert_eq!(via(ELSEWHERE), "evil/second");
+}

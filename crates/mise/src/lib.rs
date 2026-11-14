@@ -8,9 +8,10 @@ mod lookup;
 mod policy;
 mod registry;
 mod sandbox;
+mod targets;
 
 pub use lookup::{Bootstrap, Lookup, PACKAGE, Query, Release, bootstrap};
-pub use policy::{bracketed, check, options_name_a_host, split};
+pub use policy::{bracketed, check, options, split};
 pub use registry::{backends, github_sources, listed_github_repository};
 pub use sandbox::sandbox_env;
 

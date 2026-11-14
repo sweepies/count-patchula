@@ -172,9 +172,10 @@ versions the way it installs them, `api_url` and `version_list_url`
 included. Some tools are refused for safety (plugin backends, Git-ref
 installs); see [mise lookups](/guide/sources/#mise-lookups).
 
-`http:` and `s3:` tools without `version_list_url` (or `version_prefix` for s3)
-are skipped with a reason, not looked up: mise lists their versions only from
-those options, so there is nothing to ask. They are not counted as lookup
+`http:` and `s3:` tools without `version_list_url` (or `version_prefix` for s3,
+also per platform under `platforms`) are skipped with a reason, not looked up:
+mise lists their versions only from those options, so there is nothing to
+ask. They are not counted as lookup
 failures.
 
 ## Cargo, Go and Terraform

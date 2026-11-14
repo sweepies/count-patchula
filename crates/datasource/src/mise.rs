@@ -159,11 +159,11 @@ impl Client {
     /// The token mise is handed under `access`: the run's for `Run`, else a
     /// token scoped to the repository with the permissions the access names,
     /// which fails the lookup rather than fall back to a broader one. Only a
-    /// token for github.com is handed out, and none for a tool whose options
-    /// may name a host: mise sends its GitHub token to any host that looks
-    /// like a GitHub API.
-    async fn mise_token(&self, access: &MiseAccess, tool: &str) -> Result<Option<String>> {
-        if !self.hands_mise_a_token(tool) {
+    /// token for github.com is handed out. A tool's options may send it to
+    /// another host (`api_url`); the token reaches no further than the
+    /// repository whose own entry wrote them, so it is handed out the same.
+    async fn mise_token(&self, access: &MiseAccess) -> Result<Option<String>> {
+        if !self.github.versions_host_eligible() {
             return Ok(None);
         }
         let (repository, permissions) = match access {
@@ -187,18 +187,12 @@ impl Client {
             .await?;
         Ok(Some(token))
     }
-    /// Whether mise is handed a GitHub token for `tool`: only on github.com,
-    /// and never when the tool's options may name a host.
-    fn hands_mise_a_token(&self, tool: &str) -> bool {
-        self.github.versions_host_eligible() && !patchula_mise::options_name_a_host(tool)
-    }
     /// Whom a listing under `access` serves. A repository's own listing is
     /// keyed by the numeric id its token is minted for, so a repository that
-    /// later takes the name never reads it. A listing made with no token
-    /// (off github.com, or for options that may name a host) is public too:
-    /// its options key it apart from the tool's github.com listing.
-    async fn listing_credential_scope(&self, access: &MiseAccess, tool: &str) -> Result<String> {
-        if !self.hands_mise_a_token(tool) {
+    /// later takes the name never reads it. No token reaches mise off
+    /// github.com, so such a listing is public too.
+    async fn listing_credential_scope(&self, access: &MiseAccess) -> Result<String> {
+        if !self.github.versions_host_eligible() {
             return Ok(PUBLIC_SCOPE.into());
         }
         Ok(match access {
@@ -226,7 +220,7 @@ impl Client {
             tool: name.into(),
             options: options.unwrap_or_default().into(),
             prefix: prefix.unwrap_or_default().into(),
-            credential_scope: self.listing_credential_scope(access, tool).await?,
+            credential_scope: self.listing_credential_scope(access).await?,
             mise_version: lookup.version().into(),
             versions_host: self.use_versions_host,
         })
@@ -235,7 +229,7 @@ impl Client {
     /// access gives, as its listing is.
     pub async fn mise_backend(&self, tool: &str) -> Result<String> {
         let access = self.tool_access(tool)?;
-        let token = self.mise_token(&access, tool).await?;
+        let token = self.mise_token(&access).await?;
         Ok(self.mise_lookup()?.backend(tool, token.as_deref()).await?)
     }
     /// One tool's listing, from the store while fresh and from mise otherwise.
@@ -249,7 +243,7 @@ impl Client {
         if let Some(saved) = self.fresh_state::<Listing>(&scope).await? {
             return Ok(saved.releases);
         }
-        let token = self.mise_token(&access, tool).await?;
+        let token = self.mise_token(&access).await?;
         let releases = lookup
             .ls_remote(&Query {
                 tool,
