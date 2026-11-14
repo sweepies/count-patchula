@@ -236,7 +236,7 @@ mod tests {
         std::fs::write(root.path().join("crates/demo/src/lib.rs"), source).unwrap();
         std::fs::write(
             root.path().join("Cargo.lock"),
-            format!("version = 4\n\n[[package]]\nname = \"serde\"\nversion = \"{serde}\"\n"),
+            format!("version = 4\n\n[[package]]\nname = \"serde\"\nversion = \"{serde}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n"),
         )
         .unwrap();
         let mut row = Row {
@@ -282,7 +282,7 @@ mod tests {
         guard(root.path()).expect("a fresh row holds");
         std::fs::write(
             root.path().join("Cargo.lock"),
-            "version = 4\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.1\"\n",
+            "version = 4\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
         )
         .unwrap();
         guard(root.path()).expect("a locked version bump needs no version bump");

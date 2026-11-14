@@ -7,32 +7,61 @@
 //! The fingerprint is the first 12 hex digits of the sha256 over each listed
 //! package as `name\0versions\0`, in listed order, with a package's locked
 //! versions sorted and joined by `,`. A row listing `-` has none.
+//!
+//! Only packages Cargo.lock gives a `source` (registry or git) may be
+//! listed. A workspace or path crate is locked at the workspace version,
+//! which moves every release and says nothing about its code: such a crate
+//! belongs in the row's sources.
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// The package versions `lock` (a Cargo.lock) resolves, by package name,
-/// each package's versions sorted.
-fn locked(lock: &str) -> BTreeMap<&str, Vec<&str>> {
-    let mut packages: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    let mut name = None;
+/// A Cargo.lock's packages by name: the versions it resolves from a
+/// `source` (registry or git), sorted, and whether any entry of that name
+/// has no source (a workspace or path crate).
+struct Locked<'a> {
+    versions: BTreeMap<&'a str, Vec<&'a str>>,
+    local: BTreeSet<&'a str>,
+}
+
+fn locked(lock: &str) -> Locked<'_> {
+    let mut locked = Locked {
+        versions: BTreeMap::new(),
+        local: BTreeSet::new(),
+    };
+    // Each `[[package]]` entry: its name, version and whether it has a
+    // source. Another table (`[[patch.unused]]`, `[metadata]`) ends it.
+    let mut entries: Vec<(Option<&str>, Option<&str>, bool)> = Vec::new();
+    let mut in_package = false;
     for line in lock.lines() {
-        if line == "[[package]]" {
-            name = None;
-        } else if let Some(rest) = line.strip_prefix("name = ") {
-            name = Some(rest.trim_matches('"'));
-        } else if let Some(rest) = line.strip_prefix("version = ")
-            && let Some(package) = name.take()
-        {
-            packages
-                .entry(package)
-                .or_default()
-                .push(rest.trim_matches('"'));
+        if line.starts_with('[') {
+            in_package = line == "[[package]]";
+            if in_package {
+                entries.push((None, None, false));
+            }
+        } else if in_package && let Some(entry) = entries.last_mut() {
+            if let Some(rest) = line.strip_prefix("name = ") {
+                entry.0 = Some(rest.trim_matches('"'));
+            } else if let Some(rest) = line.strip_prefix("version = ") {
+                entry.1 = Some(rest.trim_matches('"'));
+            } else if line.starts_with("source = ") {
+                entry.2 = true;
+            }
         }
     }
-    for versions in packages.values_mut() {
+    for (name, version, sourced) in entries {
+        let (Some(name), Some(version)) = (name, version) else {
+            continue;
+        };
+        if sourced {
+            locked.versions.entry(name).or_default().push(version);
+        } else {
+            locked.local.insert(name);
+        }
+    }
+    for versions in locked.versions.values_mut() {
         versions.sort_unstable();
     }
-    packages
+    locked
 }
 
 /// One table row as the cache keys it: the name, the version the parity
@@ -44,7 +73,7 @@ pub type Keyed = (String, u32, Option<String>);
 /// row, a name listed twice, or a listed package the lock does not resolve.
 pub fn fingerprints(lock: &str, table: &str) -> Result<Vec<Keyed>, String> {
     let locked = locked(lock);
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = BTreeSet::new();
     let mut rows = Vec::new();
     for line in table
         .lines()
@@ -66,7 +95,14 @@ pub fn fingerprints(lock: &str, table: &str) -> Result<Vec<Keyed>, String> {
         }
         let mut hasher = Sha256::new();
         for dep in deps.split(',') {
+            if locked.local.contains(dep) {
+                return Err(format!(
+                    "{name}: listed dependency {dep} is a workspace or path crate, locked at \
+                     the workspace version rather than by its code — list its sources instead"
+                ));
+            }
             let versions = locked
+                .versions
                 .get(dep)
                 .ok_or_else(|| format!("{name}: listed dependency {dep} is not in Cargo.lock"))?;
             hasher.update(dep.as_bytes());

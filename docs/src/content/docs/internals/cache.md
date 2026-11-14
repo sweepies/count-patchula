@@ -81,7 +81,12 @@ fingerprints each row's locked versions (the first 12 hex digits of a sha256)
 into its key, so a dependency bump, such as the Count's own update PRs on
 this repository, invalidates exactly the representations that list the crate
 and needs no version bump. A row listing `-` has no fingerprint and its key is
-plain `name@v{VERSION}`. The parity test checks only that every listed package
+plain `name@v{VERSION}`. The fingerprint covers only the listed crates' locked
+versions. A git or `[patch]` source whose code changes without a version
+change, and a transitive dependency that is not listed, change nothing in it:
+list such code in the row's sources, or bump the version by hand. A workspace
+or path crate cannot be listed at all, since Cargo.lock holds it at the
+workspace version; list its files as sources. The parity test checks only that every listed package
 is in Cargo.lock, so a typo fails, and the build fails outside the workspace
 rather than key without the lock. The fingerprint follows `~` because `+` is
 the retired per-build marker migration 014 deletes on sight; names may

@@ -478,6 +478,7 @@ async fn migration_rebuilds_github_release_lists_stored_with_prereleases() {
             "tag-catalog@v1",
             r#"{"source":"github-releases","package":"owner/repo"}"#,
         ),
+        ("branch-hint@v1", r#"{"repository":"owner/repo"}"#),
     ] {
         conn.execute(
             "INSERT INTO state(namespace,scope,value) VALUES (?1,?2,X'00')",
@@ -493,17 +494,26 @@ async fn migration_rebuilds_github_release_lists_stored_with_prereleases() {
             .collect::<std::result::Result<_, _>>()
             .unwrap()
     };
-    // Migration 011 drops only the github-releases source-head rows.
+    drop(conn);
+    // 011's state delete on its own, on a copy: only the github-releases
+    // source-head rows go. Opening the original also prunes the other
+    // tabled rows, which would hide it.
+    let copy = directory.path().join("copy.sqlite");
+    std::fs::copy(&path, &copy).unwrap();
+    let conn = rusqlite::Connection::open(&copy).unwrap();
     conn.execute_batch(include_str!("../src/migrations/011.sql"))
         .unwrap();
     assert_eq!(
         state(&conn),
         [
+            r#"branch-hint@v1 {"repository":"owner/repo"}"#,
             r#"source-head@v1 {"source":"other","package":"owner/repo"}"#,
             r#"tag-catalog@v1 {"source":"github-releases","package":"owner/repo"}"#,
         ]
     );
     drop(conn);
+    // Opening the schema-10 cache runs 011: the github-releases lists and
+    // heads are gone, other sources' stay.
     let cache = cache(&directory).await;
     let github = cache
         .releases("github-releases", "owner/repo")
@@ -519,10 +529,22 @@ async fn migration_rebuilds_github_release_lists_stored_with_prereleases() {
             .as_deref(),
         Some("v1.0.0")
     );
-    // Opening prunes the rest: both names are tabled, and neither key is
-    // its current one.
     let conn = rusqlite::Connection::open(&path).unwrap();
-    assert!(state(&conn).is_empty());
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM release_heads WHERE source = 'github-releases'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    // Then the prune: every row under a tabled name is off its current key
+    // and goes; the untabled hint stays.
+    assert_eq!(
+        state(&conn),
+        [r#"branch-hint@v1 {"repository":"owner/repo"}"#]
+    );
 }
 
 #[tokio::test]

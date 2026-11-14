@@ -804,12 +804,16 @@ mod tests {
     #[test]
     fn a_fingerprint_follows_only_its_listed_crates() {
         fn lock(serde: &str, regex: &str) -> String {
+            const REGISTRY: &str =
+                "source = \"registry+https://github.com/rust-lang/crates.io-index\"";
             format!(
-                "version = 4\n\n[[package]]\nname = \"serde\"\nversion = \"{serde}\"\n\n\
-                 [[package]]\nname = \"regex\"\nversion = \"{regex}\"\n\n\
-                 [[package]]\nname = \"pklr\"\nversion = \"0.1.0\"\n\
-                 source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n\
-                 [[package]]\nname = \"pklr\"\nversion = \"0.0.9\"\n"
+                "version = 4\n\n[[package]]\nname = \"serde\"\nversion = \"{serde}\"\n{REGISTRY}\n\n\
+                 [[package]]\nname = \"regex\"\nversion = \"{regex}\"\n{REGISTRY}\n\n\
+                 [[package]]\nname = \"pklr\"\nversion = \"0.1.0\"\n{REGISTRY}\n\n\
+                 [[package]]\nname = \"pklr\"\nversion = \"0.0.9\"\n\
+                 source = \"git+https://github.com/jdx/pklr#0123abc\"\n\n\
+                 [[package]]\nname = \"patchula-words\"\nversion = \"0.9.0\"\n\n\
+                 [[patch.unused]]\nname = \"unused\"\nversion = \"1.0.0\"\n"
             )
         }
         let table = "# name\tversion\tsources\tdeps\tsha256\n\
@@ -855,6 +859,24 @@ mod tests {
         )
         .unwrap_err();
         assert!(missing.contains("serd"), "{missing}");
+        // A workspace or path crate is locked at the workspace version, not
+        // by its code: listing it fails, pointing at the sources column.
+        let local = build_support::fingerprints(
+            &lock("1.0.0", "1.0.0"),
+            "parsed\t1\tsrc/a.rs\tserde,patchula-words\tabc\n",
+        )
+        .unwrap_err();
+        assert!(
+            local.contains("patchula-words") && local.contains("list its sources instead"),
+            "{local}"
+        );
+        // An unused patch is not a locked package.
+        let unused = build_support::fingerprints(
+            &lock("1.0.0", "1.0.0"),
+            "parsed\t1\tsrc/a.rs\tunused\tabc\n",
+        )
+        .unwrap_err();
+        assert!(unused.contains("not in Cargo.lock"), "{unused}");
     }
 
     /// The rows the build emitted are the ones the generator gives for the
