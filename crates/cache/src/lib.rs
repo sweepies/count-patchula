@@ -205,11 +205,30 @@ pub const fn plain(name: &str) -> bool {
     !bytes.is_empty()
 }
 
-// `state_fingerprint` and `derived_fingerprint`: the build script's
-// fingerprint of the locked versions a row of `tests/state-versions.tsv` or
-// `tests/derived-versions.tsv` lists, by name; `None` for a name with no row
-// or a row listing none.
+// `STATE_ROWS` and `DERIVED_ROWS`: each row of `tests/state-versions.tsv`
+// and `tests/derived-versions.tsv` as `(name, version, fingerprint)`, from
+// the build script. The fingerprint covers the locked versions the row
+// lists (`None` when it lists none); the version is the row's, which the
+// parity guard holds equal to the code's.
 include!(concat!(env!("OUT_DIR"), "/fingerprints.rs"));
+
+/// The fingerprint `rows` give `name`: `None` for a name with no row or a
+/// row listing no crates.
+fn fingerprint(rows: &[(&str, u32, Option<&'static str>)], name: &str) -> Option<&'static str> {
+    rows.iter()
+        .find(|(row, _, _)| *row == name)
+        .and_then(|(_, _, fingerprint)| *fingerprint)
+}
+
+/// Each tabled name and the one key this build reads it under, as the JSON
+/// array of `[name, key]` pairs the open-time prune joins against.
+fn current_keys(rows: &[(&str, u32, Option<&str>)]) -> String {
+    let keys: Vec<(&str, String)> = rows
+        .iter()
+        .map(|(name, version, fingerprint)| (*name, versioned(name, *version, *fingerprint)))
+        .collect();
+    serde_json::to_string(&keys).expect("names and keys serialize")
+}
 
 /// `name@v{version}`, then `~{fingerprint}` when the name's row lists
 /// locked crates: a bump of one misses the key with no version bump. `~`
@@ -232,7 +251,7 @@ fn state_namespace<T: State>() -> String {
         )
     };
     let fingerprint = if T::CODE_VERSIONED {
-        state_fingerprint(T::NAMESPACE)
+        fingerprint(STATE_ROWS, T::NAMESPACE)
     } else {
         None
     };
@@ -244,7 +263,7 @@ fn state_namespace<T: State>() -> String {
 /// `tests/derived-versions.tsv` lists locked crates.
 pub fn representation(name: &str, version: u32) -> String {
     debug_assert!(plain(name), "a representation name has no @, ~ or +");
-    versioned(name, version, derived_fingerprint(name))
+    versioned(name, version, fingerprint(DERIVED_ROWS, name))
 }
 
 type Job = Box<dyn FnOnce(&mut Store) + Send>;
@@ -596,6 +615,19 @@ mod tests {
         assert_eq!(version, store::MIGRATIONS.len() as i64);
     }
 
+    /// Make a current cache look like one at schema `version`, so opening
+    /// it replays the later migrations: 015's column and index go first,
+    /// since adding them again would fail.
+    fn rewind(store: &Store, version: i64) -> Result<()> {
+        if version < 15 {
+            store.conn.execute_batch(
+                "DROP INDEX http_representation; ALTER TABLE http DROP COLUMN representation;",
+            )?;
+        }
+        store.conn.pragma_update(None, "user_version", version)?;
+        Ok(())
+    }
+
     /// Migration 014 drops state rows keyed under the retired per-build
     /// scheme — a namespace ending `+<build>` — and keeps `name@v` entries.
     #[tokio::test]
@@ -622,7 +654,7 @@ mod tests {
                     "INSERT INTO state(namespace, scope, value) VALUES ('test-parsed@v1+0.0.1', '{}', '1'), ('plain@v1', '{}', '1')",
                     [],
                 )?;
-                store.conn.pragma_update(None, "user_version", 13)?;
+                rewind(store, 13)?;
                 Ok(())
             })
             .await
@@ -741,7 +773,7 @@ mod tests {
                 ] {
                     store.http_put(&key, &entry)?;
                 }
-                store.conn.pragma_update(None, "user_version", 13)?;
+                rewind(store, 13)?;
                 Ok(())
             })
             .await
@@ -787,6 +819,7 @@ mod tests {
             build_support::fingerprints(lock, table)
                 .unwrap()
                 .into_iter()
+                .map(|(name, _, fingerprint)| (name, fingerprint))
                 .collect()
         };
         let base = fingerprints(&lock("1.0.0", "1.0.0"));
@@ -810,6 +843,12 @@ mod tests {
             fingerprints(&lock("1.0.1", "1.0.0"))["parsed"],
             base["parsed"]
         );
+        let versions: Vec<u32> = build_support::fingerprints(&lock("1.0.0", "1.0.0"), table)
+            .unwrap()
+            .into_iter()
+            .map(|(_, version, _)| version)
+            .collect();
+        assert_eq!(versions, [1, 2]);
         let missing = build_support::fingerprints(
             &lock("1.0.0", "1.0.0"),
             "parsed\t1\tsrc/a.rs\tserd\tabc\n",
@@ -818,161 +857,73 @@ mod tests {
         assert!(missing.contains("serd"), "{missing}");
     }
 
-    /// The fingerprints the build emitted are the ones the generator gives
-    /// for the workspace's lock and tables.
+    /// The rows the build emitted are the ones the generator gives for the
+    /// workspace's lock and tables.
     #[test]
-    fn the_build_fingerprints_the_workspace_tables() {
+    fn the_build_keys_the_workspace_tables() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
         for (file, emitted) in [
-            (
-                "state-versions.tsv",
-                state_fingerprint as fn(&str) -> Option<&'static str>,
-            ),
-            ("derived-versions.tsv", derived_fingerprint),
+            ("state-versions.tsv", STATE_ROWS),
+            ("derived-versions.tsv", DERIVED_ROWS),
         ] {
             let table = std::fs::read_to_string(root.join("tests").join(file)).unwrap();
-            for (name, fingerprint) in build_support::fingerprints(&lock, &table).unwrap() {
-                assert_eq!(emitted(&name), fingerprint.as_deref(), "{file}: {name}");
-            }
+            let generated = build_support::fingerprints(&lock, &table).unwrap();
+            let emitted: Vec<_> = emitted
+                .iter()
+                .map(|(name, version, fingerprint)| {
+                    (name.to_string(), *version, fingerprint.map(str::to_owned))
+                })
+                .collect();
+            assert_eq!(emitted, generated, "{file}");
         }
-        assert_eq!(state_fingerprint("not-a-row"), None);
+        assert_eq!(fingerprint(STATE_ROWS, "not-a-row"), None);
     }
 
-    /// A code-versioned state with a row keys under `name@vN~fingerprint`
-    /// and reads back; migration 014, which deletes `+` keys, leaves it
-    /// and a fingerprinted representation alone.
-    #[tokio::test]
-    async fn a_fingerprinted_key_round_trips_and_survives_migration_014() {
-        #[derive(Serialize, Deserialize)]
-        struct Extract(u32);
-        #[derive(Serialize)]
-        struct Scope {
-            key: String,
-        }
-        impl State for Extract {
-            const NAMESPACE: &'static str = "extract";
-            const VERSION: u32 = 1;
-            const CODE_VERSIONED: bool = true;
-            type Scope = Scope;
-        }
-        let fingerprint = state_fingerprint("extract").expect("extract lists crates");
-        let namespace = format!("extract@v1~{fingerprint}");
-        assert_eq!(state_namespace::<Extract>(), namespace);
-        let representation = representation("npm-catalog-v2", 1);
-        assert_eq!(
-            representation,
-            format!(
-                "npm-catalog-v2@v1~{}",
-                derived_fingerprint("npm-catalog-v2").unwrap()
-            )
-        );
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("cache.sqlite");
-        let scope = Scope { key: "k".into() };
-        let cache = Cache::open(&path, Options::default()).await.unwrap();
-        cache.set_state(&scope, &Extract(7)).await.unwrap();
-        let http = HttpKey::new("GET", "https://example.org/doc", BTreeMap::new())
-            .unwrap()
-            .representation(&representation)
-            .encoded()
-            .unwrap();
-        let stored = http.clone();
-        cache
-            .call(move |store| {
-                store.http_put(
-                    &stored,
-                    &HttpEntry {
-                        status: 200,
-                        etag: None,
-                        last_modified: None,
-                        headers: BTreeMap::new(),
-                        body: b"body".to_vec(),
-                        fetched_at: 0,
-                        expires_at: None,
-                        cache_control: None,
-                    },
-                )?;
-                store.conn.execute_batch(store::MIGRATIONS[13])?;
-                Ok(())
-            })
-            .await
-            .unwrap();
-        drop(cache);
-        let cache = Cache::open(&path, Options::default()).await.unwrap();
-        assert_eq!(
-            cache.state::<Extract>(&scope).await.unwrap().map(|v| v.0),
-            Some(7)
-        );
-        let (namespaces, keys) = cache
-            .read(|store| {
-                let mut statement = store.conn.prepare("SELECT namespace FROM state")?;
-                let namespaces = statement
-                    .query_map([], |row| row.get::<_, String>(0))?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                let mut statement = store.conn.prepare("SELECT key FROM http")?;
-                let keys = statement
-                    .query_map([], |row| row.get::<_, String>(0))?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                Ok((namespaces, keys))
-            })
-            .await
-            .unwrap();
-        assert_eq!(namespaces, [namespace]);
-        assert_eq!(keys, [http]);
-    }
-
-    /// Migration 015 drops the plain `name@vN` keys of fingerprinted names —
-    /// state namespaces and derived representations — and keeps
-    /// fingerprinted keys, other names and unrepresented bodies.
-    #[tokio::test]
-    async fn migration_015_drops_unfingerprinted_keys() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("cache.sqlite");
-        let cache = Cache::open(&path, Options::default()).await.unwrap();
-        fn key(representation: Option<&str>) -> String {
-            let mut key = HttpKey::new("GET", "https://example.org/doc", BTreeMap::new()).unwrap();
-            if let Some(representation) = representation {
-                key = key.representation(representation);
-            }
-            key.encoded().unwrap()
-        }
-        cache
-            .call(|store| {
-                store.conn.execute(
-                    "INSERT INTO state(namespace, scope, value) VALUES \
-                     ('extract@v6', '{}', '1'), ('extract@v6~0123456789ab', '{}', '1'), \
-                     ('branch-hint@v1', '{}', '1'), ('catalog@v5', '{}', '1')",
-                    [],
-                )?;
-                for key in [
-                    key(Some("npm-catalog-v2@v1")),
-                    key(Some("npm-catalog-v2@v1~0123456789ab")),
-                    key(Some("doc@v1")),
-                    key(None),
-                ] {
-                    store.http_put(
-                        &key,
-                        &HttpEntry {
-                            status: 200,
-                            etag: None,
-                            last_modified: None,
-                            headers: BTreeMap::new(),
-                            body: b"body".to_vec(),
-                            fetched_at: 0,
-                            expires_at: None,
-                            cache_control: None,
-                        },
-                    )?;
+    /// A tabled name's version in the build's rows, for test states that
+    /// must key exactly as the real one does.
+    const fn tabled_version(rows: &[(&str, u32, Option<&str>)], name: &str) -> u32 {
+        let mut i = 0;
+        while i < rows.len() {
+            let (row, version, _) = rows[i];
+            let (a, b) = (row.as_bytes(), name.as_bytes());
+            if a.len() == b.len() {
+                let mut j = 0;
+                while j < a.len() && a[j] == b[j] {
+                    j += 1;
                 }
-                store.conn.pragma_update(None, "user_version", 14)?;
-                Ok(())
-            })
-            .await
-            .unwrap();
-        drop(cache);
-        let cache = Cache::open(&path, Options::default()).await.unwrap();
-        let (namespaces, keys) = cache
+                if j == a.len() {
+                    return version;
+                }
+            }
+            i += 1;
+        }
+        panic!("no such row")
+    }
+
+    fn entry() -> HttpEntry {
+        HttpEntry {
+            status: 200,
+            etag: None,
+            last_modified: None,
+            headers: BTreeMap::new(),
+            body: b"body".to_vec(),
+            fetched_at: 0,
+            expires_at: None,
+            cache_control: None,
+        }
+    }
+
+    fn http_key(representation: Option<&str>) -> String {
+        let mut key = HttpKey::new("GET", "https://example.org/doc", BTreeMap::new()).unwrap();
+        if let Some(representation) = representation {
+            key = key.representation(representation);
+        }
+        key.encoded().unwrap()
+    }
+
+    async fn keys(cache: &Cache) -> (Vec<String>, Vec<String>) {
+        cache
             .read(|store| {
                 let mut statement = store
                     .conn
@@ -987,15 +938,178 @@ mod tests {
                 Ok((namespaces, keys))
             })
             .await
+            .unwrap()
+    }
+
+    /// A code-versioned state with a row keys under `name@vN~fingerprint`
+    /// and reads back after a reopen, which prunes; migration 014, which
+    /// deletes `+` keys, leaves it and a fingerprinted representation alone.
+    #[tokio::test]
+    async fn a_fingerprinted_key_round_trips_and_survives_migration_014() {
+        #[derive(Serialize, Deserialize)]
+        struct Extract(u32);
+        #[derive(Serialize)]
+        struct Scope {
+            key: String,
+        }
+        const VERSION: u32 = tabled_version(STATE_ROWS, "extract");
+        impl State for Extract {
+            const NAMESPACE: &'static str = "extract";
+            const VERSION: u32 = VERSION;
+            const CODE_VERSIONED: bool = true;
+            type Scope = Scope;
+        }
+        let fingerprint = fingerprint(STATE_ROWS, "extract").expect("extract lists crates");
+        let namespace = format!("extract@v{VERSION}~{fingerprint}");
+        assert_eq!(state_namespace::<Extract>(), namespace);
+        let npm = tabled_version(DERIVED_ROWS, "npm-catalog-v2");
+        let representation = representation("npm-catalog-v2", npm);
+        assert_eq!(
+            representation,
+            format!(
+                "npm-catalog-v2@v{npm}~{}",
+                super::fingerprint(DERIVED_ROWS, "npm-catalog-v2").unwrap()
+            )
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let scope = Scope { key: "k".into() };
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        cache.set_state(&scope, &Extract(7)).await.unwrap();
+        let http = http_key(Some(&representation));
+        let stored = http.clone();
+        cache
+            .call(move |store| {
+                store.http_put(&stored, &entry())?;
+                // Replay 014 on the current schema.
+                store.conn.execute_batch(store::MIGRATIONS[13])?;
+                store
+                    .conn
+                    .pragma_update(None, "user_version", store::MIGRATIONS.len() as i64)?;
+                Ok(())
+            })
+            .await
             .unwrap();
-        assert_eq!(namespaces, ["branch-hint@v1", "extract@v6~0123456789ab"]);
-        let mut expected = [
-            key(Some("npm-catalog-v2@v1~0123456789ab")),
-            key(Some("doc@v1")),
-            key(None),
+        drop(cache);
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        assert_eq!(
+            cache.state::<Extract>(&scope).await.unwrap().map(|v| v.0),
+            Some(7)
+        );
+        assert_eq!(keys(&cache).await, (vec![namespace], vec![http]));
+    }
+
+    /// Opening the cache prunes a tabled name's superseded keys — an older
+    /// fingerprint, an older version, the plain key from before
+    /// fingerprints — for states and derived representations alike, and
+    /// keeps each name's current key, untabled names (including one that
+    /// shares a tabled name's prefix) and unrepresented bodies.
+    #[tokio::test]
+    async fn opening_prunes_superseded_keys() {
+        let extract = format!(
+            "extract@v{}~{}",
+            tabled_version(STATE_ROWS, "extract"),
+            fingerprint(STATE_ROWS, "extract").unwrap()
+        );
+        let npm = representation(
+            "npm-catalog-v2",
+            tabled_version(DERIVED_ROWS, "npm-catalog-v2"),
+        );
+        let old_version = format!("extract@v0~{}", fingerprint(STATE_ROWS, "extract").unwrap());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.sqlite");
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        let (state_rows, http_rows) = (
+            [
+                extract.clone(),
+                old_version,
+                format!(
+                    "extract@v{}~000000000000",
+                    tabled_version(STATE_ROWS, "extract")
+                ),
+                format!("extract@v{}", tabled_version(STATE_ROWS, "extract")),
+                "extracted@v1".to_owned(),
+                "branch-hint@v1".to_owned(),
+            ],
+            [
+                http_key(Some(&npm)),
+                http_key(Some("npm-catalog-v2@v1~000000000000")),
+                http_key(Some("npm-catalog-v2@v0")),
+                http_key(Some("doc@v1")),
+                http_key(None),
+            ],
+        );
+        cache
+            .call(move |store| {
+                for namespace in &state_rows {
+                    store.set_state(namespace, "{}", b"1")?;
+                }
+                for key in &http_rows {
+                    store.http_put(key, &entry())?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        drop(cache);
+        let cache = Cache::open(&path, Options::default()).await.unwrap();
+        let mut expected_http = [
+            http_key(Some(&npm)),
+            http_key(Some("doc@v1")),
+            http_key(None),
         ];
-        expected.sort();
-        assert_eq!(keys, expected);
+        expected_http.sort();
+        assert_eq!(
+            keys(&cache).await,
+            (
+                vec![
+                    "branch-hint@v1".to_owned(),
+                    extract,
+                    "extracted@v1".to_owned()
+                ],
+                expected_http.to_vec()
+            )
+        );
+    }
+
+    /// The prune reads each name's keys through an index, never a scan of
+    /// the state or HTTP table.
+    #[tokio::test]
+    async fn the_prune_searches_by_index() {
+        let cache = Cache::open(":memory:", Options::default()).await.unwrap();
+        let plans = cache
+            .call(|store| {
+                let mut plans = Vec::new();
+                for (sql, rows) in [
+                    (store::PRUNE_STATE, STATE_ROWS),
+                    (store::PRUNE_HTTP, DERIVED_ROWS),
+                ] {
+                    let mut statement = store.conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                    let plan = statement
+                        .query_map([current_keys(rows)], |row| row.get::<_, String>(3))?
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    plans.push(plan.join("\n"));
+                }
+                Ok(plans)
+            })
+            .await
+            .unwrap();
+        assert!(
+            plans[0].contains("SEARCH state USING"),
+            "state prune plan:\n{}",
+            plans[0]
+        );
+        assert!(
+            plans[1].contains("SEARCH http USING INDEX http_representation"),
+            "http prune plan:\n{}",
+            plans[1]
+        );
+        for plan in &plans {
+            assert!(
+                !plan.contains("SCAN state") && !plan.contains("SCAN http"),
+                "{plan}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -519,7 +519,8 @@ async fn migration_rebuilds_github_release_lists_stored_with_prereleases() {
             .as_deref(),
         Some("v1.0.0")
     );
-    // Migration 015 drops the rest: both names are fingerprinted now.
+    // Opening prunes the rest: both names are tabled, and neither key is
+    // its current one.
     let conn = rusqlite::Connection::open(&path).unwrap();
     assert!(state(&conn).is_empty());
 }

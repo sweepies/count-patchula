@@ -1,7 +1,8 @@
 //! Emits `fingerprints.rs`: for each row of `tests/state-versions.tsv` and
-//! `tests/derived-versions.tsv`, the fingerprint of its listed crates'
-//! locked versions, which the cache appends to that state's or
-//! representation's key. A dependency bump then misses exactly the caches
+//! `tests/derived-versions.tsv`, its version and the fingerprint of its
+//! listed crates' locked versions. The cache appends the fingerprint to
+//! that state's or representation's key, and prunes the name's other keys
+//! when it opens. A dependency bump then misses exactly the caches
 //! that list it. The build needs the workspace's Cargo.lock and tables, so
 //! it fails outside the workspace rather than key without them.
 #[path = "build_support.rs"]
@@ -21,18 +22,16 @@ fn read(path: &Path) -> String {
     })
 }
 
-/// A `fn {name}(name: &str) -> Option<&'static str>` over one table's rows.
-fn function(out: &mut String, function: &str, lock: &str, table: &Path) {
+/// A `const {name}: &[(&str, u32, Option<&str>)]` of one table's rows:
+/// name, version and fingerprint.
+fn rows(out: &mut String, constant: &str, lock: &str, table: &Path) {
     let rows = build_support::fingerprints(lock, &read(table))
         .unwrap_or_else(|error| panic!("{}: {error}", table.display()));
-    writeln!(out, "fn {function}(name: &str) -> Option<&'static str> {{").unwrap();
-    writeln!(out, "    match name {{").unwrap();
-    for (name, fingerprint) in rows {
-        if let Some(fingerprint) = fingerprint {
-            writeln!(out, "        {name:?} => Some({fingerprint:?}),").unwrap();
-        }
+    writeln!(out, "const {constant}: &[(&str, u32, Option<&str>)] = &[").unwrap();
+    for (name, version, fingerprint) in rows {
+        writeln!(out, "    ({name:?}, {version}, {fingerprint:?}),").unwrap();
     }
-    writeln!(out, "        _ => None,\n    }}\n}}").unwrap();
+    writeln!(out, "];").unwrap();
 }
 
 fn main() {
@@ -44,15 +43,15 @@ fn main() {
         .expect("crates/cache sits two levels under the workspace root");
     let lock = read(&root.join("Cargo.lock"));
     let mut out = String::new();
-    function(
+    rows(
         &mut out,
-        "state_fingerprint",
+        "STATE_ROWS",
         &lock,
         &root.join("tests/state-versions.tsv"),
     );
-    function(
+    rows(
         &mut out,
-        "derived_fingerprint",
+        "DERIVED_ROWS",
         &lock,
         &root.join("tests/derived-versions.tsv"),
     );

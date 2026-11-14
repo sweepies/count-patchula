@@ -93,9 +93,20 @@ representation constant), so a representation cannot exist without a row,
 and a listed file that is renamed fails naming the row and the missing
 file. Entries written
 under the retired `name+build` scheme are never read again and are deleted
-when the cache opens, as are those under a fingerprinted name's plain
-`name@v{VERSION}` key from before fingerprints (migration 015); raw and
-derived namespaces never share validators.
+when the cache opens; raw and derived namespaces never share validators.
+
+Opening the cache also prunes superseded keys. The build script emits each
+tabled name's version (the row's, which the parity test holds equal to the
+code's) beside its fingerprint, so the cache knows the one key this build
+reads for every row of both tables. After migrations it deletes every state
+row and derived HTTP body under a tabled name whose key is not that one: an
+older version, an older fingerprint, or the plain key from before
+fingerprints. It is one indexed join per table: a name's keys are the range
+`name@v` to `name@w`, found through the state table's primary key and an
+index on the representation an HTTP key names (migration 015). Names that
+are no longer tabled are not pruned. Two builds that share a cache directory
+and differ in a version or a locked dependency prune each other's entries for
+those names, so each misses once after the other has run.
 
 The default 256 MiB budget counts compressed HTTP body bytes. An access clock
 approximates LRU and evicts whole HTTP rows, validators included, until the
@@ -154,10 +165,9 @@ memo — is code-versioned. A state refetched within a bounded freshness
 window, or holding facts that are not code-derived — receipts, history,
 permits, run timestamps, hints — is exempt; a stale hint only costs a
 wasted read and never a wrong answer. Entries written under the
-retired `name@vN+build` scheme, and those under a fingerprinted name's plain
-`name@vN` key from before fingerprints, are never read again and are deleted
-when the cache opens (migrations 014 and 015). Entries under an older version
-or fingerprint of the same name are not pruned.
+retired `name@vN+build` scheme are never read again and are deleted when the
+cache opens, and so are a code-versioned state's entries under any key but
+its current one (see the prune above).
 
 ## Schema and corruption
 

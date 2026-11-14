@@ -35,10 +35,14 @@ fn locked(lock: &str) -> BTreeMap<&str, Vec<&str>> {
     packages
 }
 
-/// Every row of a versions table (`table`, its text) as `(name,
-/// fingerprint)`: `None` for a row listing no packages. Fails on a malformed
+/// One table row as the cache keys it: the name, the version the parity
+/// guard holds equal to the code's, and the fingerprint (`None` for a row
+/// listing no packages).
+pub type Keyed = (String, u32, Option<String>);
+
+/// Every row of a versions table (`table`, its text). Fails on a malformed
 /// row, a name listed twice, or a listed package the lock does not resolve.
-pub fn fingerprints(lock: &str, table: &str) -> Result<Vec<(String, Option<String>)>, String> {
+pub fn fingerprints(lock: &str, table: &str) -> Result<Vec<Keyed>, String> {
     let locked = locked(lock);
     let mut seen = std::collections::BTreeSet::new();
     let mut rows = Vec::new();
@@ -47,14 +51,17 @@ pub fn fingerprints(lock: &str, table: &str) -> Result<Vec<(String, Option<Strin
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
     {
         let fields: Vec<&str> = line.split('\t').collect();
-        let [name, _version, _sources, deps, _sha256] = fields[..] else {
+        let [name, version, _sources, deps, _sha256] = fields[..] else {
             return Err(format!("malformed row {line:?}"));
         };
+        let version = version
+            .parse()
+            .map_err(|_| format!("{name}: bad version {version:?}"))?;
         if !seen.insert(name) {
             return Err(format!("{name} is listed twice"));
         }
         if deps == "-" {
-            rows.push((name.to_owned(), None));
+            rows.push((name.to_owned(), version, None));
             continue;
         }
         let mut hasher = Sha256::new();
@@ -73,7 +80,7 @@ pub fn fingerprints(lock: &str, table: &str) -> Result<Vec<(String, Option<Strin
             .take(6)
             .map(|b| format!("{b:02x}"))
             .collect();
-        rows.push((name.to_owned(), Some(hex)));
+        rows.push((name.to_owned(), version, Some(hex)));
     }
     Ok(rows)
 }
