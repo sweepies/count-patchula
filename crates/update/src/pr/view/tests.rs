@@ -274,3 +274,125 @@ fn an_incomplete_read_protects_every_planned_plan() {
         );
     }
 }
+
+/// One pull request in a history: who opened it, its state, its head
+/// branch, the update key its ownership marker carries and how it closed.
+#[derive(Clone, Copy, Debug)]
+struct Shape {
+    count: bool,
+    state: &'static str,
+    head: &'static str,
+    key: Option<usize>,
+    closure: Option<&'static str>,
+}
+
+/// Every combination of author, state (merged is closed with
+/// `merged_at`), head, marker key (plan A's, plan B's or none) and closure.
+fn shapes() -> Vec<Shape> {
+    let mut out = Vec::new();
+    for count in [true, false] {
+        for state in ["open", "closed", "merged"] {
+            for head in [PLAN_A_BRANCH, PLAN_B_BRANCH, OTHER_BRANCH] {
+                for key in [None, Some(0), Some(1)] {
+                    for closure in [None, Some(markers::OBSOLETE), Some(markers::BATCHED)] {
+                        out.push(Shape {
+                            count,
+                            state,
+                            head,
+                            key,
+                            closure,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn shaped(shape: Shape, number: u64, keys: &[String]) -> Tracked {
+    let mut pr = closed(number, shape.head, "");
+    let mut body = match shape.key {
+        Some(plan) => markers::ownership(&Marker::new("a".repeat(64), keys[plan].clone())),
+        None => "a pull request body".into(),
+    };
+    if let Some(closure) = shape.closure {
+        body.push('\n');
+        body.push_str(closure);
+    }
+    pr.pr.body = Some(body);
+    pr.pr.state = if shape.state == "open" {
+        "open"
+    } else {
+        "closed"
+    }
+    .into();
+    pr.pr.merged_at = (shape.state == "merged").then(|| "2026-11-10T12:00:00Z".into());
+    if !shape.count {
+        pr.pr.user = Some(model::Actor {
+            login: "renovate[bot]".into(),
+        });
+    }
+    pr
+}
+
+/// `admit` consults only the closed reads `closed_reads` names. Over every
+/// one-PR history and a spread of two-PR histories, with and without a
+/// "bring back" tick, the view filled exactly as the lifecycle fills it
+/// decides the same as one that also answers every other head — with all
+/// of that head's closed PRs, or as unread.
+#[test]
+fn admit_consults_only_the_closed_reads_it_selects() {
+    let keys: Vec<String> = plans().iter().map(Plan::update_key).collect();
+    let grid = shapes();
+    let mut histories: Vec<Vec<Shape>> = grid.iter().map(|s| vec![*s]).collect();
+    for (i, first) in grid.iter().enumerate() {
+        for k in 0..6 {
+            histories.push(vec![*first, grid[(i * 7 + k * 13 + 1) % grid.len()]]);
+        }
+    }
+    let mut recreate = Controls::default();
+    recreate.recreate.extend(keys.iter().cloned());
+    let config = config(None, None);
+    for history in &histories {
+        let all: Vec<Tracked> = history
+            .iter()
+            .enumerate()
+            .map(|(i, shape)| shaped(*shape, i as u64 + 1, &keys))
+            .collect();
+        for controls in [&Controls::default(), &recreate] {
+            let open: Vec<&Tracked> = all.iter().filter(|t| t.pr.state == "open").collect();
+            let closed_on = |head: &str| -> Vec<&Tracked> {
+                all.iter()
+                    .filter(|t| {
+                        t.pr.state == "closed"
+                            && t.pr.merged_at.is_none()
+                            && head_branch(&t.pr) == head
+                    })
+                    .collect()
+            };
+            let decide = |extra: Option<bool>| {
+                let mut plans = plans();
+                let mut pulls = Pulls::from_open(open.clone(), Some(0), true);
+                let selected = closed_reads(&pulls, &plans, controls, OWNER);
+                for head in [PLAN_A_BRANCH, PLAN_B_BRANCH, OTHER_BRANCH] {
+                    if selected.iter().any(|s| s == head) {
+                        pulls.read_closed(head.into(), Ok(closed_on(head)));
+                    } else if let Some(read) = extra {
+                        let answer = if read {
+                            Ok(closed_on(head))
+                        } else {
+                            Err(Unread)
+                        };
+                        pulls.read_closed(head.into(), answer);
+                    }
+                }
+                admit(&pulls, &mut plans, controls, &config, OWNER);
+                plans.iter().map(outcome).collect::<Vec<_>>()
+            };
+            let narrowed = decide(None);
+            assert_eq!(narrowed, decide(Some(true)), "{history:?}");
+            assert_eq!(narrowed, decide(Some(false)), "{history:?}");
+        }
+    }
+}
