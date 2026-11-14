@@ -623,7 +623,7 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     }
     // The records run past each batch's end; both finish before the
     // assertions and the transcript.
-    runner.recordings_done().await;
+    runner.drain_records().await;
     // GitHub would not show the repository, so the public API hides it.
     let ran = cache.repository("owner/repo").await.unwrap().unwrap();
     assert!(ran.private);
@@ -822,8 +822,11 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
     tokio::time::timeout(Duration::from_secs(5), transport.lookup_started.notified())
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(deliveries.iter().all(|task| !task.is_finished()));
+    // The deliveries now wait on the locked database. That none is
+    // answered before its work is durable is pinned by
+    // `database_busy_has_a_stable_error_kind_and_does_not_consume_the_delivery`
+    // (a write that fails answers 503); here every delivery must come
+    // through the contention accepted.
     blocker.execute_batch("COMMIT").unwrap();
     for delivery in deliveries {
         let response = tokio::time::timeout(Duration::from_secs(5), delivery)
@@ -934,7 +937,7 @@ fn payload() -> Value {
     json!({"installation":{"id":1},"sender":{"login":"human"},"repository":{"id":100,"full_name":"owner/repo","default_branch":"main"},"ref":"refs/heads/main"})
 }
 fn typed(value: &Value) -> crate::webhook::Payload {
-    crate::webhook::Payload::parse(value).unwrap()
+    serde_json::from_value(value.clone()).unwrap()
 }
 fn pr() -> Value {
     json!({"number":1,"node_id":"PR_node1","html_url":"https://github.com/owner/repo/pull/1","state":"open","title":"Update","labels":[],"body":format!("<!-- patchula:{} -->\n- [x] any wording <!-- patchula-recheck -->", json!({"version":1,"identity":"a".repeat(64),"update":"b".repeat(64)})),"user":{"login":"patchula[bot]"},"head":{"ref":"custom-deps/pkg-2.x","sha":"a".repeat(40),"repo":{"full_name":"owner/repo"}},"base":{"ref":"main","repo":{"full_name":"owner/repo"}}})
@@ -1566,7 +1569,7 @@ async fn the_report_directory_keeps_only_the_newest_reports() {
     server.reports_kept = 3;
     let report = |n: usize| Report {
         schema_version: SCHEMA_VERSION,
-        repositories: vec![Repository {
+        repositories: vec![patchula_report::Repository {
             repository: format!("owner/repo-{n}"),
             status: Status::Complete,
             reason: None,
@@ -1984,7 +1987,7 @@ async fn a_batch_releases_its_claim_before_recording() {
     gate.release.notify_one();
     stop.send(true).unwrap();
     worker.await.unwrap().unwrap();
-    engines.recordings_done().await;
+    engines.drain_records().await;
     assert!(
         cache
             .repository("owner/repo")
@@ -2042,7 +2045,7 @@ async fn a_repository_made_private_is_recorded_private() {
     if let Some(job) = outcome.record {
         runner.record(job).await;
     }
-    runner.recordings_done().await;
+    runner.drain_records().await;
     assert!(
         !cache
             .repository("owner/repo")
@@ -2063,7 +2066,7 @@ async fn a_repository_made_private_is_recorded_private() {
     if let Some(job) = outcome.record {
         runner.record(job).await;
     }
-    runner.recordings_done().await;
+    runner.drain_records().await;
     assert!(
         cache
             .repository("owner/repo")
@@ -2124,7 +2127,7 @@ async fn a_quiet_repository_skips_the_sweep_and_its_record_stands() {
     if let Some(job) = outcome.record {
         runner.record(job).await;
     }
-    runner.recordings_done().await;
+    runner.drain_records().await;
     let recorded = cache.repository("owner/repo").await.unwrap().unwrap();
     // The sweep finds it quiet: no report row, no record, no request.
     let before = github.requests();
@@ -2264,7 +2267,7 @@ async fn a_sweep_over_quiet_repositories_makes_no_requests() {
     if let Some(job) = outcome.record {
         runner.record(job).await;
     }
-    runner.recordings_done().await;
+    runner.drain_records().await;
     let before_sweep = github.requests().len();
     let work: Vec<Work> = names
         .iter()
@@ -2274,7 +2277,7 @@ async fn a_sweep_over_quiet_repositories_makes_no_requests() {
         .run(&work, &settings, &Attribution::reason("push"))
         .await
         .unwrap();
-    runner.recordings_done().await;
+    runner.drain_records().await;
     let steady_state = github.requests().len() - before_sweep;
     assert!(steady_state > 0, "a real run costs requests");
     // The sweep replays the stored answers: the "after" is zero requests

@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::Utc;
-use futures_util::{FutureExt, future::BoxFuture};
+use futures_util::future::BoxFuture;
 use patchula_cache::{
     Cache,
     queue::{Attribution, Claim, Finish, MAX_REQUEUES, Priority, Work},
@@ -18,7 +18,7 @@ use patchula_config::settings::Settings;
 use patchula_engine::Engine;
 use patchula_github::{Client, app::App};
 use patchula_http::Transport;
-use patchula_report::{Report, Repository, SCHEMA_VERSION, Status};
+use patchula_report::{Report, SCHEMA_VERSION, Status};
 use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
@@ -36,9 +36,49 @@ use tokio::{
     task::JoinSet,
 };
 
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct Error(&'static str);
+/// A server failure: what failed and, when another error caused it, that
+/// error.
+#[derive(Debug)]
+pub struct Error {
+    message: &'static str,
+    cause: Option<Box<dyn std::error::Error + Send + Sync>>,
+}
+impl Error {
+    fn new(message: &'static str) -> Self {
+        Self {
+            message,
+            cause: None,
+        }
+    }
+    /// A `map_err` adapter: `message`, caused by the error it maps.
+    fn cause<E: Into<Box<dyn std::error::Error + Send + Sync>>>(
+        message: &'static str,
+    ) -> impl FnOnce(E) -> Self {
+        move |cause| Self {
+            message,
+            cause: Some(cause.into()),
+        }
+    }
+    /// What failed, without the cause: the text a remote user sees.
+    fn message(&self) -> &'static str {
+        self.message
+    }
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.cause {
+            Some(cause) => write!(f, "{}: {cause}", self.message),
+            None => f.write_str(self.message),
+        }
+    }
+}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause
+            .as_deref()
+            .map(|cause| cause as &(dyn std::error::Error + 'static))
+    }
+}
 pub struct Options {
     pub settings: PathBuf,
     pub cache: PathBuf,
@@ -63,9 +103,10 @@ pub async fn serve(options: Options) -> miette::Result<()> {
 
 async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), Error> {
     if options.webhook_secret.is_empty() {
-        return Err(Error("webhook secret must be nonempty"));
+        return Err(Error::new("webhook secret must be nonempty"));
     }
-    std::fs::create_dir_all(&options.cache).map_err(|_| Error("cannot create cache directory"))?;
+    std::fs::create_dir_all(&options.cache)
+        .map_err(Error::cause("cannot create cache directory"))?;
     // One queue owner per cache directory. The OS releases this advisory lock on crash.
     let lock_path = options.cache.join("server.lock");
     let lock = std::fs::File::options()
@@ -73,25 +114,26 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         .truncate(false)
         .write(true)
         .open(lock_path)
-        .map_err(|_| Error("cannot open server lock"))?;
+        .map_err(Error::cause("cannot open server lock"))?;
     lock.try_lock()
-        .map_err(|_| Error("another server owns this cache"))?;
+        .map_err(Error::cause("another server owns this cache"))?;
     let cache = Cache::open_dir(&options.cache, Default::default())
         .await
-        .map_err(|_| Error("cannot open server cache"))?;
+        .map_err(Error::cause("cannot open server cache"))?;
     cache
         .recover_work(Utc::now().timestamp_millis())
         .await
-        .map_err(|_| Error("cannot recover pending work"))?;
-    let transport: Arc<dyn Transport> =
-        Arc::new(patchula_http::Network::new().map_err(|_| Error("cannot create HTTP transport"))?);
+        .map_err(Error::cause("cannot recover pending work"))?;
+    let transport: Arc<dyn Transport> = Arc::new(
+        patchula_http::Network::new().map_err(Error::cause("cannot create HTTP transport"))?,
+    );
     let app = App::new(
         options.app_id,
         &options.private_key,
         transport.clone(),
         patchula_engine::settings::github_options(&settings.current()).api_url,
     )
-    .map_err(|_| Error("invalid GitHub App credentials"))?;
+    .map_err(Error::cause("invalid GitHub App credentials"))?;
     // The image has no mise of its own: the first start installs the pinned
     // one into the tool store, and later starts find it there.
     if let Some(workspace) = cache.workspace_dir() {
@@ -112,7 +154,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     let bot = app
         .bot_login()
         .await
-        .map_err(|_| Error("GitHub App authentication failed"))?;
+        .map_err(Error::cause("GitHub App authentication failed"))?;
     // Without a client ID the CLI cannot sign in, but webhooks still work.
     let client_id = app.client_id().await.ok();
     if client_id.is_none() {
@@ -167,8 +209,8 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     let ready = Arc::new(AtomicBool::new(false));
     let listener = TcpListener::bind(options.listen)
         .await
-        .map_err(|_| Error("cannot bind server listener"))?;
-    tracing::info!(target: "patchula_server", address = %listener.local_addr().map_err(|_| Error("cannot inspect listener"))?, "server listening");
+        .map_err(Error::cause("cannot bind server listener"))?;
+    tracing::info!(target: "patchula_server", address = %listener.local_addr().map_err(Error::cause("cannot inspect listener"))?, "server listening");
     let (stop, stopped) = watch::channel(false);
     let reload_settings = settings.clone();
     let settings_path = options.settings;
@@ -445,50 +487,34 @@ impl Batch for Engines {
         attribution: &'a Attribution,
     ) -> BoxFuture<'a, Result<BatchOutcome, Error>> {
         Box::pin(async move {
-            let id = work.first().ok_or(Error("empty batch"))?.installation;
+            let id = work.first().ok_or(Error::new("empty batch"))?.installation;
             if !settings.installation_allowed(id) {
                 skip_report("installation not allowlisted", false);
                 return Ok(BatchOutcome::default());
             }
             // One client serves discovery, check candidates and the public
             // record: every batch past the allowlist check needs it anyway.
-            let client = Client::with_credentials(
-                self.app.installation(id),
-                self.cache.clone(),
-                patchula_engine::settings::github_options(settings),
-                self.transport.clone(),
-            )
-            .map_err(|_| Error("cannot create installation client"))?;
+            let client =
+                installation_client(&self.app, id, &self.cache, settings, &self.transport)?;
             if work.iter().any(|w| w.repo.is_empty()) {
                 let mut repos = Vec::new();
                 let mut listed = Vec::new();
-                for page in 1..=1000 {
-                    let value = client
-                        .get(&format!(
-                            "installation/repositories?per_page=100&page={page}"
-                        ))
-                        .await
-                        .map_err(|_| Error("installation discovery failed"))?;
-                    // One unreadable entry fails the listing: a skipped
-                    // repository would silently escape the update sweep.
-                    let value: patchula_github::model::InstallationRepositories =
-                        serde_json::from_slice(&value.body)
-                            .map_err(|_| Error("invalid installation repository"))?;
-                    for entry in &value.repositories {
-                        let repo = entry.full_name.as_str();
-                        if settings.allows(id, repo) {
-                            let repo = repo.to_ascii_lowercase();
-                            // Unknown visibility counts as private, which the public API hides.
-                            let private = entry.private.unwrap_or(true);
-                            listed.push((repo.clone(), private));
-                            repos.push(Work::repository(id, repo));
+                let entries = patchula_engine::installation_repositories(&client)
+                    .await
+                    .map_err(|error| match error {
+                        patchula_github::Error::Json => {
+                            Error::new("invalid installation repository")
                         }
-                    }
-                    if value.repositories.len() < 100 {
-                        break;
-                    }
-                    if page == 1000 {
-                        return Err(Error("installation repository page budget exceeded"));
+                        error => Error::cause("installation discovery failed")(error),
+                    })?;
+                for entry in &entries {
+                    let repo = entry.full_name.as_str();
+                    if settings.allows(id, repo) {
+                        let repo = repo.to_ascii_lowercase();
+                        // Unknown visibility counts as private, which the public API hides.
+                        let private = entry.private.unwrap_or(true);
+                        listed.push((repo.clone(), private));
+                        repos.push(Work::repository(id, repo));
                     }
                 }
                 self.cache
@@ -500,11 +526,11 @@ impl Batch for Engines {
                         attribution.clone(),
                     )
                     .await
-                    .map_err(|_| Error("cannot persist discovered repositories"))?;
+                    .map_err(Error::cause("cannot persist discovered repositories"))?;
                 self.cache
                     .repositories_listed(id, listed)
                     .await
-                    .map_err(|_| Error("cannot record discovered repositories"))?;
+                    .map_err(Error::cause("cannot record discovered repositories"))?;
                 tracing::info!(target: "patchula_server", installation = id,
                     "discovery completed; repository work queued for a separate batch");
             }
@@ -541,14 +567,14 @@ impl Batch for Engines {
                 && attribution.reasons.iter().all(|reason| reason == "sweep");
             if quiet_sweep {
                 let quiet = {
-                    let mut slot = self.engine(id, settings).await?;
-                    let outcome = std::panic::AssertUnwindSafe(async {
-                        let (_, engine) = slot.as_mut().ok_or(Error("missing batch engine"))?;
-                        Ok::<_, Error>(engine.sweep_quiet(&repositories, Utc::now()).await)
-                    })
-                    .catch_unwind()
-                    .await;
-                    discard_on_panic(&mut slot, outcome)?
+                    let mut slot = SlotGuard::new(self.engine(id, settings).await?);
+                    let quiet = slot
+                        .engine()
+                        .map_err(Error::new)?
+                        .sweep_quiet(&repositories, Utc::now())
+                        .await;
+                    slot.finish();
+                    quiet
                 };
                 match quiet {
                     Ok(quiet) if !quiet.is_empty() => {
@@ -567,25 +593,22 @@ impl Batch for Engines {
             }
             let started = Utc::now();
             let (result, withheld) = {
-                let mut slot = self.engine(id, settings).await?;
-                let outcome = std::panic::AssertUnwindSafe(async {
-                    let (_, engine) = slot.as_mut().ok_or(Error("missing batch engine"))?;
-                    let result = engine
-                        .run(
-                            patchula_engine::Options {
-                                repositories: repositories.clone(),
-                                ..patchula_engine::Options::default()
-                            },
-                            false,
-                            false,
-                        )
-                        .await;
-                    let withheld = result.as_ref().ok().map(crate::public::withheld);
-                    Ok::<_, Error>((result, withheld))
-                })
-                .catch_unwind()
-                .await;
-                discard_on_panic(&mut slot, outcome)?
+                let mut slot = SlotGuard::new(self.engine(id, settings).await?);
+                let result = slot
+                    .engine()
+                    .map_err(Error::new)?
+                    .run(
+                        patchula_engine::Options {
+                            repositories: repositories.clone(),
+                            ..patchula_engine::Options::default()
+                        },
+                        false,
+                        false,
+                    )
+                    .await;
+                slot.finish();
+                let withheld = result.as_ref().ok().map(crate::public::withheld);
+                (result, withheld)
             };
             let record = if let (Ok(report), Some(withheld)) = (&result, withheld) {
                 // The record runs past the batch's end so its reads never
@@ -618,27 +641,25 @@ impl Batch for Engines {
             };
             let report = match &result {
                 Ok(report) => report.clone(),
-                Err(_) => Report {
-                    schema_version: SCHEMA_VERSION,
-                    repositories: repositories
-                        .iter()
-                        .map(|repo| Repository {
-                            repository: repo.clone(),
-                            status: Status::Error,
-                            reason: Some("batch engine failed; work will be retried".into()),
-                            package_files: Vec::new(),
-                            warnings: Vec::new(),
-                            skipped: Vec::new(),
-                            notices: Vec::new(),
-                            lookup_failures: Vec::new(),
-                            tooling: Vec::new(),
-                            default_branch: None,
-                            commit: None,
-                        })
-                        .collect(),
-                    stats: None,
-                    actions: None,
-                },
+                Err(error) => {
+                    tracing::error!(target: "patchula_server", installation = id, %error,
+                        "batch engine failed; work will be retried");
+                    Report {
+                        schema_version: SCHEMA_VERSION,
+                        repositories: repositories
+                            .iter()
+                            .map(|repo| {
+                                patchula_engine::repo_report(
+                                    repo,
+                                    Status::Error,
+                                    Some("batch engine failed; work will be retried".into()),
+                                )
+                            })
+                            .collect(),
+                        stats: None,
+                        actions: None,
+                    }
+                }
             };
             output_report(&report, &settings.server).await?;
             let mut outcome = BatchOutcome::report(&report);
@@ -651,11 +672,6 @@ impl Batch for Engines {
     }
 }
 impl Engines {
-    /// Every record task has finished.
-    #[cfg(test)]
-    async fn recordings_done(&self) {
-        self.drain_records().await;
-    }
     /// Asks GitHub whether a repository is in this App's installation `id`.
     fn member(&self, id: u64) -> impl Fn(String) -> BoxFuture<'static, bool> + Send + Sync + use<> {
         let app = self.app.clone();
@@ -694,13 +710,13 @@ impl Engines {
                 self.cache.clone(),
                 self.transport.clone(),
             )
-            .map_err(|_| Error("cannot create batch engine"))?;
+            .map_err(Error::cause("cannot create batch engine"))?;
             *slot = Some((key, engine));
         }
-        let (_, engine) = slot.as_mut().ok_or(Error("missing batch engine"))?;
+        let (_, engine) = slot.as_mut().ok_or(Error::new("missing batch engine"))?;
         engine
             .set_batch_options(settings.concurrency, settings.recheck(self.recheck))
-            .map_err(|_| Error("invalid batch options"))?;
+            .map_err(Error::cause("invalid batch options"))?;
         engine.set_lockfile_cache_limit(settings.lockfiles.cache_gib);
         engine.set_advertised_server(
             settings
@@ -710,16 +726,20 @@ impl Engines {
         Ok(slot)
     }
 }
-/// The installation's engine slot while a remote run holds it. A run ends
-/// three ways: it returns, it panics, or its future is dropped — the remote
-/// time limit cancels a hung run mid-await. Only a returned run leaves the
-/// engine in place: a panic or a dropped run may have left half-done state,
-/// so the slot is emptied however the guard drops.
+/// The installation's engine slot while a batch or a remote run holds it.
+/// A run ends three ways: it returns, it panics, or its future is dropped —
+/// the remote time limit cancels a hung run mid-await. Only a returned run
+/// leaves the engine in place: a panic or a dropped run may have left
+/// half-done state, so the slot is emptied however the guard drops and the
+/// next run builds a fresh engine.
 struct SlotGuard {
     slot: tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>,
     armed: bool,
 }
 impl SlotGuard {
+    fn new(slot: tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>) -> Self {
+        Self { slot, armed: true }
+    }
     fn engine(&mut self) -> Result<&mut Engine, &'static str> {
         self.slot
             .as_mut()
@@ -753,8 +773,12 @@ impl crate::remote::Runner for Engines {
             let (report, withheld) = {
                 // The installation's own lock, so a remote run never races its
                 // queued batches.
-                let slot = self.engine(installation, settings).await.map_err(|e| e.0)?;
-                let mut slot = SlotGuard { slot, armed: true };
+                let slot = self.engine(installation, settings).await.map_err(|error| {
+                    tracing::error!(target: "patchula_server", installation, %error,
+                        "remote run cannot start");
+                    error.message()
+                })?;
+                let mut slot = SlotGuard::new(slot);
                 let options = patchula_engine::Options {
                     repositories,
                     ..patchula_engine::Options::default()
@@ -764,41 +788,72 @@ impl crate::remote::Runner for Engines {
                     Mode::DryRun => slot.engine()?.run(options, true, false).await,
                     Mode::Run => slot.engine()?.run(options, false, false).await,
                 }
-                .map_err(|_| "the run failed on the server");
+                .map_err(|error| {
+                    tracing::error!(target: "patchula_server", installation, %error,
+                        "remote run failed");
+                    "the run failed on the server"
+                });
                 slot.finish();
                 let report = result?;
                 let withheld = crate::public::withheld(&report);
                 (report, withheld)
             };
             if mode == Mode::Run {
-                if let Ok(client) = Client::with_credentials(
-                    self.app.installation(installation),
-                    self.cache.clone(),
-                    patchula_engine::settings::github_options(settings),
-                    self.transport.clone(),
+                match installation_client(
+                    &self.app,
+                    installation,
+                    &self.cache,
+                    settings,
+                    &self.transport,
                 ) {
-                    crate::public::record(
-                        &self.cache,
-                        &client,
-                        &self.bot_login,
-                        installation,
-                        &crate::public::Recorded {
-                            report: &report,
-                            withheld,
-                        },
-                        started,
-                        &self.member(installation),
-                    )
-                    .await;
+                    Err(error) => {
+                        tracing::warn!(target: "patchula_server", installation, %error,
+                            "remote run not recorded for the public API");
+                    }
+                    Ok(client) => {
+                        crate::public::record(
+                            &self.cache,
+                            &client,
+                            &self.bot_login,
+                            installation,
+                            &crate::public::Recorded {
+                                report: &report,
+                                withheld,
+                            },
+                            started,
+                            &self.member(installation),
+                        )
+                        .await
+                    }
                 }
                 tracing::info!(target: "patchula_server", installation, user = login, "remote run report");
                 output_report(&report, &settings.server)
                     .await
-                    .map_err(|e| e.0)?;
+                    .map_err(|error| {
+                        tracing::error!(target: "patchula_server", installation, %error,
+                            "remote run report not written");
+                        error.message()
+                    })?;
             }
             Ok(report)
         })
     }
+}
+/// The client acting as installation `id` under the server's `settings`.
+pub(crate) fn installation_client(
+    app: &Arc<App>,
+    id: u64,
+    cache: &Cache,
+    settings: &Settings,
+    transport: &Arc<dyn Transport>,
+) -> Result<Client, Error> {
+    Client::with_credentials(
+        app.installation(id),
+        cache.clone(),
+        patchula_engine::settings::github_options(settings),
+        transport.clone(),
+    )
+    .map_err(Error::cause("cannot create installation client"))
 }
 /// The batch report file grammar, `batch-<ts>-<pid>-<counter>.json`, in one
 /// place: `name` builds it for a write and `report` recognises it for
@@ -914,7 +969,7 @@ async fn output_report(
         let kept = server.reports_kept;
         tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(&directory)
-                .map_err(|_| Error("cannot create report directory"))?;
+                .map_err(Error::cause("cannot create report directory"))?;
             // Batches finish side by side, so the counter keeps two in the
             // same instant apart.
             static REPORTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -928,23 +983,23 @@ async fn output_report(
                 .write(true)
                 .create_new(true)
                 .open(&temporary)
-                .map_err(|_| Error("cannot create batch report"))?;
+                .map_err(Error::cause("cannot create batch report"))?;
             serde_json::to_writer(&file, &report)
-                .map_err(|_| Error("cannot write batch report"))?;
+                .map_err(Error::cause("cannot write batch report"))?;
             file.sync_all()
-                .map_err(|_| Error("cannot sync batch report"))?;
+                .map_err(Error::cause("cannot sync batch report"))?;
             let path = directory.join(name);
             std::fs::rename(temporary, &path)
-                .map_err(|_| Error("cannot publish batch report"))?;
+                .map_err(Error::cause("cannot publish batch report"))?;
             tracing::info!(target: "patchula_server", path = %path.display(), repository_runs = report.repositories.len(), "batch report written");
             prune_reports(&directory, kept);
             Ok::<(), Error>(())
         })
         .await
-        .map_err(|_| Error("report writer failed"))??;
+        .map_err(Error::cause("report writer failed"))??;
     } else {
         let json =
-            serde_json::to_string(report).map_err(|_| Error("cannot encode batch report"))?;
+            serde_json::to_string(report).map_err(Error::cause("cannot encode batch report"))?;
         tracing::info!(target: "patchula_server", report = %json, "batch report");
     }
     Ok(())
@@ -976,7 +1031,7 @@ async fn workers(
             joined = running.join_next() => {
                 let Some(joined) = joined else { break };
                 let result = joined
-                    .map_err(|_| Error("queue worker stopped unexpectedly"))
+                    .map_err(Error::cause("queue worker stopped unexpectedly"))
                     .and_then(|result| result);
                 if let Err(error) = result
                     && failure.is_none()
@@ -1016,7 +1071,7 @@ async fn worker(
         let claims = cache
             .claim_batch(Utc::now().timestamp_millis(), settings.server.batch_size)
             .await
-            .map_err(|_| Error("queue claim failed"))?;
+            .map_err(Error::cause("queue claim failed"))?;
         if claims.is_empty() {
             tokio::select! { _ = tokio::time::sleep(Duration::from_millis(100)) => {}, _ = stop.changed() => {} }
             continue;
@@ -1060,7 +1115,7 @@ async fn worker(
             listed
         };
         if outcome.failed() {
-            tracing::error!(target: "patchula_server", error = error.as_ref().map(|e| e.0),
+            tracing::error!(target: "patchula_server", error = error.as_ref().map(|e| e.to_string()),
                 error_kinds = ?outcome.error_kinds, error_count = outcome.error_kinds.values().sum::<usize>(),
                 retried = ?listed(&retried), "batch failed; failed repositories will be retried with backoff");
         }
@@ -1077,7 +1132,7 @@ async fn worker(
                 settings.server.coalescing_ms as i64,
             )
             .await
-            .map_err(|_| Error("queue completion failed"))?;
+            .map_err(Error::cause("queue completion failed"))?;
         // The batch's public record spawns only now that its claims are
         // finished: waiting for a record slot can never hold queue rows.
         if let Some(job) = outcome.record {
@@ -1117,8 +1172,8 @@ async fn run_until(
     let mut failure = None;
     tokio::select! {
         _ = shutdown => {},
-        result = &mut worker => { failure = Some(result.ok().and_then(Result::err).unwrap_or(Error("queue worker stopped unexpectedly"))); },
-        _ = &mut server => { failure = Some(Error("HTTP server stopped unexpectedly")); },
+        result = &mut worker => { failure = Some(result.ok().and_then(Result::err).unwrap_or(Error::new("queue worker stopped unexpectedly"))); },
+        _ = &mut server => { failure = Some(Error::new("HTTP server stopped unexpectedly")); },
     }
     accepting.store(false, Ordering::Release);
     let _ = stop.send(true);
@@ -1164,7 +1219,7 @@ async fn run_until(
     } else {
         cache.release_work().await
     }
-    .map_err(|_| Error("cannot requeue interrupted batch"))?;
+    .map_err(Error::cause("cannot requeue interrupted batch"))?;
     failure.map_or(Ok(()), Err)
 }
 
@@ -1205,11 +1260,11 @@ async fn maintenance(
             let result = async {
                 app.bot_login()
                     .await
-                    .map_err(|_| Error("App authentication probe failed"))?;
+                    .map_err(Error::cause("App authentication probe failed"))?;
                 let installations = app
                     .installations()
                     .await
-                    .map_err(|_| Error("installation listing failed"))?;
+                    .map_err(Error::cause("installation listing failed"))?;
                 let ids: Vec<_> = installations
                     .into_iter()
                     .filter(|id| current.installation_allowed(*id))
@@ -1218,9 +1273,9 @@ async fn maintenance(
                 cache
                     .repositories_retain(ids.clone())
                     .await
-                    .map_err(|_| Error("cannot prune recorded repositories"))?;
+                    .map_err(Error::cause("cannot prune recorded repositories"))?;
                 if ids.is_empty() {
-                    return Err(Error(
+                    return Err(Error::new(
                         "no allowed App installations available for token probe",
                     ));
                 }
@@ -1237,14 +1292,14 @@ async fn maintenance(
                             Attribution::reason("sweep"),
                         )
                         .await
-                        .map_err(|_| Error("cannot persist cron sweep"))?;
+                        .map_err(Error::cause("cannot persist cron sweep"))?;
                     swept = true;
                 }
                 for id in &ids {
                     app.installation(*id)
                         .token()
                         .await
-                        .map_err(|_| Error("installation token probe failed"))?;
+                        .map_err(Error::cause("installation token probe failed"))?;
                 }
                 Ok(())
             }
@@ -1280,7 +1335,7 @@ async fn check_candidate(client: &Client, work: &Work, bot: &str) -> Result<bool
         {
             Ok(pr) => pr,
             Err(patchula_github::Error::Status(404)) => continue,
-            Err(_) => return Err(Error("check-event PR ownership lookup failed")),
+            Err(_) => return Err(Error::new("check-event PR ownership lookup failed")),
         };
         if patchula_update::pull_requests::owned_pr(&pr, bot, &work.repo) {
             return Ok(true);
@@ -1311,16 +1366,3 @@ async fn signal() {
 
 #[cfg(test)]
 mod tests;
-
-/// The outcome of work on a slot's engine. An engine that panicked mid-run
-/// may hold half-done state, so its slot is emptied, the next run builds a
-/// fresh one, and the panic carries on to whoever recovers it.
-fn discard_on_panic<T>(
-    slot: &mut tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>,
-    outcome: std::thread::Result<T>,
-) -> T {
-    outcome.unwrap_or_else(|panic| {
-        **slot = None;
-        std::panic::resume_unwind(panic)
-    })
-}

@@ -1,6 +1,6 @@
 //! The wire contract between `patchula --remote` and `patchula serve`, defined
-//! once so both sides serialize the same JSON. Old and new CLIs and servers
-//! interoperate: every message keeps the shape it always had.
+//! once so both sides serialize the same JSON. Message shapes are frozen, so
+//! CLIs and servers of different releases interoperate.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,7 +10,8 @@ pub const MAX_REPOSITORIES: usize = 20;
 pub const USER_TTL_SECONDS: i64 = 300;
 /// How long a finished job's report stays available to poll.
 pub const JOB_TTL_SECONDS: i64 = 900;
-/// Finished jobs the server keeps at once.
+/// Jobs the server keeps at once, running and finished; a new run is
+/// refused while it holds this many.
 pub const MAX_JOBS: usize = 1000;
 /// The longest a remote run may take: one batch's work. A run that outlives
 /// this is lost, and the CLI stops polling.
@@ -60,9 +61,9 @@ pub struct RejectBody {
     pub error: String,
 }
 
-/// The `GET /api/v1/runs/{id}` 200 body. Serializes exactly as the ad-hoc
-/// `json!` responses always did; `decode` reads it back with the report's
-/// schema version checked first, as `Report::from_json` does.
+/// The `GET /api/v1/runs/{id}` 200 body, tagged by `status`. `decode`
+/// reads it back with the report's schema version checked first, as
+/// `Report::from_json` does.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum JobStatus {
