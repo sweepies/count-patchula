@@ -267,7 +267,7 @@ fn wrapper(path: &str, text: &Lines<'_>) -> Vec<Dependency> {
 }
 
 pub(super) fn selected(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = crate::roles::leaf(path);
     // Under a source tree only main sources are build logic (such as
     // buildSrc/src/main/kotlin/*.gradle.kts); test resources and docs hold
     // fixtures that pin old versions on purpose.
@@ -348,7 +348,7 @@ pub(crate) fn logic_folder(path: &str) -> bool {
 
 /// Whether `path` is a source file build logic can be written in.
 pub(crate) fn logic_source(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = crate::roles::leaf(path);
     [".kt", ".kts", ".groovy", ".java", ".gradle"]
         .iter()
         .any(|suffix| leaf.ends_with(suffix))
@@ -359,7 +359,7 @@ pub(crate) fn logic_source(path: &str) -> bool {
 /// Included builds elsewhere are read once the settings name them; see
 /// `included_builds`.
 pub(crate) fn build_logic(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = crate::roles::leaf(path);
     let in_logic = BUILD_LOGIC
         .iter()
         .any(|dir| path.starts_with(dir) || path.contains(&format!("/{dir}")));
@@ -524,7 +524,7 @@ fn applied_script(
     // for a script another applies, either its own folder or the build's,
     // which must not name two different files.
     let own = &path[..path.rfind('/').map_or(0, |i| i + 1)];
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = crate::roles::leaf(path);
     if leaf.starts_with("build.gradle") || leaf.starts_with("settings.gradle") {
         return resolve(own);
     }
@@ -557,7 +557,7 @@ fn references(
 ) -> Vec<Reference> {
     let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     let bytes = code.as_bytes();
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = crate::roles::leaf(path);
     let settings = matches!(leaf, "settings.gradle" | "settings.gradle.kts");
     let plain = |s: &str| !s.contains('$') && !s.contains("://");
     let mut out = Vec::new();
@@ -1239,41 +1239,8 @@ pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
-    fn proposing(&self, dep: &Dependency) -> Proposing {
-        Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
-            written: Written::Range,
-            keeps_satisfied: false,
-            unversioned: Unversioned {
-                looked_up: false,
-                opaque: false,
-            },
-            short_tags: ShortTags::Fixed,
-            selector_resolved: false,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
-            pin: Pin {
-                commit: false,
-                needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
-                    && matches!(
-                        dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
-                    ),
-                from_catalog: false,
-            },
-            lock: Lock {
-                keeps_ranges: false,
-                movable: false,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
-                reported: false,
-            },
-            edits: Edits::Manifest,
-            advisories: Advisories::BySource,
-        }
+    fn proposing(&self, _dep: &Dependency) -> Proposing {
+        Proposing::BASE
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
         selected(path)

@@ -204,7 +204,7 @@ fn collect(
                 continue;
             }
             let override_name = if name == "." {
-                pointer.rsplit('/').next().unwrap_or(name)
+                crate::roles::leaf(pointer)
             } else {
                 name
             };
@@ -445,7 +445,7 @@ impl Npmrc {
 pub(super) fn env_registry_warnings(files: &crate::Files) -> Vec<String> {
     let mut out = Vec::new();
     for (path, text) in files {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let leaf = crate::roles::leaf(path);
         let Ok(text) = text.read() else {
             continue;
         };
@@ -665,41 +665,17 @@ impl crate::Ecosystem for Descriptor {
                 _ => Range::Installed,
             },
             runtime_toolchain: dep.kind == DependencyKind::Toolchain,
-            written: Written::Range,
-            keeps_satisfied: false,
-            unversioned: Unversioned {
-                looked_up: false,
-                opaque: false,
-            },
-            short_tags: ShortTags::Fixed,
-            selector_resolved: false,
             resolved_via_listing: dep.kind == DependencyKind::Tool,
-            pin: Pin {
-                commit: false,
-                needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
-                    && matches!(
-                        dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
-                    ),
-                from_catalog: false,
-            },
             lock: Lock {
-                keeps_ranges: false,
-                movable: false,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
                 reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
                     && dep.resolved.is_some(),
+                ..Proposing::BASE.lock
             },
-            edits: Edits::Manifest,
-            advisories: Advisories::BySource,
+            ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let leaf = crate::roles::leaf(path);
         matches!(
             leaf,
             "package.json"

@@ -1,3 +1,4 @@
+use crate::roles::leaf;
 use crate::*;
 use std::{
     collections::BTreeSet,
@@ -60,7 +61,7 @@ pub fn included_files<'a>(
     };
     // mise's walk prunes hidden directories as well as hidden files.
     let configuration = |path: &str| {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let leaf = leaf(path);
         let below = path.strip_prefix(pattern.as_str()).unwrap_or(path);
         below.split('/').any(|part| part.starts_with('.'))
             || matches!(leaf, "mise.toml" | "mise.local.toml")
@@ -428,7 +429,7 @@ const PLAIN_SETTINGS: [&str; 18] = [
 /// `.config/mise/`, and their `conf.d` folders. `.miserc` files, which can
 /// choose the environment, count too.
 pub(crate) fn config_file(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = leaf(path);
     let named = leaf
         .strip_prefix('.')
         .unwrap_or(leaf)
@@ -479,11 +480,7 @@ fn backends(tool: &str) -> Vec<String> {
 /// plain tables and settings above counts against every tool.
 fn redirected_backends(path: &str, text: &str) -> Option<BTreeSet<String>> {
     let mut out = BTreeSet::new();
-    if path
-        .rsplit('/')
-        .next()
-        .is_some_and(|leaf| leaf.starts_with(".miserc"))
-    {
+    if leaf(path).starts_with(".miserc") {
         out.insert("*".to_owned());
         return Some(out);
     }
@@ -567,10 +564,6 @@ fn related(dir: &str, path: &str) -> bool {
     let folder = &path[..path.rfind('/').map_or(0, |i| i + 1)];
     let folder = folder.strip_suffix(".cargo/").unwrap_or(folder);
     dir.starts_with(folder) || folder.starts_with(dir)
-}
-
-fn leaf(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
 }
 
 /// The first file `related` to `dir` that `test` accepts, as the reason
@@ -795,7 +788,7 @@ pub(crate) fn redirected(
             .ok()
             .and_then(|text| redirected_backends(config, text))
         else {
-            return Some(format!("{config}, which the Count cannot read"));
+            return Some(Unread::Failed.reason(config));
         };
         if redirected.contains("*") || kinds.iter().any(|kind| redirected.contains(kind)) {
             return Some(format!(
@@ -818,40 +811,11 @@ pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
-    fn proposing(&self, dep: &Dependency) -> Proposing {
+    fn proposing(&self, _dep: &Dependency) -> Proposing {
         Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
-            written: Written::Range,
-            keeps_satisfied: false,
-            unversioned: Unversioned {
-                looked_up: false,
-                opaque: false,
-            },
-            short_tags: ShortTags::Fixed,
             selector_resolved: true,
             resolved_via_listing: true,
-            pin: Pin {
-                commit: false,
-                needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
-                    && matches!(
-                        dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
-                    ),
-                from_catalog: false,
-            },
-            lock: Lock {
-                keeps_ranges: false,
-                movable: false,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
-                reported: false,
-            },
-            edits: Edits::Manifest,
-            advisories: Advisories::BySource,
+            ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {

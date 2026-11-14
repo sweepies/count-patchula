@@ -28,7 +28,7 @@ pub fn edits(
     let replacement = if dep.proposing().pin.commit {
         if value.is_empty()
             || value.contains([' ', '\t', '\r', '\n', '\0', '\'', '"', '#', '@', '\\'])
-            || digest.is_some_and(|d| d.len() != 40 || !d.bytes().all(|b| b.is_ascii_hexdigit()))
+            || digest.is_some_and(|d| !crate::commit_hash(d))
         {
             return Err("invalid action ref or commit digest".into());
         }
@@ -38,8 +38,21 @@ pub fn edits(
         actions::replacement(dep, text, value, digest)?
     } else if dep.kind == DependencyKind::Runner {
         actions::runner_replacement(dep, text, value)?
-    } else if let EditForm::Image { .. } = dep.form {
-        return image_edits(dep, text, raw, value, digest);
+    } else if let EditForm::Image {
+        digest_pointer,
+        comment,
+        ..
+    } = &dep.form
+    {
+        return image_edits(
+            dep,
+            text,
+            raw,
+            value,
+            digest,
+            digest_pointer.as_deref(),
+            *comment,
+        );
     } else {
         let current = scalar(dep, raw)?;
         let target = match descriptor.declared_form(dep, &current, value)? {
@@ -152,6 +165,8 @@ fn image_edits(
     raw: &str,
     value: &str,
     digest: Option<&str>,
+    digest_pointer: Option<&str>,
+    comment: bool,
 ) -> Result<Vec<Edit>, String> {
     if value.is_empty()
         || value.len() > 128
@@ -167,15 +182,7 @@ fn image_edits(
     {
         return Err("invalid image tag or content digest".into());
     }
-    let EditForm::Image {
-        digest_pointer,
-        comment,
-        ..
-    } = &dep.form
-    else {
-        return Err("not an image edit form".into());
-    };
-    let literal = if *comment {
+    let literal = if comment {
         raw.split_once(" #").map_or(raw, |(a, _)| a).trim_end()
     } else {
         raw

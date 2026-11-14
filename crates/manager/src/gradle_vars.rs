@@ -256,7 +256,7 @@ pub(super) fn extract(files: &Files, selected: impl Fn(&str) -> bool) -> Vec<Dep
         }
     }
     for (path, text) in read {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let leaf = crate::roles::leaf(path);
         if leaf == "gradle.properties" {
             properties(path, text, &mut definitions);
         } else if leaf.ends_with(".gradle") || leaf.ends_with(".gradle.kts") {

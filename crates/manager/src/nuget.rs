@@ -218,15 +218,13 @@ fn sdk(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
 /// compared case-insensitively — `.csproj`, `.CSPROJ`, `.vcxproj`,
 /// `.sqlproj`, `.proj`.
 fn project_file(path: &str) -> bool {
-    path.rsplit('/')
-        .next()
-        .unwrap_or(path)
+    crate::roles::leaf(path)
         .rsplit_once('.')
         .is_some_and(|(_, ext)| ext.to_ascii_lowercase().ends_with("proj"))
 }
 
 pub(super) fn selected(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = crate::roles::leaf(path);
     let lower = leaf.to_ascii_lowercase();
     project_file(path)
         || solution_file(&lower)
@@ -267,9 +265,7 @@ const CONFIG_NAMES: [&str; 3] = ["nuget.config", "NuGet.config", "NuGet.Config"]
 
 /// Whether `path` could be a NuGet config file, under any spelling.
 pub(crate) fn config_file(path: &str) -> bool {
-    path.rsplit('/')
-        .next()
-        .is_some_and(|leaf| leaf.eq_ignore_ascii_case("nuget.config"))
+    crate::roles::leaf(path).eq_ignore_ascii_case("nuget.config")
 }
 
 /// The start of MSBuild property names that set restore sources, fallback
@@ -287,7 +283,7 @@ pub(crate) const RESTORE_OVERRIDES: [&str; 6] = [
 /// Whether `path` is an MSBuild file or response file that could set a
 /// restore property.
 pub(crate) fn msbuild_file(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    let leaf = crate::roles::leaf(path).to_ascii_lowercase();
     [
         ".props",
         ".targets",
@@ -568,7 +564,7 @@ impl Feeds {
                 text.read()
                     .map_err(|_| ())
                     .and_then(config)
-                    .map_err(|()| format!("{path}, which the Count cannot read"))
+                    .map_err(|()| Unread::Failed.reason(path))
             };
             if !matches!(configs.get(&dir), Some(Err(_))) {
                 configs.insert(dir, read);
@@ -645,7 +641,7 @@ impl Feeds {
         if let Some(reason) = &self.overridden {
             return Origin::Index(Named::Unusable(reason.clone()));
         }
-        let leaf = file.rsplit('/').next().unwrap_or(file).to_ascii_lowercase();
+        let leaf = crate::roles::leaf(file).to_ascii_lowercase();
         let shared = leaf.ends_with(".props") || leaf.ends_with(".targets");
         let folder = &file[..file.rfind('/').map_or(0, |i| i + 1)];
         // A tool manifest sits in the `.config` folder of the project it
@@ -774,38 +770,8 @@ pub(crate) struct Descriptor;
 impl crate::Ecosystem for Descriptor {
     fn proposing(&self, dep: &Dependency) -> Proposing {
         Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
-            written: Written::Range,
-            keeps_satisfied: false,
-            unversioned: Unversioned {
-                looked_up: false,
-                opaque: false,
-            },
-            short_tags: ShortTags::Fixed,
-            selector_resolved: false,
             resolved_via_listing: dep.kind == DependencyKind::Tool,
-            pin: Pin {
-                commit: false,
-                needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
-                    && matches!(
-                        dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
-                    ),
-                from_catalog: false,
-            },
-            lock: Lock {
-                keeps_ranges: false,
-                movable: false,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
-                reported: false,
-            },
-            edits: Edits::Manifest,
-            advisories: Advisories::BySource,
+            ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &patchula_config::Config, path: &str) -> bool {

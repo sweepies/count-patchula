@@ -349,45 +349,20 @@ pub(crate) struct Descriptor;
 impl crate::Ecosystem for Descriptor {
     fn proposing(&self, dep: &Dependency) -> Proposing {
         Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
-            written: Written::Range,
-            keeps_satisfied: false,
-            unversioned: Unversioned {
-                looked_up: false,
-                opaque: false,
-            },
-            short_tags: ShortTags::Fixed,
-            selector_resolved: false,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
-            pin: Pin {
-                commit: false,
-                needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
-                    && matches!(
-                        dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
-                    ),
-                from_catalog: false,
-            },
             lock: Lock {
                 keeps_ranges: true,
                 movable: dep.source == Source::Pypi,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
                 reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
                     && dep.resolved.is_some()
                     && dep.source == Source::Pypi,
+                ..Proposing::BASE.lock
             },
-            edits: Edits::Manifest,
-            advisories: Advisories::BySource,
+            ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
         matches!(
-            path.rsplit('/').next().unwrap_or(path),
+            crate::roles::leaf(path),
             "pyproject.toml" | "uv.lock" | "poetry.lock" | ".python-version"
         )
     }
@@ -397,7 +372,7 @@ impl crate::Ecosystem for Descriptor {
     /// The settings the pip and uv backends mise runs read.
     fn backend_settings(&self, path: &str) -> bool {
         matches!(
-            path.rsplit('/').next().unwrap_or(path),
+            crate::roles::leaf(path),
             "pyproject.toml" | "uv.toml" | "pip.conf" | "pip.ini"
         )
     }

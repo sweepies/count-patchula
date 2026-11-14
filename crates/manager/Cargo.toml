@@ -10,6 +10,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Test fixtures for the crates that build dependencies by hand.
+testing = []
+
 [dependencies]
 patchula-versioning = { path = "../versioning" }
 patchula-mise = { path = "../mise" }
@@ -27,4 +31,5 @@ sha2 = "0.11.1"
 toml_edit = { version = "0.25.17", features = ["serde"] }
 globset = "0.4"
 url = "2.5.8"
+percent-encoding = "2"
 roxmltree = "0.21.2"

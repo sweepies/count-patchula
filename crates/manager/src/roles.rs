@@ -1,7 +1,7 @@
 //! The file-role taxonomy: what role a repository file name plays for each
 //! ecosystem, stated once here and next to the predicates each ecosystem
-//! module already owns, and read by every classifier that used to keep its
-//! own filename table. Everything fails closed: a name no ecosystem claims
+//! module owns, and read by every classifier that needs a file's role.
+//! Everything fails closed: a name no ecosystem claims
 //! has no role, so it is never materialized for a tool run, never public,
 //! and credential-checked whenever it could hold one.
 
@@ -60,7 +60,8 @@ pub struct Roles {
     pub read: bool,
 }
 
-fn leaf(path: &str) -> &str {
+/// The last segment of `path`: its file name.
+pub fn leaf(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
@@ -138,11 +139,9 @@ const PYTHON_CREDENTIAL_SCANS: &[(&[&str], CredentialScan)] = &[
 ];
 /// MSBuild project and solution suffixes NuGet reads.
 const NUGET_SUFFIXES: &[&str] = &[".csproj", ".fsproj", ".vbproj", ".sln", ".slnx"];
-/// `NUGET_SUFFIXES` plus the property and target files that can carry
+/// The property and target files that, beside `NUGET_SUFFIXES`, can carry
 /// restore sources.
-const NUGET_STEERING_SUFFIXES: &[&str] = &[
-    ".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".props", ".targets",
-];
+const NUGET_PROPERTY_SUFFIXES: &[&str] = &[".props", ".targets"];
 /// The NuGet files the Count rewrites: its lockfile and the MSBuild files
 /// that hold central package management and restore settings.
 const NUGET_WRITABLE: &[&str] = &[
@@ -376,7 +375,8 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             roles.steers = crate::nuget::config_file(path)
                 || named(lock_names(Manager::Nuget).supported, path)
                 || named(manifest_names(Manager::Nuget), path)
-                || suffixed(NUGET_STEERING_SUFFIXES, path);
+                || suffixed(NUGET_SUFFIXES, path)
+                || suffixed(NUGET_PROPERTY_SUFFIXES, path);
         }
         Manager::Maven => {
             roles.registry = crate::maven::repository_file(path);
@@ -437,7 +437,7 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             // files it is written from are checked out only while the
             // work holds an Actions job (checkout.rs), so nothing here
             // is `read` and `.github/dependabot.yml` stays out.
-            roles.writable = path == ".github/workflows/actions.lock";
+            roles.writable = path == ACTIONS_LOCK;
             // A workflow or action file can steer the run's fetches: it
             // names the repositories the tool resolves.
             roles.steers = github_workflow(path) || action_file(path) || roles.writable;
@@ -490,6 +490,10 @@ pub fn cargo_config(path: &str) -> bool {
     crate::cargo::config_file(path)
 }
 
+/// The GitHub Actions workflow lockfile's one path: not a leaf name
+/// matched anywhere in the tree.
+pub const ACTIONS_LOCK: &str = ".github/workflows/actions.lock";
+
 /// A workflow file directly under `.github/workflows/` — never nested,
 /// and never the lockfile itself. `.forgejo` and `.gitea` workflows are
 /// not GitHub Actions' and match nothing here.
@@ -497,7 +501,7 @@ pub fn github_workflow(path: &str) -> bool {
     let Some(rest) = path.strip_prefix(".github/workflows/") else {
         return false;
     };
-    rest != "actions.lock"
+    path != ACTIONS_LOCK
         && !rest.contains('/')
         && matches!(rest.rsplit('.').next(), Some("yml" | "yaml"))
 }
@@ -521,9 +525,9 @@ pub fn lock_names(manager: Manager) -> LockNames {
             readable: &["package-lock.json", "npm-shrinkwrap.json", "aube-lock.yaml"],
         },
         Manager::Bun => LockNames {
-            supported: &["bun.lock"],
+            supported: BUN_LOCK,
             unsupported: &[],
-            readable: &["bun.lock"],
+            readable: BUN_LOCK,
         },
         Manager::Pyproject => LockNames {
             supported: PYTHON_LOCKS,

@@ -284,7 +284,7 @@ pub(crate) fn modules(files: &Files) -> Modules {
                 .ok()
                 .and_then(read)
                 .map(|(replaced, uses)| Workspace { replaced, uses })
-                .ok_or_else(|| format!("{path}, which the Count cannot read"));
+                .ok_or_else(|| Unread::Failed.reason(path));
             (path.clone(), entry)
         })
         .collect();
@@ -349,7 +349,7 @@ fn replacements(path: &str, modules: &Modules) -> Result<BTreeSet<String>, Strin
 
 /// Whether `path` is a Go workspace file.
 pub(crate) fn work_file(path: &str) -> bool {
-    path.rsplit('/').next() == Some("go.work")
+    crate::roles::leaf(path) == "go.work"
 }
 
 pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
@@ -359,48 +359,23 @@ pub(crate) struct Descriptor;
 impl crate::Ecosystem for Descriptor {
     fn proposing(&self, dep: &Dependency) -> Proposing {
         Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
-            written: Written::Range,
-            keeps_satisfied: false,
-            unversioned: Unversioned {
-                looked_up: false,
-                opaque: false,
-            },
-            short_tags: ShortTags::Fixed,
-            selector_resolved: false,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
-            pin: Pin {
-                commit: false,
-                needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
-                    && matches!(
-                        dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
-                    ),
-                from_catalog: false,
-            },
             lock: Lock {
-                keeps_ranges: false,
                 movable: dep.source == Source::Go,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
                 reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
                     && dep.resolved.is_some()
                     && dep.source == Source::Go,
+                ..Proposing::BASE.lock
             },
-            edits: Edits::Manifest,
             advisories: if dep.kind == DependencyKind::Toolchain && dep.package == "go" {
                 Advisories::GoStdlib
             } else {
                 Advisories::BySource
             },
+            ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        path.rsplit('/').next() == Some("go.mod")
+        crate::roles::leaf(path) == "go.mod"
     }
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Go, path).registry

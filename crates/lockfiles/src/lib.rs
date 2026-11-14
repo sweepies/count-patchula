@@ -3,7 +3,7 @@
 //! that executes it. Nothing here knows `Plan` or `Snapshot`.
 use patchula_config::Config;
 use patchula_manager::Dependency;
-use patchula_manager::roles::{lock_names, manifest_names};
+use patchula_manager::roles::{leaf, lock_names, manifest_names};
 use patchula_report::Update;
 use patchula_words::{Manager, Source};
 use serde::{Deserialize, Serialize};
@@ -31,9 +31,7 @@ pub enum Ecosystem {
     Actions,
 }
 
-/// The GitHub Actions workflow lockfile's one path: not a leaf name
-/// matched anywhere in the tree.
-pub const ACTIONS_LOCK: &str = ".github/workflows/actions.lock";
+pub use patchula_manager::roles::ACTIONS_LOCK;
 
 /// What a lock job asks its ecosystem's tool to do.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -67,6 +65,18 @@ pub struct Job {
     pub wait_hours: u32,
 }
 impl Job {
+    /// A job that asks `ecosystem`'s tool to move `scope` in `directory`,
+    /// with no exact version, publish-age allowance or wait of its own.
+    pub fn new(ecosystem: Ecosystem, directory: impl Into<String>, scope: Scope) -> Self {
+        Self {
+            ecosystem,
+            directory: directory.into(),
+            scope,
+            exact_version: false,
+            publish_age_allow: false,
+            wait_hours: 0,
+        }
+    }
     /// The package a targeted job moves.
     pub fn package(&self) -> Option<&str> {
         match &self.scope {
@@ -89,8 +99,9 @@ impl Job {
         }
     }
 }
-// The wire shape is the old field layout: `package`, `current` and `target`
-// stay top-level so serialized job identities do not change.
+// The wire shape is frozen: `package`, `current` and `target` sit at the
+// top level, and `exact_version` is `lock_only`, because the serialized job
+// feeds the Patchula-Plan hash.
 impl Serialize for Job {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
@@ -244,26 +255,18 @@ pub fn job(
             {
                 return Ok(None);
             }
-            return Ok(Some(Job {
-                ecosystem: Ecosystem::Mise,
-                directory: root.into(),
-                scope: Scope::Package {
+            return Ok(Some(Job::new(
+                Ecosystem::Mise,
+                root,
+                Scope::Package {
                     package: dep.name.clone(),
                     current: Some(dep.current.clone()),
                     target: update.new_version.clone().or(update.new_value.clone()),
                 },
-                exact_version: false,
-                publish_age_allow: false,
-                wait_hours: 0,
-            }));
+            )));
         }
         // Node version files pin the runtime, which no lockfile records.
-        Manager::Npm | Manager::Bun
-            if matches!(
-                dep.file.rsplit('/').next(),
-                Some(".nvmrc" | ".node-version")
-            ) =>
-        {
+        Manager::Npm | Manager::Bun if matches!(leaf(&dep.file), ".nvmrc" | ".node-version") => {
             return Ok(None);
         }
         Manager::Npm | Manager::Bun => {
@@ -340,18 +343,15 @@ pub fn job(
         }
         // Each flake input is moved by name; nix resolves its new revision.
         Manager::Nix => {
-            return Ok(Some(Job {
-                ecosystem: Ecosystem::Nix,
-                directory: directory(&dep.file).into(),
-                scope: Scope::Package {
+            return Ok(Some(Job::new(
+                Ecosystem::Nix,
+                directory(&dep.file),
+                Scope::Package {
                     package: dep.name.clone(),
                     current: dep.digest.clone(),
                     target: update.new_digest.clone(),
                 },
-                exact_version: false,
-                publish_age_allow: false,
-                wait_hours: 0,
-            }));
+            )));
         }
         // NuGet locks sit beside each project; a manifest under a directory
         // with locks restores that directory's solution or project.
@@ -359,36 +359,23 @@ pub fn job(
             let dir = directory(&dep.file);
             let locked = dep.kind != patchula_words::DependencyKind::Toolchain
                 && !dep.file.ends_with("dotnet-tools.json")
-                && subtree(paths, dir).any(|p| {
-                    lock_names(Manager::Nuget)
-                        .supported
-                        .contains(&p.rsplit('/').next().unwrap_or(p))
-                });
+                && subtree(paths, dir)
+                    .any(|p| lock_names(Manager::Nuget).supported.contains(&leaf(p)));
             if !locked {
                 return Ok(None);
             }
-            return Ok(Some(Job {
-                ecosystem: Ecosystem::Dotnet,
-                directory: dir.into(),
-                scope: Scope::Directory,
-                exact_version: false,
-                publish_age_allow: false,
-                wait_hours: 0,
-            }));
+            return Ok(Some(Job::new(Ecosystem::Dotnet, dir, Scope::Directory)));
         }
         Manager::Gradle
             if dep
                 .file
                 .ends_with("gradle/wrapper/gradle-wrapper.properties") =>
         {
-            return Ok(Some(Job {
-                ecosystem: Ecosystem::GradleWrapper,
-                directory: directory(&dep.file).into(),
-                scope: Scope::Directory,
-                exact_version: false,
-                publish_age_allow: false,
-                wait_hours: 0,
-            }));
+            return Ok(Some(Job::new(
+                Ecosystem::GradleWrapper,
+                directory(&dep.file),
+                Scope::Directory,
+            )));
         }
         // Gradle dependency locking writes per-configuration lockfiles that
         // need the build itself to regenerate; hold such updates.
@@ -407,8 +394,8 @@ pub fn job(
         // Toolchain files pin a tool, which no lockfile records.
         Manager::Cargo | Manager::Terraform
             if matches!(
-                dep.file.rsplit('/').next(),
-                Some("rust-toolchain" | "rust-toolchain.toml" | ".terraform-version")
+                leaf(&dep.file),
+                "rust-toolchain" | "rust-toolchain.toml" | ".terraform-version"
             ) =>
         {
             return Ok(None);
@@ -471,14 +458,11 @@ pub fn job(
             {
                 return Ok(None);
             }
-            return Ok(Some(Job {
-                ecosystem: Ecosystem::Actions,
-                directory: ".github/workflows".into(),
-                scope: Scope::Directory,
-                exact_version: false,
-                publish_age_allow: false,
-                wait_hours: 0,
-            }));
+            return Ok(Some(Job::new(
+                Ecosystem::Actions,
+                ".github/workflows",
+                Scope::Directory,
+            )));
         }
         // No lockfile the Count generates.
         Manager::Dockerfile
@@ -603,40 +587,56 @@ pub fn refresh(ecosystem: Ecosystem) -> Refresh {
     }
 }
 
+/// Every ecosystem, in the order refresh claims are tried: a lock name two
+/// ecosystems could read goes to the earlier one. An ecosystem whose
+/// `refresh` is `Never` claims nothing wherever it sits.
+const REFRESH_ORDER: [Ecosystem; 13] = [
+    Ecosystem::Node,
+    Ecosystem::Cargo,
+    Ecosystem::Python,
+    Ecosystem::Dotnet,
+    Ecosystem::Ruby,
+    Ecosystem::Php,
+    Ecosystem::Nix,
+    Ecosystem::Apm,
+    Ecosystem::Mise,
+    Ecosystem::Go,
+    Ecosystem::Terraform,
+    Ecosystem::Actions,
+    Ecosystem::GradleWrapper,
+];
+// A new `Ecosystem` variant fails to compile here until `REFRESH_ORDER`
+// places it.
+const _: () = match Ecosystem::Node {
+    Ecosystem::Node
+    | Ecosystem::Cargo
+    | Ecosystem::Python
+    | Ecosystem::Dotnet
+    | Ecosystem::Ruby
+    | Ecosystem::Php
+    | Ecosystem::Nix
+    | Ecosystem::Apm
+    | Ecosystem::Mise
+    | Ecosystem::Go
+    | Ecosystem::Terraform
+    | Ecosystem::Actions
+    | Ecosystem::GradleWrapper => (),
+};
+
 /// The refresh jobs `paths` holds under `config`: a supported lockfile's
 /// directory claims its ecosystem's whole-directory work. First match wins,
-/// in the order the ecosystems were always claimed: a lock name two
-/// ecosystems could read goes to the earlier one.
+/// in `REFRESH_ORDER`.
 pub fn refresh_jobs(config: &Config, paths: &BTreeSet<String>) -> BTreeSet<Job> {
     let mut jobs = BTreeSet::new();
     for path in paths {
-        let leaf = path.rsplit('/').next().unwrap();
-        let Some(ecosystem) = [
-            Ecosystem::Node,
-            Ecosystem::Cargo,
-            Ecosystem::Python,
-            Ecosystem::Dotnet,
-            Ecosystem::Ruby,
-            Ecosystem::Php,
-            Ecosystem::Nix,
-            Ecosystem::Apm,
-            Ecosystem::Mise,
-            Ecosystem::Go,
-            Ecosystem::Terraform,
-            Ecosystem::Actions,
-        ]
-        .into_iter()
-        .find(|ecosystem| refresh(*ecosystem).claims(config, leaf, directory(path), paths)) else {
+        let leaf = leaf(path);
+        let Some(ecosystem) = REFRESH_ORDER
+            .into_iter()
+            .find(|ecosystem| refresh(*ecosystem).claims(config, leaf, directory(path), paths))
+        else {
             continue;
         };
-        jobs.insert(Job {
-            ecosystem,
-            directory: directory(path).into(),
-            scope: Scope::Directory,
-            exact_version: false,
-            publish_age_allow: false,
-            wait_hours: 0,
-        });
+        jobs.insert(Job::new(ecosystem, directory(path), Scope::Directory));
     }
     jobs
 }
@@ -891,14 +891,8 @@ pub fn actions_composite_job(
     let listed = actions_lock_workflows(&lock)
         .ok_or("actions.lock: a corrupt or newer lockfile; regenerate it with `gh actions-lock`")?;
     let callers = actions_lock_callers(&dep.file, &listed.into_keys().collect(), read)?;
-    Ok((!callers.is_empty()).then(|| Job {
-        ecosystem: Ecosystem::Actions,
-        directory: ".github/workflows".into(),
-        scope: Scope::Directory,
-        exact_version: false,
-        publish_age_allow: false,
-        wait_hours: 0,
-    }))
+    Ok((!callers.is_empty())
+        .then(|| Job::new(Ecosystem::Actions, ".github/workflows", Scope::Directory)))
 }
 
 /// The ecosystem `manager`'s lockfile work runs through, or `None` for a

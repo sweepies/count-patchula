@@ -44,7 +44,7 @@ pub(super) fn extract(
     files: &Files,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
-    if path.rsplit('/').next() != Some("composer.json") {
+    if crate::roles::leaf(path) != "composer.json" {
         return Ok(Vec::new());
     }
     let root = jsonc_parser::parse_to_ast(text, &Default::default(), &Default::default())
@@ -315,47 +315,19 @@ pub(crate) struct Descriptor;
 impl crate::Ecosystem for Descriptor {
     fn proposing(&self, dep: &Dependency) -> Proposing {
         Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
-            written: Written::Range,
-            keeps_satisfied: false,
-            unversioned: Unversioned {
-                looked_up: false,
-                opaque: false,
-            },
-            short_tags: ShortTags::Fixed,
-            selector_resolved: false,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
-            pin: Pin {
-                commit: false,
-                needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
-                    && matches!(
-                        dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
-                    ),
-                from_catalog: false,
-            },
             lock: crate::Lock {
                 keeps_ranges: true,
                 movable: dep.source == Source::Packagist,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
                 reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
                     && dep.resolved.is_some()
                     && dep.source == Source::Packagist,
+                ..Proposing::BASE.lock
             },
-            edits: Edits::Manifest,
-            advisories: Advisories::BySource,
+            ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        matches!(
-            path.rsplit('/').next().unwrap_or(path),
-            "composer.json" | "composer.lock"
-        )
+        matches!(crate::roles::leaf(path), "composer.json" | "composer.lock")
     }
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Composer, path).registry

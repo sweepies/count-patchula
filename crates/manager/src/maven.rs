@@ -206,15 +206,15 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
 
 /// Whether `path` is a Maven settings file, by its name.
 pub(crate) fn settings_file(path: &str) -> bool {
-    path.rsplit('/')
-        .next()
-        .is_some_and(|leaf| leaf.to_ascii_lowercase().ends_with("settings.xml"))
+    crate::roles::leaf(path)
+        .to_ascii_lowercase()
+        .ends_with("settings.xml")
 }
 
 /// Whether `path` is a file the Count reads for Maven repositories by its
 /// name; POMs other files name are found by `referenced`.
 pub(crate) fn repository_file(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = crate::roles::leaf(path);
     leaf == "pom.xml"
         || settings_file(path)
         || path == ".mvn/maven.config"
@@ -413,7 +413,7 @@ pub(crate) fn private_repositories(files: &Files) -> Option<crate::origins::Repo
             if settings_file(path) && !poms.contains(path.as_str()) && !text.contains("<settings") {
                 continue;
             }
-            out.close(format!("{path}, which the Count cannot read"));
+            out.close(Unread::Failed.reason(path));
             return Some(out);
         };
         let root = document.root_element().tag_name().name();
@@ -465,44 +465,11 @@ pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
-    fn proposing(&self, dep: &Dependency) -> Proposing {
-        Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
-            written: Written::Range,
-            keeps_satisfied: false,
-            unversioned: Unversioned {
-                looked_up: false,
-                opaque: false,
-            },
-            short_tags: ShortTags::Fixed,
-            selector_resolved: false,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
-            pin: Pin {
-                commit: false,
-                needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
-                    && matches!(
-                        dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
-                    ),
-                from_catalog: false,
-            },
-            lock: Lock {
-                keeps_ranges: false,
-                movable: false,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
-                reported: false,
-            },
-            edits: Edits::Manifest,
-            advisories: Advisories::BySource,
-        }
+    fn proposing(&self, _dep: &Dependency) -> Proposing {
+        Proposing::BASE
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        path.rsplit('/').next() == Some("pom.xml")
+        crate::roles::leaf(path) == "pom.xml"
     }
     fn registry_file(&self, path: &str) -> bool {
         crate::roles::eco_roles(Manager::Maven, path).registry

@@ -296,46 +296,25 @@ pub(crate) struct Descriptor {
 impl crate::Ecosystem for Descriptor {
     fn proposing(&self, dep: &Dependency) -> Proposing {
         Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
             written: if dep.source == Source::ForgeTags {
                 Written::Tag
             } else {
                 Written::Range
             },
-            keeps_satisfied: false,
             unversioned: Unversioned {
                 looked_up: dep.source == Source::ForgeTags,
-                opaque: false,
+                ..Proposing::BASE.unversioned
             },
-            short_tags: ShortTags::Fixed,
-            selector_resolved: false,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
             pin: Pin {
-                commit: false,
                 needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
-                    && matches!(
-                        dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
-                    ),
-                from_catalog: false,
+                    && dep.kind == DependencyKind::ContainerImage,
+                ..Proposing::BASE.pin
             },
-            lock: Lock {
-                keeps_ranges: false,
-                movable: false,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
-                reported: false,
-            },
-            edits: Edits::Manifest,
-            advisories: Advisories::BySource,
+            ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let leaf = crate::roles::leaf(path);
         leaf.ends_with(".gitlab-ci.yml") || leaf.ends_with(".gitlab-ci.yaml")
     }
     fn prepare<'a>(

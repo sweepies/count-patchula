@@ -294,7 +294,7 @@ pub(crate) fn jsonc_ast(text: &str, jsonc: bool) -> Result<jsonc_parser::ast::Va
     )
 }
 /// NuGet's and devcontainers' settings: every JSONC relaxation on, which
-/// is what `ParseOptions::default()` has always meant here.
+/// is what `ParseOptions::default()` turns on.
 pub(crate) fn jsonc_ast_lenient(text: &str) -> Result<jsonc_parser::ast::Value<'_>, String> {
     jsonc_parse(text, &Default::default())
 }
@@ -347,8 +347,9 @@ pub struct Declaration<'a> {
 }
 impl Declaration<'_> {
     /// The declaration's key: the JSON of its fields, hashed. A missing
-    /// source or registry serializes as `""`/absent exactly as the report
-    /// and extracted recipes always wrote it.
+    /// source or registry serializes as `""`/absent, as the report and
+    /// extracted recipes write it. The bytes are frozen: update identities
+    /// hash them.
     pub fn key(&self) -> String {
         let mut parts = serde_json::json!([
             self.file,
@@ -367,8 +368,8 @@ impl Declaration<'_> {
         hash(parts.to_string().as_bytes())
     }
     /// Whether `other` names the same extracted dependency. The datasource is
-    /// left out: a report entry's metadata may not state one, and the report
-    /// join has never compared it.
+    /// left out: a report entry's metadata may not state one, so the report
+    /// join does not compare it.
     pub fn equivalent(&self, other: &Self) -> bool {
         self.file == other.file
             && self.manager == other.manager
@@ -546,11 +547,10 @@ pub(crate) trait Ecosystem {
     /// built once per extraction.
     fn prepare<'a>(
         &self,
-        scanner: &'a Scanner,
-        files: &'a Files,
-        shared: &'a Shared<'a>,
+        _scanner: &'a Scanner,
+        _files: &'a Files,
+        _shared: &'a Shared<'a>,
     ) -> Result<Prepared<'a>, String> {
-        let _ = (scanner, files, shared);
         Ok(Prepared::default())
     }
 }
@@ -563,6 +563,22 @@ pub(crate) struct Prepared<'a> {
     pub extract: Option<FileExtractor<'a>>,
     /// A finishing step over the whole extraction.
     pub finish: Option<Finisher<'a>>,
+}
+
+impl<'a> Prepared<'a> {
+    /// A per-file extractor that records `extract`'s answer for each file,
+    /// or the warning that skips it, and no finishing step.
+    pub(crate) fn per_file(
+        extract: fn(&str, &Lines<'_>) -> Result<Vec<Dependency>, String>,
+    ) -> Self {
+        Self {
+            extract: Some(Box::new(move |path, text, out| {
+                file_result(out, path, extract(path, text));
+                Ok(())
+            })),
+            finish: None,
+        }
+    }
 }
 
 /// State several ecosystems share: the YAML family parses each selected
@@ -589,7 +605,7 @@ pub(crate) fn file_result(
 }
 
 /// The order ecosystems extract a file in: the manifest chain first, then
-/// the additive YAML, CI and regex passes, reproducing the old dispatch.
+/// the additive YAML, CI and regex passes.
 const EXTRACT_ORDER: &[Manager] = &[
     Manager::Npm,
     Manager::Bun,
@@ -640,6 +656,21 @@ static NODE_NPM: npm::Descriptor = npm::Descriptor {
 static NODE_BUN: npm::Descriptor = npm::Descriptor {
     manager: Manager::Bun,
 };
+static COMPOSE: yaml::Descriptor = yaml::Descriptor {
+    manager: Manager::Compose,
+};
+static KUBERNETES: yaml::Descriptor = yaml::Descriptor {
+    manager: Manager::Kubernetes,
+};
+static KUSTOMIZE: yaml::Descriptor = yaml::Descriptor {
+    manager: Manager::Kustomize,
+};
+static FLUX: yaml::Descriptor = yaml::Descriptor {
+    manager: Manager::Flux,
+};
+static HELM_VALUES: yaml::Descriptor = yaml::Descriptor {
+    manager: Manager::HelmValues,
+};
 static GITLABCI: gitlabci::Descriptor = gitlabci::Descriptor {
     manager: Manager::Gitlabci,
 };
@@ -657,12 +688,13 @@ pub(crate) fn ecosystem(manager: Manager) -> &'static dyn Ecosystem {
         Manager::Mise => &mise::DESCRIPTOR,
         Manager::Cargo => &cargo::DESCRIPTOR,
         Manager::Dockerfile => &images::DESCRIPTOR,
-        Manager::Compose => yaml::descriptor(manager),
+        Manager::Compose => &COMPOSE,
         Manager::Go => &go::DESCRIPTOR,
         Manager::Terraform => &terraform::DESCRIPTOR,
-        Manager::Kubernetes | Manager::Kustomize | Manager::Flux | Manager::HelmValues => {
-            yaml::descriptor(manager)
-        }
+        Manager::Kubernetes => &KUBERNETES,
+        Manager::Kustomize => &KUSTOMIZE,
+        Manager::Flux => &FLUX,
+        Manager::HelmValues => &HELM_VALUES,
         Manager::Pyproject => &pyproject::DESCRIPTOR,
         Manager::PreCommit => &precommit::DESCRIPTOR,
         Manager::Helm => &helm::DESCRIPTOR,
@@ -764,10 +796,7 @@ impl Scanner {
         }
         paths
             .into_iter()
-            .filter(|path| {
-                requirements_name(path)
-                    && (self.config.exclude.is_empty() || !self.exclude.matches(path))
-            })
+            .filter(|path| requirements_name(path) && !self.excluded(path))
             .map(|path| Skipped {
                 manager: Manager::Pyproject,
                 file: path.to_owned(),
@@ -778,9 +807,13 @@ impl Scanner {
             .collect()
     }
     pub(crate) fn selected(&self, manager: Manager, path: &str) -> bool {
-        if !self.config.managers.contains(&manager) || self.excluded(path) {
-            return false;
-        }
+        self.config.managers.contains(&manager)
+            && !self.excluded(path)
+            && self.selects(manager, path)
+    }
+    /// Whether `manager`'s file patterns take `path`, before whether the
+    /// manager is enabled and whether `exclude` leaves the path out.
+    fn selects(&self, manager: Manager, path: &str) -> bool {
         if let Some((_, p)) = self.selections.iter().find(|(m, _)| *m == manager) {
             return p.matches(path);
         }
@@ -794,9 +827,6 @@ impl Scanner {
         } else {
             BTreeMap::new()
         };
-        // A file that does not parse (a template such as ERB-rendered YAML)
-        // is skipped with a warning. Warnings suppress branch cleanup, so the
-        // skipped file's open updates are never closed as obsolete.
         let yaml = if yaml::MANAGERS
             .iter()
             .any(|m| self.config.managers.contains(m))
@@ -819,13 +849,15 @@ impl Scanner {
                 prepared.push((manager, ecosystem(manager).prepare(self, files, &shared)?));
             }
         }
-        for (path, text) in files {
+        // `prepared` holds only enabled managers, and a path `exclude`
+        // leaves out is no manager's.
+        for (path, text) in files.iter().filter(|(path, _)| !self.excluded(path)) {
             // An unread file says nothing a manager can extract; whatever it
             // could steer is failed by the readers that consult it.
             let text = match text.read() {
                 Ok(text) => text,
                 Err(unread) => {
-                    if self.config.managers.iter().any(|m| self.selected(*m, path)) {
+                    if self.config.managers.iter().any(|m| self.selects(*m, path)) {
                         result
                             .warnings
                             .push(format!("{path}: skipped: {}", unread.why()));
@@ -838,7 +870,7 @@ impl Scanner {
                 let Some(extract) = eco.extract.as_mut() else {
                     continue;
                 };
-                if self.selected(*manager, path) {
+                if self.selects(*manager, path) {
                     extract(path, &text, &mut result)?;
                 }
             }
@@ -865,6 +897,42 @@ impl Scanner {
         Ok(result)
     }
 }
+/// Fixtures for tests that build dependencies by hand.
+#[cfg(any(test, feature = "testing"))]
+pub mod testing {
+    use super::*;
+
+    /// A bare scalar declaration of `example` at `1.0.0` in `manifest`,
+    /// resolved to `1.0.0`, under the semver scheme. Tests change what they
+    /// need with struct update syntax.
+    pub fn dependency(manager: Manager, kind: DependencyKind, source: Source) -> Dependency {
+        Dependency {
+            manager,
+            file: "manifest".into(),
+            location: Location {
+                start: 0,
+                end: 1,
+                line: 1,
+                column: 1,
+                pointer: String::new(),
+            },
+            form: EditForm::Scalar(Syntax::Bare),
+            name: "example".into(),
+            package: "example".into(),
+            kind,
+            current: "1.0.0".into(),
+            resolved: Some("1.0.0".into()),
+            digest: None,
+            source,
+            scheme: Scheme::Semver,
+            extract: None,
+            included_by: None,
+            registry: None,
+            cooldown: None,
+        }
+    }
+}
+
 /// A registry value as recorded when the Count cannot use it: any user,
 /// password or query removed, so a secret in it never reaches a report.
 pub(crate) fn redacted(value: &str) -> String {
@@ -925,7 +993,7 @@ pub(crate) fn registry_url(value: &str) -> Option<String> {
 /// `dev-requirements.in`, `requirements-test.txt`, or any `.txt` or `.in`
 /// under a `requirements/` directory.
 fn requirements_name(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = crate::roles::leaf(path);
     let Some(stem) = leaf
         .strip_suffix(".txt")
         .or_else(|| leaf.strip_suffix(".in"))
@@ -940,6 +1008,30 @@ fn requirements_name(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A default port is dropped only for its own scheme: `http://host:443`
+    /// names another server than `http://host`.
+    #[test]
+    fn web_host_drops_only_its_schemes_default_port() {
+        use super::web_host;
+        assert_eq!(
+            web_host("HTTPS://Registry.npmjs.org:443/x").as_deref(),
+            Some("registry.npmjs.org")
+        );
+        assert_eq!(
+            web_host("http://registry.npmjs.org:80/x").as_deref(),
+            Some("registry.npmjs.org")
+        );
+        assert_eq!(
+            web_host("http://registry.npmjs.org:443/x").as_deref(),
+            Some("registry.npmjs.org:443")
+        );
+        assert_eq!(
+            web_host("https://registry.npmjs.org:80/x").as_deref(),
+            Some("registry.npmjs.org:80")
+        );
+        assert_eq!(web_host("git://registry.npmjs.org/x"), None);
+    }
+
     /// The schema's built-in `versions = "preserve"` rule names the managers
     /// whose descriptors declare `lock.keeps_ranges`; the two must agree.
     #[test]
@@ -996,12 +1088,10 @@ mod tests {
         assert_eq!(declared, descriptors);
     }
 
-    /// Today's per-path classification, pinned before the file-role taxonomy:
-    /// `needs`, `registry_settings`, `linked_settings`, `credential_scope`,
-    /// `credential_check`, public-verdict coverage and each manager's
-    /// `registry_file`, for root and nested forms of representative paths.
-    /// The taxonomy must reproduce every answer except the spec's permitted
-    /// fixes.
+    /// The per-path classification: `needs`, `registry_settings`,
+    /// `linked_settings`, `credential_scope`, `credential_check`,
+    /// public-verdict coverage and each manager's `registry_file`, for root
+    /// and nested forms of representative paths.
     #[test]
     fn file_classification_is_pinned() {
         use super::CredentialCheck;
@@ -1325,16 +1415,6 @@ mod tests {
     }
 
     #[test]
-    fn every_manager_has_a_descriptor() {
-        for manager in super::Manager::ALL {
-            // The call is the check: ecosystem() routes YAML-family managers
-            // through yaml::descriptor, which panics for a manager missing
-            // from yaml::MANAGERS.
-            super::ecosystem(*manager);
-        }
-    }
-
-    #[test]
     fn extraction_names_every_manager_once() {
         let mut order = super::EXTRACT_ORDER.to_vec();
         order.sort();
@@ -1457,19 +1537,17 @@ impl Unread {
 /// few levels deep at most.
 pub const MORE_ROUNDS: usize = 16;
 
-/// The host of an http or https `url`, lowercased and without a default
-/// port, whatever the case of its scheme.
+/// The host of an http or https `url`, lowercased and without its scheme's
+/// default port, whatever the case of its scheme.
 pub(crate) fn web_host(url: &str) -> Option<String> {
-    let rest = ["https://", "http://"].iter().find_map(|scheme| {
-        url.get(..scheme.len())
-            .filter(|prefix| prefix.eq_ignore_ascii_case(scheme))
-            .map(|_| &url[scheme.len()..])
-    })?;
+    let (rest, port) =
+        [("https://", ":443"), ("http://", ":80")]
+            .iter()
+            .find_map(|(scheme, port)| {
+                url.get(..scheme.len())
+                    .filter(|prefix| prefix.eq_ignore_ascii_case(scheme))
+                    .map(|_| (&url[scheme.len()..], *port))
+            })?;
     let host = rest.split(['/', '?', '#']).next()?.to_ascii_lowercase();
-    Some(
-        host.strip_suffix(":443")
-            .or_else(|| host.strip_suffix(":80"))
-            .unwrap_or(&host)
-            .to_owned(),
-    )
+    Some(host.strip_suffix(port).unwrap_or(&host).to_owned())
 }

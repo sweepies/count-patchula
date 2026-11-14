@@ -35,7 +35,9 @@
 //! installation partition — never safety.
 use crate::Files;
 use crate::origins::{Named, Public};
+use crate::roles;
 use jsonc_parser::ast::Value;
+use patchula_words::Manager;
 
 /// Well-known public forges: their content is public by construction, so
 /// a fetch there can neither hold private packages nor answer as another
@@ -172,23 +174,9 @@ fn placeholder(userinfo: &str) -> bool {
 
 /// `value` with `%XX` escapes decoded; a malformed escape is kept as written.
 fn percent_decoded(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && let Some(byte) = value
-                .get(i + 1..i + 3)
-                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-        {
-            out.push(byte);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    percent_encoding::percent_decode_str(value)
+        .decode_utf8_lossy()
+        .into_owned()
 }
 
 /// Whether `value`, a URL or specifier a manifest or lockfile names for a
@@ -1035,18 +1023,17 @@ pub(crate) fn verdict(path: &str, text: &crate::Text, files: &Files) -> Option<b
 type VerdictRule = fn(&str, &str, &Files) -> Option<bool>;
 
 fn npm_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    use crate::roles as taxonomy;
     // Coverage is the taxonomy's file set; the leaf match only picks the
     // parser for a covered name, and fails closed on one it does not know.
-    if !(taxonomy::named(taxonomy::NODE_MANIFEST, path)
-        || taxonomy::named(taxonomy::NODE_SETTINGS, path)
-        || taxonomy::named(taxonomy::PNPM_WORKSPACE, path)
-        || taxonomy::named(taxonomy::NPM_LOCKS, path)
-        || taxonomy::named(taxonomy::BUN_LOCK, path))
+    if !(roles::named(roles::NODE_MANIFEST, path)
+        || roles::named(roles::NODE_SETTINGS, path)
+        || roles::named(roles::PNPM_WORKSPACE, path)
+        || roles::named(roles::NPM_LOCKS, path)
+        || roles::named(roles::BUN_LOCK, path))
     {
         return None;
     }
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = roles::leaf(path);
     let flag = match leaf {
         "package.json" => json_public(text, false, &crate::npm::NPM, package_json_rule),
         ".npmrc" => npmrc_public(text),
@@ -1064,13 +1051,10 @@ fn npm_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
 }
 
 fn pypi_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    use crate::roles as taxonomy;
-    if !(taxonomy::named(taxonomy::PYTHON_LOCKS, path)
-        || taxonomy::named(taxonomy::PYTHON_SETTINGS, path))
-    {
+    if !(roles::named(roles::PYTHON_LOCKS, path) || roles::named(roles::PYTHON_SETTINGS, path)) {
         return None;
     }
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = roles::leaf(path);
     let flag = match leaf {
         "pyproject.toml" => toml_public(text, &crate::pypi::PYPI, pyproject_rule),
         "uv.toml" => toml_public(text, &crate::pypi::PYPI, uv_rule),
@@ -1084,10 +1068,9 @@ fn pypi_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
 }
 
 fn bundler_verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
-    use patchula_words::Manager;
-    let flag = if crate::roles::named(crate::roles::manifest_names(Manager::Bundler), path) {
+    let flag = if roles::named(roles::manifest_names(Manager::Bundler), path) {
         crate::bundler::public_only(path, text, files)
-    } else if crate::roles::named(crate::roles::lock_names(Manager::Bundler).supported, path) {
+    } else if roles::named(roles::lock_names(Manager::Bundler).supported, path) {
         lines_public(text, &crate::bundler::RUBYGEMS)
     } else {
         return None;
@@ -1096,10 +1079,9 @@ fn bundler_verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
 }
 
 fn composer_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    use patchula_words::Manager;
-    let flag = if crate::roles::named(crate::roles::manifest_names(Manager::Composer), path) {
+    let flag = if roles::named(roles::manifest_names(Manager::Composer), path) {
         composer_json_public(text)
-    } else if crate::roles::named(crate::roles::lock_names(Manager::Composer).supported, path) {
+    } else if roles::named(roles::lock_names(Manager::Composer).supported, path) {
         composer_lock_public(text)
     } else {
         return None;
@@ -1108,10 +1090,9 @@ fn composer_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
 }
 
 fn cargo_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    use patchula_words::Manager;
-    let flag = if crate::roles::named(crate::roles::manifest_names(Manager::Cargo), path) {
+    let flag = if roles::named(roles::manifest_names(Manager::Cargo), path) {
         toml_public(text, &crate::cargo::CRATES, cargo_rule)
-    } else if crate::roles::named(crate::roles::lock_names(Manager::Cargo).supported, path) {
+    } else if roles::named(roles::lock_names(Manager::Cargo).supported, path) {
         toml_public(text, &crate::cargo::CRATES, no_rules)
     } else {
         return None;
@@ -1120,10 +1101,8 @@ fn cargo_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
 }
 
 fn nuget_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    use crate::roles as taxonomy;
-    use patchula_words::Manager;
-    if taxonomy::named(taxonomy::lock_names(Manager::Nuget).supported, path)
-        || taxonomy::named(taxonomy::NUGET_JSON, path)
+    if roles::named(roles::lock_names(Manager::Nuget).supported, path)
+        || roles::named(roles::NUGET_JSON, path)
     {
         return Some(json_public(text, false, &crate::nuget::NUGET_ORG, no_rules));
     }
@@ -1133,7 +1112,7 @@ fn nuget_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
     if crate::nuget::msbuild_file(path) {
         return Some(msbuild_public(text));
     }
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = roles::leaf(path);
     if leaf.ends_with(".slnx") {
         return Some(xml_public(text, &crate::nuget::NUGET_ORG, &[]));
     }
@@ -1148,32 +1127,28 @@ fn nuget_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
 /// The run's scoped token and the tool's `repo-unavailable` finding fail
 /// closed on what it cannot read.
 fn actions_verdict(path: &str, _text: &str, _files: &Files) -> Option<bool> {
-    use crate::roles as taxonomy;
-    if taxonomy::github_workflow(path)
-        || taxonomy::action_file(path)
-        || path == ".github/workflows/actions.lock"
-    {
+    if roles::github_workflow(path) || roles::action_file(path) || path == roles::ACTIONS_LOCK {
         return Some(false);
     }
     None
 }
 
 /// The verdict rule `manager`'s ecosystem applies, if it has one.
-fn verdict_rule(manager: patchula_words::Manager) -> Option<VerdictRule> {
+fn verdict_rule(manager: Manager) -> Option<VerdictRule> {
     match manager {
-        patchula_words::Manager::Npm => Some(npm_verdict),
-        patchula_words::Manager::Pyproject => Some(pypi_verdict),
-        patchula_words::Manager::Bundler => Some(bundler_verdict),
-        patchula_words::Manager::Composer => Some(composer_verdict),
-        patchula_words::Manager::Cargo => Some(cargo_verdict),
-        patchula_words::Manager::Nuget => Some(nuget_verdict),
-        patchula_words::Manager::GithubActions => Some(actions_verdict),
+        Manager::Npm => Some(npm_verdict),
+        Manager::Pyproject => Some(pypi_verdict),
+        Manager::Bundler => Some(bundler_verdict),
+        Manager::Composer => Some(composer_verdict),
+        Manager::Cargo => Some(cargo_verdict),
+        Manager::Nuget => Some(nuget_verdict),
+        Manager::GithubActions => Some(actions_verdict),
         _ => None,
     }
 }
 
 fn read_verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
-    patchula_words::Manager::ALL
+    Manager::ALL
         .iter()
         .find_map(|manager| verdict_rule(*manager).and_then(|rule| rule(path, text, files)))
 }
@@ -1181,6 +1156,16 @@ fn read_verdict(path: &str, text: &str, files: &Files) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only `%` and two hex digits decode: `%+A` is not an escape, though
+    /// a sign-accepting hex parse would read it as a newline.
+    #[test]
+    fn percent_escapes_need_two_hex_digits() {
+        assert_eq!(percent_decoded("a%2Fb%3a"), "a/b:");
+        assert_eq!(percent_decoded("%+A"), "%+A");
+        assert_eq!(percent_decoded("%-1x"), "%-1x");
+        assert_eq!(percent_decoded("trailing%2"), "trailing%2");
+    }
 
     /// Files are decided one at a time: a file is public-only when every
     /// fetch it can name is the public registry, a public forge or a
@@ -1328,15 +1313,7 @@ mod tests {
 
     #[test]
     fn fetch_urls_split_public_from_private() {
-        let npm = crate::origins::Public {
-            source: patchula_words::Source::Npm,
-            label: "npm",
-            is_public: |url| {
-                crate::web_host(url).is_some_and(|host| {
-                    matches!(host.as_str(), "registry.npmjs.org" | "registry.yarnpkg.com")
-                })
-            },
-        };
+        let npm = crate::npm::NPM;
         // Built at runtime so the fixture scan finds no credential text.
         let passworded = format!(
             "https://ci:{}@github.com/acme/x.git",

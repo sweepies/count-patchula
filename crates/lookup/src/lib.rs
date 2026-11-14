@@ -617,9 +617,10 @@ impl Evaluator {
         // branch failing each run until the fix ages.
         let wait = effective.policy.wait_hours;
         if wait > 0
-            && let Some(version) = released.filter(|version| version.published_at.is_some())
+            && let Some(version) = released
+            && let Some(published_at) = version.published_at.as_deref()
         {
-            let published = published(version)?;
+            let published = published(version, published_at)?;
             let until = eligible_at(published, wait);
             if until > now {
                 return Ok(Evaluation {
@@ -687,6 +688,7 @@ impl Evaluator {
         overrides: &std::collections::BTreeSet<(String, String)>,
         advisories: Option<Advisories<'_>>,
     ) -> Result<Evaluation> {
+        let proposing = dep.proposing();
         let fixes = |version: &str| {
             advisories
                 .map(|(query, found)| crate::fixes(dep, query, found, version))
@@ -731,10 +733,10 @@ impl Evaluator {
             } else {
                 effective.policy.wait_hours
             };
-            if wait == 0 || version.published_at.is_none() {
+            let Some(published_at) = version.published_at.as_deref().filter(|_| wait > 0) else {
                 return Ok(true);
-            }
-            let published = published(version)?;
+            };
+            let published = published(version, published_at)?;
             let until = eligible_at(published, wait);
             if until <= now {
                 return Ok(true);
@@ -890,8 +892,7 @@ impl Evaluator {
             .or_else(|| scheme.floor(&dep.current, &current));
         // Branch and opaque refs are preserved. Their digest is proposed through
         // digest_proposal after the engine resolves that same ref.
-        if baseline.is_none() && (dep.proposing().unversioned.opaque || scheme == Ecosystem::Docker)
-        {
+        if baseline.is_none() && (proposing.unversioned.opaque || scheme == Ecosystem::Docker) {
             return Ok(Evaluation::default());
         }
         let baseline = baseline
@@ -911,6 +912,11 @@ impl Evaluator {
             .into_iter()
             .map(|kind| self.effective(dep, kind).map(|effective| (kind, effective)))
             .collect::<Result<Vec<_>>>()?;
+        let pinned = &policies
+            .iter()
+            .find(|(kind, _)| *kind == Update::Pin)
+            .expect("Pin is among the policies")
+            .1;
         let secured = policies
             .iter()
             .cloned()
@@ -954,7 +960,7 @@ impl Evaluator {
             }
             // Only Actions float a short tag such as v4 along its release line;
             // an APM tag names one release.
-            if dep.proposing().short_tags == ShortTags::Floating
+            if proposing.short_tags == ShortTags::Floating
                 && numeric_fields(&dep.current).is_some_and(|n| n < 3)
                 && numeric_prefix(&dep.current, &normalized)
             {
@@ -973,7 +979,7 @@ impl Evaluator {
             }
             let kind = if scheme == Ecosystem::Npm
                 && scheme.parse(&dep.current).is_err()
-                && self.effective(dep, Update::Pin)?.policy.versions == VersionPolicy::Exact
+                && pinned.policy.versions == VersionPolicy::Exact
                 && scheme.matches(&dep.current, &parsed).unwrap_or(false)
             {
                 Update::Pin
@@ -994,7 +1000,7 @@ impl Evaluator {
             {
                 continue;
             }
-            if dep.proposing().range == Range::Support
+            if proposing.range == Range::Support
                 && effective.policy.versions == VersionPolicy::Preserve
             {
                 // A supported runtime interval is not an installed-version
@@ -1012,17 +1018,10 @@ impl Evaluator {
             if !eligible(version, &normalized, kind, effective)? {
                 continue;
             }
-            if let Some(existing) = best.iter_mut().find(|(p, _, _, k, _)| {
-                // Retain both a next pre-1.0 compatibility boundary and a
-                // numeric-major alternative, even though Cargo calls both major.
-                if kind == Update::Pin {
-                    *k == Update::Pin
-                } else {
-                    *k != Update::Pin
-                        && Ecosystem::Npm.classify(&baseline, p)
-                            == Ecosystem::Npm.classify(&baseline, &parsed)
-                }
-            }) {
+            if let Some(existing) = best
+                .iter_mut()
+                .find(|(p, _, _, k, _)| same_track(&baseline, (p, *k), (&parsed, kind)))
+            {
                 let candidate = (parsed, version, normalized, kind, effective);
                 if candidate_order(scheme, &candidate.0, version, &existing.0, existing.1).is_gt() {
                     alternates.push(std::mem::replace(existing, candidate));
@@ -1050,7 +1049,7 @@ impl Evaluator {
                     .1;
                 if !effective.policy.active
                     || (!parsed.0.pre.is_empty() && baseline.0.pre.is_empty())
-                    || (dep.proposing().range == Range::Support
+                    || (proposing.range == Range::Support
                         && effective.policy.versions == VersionPolicy::Preserve)
                 {
                     continue;
@@ -1068,15 +1067,7 @@ impl Evaluator {
             .map(|top| {
                 let mut lower: Vec<_> = alternates
                     .iter()
-                    .filter(|alt| {
-                        if alt.3 == Update::Pin {
-                            top.3 == Update::Pin
-                        } else {
-                            top.3 != Update::Pin
-                                && Ecosystem::Npm.classify(&baseline, &top.0)
-                                    == Ecosystem::Npm.classify(&baseline, &alt.0)
-                        }
-                    })
+                    .filter(|alt| same_track(&baseline, (&top.0, top.3), (&alt.0, alt.3)))
                     .filter(|alt| candidate_order(scheme, &alt.0, alt.1, &top.0, top.1).is_lt())
                     .cloned()
                     .collect();
@@ -1087,12 +1078,12 @@ impl Evaluator {
         'tracks: for chain in chains {
             let mut reported = false;
             for (_, version, normalized, kind, effective) in chain {
-                let new_value = match dep.proposing().written {
+                let new_value = match proposing.written {
                     Written::TagAtPrecision => action_value(&dep.current, &version.version),
                     Written::VersionAtPrecision => action_value(&dep.current, &normalized),
                     Written::Tag => version.version.clone(),
                     Written::Range => {
-                        let value = if dep.proposing().range == Range::Peer
+                        let value = if proposing.range == Range::Peer
                             && effective.policy.versions == VersionPolicy::Widen
                         {
                             if scheme
@@ -1121,7 +1112,7 @@ impl Evaluator {
                                     dep.current, target.0.major, minor, patch
                                 )
                             }
-                        } else if dep.proposing().keeps_satisfied
+                        } else if proposing.keeps_satisfied
                             && scheme
                                 .matches(
                                     &dep.current,
@@ -1166,17 +1157,13 @@ impl Evaluator {
                 // target; without one there is nothing to change.
                 let in_range = new_value == dep.current;
                 let lock_only = in_range
-                    && dep
-                        .proposing()
-                        .lock
-                        .locked(dep.resolved.as_deref())
-                        .is_some()
+                    && proposing.lock.locked(dep.resolved.as_deref()).is_some()
                     && effective.policy.versions != VersionPolicy::Exact;
                 if in_range
                     && !lock_only
-                    && (dep.proposing().lock.keeps_ranges
+                    && (proposing.lock.keeps_ranges
                         || matches!(scheme, Ecosystem::Maven | Ecosystem::Nuget)
-                        || dep.proposing().runtime_toolchain)
+                        || proposing.runtime_toolchain)
                 {
                     // Lockfile maintenance is a separate, explicitly enabled operation.
                     continue 'tracks;
@@ -1184,7 +1171,7 @@ impl Evaluator {
                 let mut update = proposal(
                     (!lock_only).then_some(new_value),
                     Some(normalized),
-                    if effective.digest && dep.proposing().pin.from_catalog {
+                    if effective.digest && proposing.pin.from_catalog {
                         version.digest.clone()
                     } else {
                         None
@@ -1203,11 +1190,11 @@ impl Evaluator {
             }
         }
         if scheme == Ecosystem::Npm
-            && self.effective(dep, Update::Pin)?.policy.versions == VersionPolicy::Exact
+            && pinned.policy.versions == VersionPolicy::Exact
             && scheme.parse(&dep.current).is_err()
         {
             // Pin a range even when its highest satisfying release is unchanged.
-            let plain = self.effective(dep, Update::Pin)?;
+            let plain = pinned;
             let mut secure = plain.clone();
             secure.unfloor();
             secure.apply(
@@ -1222,7 +1209,7 @@ impl Evaluator {
             let mut selected: Option<(&Version, Parsed, &Effective<'_>)> = None;
             for v in &catalog.versions {
                 let effective = if fixes(&v.version).is_empty() {
-                    &plain
+                    plain
                 } else {
                     &secure
                 };
@@ -1300,6 +1287,108 @@ impl Evaluator {
             not_proposed,
         })
     }
+    /// Resolve an extracted version to its source identity without applying
+    /// proposal filters. mise lists versions without tag prefixes; the
+    /// extraction pattern strips them for sources that list raw tags, such as
+    /// GitHub Actions.
+    pub fn resolved_tool_version(
+        &self,
+        dep: &Dependency,
+        catalog: &Catalog,
+    ) -> Result<Option<String>> {
+        if !dep.proposing().selector_resolved {
+            return Ok(None);
+        }
+        let scheme = Ecosystem::of(dep.scheme, dep.source);
+        let Some(current_text) = dep.resolved.as_deref() else {
+            return Ok(None);
+        };
+        let Ok(current) = scheme.parse(current_text) else {
+            return Ok(None);
+        };
+        let extract = dep
+            .extract
+            .as_ref()
+            .map(|pattern| self.extractor(pattern))
+            .transpose()?;
+        Ok(catalog
+            .versions
+            .iter()
+            .filter_map(|version| {
+                let value = if let Some(extract) = &extract {
+                    extract
+                        .captures(&version.version)?
+                        .name("version")?
+                        .as_str()
+                        .to_owned()
+                } else {
+                    version.version.clone()
+                };
+                let parsed = scheme.parse(&value).ok()?;
+                let matches = if numeric_fields(current_text).is_some_and(|n| n < 3) {
+                    numeric_prefix(current_text, &value) && parsed.0.pre.is_empty()
+                } else {
+                    scheme.order(&parsed, &current).is_eq()
+                };
+                matches.then_some((parsed, value))
+            })
+            .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
+            .map(|(_, value)| value))
+    }
+    /// Resolve floating action aliases by their commit and mise numeric
+    /// selectors by their release line. Never infer a pinned action's version
+    /// from a different commit, or use release-age policy to rewrite the
+    /// observed current version.
+    pub fn resolved_current_version(
+        &self,
+        dep: &Dependency,
+        catalog: &Catalog,
+    ) -> Result<Option<String>> {
+        if dep.proposing().runtime_toolchain {
+            let scheme = Ecosystem::of(dep.scheme, dep.source);
+            return Ok(catalog
+                .versions
+                .iter()
+                .filter(|v| !v.yanked && !v.deprecated)
+                .filter_map(|v| Some((scheme.parse(&v.version).ok()?, &v.version)))
+                .filter(|(parsed, _)| {
+                    parsed.0.pre.is_empty() && scheme.matches(&dep.current, parsed).unwrap_or(false)
+                })
+                .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
+                .map(|(_, version)| version.trim_start_matches('v').into()));
+        }
+        if dep.proposing().resolved_via_listing {
+            return self.resolved_tool_version(dep, catalog);
+        }
+        if dep.proposing().short_tags != ShortTags::Floating {
+            return Ok(None);
+        }
+        let current = dep.resolved.as_deref().unwrap_or(&dep.current);
+        let Some(n) = numeric_fields(current) else {
+            return Ok(None);
+        };
+        if n >= 3 {
+            return Ok(Some(current.into()));
+        }
+        let digest = dep.digest.as_ref().or_else(|| {
+            catalog
+                .versions
+                .iter()
+                .find(|v| v.version == current)
+                .and_then(|v| v.digest.as_ref())
+        });
+        Ok(catalog
+            .versions
+            .iter()
+            .filter(|v| {
+                numeric_fields(&v.version).is_some_and(|n| n == 3)
+                    && numeric_prefix(current, &v.version)
+                    && digest.is_some_and(|d| v.digest.as_ref() == Some(d))
+            })
+            .filter_map(|v| Some((Ecosystem::Loose.parse(&v.version).ok()?, &v.version)))
+            .max_by(|(a, av), (b, bv)| Ecosystem::Loose.order(a, b).then_with(|| av.cmp(bv)))
+            .map(|(_, v)| v.clone()))
+    }
 }
 /// The committed cooldown a proposed target still sits inside, when `dep`
 /// carries one: only a security fix the floor did not hold can be marked —
@@ -1321,8 +1410,8 @@ fn inside_cooldown(
 fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
     releases.sort();
     releases.dedup();
-    // Keyed by word, not the enum, so classes come out in the order reports
-    // have always written them.
+    // Keyed by word, not the enum, so classes come out in the words'
+    // alphabetical order, which reports are written in.
     let mut groups = std::collections::BTreeMap::<&'static str, HeldBack>::new();
     for release in releases {
         if let Some(summary) = groups.get_mut(release.update_type.as_str()) {
@@ -1395,8 +1484,22 @@ fn proposal(
 fn timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
-fn published(version: &Version) -> Result<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(version.published_at.as_deref().expect("dated release"))
+/// Whether two candidates are on one track: a pin with a pin, otherwise the
+/// same npm-style class against `baseline`. A next pre-1.0 compatibility
+/// boundary and a numeric-major alternative are both kept, even though Cargo
+/// calls both major.
+fn same_track(baseline: &Parsed, a: (&Parsed, Update), b: (&Parsed, Update)) -> bool {
+    match (a.1 == Update::Pin, b.1 == Update::Pin) {
+        (true, true) => true,
+        (false, false) => {
+            Ecosystem::Npm.classify(baseline, a.0) == Ecosystem::Npm.classify(baseline, b.0)
+        }
+        _ => false,
+    }
+}
+/// When `version` was published, from its `published_at` timestamp.
+fn published(version: &Version, published_at: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(published_at)
         .map(|v| v.with_timezone(&Utc))
         .map_err(|_| format!("{}: invalid release timestamp", version.version))
 }
@@ -1408,56 +1511,6 @@ fn release_age(version: &Version, now: DateTime<Utc>) -> Option<ReleaseAge> {
             published_at: published_at.clone(),
             evaluated_at: timestamp(now),
         })
-}
-impl Evaluator {
-    /// Resolve an extracted version to its source identity without applying
-    /// proposal filters. mise lists versions without tag prefixes; the
-    /// extraction pattern strips them for sources that list raw tags, such as
-    /// GitHub Actions.
-    pub fn resolved_tool_version(
-        &self,
-        dep: &Dependency,
-        catalog: &Catalog,
-    ) -> Result<Option<String>> {
-        if !dep.proposing().selector_resolved {
-            return Ok(None);
-        }
-        let scheme = Ecosystem::of(dep.scheme, dep.source);
-        let Some(current_text) = dep.resolved.as_deref() else {
-            return Ok(None);
-        };
-        let Ok(current) = scheme.parse(current_text) else {
-            return Ok(None);
-        };
-        let extract = dep
-            .extract
-            .as_ref()
-            .map(|pattern| self.extractor(pattern))
-            .transpose()?;
-        Ok(catalog
-            .versions
-            .iter()
-            .filter_map(|version| {
-                let value = if let Some(extract) = &extract {
-                    extract
-                        .captures(&version.version)?
-                        .name("version")?
-                        .as_str()
-                        .to_owned()
-                } else {
-                    version.version.clone()
-                };
-                let parsed = scheme.parse(&value).ok()?;
-                let matches = if numeric_fields(current_text).is_some_and(|n| n < 3) {
-                    numeric_prefix(current_text, &value) && parsed.0.pre.is_empty()
-                } else {
-                    scheme.order(&parsed, &current).is_eq()
-                };
-                matches.then_some((parsed, value))
-            })
-            .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
-            .map(|(_, value)| value))
-    }
 }
 
 // SemVer precedence deliberately ignores build metadata. Break equal-precedence
@@ -1513,63 +1566,6 @@ fn action_value(current: &str, target: &str) -> String {
     }
 }
 
-impl Evaluator {
-    /// Resolve floating action aliases by their commit and mise numeric
-    /// selectors by their release line. Never infer a pinned action's version
-    /// from a different commit, or use release-age policy to rewrite the
-    /// observed current version.
-    pub fn resolved_current_version(
-        &self,
-        dep: &Dependency,
-        catalog: &Catalog,
-    ) -> Result<Option<String>> {
-        if dep.proposing().runtime_toolchain {
-            let scheme = Ecosystem::of(dep.scheme, dep.source);
-            return Ok(catalog
-                .versions
-                .iter()
-                .filter(|v| !v.yanked && !v.deprecated)
-                .filter_map(|v| Some((scheme.parse(&v.version).ok()?, &v.version)))
-                .filter(|(parsed, _)| {
-                    parsed.0.pre.is_empty() && scheme.matches(&dep.current, parsed).unwrap_or(false)
-                })
-                .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
-                .map(|(_, version)| version.trim_start_matches('v').into()));
-        }
-        if dep.proposing().resolved_via_listing {
-            return self.resolved_tool_version(dep, catalog);
-        }
-        if dep.proposing().short_tags != ShortTags::Floating {
-            return Ok(None);
-        }
-        let current = dep.resolved.as_deref().unwrap_or(&dep.current);
-        let Some(n) = numeric_fields(current) else {
-            return Ok(None);
-        };
-        if n >= 3 {
-            return Ok(Some(current.into()));
-        }
-        let digest = dep.digest.as_ref().or_else(|| {
-            catalog
-                .versions
-                .iter()
-                .find(|v| v.version == current)
-                .and_then(|v| v.digest.as_ref())
-        });
-        Ok(catalog
-            .versions
-            .iter()
-            .filter(|v| {
-                numeric_fields(&v.version).is_some_and(|n| n == 3)
-                    && numeric_prefix(current, &v.version)
-                    && digest.is_some_and(|d| v.digest.as_ref() == Some(d))
-            })
-            .filter_map(|v| Some((Ecosystem::Loose.parse(&v.version).ok()?, &v.version)))
-            .max_by(|(a, av), (b, bv)| Ecosystem::Loose.order(a, b).then_with(|| av.cmp(bv)))
-            .map(|(_, v)| v.clone()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1586,28 +1582,16 @@ mod tests {
         .unwrap();
         let eval = Evaluator::new(&config, Default::default()).unwrap();
         let dep = |extract: &str| patchula_manager::Dependency {
-            manager: Manager::Npm,
             file: "package.json".into(),
-            location: patchula_manager::Location {
-                start: 0,
-                end: 1,
-                line: 1,
-                column: 1,
-                pointer: String::new(),
-            },
             form: patchula_manager::EditForm::Scalar(patchula_manager::Syntax::Json),
             name: "lib".into(),
             package: "lib".into(),
-            kind: DependencyKind::Production,
-            current: "1.0.0".into(),
-            resolved: Some("1.0.0".into()),
-            digest: None,
-            source: Source::Npm,
-            scheme: patchula_words::Scheme::Semver,
             extract: Some(extract.into()),
-            included_by: None,
-            registry: None,
-            cooldown: None,
+            ..patchula_manager::testing::dependency(
+                Manager::Npm,
+                DependencyKind::Production,
+                Source::Npm,
+            )
         };
         let now = chrono::DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
             .unwrap()
@@ -1643,28 +1627,18 @@ mod tests {
         .unwrap();
         let dep =
             |file: &str, kind: DependencyKind, digest: Option<&str>| patchula_manager::Dependency {
-                manager: Manager::GithubActions,
                 file: file.into(),
-                location: patchula_manager::Location {
-                    start: 0,
-                    end: 1,
-                    line: 1,
-                    column: 1,
-                    pointer: String::new(),
-                },
                 form: patchula_manager::EditForm::Scalar(patchula_manager::Syntax::Yaml),
                 name: "actions/checkout".into(),
                 package: "actions/checkout".into(),
-                kind,
                 current: "v7.0.0".into(),
                 resolved: Some("v7.0.0".into()),
                 digest: digest.map(|d| d.into()),
-                source: Source::GithubTags,
-                scheme: patchula_words::Scheme::Semver,
-                extract: None,
-                included_by: None,
-                registry: None,
-                cooldown: None,
+                ..patchula_manager::testing::dependency(
+                    Manager::GithubActions,
+                    kind,
+                    Source::GithubTags,
+                )
             };
         let locked = std::collections::BTreeSet::from([".github/workflows/ci.yml".to_owned()]);
         let eval = Evaluator::new(&config, locked).unwrap();

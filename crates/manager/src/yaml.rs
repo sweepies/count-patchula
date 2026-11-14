@@ -388,7 +388,8 @@ pub(crate) struct Docs<'a> {
 /// Parse each file a YAML manager selects once, so the five managers share
 /// one parse. A file that does not parse (a template such as ERB-rendered
 /// YAML) is skipped with a warning. Warnings suppress branch cleanup, so the
-/// skipped file's open updates are never closed as obsolete.
+/// skipped file's open updates are never closed as obsolete. An unread file
+/// is warned about by the extraction loop, as every manager's is.
 pub(crate) fn prepare<'a>(
     scanner: &Scanner,
     files: &'a Files,
@@ -400,12 +401,10 @@ pub(crate) fn prepare<'a>(
         .iter()
         .filter(|(path, _)| MANAGERS.iter().any(|m| scanner.selected(*m, path)))
     {
-        let parsed = text
-            .read()
-            .map_err(|unread| unread.why().to_owned())
-            .and_then(|text| {
-                docs(text).and_then(|d| Ok((d, yaml_locations::parse(&Lines::new(text))?)))
-            });
+        let Ok(text) = text.read() else {
+            continue;
+        };
+        let parsed = docs(text).and_then(|d| Ok((d, yaml_locations::parse(&Lines::new(text))?)));
         match parsed {
             Ok((docs, spans)) => {
                 documents.insert(path.as_str(), docs);
@@ -429,7 +428,7 @@ pub(crate) struct Descriptor {
 }
 
 /// The managers that read Kubernetes-style YAML documents, parsed once for
-/// all of them. Each has its descriptor in `DESCRIPTORS`, at the same index.
+/// all of them.
 pub(crate) const MANAGERS: [Manager; 5] = [
     Manager::Compose,
     Manager::Kubernetes,
@@ -437,71 +436,23 @@ pub(crate) const MANAGERS: [Manager; 5] = [
     Manager::Flux,
     Manager::HelmValues,
 ];
-static DESCRIPTORS: [Descriptor; 5] = [
-    Descriptor {
-        manager: MANAGERS[0],
-    },
-    Descriptor {
-        manager: MANAGERS[1],
-    },
-    Descriptor {
-        manager: MANAGERS[2],
-    },
-    Descriptor {
-        manager: MANAGERS[3],
-    },
-    Descriptor {
-        manager: MANAGERS[4],
-    },
-];
-/// The descriptor of a YAML-family manager.
-pub(crate) fn descriptor(manager: Manager) -> &'static Descriptor {
-    let at = MANAGERS
-        .iter()
-        .position(|m| *m == manager)
-        .expect("a YAML-family manager");
-    &DESCRIPTORS[at]
-}
 
 impl crate::Ecosystem for Descriptor {
     fn proposing(&self, dep: &Dependency) -> Proposing {
         Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
-            written: Written::Range,
-            keeps_satisfied: false,
-            unversioned: Unversioned {
-                looked_up: false,
-                opaque: false,
-            },
-            short_tags: ShortTags::Fixed,
-            selector_resolved: false,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
             pin: Pin {
-                commit: false,
                 needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
                     && matches!(
                         dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
+                        DependencyKind::ContainerImage | DependencyKind::Chart
                     ),
-                from_catalog: false,
+                ..Proposing::BASE.pin
             },
-            lock: Lock {
-                keeps_ranges: false,
-                movable: false,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
-                reported: false,
-            },
-            edits: Edits::Manifest,
-            advisories: Advisories::BySource,
+            ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let leaf = crate::roles::leaf(path);
         match self.manager {
             Manager::Compose => {
                 (leaf.starts_with("docker-compose") || leaf.starts_with("compose"))
