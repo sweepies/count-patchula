@@ -57,10 +57,7 @@ impl Runner {
             public,
         } = context;
         let php = context::version(versions, "php")?;
-        let full = php.split('.').count() == 3
-            && php
-                .split('.')
-                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+        let full = context::numeric(&php, Some(3));
         if config.lockfiles.php == PhpBuild::Static && !full {
             return Err(format!(
                 "static PHP needs an exact version, not {php}; pin php to x.y.z or set lockfiles.php = \"compiled\""
@@ -133,15 +130,11 @@ impl Runner {
         let before = baseline.get(&lock).map(|b| b.content.as_str());
         let after = std::fs::read_to_string(root.join(&lock)).ok();
         if !maintenance && before == after.as_deref() {
-            return Err(format!(
-                "composer.lock did not change after the manifest edit in {}",
-                if directory.is_empty() {
-                    "the repository root"
-                } else {
-                    directory
-                }
-            )
-            .into());
+            return Err(context::unchanged(
+                "composer.lock",
+                directory,
+                context::Trigger::ManifestEdit,
+            ));
         }
         Ok(())
     }

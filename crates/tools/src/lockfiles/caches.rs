@@ -1,17 +1,24 @@
 //! Persistent, partitioned caches for the package data lockfile tools
 //! download, under `tool-caches/` in the runner's cache directory.
 //!
-//! Each tool's cache lives in a partition: `public` when its run holds no
-//! registry credentials, shared by every installation and the CLI, or
-//! `private-<hash>` when it does, keyed by the sorted `Credential::scope()`s
-//! of the entries that run receives, so packages fetched with one
-//! installation's credentials never reach another's cache. There is no
-//! read-only lower layer: a private run does not touch `public`, since a
-//! public package of the same name could then satisfy it without the
-//! private feed (dependency confusion), and a stale proxy listing could
-//! resolve `latest` wrong. A private partition warms after its first run.
-//! Repositories that commit their own credentials are refused upstream, so
-//! nothing credentialed enters `public`.
+//! Each tool's cache lives in one of three partitions, chosen in
+//! `Runner::use_caches`:
+//!
+//! - `private-<hash>` when the run receives registry credentials, keyed by
+//!   the sorted `Credential::scope()`s of those entries, so packages fetched
+//!   with one installation's credentials never reach another's cache.
+//! - `public`, shared by every installation and the CLI, when the run holds
+//!   no credentials and every file it can read decided public-only.
+//! - `installation-<id>` for every other run without credentials: one that
+//!   might fetch private content keeps it in its installation's partition,
+//!   where no other installation can pick it up.
+//!
+//! There is no read-only lower layer: a private run does not touch
+//! `public`, since a public package of the same name could then satisfy it
+//! without the private feed (dependency confusion), and a stale proxy
+//! listing could resolve `latest` wrong. A private partition warms after
+//! its first run. Repositories that commit their own credentials are
+//! refused upstream, so nothing credentialed enters `public`.
 //!
 //! A run holds its partition's lock file, `tool-caches/<name>.lock`, shared,
 //! so eviction never removes a partition in use. Tools whose caches document
@@ -23,13 +30,13 @@ use std::time::{Duration, SystemTime};
 
 /// The partitions' directory inside the runner's cache.
 pub(super) const ROOT: &str = "tool-caches";
-pub(super) const PUBLIC: &str = "public";
+const PUBLIC: &str = "public";
 /// The file inside a partition whose mtime records its last use.
 const USED: &str = ".used";
 /// A partition unused for this long is pruned.
 const AGE: Duration = Duration::from_secs(14 * 86_400);
 /// How often one process prunes each root, at most.
-pub(super) const EVERY: Duration = Duration::from_secs(3600);
+const EVERY: Duration = Duration::from_secs(3600);
 
 /// A tool binary a lockfile run executes: the name `mise exec` runs and
 /// its persistent-cache wiring, declared once so a rename cannot silently
@@ -51,6 +58,7 @@ pub(super) enum Bin {
     Nix,
     Apm,
     ActionsLock,
+    Mise,
 }
 
 /// One binary's cache wiring, or `None` for a tool with no cache to keep.
@@ -83,6 +91,7 @@ impl Bin {
             Self::Nix => "nix",
             Self::Apm => "apm",
             Self::ActionsLock => "gh-actions-lock",
+            Self::Mise => "mise",
         }
     }
     /// How the binary's cache is wired, keyed by the binary itself rather
@@ -128,9 +137,11 @@ impl Bin {
                 ],
                 true,
             ),
-            // Terraform's `providers lock` keeps no package cache, and nix
-            // and apm keep their own.
-            Self::Terraform | Self::Nix | Self::Apm | Self::ActionsLock => return None,
+            // Terraform's `providers lock` keeps no package cache, nix and
+            // apm keep their own, and `mise lock` downloads only to checksum.
+            Self::Terraform | Self::Nix | Self::Apm | Self::ActionsLock | Self::Mise => {
+                return None;
+            }
         })
     }
 }
@@ -195,12 +206,7 @@ pub(super) struct Hold {
 /// names the file held, it is dropped and the current one is taken.
 fn lock(path: &Path, exclusive: bool) -> Result<std::fs::File, String> {
     for _ in 0..8 {
-        let file = std::fs::File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(path)
-            .map_err(|e| e.to_string())?;
+        let file = open_or_create(path).map_err(|e| e.to_string())?;
         if exclusive {
             file.lock()
         } else {
@@ -237,11 +243,7 @@ fn same(file: &std::fs::File, path: &Path) -> bool {
 
 /// Mark the partition used now.
 fn touch(partition: &Path) -> Result<(), String> {
-    std::fs::File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(partition.join(USED))
+    open_or_create(partition.join(USED))
         .and_then(|file| file.set_modified(SystemTime::now()))
         .map_err(|e| e.to_string())
 }
@@ -370,7 +372,7 @@ fn unreadonly(path: &Path) {
 /// Restore write permission everywhere under `dir`, so a partition written
 /// by a tool whose cache is read-only (an older Go module cache) can still
 /// be removed.
-fn writable(dir: &Path) {
+fn make_writable(dir: &Path) {
     unreadonly(dir);
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -381,7 +383,7 @@ fn writable(dir: &Path) {
         // `file_type` does not follow a link, so a symlinked directory
         // under the partition is removed, never descended into.
         if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            writable(&path);
+            make_writable(&path);
         }
     }
 }
@@ -390,19 +392,14 @@ fn writable(dir: &Path) {
 /// tried exclusively, so a run's shared hold keeps it.
 fn evict(root: &Path, partition: &Partition) -> bool {
     let name = partition.to_string();
-    let Ok(file) = std::fs::File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(root.join(format!("{name}.lock")))
-    else {
+    let Ok(file) = open_or_create(root.join(format!("{name}.lock"))) else {
         return false;
     };
     if file.try_lock().is_err() {
         return false;
     }
     let dir = root.join(&name);
-    writable(&dir);
+    make_writable(&dir);
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => {
             // The lock file goes with its partition while the exclusive
@@ -453,12 +450,7 @@ pub(super) fn prune(root: &Path, cap: u64, now: SystemTime) -> Result<(), String
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.to_string()),
     };
-    let guard = std::fs::File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(root.join("prune.lock"))
-        .map_err(|e| e.to_string())?;
+    let guard = open_or_create(root.join("prune.lock")).map_err(|e| e.to_string())?;
     if guard.try_lock().is_err() {
         return Ok(());
     }
@@ -530,7 +522,7 @@ mod tests {
         let partition = temp.path().join("public");
         std::fs::create_dir_all(&partition).unwrap();
         std::os::unix::fs::symlink(&outside, partition.join("link")).unwrap();
-        writable(&partition);
+        make_writable(&partition);
         let mode = std::fs::metadata(&outside).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o444, "the symlink's target was followed");
     }

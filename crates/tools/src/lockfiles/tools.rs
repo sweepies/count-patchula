@@ -21,6 +21,11 @@ const SEEDABLE: &[&str] = &["node", "go", "bun", "aube", "yarn", "uv", "terrafor
 /// served about 44 KB/s when measured.
 pub(super) const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
 
+/// Time allowed for a mise install or uninstall run outside a tool call,
+/// which may install every pinned default at once.
+const MISE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(INSTALL_TIMEOUT.as_secs() * 2);
+
 /// Where packslip installs the pinned mise in the store, one directory per
 /// version, when the host has no mise of its own.
 const STORE_MISE: &str = "patchula-mise";
@@ -37,17 +42,10 @@ fn on_path(name: &str) -> Option<PathBuf> {
     })
 }
 
-fn pinned_mise() -> Result<String, String> {
-    tool_defaults()?["tools"]["mise"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "embedded defaults pin no mise".into())
-}
-
 fn store_mise(tools: &Path) -> Option<PathBuf> {
     let mise = tools
         .join(STORE_MISE)
-        .join(pinned_mise().ok()?)
+        .join(default_version("mise").ok()?)
         .join("bin/mise");
     mise.is_file().then_some(mise)
 }
@@ -85,9 +83,9 @@ pub(super) async fn install_mise(
     if let Some(mise) = store_mise(tools) {
         return Ok(mise);
     }
-    let version = pinned_mise()?;
+    let version = default_version("mise")?;
     let root = tools.join(STORE_MISE);
-    let install = root.join(&version);
+    let install = root.join(version);
     // packslip refuses to replace a tree a failed attempt left unmarked.
     if install.exists() {
         std::fs::remove_dir_all(&install).map_err(|e| e.to_string())?;
@@ -102,7 +100,7 @@ pub(super) async fn install_mise(
             "install".into(),
             "github.com/jdx/mise".into(),
             "--version".into(),
-            version.clone(),
+            version.into(),
             "--pin".into(),
             MISE_SIGNER.into(),
             "--install-dir".into(),
@@ -127,7 +125,7 @@ pub(super) async fn install_mise(
             .filter_map(|key| std::env::var(key).ok())
             .collect(),
         timeout: INSTALL_TIMEOUT,
-        output_limit: 4096,
+        output_limit: super::process::OUTPUT_LIMIT,
         complete_output: false,
     };
     executor.run(spec).await.map_err(|e| {
@@ -174,12 +172,7 @@ pub fn tools_dir(workspace: &Path) -> PathBuf {
 
 fn lock_file(dir: &Path, name: &str) -> Result<std::fs::File, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    std::fs::File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(dir.join(name))
-        .map_err(|e| e.to_string())
+    open_or_create(dir.join(name)).map_err(|e| e.to_string())
 }
 
 /// Lock the store for a tool run (shared) or a removal (exclusive), waiting
@@ -199,11 +192,23 @@ pub(super) async fn lock_store(dir: &Path, exclusive: bool) -> Result<std::fs::F
     .map_err(|e| format!("cannot lock the tool store: {e}"))
 }
 
+/// The usage record, empty when there is none. A record that cannot be
+/// read or parsed also reads as empty, which makes every tool unproven, so
+/// it is logged.
 fn read_usage(dir: &Path) -> BTreeMap<String, i64> {
-    std::fs::read(dir.join(USAGE))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    let path = dir.join(USAGE);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return BTreeMap::new(),
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "tool usage record is unreadable");
+            return BTreeMap::new();
+        }
+    };
+    serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+        tracing::warn!(%error, path = %path.display(), "tool usage record is corrupt");
+        BTreeMap::new()
+    })
 }
 fn write_usage(dir: &Path, usage: &BTreeMap<String, i64>) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -387,6 +392,17 @@ impl Runner {
             tracing::warn!(%error, "tool usage was not recorded");
         }
     }
+    /// Run `work` on the blocking pool with a clone of this runner: the
+    /// tool store's file locks and I/O must not stall the async runtime.
+    pub(super) async fn off_runtime(
+        &self,
+        work: impl FnOnce(&Runner) + Send + 'static,
+    ) -> Result<(), String> {
+        let runner = self.clone();
+        tokio::task::spawn_blocking(move || work(&runner))
+            .await
+            .map_err(|e| e.to_string())
+    }
     /// The directory this runner installs tools into.
     pub fn tools(&self) -> &Path {
         &self.mise_data
@@ -394,7 +410,7 @@ impl Runner {
     async fn mise(&self, args: Vec<String>) -> Result<(), String> {
         let driver = tempfile::tempdir().map_err(|e| e.to_string())?;
         let mut spec = self.command(driver.path());
-        spec.timeout = 2 * INSTALL_TIMEOUT;
+        spec.timeout = MISE_TIMEOUT;
         spec.args.extend(args);
         self.executor
             .run(spec)
@@ -407,12 +423,14 @@ impl Runner {
         let tools = defaults()?;
         let _store = lock_store(&self.mise_data, true).await?;
         self.clear_unproven(&tools).await;
-        self.seed(&tools);
+        let seeded = tools.clone();
+        self.off_runtime(move |runner| runner.seed(&seeded)).await?;
         let specs: Vec<String> = tools.iter().map(|(t, v)| format!("{t}@{v}")).collect();
         let mut args = vec!["install".to_string()];
         args.extend(specs.iter().cloned());
         self.mise(args).await?;
-        self.record_use(&tools);
+        self.off_runtime(move |runner| runner.record_use(&tools))
+            .await?;
         Ok(specs)
     }
     /// Uninstall tool versions no run has used for `days`; pinned defaults stay.

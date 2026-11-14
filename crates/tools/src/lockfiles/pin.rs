@@ -64,11 +64,7 @@ impl Pinned {
         if let Some(missing) = targets.keys().find(|package| !found.contains(**package)) {
             return Err(format!(
                 "cannot pin {missing} to its target: no declaration of it found in {}",
-                if directory.is_empty() {
-                    "the repository root"
-                } else {
-                    directory
-                }
+                context::describe_dir(directory)
             ));
         }
         for (path, edits) in edits {

@@ -2,6 +2,11 @@ use super::Runner;
 use patchula_process::CommandSpec;
 use std::{path::Path, time::Duration};
 
+/// How long one tool run may take once its tools are installed.
+const TOOL_TIMEOUT: Duration = Duration::from_secs(180);
+/// The bytes of a run's output the executor keeps.
+pub(super) const OUTPUT_LIMIT: usize = 4096;
+
 impl Runner {
     pub(super) fn command(&self, driver: &Path) -> CommandSpec {
         let home = driver.join("home");
@@ -16,8 +21,8 @@ impl Runner {
             cwd: driver.into(),
             env,
             secrets: Vec::new(),
-            timeout: Duration::from_secs(180),
-            output_limit: 4096,
+            timeout: TOOL_TIMEOUT,
+            output_limit: OUTPUT_LIMIT,
             complete_output: false,
         }
     }

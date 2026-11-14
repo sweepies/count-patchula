@@ -13,15 +13,11 @@ pub(super) static DESCRIPTOR: Tool = Tool {
 
 /// `.ruby-version`, then the Gemfile's `ruby` directive, then the default.
 fn ruby_version(cwd: &Path, pinned: &str) -> String {
-    let numeric = |v: &str| {
-        v.split('.')
-            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-    };
     if let Ok(text) = std::fs::read_to_string(cwd.join(".ruby-version"))
         && let Some(token) = text.split_whitespace().next()
     {
         let version = token.strip_prefix("ruby-").unwrap_or(token);
-        if numeric(version) {
+        if context::numeric(version, None) {
             return version.into();
         }
     }
@@ -33,7 +29,7 @@ fn ruby_version(cwd: &Path, pinned: &str) -> String {
                 .or_else(|| line.strip_prefix("ruby("))
             {
                 let version = rest.trim().trim_matches(['"', '\'', '(', ')', ' ']);
-                if numeric(version) {
+                if context::numeric(version, None) {
                     return version.into();
                 }
             }
@@ -111,15 +107,12 @@ impl Runner {
         let edited = baseline.get(&manifest).map(|b| b.content.clone())
             != std::fs::read_to_string(root.join(&manifest)).ok();
         if !maintenance && (edited || !gems.is_empty()) && before == after.as_deref() {
-            return Err(format!(
-                "Gemfile.lock did not change after the manifest edit in {}",
-                if directory.is_empty() {
-                    "the repository root"
-                } else {
-                    directory
-                }
-            )
-            .into());
+            let trigger = if edited {
+                context::Trigger::ManifestEdit
+            } else {
+                context::Trigger::TargetedUpgrade
+            };
+            return Err(context::unchanged("Gemfile.lock", directory, trigger));
         }
         Ok(())
     }

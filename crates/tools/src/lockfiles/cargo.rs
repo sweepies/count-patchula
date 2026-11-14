@@ -13,13 +13,28 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     output: Output::Default,
 };
 
-/// What a Cargo run is given: its registry environment, the credential
-/// scopes it holds, every secret value a failure must not repeat, and
-/// whether it may share the `public` cache partition.
-pub(super) type CargoAccess<'a> = (&'a [(String, String)], &'a [String], &'a [String], bool);
-/// What one directory's jobs share: the toolchain pin, whether the run is
-/// lockfile maintenance, and the cooldown the repository committed for it.
-pub(super) type CargoDirectory<'a> = (&'a str, bool, Option<&'a patchula_manager::Cooldown>);
+/// What a Cargo run is given.
+#[derive(Clone, Copy)]
+pub(super) struct CargoAccess<'a> {
+    /// The registry environment.
+    pub env: &'a [(String, String)],
+    /// The credential scopes the run holds.
+    pub credentials: &'a [String],
+    /// Every secret value a failure must not repeat.
+    pub secrets: &'a [String],
+    /// Whether the run may share the `public` cache partition.
+    pub public: bool,
+}
+/// What one directory's jobs share.
+#[derive(Clone, Copy)]
+pub(super) struct CargoDirectory<'a> {
+    /// The toolchain pin.
+    pub rust: &'a str,
+    /// Whether the run is lockfile maintenance.
+    pub maintenance: bool,
+    /// The cooldown the repository committed for the directory.
+    pub cooldown: Option<&'a patchula_manager::Cooldown>,
+}
 
 /// Whether Cargo treats `target` as incompatible with `current`: a different
 /// major version, or a different minor (or patch) one below 1.0. Cargo then
@@ -133,8 +148,17 @@ impl Runner {
                 driver,
                 &cwd,
                 job,
-                (&rust, maintenance, committed),
-                (&env, &credentials, &secrets, public),
+                CargoDirectory {
+                    rust: &rust,
+                    maintenance,
+                    cooldown: committed,
+                },
+                CargoAccess {
+                    env: &env,
+                    credentials: &credentials,
+                    secrets: &secrets,
+                    public,
+                },
             )
             .await?;
         }
@@ -154,8 +178,17 @@ impl Runner {
         directory: CargoDirectory<'_>,
         access: CargoAccess<'_>,
     ) -> Result<(), Failure> {
-        let (rust, maintenance, cooldown) = directory;
-        let (env, credentials, secrets, public) = access;
+        let CargoDirectory {
+            rust,
+            maintenance,
+            cooldown,
+        } = directory;
+        let CargoAccess {
+            env,
+            credentials,
+            secrets,
+            public,
+        } = access;
         // The publish age Cargo holds every crate this job newly locks to:
         // the longer of the directory's committed cooldown — verbatim, in
         // the grammar the repository already gave Cargo — and the wait the

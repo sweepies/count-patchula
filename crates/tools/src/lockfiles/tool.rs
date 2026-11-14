@@ -29,6 +29,9 @@ pub(super) enum Run {
     /// Through rustup: the named tool's pin is the toolchain,
     /// `rustup run <version> bin`, with the run's own Cargo home.
     Rustup(&'static str),
+    /// The pinned mise itself, with the project configuration the outer
+    /// `--no-config` turns off: `env -u MISE_NO_CONFIG mise args`.
+    Mise,
     /// Through `/bin/sh -c`, for a tool whose exit status and streams the
     /// run must keep whole rather than letting the executor turn a nonzero
     /// exit into a bounded failure.

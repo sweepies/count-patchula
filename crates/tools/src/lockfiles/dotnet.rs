@@ -33,11 +33,7 @@ fn sdk(
         let Some(version) = value["sdk"]["version"].as_str() else {
             continue;
         };
-        if version.split('.').count() == 3
-            && version
-                .split('.')
-                .all(|p| p.bytes().all(|b| b.is_ascii_digit()))
-        {
+        if context::numeric(version, Some(3)) {
             return version.into();
         }
     }
@@ -74,27 +70,9 @@ fn target(cwd: &Path) -> Result<PathBuf, String> {
     Err("no solution or project to restore".into())
 }
 
-fn locks(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if path
-                .file_name()
-                .is_some_and(|n| n != "obj" && n != "bin" && n != ".git")
-            {
-                locks(&path, out);
-            }
-        } else if path.file_name().is_some_and(|n| n == "packages.lock.json") {
-            out.push(path);
-        }
-    }
-}
-/// The text of every `nuget.config` under `dir`, in any case, or why it
-/// could not be read.
-fn nuget_configs(dir: &Path, out: &mut Vec<std::io::Result<String>>) {
+/// Every file under `dir` outside `obj/`, `bin/` and `.git/`, with its
+/// leaf name.
+fn project_files(dir: &Path, found: &mut dyn FnMut(PathBuf, &str)) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -102,22 +80,39 @@ fn nuget_configs(dir: &Path, out: &mut Vec<std::io::Result<String>>) {
         let Ok(kind) = entry.file_type() else {
             continue;
         };
-        let path = entry.path();
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
         if kind.is_dir() {
-            if path
-                .file_name()
-                .is_some_and(|n| n != "obj" && n != "bin" && n != ".git")
-            {
-                nuget_configs(&path, out);
+            if !matches!(name, "obj" | "bin" | ".git") {
+                project_files(&entry.path(), found);
             }
-        } else if entry
-            .file_name()
-            .to_str()
-            .is_some_and(patchula_manager::roles::nuget_config)
-        {
-            out.push(std::fs::read_to_string(&path));
+        } else {
+            found(entry.path(), name);
         }
     }
+}
+/// Every `packages.lock.json` under `dir`.
+fn locks(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    project_files(dir, &mut |path, name| {
+        if name == "packages.lock.json" {
+            out.push(path);
+        }
+    });
+    out
+}
+/// The text of every `nuget.config` under `dir`, in any case, or why it
+/// could not be read.
+fn nuget_configs(dir: &Path) -> Vec<std::io::Result<String>> {
+    let mut out = Vec::new();
+    project_files(dir, &mut |path, name| {
+        if patchula_manager::roles::nuget_config(name) {
+            out.push(std::fs::read_to_string(path));
+        }
+    });
+    out
 }
 /// Restore writes `obj/` intermediates, which never belong in a commit.
 fn remove_intermediates(dir: &Path) -> Result<(), String> {
@@ -168,9 +163,7 @@ impl Runner {
             ..
         } = context;
         let cwd = root.join(directory);
-        let mut before = Vec::new();
-        locks(&cwd, &mut before);
-        let before: BTreeMap<_, _> = before
+        let before: BTreeMap<_, _> = locks(&cwd)
             .into_iter()
             .map(|p| {
                 let text = std::fs::read_to_string(&p).unwrap_or_default();
@@ -186,9 +179,7 @@ impl Runner {
         let credentials = if self.registries.is_empty() {
             (Vec::new(), Vec::new())
         } else {
-            let mut configs = Vec::new();
-            nuget_configs(root, &mut configs);
-            configs
+            nuget_configs(root)
                 .iter()
                 .map(|text| {
                     text.as_deref()
@@ -227,15 +218,11 @@ impl Runner {
             .iter()
             .any(|(path, text)| std::fs::read_to_string(path).ok().as_ref() != Some(text));
         if edited && !before.is_empty() && !changed {
-            return Err(format!(
-                "packages.lock.json did not change after the manifest edit in {}",
-                if directory.is_empty() {
-                    "the repository root"
-                } else {
-                    directory
-                }
-            )
-            .into());
+            return Err(context::unchanged(
+                "packages.lock.json",
+                directory,
+                context::Trigger::ManifestEdit,
+            ));
         }
         Ok(())
     }

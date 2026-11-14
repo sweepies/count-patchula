@@ -60,7 +60,6 @@ pub(super) fn tools() -> Result<Vec<(String, String)>, String> {
     )])
 }
 
-/// The direct inputs of a lock: input name to its node.
 /// Why an input `flake.nix` declares, or any input override nested in it, is
 /// refused. A path value arrives as an absolute `path:` reference, which is
 /// allowed while it stays inside `root`, the checked-out repository.
@@ -99,6 +98,7 @@ fn declared_refusal(input: &Value, directory: &str, root: &Path) -> Option<Strin
     }
 }
 
+/// The direct inputs of a lock: input name to its node.
 fn inputs(lock: &Value) -> BTreeMap<String, &Value> {
     let nodes = &lock["nodes"];
     let root = lock["root"].as_str().unwrap_or("root");

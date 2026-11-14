@@ -11,13 +11,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     output: Output::Default,
 };
 
-/// Lockfile names the Python ecosystem recognizes, from the manager's
-/// file roles: `supported` are regenerated in place, `unsupported` are
-/// names of other tools' lockfiles nothing here regenerates.
-fn locks() -> patchula_manager::roles::LockNames {
-    patchula_manager::roles::lock_names(Manager::Pyproject)
-}
-
 /// The interpreter both tools resolve against: the nearest `.python-version`,
 /// otherwise the repository mise pin or the runner default.
 fn python(
@@ -35,10 +28,7 @@ fn python(
                 .next()
                 .map(str::to_owned)
         })
-        .filter(|v| {
-            v.split('.')
-                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-        });
+        .filter(|v| context::numeric(v, None));
     pinned
         .or_else(|| versions.get("python").cloned())
         .ok_or_else(|| "missing python version".into())
@@ -76,14 +66,11 @@ impl Runner {
             .map(|text| super::credentials::poetry_sources(&text))
             .unwrap_or_default()];
         let (poetry, poetry_entries) = self.poetry_env(&sources);
-        for &leaf in locks().supported {
+        let targeted = jobs.iter().any(|j| j.package().is_some());
+        for &leaf in lock_names(Manager::Pyproject).supported {
             if !cwd.join(leaf).is_file() {
                 continue;
             }
-            let packages: BTreeSet<_> = jobs
-                .iter()
-                .filter_map(|j| j.package().map(str::to_owned))
-                .collect();
             let invocation = if leaf == "uv.lock" {
                 let mut args = vec![
                     "lock".to_string(),
@@ -95,8 +82,7 @@ impl Runner {
                 }
                 // A declaration left as it is gets the exact version, so the
                 // lock cannot move past it.
-                for job in jobs.iter().filter(|j| j.package().is_some()) {
-                    let package = job.package().unwrap_or_default();
+                for (job, package) in jobs.iter().filter_map(|j| Some((j, j.package()?))) {
                     args.extend([
                         "--upgrade-package".into(),
                         match (job.exact_version, job.target()) {
@@ -185,16 +171,13 @@ impl Runner {
             let edited = baseline.get(&manifest).map(|b| b.content.clone())
                 != std::fs::read_to_string(root.join(&manifest)).ok();
             // A targeted upgrade must move the lock just like a manifest edit.
-            if !maintenance && (edited || !packages.is_empty()) && before == after.as_deref() {
-                return Err(format!(
-                    "{leaf} did not change after the manifest edit in {}",
-                    if directory.is_empty() {
-                        "the repository root"
-                    } else {
-                        directory
-                    }
-                )
-                .into());
+            if !maintenance && (edited || targeted) && before == after.as_deref() {
+                let trigger = if edited {
+                    context::Trigger::ManifestEdit
+                } else {
+                    context::Trigger::TargetedUpgrade
+                };
+                return Err(context::unchanged(leaf, directory, trigger));
             }
         }
         Ok(())

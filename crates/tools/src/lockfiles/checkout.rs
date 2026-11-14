@@ -1,6 +1,7 @@
 use super::contract::{BaseFile, Ecosystem, Failure, Work};
 use super::{
-    Runner, cargo_config, collect, directory_of_cargo_config, hash, materialized, safe_path, within,
+    Runner, collect, directory_of_cargo_config, hash, materialized, open_or_create, safe_path,
+    within,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_github::blob_sha;
@@ -8,6 +9,13 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
+
+/// The output a git run may write, such as an `ls-tree` of a whole
+/// repository.
+const GIT_OUTPUT_LIMIT: usize = 16 << 20;
+/// The largest Cargo configuration blob read for its registries; a larger
+/// one is skipped.
+const CARGO_CONFIG_LIMIT: usize = 1 << 20;
 
 impl Runner {
     async fn git(
@@ -46,7 +54,7 @@ impl Runner {
             .insert("GIT_CONFIG_VALUE_0".into(), header.clone().into());
         spec.secrets = vec![header, encoded, token];
         spec.complete_output = true;
-        spec.output_limit = 16 * 1024 * 1024;
+        spec.output_limit = GIT_OUTPUT_LIMIT;
         self.executor
             .run(spec)
             .await
@@ -76,12 +84,8 @@ impl Runner {
         std::fs::create_dir_all(&clones).map_err(|e| e.to_string())?;
         let name = hash(work.repository.as_bytes());
         let clone = clones.join(&name);
-        let lock = std::fs::File::options()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(clones.join(format!("{name}.lock")))
-            .map_err(|e| e.to_string())?;
+        let lock =
+            open_or_create(clones.join(format!("{name}.lock"))).map_err(|e| e.to_string())?;
         // Commands in other checkouts share the clone; wait for theirs to finish.
         let _lock = tokio::task::spawn_blocking(move || lock.lock().map(|()| lock))
             .await
@@ -260,7 +264,7 @@ impl Runner {
     /// them.
     fn reads_cargo_config(&self, work: &Work<'_>, path: &str) -> bool {
         !self.registries.is_empty()
-            && cargo_config(path)
+            && patchula_manager::roles::cargo_config(path)
             && work.jobs.iter().any(|job| {
                 let owner = directory_of_cargo_config(path);
                 job.ecosystem == Ecosystem::Cargo && within(&job.directory, owner)
@@ -299,7 +303,7 @@ impl Runner {
             let Ok(bytes) = std::fs::read(work.join(&path)) else {
                 continue;
             };
-            if bytes.len() > 1 << 20 {
+            if bytes.len() > CARGO_CONFIG_LIMIT {
                 continue;
             }
             if let Ok(text) = String::from_utf8(bytes)

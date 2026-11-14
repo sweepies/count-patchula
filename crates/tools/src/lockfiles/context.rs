@@ -19,6 +19,45 @@ pub(super) struct Context<'a> {
 
 pub(super) use super::contract::join;
 
+/// How a message names `directory`.
+pub(super) fn describe_dir(directory: &str) -> &str {
+    if directory.is_empty() {
+        "the repository root"
+    } else {
+        directory
+    }
+}
+
+/// What asked a run to move its lock, for the failure when it did not.
+#[derive(Clone, Copy)]
+pub(super) enum Trigger {
+    ManifestEdit,
+    TargetedUpgrade,
+}
+
+/// The failure for a lock at `leaf` in `directory` that the run left as it
+/// was although `trigger` asked it to move.
+pub(super) fn unchanged(leaf: &str, directory: &str, trigger: Trigger) -> Failure {
+    let trigger = match trigger {
+        Trigger::ManifestEdit => "the manifest edit",
+        Trigger::TargetedUpgrade => "the targeted upgrade",
+    };
+    format!(
+        "{leaf} did not change after {trigger} in {}",
+        describe_dir(directory)
+    )
+    .into()
+}
+
+/// Whether `version` is dot-separated runs of digits, with exactly `parts`
+/// of them when given.
+pub(super) fn numeric(version: &str, parts: Option<usize>) -> bool {
+    parts.is_none_or(|parts| version.split('.').count() == parts)
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+}
+
 pub(super) fn version(versions: &BTreeMap<String, String>, tool: &str) -> Result<String, String> {
     versions
         .get(tool)

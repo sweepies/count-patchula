@@ -349,14 +349,6 @@ fn read_head(stream: &mut impl Read) -> Option<Vec<u8>> {
     None
 }
 
-/// The developer's mise store, where the real tool tests take tools from.
-fn mise_store() -> PathBuf {
-    std::env::var_os("MISE_DATA_DIR").map_or_else(
-        || PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/share/mise"),
-        PathBuf::from,
-    )
-}
-
 /// The `tool@version` spec the task tools install, installed into the
 /// developer's store first when a local run lacks it.
 pub(super) fn ensure_tool() -> String {
@@ -441,58 +433,17 @@ fn actions_lock(tree: &Path, proxy: &GitHubProxy, args: &[&str]) -> (bool, Strin
         .env("XDG_CACHE_HOME", home.path().join("cache"))
         .env("NO_COLOR", "1")
         .env("TERM", "dumb");
-    let mut child = command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut text = Vec::new();
-            if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut text);
-            }
-            String::from_utf8_lossy(&text).into_owned()
-        })
-    };
-    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
-    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
-    let started = std::time::Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if started.elapsed() > TOOL_DEADLINE {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!(
-                "gh-actions-lock ran past {TOOL_DEADLINE:?}\n{}\n{}",
-                stdout.join().unwrap(),
-                stderr.join().unwrap()
-            );
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
+    let output = run_with_deadline(&mut command, TOOL_DEADLINE);
     (
-        status.success(),
-        stdout.join().unwrap(),
-        stderr.join().unwrap(),
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
     )
 }
 
 /// How long one tool run may take before the test kills it: replays finish
 /// in seconds, and a wedged proxy exchange must not hang the suite.
 const TOOL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// The files `gh-actions-lock` sees, written under `.github/workflows/` in a
-/// fresh tree.
-fn write_tree(dir: &Path, files: &BTreeMap<String, String>) {
-    for (path, text) in files {
-        let path = dir.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
-}
 
 fn workflow(step: &str) -> String {
     format!(

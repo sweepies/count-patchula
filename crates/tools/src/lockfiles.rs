@@ -118,7 +118,7 @@ pub struct Runner {
 /// How the token a lockfile tool authenticates to GitHub with was
 /// produced — reported by the tool's run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToolTokenKind {
+enum ToolTokenKind {
     /// A GitHub App installation token minted for one repository, with
     /// `metadata: read` only.
     Scoped,
@@ -130,14 +130,14 @@ pub enum ToolTokenKind {
 /// the token itself is private: the only way to hand it to a tool is
 /// [`grant`](Self::grant), which also puts it on the run's `secrets`, so a
 /// failure can never repeat it.
-pub struct ToolToken {
+struct ToolToken {
     token: String,
-    pub kind: ToolTokenKind,
+    kind: ToolTokenKind,
 }
 impl ToolToken {
     /// Give the tool the token as `GH_TOKEN`, and mask it in the run's
     /// output.
-    pub fn grant(self, env: &mut Vec<(String, String)>, secrets: &mut Vec<String>) {
+    fn grant(self, env: &mut Vec<(String, String)>, secrets: &mut Vec<String>) {
         secrets.push(self.token.clone());
         env.push(("GH_TOKEN".to_owned(), self.token));
     }
@@ -148,6 +148,11 @@ impl ToolToken {
 fn lockfile_concurrency() -> usize {
     std::thread::available_parallelism().map_or(1, |cores| cores.get().min(4))
 }
+
+/// The output a tool whose answer is JSON may write.
+const JSON_LIMIT: usize = 1 << 20;
+/// The largest file a tool may generate.
+const GENERATED_LIMIT: u64 = 16 << 20;
 
 /// The persistent tool caches' default size cap in GiB.
 pub const DEFAULT_CACHE_GIB: u64 = 20;
@@ -204,10 +209,7 @@ impl Runner {
     /// Version lookups through the pinned mise, in this runner's tool store and
     /// through its executor.
     pub fn mise_lookup(&self) -> Arc<patchula_mise::Lookup> {
-        let defaults = tool_defaults().expect("embedded tool defaults parse");
-        let version = defaults["tools"]["mise"]
-            .as_str()
-            .expect("embedded defaults pin mise");
+        let version = default_version("mise").expect("embedded defaults pin mise");
         Arc::new(patchula_mise::Lookup::new(
             self.executor.clone(),
             self.mise.clone(),
@@ -229,7 +231,7 @@ impl Runner {
             Some(credentials) => credentials
                 .token()
                 .await
-                .map_err(|_| "GitHub authentication failed".to_owned()),
+                .map_err(|e| format!("GitHub authentication failed: {e}")),
             None => Ok(self.token.clone()),
         }
     }
@@ -238,14 +240,14 @@ impl Runner {
     /// repository-scoped `metadata: read` token where the run's credentials
     /// can mint one — a GitHub App installation — else the run's own token,
     /// as Renovate hands its token to tools.
-    pub async fn actions_lock_token(&self, repository: &str) -> Result<ToolToken, String> {
+    async fn actions_lock_token(&self, repository: &str) -> Result<ToolToken, String> {
         if let Some(credentials) = &self.credentials
             && let Some(token) = credentials.scoped_token(repository)
         {
             return Ok(ToolToken {
                 token: token
                     .await
-                    .map_err(|_| "GitHub authentication failed".to_owned())?,
+                    .map_err(|e| format!("GitHub authentication failed: {e}"))?,
                 kind: ToolTokenKind::Scoped,
             });
         }
@@ -358,11 +360,6 @@ impl Runner {
             match ecosystem {
                 Ecosystem::Node => self.node(context).await?,
                 Ecosystem::Cargo => {
-                    // Cargo runs outside the repository and reads none of its
-                    // configuration. It gets each credentialed registry the
-                    // `.cargo/config.toml` files at or above the project
-                    // define, by name, from the environment, and the
-                    // directory's committed publish-age cooldown alongside.
                     self.cargo_locks(
                         context,
                         &jobs,
@@ -378,10 +375,8 @@ impl Runner {
                 Ecosystem::Python => self.python_locks(context, &jobs).await?,
                 Ecosystem::GradleWrapper => self.gradle_wrapper(context).await?,
                 Ecosystem::Dotnet => {
-                    let edited = work.edits.keys().any(|p| {
-                        context.directory.is_empty()
-                            || p.starts_with(&format!("{}/", context.directory))
-                    }) && !context.maintenance;
+                    let edited = work.edits.keys().any(|p| under(p, context.directory))
+                        && !context.maintenance;
                     self.dotnet_restore(context, edited).await?;
                 }
                 Ecosystem::Ruby => self.bundle_lock(context, &jobs).await?,
@@ -413,7 +408,7 @@ impl Runner {
             if before.map(|b| &b.content) == after {
                 continue;
             }
-            if !writable(&path) && work.edits.get(&path) != after {
+            if !patchula_manager::roles::roles(&path).writable && work.edits.get(&path) != after {
                 return Err(format!("tool modified unexpected file {path}").into());
             }
             if path.rsplit('/').next() == Some("mise.lock")
@@ -475,7 +470,7 @@ impl Runner {
         let mut scopes = call.credentials.clone();
         scopes.sort_unstable();
         scopes.dedup();
-        // Credentialed runs partition on the credential set as before.
+        // Credentialed runs partition on their credential set.
         // Uncredentialed runs share `public` only when every file they can
         // read decided public-only; anything else gets the installation's
         // own partition, so a run that might fetch private content never
@@ -505,7 +500,8 @@ impl Runner {
                 let _store = tools::lock_store(&self.mise_data, true).await?;
                 if !self.installed(&call.tools) {
                     self.clear_unproven(&call.tools).await;
-                    self.seed(&call.tools);
+                    let tools = call.tools.clone();
+                    self.off_runtime(move |runner| runner.seed(&tools)).await?;
                 }
             }
             spec.timeout = tools::INSTALL_TIMEOUT;
@@ -516,7 +512,7 @@ impl Runner {
         }
         // A tool whose answer is JSON is read whole.
         if call.descriptor.output == Output::Complete {
-            spec.output_limit = 1 << 20;
+            spec.output_limit = JSON_LIMIT;
             spec.complete_output = true;
         }
         for (key, value) in &call.env {
@@ -564,6 +560,12 @@ impl Runner {
                 ]);
             }
             Run::Direct => spec.args.push(call.bin.name().into()),
+            Run::Mise => spec.args.extend([
+                "env".into(),
+                "-u".into(),
+                "MISE_NO_CONFIG".into(),
+                call.bin.name().into(),
+            ]),
             Run::Shell => spec.args.push("/bin/sh".into()),
         }
         spec.args.extend(call.args);
@@ -574,7 +576,9 @@ impl Runner {
             .run(spec)
             .await
             .map_err(|failure| Failure::Tool { context, failure })?;
-        self.record_use(&call.tools);
+        let tools = call.tools;
+        self.off_runtime(move |runner| runner.record_use(&tools))
+            .await?;
         Ok(output)
     }
     /// Run a tool that may hold registry credentials. When it does, a failure
@@ -587,12 +591,29 @@ impl Runner {
         if !held {
             return result;
         }
-        result.map_err(|_| {
-            Failure::Text(format!(
-                "{bin} failed while it held registry credentials, so its output is not shown"
-            ))
-        })
+        result.map_err(|failure| held_failure(bin, &failure))
     }
+}
+
+/// The failure a tool that held registry credentials reports: how it
+/// failed (a timeout or its exit status), never what it printed.
+fn held_failure(bin: &str, failure: &Failure) -> Failure {
+    use patchula_process::Failure as Run;
+    let how = match failure {
+        Failure::Tool { failure, .. } => match failure {
+            Run::TimedOut { limit } => format!("it exceeded its {}s time limit", limit.as_secs()),
+            Run::Exited { status, .. } => format!("it exited with {status}"),
+            Run::Spawn { .. } => "it could not start".to_owned(),
+            Run::OutputTooLarge => "its output exceeded the size limit".to_owned(),
+            Run::Io(_) => "an I/O error".to_owned(),
+        },
+        // The runner's own failures, before the tool ran or around it,
+        // hold nothing the tool printed.
+        Failure::Text(text) => text.clone(),
+    };
+    Failure::Text(format!(
+        "{bin} failed while it held registry credentials ({how}), so its output is not shown"
+    ))
 }
 
 impl Generate for Runner {
@@ -738,19 +759,12 @@ fn versions(
     baseline: &BTreeMap<String, BaseFile>,
     directory: &str,
 ) -> Result<BTreeMap<String, String>, String> {
-    let defaults = tool_defaults()?;
     let mut versions: BTreeMap<String, String> = BTreeMap::new();
     for tool in descriptors()
         .flat_map(|descriptor| descriptor.tools.iter().copied())
         .collect::<BTreeSet<_>>()
     {
-        versions.insert(
-            tool.into(),
-            defaults["tools"][tool]
-                .as_str()
-                .ok_or("invalid tool defaults")?
-                .into(),
-        );
+        versions.insert(tool.into(), default_version(tool)?.into());
     }
     // mise reads `.tool-versions` below `mise.toml` and `.mise.toml` in the
     // same directory, and a deeper file over a shallower one; `upward`
@@ -766,7 +780,7 @@ fn versions(
                 continue;
             };
             let version = match &pin {
-                // `.tool-versions` pins the first word, as it always did.
+                // A `.tool-versions` pin is its first word.
                 mise::Pin::Words(words) => words.first().map(String::as_str),
                 mise::Pin::Spec(spec) => spec
                     .as_str()
@@ -809,12 +823,12 @@ fn tool_defaults() -> Result<&'static toml_edit::Document<&'static str>, String>
         .as_ref()
         .map_err(Clone::clone)
 }
-/// A Cargo configuration file, read only for its `registries`.
-fn cargo_config(path: &str) -> bool {
-    patchula_manager::roles::cargo_config(path)
-}
-fn writable(path: &str) -> bool {
-    patchula_manager::roles::roles(path).writable
+/// What `defaults.toml` pins for `tool`, which a repository without its own
+/// pin gets.
+fn default_version(tool: &str) -> Result<&'static str, String> {
+    tool_defaults()?["tools"][tool]
+        .as_str()
+        .ok_or_else(|| format!("defaults.toml pins no {tool}"))
 }
 fn materialized(path: &str) -> bool {
     let roles = patchula_manager::roles::roles(path);
@@ -823,6 +837,15 @@ fn materialized(path: &str) -> bool {
 /// The directory whose `.cargo` holds `path`, a Cargo configuration file.
 fn directory_of_cargo_config(path: &str) -> &str {
     directory(directory(path))
+}
+/// Open `path` for writing, creating it and keeping what it holds: the
+/// lock files and the partition use marker.
+fn open_or_create(path: impl AsRef<Path>) -> std::io::Result<std::fs::File> {
+    std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
 }
 fn safe_path(path: &str) -> bool {
     !path.is_empty()
@@ -885,7 +908,7 @@ fn collect(root: &Path) -> Result<BTreeMap<String, String>, String> {
                     .to_str()
                     .ok_or("non UTF-8 path")?
                     .to_owned();
-                if entry.metadata().map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
+                if entry.metadata().map_err(|e| e.to_string())?.len() > GENERATED_LIMIT {
                     return Err("generated file exceeds 16 MiB".into());
                 }
                 files.insert(
