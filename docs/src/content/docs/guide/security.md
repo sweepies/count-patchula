@@ -78,6 +78,33 @@ advisory whose ranges the Count cannot evaluate is never claimed as fixed.
   [report reference](/reference/report/).
 - **The terminal UI** marks security updates in red and names what they fix.
 
+### Severity
+
+An advisory's severity is low, moderate, high or critical. The advisory
+database's own rating comes first: the rating GitHub's advisories carry, or a
+rating word such as Ubuntu's `medium` that a record lists beside its CVSS
+vectors. A record without one is rated from its CVSS vector, with the standard
+CVSS bands: low 0.1–3.9, moderate 4.0–6.9, high 7.0–8.9 and critical 9.0–10.0.
+RustSec and many PyPA, Debian and Alpine records carry a vector; Go records
+stay unrated.
+
+- A record with vectors of several CVSS versions is scored by the newest:
+  4.0, then 3.1 or 3.0, then 2.0.
+- CVSS 2.0 has no critical band: 7.0–10.0 is high.
+- A vector that doesn't parse is ignored. A score of 0.0 (CVSS's "none") has
+  no severity, in any CVSS version.
+- An advisory with no rating and no usable vector has no severity: the
+  terminal shows it as `unknown`, PR tables as `unrated`, and the dashboard and
+  report leave it out. It sorts after every rated advisory on the dashboard.
+
+Severity orders the dashboard's vulnerabilities, most severe first, and shows
+in PR tables, the dashboard, the report and the terminal. It doesn't change
+which updates are proposed or labelled `security`.
+
+The terminal lists each advisory once per package and version, with the
+manifests that declare that version (named up to two, counted past that), so
+a crate two workspace members depend on is one line, not two.
+
 ## Container image rebuilds
 
 A pinned image, such as `FROM debian:bookworm@sha256:…`, gets a new digest when

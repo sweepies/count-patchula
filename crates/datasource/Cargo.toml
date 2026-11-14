@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+cvss = "3.0.0"
 libyaml-safer = "0.3.0"
 patchula-mise = { path = "../mise" }
 reqwest.workspace = true

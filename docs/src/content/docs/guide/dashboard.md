@@ -22,8 +22,8 @@ In order:
    with its advisories as links (and their summaries collapsed when there are
    several), and the fix once: the
    open PR (or batch PR) that fixes it, "fixed in X, whose PR was closed",
-   "fixed in X, not proposed", or "no fixed release yet". A severity shows only when the advisory database rates it (see
-   [security advisories](/guide/security/));
+   "fixed in X, not proposed", or "no fixed release yet". A severity shows only when the advisory carries a rating or a CVSS vector (see
+   [severity](/guide/security/#severity));
 2. tooling warnings: updates set to merge in a repository whose CI, required
    checks or delivery don't back that up, with the open PRs each affects, and
    the ones you silenced with `warnings.quiet` collapsed under "Silenced" (see

@@ -246,10 +246,7 @@ impl Counts {
         Self {
             dependencies: deps().count(),
             updates: deps().map(|d| d.updates.len()).sum(),
-            vulnerabilities: deps()
-                .filter_map(|d| d.metadata.as_ref())
-                .map(|m| m.advisories.len())
-                .sum(),
+            vulnerabilities: vulnerabilities(repo).len(),
             failures: repo.lookup_failures.len(),
             notices: repo.notices.len(),
             skipped: repo.skipped.len(),
@@ -530,26 +527,79 @@ fn actions_section(
     }
 }
 
+/// One advisory against one package version, with every package file that
+/// declares that version. A package declared in several manifests, such as a
+/// crate two workspace members depend on, is one vulnerability, not one per
+/// manifest.
+struct Vulnerability<'a> {
+    name: &'a str,
+    current: String,
+    advisory: &'a patchula_report::Advisory,
+    files: Vec<&'a str>,
+}
+
+/// The repository's vulnerabilities, in report order.
+fn vulnerabilities(repo: &Repository) -> Vec<Vulnerability<'_>> {
+    let mut found: Vec<Vulnerability<'_>> = Vec::new();
+    for file in &repo.package_files {
+        for dep in &file.dependencies {
+            let Some(metadata) = &dep.metadata else {
+                continue;
+            };
+            // Advisories are judged against the resolved version, so it
+            // leads; the declaration display is the fallback.
+            let current = dep
+                .current
+                .version
+                .clone()
+                .unwrap_or_else(|| updates::current(dep));
+            for advisory in &metadata.advisories {
+                let same = found.iter_mut().find(|v| {
+                    v.name == dep.name && v.current == current && v.advisory.id == advisory.id
+                });
+                match same {
+                    Some(v) if !v.files.contains(&file.path.as_str()) => {
+                        v.files.push(&file.path);
+                    }
+                    Some(_) => {}
+                    None => found.push(Vulnerability {
+                        name: &dep.name,
+                        current: current.clone(),
+                        advisory,
+                        files: vec![&file.path],
+                    }),
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The manifests a vulnerability is declared in: named up to two, counted
+/// past that.
+fn manifests(files: &[&str]) -> String {
+    if files.len() > 2 {
+        format!("{} manifests", files.len())
+    } else {
+        files.join(", ")
+    }
+}
+
 /// Vulnerabilities, failed lookups, notices, skipped values and warnings.
 fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
-    let advisories: Vec<_> = repo
-        .package_files
-        .iter()
-        .flat_map(|f| &f.dependencies)
-        .filter_map(|d| d.metadata.as_ref().map(|m| (d, m)))
-        .flat_map(|(d, m)| m.advisories.iter().map(move |a| (d, a)))
-        .collect();
-    if !advisories.is_empty() {
+    let vulnerabilities = vulnerabilities(repo);
+    if !vulnerabilities.is_empty() {
         style.heading(
             out,
             indent,
             "Vulnerabilities",
-            advisories.len(),
+            vulnerabilities.len(),
             Paint::Error,
         );
-        let rows: Vec<_> = advisories
+        let rows: Vec<_> = vulnerabilities
             .iter()
-            .map(|(dep, advisory)| {
+            .map(|v| {
+                let advisory = v.advisory;
                 let severity = advisory
                     .severity
                     .map_or("unknown".to_owned(), |s| s.as_str().to_owned());
@@ -564,17 +614,10 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
                 } else {
                     format!("{} ({})", advisory.id, cves.join(", "))
                 };
-                // Advisories are judged against the resolved version, so it
-                // leads; the declaration display is the fallback.
-                let current = dep
-                    .current
-                    .version
-                    .clone()
-                    .unwrap_or_else(|| updates::current(dep));
                 let paint = advisory.severity.map_or(Paint::Dim, severity_paint);
                 vec![
                     (severity, paint),
-                    (format!("{} {current}", dep.name), Paint::Bold),
+                    (format!("{} {}", v.name, v.current), Paint::Bold),
                     (id, Paint::Plain),
                     (
                         advisory
@@ -583,13 +626,15 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
                             .map_or("no fix yet".into(), |v| format!("fixed in {v}")),
                         Paint::Plain,
                     ),
+                    (manifests(&v.files), Paint::Dim),
                 ]
             })
             .collect();
-        let lines = style.lines(indent + 2, &rows, usize::MAX);
-        for (line, (_, advisory)) in lines.iter().zip(&advisories) {
+        // The manifests give way to a narrow terminal, as paths do elsewhere.
+        let lines = style.lines(indent + 2, &rows, 4);
+        for (line, v) in lines.iter().zip(&vulnerabilities) {
             let _ = writeln!(out, "{line}");
-            if let Some(summary) = &advisory.summary {
+            if let Some(summary) = &v.advisory.summary {
                 style.wrap(out, indent + 4, summary, Paint::Dim);
             }
         }
