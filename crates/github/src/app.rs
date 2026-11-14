@@ -486,8 +486,9 @@ impl Credentials for Installation {
 mod tests {
     use super::*;
     use patchula_http::{Exchange, Response};
+    use patchula_testkit::app_key::AppKey;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    struct Offline(AtomicUsize, String);
+    struct Offline(AtomicUsize, Vec<u8>);
     impl Transport for Offline {
         fn send(&self, request: Request) -> Exchange<'_> {
             let mint = self.0.fetch_add(1, Ordering::SeqCst);
@@ -499,7 +500,7 @@ mod tests {
                 .unwrap();
             let claims = jsonwebtoken::decode::<Value>(
                 jwt,
-                &jsonwebtoken::DecodingKey::from_rsa_pem(self.1.as_bytes()).unwrap(),
+                &jsonwebtoken::DecodingKey::from_rsa_der(&self.1),
                 &{
                     let mut validation = jsonwebtoken::Validation::new(Algorithm::RS256);
                     validation.validate_exp = false;
@@ -521,15 +522,64 @@ mod tests {
             })
         }
     }
+    /// The App's JWT is RS256 over the same header and claims, from a PKCS#1
+    /// or PKCS#8 PEM key, and verifies with the public key independently of
+    /// jsonwebtoken.
+    #[test]
+    fn jwt_signs_rs256_with_the_app_key_and_verifies_with_its_public_key() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        let key = AppKey::generate();
+        for pem in [key.pkcs1_pem(), key.pkcs8_pem()] {
+            let app = App::new(
+                1,
+                pem.as_bytes(),
+                Arc::new(CyclingReads),
+                Url::parse("https://api.github.com").unwrap(),
+            )
+            .unwrap();
+            let jwt = app.jwt(1_700_000_000).unwrap();
+            let (signed, signature) = jwt.rsplit_once('.').unwrap();
+            let (header, claims) = signed.split_once('.').unwrap();
+            let json = |part: &str| -> Value {
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(part).unwrap()).unwrap()
+            };
+            assert_eq!(json(header), json!({"typ": "JWT", "alg": "RS256"}));
+            assert_eq!(
+                json(claims),
+                json!({"iat": 1_699_999_940, "exp": 1_700_000_540, "iss": "1"})
+            );
+            aws_lc_rs::signature::UnparsedPublicKey::new(
+                &aws_lc_rs::signature::RSA_PKCS1_2048_8192_SHA256,
+                key.public_der(),
+            )
+            .verify(
+                signed.as_bytes(),
+                &URL_SAFE_NO_PAD.decode(signature).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    /// A key that is not PEM is a configuration error. Which PEMs load is
+    /// jsonwebtoken's backend-independent decoder: PKCS#1 and PKCS#8.
+    #[test]
+    fn a_key_that_is_not_pem_is_rejected() {
+        assert!(matches!(
+            App::new(
+                1,
+                b"not a key",
+                Arc::new(CyclingReads),
+                Url::parse("https://api.github.com").unwrap(),
+            ),
+            Err(Error::Configuration)
+        ));
+    }
+
     #[tokio::test]
     async fn signed_jwt_cached_per_installation_and_renewed_before_expiry() {
-        use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey, LineEnding};
-        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
-        let transport = Arc::new(Offline(
-            AtomicUsize::new(0),
-            key.to_public_key().to_pkcs1_pem(LineEnding::LF).unwrap(),
-        ));
-        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let key = AppKey::generate();
+        let transport = Arc::new(Offline(AtomicUsize::new(0), key.public_der().to_vec()));
+        let pem = key.pkcs1_pem();
         let app = App::new(
             1,
             pem.as_bytes(),
@@ -555,13 +605,9 @@ mod tests {
     /// minutes before expiry mints again.
     #[tokio::test]
     async fn scoped_mints_cache_per_repository_and_renew_before_expiry() {
-        use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey, LineEnding};
-        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
-        let transport = Arc::new(Offline(
-            AtomicUsize::new(0),
-            key.to_public_key().to_pkcs1_pem(LineEnding::LF).unwrap(),
-        ));
-        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let key = AppKey::generate();
+        let transport = Arc::new(Offline(AtomicUsize::new(0), key.public_der().to_vec()));
+        let pem = key.pkcs1_pem();
         let app = App::new(
             1,
             pem.as_bytes(),
@@ -640,9 +686,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_metadata_and_installations_paginate() {
-        use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
-        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
-        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let pem = AppKey::generate().pkcs1_pem();
         let app = App::new(
             1,
             pem.as_bytes(),
@@ -705,9 +749,7 @@ mod tests {
     /// A mint that still names another repository is an error.
     #[tokio::test]
     async fn a_stale_repository_id_is_read_again_and_a_mismatch_fails_closed() {
-        use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
-        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
-        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let pem = AppKey::generate().pkcs1_pem();
         let transport = Arc::new(Renames {
             current: std::sync::Mutex::new(1),
             names: std::sync::Mutex::new(BTreeMap::from([(1, "acme/app".to_owned())])),
@@ -772,9 +814,7 @@ mod tests {
     /// the App reads, not handed on to configuration and the cache.
     #[tokio::test]
     async fn an_installation_id_past_i64_is_invalid() {
-        use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
-        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
-        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let pem = AppKey::generate().pkcs1_pem();
         let app = App::new(
             1,
             pem.as_bytes(),
@@ -816,9 +856,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_page_that_links_to_itself_is_a_pagination_error() {
-        use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
-        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
-        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let pem = AppKey::generate().pkcs1_pem();
         let app = App::new(
             1,
             pem.as_bytes(),
