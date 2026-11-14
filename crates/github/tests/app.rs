@@ -2,7 +2,7 @@
 //! The repository-scoped installation-token mint against the fake GitHub,
 //! plus an `#[ignore]`d proof against a real App installation.
 
-use patchula_github::app::App;
+use patchula_github::{Permissions, app::App};
 use patchula_http::{Exchange, Transport};
 use patchula_testkit::{github::FakeGitHub, transcripts};
 use reqwest::{
@@ -75,7 +75,7 @@ async fn a_scoped_mint_posts_repository_ids_and_metadata_read() {
     let id = github.state().repo().id;
 
     let token = credentials
-        .scoped_token("demo/app")
+        .scoped_token("demo/app", Permissions::MetadataRead)
         .expect("an installation mints scoped tokens")
         .await
         .unwrap();
@@ -107,7 +107,11 @@ async fn a_scoped_mint_posts_repository_ids_and_metadata_read() {
     // Cached: the same repository does not mint again or read its id
     // again, and a different repository mints its own token.
     assert_eq!(
-        credentials.scoped_token("demo/app").unwrap().await.unwrap(),
+        credentials
+            .scoped_token("demo/app", Permissions::MetadataRead)
+            .unwrap()
+            .await
+            .unwrap(),
         token
     );
     assert_eq!(
@@ -119,7 +123,7 @@ async fn a_scoped_mint_posts_repository_ids_and_metadata_read() {
         1
     );
     let other = credentials
-        .scoped_token("demo/worker")
+        .scoped_token("demo/worker", Permissions::MetadataRead)
         .unwrap()
         .await
         .unwrap();
@@ -150,7 +154,11 @@ async fn a_scoped_mint_answers_permissions_and_repositories() {
     let app = app(recorded.clone());
     let credentials = app.installation(10);
 
-    credentials.scoped_token("demo/app").unwrap().await.unwrap();
+    credentials
+        .scoped_token("demo/app", Permissions::MetadataRead)
+        .unwrap()
+        .await
+        .unwrap();
     let (body, answer) = recorded.mints.lock().unwrap()[1].clone();
     assert_eq!(
         body,
@@ -167,7 +175,7 @@ async fn a_scoped_mint_answers_permissions_and_repositories() {
     // makes it a 404.
     assert!(
         credentials
-            .scoped_token("demo/hidden")
+            .scoped_token("demo/hidden", Permissions::MetadataRead)
             .unwrap()
             .await
             .is_err()
@@ -210,7 +218,7 @@ async fn a_real_installation_mints_a_metadata_read_token_for_one_repository() {
     .unwrap();
     let token = app
         .installation(installation.parse().unwrap())
-        .scoped_token(&repo)
+        .scoped_token(&repo, Permissions::MetadataRead)
         .expect("installations mint scoped tokens")
         .await
         .unwrap();

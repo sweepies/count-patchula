@@ -16,6 +16,7 @@ mod images;
 pub use images::{ImageSbom, Sbom};
 mod maven;
 mod mise;
+pub use mise::{MiseAccess, mise_access};
 mod nix;
 pub use nix::Flakes;
 mod nuget;
@@ -222,6 +223,9 @@ pub struct Client {
     tokens: docker::Tokens,
     use_versions_host: bool,
     mise: Option<std::sync::Arc<patchula_mise::Lookup>>,
+    mise_access: MiseAccess,
+    /// The repository a scoped mise token is minted for.
+    mise_via: Option<String>,
     nix: Option<std::sync::Arc<dyn Flakes>>,
     stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<StaleKey, i64>>>>,
 }
@@ -269,6 +273,8 @@ impl Client {
             tokens: Default::default(),
             use_versions_host: true,
             mise: None,
+            mise_access: MiseAccess::Run,
+            mise_via: None,
             nix: None,
             stale_registry: Default::default(),
         }

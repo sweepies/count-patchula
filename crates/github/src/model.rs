@@ -35,6 +35,9 @@ pub struct Repository {
     pub allow_rebase_merge: Option<bool>,
     /// `delete_branch_on_merge` — same.
     pub delete_branch_on_merge: Option<bool>,
+    /// `private` — required upstream, kept `Option` for the caller's
+    /// fail-closed default: a missing flag means private, never public.
+    pub private: Option<bool>,
 }
 
 /// `GET /repos/{owner}/{repo}/git/ref/{ref}` — the OpenAPI `git-ref` schema.

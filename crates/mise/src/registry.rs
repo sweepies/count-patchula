@@ -39,6 +39,64 @@ pub fn backends(tool: &str) -> &'static [String] {
     REGISTRY.get(tool).map_or(&[], Vec::as_slice)
 }
 
+/// Backends whose listing reads no GitHub repository when the name after
+/// the backend is a plain registry name: no `/` (a path or GitHub
+/// shorthand) and no `:` (a URL or a nested backend). npm's scoped names
+/// are the exception, handled where they are read.
+const REGISTRY_BACKENDS: &[&str] = &["cargo", "conda", "gem", "npm", "pipx", "pypi"];
+
+/// The GitHub repositories, lowercased `owner/repo`, that mise may list
+/// `tool`'s versions from. An empty set means none: a core tool or a
+/// registry package, for which no GitHub token matters. `None` means the
+/// Count cannot tell: a backend that reads arbitrary hosts or Go modules, a
+/// shorthand the registry snapshot does not list, or one with a backend
+/// like that. For a shorthand every backend the snapshot lists counts,
+/// since mise picks the first one usable on its host.
+pub fn github_sources(tool: &str) -> Option<BTreeSet<String>> {
+    if tool.contains(':') {
+        return backend_sources(tool);
+    }
+    let listed: Vec<&String> = backends(tool)
+        .iter()
+        .filter(|backend| {
+            backend
+                .split_once(':')
+                .is_none_or(|(kind, _)| !crate::policy::PLUGIN_BACKENDS.contains(&kind))
+        })
+        .collect();
+    if listed.is_empty() {
+        return None;
+    }
+    let mut sources = BTreeSet::new();
+    for backend in listed {
+        sources.extend(backend_sources(backend)?);
+    }
+    Some(sources)
+}
+
+/// `github_sources` for one `backend:name`.
+fn backend_sources(backend: &str) -> Option<BTreeSet<String>> {
+    if let Some(repository) = repository(backend) {
+        return Some(BTreeSet::from([repository]));
+    }
+    let (kind, name) = backend.split_once(':')?;
+    let plain = !name.is_empty() && !name.contains(':');
+    let registry_name = match kind {
+        "core" => plain && !name.contains('/'),
+        "npm" => {
+            plain
+                && name
+                    .strip_prefix('@')
+                    .map_or(!name.contains('/'), |scoped| {
+                        scoped.matches('/').count() == 1
+                    })
+        }
+        kind if REGISTRY_BACKENDS.contains(&kind) => plain && !name.contains('/'),
+        _ => false,
+    };
+    registry_name.then(BTreeSet::new)
+}
+
 /// Whether the snapshot lists `owner/repo`, case-insensitively. A lookup
 /// reads the mirror only for a listed repository rather than discovering
 /// an unlisted one by a mirror 404.
@@ -57,6 +115,37 @@ mod tests {
         }
         for unlisted in ["private-org/internal", "age", "unknown/clean-room-tool"] {
             assert!(!listed_github_repository(unlisted), "{unlisted}");
+        }
+    }
+    #[test]
+    fn github_sources_name_the_repositories_a_listing_reads() {
+        let set = |repos: &[&str]| Some(repos.iter().map(|r| (*r).to_owned()).collect());
+        for (tool, sources) in [
+            ("github:Org/Tool", set(&["org/tool"])),
+            ("ubi:org/tool", set(&["org/tool"])),
+            ("aqua:org/tool/cmd", set(&["org/tool"])),
+            ("cargo:https://github.com/org/tool.git", set(&["org/tool"])),
+            ("core:node", set(&[])),
+            ("node", set(&[])),
+            ("npm:prettier", set(&[])),
+            ("npm:@types/node", set(&[])),
+            ("cargo:ripgrep", set(&[])),
+            ("pypi:black", set(&[])),
+            ("gem:rails", set(&[])),
+            // The snapshot lists aqua, asdf and cargo for ripgrep; the
+            // plugin backend is never used.
+            ("ripgrep", set(&["burntsushi/ripgrep"])),
+            ("npm:github:org/tool", None),
+            ("npm:@scope/a/b", None),
+            ("pipx:org/tool", None),
+            ("cargo:https://gitlab.com/org/tool", None),
+            ("go:github.com/org/tool", None),
+            ("http:tool", None),
+            ("spm:org/tool", None),
+            ("gitlab:org/tool", None),
+            ("unknown-shorthand", None),
+        ] {
+            assert_eq!(github_sources(tool), sources, "{tool}");
         }
     }
     #[test]

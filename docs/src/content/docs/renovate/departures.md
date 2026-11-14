@@ -127,6 +127,8 @@ See [GitHub Actions](/guide/github-actions/).
 
 Rules and branch names use the tool's name: `jq`, not `jqlang/jq`, and `patchula/jq-1.x`. `asdf:` and `vfox:` tools, and registry names that only have a plugin backend, are refused with a warning, because their plugins are code from the repository being read. See [mise lookups](/guide/sources/#mise-lookups).
 
+As a GitHub App, the Count hands mise a read-only token scoped to the repository being read, not the installation's token. A tool released from another private repository the App can read, such as `github:your-org/internal-cli`, is not found from a different repository, where Renovate's installation token would list it.
+
 ### Nix flake inputs {#nix-flake-inputs}
 
 - **Renovate:** The `nix` manager is beta and off by default

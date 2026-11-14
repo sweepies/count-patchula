@@ -53,7 +53,11 @@ fn engine(cache: Cache, registry: Arc<Registry>, token: &str) -> Engine {
         .with_versions_host(false)
 }
 fn key(package: &str) -> LookupKey {
-    (false, PackageId::public(Source::Npm, package))
+    (
+        false,
+        PackageId::public(Source::Npm, package),
+        MiseAccess::Run,
+    )
 }
 fn now() -> DateTime<Utc> {
     "2026-10-15T12:00:00Z".parse().unwrap()
@@ -70,6 +74,7 @@ async fn read(engine: &Engine, wait: u32, now: DateTime<Utc>, force: bool) -> (C
                 BTreeSet::new()
             },
             &engine.sources,
+            &MiseVias::new(),
             now,
         )
         .await

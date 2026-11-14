@@ -14,7 +14,7 @@ mod write;
 use futures_util::{StreamExt, stream};
 use patchula_cache::{Cache, State};
 use patchula_config::{Config, PackageId};
-use patchula_datasource::{Client as Sources, Failure};
+use patchula_datasource::{Client as Sources, Failure, MiseAccess};
 use patchula_github::{Client as Github, Options as GithubOptions, model};
 use patchula_http::{Cached, MAX_CONCURRENCY, PhaseTrace, Transport};
 use patchula_lookup::{Evaluation, Evaluator};
@@ -147,6 +147,11 @@ struct Work {
     /// PR's `created_at` plus the hour — set by the write path for
     /// [`Engine::record_quiet`]'s `next_due`.
     per_hour_due: Option<chrono::DateTime<chrono::Utc>>,
+    /// The repository's visibility as GitHub reported it; `None` when it
+    /// was not read, which counts as private.
+    private: Option<bool>,
+    /// A local directory rather than a GitHub repository.
+    local: bool,
 }
 impl Work {
     /// A repository's work before extraction: its report and config, with
@@ -163,6 +168,8 @@ impl Work {
             controls: patchula_update::dashboard::Controls::default(),
             lookup_hash: String::new(),
             per_hour_due: None,
+            private: None,
+            local: false,
         }
     }
     /// A repository's work from its extraction: the report carries the
@@ -361,7 +368,7 @@ impl State for LastRun {
 }
 impl State for LookupHint {
     const NAMESPACE: &'static str = "lookup-hint";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     // Not code-versioned: a hint only names what to prefetch. A stale one
     // costs a wasted read — `resolve_digests` re-reads or overrides it —
     // never a wrong answer, so `VERSION` covers the shape alone and a
@@ -377,32 +384,33 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 5;
+    const VERSION: u32 = 6;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 8;
+    const VERSION: u32 = 9;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 8;
+    const VERSION: u32 = 9;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 5;
+    const VERSION: u32 = 6;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
 type Entry = model::TreeEntry;
 
-/// A catalog: whether the versions host may stand in, and the package.
-type LookupKey = (bool, PackageId);
+/// A catalog: whether the versions host may stand in, the package, and whom
+/// a mise listing is made for (`Run` for every other source).
+type LookupKey = (bool, PackageId, MiseAccess);
 /// An image digest to resolve: the image and its reference.
 type DigestKey = (String, String);
 /// A package whose digest, image or SBOM read carried credentials, so the
@@ -424,6 +432,9 @@ impl Sent {
         }
     }
 }
+/// The repository each `Public` mise key's token is scoped to: one that
+/// asked for it, so never the repository the tool is released from.
+type MiseVias = BTreeMap<LookupKey, String>;
 type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, Failure>>;
 #[allow(dead_code)]
 mod repository_head {
@@ -703,7 +714,18 @@ impl Engine {
         engine.lockfile_cache_gib = settings.lockfiles.cache_gib;
         Ok(engine)
     }
-    fn catalog_key(&self, dep: &Dependency, config: Option<&Config>) -> LookupKey {
+    /// Whom `dep`'s mise listing in `repo` is made for: the one place the
+    /// token mise gets is chosen. Credentials that cannot mint a
+    /// repository-scoped token, and a local directory, which no token can
+    /// be scoped to, keep the run's own.
+    fn mise_access(&self, repo: &Work, dep: &Dependency) -> MiseAccess {
+        if dep.source != Source::Mise || repo.local || !self.github.mints_scoped_tokens() {
+            return MiseAccess::Run;
+        }
+        patchula_datasource::mise_access(&dep.package, &repo.report.repository, repo.private)
+    }
+    fn catalog_key(&self, repo: &Work, dep: &Dependency) -> LookupKey {
+        let config = repo.config.as_ref();
         let enabled = self
             .versions_host_override
             .unwrap_or_else(|| config.is_none_or(|config| config.use_versions_host));
@@ -713,13 +735,14 @@ impl Engine {
         if dep.source == Source::Nix {
             id.name.clone_from(&dep.current);
         }
-        (enabled, id)
+        (enabled, id, self.mise_access(repo, dep))
     }
     /// The catalog for `key`, and whether any request made for it carried
     /// an operator entry's credentials or a registry account's token.
     async fn lookup_key(
         sources: &Sources,
-        (enabled, id): &LookupKey,
+        key: &LookupKey,
+        vias: &MiseVias,
     ) -> (
         std::result::Result<patchula_datasource::Catalog, Failure>,
         bool,
@@ -727,7 +750,11 @@ impl Engine {
         let (result, credentialed) =
             // Boxed: lookups are large futures, and the run holds many.
             patchula_http::tracked(Box::pin(
-                sources.clone().with_versions_host(*enabled).lookup(id),
+                sources
+                    .clone()
+                    .with_versions_host(key.0)
+                    .with_mise_access(key.2.clone(), vias.get(key).cloned())
+                    .lookup(&key.1),
             ))
             .await;
         (result.map_err(Failure::from), credentialed)
@@ -928,6 +955,7 @@ impl Engine {
         &self,
         keys: BTreeSet<LookupKey>,
         sources: &Sources,
+        vias: &MiseVias,
     ) -> (Catalogs, BTreeSet<LookupKey>) {
         /// Packages one release-catalog batch asks for.
         const RELEASES_PER_BATCH: usize = 16;
@@ -939,13 +967,13 @@ impl Engine {
         const LOOKUP_FAN_OUT: usize = 100;
         let (releases, others): (Vec<_>, Vec<_>) = keys
             .into_iter()
-            .partition(|(_, id)| id.source == Source::GithubReleases && id.is_public());
+            .partition(|(_, id, _)| id.source == Source::GithubReleases && id.is_public());
         let mut groups = Vec::new();
         for enabled in [true, false] {
             let packages: Vec<_> = releases
                 .iter()
-                .filter(|(host, _)| *host == enabled)
-                .map(|(_, id)| id.name.clone())
+                .filter(|(host, _, _)| *host == enabled)
+                .map(|(_, id, _)| id.name.clone())
                 .collect();
             groups.extend(
                 packages
@@ -965,7 +993,11 @@ impl Engine {
                             .into_iter()
                             .map(|(package, result)| {
                                 (
-                                    (enabled, PackageId::public(Source::GithubReleases, package)),
+                                    (
+                                        enabled,
+                                        PackageId::public(Source::GithubReleases, package),
+                                        MiseAccess::Run,
+                                    ),
                                     (result.map_err(Failure::from), credentialed),
                                 )
                             })
@@ -976,8 +1008,9 @@ impl Engine {
                                     let key = (
                                         enabled,
                                         PackageId::public(Source::GithubReleases, package),
+                                        MiseAccess::Run,
                                     );
-                                    let result = Self::lookup_key(sources, &key).await;
+                                    let result = Self::lookup_key(sources, &key, vias).await;
                                     (key, result)
                                 })
                                 .buffer_unordered(FALLBACK_FAN_OUT)
@@ -992,7 +1025,7 @@ impl Engine {
             .collect::<Vec<_>>();
         let others = stream::iter(others)
             .map(|key| async move {
-                let result = Self::lookup_key(sources, &key).await;
+                let result = Self::lookup_key(sources, &key, vias).await;
                 self.progress.advance(1);
                 (key, result)
             })
@@ -1081,7 +1114,7 @@ impl Engine {
             .state::<BranchHint>(&hint_scope)
             .await?
             .map(|hint| hint.0);
-        let (branch, commit, tree_sha) = if let Some(hint) = hint {
+        let (branch, commit, tree_sha, private) = if let Some(hint) = hint {
             // Conditional REST heads are faster than GraphQL snapshots on the
             // measured warm path. Revalidate metadata and the hinted branch in
             // parallel; a rename retries only the newly authoritative branch.
@@ -1091,6 +1124,7 @@ impl Engine {
                 self.head(repo, &hint)
             );
             let metadata = metadata?;
+            let private = metadata.private;
             let branch = metadata.default_branch;
             let head = if branch == hint {
                 head?
@@ -1103,7 +1137,7 @@ impl Engine {
                 .commit
                 .map(|detail| detail.tree.sha)
                 .ok_or_else(|| Error::Invalid("commit has no tree".into()))?;
-            (branch, commit, tree)
+            (branch, commit, tree, private)
         } else {
             let (owner, name) = repo.split_once('/').expect("validated repository");
             let data = self
@@ -1113,14 +1147,15 @@ impl Engine {
                     serde_json::json!({"owner":owner,"name":name}),
                 )
                 .await?;
-            let head = data
-                .repository
+            let repository = data.repository;
+            let private = repository.as_ref().map(|repository| repository.is_private);
+            let head = repository
                 .and_then(|repository| repository.default_branch_ref)
                 .ok_or_else(|| Error::Invalid("repository has no default branch".into()))?;
             let Some(HeadTarget::Commit(target)) = head.target else {
                 return Err(Error::Invalid("default branch head is not a commit".into()));
             };
-            (head.name, target.oid, target.tree.oid)
+            (head.name, target.oid, target.tree.oid, private)
         };
         self.cache
             .set_state(&hint_scope, &BranchHint(branch.clone()))
@@ -1128,8 +1163,11 @@ impl Engine {
         let mut report = repo_report(repo, Status::Complete, None);
         report.default_branch = Some(branch);
         report.commit = Some(commit.clone());
-        self.extract(repo, override_config, report, commit, &tree_sha)
-            .await
+        let mut work = self
+            .extract(repo, override_config, report, commit, &tree_sha)
+            .await?;
+        work.private = private;
+        Ok(work)
     }
     /// A repository read from disk: the same config discovery, file selection
     /// and Git blob identities as one read through the API.
@@ -1569,6 +1607,104 @@ mod tests {
         fn send(&self, _: reqwest::Request) -> Exchange<'_> {
             panic!("construction issues no requests")
         }
+    }
+
+    /// Credentials that mint a repository-scoped token for one repository.
+    struct Minting;
+    impl patchula_github::Credentials for Minting {
+        fn scope(&self) -> &str {
+            "installation"
+        }
+        fn token(&self) -> patchula_github::Token<'_> {
+            Box::pin(async { Ok("installation-token".to_owned()) })
+        }
+        fn mints_scoped_tokens(&self) -> bool {
+            true
+        }
+        fn scoped_token(
+            &self,
+            repository: &str,
+            _: patchula_github::Permissions,
+        ) -> Option<patchula_github::Token<'_>> {
+            let token = format!("scoped-{repository}");
+            Some(Box::pin(async move { Ok(token) }))
+        }
+    }
+
+    /// A mise lookup's access is chosen here: credentials that mint a
+    /// repository-scoped token get the scope rule's answer; a token run, a
+    /// local directory and every other source keep the run's own token.
+    #[tokio::test]
+    async fn mise_access_scopes_only_where_a_token_can_be_minted() {
+        let settings = &patchula_config::settings::Settings::default();
+        let engine = |auth| async move {
+            Engine::from_settings(
+                settings,
+                Vec::new(),
+                auth,
+                4,
+                patchula_words::Recheck::NextRun,
+                Cache::open(":memory:", Default::default()).await.unwrap(),
+                Arc::new(Never),
+            )
+            .unwrap()
+        };
+        let installation = engine(Auth::Credentials(Arc::new(Minting))).await;
+        let token = engine(Auth::Token("t".into())).await;
+        let tool = |package: &str| Dependency {
+            package: package.into(),
+            ..patchula_manager::testing::dependency(
+                patchula_words::Manager::Mise,
+                DependencyKind::Tool,
+                Source::Mise,
+            )
+        };
+        let work = |name: &str, private: Option<bool>, local: bool| Work {
+            private,
+            local,
+            ..Work::empty(repo_report(name, Status::Complete, None), None)
+        };
+        let app = work("acme/app", Some(true), false);
+        assert_eq!(
+            installation.mise_access(&app, &tool("github:acme/tool")),
+            MiseAccess::Public
+        );
+        assert_eq!(
+            installation.mise_access(&app, &tool("github:Acme/App")),
+            MiseAccess::Repository("acme/app".into())
+        );
+        assert_eq!(
+            installation.mise_access(&app, &tool("go:github.com/acme/tool")),
+            MiseAccess::Repository("acme/app".into())
+        );
+        assert_eq!(
+            installation.mise_access(
+                &work("acme/site", Some(false), false),
+                &tool("go:example.com/tool")
+            ),
+            MiseAccess::Public
+        );
+        // Visibility not read counts as private.
+        assert_eq!(
+            installation.mise_access(
+                &work("acme/site", None, false),
+                &tool("go:example.com/tool")
+            ),
+            MiseAccess::Repository("acme/site".into())
+        );
+        assert_eq!(
+            installation.mise_access(&work("local/app", None, true), &tool("github:acme/app")),
+            MiseAccess::Run
+        );
+        assert_eq!(
+            token.mise_access(&app, &tool("github:acme/app")),
+            MiseAccess::Run
+        );
+        let npm = Dependency {
+            source: Source::Npm,
+            ..tool("github:acme/app")
+        };
+        assert_eq!(installation.mise_access(&app, &npm), MiseAccess::Run);
     }
 
     /// A token run, the CLI's, paces writes with the operator's

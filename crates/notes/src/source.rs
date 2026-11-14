@@ -30,7 +30,7 @@ fn compact_npm(
     .map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NOTES_SOURCE_NPM: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-source-npm", 1, compact_npm);
+    patchula_http::Derived::new("notes-source-npm", 2, compact_npm);
 fn compact_crate(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
@@ -39,7 +39,7 @@ fn compact_crate(
     serde_json::to_vec(&metadata(&value["crate"])).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NOTES_SOURCE_CRATES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-source-crates", 1, compact_crate);
+    patchula_http::Derived::new("notes-source-crates", 2, compact_crate);
 fn compact_pypi(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
@@ -73,7 +73,7 @@ fn compact_pypi(
     serde_json::to_vec(&source).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NOTES_SOURCE_PYPI: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-source-pypi", 1, compact_pypi);
+    patchula_http::Derived::new("notes-source-pypi", 2, compact_pypi);
 
 pub(super) fn vanity(html: &str, package: &str) -> Option<(String, Repository)> {
     static META: LazyLock<regex::Regex> =
@@ -125,7 +125,7 @@ impl Client {
         {
             return Ok(Some(source));
         }
-        let token = self.sources.mise_token().await;
+        let token = self.sources.run_tool_token().await;
         let backend = self
             .sources
             .mise_lookup()?

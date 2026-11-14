@@ -352,3 +352,152 @@ async fn versions_that_do_not_order_are_not_taken_for_a_git_ref() {
         .unwrap_err();
     assert!(error.to_string().contains("Git ref"), "{error}");
 }
+
+/// Installation credentials: each repository's scoped token names it and
+/// the permissions it was minted with.
+struct Installation;
+impl patchula_github::Credentials for Installation {
+    fn scope(&self) -> &str {
+        "installation"
+    }
+    fn token(&self) -> patchula_github::Token<'_> {
+        Box::pin(async { Ok("installation-token".to_owned()) })
+    }
+    fn mints_scoped_tokens(&self) -> bool {
+        true
+    }
+    fn scoped_token(
+        &self,
+        repository: &str,
+        permissions: patchula_github::Permissions,
+    ) -> Option<patchula_github::Token<'_>> {
+        let token = format!("scoped-{repository}-{permissions:?}");
+        Some(Box::pin(async move { Ok(token) }))
+    }
+}
+fn installation(replay: &Arc<MiseReplay>, cache: Cache) -> Client {
+    let transport = Arc::new(Npm);
+    let github = patchula_github::Client::with_credentials(
+        Arc::new(Installation),
+        cache.clone(),
+        patchula_github::Options::default(),
+        transport.clone(),
+    )
+    .unwrap();
+    Client::new(
+        github,
+        patchula_datasource::cached(cache.clone(), transport, 2).unwrap(),
+        cache,
+    )
+    .with_mise(Arc::new(Lookup::new(
+        replay.clone(),
+        "mise".into(),
+        "/var/lib/patchula/tools".into(),
+        "2026.10.11".into(),
+    )))
+}
+fn token(replay: &MiseReplay) -> String {
+    replay.calls().last().unwrap().env["MISE_GITHUB_TOKEN"].clone()
+}
+
+/// A tool released from another repository, or from no GitHub repository,
+/// lists public data; one released from the repository itself, or from
+/// somewhere the Count cannot tell in a repository that may be private,
+/// is that repository's own.
+#[test]
+fn the_scope_rule() {
+    use patchula_datasource::{MiseAccess, mise_access};
+    let own = || MiseAccess::Repository("Acme/App".into());
+    for (tool, private, access) in [
+        ("github:acme/tool", Some(true), MiseAccess::Public),
+        ("aqua:jqlang/jq", Some(true), MiseAccess::Public),
+        ("jq", Some(true), MiseAccess::Public),
+        ("npm:prettier", Some(true), MiseAccess::Public),
+        ("core:node", None, MiseAccess::Public),
+        ("github:acme/app", Some(false), own()),
+        ("ubi:ACME/APP", Some(true), own()),
+        ("go:github.com/acme/tool", Some(true), own()),
+        ("go:github.com/acme/tool", None, own()),
+        ("go:github.com/acme/tool", Some(false), MiseAccess::Public),
+        ("http:tool", Some(false), MiseAccess::Public),
+    ] {
+        assert_eq!(
+            mise_access(tool, "Acme/App", private),
+            access,
+            "{tool} {private:?}"
+        );
+    }
+}
+
+/// mise gets a read-only token scoped to the repository a lookup is made
+/// for, never the installation's; the run's own token only for `Run`.
+#[tokio::test]
+async fn mise_gets_a_token_scoped_to_the_repository() {
+    use patchula_datasource::MiseAccess;
+    let replay = replay();
+    let jq = patchula_config::PackageId::public(Source::Mise, "jq");
+    let source = installation(&replay, memory().await);
+    source
+        .clone()
+        .with_mise_access(MiseAccess::Repository("acme/app".into()), None)
+        .lookup(&jq)
+        .await
+        .unwrap();
+    assert_eq!(token(&replay), "scoped-acme/app-ContentsRead");
+    source
+        .clone()
+        .with_mise_access(MiseAccess::Public, Some("acme/site".into()))
+        .lookup(&jq)
+        .await
+        .unwrap();
+    assert_eq!(token(&replay), "scoped-acme/site-ContentsRead");
+    source.lookup(&jq).await.unwrap();
+    assert_eq!(token(&replay), "installation-token");
+    // A token run cannot mint: a scoped lookup fails rather than fall back
+    // to the run's token.
+    let replay = self::replay();
+    let error = client(Some(&replay), memory().await, "run-token")
+        .with_mise_access(MiseAccess::Repository("acme/app".into()), None)
+        .lookup(&jq)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Github(_)), "{error}");
+    assert!(replay.lookups().is_empty());
+}
+
+/// A public listing one repository's lookup stored serves another's; a
+/// repository's own listing serves no other repository, nor a public or
+/// run-token lookup.
+#[tokio::test]
+async fn public_listings_are_shared_and_repository_listings_are_not() {
+    use patchula_datasource::MiseAccess;
+    let replay = replay();
+    let cache = memory().await;
+    let jq = patchula_config::PackageId::public(Source::Mise, "jq");
+    let lookups = || replay.lookups().len();
+    let source = installation(&replay, cache.clone());
+    let public = |via: &str| {
+        source
+            .clone()
+            .with_mise_access(MiseAccess::Public, Some(via.into()))
+    };
+    let own = |repository: &str| {
+        source
+            .clone()
+            .with_mise_access(MiseAccess::Repository(repository.into()), None)
+    };
+    public("acme/app").lookup(&jq).await.unwrap();
+    assert_eq!(lookups(), 1);
+    public("acme/site").lookup(&jq).await.unwrap();
+    assert_eq!(lookups(), 1);
+    own("acme/app").lookup(&jq).await.unwrap();
+    assert_eq!(lookups(), 2);
+    own("ACME/app").lookup(&jq).await.unwrap();
+    assert_eq!(lookups(), 2);
+    own("acme/site").lookup(&jq).await.unwrap();
+    assert_eq!(lookups(), 3);
+    assert_eq!(token(&replay), "scoped-acme/site-ContentsRead");
+    // The run's token keeps its own listing.
+    source.lookup(&jq).await.unwrap();
+    assert_eq!(lookups(), 4);
+}

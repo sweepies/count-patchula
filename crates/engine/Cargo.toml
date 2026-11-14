@@ -38,6 +38,7 @@ graphql_client = { version = "0.16", default-features = false, features = ["grap
 base64 = "0.23"
 [dev-dependencies]
 patchula-update = { path = "../update", features = ["testing"] }
+patchula-manager = { path = "../manager", features = ["testing"] }
 patchula-engine = { path = ".", features = ["testing"] }
 patchula-cache = { path = "../cache", features = ["paused-clock"] }
 sha2 = "0.11.1"

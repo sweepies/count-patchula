@@ -41,11 +41,11 @@ oci-config-notes	1	crates/datasource/src/docker.rs,crates/datasource/src/upstrea
 oci-tags	1	crates/datasource/src/docker.rs,crates/http/src/derive.rs	serde,serde_json	1793d5ba9d90c2f7d4f7cc78cbdb2bf199bc463dbfa454c8296e3e13f6fa1808
 image-platform	3	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json,sha2	27914c918d53cef3cd1fb7b1cb4882cb189b3658e2f719f07fe88ad208fdbe5e
 sbom-os	3	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	base64,serde,serde_json,sha2	27914c918d53cef3cd1fb7b1cb4882cb189b3658e2f719f07fe88ad208fdbe5e
-github-release-head	3	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	605877daff1c2baba2d8eac62f531ed0bd0d325c3a3f3015b6a1530875669641
+github-release-head	4	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	90de1d5d0ae9b0ca961e6d7723f2b48ad8553710df39402af75c12d37f28c0a8
 anonymous-registry-pull-token	1	crates/datasource/src/docker.rs	chrono,serde,serde_json	e8d7be4142dd9b7f394b4f633656f200b7003bd1fec689a051750576ef313cd3
-notes-adapter-listing	3	crates/notes/src/adapters.rs,crates/http/src/derive.rs	serde,serde_json	e263df6c39dbbeffba69a019e11156047d641375751ce2b2648e4e0594125f37
-parsed-postgres-sgml	3	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	88e9f22ae8c9476b14877f6642394b029ce0c62fdd1e59587364b3194da3813e
-parsed-go-history	3	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	88e9f22ae8c9476b14877f6642394b029ce0c62fdd1e59587364b3194da3813e
+notes-adapter-listing	4	crates/notes/src/adapters.rs,crates/http/src/derive.rs	serde,serde_json	99a900a02c190d3b0f9ef17a7d4b3b811ea89f81025d8d9bdfa378b7cdb2e6f6
+parsed-postgres-sgml	4	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	8da9b01fc08129e3461f18c43344fcc8d38c9846f2020875d964c58a0ce80a33
+parsed-go-history	4	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	8da9b01fc08129e3461f18c43344fcc8d38c9846f2020875d964c58a0ce80a33
 notes-changelog-directory	1	crates/notes/src/changelog.rs,crates/http/src/derive.rs	serde,serde_json	b28b1e0b0a53e8d78b4ed36d9d211445e6def5e79dd71bbb1e3b51dabf98b10f
 parsed-changelog	1	crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	base64,regex,serde,serde_json	7ca6ab66ce0ae0763b95a1b74f1c933cbe981d1f9a7f12ebf6d6ea42cbfe6c43
 notes-gitlab-releases	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	6a531ac87a6f5fc97d73023486b38f6db9580a69bbc8be30117585472da364c2
@@ -53,7 +53,7 @@ notes-gitea-releases	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde
 notes-forge-tags	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	6a531ac87a6f5fc97d73023486b38f6db9580a69bbc8be30117585472da364c2
 notes-forge-files	1	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	6a531ac87a6f5fc97d73023486b38f6db9580a69bbc8be30117585472da364c2
 notes-forge-changelog	1	crates/notes/src/forge.rs,crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	regex,serde,serde_json	ebc4a3c430b8db1fc93d2fff8586d788248126c4432677a090a162f523fb4834
-notes-source-npm	1	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	1a38f4bc261af82f5cd87fc95db6503b8a1c17b630ae55edea6759525be709b1
-notes-source-crates	1	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	1a38f4bc261af82f5cd87fc95db6503b8a1c17b630ae55edea6759525be709b1
-notes-source-pypi	1	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	1a38f4bc261af82f5cd87fc95db6503b8a1c17b630ae55edea6759525be709b1
+notes-source-npm	2	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	995027089db3a5224d6c7336954ed38d38bc67c1c8d4a2daad6840da5ea137e1
+notes-source-crates	2	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	995027089db3a5224d6c7336954ed38d38bc67c1c8d4a2daad6840da5ea137e1
+notes-source-pypi	2	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	995027089db3a5224d6c7336954ed38d38bc67c1c8d4a2daad6840da5ea137e1
 notes-mise-versions	1	crates/notes/src/mirror.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json	1bebc4a0e97ddbaea0fa5f66ee60d3e1eb4695559b86db896f808d53b4a2a267

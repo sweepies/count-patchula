@@ -18,10 +18,12 @@ pub(crate) struct CatalogScope {
     versions_host: bool,
     package: PackageId,
     credential_scope: String,
+    /// Whom a mise catalog was listed for; `Run` for every other source.
+    access: MiseAccess,
 }
 impl State for Saved {
     const NAMESPACE: &'static str = "catalog";
-    const VERSION: u32 = 6;
+    const VERSION: u32 = 7;
     // Code-versioned: the view is datasource output decoded into `Catalog`;
     // a stale-but-decodable view from a release whose transforms moved is
     // worse than a miss.
@@ -44,6 +46,7 @@ impl Engine {
             versions_host: key.0,
             package: key.1.clone(),
             credential_scope: self.github.credential_scope().into(),
+            access: key.2.clone(),
         }
     }
     pub(super) async fn age_catalogs(
@@ -52,6 +55,7 @@ impl Engine {
         waits: &BTreeMap<LookupKey, u32>,
         force: &BTreeSet<LookupKey>,
         sources: &Sources,
+        vias: &MiseVias,
         now: DateTime<Utc>,
     ) -> Result<(Catalogs, Evidence, BTreeSet<LookupKey>)> {
         let mut results = Catalogs::new();
@@ -99,8 +103,8 @@ impl Engine {
         }
         let fresh = sources.revalidating();
         let ((mut fetched, sent), (forced, sent_forced)) = tokio::join!(
-            self.catalogs(ordinary, sources),
-            self.catalogs(forced, &fresh)
+            self.catalogs(ordinary, sources, vias),
+            self.catalogs(forced, &fresh, vias)
         );
         fetched.extend(forced);
         credentialed.extend(sent);
@@ -145,7 +149,7 @@ pub(crate) struct Controls {
 }
 impl State for Controls {
     const NAMESPACE: &'static str = "catalog-controls";
-    const VERSION: u32 = 6;
+    const VERSION: u32 = 7;
     // Code-versioned: the stored keys come from `identity` and `plan`
     // code, and a key written by older code that no longer matches its
     // dependency quietly un-retries a ticked box.

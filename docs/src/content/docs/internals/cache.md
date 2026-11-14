@@ -339,7 +339,34 @@ GraphQL reads resolve the refs currently needed without revalidating the lists.
 
 What `mise ls-remote --json` printed is stored as `mise-ls-remote` state, since
 it has no validators. The scope holds the tool (and a version prefix such as
-`lts`), the credential scope, whether mise may read the mise-versions mirror
+`lts`), whom the listing serves, whether mise may read the mise-versions mirror
 and the pinned mise version. A listing younger than an hour is reused without
 starting mise. A manual retry replaces it, and only successful lookups are
 stored.
+
+Whom a listing serves follows the token mise was handed (see
+[scoped tokens](/internals/github-client/#app-tokens)). The engine decides it
+per repository and dependency (`Engine::mise_access`), and it is the third
+element of the batch's lookup key and part of the `catalog` scope:
+
+- `public` when the token is scoped to a repository the tool is not released
+  from. Such a token sees that repository and public data only, so the
+  listing is public, and one lookup in the batch serves every repository that
+  asks for it, with the token of the first of them. A tool is not released
+  from the repository when every GitHub repository its backend names
+  (`github:`, `ubi:`, `aqua:`, `packslip:`, `cargo:` with a GitHub URL, or each
+  backend the registry snapshot lists for a shorthand) is another one, or its
+  backend reads a package registry or is a core tool. When the Count cannot
+  tell (`go:`, `http:`, `spm:`, an unlisted shorthand and the like), the
+  listing is public only for a repository GitHub reports as public.
+- The run's credential scope and the repository otherwise: the listing of a
+  tool released from the repository, or of an unknown one in a private
+  repository (or one whose visibility was not read), serves that repository
+  alone.
+- The run's credential scope for credentials that cannot mint a scoped token
+  (a personal token, an Action's own token) and for a local directory: mise
+  gets the run's token, and the listing serves only that credential, never a
+  scoped lookup.
+
+Off github.com no token reaches mise, so every listing there is public. Release
+notes and flake inputs still hand mise and nix the run's token.

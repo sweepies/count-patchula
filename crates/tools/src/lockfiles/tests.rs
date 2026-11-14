@@ -7714,10 +7714,15 @@ async fn the_actions_lock_token_is_scoped_on_app_credentials_and_the_run_token_o
         fn token(&self) -> patchula_github::Token<'_> {
             Box::pin(async { Ok("full".to_owned()) })
         }
-        fn scoped_token(&self, repository: &str) -> Option<patchula_github::Token<'_>> {
+        fn scoped_token(
+            &self,
+            repository: &str,
+            permissions: patchula_github::Permissions,
+        ) -> Option<patchula_github::Token<'_>> {
             let repository = repository.to_owned();
             Some(Box::pin(async move {
                 assert_eq!(repository, "demo/app");
+                assert_eq!(permissions, patchula_github::Permissions::MetadataRead);
                 Ok("scoped".to_owned())
             }))
         }
