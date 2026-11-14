@@ -662,9 +662,9 @@ fn bundle_config(dir: &str, text: Option<&Text>) -> Option<Named> {
             BUNDLE_SETTINGS.contains(&name.as_str()) || name.starts_with("build.")
         });
         if !harmless {
+            let setting = crate::origins::shown(key).unwrap_or("a setting");
             return Some(Named::Unusable(format!(
-                "{} in {dir}.bundle/config, which the Count does not follow",
-                crate::origins::shown(key)
+                "{setting} in {dir}.bundle/config, which the Count does not follow"
             )));
         }
     }

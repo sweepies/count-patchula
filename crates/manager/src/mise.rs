@@ -774,19 +774,24 @@ fn project_redirect(
 
 /// Options on the tool's entry, in any of `configs` or its own file,
 /// beyond its version and platforms, such as install arguments or an API
-/// URL, which can change where it comes from.
+/// URL, which can change where it comes from. The reason names the options
+/// when every one is plainly a name.
 fn tool_options(dep: &Dependency, configs: &[&str], files: &Files) -> Option<String> {
-    let optioned = |entry: &toml_edit::Item| {
+    let options = |entry: &toml_edit::Item| {
         let keys = |table: &dyn toml_edit::TableLike| {
             table
                 .iter()
-                .any(|(key, _)| !matches!(key, "version" | "os" | "minimum_release_age"))
+                .map(|(key, _)| key.to_owned())
+                .filter(|key| !matches!(key.as_str(), "version" | "os" | "minimum_release_age"))
+                .collect::<Vec<_>>()
         };
         match entry {
             toml_edit::Item::Value(Value::Array(values)) => values
                 .iter()
-                .any(|v| v.as_inline_table().is_some_and(|t| keys(t))),
-            entry => entry.as_table_like().is_some_and(keys),
+                .filter_map(|v| v.as_inline_table())
+                .flat_map(|t| keys(t))
+                .collect(),
+            entry => entry.as_table_like().map(keys).unwrap_or_default(),
         }
     };
     let task_tools =
@@ -814,12 +819,31 @@ fn tool_options(dep: &Dependency, configs: &[&str], files: &Files) -> Option<Str
                     .filter_map(|(_, task)| task_tools(task)),
             );
         }
-        if entries.iter().any(optioned) {
-            return Some(format!(
-                "options on {} in {file} that may move where mise installs it from",
-                crate::origins::shown(&dep.name)
-            ));
+        let mut keys: Vec<String> = Vec::new();
+        for key in entries.iter().flat_map(options) {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
         }
+        if keys.is_empty() {
+            continue;
+        }
+        let named: Option<Vec<String>> = keys
+            .iter()
+            .map(|key| crate::origins::shown(key).map(|key| format!("`{key}`")))
+            .collect();
+        return Some(match named.as_deref() {
+            Some([one]) => format!(
+                "its entry in {file} sets {one}, which may move where mise installs it from"
+            ),
+            Some([rest @ .., last]) => format!(
+                "its entry in {file} sets {} and {last}, which may move where mise installs it from",
+                rest.join(", ")
+            ),
+            _ => {
+                format!("its entry in {file} has options that may move where mise installs it from")
+            }
+        });
     }
     None
 }
@@ -874,7 +898,7 @@ pub(crate) fn redirected(
         };
         if redirected.contains("*") || kinds.iter().any(|kind| redirected.contains(kind)) {
             return Some(format!(
-                "settings in {config} that may move where mise installs it from"
+                "settings in {config} may move where mise installs it from"
             ));
         }
     }
