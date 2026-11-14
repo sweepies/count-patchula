@@ -41,7 +41,8 @@ single-flight lock, keyed by (installation, repository, permission set), so
 two repositories mint separately and a fuller token never answers a narrower
 mint. Only App installation credentials answer `scoped_token`,
 `repository_id` and `mints_scoped_tokens`; every other credential returns
-`None`, and the actions.lock tool and mise use the run's own token. A
+`None`: the actions.lock tool then uses the run's own token, and mise gets
+it only for a trusted repository and no token otherwise. A
 real-installation proof lives ignored in `crates/github/tests/app.rs`: set
 `PATCHULA_TEST_APP_ID`, `PATCHULA_TEST_APP_KEY_FILE`,
 `PATCHULA_TEST_INSTALLATION`, `PATCHULA_TEST_REPO` and

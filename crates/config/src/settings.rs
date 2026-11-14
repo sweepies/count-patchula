@@ -34,8 +34,51 @@ pub struct Settings {
     pub http: Http,
     pub github: Github,
     pub registries: BTreeMap<String, Registry>,
+    /// `owner/name` globs of the repositories whose writers count as the
+    /// operator; see [`TrustedRepositories`].
+    pub trusted_repositories: Vec<String>,
     pub lockfiles: Lockfiles,
     pub server: Server,
+}
+/// The compiled `trustedRepositories` globs. Each matches a whole
+/// `owner/name`, case-insensitively, and `*` crosses `/`, so `*` trusts every
+/// repository and `acme/*` trusts an owner. No pattern trusts nothing.
+#[derive(Clone, Debug, Default)]
+pub struct TrustedRepositories(globset::GlobSet);
+impl TrustedRepositories {
+    /// The globs compiled, or the first one that is not a glob. A leading
+    /// `!` is refused: nothing is excluded from trust, only left out of it.
+    pub fn compile(patterns: &[String]) -> Result<Self, String> {
+        let mut set = globset::GlobSetBuilder::new();
+        for pattern in patterns {
+            if pattern.is_empty() {
+                return Err("patterns must not be empty".into());
+            }
+            if pattern.starts_with('!') {
+                return Err(format!(
+                    "pattern {pattern:?} cannot be negated; list only the repositories to trust"
+                ));
+            }
+            set.add(
+                globset::GlobBuilder::new(pattern)
+                    .case_insensitive(true)
+                    .literal_separator(false)
+                    .build()
+                    .map_err(|error| format!("pattern {pattern:?} is not a glob: {error}"))?,
+            );
+        }
+        set.build()
+            .map(Self)
+            .map_err(|error| format!("patterns do not compile: {error}"))
+    }
+    /// Whether `repository` (`owner/name`) is trusted.
+    pub fn trust(&self, repository: &str) -> patchula_words::Trust {
+        if self.0.is_match(repository) {
+            patchula_words::Trust::Trusted
+        } else {
+            patchula_words::Trust::Untrusted
+        }
+    }
 }
 /// Lockfile tooling settings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +234,7 @@ impl Default for Settings {
             },
             github: Github { write_burst: 12 },
             registries: BTreeMap::new(),
+            trusted_repositories: Vec::new(),
             lockfiles: Lockfiles { cache_gib: 20 },
             server: Server {
                 triggers: Triggers {
@@ -297,6 +341,9 @@ impl Settings {
                     "needs auth, and does not apply to a mirror",
                 ));
             }
+        }
+        if let Err(message) = TrustedRepositories::compile(&self.trusted_repositories) {
+            return Err(issue("trustedRepositories", &message));
         }
         if !(1..=100).contains(&self.http.default_host_concurrency) {
             return Err(issue("http.defaultHostConcurrency", "must be 1..100"));
@@ -562,6 +609,57 @@ mod tests {
         .unwrap_err();
         let io = std::fs::read(&missing).unwrap_err();
         assert_eq!(error, format!("cannot read {}: {io}", missing.display()));
+    }
+    /// A trusted-repository glob matches the whole `owner/name` in any
+    /// case, and its `*` crosses `/`; nothing listed trusts nothing.
+    #[test]
+    fn trusted_repository_globs_match_whole_names_in_any_case() {
+        use patchula_words::Trust::{Trusted, Untrusted};
+        let trust = |patterns: &[&str], repository: &str| {
+            TrustedRepositories::compile(
+                &patterns.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .trust(repository)
+        };
+        assert_eq!(trust(&[], "acme/app"), Untrusted);
+        assert_eq!(trust(&["acme/app"], "acme/app"), Trusted);
+        assert_eq!(trust(&["acme/app"], "Acme/App"), Trusted);
+        assert_eq!(trust(&["ACME/*"], "acme/site"), Trusted);
+        assert_eq!(trust(&["*"], "acme/app"), Trusted);
+        assert_eq!(trust(&["acme*"], "acme/app"), Trusted);
+        assert_eq!(trust(&["acme/app"], "acme/app-fork"), Untrusted);
+        assert_eq!(trust(&["acme/app"], "other/acme/app"), Untrusted);
+        assert_eq!(trust(&["acme/*"], "acme-evil/app"), Untrusted);
+        assert_eq!(trust(&["acme"], "acme/app"), Untrusted);
+        assert_eq!(trust(&["acme/a", "other/*"], "other/b"), Trusted);
+    }
+    /// A pattern that is empty, negated or not a glob fails the settings,
+    /// naming the field and the pattern.
+    #[test]
+    fn invalid_trusted_repository_patterns_fail_validation() {
+        for pattern in ["", "!acme/app", "acme/[app"] {
+            let settings = Settings {
+                trusted_repositories: vec!["acme/*".into(), pattern.into()],
+                ..Settings::default()
+            };
+            let issue = settings.validate().unwrap_err();
+            assert_eq!(issue.field, "trustedRepositories", "{pattern}");
+            assert!(
+                issue.message.starts_with("trustedRepositories "),
+                "{}",
+                issue.message
+            );
+            if !pattern.is_empty() {
+                assert!(issue.message.contains(pattern), "{}", issue.message);
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.pkl");
+        let settings =
+            load_body(&path, "trustedRepositories { \"acme/*\" \"Other/App\" }").unwrap();
+        assert_eq!(settings.trusted_repositories, ["acme/*", "Other/App"]);
+        assert!(load_body(&path, "trustedRepositories { \"!acme/*\" }").is_err());
     }
     #[test]
     fn reports_kept_is_read_and_bounded() {

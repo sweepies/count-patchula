@@ -6,7 +6,7 @@ use patchula_datasource::{Client, Error, MiseAccess, MiseRepository, mise_scope_
 use patchula_http::{Exchange, Response, Transport};
 use patchula_mise::Lookup;
 use patchula_testkit::{MiseReplay, Outcome, Run};
-use patchula_words::Source;
+use patchula_words::{Source, Trust};
 use std::{path::Path, sync::Arc};
 
 /// Answers the one public registry read the notes tests need.
@@ -414,10 +414,18 @@ fn installation(replay: &Arc<MiseReplay>, cache: Cache, credentials: Arc<Install
 fn token(replay: &MiseReplay) -> String {
     replay.calls().last().unwrap().env["MISE_GITHUB_TOKEN"].clone()
 }
+/// An untrusted repository.
 fn repository(name: &str, private: Option<bool>) -> MiseRepository {
     MiseRepository {
         name: name.into(),
         private,
+        trust: Trust::Untrusted,
+    }
+}
+fn trusted(name: &str) -> MiseRepository {
+    MiseRepository {
+        trust: Trust::Trusted,
+        ..repository(name, Some(true))
     }
 }
 
@@ -476,14 +484,49 @@ async fn mise_gets_a_token_scoped_to_the_repository_with_the_access_permissions(
     assert_eq!(token(&replay), "scoped-acme/site-MetadataRead");
     source.lookup(&jq).await.unwrap();
     assert_eq!(token(&replay), "installation-token");
-    // A token run cannot mint: mise gets the run's token, kept apart.
-    let replay = self::replay();
-    client(Some(&replay), memory().await, "run-token")
-        .with_mise_repository(Some(repository("acme/app", Some(true))))
+    // A trusted repository's lookups get the run's token.
+    source
+        .clone()
+        .with_mise_repository(Some(trusted("acme/app")))
         .lookup(&jq)
         .await
         .unwrap();
+    assert_eq!(token(&replay), "installation-token");
+}
+
+/// A token run cannot mint a scoped token: a trusted repository's lookups
+/// get the run's token, and an untrusted one's get none, as the run's reaches
+/// further than the repository. Untrusted listings are public and shared;
+/// the run's listing is never served to them.
+#[tokio::test]
+async fn a_token_run_hands_its_token_only_to_trusted_repositories() {
+    let jq = patchula_config::PackageId::public(Source::Mise, "jq");
+    let replay = self::replay();
+    let lookups = || replay.lookups().len();
+    let source = client(Some(&replay), memory().await, "run-token");
+    let as_repo = |repository| source.clone().with_mise_repository(Some(repository));
+    as_repo(trusted("acme/app")).lookup(&jq).await.unwrap();
     assert_eq!(token(&replay), "run-token");
+    assert_eq!(lookups(), 1);
+    as_repo(repository("acme/app", Some(true)))
+        .lookup(&jq)
+        .await
+        .unwrap();
+    assert_eq!(lookups(), 2);
+    assert!(
+        !replay
+            .calls()
+            .last()
+            .unwrap()
+            .env
+            .contains_key("MISE_GITHUB_TOKEN")
+    );
+    as_repo(repository("jqlang/jq", Some(false)))
+        .lookup(&jq)
+        .await
+        .unwrap();
+    as_repo(trusted("acme/other")).lookup(&jq).await.unwrap();
+    assert_eq!(lookups(), 2);
 }
 
 /// A batch key's access must be the one its repository gives: a `Public`
@@ -569,5 +612,13 @@ async fn public_listings_are_shared_and_repository_listings_are_not() {
     as_repo("acme/api", true).lookup(&jq).await.unwrap();
     assert_eq!(lookups(), 5);
     source.lookup(&jq).await.unwrap();
+    assert_eq!(lookups(), 6);
+    // A trusted repository's lookups share the run's listing.
+    source
+        .clone()
+        .with_mise_repository(Some(trusted("acme/app")))
+        .lookup(&jq)
+        .await
+        .unwrap();
     assert_eq!(lookups(), 6);
 }

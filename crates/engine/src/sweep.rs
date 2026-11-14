@@ -275,7 +275,10 @@ impl Engine {
         let mut report = repo_report(repo, Status::Complete, None);
         report.default_branch = Some(state.branch.clone());
         report.commit = Some(state.commit.clone());
-        Ok(Some(Work::from_extraction(report, config, cached)))
+        Ok(Some(Work {
+            trust: self.trust(repo, false),
+            ..Work::from_extraction(report, config, cached)
+        }))
     }
 
     /// A complete run's stored answer for the sweep: the row's lookup hash,

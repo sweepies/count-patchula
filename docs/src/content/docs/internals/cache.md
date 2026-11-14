@@ -346,11 +346,18 @@ stored.
 
 Whom a listing serves follows the token mise was handed (see
 [scoped tokens](/internals/github-client/#app-tokens)). `Sources::mise_access`
-decides it from the tool and the repository the lookup is made for (its name
-and visibility), and it is the third element of the batch's lookup key and
+decides it from the tool and the repository the lookup is made for (its name,
+visibility and `Trust`, which the engine resolves once per repository from
+`trustedRepositories` and carries on its work), and it is the third element of the batch's lookup key and
 part of the `catalog` scope. Release notes look a repository's mise tools up
 through a client made for that repository, so they get the same access and
 read the same listings.
+
+- The run's credential scope for a trusted repository and for a local
+  directory: mise gets the run's token, and the listing serves only that
+  credential, never a scoped or tokenless lookup.
+
+For an untrusted repository:
 
 - `public`, with a `metadata: read` token scoped to a repository that asked
   for the tool. That token reads no repository's private releases (not even
@@ -369,10 +376,10 @@ read the same listings.
   visibility was not read), serves that repository alone. The id is the one
   the mint names, so a new repository under a renamed one's name reads none
   of its listings or catalogs.
-- The run's credential scope for credentials that cannot mint a scoped token
-  (a personal token, an Action's own token) and for a local directory: mise
-  gets the run's token, and the listing serves only that credential, never a
-  scoped lookup.
+- `public`, with no token, under credentials that cannot mint a scoped one (a
+  personal token, an Action's own token): the run's token reaches further
+  than the repository. The `catalog` scope files these with the `metadata:
+  read` views, which read the same public data.
 
 A batch lookup checks that its key's access is the one the repository it is
 made for gives, and fails otherwise: a public key never runs without a

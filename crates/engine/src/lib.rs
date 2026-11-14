@@ -24,7 +24,7 @@ use patchula_report::{
     SCHEMA_VERSION, Status,
 };
 use patchula_words::{
-    DependencyKind, LookupErrorKind, Recheck, ResolutionKind, Source, Update as UpdateKind,
+    DependencyKind, LookupErrorKind, Recheck, ResolutionKind, Source, Trust, Update as UpdateKind,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -124,6 +124,8 @@ pub struct Engine {
     /// Whether the GitHub identity is an installation's, which discovers
     /// repositories through `installation/repositories` rather than `user/repos`.
     installation: bool,
+    /// The operator's `trustedRepositories`; empty trusts nothing.
+    trusted: patchula_config::settings::TrustedRepositories,
     /// The server URL hidden in PRs and the dashboard for the CLI to find.
     advertised_server: Option<String>,
     progress: Arc<dyn Progress>,
@@ -152,6 +154,9 @@ struct Work {
     private: Option<bool>,
     /// A local directory rather than a GitHub repository.
     local: bool,
+    /// Whether the operator trusts the repository, from [`Engine::trust`];
+    /// untrusted until resolved.
+    trust: Trust,
 }
 impl Work {
     /// A repository's work before extraction: its report and config, with
@@ -170,6 +175,7 @@ impl Work {
             per_hour_due: None,
             private: None,
             local: false,
+            trust: Trust::Untrusted,
         }
     }
     /// A repository's work from its extraction: the report carries the
@@ -384,25 +390,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 6;
+    const VERSION: u32 = 7;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 9;
+    const VERSION: u32 = 10;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 9;
+    const VERSION: u32 = 10;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 6;
+    const VERSION: u32 = 7;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -606,6 +612,7 @@ impl Engine {
             versions_host_override: None,
             advisories: false,
             installation: false,
+            trusted: Default::default(),
             advertised_server: None,
             progress: Arc::new(()),
         };
@@ -713,7 +720,21 @@ impl Engine {
         let mut engine = engine.with_recheck(recheck);
         engine.advisories = true;
         engine.lockfile_cache_gib = settings.lockfiles.cache_gib;
+        engine.trusted =
+            patchula_config::settings::TrustedRepositories::compile(&settings.trusted_repositories)
+                .map_err(Error::Configuration)?;
         Ok(engine)
+    }
+    /// Whether the operator trusts `repository`: the one place a
+    /// repository's trust is resolved. A local directory is the operator's
+    /// own checkout, scanned at their request, and is trusted; a GitHub
+    /// repository is trusted when `trustedRepositories` names it.
+    fn trust(&self, repository: &str, local: bool) -> Trust {
+        if local {
+            Trust::Trusted
+        } else {
+            self.trusted.trust(repository)
+        }
     }
     /// The repository `repo`'s mise lookups are made for; none for a local
     /// directory, which no token can be scoped to.
@@ -721,6 +742,7 @@ impl Engine {
         (!repo.local).then(|| MiseRepository {
             name: repo.report.repository.clone(),
             private: repo.private,
+            trust: repo.trust,
         })
     }
     /// Whom `dep`'s mise listing in `repo` is made for, as
@@ -1639,12 +1661,16 @@ mod tests {
         }
     }
 
-    /// A mise lookup's access is chosen here: credentials that mint a
-    /// repository-scoped token get the scope rule's answer; a token run, a
-    /// local directory and every other source keep the run's own token.
+    /// A mise lookup's access is chosen here. An untrusted repository gets
+    /// the scope rule's answer where the credentials mint a scoped token and
+    /// no token where they cannot; a trusted repository, a local directory
+    /// and every other source keep the run's own token.
     #[tokio::test]
-    async fn mise_access_scopes_only_where_a_token_can_be_minted() {
-        let settings = &patchula_config::settings::Settings::default();
+    async fn mise_access_follows_trust_and_scopes_untrusted_repositories() {
+        let settings = &patchula_config::settings::Settings {
+            trusted_repositories: vec!["ACME/trusted-*".into()],
+            ..Default::default()
+        };
         let engine = |auth| async move {
             Engine::from_settings(
                 settings,
@@ -1667,12 +1693,14 @@ mod tests {
                 Source::Mise,
             )
         };
-        let work = |name: &str, private: Option<bool>, local: bool| Work {
+        let work = |engine: &Engine, name: &str, private: Option<bool>, local: bool| Work {
             private,
             local,
+            trust: engine.trust(name, local),
             ..Work::empty(repo_report(name, Status::Complete, None), None)
         };
-        let app = work("acme/app", Some(true), false);
+        let app = work(&installation, "acme/app", Some(true), false);
+        assert_eq!(app.trust, Trust::Untrusted);
         assert_eq!(
             installation.mise_access(&app, &tool("github:acme/tool")),
             MiseAccess::Public
@@ -1684,7 +1712,7 @@ mod tests {
         // The repository is named in lowercase whatever case it was read in.
         assert_eq!(
             installation.mise_access(
-                &work("Acme/App", Some(true), false),
+                &work(&installation, "Acme/App", Some(true), false),
                 &tool("github:acme/app")
             ),
             MiseAccess::Repository("acme/app".into())
@@ -1695,7 +1723,7 @@ mod tests {
         );
         assert_eq!(
             installation.mise_access(
-                &work("acme/site", Some(false), false),
+                &work(&installation, "acme/site", Some(false), false),
                 &tool("go:example.com/tool")
             ),
             MiseAccess::Public
@@ -1703,24 +1731,71 @@ mod tests {
         // Visibility not read counts as private.
         assert_eq!(
             installation.mise_access(
-                &work("acme/site", None, false),
+                &work(&installation, "acme/site", None, false),
                 &tool("go:example.com/tool")
             ),
             MiseAccess::Repository("acme/site".into())
         );
+        // A trusted repository looks private tools from anywhere up with the
+        // run's token, under either credentials.
+        let trusted = work(&installation, "acme/Trusted-App", Some(true), false);
+        assert_eq!(trusted.trust, Trust::Trusted);
+        for engine in [&installation, &token] {
+            assert_eq!(
+                engine.mise_access(&trusted, &tool("github:acme/tool")),
+                MiseAccess::Run
+            );
+            assert_eq!(
+                engine.mise_access(&trusted, &tool("github:acme/trusted-app")),
+                MiseAccess::Run
+            );
+        }
+        // A local directory is the operator's own, and trusted.
+        let local = work(&installation, "local/app", None, true);
+        assert_eq!(local.trust, Trust::Trusted);
         assert_eq!(
-            installation.mise_access(&work("local/app", None, true), &tool("github:acme/app")),
+            installation.mise_access(&local, &tool("github:acme/app")),
             MiseAccess::Run
         );
+        // A token run cannot mint: an untrusted repository gets no token.
         assert_eq!(
-            token.mise_access(&app, &tool("github:acme/app")),
-            MiseAccess::Run
+            token.mise_access(
+                &work(&token, "acme/app", Some(true), false),
+                &tool("github:acme/app")
+            ),
+            MiseAccess::Anonymous
+        );
+        assert_eq!(
+            token.mise_access(
+                &work(&token, "acme/site", Some(false), false),
+                &tool("github:acme/tool")
+            ),
+            MiseAccess::Anonymous
         );
         let npm = Dependency {
             source: Source::Npm,
             ..tool("github:acme/app")
         };
         assert_eq!(installation.mise_access(&app, &npm), MiseAccess::Run);
+    }
+
+    /// Settings whose `trustedRepositories` do not compile build no engine.
+    #[tokio::test]
+    async fn invalid_trusted_repositories_build_no_engine() {
+        let settings = patchula_config::settings::Settings {
+            trusted_repositories: vec!["acme/[app".into()],
+            ..Default::default()
+        };
+        let built = Engine::from_settings(
+            &settings,
+            Vec::new(),
+            Auth::Token("t".into()),
+            4,
+            patchula_words::Recheck::NextRun,
+            Cache::open(":memory:", Default::default()).await.unwrap(),
+            Arc::new(Never),
+        );
+        assert!(built.is_err());
     }
 
     /// A token run, the CLI's, paces writes with the operator's

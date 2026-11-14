@@ -79,14 +79,21 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   (`MISE_AUTO_INSTALL=0`).
 - With a GitHub token as `MISE_GITHUB_TOKEN`, only when he talks to
   github.com, and no other credential: mise's `gh` login, credential command
-  and Git credential helper lookups are off. As a GitHub App (`patchula serve`,
-  `--all-repos` with App credentials, or an Action run on several
-  repositories) the token is a read-only one he mints for the repository the
-  lookup is for, so a repository's `mise.toml` sees only that repository and
-  public tools, never another private repository the App can read. Release
-  notes for a mise tool look it up the same way. With a
-  personal token, or the token of an Action run on its own repository, mise
-  gets that token.
+  and Git credential helper lookups are off. Which token depends on whether
+  the repository is [trusted](#trusted-repositories):
+  - A trusted repository, or a local directory, gets the token the Count runs
+    with, so its tools may come from any repository that token can read.
+  - An untrusted repository read as a GitHub App (`patchula serve`,
+    `--all-repos` with App credentials, or an Action run on several
+    repositories) gets a read-only token he mints for that repository, so its
+    `mise.toml` sees only that repository and public tools, never another
+    private repository the App can read.
+  - An untrusted repository read with a personal token or an Action's token
+    gets none, as that token cannot be narrowed to the repository. mise
+    looks its tools up anonymously: public tools resolve, under GitHub's
+    lower rate limit for requests without a token, and private ones do not.
+
+  Release notes for a mise tool look it up the same way.
 - With a three-minute limit per lookup and at most four running at once.
 
 What happens to a listing:
@@ -96,7 +103,9 @@ What happens to a listing:
   public data, which every repository shares. A tool released from the
   repository itself, or one whose source the Count cannot tell (a `go:` or
   `http:` tool, say) in a private repository, is listed for that repository
-  alone. A manual retry, or a failed lookup, asks mise again.
+  alone. A trusted repository's listing, made with the Count's own token, is
+  kept for the repositories that token serves and never for an untrusted
+  one. A manual retry, or a failed lookup, asks mise again.
 - The Node LTS line comes from `mise ls-remote node lts`. When that listing
   fails or is empty, the catalog stays whole without LTS evidence, so only a
   dependency on the LTS channel reports it.
@@ -107,6 +116,30 @@ What happens to a listing:
 - Where there is no release URL, release notes find a tool's repository from
   the backend mise picks for it when that is npm, PyPI or crates.io. A tool
   whose listing and backend name no repository has no release notes.
+
+### Trusted repositories {#trusted-repositories}
+
+The operator setting [`trustedRepositories`](/reference/settings/#shared)
+lists the repositories whose writers count as the operator. Each entry is a
+glob over the whole `owner/name`, in any case, and its `*` also matches `/`:
+
+```pkl
+trustedRepositories {
+  "acme/*"        // every repository acme owns
+  "other/tools"   // one repository
+}
+```
+
+`"*"` trusts every repository, and `"acme*"` trusts `acme-labs/app` too, so
+end an owner's glob with `/*`. Nothing is trusted by default, and an entry
+cannot be negated; an invalid glob fails the settings check. Repository config
+cannot set it.
+
+Trust a repository only if its writers may run code as the Count, on his
+machine, with his filesystem, network and credentials: trusting it says they
+count as you. Today trust decides one thing, the GitHub token a repository's
+mise lookups get. An untrusted repository may point the Count at any host or
+package, but gets no credential wider than the repository itself.
 
 ### Package backends and the project's settings
 

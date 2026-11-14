@@ -308,6 +308,19 @@ words!(
 });
 
 words!(
+    /// Whether the operator's `trustedRepositories` names a repository.
+    /// A trusted repository's writers count as the operator: the Count looks
+    /// its tools up with the run's own credentials. An untrusted one gets no
+    /// credential wider than the repository itself. Untrusted is the default,
+    /// so a repository nobody resolved fails closed.
+    #[derive(Default)]
+    Trust {
+    Trusted => "trusted",
+    #[default]
+    Untrusted => "untrusted",
+});
+
+words!(
     /// Where an image's SBOM came from.
     #[derive(Default)]
     SbomSource {

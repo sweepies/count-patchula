@@ -14,6 +14,14 @@ github: Github = new {}
 /// prefix, matched by whole path segments, carries that entry's credentials;
 /// the longest prefix wins.
 registries: Mapping<String, Registry> = new {}
+/// Repositories whose writers count as the operator, as globs over the whole
+/// "owner/name", in any case; `*` also matches `/`, so "*" trusts every
+/// repository and "acme/*" trusts an owner. Negation is refused. Trust a
+/// repository only if its writers may run code as the Count, with his
+/// filesystem, network and credentials: the Count looks its mise tools up
+/// with the run's own GitHub token. An untrusted repository gets no
+/// credential wider than itself. Empty trusts nothing.
+trustedRepositories: Listing<String> = new {}
 lockfiles: Lockfiles = new {}
 /// Only `patchula serve` reads this section.
 server: Server = new {}

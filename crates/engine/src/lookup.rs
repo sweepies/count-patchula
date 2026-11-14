@@ -314,6 +314,7 @@ impl Engine {
                             None,
                         ),
                     };
+                    work.trust = self.trust(&repo, local.is_some());
                     if read_controls
                         && work.report.status == Status::Complete
                         && let Some(config) = &work.config

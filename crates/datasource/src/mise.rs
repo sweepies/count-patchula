@@ -8,10 +8,13 @@ use std::sync::Arc;
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MiseAccess {
     /// The run's own token, its listing kept under the run's credential
-    /// scope: credentials that cannot mint a repository-scoped token, and a
-    /// local directory.
+    /// scope: a trusted repository, and a local directory.
     #[default]
     Run,
+    /// No GitHub token: an untrusted repository under credentials that
+    /// cannot mint a repository-scoped token. The listing reads public data
+    /// alone, so it is public and every repository shares it.
+    Anonymous,
     /// A `metadata: read` token scoped to a repository that asked for the
     /// tool. Without `contents` it reads no repository's releases but public
     /// ones (not even its own under an old name), so the listing is public
@@ -24,12 +27,14 @@ pub enum MiseAccess {
     Repository(String),
 }
 
-/// The repository mise lookups are made for: its name and visibility as
-/// GitHub reported it (`None` when not read counts as private).
+/// The repository mise lookups are made for: its name, its visibility as
+/// GitHub reported it (`None` when not read counts as private), and whether
+/// the operator trusts it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MiseRepository {
     pub name: String,
     pub private: Option<bool>,
+    pub trust: patchula_words::Trust,
 }
 
 /// The scope rule alone: the access a lookup for `tool` in `repository`
@@ -100,15 +105,21 @@ impl Client {
         self.mise.as_ref().ok_or(Error::NoMise)
     }
     /// The access a mise lookup for `tool` made for `repository` gets: the
-    /// one place the token mise is handed is chosen. Without a repository
-    /// (a local directory) or with credentials that cannot mint a
-    /// repository-scoped token, mise gets the run's own.
+    /// one place the token mise is handed is chosen. A trusted repository,
+    /// or none (a local directory), gets the run's own token. An untrusted
+    /// one gets a token scoped to it as the scope rule says, or none when
+    /// the credentials cannot mint one: the run's would reach further than
+    /// the repository.
     pub fn mise_access(&self, repository: Option<&MiseRepository>, tool: &str) -> MiseAccess {
         match repository {
+            None => MiseAccess::Run,
+            Some(repository) if repository.trust == patchula_words::Trust::Trusted => {
+                MiseAccess::Run
+            }
             Some(repository) if self.github.mints_scoped_tokens() => {
                 mise_scope_rule(tool, repository)
             }
-            _ => MiseAccess::Run,
+            Some(_) => MiseAccess::Anonymous,
         }
     }
     /// This client's mise lookups are made for `repository`, each with the
@@ -160,6 +171,7 @@ impl Client {
         }
         let (repository, permissions) = match access {
             MiseAccess::Run => return Ok(self.github.token().await.ok()),
+            MiseAccess::Anonymous => return Ok(None),
             MiseAccess::Public => (
                 self.mise_repository
                     .as_ref()
@@ -189,7 +201,7 @@ impl Client {
         }
         Ok(match access {
             MiseAccess::Run => self.github.credential_scope().into(),
-            MiseAccess::Public => PUBLIC_SCOPE.into(),
+            MiseAccess::Public | MiseAccess::Anonymous => PUBLIC_SCOPE.into(),
             MiseAccess::Repository(repository) => format!(
                 "{}:{}",
                 self.github.credential_scope(),

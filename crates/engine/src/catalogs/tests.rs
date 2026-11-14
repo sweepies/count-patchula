@@ -460,7 +460,7 @@ impl patchula_github::Credentials for Installation {
 /// One package's views under `Run`, `Public` and a repository's own access
 /// are separate entries: none is reused for another, each is reused for
 /// itself, and a repository's view is not reused for a new repository
-/// under its old name.
+/// under its old name. `Anonymous` shares the `Public` view.
 #[tokio::test]
 async fn views_are_kept_per_access_and_a_repository_view_by_its_id() {
     let credentials = Arc::new(Installation::default());
@@ -508,6 +508,9 @@ async fn views_are_kept_per_access_and_a_repository_view_by_its_id() {
     credentials.0.lock().unwrap().insert("acme/app".into(), 2);
     assert!(!read(keys[2].clone()).await);
     assert!(read(keys[3].clone()).await);
+    // An untrusted repository's tokenless view reads public data, as the
+    // `Public` one does.
+    assert!(read(at(MiseAccess::Anonymous)).await);
 }
 
 /// The second fetch pass computes its vias from the work as it stands, so

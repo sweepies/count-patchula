@@ -31,7 +31,7 @@ enum CatalogAccess {
 }
 impl State for Saved {
     const NAMESPACE: &'static str = "catalog";
-    const VERSION: u32 = 7;
+    const VERSION: u32 = 8;
     // Code-versioned: the view is datasource output decoded into `Catalog`;
     // a stale-but-decodable view from a release whose transforms moved is
     // worse than a miss.
@@ -54,7 +54,8 @@ impl Engine {
     async fn catalog_scope(&self, key: &LookupKey) -> Option<CatalogScope> {
         let access = match &key.2 {
             MiseAccess::Run => CatalogAccess::Run,
-            MiseAccess::Public => CatalogAccess::Public,
+            // Both read public data alone.
+            MiseAccess::Public | MiseAccess::Anonymous => CatalogAccess::Public,
             MiseAccess::Repository(repository) => {
                 CatalogAccess::Repository(self.github.scoped_repository_id(repository)?.await.ok()?)
             }
@@ -170,7 +171,7 @@ pub(crate) struct Controls {
 }
 impl State for Controls {
     const NAMESPACE: &'static str = "catalog-controls";
-    const VERSION: u32 = 7;
+    const VERSION: u32 = 8;
     // Code-versioned: the stored keys come from `identity` and `plan`
     // code, and a key written by older code that no longer matches its
     // dependency quietly un-retries a ticked box.
