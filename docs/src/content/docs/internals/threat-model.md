@@ -42,8 +42,10 @@ It may not:
   with his credentials, his cache and, under an App, the private key, so code
   running there reaches all of them.
 - obtain a credential wider than its own reach: the installation token, the
-  App key, another repository's token, or an operator registry credential
-  meant for other repositories.
+  App key, another repository's token, an operator registry credential meant
+  for other repositories, or the machine's own credentials. Cloud
+  instance-metadata endpoints (link-local addresses such as `169.254.169.254`)
+  hand those out, so a repository-chosen fetch target may not be one.
 - see data that only another repository's credentials could fetch. Results
   shared between repositories, such as listings and catalogs, are shared only
   when they came from public data or from a credential the reader may hold.
