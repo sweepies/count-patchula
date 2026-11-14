@@ -11,18 +11,16 @@ and it breaks legitimate setups.
 
 - **The operator** runs the Count and writes its settings: the operator
   settings file, flags and environment. The operator is fully trusted.
-- **A trusted repository** matches `trustedRepositories` in the operator
-  settings. Its writers count as the operator. A local directory scan is the
-  operator's own checkout and is trusted too.
-- **An untrusted repository** is any other repository the Count reads.
-  Treat its writers as possibly hostile.
+- **Every repository** the Count reads is treated the same way. Its writers
+  may be hostile toward the Count and toward other repositories. There is no
+  setting that trusts a repository.
 
 Someone who can change what the Count reads in a repository — its
 configuration, manifests or lockfiles on the branch he reads — already has
 write access to that repository. Nothing the Count does can take that access
 away, and nothing needs to protect the repository from its own writers.
 
-## What an untrusted repository may cause
+## What a repository may cause
 
 It may:
 
@@ -50,23 +48,16 @@ It may not:
   shared between repositories, such as listings and catalogs, are shared only
   when they came from public data or from a credential the reader may hold.
 
-## What a trusted repository may cause
-
-Anything the operator may. Trusted means trusted: it gets the run's
-credentials, and code-running paths are allowed for it. There are no extra
-guards against a trusted repository, including in caches it shares with
-others.
-
 ## Consequences
 
 - **Follow, don't refuse.** If the Count can reproduce what a repository
-  declares, he does it. He refuses only what would run code for an untrusted
+  declares, he does it. He refuses only what would run code chosen by the
   repository, or what he cannot reproduce faithfully.
 - **Scope credentials, don't strip them.** Give each lookup the narrowest
   credential its repository is entitled to. Don't withhold that credential
   because a repository-chosen host could see it.
-- **Don't run code from untrusted repositories.** Every code-running path
-  checks the repository's trust. Untrusted means off.
+- **Never run code a repository chose.** Plugin backends, lifecycle scripts,
+  hooks and the like stay off for every repository.
 - **Keep shared results honest.** A shared cache key includes everything that
   changes the answer: the options, the source, and the reach of the
   credential that fetched it.
@@ -77,5 +68,4 @@ others.
 ## Out of scope
 
 - Protecting a repository from its own writers.
-- Sandboxing a trusted repository's code.
 - A compromised operator, or a compromised host the operator configured.
