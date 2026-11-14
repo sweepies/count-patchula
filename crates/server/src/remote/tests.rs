@@ -134,15 +134,8 @@ impl Runner for Recorder {
 }
 
 fn app() -> Arc<App> {
-    use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
     static PEM: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    let pem = PEM.get_or_init(|| {
-        rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
-            .unwrap()
-            .to_pkcs1_pem(LineEnding::LF)
-            .unwrap()
-            .to_string()
-    });
+    let pem = PEM.get_or_init(|| patchula_testkit::app_key::AppKey::generate().pkcs1_pem());
     App::new(
         7,
         pem.as_bytes(),

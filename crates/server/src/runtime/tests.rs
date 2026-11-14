@@ -301,15 +301,8 @@ impl Transport for InstallationLookup {
     }
 }
 fn lookup_app(transport: Arc<dyn Transport>, id: u64) -> Arc<App> {
-    use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
     static PEM: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    let pem = PEM.get_or_init(|| {
-        rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
-            .unwrap()
-            .to_pkcs1_pem(LineEnding::LF)
-            .unwrap()
-            .to_string()
-    });
+    let pem = PEM.get_or_init(|| patchula_testkit::app_key::AppKey::generate().pkcs1_pem());
     App::new(
         id,
         pem.as_bytes(),
@@ -568,12 +561,10 @@ async fn installation_cache_uses_memory_disk_ttl_and_invalidates_on_not_found() 
 #[tokio::test]
 async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
     let _capture = LOG_TEST_LOCK.lock().await;
-    use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
     use tracing::instrument::WithSubscriber;
     let logs = Logs::default();
     let directory = tempfile::tempdir().unwrap();
-    let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
-    let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+    let pem = patchula_testkit::app_key::AppKey::generate().pkcs1_pem();
     let github = deleted_repo();
     let transport: Arc<dyn Transport> = github.clone();
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
@@ -649,7 +640,6 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
 
 #[tokio::test]
 async fn an_unreadable_installation_listing_fails_the_batch() {
-    use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
     let github = Arc::new(FakeGitHub::new("owner/repo"));
     github
         .on(Matcher::Route {
@@ -665,8 +655,7 @@ async fn an_unreadable_installation_listing_fails_the_batch() {
         );
     let transport: Arc<dyn Transport> = github.clone();
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-    let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
-    let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+    let pem = patchula_testkit::app_key::AppKey::generate().pkcs1_pem();
     let runner = Engines {
         app: App::new(
             1,

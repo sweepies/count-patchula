@@ -42,7 +42,6 @@ tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "registry"] }
-rsa = { version = "0.9", features = ["pem"] }
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 
 [target.'cfg(unix)'.dev-dependencies]

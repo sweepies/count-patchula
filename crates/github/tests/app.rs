@@ -20,12 +20,7 @@ fn snapshot() -> PathBuf {
 }
 
 fn pem() -> String {
-    use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
-    rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
-        .unwrap()
-        .to_pkcs1_pem(LineEnding::LF)
-        .unwrap()
-        .to_string()
+    patchula_testkit::app_key::AppKey::generate().pkcs1_pem()
 }
 
 fn app(transport: Arc<dyn Transport>) -> Arc<App> {
