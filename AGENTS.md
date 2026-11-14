@@ -34,7 +34,9 @@ with Astro Starlight; the pages are under `docs/src/content/docs/`.
 
 Architecture, caching and the HTTP test design are in
 `docs/src/content/docs/internals/`. Read the relevant page before changing the
-engine, cache or GitHub client.
+engine, cache or GitHub client. Read `internals/threat-model.md` before
+changing credentials, lookups, caches shared between repositories, or anything
+that runs a tool: every guard there should follow from it.
 
 ## Voice
 
