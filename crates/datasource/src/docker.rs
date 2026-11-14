@@ -96,17 +96,18 @@ enum RealmTrust {
 /// One rule for the realm a registry at `host` names. The registry entry's
 /// credentials go to a token service on the registry's own origin, Docker
 /// Hub's auth.docker.io, or gitlab.com for its registry. A self-hosted
-/// GitLab's registry at `registry.<instance>` takes tokens from
-/// `<instance>/jwt/auth`, which needs its own entry for credentials. Every
-/// realm is HTTPS with no userinfo, and every realm off the registry's
-/// origin is on port 443.
+/// GitLab's registry at `registry.<instance>`, or on a port of the instance
+/// (`<instance>:5050`), takes tokens from `<instance>/jwt/auth`, which needs
+/// its own entry for credentials. Every realm is HTTPS with no userinfo, and
+/// every realm off the registry's origin is on port 443.
 fn realm_trust(host: &str, realm: &Url) -> RealmTrust {
     if realm.scheme() != "https" || !realm.username().is_empty() || realm.password().is_some() {
         return RealmTrust::Refused;
     }
-    if Url::parse(&format!("https://{host}/"))
-        .is_ok_and(|registry| registry.origin() == realm.origin())
-    {
+    let Ok(registry) = Url::parse(&format!("https://{host}/")) else {
+        return RealmTrust::Refused;
+    };
+    if registry.origin() == realm.origin() {
         return RealmTrust::Credentials;
     }
     if realm.port_or_known_default() != Some(443) {
@@ -120,7 +121,7 @@ fn realm_trust(host: &str, realm: &Url) -> RealmTrust {
     {
         RealmTrust::Credentials
     } else if realm_host.is_some()
-        && realm_host == host.strip_prefix("registry.")
+        && (realm_host == host.strip_prefix("registry.") || realm_host == registry.host_str())
         && path == "/jwt/auth"
     {
         RealmTrust::Tokens

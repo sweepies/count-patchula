@@ -43,8 +43,15 @@ struct Claims {
     iss: String,
 }
 struct CachedToken {
-    value: String,
+    minted: Minted,
     expires: i64,
+}
+/// A minted token, and for a scoped mint the `full_name` of the repository
+/// GitHub narrowed it to.
+#[derive(Clone)]
+struct Minted {
+    value: String,
+    repository: Option<String>,
 }
 
 /// What a cached installation token covers: the whole installation, or one
@@ -297,14 +304,16 @@ impl App {
         if !valid_id(id) {
             return Err(Error::Configuration);
         }
-        self.mint(
-            Mint {
-                installation: id,
-                scope: None,
-            },
-            now,
-        )
-        .await
+        Ok(self
+            .mint(
+                Mint {
+                    installation: id,
+                    scope: None,
+                },
+                now,
+            )
+            .await?
+            .value)
     }
     /// `repository`'s numeric id, read with `installation`'s token: the
     /// `repository_ids` a scoped mint must name.
@@ -348,7 +357,7 @@ impl App {
         installation: u64,
         repository: u64,
         now: i64,
-    ) -> Result<String> {
+    ) -> Result<Minted> {
         if !valid_id(installation) || !valid_id(repository) {
             return Err(Error::Configuration);
         }
@@ -364,7 +373,39 @@ impl App {
         )
         .await
     }
-    async fn mint(&self, key: Mint, now: i64) -> Result<String> {
+    /// `installation`'s token narrowed to the repository named `repository`.
+    /// The mint must come back narrowed to that name: a cached id a rename
+    /// and recreate left stale names another repository, so on a mismatch
+    /// the id is read again and minted once more, and a second mismatch is
+    /// an error rather than a token for the wrong repository.
+    async fn scoped_token_for(
+        &self,
+        installation: u64,
+        repository: &str,
+        now: i64,
+    ) -> Result<String> {
+        for _ in 0..2 {
+            let id = self.repository_id(installation, repository, now).await?;
+            let minted = self.scoped_token_at(installation, id, now).await;
+            let minted = match minted {
+                Ok(minted) => minted,
+                Err(error) => {
+                    self.forget_repository(installation, repository);
+                    return Err(error);
+                }
+            };
+            if minted
+                .repository
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(repository))
+            {
+                return Ok(minted.value);
+            }
+            self.forget_repository(installation, repository);
+        }
+        Err(Error::Json)
+    }
+    async fn mint(&self, key: Mint, now: i64) -> Result<Minted> {
         // Single flight per mint: simultaneous readiness, Git and API
         // requests cannot mint the same token twice.
         let path = format!("app/installations/{}/access_tokens", key.installation);
@@ -375,7 +416,7 @@ impl App {
             .as_ref()
             .filter(|token| token.expires > now + TOKEN_MARGIN)
         {
-            return Ok(token.value.clone());
+            return Ok(token.minted.clone());
         }
         let jwt = self.jwt(now)?;
         let value = self
@@ -392,11 +433,17 @@ impl App {
         if expires <= now + TOKEN_MARGIN {
             return Err(Error::Configuration);
         }
-        *saved = Some(CachedToken {
+        let minted = Minted {
             value: token.into(),
+            repository: value["repositories"][0]["full_name"]
+                .as_str()
+                .map(str::to_owned),
+        };
+        *saved = Some(CachedToken {
+            minted: minted.clone(),
             expires,
         });
-        Ok(token.into())
+        Ok(minted)
     }
 }
 /// A map lock; a panicking holder cannot leave a map entry half-written.
@@ -429,13 +476,8 @@ impl Credentials for Installation {
         let installation = self.id;
         let repository = repository.to_owned();
         Some(Box::pin(async move {
-            let now = Utc::now().timestamp();
-            let id = app.repository_id(installation, &repository, now).await?;
-            let token = app.scoped_token_at(installation, id, now).await;
-            if token.is_err() {
-                app.forget_repository(installation, &repository);
-            }
-            token
+            app.scoped_token_for(installation, &repository, Utc::now().timestamp())
+                .await
         }))
     }
 }
@@ -530,16 +572,16 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z")
             .unwrap()
             .timestamp();
-        let first = app.scoped_token_at(10, 42, now).await.unwrap();
+        let first = app.scoped_token_at(10, 42, now).await.unwrap().value;
         assert_eq!(
-            app.scoped_token_at(10, 42, now + 3479).await.unwrap(),
+            app.scoped_token_at(10, 42, now + 3479).await.unwrap().value,
             first
         );
         assert_eq!(transport.0.load(Ordering::SeqCst), 1);
-        assert_ne!(app.scoped_token_at(10, 43, now).await.unwrap(), first);
+        assert_ne!(app.scoped_token_at(10, 43, now).await.unwrap().value, first);
         assert_ne!(app.token_at(10, now).await.unwrap(), first);
         assert_ne!(
-            app.scoped_token_at(10, 42, now + 3480).await.unwrap(),
+            app.scoped_token_at(10, 42, now + 3480).await.unwrap().value,
             first
         );
         assert_eq!(transport.0.load(Ordering::SeqCst), 4);
@@ -617,6 +659,97 @@ mod tests {
         // The suspended installation is skipped and the Link header's second
         // page is followed.
         assert_eq!(app.installations().await.unwrap(), vec![10, 30]);
+    }
+
+    /// An installation whose `acme/app` id and per-id names a test steers:
+    /// `GET repos/acme/app` reads the current id, and a scoped mint names
+    /// the repository its id has now.
+    struct Renames {
+        current: std::sync::Mutex<u64>,
+        names: std::sync::Mutex<BTreeMap<u64, String>>,
+    }
+    impl Transport for Renames {
+        fn send(&self, request: Request) -> Exchange<'_> {
+            let path = request.url().path().to_ascii_lowercase();
+            let body: Value = request
+                .body()
+                .and_then(|body| body.as_bytes())
+                .map_or(Value::Null, |body| serde_json::from_slice(body).unwrap());
+            let answer = if path.ends_with("/repos/acme/app") {
+                json!({"full_name": "acme/app", "id": *self.current.lock().unwrap()})
+            } else {
+                let expires = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+                match body["repository_ids"][0].as_u64() {
+                    Some(id) => {
+                        let name = self.names.lock().unwrap()[&id].clone();
+                        json!({"token": format!("scoped-{id}"), "expires_at": expires,
+                               "repositories": [{"id": id, "full_name": name}]})
+                    }
+                    None => json!({"token": "full", "expires_at": expires}),
+                }
+            };
+            Box::pin(async move {
+                Ok(Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: header::HeaderMap::new(),
+                    body: serde_json::to_vec(&answer).unwrap(),
+                    stale: None,
+                })
+            })
+        }
+    }
+
+    /// After a rename and recreate, the cached id names the renamed
+    /// repository: the mint comes back narrowed to another name, so the id
+    /// is read again and the token is minted for the repository asked for.
+    /// A mint that still names another repository is an error.
+    #[tokio::test]
+    async fn a_stale_repository_id_is_read_again_and_a_mismatch_fails_closed() {
+        use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
+        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+        let pem = key.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let transport = Arc::new(Renames {
+            current: std::sync::Mutex::new(1),
+            names: std::sync::Mutex::new(BTreeMap::from([(1, "acme/app".to_owned())])),
+        });
+        let app = App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            Url::parse("https://api.github.com").unwrap(),
+        )
+        .unwrap();
+        let now = Utc::now().timestamp();
+        assert_eq!(app.repository_id(10, "acme/app", now).await.unwrap(), 1);
+        // `acme/app` is renamed to `acme/old` and a new `acme/app` created.
+        *transport.current.lock().unwrap() = 2;
+        transport
+            .names
+            .lock()
+            .unwrap()
+            .extend([(1, "acme/old".to_owned()), (2, "acme/app".to_owned())]);
+        assert_eq!(
+            app.scoped_token_for(10, "Acme/App", now).await.unwrap(),
+            "scoped-2"
+        );
+        // A repository whose mint never names it is refused.
+        transport
+            .names
+            .lock()
+            .unwrap()
+            .insert(2, "acme/elsewhere".to_owned());
+        *transport.current.lock().unwrap() = 2;
+        let fresh = App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            Url::parse("https://api.github.com").unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            fresh.scoped_token_for(10, "acme/app", now).await,
+            Err(Error::Json)
+        ));
     }
 
     /// Answers every request with one JSON body.

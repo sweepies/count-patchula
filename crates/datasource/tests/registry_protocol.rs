@@ -1414,6 +1414,57 @@ async fn a_token_service_entry_alone_never_mints_account_tokens() {
     assert!(steps.0.lock().unwrap().is_empty());
 }
 
+/// GitLab's documented layout with the registry on a port of the instance
+/// (`registry_external_url 'https://gitlab.acme.dev:5050'`) takes tokens
+/// from the instance's `/jwt/auth`. The registry's own entry does not reach
+/// that token service: it needs an entry of its own for credentials.
+#[tokio::test]
+async fn a_gitlab_registry_on_a_port_of_its_instance_takes_tokens_from_it() {
+    let manifest = "https://gitlab.acme.dev:5050/v2/team/app/manifests/1.0";
+    let realm = "https://gitlab.acme.dev/jwt/auth";
+    let digest = format!("sha256:{}", "f".repeat(64));
+    for (credentials, first) in [
+        (Vec::new(), None),
+        (
+            vec![basic("https://gitlab.acme.dev:5050", "reg", "reg-secret")],
+            Some("Basic cmVnOnJlZy1zZWNyZXQ=".to_owned()),
+        ),
+    ] {
+        let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([
+            (
+                manifest.to_owned(),
+                first,
+                response(
+                    401,
+                    "",
+                    &[(
+                        "www-authenticate",
+                        &format!(r#"Bearer realm="{realm}",service="container_registry""#),
+                    )],
+                ),
+            ),
+            // Tokens trust only: no credentials go to the token service.
+            (
+                format!("{realm}?service=container_registry&scope=repository%3Ateam%2Fapp%3Apull"),
+                None,
+                response(200, r#"{"token":"pull","expires_in":300}"#, &[]),
+            ),
+            (
+                manifest.to_owned(),
+                Some("Bearer pull".to_owned()),
+                response(200, "", &[("docker-content-digest", digest.as_str())]),
+            ),
+        ]))));
+        let dir = tempfile::tempdir().unwrap();
+        auth_client_with(steps.clone(), dir.path(), credentials)
+            .await
+            .registry_digest("gitlab.acme.dev:5050/team/app", "1.0")
+            .await
+            .unwrap();
+        assert!(steps.0.lock().unwrap().is_empty());
+    }
+}
+
 #[tokio::test]
 async fn a_self_hosted_gitlab_registry_uses_its_token_service_entry() {
     let manifest = "https://registry.gitlab.acme.dev/v2/team/app/manifests/1.0";

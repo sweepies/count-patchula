@@ -10,12 +10,12 @@ use std::{
 
 /// The mise package the Count pins, installed into its own tool store.
 pub const PACKAGE: &str = "aqua:jdx/mise";
-/// The literal arguments every spec starts with and the bootstrap argv is
-/// built from, defined once here for the code that builds and reads it.
 /// A scratch directory that could not be made, as the run's failure.
 fn io(error: std::io::Error) -> Error {
     Error::Failed(Failure::Io(error.to_string()))
 }
+/// The literal arguments every spec starts with and the bootstrap argv is
+/// built from, defined once here for the code that builds and reads it.
 const NO_CONFIG: &str = "--no-config";
 const INSTALL: &str = "install";
 const EXEC: &str = "exec";

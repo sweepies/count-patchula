@@ -108,6 +108,14 @@ impl State for TagObject {
     type Scope = TagObjectScope;
 }
 
+/// The parts of a batched release-catalog read.
+pub(super) struct ReleaseParts {
+    /// The cold batch's catalogs, or its error and the packages it asked
+    /// for.
+    pub(super) cold: std::result::Result<BTreeMap<String, Result<Catalog>>, (Error, Vec<String>)>,
+    /// The warm heads' catalogs, each with its own outcome.
+    pub(super) warm: BTreeMap<String, Result<Catalog>>,
+}
 impl Client {
     pub(super) async fn github_versions(&self, source: Source, package: &str) -> Result<Catalog> {
         if source == Source::GithubTags {
@@ -140,8 +148,20 @@ impl Client {
         &self,
         packages: &[String],
     ) -> Result<BTreeMap<String, Result<Catalog>>> {
+        let parts = self.api_release_parts(packages).await?;
+        let mut result = parts.cold.map_err(|(error, _)| error)?;
+        result.extend(parts.warm);
+        Ok(result)
+    }
+    /// `api_release_catalogs` with the cold batch's outcome kept apart from
+    /// the warm heads' answers, so a caller can keep those when the batch
+    /// fails as a whole.
+    pub(super) async fn api_release_parts(&self, packages: &[String]) -> Result<ReleaseParts> {
         if packages.is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(ReleaseParts {
+                cold: Ok(BTreeMap::new()),
+                warm: BTreeMap::new(),
+            });
         }
         let mut variables = serde_json::Map::new();
         let mut declarations = Vec::new();
@@ -169,6 +189,7 @@ impl Client {
             fields.push(format!("r{i}:repository(owner:$o{i},name:$n{i}){{releases(first:100,orderBy:{{field:CREATED_AT,direction:DESC}}){{nodes{{tagName publishedAt isDraft isPrerelease}}pageInfo{{hasNextPage endCursor}}}}}}"));
             pending.push((package.clone(), scope, previous));
         }
+        let cold_packages: Vec<String> = pending.iter().map(|(p, _, _)| p.clone()).collect();
         let cold = async {
             if pending.is_empty() {
                 return Ok::<BTreeMap<String, Result<Catalog>>, Error>(BTreeMap::new());
@@ -207,9 +228,10 @@ impl Client {
             (package, result)
         }).buffer_unordered(self.github.concurrency()).collect::<BTreeMap<_,_>>();
         let (cold, warm) = tokio::join!(cold, warm);
-        let mut result = cold?;
-        result.extend(warm);
-        Ok(result)
+        Ok(ReleaseParts {
+            cold: cold.map_err(|error| (error, cold_packages)),
+            warm,
+        })
     }
 
     async fn release_catalog(
