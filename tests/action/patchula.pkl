@@ -1,7 +1,8 @@
 // The Action workflow's dry run uses this in place of a repository config:
 // GitHub Actions only, so it plans real updates without running lockfile tools.
-// The action runs a released Count, which can predate this checkout's schema,
-// so PatchulaConfig.pkl beside this file links to the checkout's copy.
+// The action runs a released Count, whose schema can differ from this
+// checkout's. PatchulaConfig.pkl beside this file links to the checkout's copy
+// for local use; the workflow replaces it with the release's own schema.
 amends "PatchulaConfig.pkl"
 
 managers = new Listing { "github-actions" }

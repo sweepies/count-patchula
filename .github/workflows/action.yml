@@ -29,11 +29,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # This repository has no config of its own, so a GitHub Actions-only one
-      # stands in: the dry run plans real updates without lockfile tools.
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install: false
+          cache: false
+      # The action runs the latest release, which can predate this checkout's
+      # schema. Pin that release here and write its own schema beside the
+      # stand-in config, so the two always match.
+      - id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName | ltrimstr("v")')
+          schema=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:sweepies/count-patchula@$version" -- patchula config schema)
+          rm -f tests/action/PatchulaConfig.pkl
+          printf '%s\n' "$schema" > tests/action/PatchulaConfig.pkl
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # A GitHub Actions-only config stands in for this repository's own, so
+      # the dry run plans real updates without lockfile tools.
       - uses: $/
         with:
           token: ${{ github.token }}
           dry-run: "true"
+          version: ${{ steps.release.outputs.version }}
           args: |
             --config tests/action/patchula.pkl
