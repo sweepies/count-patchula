@@ -130,7 +130,7 @@ impl Client {
         let file = listing
             .iter()
             .find(|entry| entry.name == name)
-            .ok_or_else(|| Error::Notes("missing PostgreSQL release notes".into()))?;
+            .ok_or_else(|| Error::Upstream("missing PostgreSQL release notes"))?;
         let sections = self
             .adapter_sections(
                 "postgres/postgres",
@@ -152,7 +152,7 @@ impl Client {
         let file = listing
             .iter()
             .find(|entry| entry.name == "release.go")
-            .ok_or_else(|| Error::Notes("missing Go release history".into()))?;
+            .ok_or_else(|| Error::Upstream("missing Go release history"))?;
         let sections = self
             .adapter_sections("golang/website", &file.path, &file.sha, PARSED_GO_HISTORY)
             .await?;
@@ -238,13 +238,92 @@ enum Node {
     },
 }
 
-/// An open SGML element.
-type Frame = (String, Vec<(String, String)>, Vec<Node>);
+impl TreeNode for Node {
+    type Attrs = Vec<(String, String)>;
+    fn text(text: String) -> Self {
+        Node::Text(text)
+    }
+    fn text_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Node::Text(text) => Some(text),
+            Node::Element { .. } => None,
+        }
+    }
+    fn element(name: String, attrs: Self::Attrs, children: Vec<Self>) -> Self {
+        Node::Element {
+            name,
+            attrs,
+            children,
+        }
+    }
+}
+
+/// A node of a tag tree the adapters build: text, or an element with its
+/// attributes and children.
+trait TreeNode: Sized {
+    type Attrs;
+    fn text(text: String) -> Self;
+    fn text_mut(&mut self) -> Option<&mut String>;
+    fn element(name: String, attrs: Self::Attrs, children: Vec<Self>) -> Self;
+}
+
+/// A tag tree under construction: the open elements, innermost last, and
+/// the document's finished top-level nodes.
+struct Tree<N: TreeNode> {
+    open: Vec<(String, N::Attrs, Vec<N>)>,
+    root: Vec<N>,
+}
+impl<N: TreeNode> Tree<N> {
+    fn new() -> Self {
+        Self {
+            open: Vec::new(),
+            root: Vec::new(),
+        }
+    }
+    /// The children of the open element, or the document's nodes.
+    fn nodes(&mut self) -> &mut Vec<N> {
+        match self.open.last_mut() {
+            Some(frame) => &mut frame.2,
+            None => &mut self.root,
+        }
+    }
+    /// Add text, merged into text just before it.
+    fn text(&mut self, text: &str) {
+        let nodes = self.nodes();
+        match nodes.last_mut().and_then(N::text_mut) {
+            Some(existing) => existing.push_str(text),
+            None => nodes.push(N::text(text.to_string())),
+        }
+    }
+    fn open(&mut self, name: String, attrs: N::Attrs) {
+        self.open.push((name, attrs, Vec::new()));
+    }
+    fn element(&mut self, name: String, attrs: N::Attrs, children: Vec<N>) {
+        self.nodes().push(N::element(name, attrs, children));
+    }
+    /// Close the innermost open element named `name`, and every element
+    /// opened inside it; a close with no such element is ignored.
+    fn close(&mut self, name: &str) {
+        let Some(index) = self.open.iter().rposition(|frame| frame.0 == name) else {
+            return;
+        };
+        while self.open.len() > index {
+            let (name, attrs, children) = self.open.pop().expect("open element");
+            self.element(name, attrs, children);
+        }
+    }
+    /// The document, with every element still open closed.
+    fn finish(mut self) -> Vec<N> {
+        while let Some((name, attrs, children)) = self.open.pop() {
+            self.element(name, attrs, children);
+        }
+        self.root
+    }
+}
 
 /// Parse the SGML subset used by the PostgreSQL release notes.
 fn sgml_nodes(text: &str) -> Vec<Node> {
-    let mut root: Vec<Node> = Vec::new();
-    let mut stack: Vec<Frame> = Vec::new();
+    let mut tree = Tree::<Node>::new();
     let mut start = 0;
     let mut index = 0;
     while index < text.len() {
@@ -253,7 +332,7 @@ fn sgml_nodes(text: &str) -> Vec<Node> {
         };
         let open = index + offset;
         if open > start {
-            sgml_push_text(&mut stack, &mut root, &text[start..open]);
+            tree.text(&text[start..open]);
         }
         if text[open..].starts_with("<!--") {
             index = match text[open..].find("-->") {
@@ -273,68 +352,26 @@ fn sgml_nodes(text: &str) -> Vec<Node> {
             continue;
         }
         if let Some(name) = tag.strip_prefix('/') {
-            sgml_close(&mut stack, &mut root, name.trim());
+            tree.close(name.trim());
             continue;
         }
         let self_closing = tag.ends_with('/');
         let (name, attrs) = sgml_tag(tag.trim_end_matches('/').trim());
         if !sgml_element(&name) {
             // Not an element: keep the text, such as an address.
-            sgml_push_text(&mut stack, &mut root, &text[open..=end]);
+            tree.text(&text[open..=end]);
             continue;
         }
         if self_closing {
-            sgml_push_element(&mut stack, &mut root, name, attrs, Vec::new());
+            tree.element(name, attrs, Vec::new());
         } else {
-            stack.push((name, attrs, Vec::new()));
+            tree.open(name, attrs);
         }
     }
     if start < text.len() {
-        sgml_push_text(&mut stack, &mut root, &text[start..]);
+        tree.text(&text[start..]);
     }
-    while let Some((name, attrs, children)) = stack.pop() {
-        sgml_push_element(&mut stack, &mut root, name, attrs, children);
-    }
-    root
-}
-
-fn sgml_push_text(stack: &mut [Frame], root: &mut Vec<Node>, text: &str) {
-    let nodes = match stack.last_mut() {
-        Some(frame) => &mut frame.2,
-        None => root,
-    };
-    match nodes.last_mut() {
-        Some(Node::Text(existing)) => existing.push_str(text),
-        _ => nodes.push(Node::Text(text.to_string())),
-    }
-}
-
-fn sgml_push_element(
-    stack: &mut [Frame],
-    root: &mut Vec<Node>,
-    name: String,
-    attrs: Vec<(String, String)>,
-    children: Vec<Node>,
-) {
-    let nodes = match stack.last_mut() {
-        Some(frame) => &mut frame.2,
-        None => root,
-    };
-    nodes.push(Node::Element {
-        name,
-        attrs,
-        children,
-    });
-}
-
-fn sgml_close(stack: &mut Vec<Frame>, root: &mut Vec<Node>, name: &str) {
-    let Some(index) = stack.iter().rposition(|frame| frame.0 == name) else {
-        return;
-    };
-    while stack.len() > index {
-        let (name, attrs, children) = stack.pop().expect("open element");
-        sgml_push_element(stack, root, name, attrs, children);
-    }
+    tree.finish()
 }
 
 /// The index of the `>` that closes the tag opened at `open`.
@@ -1123,45 +1160,59 @@ enum GoHtml {
     },
 }
 
-/// An open HTML element of the Go history.
-type GoFrame = (String, Option<String>, Vec<GoHtml>);
+impl TreeNode for GoHtml {
+    /// The element's `href`, the one attribute the history keeps.
+    type Attrs = Option<String>;
+    fn text(text: String) -> Self {
+        GoHtml::Text(text)
+    }
+    fn text_mut(&mut self) -> Option<&mut String> {
+        match self {
+            GoHtml::Text(text) => Some(text),
+            GoHtml::Element { .. } => None,
+        }
+    }
+    fn element(name: String, href: Self::Attrs, children: Vec<Self>) -> Self {
+        GoHtml::Element {
+            name,
+            href,
+            children,
+        }
+    }
+}
 
 fn go_html(text: &str) -> String {
     go_html_render(&go_html_nodes(text)).trim().to_string()
 }
 
 fn go_html_nodes(text: &str) -> Vec<GoHtml> {
-    let mut root: Vec<GoHtml> = Vec::new();
-    let mut stack: Vec<GoFrame> = Vec::new();
+    let mut tree = Tree::<GoHtml>::new();
     let mut rest = text;
     while let Some(index) = rest.find('<') {
         if index > 0 {
-            go_html_text(&mut stack, &mut root, &rest[..index]);
+            tree.text(&rest[..index]);
         }
         rest = &rest[index..];
         let Some((name, href, closing, empty, end)) = go_html_tag(rest) else {
             // Not a tag: keep the literal character.
-            go_html_text(&mut stack, &mut root, "<");
+            tree.text("<");
             rest = &rest[1..];
             continue;
         };
         rest = &rest[end..];
         if closing {
-            go_html_close(&mut stack, &mut root, &name);
+            tree.close(&name);
             continue;
         }
-        stack.push((name.clone(), href, Vec::new()));
+        tree.open(name.clone(), href);
         if empty {
-            go_html_close(&mut stack, &mut root, &name);
+            tree.close(&name);
         }
     }
     if !rest.is_empty() {
-        go_html_text(&mut stack, &mut root, rest);
+        tree.text(rest);
     }
-    while let Some((name, href, children)) = stack.pop() {
-        go_html_element(&mut stack, &mut root, name, href, children);
-    }
-    root
+    tree.finish()
 }
 
 /// The name, href, kind and end of one HTML tag at the start of `text`.
@@ -1252,48 +1303,6 @@ fn go_html_tag(text: &str) -> Option<(String, Option<String>, bool, bool, usize)
         }
     }
     Some((name, href, closing, empty, index))
-}
-
-/// Add text to the open element, or to the document.
-fn go_html_text(stack: &mut [GoFrame], root: &mut Vec<GoHtml>, text: &str) {
-    let nodes = match stack.last_mut() {
-        Some(frame) => &mut frame.2,
-        None => root,
-    };
-    match nodes.last_mut() {
-        Some(GoHtml::Text(existing)) => existing.push_str(text),
-        _ => nodes.push(GoHtml::Text(text.to_string())),
-    }
-}
-
-/// Add an element to the open element, or to the document.
-fn go_html_element(
-    stack: &mut [GoFrame],
-    root: &mut Vec<GoHtml>,
-    name: String,
-    href: Option<String>,
-    children: Vec<GoHtml>,
-) {
-    let nodes = match stack.last_mut() {
-        Some(frame) => &mut frame.2,
-        None => root,
-    };
-    nodes.push(GoHtml::Element {
-        name,
-        href,
-        children,
-    });
-}
-
-/// Close the innermost element with the given name.
-fn go_html_close(stack: &mut Vec<GoFrame>, root: &mut Vec<GoHtml>, name: &str) {
-    let Some(index) = stack.iter().rposition(|frame| frame.0 == name) else {
-        return;
-    };
-    while stack.len() > index {
-        let (name, href, children) = stack.pop().expect("open element");
-        go_html_element(stack, root, name, href, children);
-    }
 }
 
 fn go_html_render(nodes: &[GoHtml]) -> String {

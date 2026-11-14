@@ -116,8 +116,7 @@ fn digest(lines: &[String]) -> String {
     let mut lines = lines.to_vec();
     lines.sort();
     let transcript = lines.join("\n");
-    let hash = sha2::Sha256::digest(transcript.as_bytes());
-    hash.iter().map(|b| format!("{b:02x}")).collect()
+    crate::hex(&sha2::Sha256::digest(transcript.as_bytes()))
 }
 
 fn read_snapshot(path: &Path) -> BTreeMap<String, String> {

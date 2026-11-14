@@ -238,7 +238,7 @@ impl ChartNotes {
 }
 
 /// The public mise-versions mirror of GitHub release and tag lists.
-pub const MIRROR_URL: &str = "https://mise-versions.jdx.dev/data";
+const MIRROR_URL: &str = "https://mise-versions.jdx.dev/data";
 /// The mirror's document for one repository's `releases` or `tags` list.
 pub fn mirror_url(repository: &str, kind: &str) -> String {
     format!(

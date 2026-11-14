@@ -108,10 +108,10 @@ impl PartialOrd for Registry {
         Some(self.cmp(other))
     }
 }
-/// The recorded string is what ordered `Option<String>` before the enum:
-/// changes, PR rows and markers keep the order they had. Values that record
-/// the same text are then told apart by kind and contents, so ordering agrees
-/// with equality and ordered collections never merge distinct registries.
+/// Registries order by their recorded string, so changes, PR rows and
+/// markers sort by the text they record. Values that record the same text
+/// are then told apart by kind and contents, so ordering agrees with
+/// equality and ordered collections never merge distinct registries.
 impl Ord for Registry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         let kind = |registry: &Self| match registry {
@@ -119,14 +119,10 @@ impl Ord for Registry {
             Self::Ambiguous { .. } => 1,
             Self::Unusable(_) => 2,
         };
-        let indexes = |registry: &Self| match registry {
-            Self::Ambiguous { indexes, .. } => Some(indexes.clone()),
-            _ => None,
-        };
         self.recorded()
             .cmp(other.recorded())
             .then_with(|| kind(self).cmp(&kind(other)))
-            .then_with(|| indexes(self).cmp(&indexes(other)))
+            .then_with(|| self.indexes().cmp(&other.indexes()))
     }
 }
 impl From<&str> for Registry {

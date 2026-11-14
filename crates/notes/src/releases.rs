@@ -178,7 +178,7 @@ impl Client {
             }
             let (owner, name) = repo
                 .split_once('/')
-                .ok_or_else(|| Error::Notes("invalid upstream repository".into()))?;
+                .ok_or_else(|| Error::Upstream("invalid upstream repository"))?;
             let mut variables = json!({"owner":owner,"name":name});
             let mut declarations = String::from("$owner:String!,$name:String!");
             let mut fields = String::new();
@@ -202,19 +202,19 @@ impl Client {
                 .await?;
             let repository = data["repository"]
                 .as_object()
-                .ok_or_else(|| Error::Notes("missing upstream repository".into()))?;
+                .ok_or_else(|| Error::Upstream("missing upstream repository"))?;
             let mut changed = Vec::new();
             for (i, tag) in remaining.into_iter().enumerate() {
                 let value = repository
                     .get(&format!("r{i}"))
-                    .ok_or_else(|| Error::Notes("missing release alias".into()))?;
+                    .ok_or_else(|| Error::Upstream("missing release alias"))?;
                 if value.is_null() {
                     result.insert(tag, Ok(None));
                     continue;
                 }
                 let updated_at = value["updatedAt"]
                     .as_str()
-                    .ok_or_else(|| Error::Notes("missing release updatedAt".into()))?;
+                    .ok_or_else(|| Error::Upstream("missing release updatedAt"))?;
                 if let Some(saved) = cached.remove(&tag) {
                     if saved.updated_at == updated_at {
                         result.insert(tag, Ok(Some(saved.release)));
@@ -229,7 +229,7 @@ impl Client {
                     || !value["draft"].is_boolean()
                     || !value["prerelease"].is_boolean()
                 {
-                    return Err(Error::Notes("incomplete release body".into()));
+                    return Err(Error::Upstream("incomplete release body"));
                 }
                 let release: ReleaseBody = serde_json::from_value(value.clone())?;
                 let saved = SavedRelease {

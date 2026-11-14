@@ -129,9 +129,73 @@ pub fn retry_delay_ms(installation: u64, repo: &str, failures: i64) -> i64 {
     backoff + (hash % (backoff as u64 / 10 + 1)) as i64
 }
 
+/// How long a webhook delivery id is kept for deduplication: seven days,
+/// covering GitHub's normal redelivery.
+const DELIVERY_RETENTION_MS: i64 = 7 * 86_400 * 1_000;
+
+const PRUNE_DELIVERIES: &str = "DELETE FROM server_deliveries WHERE received_at < ?1";
+const INSERT_DELIVERY: &str =
+    "INSERT OR IGNORE INTO server_deliveries(delivery,received_at) VALUES (?1,?2)";
+const QUEUED_CHECKS: &str = "SELECT check_prs FROM server_work WHERE installation=?1 AND repo=?2";
+const UPSERT_WORK: &str = "INSERT INTO server_work(installation,repo,available_at,check_prs,priority) \
+     VALUES (?1,?2,?3,?4,?5) ON CONFLICT(installation,repo) DO UPDATE SET \
+     generation=server_work.generation+1,check_prs=excluded.check_prs,\
+     available_at=MIN(server_work.available_at,excluded.available_at),\
+     priority=MIN(server_work.priority,excluded.priority)";
+const INSERT_CAUSE: &str = "INSERT INTO server_work_causes \
+     SELECT installation,repo,generation,?3 FROM server_work WHERE installation=?1 AND repo=?2";
+const NEXT_INSTALLATION: &str = "SELECT installation FROM server_work \
+     WHERE claimed IS NULL AND available_at<=?1 \
+     AND installation NOT IN (SELECT installation FROM server_work WHERE claimed IS NOT NULL) \
+     ORDER BY priority,available_at,installation,repo LIMIT 1";
+const CLAIMABLE: &str = "SELECT repo,generation,check_prs,requeues,priority FROM server_work \
+     WHERE claimed IS NULL AND available_at<=?1 AND installation=?2 \
+     ORDER BY priority,available_at,repo LIMIT ?3";
+const CAUSES: &str = "SELECT attribution FROM server_work_causes \
+     WHERE installation=?1 AND repo=?2 AND generation<=?3";
+const CLAIM: &str = "UPDATE server_work SET claimed=generation WHERE installation=?1 AND repo=?2";
+const CLAIMED_STATE: &str = "SELECT generation,failures FROM server_work \
+     WHERE installation=?1 AND repo=?2 AND claimed=?3";
+const DELETE_CAUSES: &str =
+    "DELETE FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation<=?3";
+const DELETE_WORK: &str = "DELETE FROM server_work \
+     WHERE installation=?1 AND repo=?2 AND generation=?3 AND claimed=?3";
+const UNCLAIM: &str = "UPDATE server_work SET claimed=NULL,available_at=?4,failures=?5,requeues=?6 \
+     WHERE installation=?1 AND repo=?2 AND claimed=?3";
+const RETRY_CAUSE_ONCE: &str = "INSERT INTO server_work_causes SELECT ?1,?2,?3,?4 \
+     WHERE NOT EXISTS (SELECT 1 FROM server_work_causes \
+     WHERE installation=?1 AND repo=?2 AND generation=?3 AND attribution=?4)";
+const RETRY_CLAIMED: &str = "INSERT INTO server_work_causes \
+     SELECT installation,repo,generation,?1 FROM server_work WHERE claimed IS NOT NULL";
+const CLAIMED: &str =
+    "SELECT installation,repo,claimed,failures FROM server_work WHERE claimed IS NOT NULL";
+const RECOVER: &str = "UPDATE server_work SET claimed=NULL,failures=?3,requeues=0,\
+     available_at=CASE WHEN generation=claimed THEN ?4 ELSE available_at END \
+     WHERE installation=?1 AND repo=?2";
+
+/// The `retry` cause, as `server_work_causes` stores it.
+fn retry_cause() -> Result<String> {
+    Ok(serde_json::to_string(&Attribution::reason("retry"))?)
+}
+
+/// Record a `retry` cause for one generation of a repository's work, once
+/// however often that generation fails.
+fn retry_once(
+    tx: &rusqlite::Transaction<'_>,
+    installation: i64,
+    repo: &str,
+    generation: i64,
+) -> Result<()> {
+    tx.execute(
+        RETRY_CAUSE_ONCE,
+        params![installation, repo, generation, retry_cause()?],
+    )?;
+    Ok(())
+}
+
 impl Cache {
     /// Atomically accept a delivery and persist its work before acknowledging it.
-    /// Delivery IDs are retained for seven days, covering normal GitHub redelivery.
+    /// Delivery ids are kept for [`DELIVERY_RETENTION_MS`].
     pub async fn enqueue(
         &self,
         delivery: Option<String>,
@@ -158,15 +222,23 @@ impl Cache {
     ) -> Result<bool> {
         self.call(move |store| {
             let tx = store.conn.transaction()?;
-            tx.execute("DELETE FROM server_deliveries WHERE received_at < ?1", [now - 7 * 86400 * 1000])?;
+            tx.execute(PRUNE_DELIVERIES, [now - DELIVERY_RETENTION_MS])?;
             if let Some(delivery) = &delivery {
-                let inserted = tx.execute("INSERT OR IGNORE INTO server_deliveries(delivery,received_at) VALUES (?1,?2)", params![delivery, now])?;
-                if inserted == 0 { return Ok(false); }
+                let inserted = tx.execute(INSERT_DELIVERY, params![delivery, now])?;
+                if inserted == 0 {
+                    return Ok(false);
+                }
             }
+            let attribution = serde_json::to_string(&attribution)?;
             // A new trigger brings a backed-off retry forward; coalescing
             // still waits for the window the first event opened.
             for item in &work {
-                let previous: Option<Option<String>> = tx.query_row("SELECT check_prs FROM server_work WHERE installation=?1 AND repo=?2", params![item.installation as i64, item.repo], |r| r.get(0)).optional()?;
+                let installation = item.installation as i64;
+                let previous: Option<Option<String>> = tx
+                    .query_row(QUEUED_CHECKS, params![installation, item.repo], |r| {
+                        r.get(0)
+                    })
+                    .optional()?;
                 let checks = match (&item.check_prs, previous) {
                     (Some(incoming), Some(Some(previous))) => {
                         let mut merged: BTreeSet<u64> = serde_json::from_str(&previous)?;
@@ -174,15 +246,25 @@ impl Cache {
                         Some(serde_json::to_string(&merged)?)
                     }
                     (Some(incoming), None) => Some(serde_json::to_string(incoming)?),
-                    _ => None, // A push/checkbox/sweep takes precedence over check hints.
+                    // A push, checkbox or sweep takes precedence over check hints.
+                    _ => None,
                 };
-                tx.execute("INSERT INTO server_work(installation,repo,available_at,check_prs,priority) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(installation,repo) DO UPDATE SET generation=server_work.generation+1,check_prs=excluded.check_prs,available_at=MIN(server_work.available_at,excluded.available_at),priority=MIN(server_work.priority,excluded.priority)",
-                    params![item.installation as i64, item.repo, now + coalesce_ms, checks, item.priority as i64])?;
-                tx.execute("INSERT INTO server_work_causes SELECT installation,repo,generation,?3 FROM server_work WHERE installation=?1 AND repo=?2", params![item.installation as i64, item.repo, serde_json::to_string(&attribution)?])?;
+                tx.execute(
+                    UPSERT_WORK,
+                    params![
+                        installation,
+                        item.repo,
+                        now + coalesce_ms,
+                        checks,
+                        item.priority as i64
+                    ],
+                )?;
+                tx.execute(INSERT_CAUSE, params![installation, item.repo, attribution])?;
             }
             tx.commit()?;
             Ok(true)
-        }).await
+        })
+        .await
     }
     /// One installation per batch so every repository runs with its own App
     /// token, and never one whose earlier batch is still running, so batches
@@ -190,30 +272,64 @@ impl Cache {
     pub async fn claim_batch(&self, now: i64, limit: usize) -> Result<Vec<Claim>> {
         self.call(move |store| {
             let tx = store.conn.transaction()?;
-            let installation: Option<i64> = tx.query_row("SELECT installation FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation NOT IN (SELECT installation FROM server_work WHERE claimed IS NOT NULL) ORDER BY priority,available_at,installation,repo LIMIT 1", [now], |r| r.get(0)).optional()?;
-            let Some(installation) = installation else { return Ok(Vec::new()); };
-            let rows = {
-                let mut query = tx.prepare("SELECT repo,generation,check_prs,requeues,priority FROM server_work WHERE claimed IS NULL AND available_at<=?1 AND installation=?2 ORDER BY priority,available_at,repo LIMIT ?3")?;
-                let rows = query.query_map(params![now, installation, limit as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?)))?.collect::<std::result::Result<Vec<_>, _>>()?;
-                rows.into_iter().map(|(repo, generation, checks, requeues, priority)| Ok(Claim {
-                    work: Work { installation: installation as u64, repo, check_prs: checks.map(|text| serde_json::from_str(&text)).transpose()?, priority: Priority::stored(priority) }, requeues, generation, attribution: Attribution::default(),
-                })).collect::<Result<Vec<_>>>()?
+            let installation: Option<i64> = tx
+                .query_row(NEXT_INSTALLATION, [now], |r| r.get(0))
+                .optional()?;
+            let Some(installation) = installation else {
+                return Ok(Vec::new());
             };
-            let mut rows = rows;
-            for claim in &mut rows {
-                let mut query = tx.prepare("SELECT attribution FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation<=?3")?;
-                let causes = query.query_map(params![installation, claim.work.repo, claim.generation], |r| r.get::<_, String>(0))?;
+            let rows = {
+                let mut query = tx.prepare(CLAIMABLE)?;
+                query
+                    .query_map(params![now, installation, limit as i64], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, Option<String>>(2)?,
+                            r.get::<_, i64>(3)?,
+                            r.get::<_, i64>(4)?,
+                        ))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            let mut claims = rows
+                .into_iter()
+                .map(|(repo, generation, checks, requeues, priority)| {
+                    Ok(Claim {
+                        work: Work {
+                            installation: installation as u64,
+                            repo,
+                            check_prs: checks
+                                .map(|text| serde_json::from_str(&text))
+                                .transpose()?,
+                            priority: Priority::stored(priority),
+                        },
+                        requeues,
+                        generation,
+                        attribution: Attribution::default(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for claim in &mut claims {
+                let mut query = tx.prepare(CAUSES)?;
+                let causes = query.query_map(
+                    params![installation, claim.work.repo, claim.generation],
+                    |r| r.get::<_, String>(0),
+                )?;
                 for cause in causes {
-                    claim.attribution.merge(&serde_json::from_str::<Attribution>(&cause?)?);
+                    claim
+                        .attribution
+                        .merge(&serde_json::from_str::<Attribution>(&cause?)?);
                 }
                 if claim.attribution.reasons.is_empty() {
                     claim.attribution.reasons.insert("recovered work".into());
                 }
-                tx.execute("UPDATE server_work SET claimed=generation WHERE installation=?1 AND repo=?2", params![installation, claim.work.repo])?;
+                tx.execute(CLAIM, params![installation, claim.work.repo])?;
             }
             tx.commit()?;
-            Ok(rows)
-        }).await
+            Ok(claims)
+        })
+        .await
     }
     pub async fn finish_work(
         &self,
@@ -224,42 +340,63 @@ impl Cache {
         self.call(move |store| {
             let tx = store.conn.transaction()?;
             for (claim, finish) in &finished {
-                let key = params![claim.work.installation as i64, claim.work.repo, claim.generation];
+                let installation = claim.work.installation as i64;
+                let key = params![installation, claim.work.repo, claim.generation];
                 // Work that arrived during the run waits only for coalescing.
-                let state: Option<(i64, i64)> = tx.query_row("SELECT generation,failures FROM server_work WHERE installation=?1 AND repo=?2 AND claimed=?3", key, |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
-                let Some((generation, failures)) = state else { continue };
+                let state: Option<(i64, i64)> = tx
+                    .query_row(CLAIMED_STATE, key, |r| Ok((r.get(0)?, r.get(1)?)))
+                    .optional()?;
+                let Some((generation, failures)) = state else {
+                    continue;
+                };
                 let newer = generation != claim.generation;
                 let (failures, requeues, delay) = match finish {
                     Finish::Done => {
-                        tx.execute("DELETE FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation<=?3", key)?;
-                        tx.execute("DELETE FROM server_work WHERE installation=?1 AND repo=?2 AND generation=?3 AND claimed=?3", key)?;
+                        tx.execute(DELETE_CAUSES, key)?;
+                        tx.execute(DELETE_WORK, key)?;
                         (0, 0, coalesce_ms)
                     }
                     Finish::Failed | Finish::Requeue => {
-                        // One `retry` cause per generation, however often it fails.
-                        let retry = serde_json::to_string(&Attribution::reason("retry"))?;
-                        tx.execute("INSERT INTO server_work_causes SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation=?3 AND attribution=?4)",
-                            params![claim.work.installation as i64, claim.work.repo, claim.generation, retry])?;
+                        retry_once(&tx, installation, &claim.work.repo, claim.generation)?;
                         let failures = failures + i64::from(*finish == Finish::Failed);
-                        let requeues = if *finish == Finish::Requeue { claim.requeues + 1 } else { 0 };
-                        let delay = if newer { coalesce_ms } else if *finish == Finish::Failed { retry_delay_ms(claim.work.installation, &claim.work.repo, failures) } else { RETRY_MS };
+                        let requeues = if *finish == Finish::Requeue {
+                            claim.requeues + 1
+                        } else {
+                            0
+                        };
+                        let delay = if newer {
+                            coalesce_ms
+                        } else if *finish == Finish::Failed {
+                            retry_delay_ms(claim.work.installation, &claim.work.repo, failures)
+                        } else {
+                            RETRY_MS
+                        };
                         (failures, requeues, delay)
                     }
                 };
-                tx.execute("UPDATE server_work SET claimed=NULL,available_at=?4,failures=?5,requeues=?6 WHERE installation=?1 AND repo=?2 AND claimed=?3",
-                    params![claim.work.installation as i64, claim.work.repo, claim.generation, now + delay, failures, requeues])?;
+                tx.execute(
+                    UNCLAIM,
+                    params![
+                        installation,
+                        claim.work.repo,
+                        claim.generation,
+                        now + delay,
+                        failures,
+                        requeues
+                    ],
+                )?;
             }
             tx.commit()?;
             Ok(())
-        }).await
+        })
+        .await
     }
     /// Releases the claims of runs a shutdown cut short, to run again without
     /// counting as failures.
     pub async fn release_work(&self) -> Result<()> {
         self.call(|store| {
             let tx = store.conn.transaction()?;
-            let retry = serde_json::to_string(&Attribution::reason("retry"))?;
-            tx.execute("INSERT INTO server_work_causes SELECT installation,repo,generation,?1 FROM server_work WHERE claimed IS NOT NULL", [retry])?;
+            tx.execute(RETRY_CLAIMED, [retry_cause()?])?;
             tx.execute("UPDATE server_work SET claimed=NULL", [])?;
             tx.commit()?;
             Ok(())
@@ -275,18 +412,24 @@ impl Cache {
         self.call(move |store| {
             let tx = store.conn.transaction()?;
             let claimed = {
-                let mut query = tx.prepare("SELECT installation,repo,claimed,failures FROM server_work WHERE claimed IS NOT NULL")?;
-                query.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)))?.collect::<std::result::Result<Vec<_>, _>>()?
+                let mut query = tx.prepare(CLAIMED)?;
+                query
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, i64>(2)?,
+                            r.get::<_, i64>(3)?,
+                        ))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
             };
-            let retry = serde_json::to_string(&Attribution::reason("retry"))?;
             for (installation, repo, claimed, failures) in claimed {
-                tx.execute("INSERT INTO server_work_causes SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM server_work_causes WHERE installation=?1 AND repo=?2 AND generation=?3 AND attribution=?4)",
-                    params![installation, repo, claimed, retry])?;
+                retry_once(&tx, installation, &repo, claimed)?;
                 let failures = failures + 1;
                 // Work that arrived during the run keeps the time its trigger set.
                 let at = now + retry_delay_ms(installation as u64, &repo, failures);
-                tx.execute("UPDATE server_work SET claimed=NULL,failures=?3,requeues=0,available_at=CASE WHEN generation=claimed THEN ?4 ELSE available_at END WHERE installation=?1 AND repo=?2",
-                    params![installation, repo, failures, at])?;
+                tx.execute(RECOVER, params![installation, repo, failures, at])?;
             }
             tx.commit()?;
             Ok(())
@@ -522,6 +665,20 @@ mod tests {
             1
         );
     }
+    /// Claim and fail `work()` `n` times in a row, each run when its backoff
+    /// is up; the time the next retry is due.
+    async fn fail_times(cache: &Cache, n: i64) -> i64 {
+        let mut now = 0;
+        for failures in 1..=n {
+            let claims = cache.claim_batch(now, 10).await.unwrap();
+            cache
+                .finish_work(Finish::Failed.all(claims), now, 0)
+                .await
+                .unwrap();
+            now += retry_delay_ms(1, "owner/repo", failures);
+        }
+        now
+    }
     async fn causes(cache: &Cache) -> i64 {
         cache
             .call(|store| {
@@ -604,15 +761,7 @@ mod tests {
     async fn a_new_trigger_brings_a_backed_off_retry_forward() {
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         cache.enqueue(None, work(), 0, 0).await.unwrap();
-        let mut now = 0;
-        for failures in 1..=4 {
-            let claims = cache.claim_batch(now, 10).await.unwrap();
-            cache
-                .finish_work(Finish::Failed.all(claims), now, 0)
-                .await
-                .unwrap();
-            now += retry_delay_ms(1, "owner/repo", failures);
-        }
+        let now = fail_times(&cache, 4).await;
         // Eight minutes of backoff remain; a push waits only for coalescing.
         let pushed = now - retry_delay_ms(1, "owner/repo", 4) + 1_000;
         cache.enqueue(None, work(), pushed, 10).await.unwrap();
@@ -759,15 +908,7 @@ mod tests {
     async fn a_success_resets_the_backoff_of_work_that_arrived_during_it() {
         let cache = Cache::open(":memory:", Default::default()).await.unwrap();
         cache.enqueue(None, work(), 0, 0).await.unwrap();
-        let mut now = 0;
-        for failures in 1..=3 {
-            let claims = cache.claim_batch(now, 10).await.unwrap();
-            cache
-                .finish_work(Finish::Failed.all(claims), now, 0)
-                .await
-                .unwrap();
-            now += retry_delay_ms(1, "owner/repo", failures);
-        }
+        let now = fail_times(&cache, 3).await;
         let claims = cache.claim_batch(now, 10).await.unwrap();
         cache.enqueue(None, work(), now, 0).await.unwrap();
         cache
@@ -916,19 +1057,6 @@ mod tests {
         let claims = cache.claim_batch(i64::MAX, 10).await.unwrap();
         assert_eq!(claims[0].work.installation, 1);
         assert_eq!(claims[0].work.priority, Priority::Person);
-    }
-    #[tokio::test]
-    async fn a_fresh_queue_is_at_schema_13() {
-        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        let version = cache
-            .call(|store| {
-                Ok(store
-                    .conn
-                    .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(version, 13);
     }
     #[tokio::test]
     async fn a_schema_12_queue_migrates_its_work_to_the_sweeps_class() {

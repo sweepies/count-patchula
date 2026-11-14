@@ -90,15 +90,10 @@ fn locked() -> BTreeMap<String, Vec<String>> {
     packages
 }
 
-/// The `(name, path)` files one source entry covers: itself, or every
-/// file under it when it ends in `/`, sorted so the hash is stable.
-fn covered(source: &str) -> Vec<(String, PathBuf)> {
-    let path = root().join(source);
-    if !source.ends_with('/') {
-        return vec![(source.to_owned(), path)];
-    }
+/// Every file under `dir`, recursively, in path order.
+pub(crate) fn files_under(dir: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    let mut pending = vec![path];
+    let mut pending = vec![dir.to_path_buf()];
     while let Some(dir) = pending.pop() {
         for entry in std::fs::read_dir(&dir)
             .unwrap_or_else(|error| panic!("{}: {error}", dir.display()))
@@ -114,6 +109,16 @@ fn covered(source: &str) -> Vec<(String, PathBuf)> {
     }
     found.sort();
     found
+}
+
+/// The `(name, path)` files one source entry covers: itself, or every
+/// file under it when it ends in `/`, sorted so the hash is stable.
+fn covered(source: &str) -> Vec<(String, PathBuf)> {
+    let path = root().join(source);
+    if !source.ends_with('/') {
+        return vec![(source.to_owned(), path)];
+    }
+    files_under(&path)
         .into_iter()
         .map(|path| {
             let name = path

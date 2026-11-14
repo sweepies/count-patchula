@@ -50,13 +50,11 @@ use std::{
 /// A content validator for the ref and tag listings, which GitHub etags as
 /// it does any changed representation.
 fn etag(nodes: &[Value]) -> String {
-    Sha256::digest(serde_json::to_vec(nodes).unwrap())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    crate::hex(&Sha256::digest(serde_json::to_vec(nodes).unwrap()))
 }
 
-fn response(status: u16, body: Value) -> Response {
+/// A JSON answer for a scripted [`Hosts`] route.
+pub fn json(status: u16, body: Value) -> Response {
     Response {
         status: StatusCode::from_u16(status).unwrap(),
         headers: Default::default(),
@@ -65,16 +63,11 @@ fn response(status: u16, body: Value) -> Response {
     }
 }
 
-/// A JSON answer for a scripted [`Hosts`] route.
-pub fn json(status: u16, body: Value) -> Response {
-    response(status, body)
-}
-
 /// A stored commit as GitHub's REST schemas serve it: `git-commit` requires
 /// `sha`, `message` and `verification`, and its content object requires
 /// `message` — terse seeds name only the fields a test steers, so the server
-/// fills the rest the way GitHub always does. `tree` stays seeded: a read of
-/// a commit without one fails the way a missing tree always did.
+/// fills the rest the way GitHub does. `tree` stays seeded: a read of a
+/// commit without one fails as a commit with a missing tree does.
 fn commit_answer(sha: &str, commit: &Value) -> Value {
     let mut answer = commit.clone();
     let object = answer.as_object_mut().unwrap();
@@ -94,16 +87,15 @@ fn commit_author(commit: &Value, key: &str, default: &str) -> Value {
 }
 
 /// The git blob sha for `content` — the same formula the client proves.
+/// `patchula_github::blob_sha` is that formula, but testkit cannot depend
+/// on the client it fakes (github dev-depends on testkit), so the fake
+/// computes it itself.
 fn blob_sha(content: &str) -> String {
     use sha1::Digest;
     let mut digest = sha1::Sha1::new();
     digest.update(format!("blob {}\0", content.len()));
     digest.update(content);
-    digest
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    crate::hex(&digest.finalize())
 }
 
 fn graphql_author(pr: &Value) -> Value {
@@ -1175,7 +1167,7 @@ impl FakeGitHub {
         }
     }
     /// The locked server state: arrange what the server holds and read what
-    /// it recorded, in the same shapes the old fakes exposed.
+    /// it recorded.
     pub fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap()
     }
@@ -1406,12 +1398,12 @@ impl FakeGitHub {
                         data.insert(field.key.clone(), prune(&value, &field.selections));
                     }
                     FieldAnswer::Errors(errors) => {
-                        return response(200, json!({"errors":errors}));
+                        return json(200, json!({"errors":errors}));
                     }
                 }
             }
         }
-        response(200, json!({"data":data}))
+        json(200, json!({"data":data}))
     }
     fn graphql_query(&self, field: &GqlField, body: &Value, state: &mut State) -> FieldAnswer {
         if field.name == "repository" {
@@ -1978,7 +1970,7 @@ impl FakeGitHub {
         pr["base"]["sha"] = json!(repo.base);
         pr["base"]["repo"]["size"] = json!(42);
         repo.prs.insert(number, pr.clone());
-        response(201, pr)
+        json(201, pr)
     }
     fn create_issue(&self, body: &Value, repo: &mut Repository, actor: &str) -> Response {
         let number = 100 + repo.issues.len() as u64;
@@ -1989,7 +1981,7 @@ impl FakeGitHub {
         };
         let issue = json!({"number":number,"id":format!("dashboard-{number}"),"title":body["title"],"body":body["body"],"state":"OPEN","author":author});
         repo.issues.insert(number, issue.clone());
-        response(201, issue)
+        json(201, issue)
     }
     fn create_tree(&self, body: &Value, repo: &mut Repository) -> Response {
         let mut tree = repo.trees[body["base_tree"].as_str().unwrap()].clone();
@@ -2010,7 +2002,7 @@ impl FakeGitHub {
         }
         let sha = format!("tree-{}", repo.trees.len());
         repo.trees.insert(sha.clone(), tree);
-        response(201, json!({"sha":sha}))
+        json(201, json!({"sha":sha}))
     }
     fn create_commit(&self, body: &Value, repo: &mut Repository, unsigned: bool) -> Response {
         assert!(
@@ -2023,7 +2015,7 @@ impl FakeGitHub {
         let sha = format!("commit-{}", repo.commits.len());
         let commit = json!({"sha":sha,"tree":{"sha":body["tree"]},"message":body["message"],"parents":[{"sha":body["parents"][0]}],"verification":{"verified":!unsigned}});
         repo.commits.insert(sha.clone(), commit.clone());
-        response(201, commit)
+        json(201, commit)
     }
     fn patch_pull(&self, rest: &str, body: &Value, repo: &mut Repository) -> Response {
         let n: u64 = rest.rsplit('/').next().unwrap().parse().unwrap();
@@ -2035,7 +2027,7 @@ impl FakeGitHub {
                 pr[key].clone_from(value);
             }
         }
-        response(200, pr.clone())
+        json(200, pr.clone())
     }
     fn patch_issue(&self, n: u64, body: &Value, repo: &mut Repository) -> Response {
         let issue = repo.issues.get_mut(&n).unwrap();
@@ -2045,7 +2037,7 @@ impl FakeGitHub {
         if body["state"] == "closed" {
             issue["state"] = json!("CLOSED");
         }
-        response(200, issue.clone())
+        json(200, issue.clone())
     }
     fn merge_pull(&self, n: u64, body: &Value, repo: &mut Repository, actor: &str) -> Response {
         let pr = repo.prs.get_mut(&n).unwrap();
@@ -2061,7 +2053,7 @@ impl FakeGitHub {
         if repo.merge.delete_branch {
             repo.refs.remove(&format!("refs/heads/{head}"));
         }
-        response(200, json!({"merged":true,"sha":"merged-base"}))
+        json(200, json!({"merged":true,"sha":"merged-base"}))
     }
     fn put_labels(&self, rest: &str, body: &Value, repo: &mut Repository) -> Response {
         let n: u64 = rest.split('/').nth(1).unwrap().parse().unwrap();
@@ -2072,7 +2064,7 @@ impl FakeGitHub {
             .map(|l| json!({"name":l}))
             .collect();
         repo.prs.get_mut(&n).unwrap()["labels"] = json!(labels);
-        response(200, json!(labels))
+        json(200, json!(labels))
     }
     /// `GET /repos/{repo}/pulls`, per GitHub's REST docs
     /// (<https://docs.github.com/en/rest/pulls/pulls#list-pull-requests>):
@@ -2142,7 +2134,7 @@ impl FakeGitHub {
         }
         let total = prs.len();
         let prs: Vec<Value> = prs.into_iter().skip((page - 1) * size).take(size).collect();
-        let mut reply = response(200, json!(prs));
+        let mut reply = json(200, json!(prs));
         if page * size < total {
             // GitHub's `next` link repeats the request's whole query with
             // only `page` advanced; the client follows it verbatim.
@@ -2185,7 +2177,7 @@ impl FakeGitHub {
         // `mutate` rules fire after read lag: the request sees state at its
         // own point.
         self.fire_mutates(ctx, state);
-        response(200, state.repositories[full].prs[&n].clone())
+        json(200, state.repositories[full].prs[&n].clone())
     }
     /// The App surface: installation listing, installation lookup and
     /// per-installation access tokens, full or scoped to named
@@ -2203,7 +2195,7 @@ impl FakeGitHub {
                 .iter()
                 .map(|id| json!({"id":id,"suspended_at":null}))
                 .collect();
-            return Some(response(200, json!(installations)));
+            return Some(json(200, json!(installations)));
         }
         if let Some(id) = path
             .strip_prefix("/app/installations/")
@@ -2226,7 +2218,7 @@ impl FakeGitHub {
                             .values()
                             .find(|repo| repo.id == id && repo.installed && !repo.deleted)
                     }) else {
-                        return Some(response(404, json!({"message":"Not Found"})));
+                        return Some(json(404, json!({"message":"Not Found"})));
                     };
                     repositories.push(json!({"id":repo.id,"node_id":repo.node_id,
                                "name":repo.name.rsplit('/').next().unwrap(),
@@ -2236,7 +2228,7 @@ impl FakeGitHub {
                 answer["repositories"] = json!(repositories);
                 answer["repository_selection"] = json!("selected");
             }
-            return Some(response(201, answer));
+            return Some(json(201, answer));
         }
         if let Some(spec) = path
             .strip_prefix("/repos/")
@@ -2246,9 +2238,9 @@ impl FakeGitHub {
                 && state.repositories[spec].installed
                 && !state.repositories[spec].deleted;
             return Some(if found && let Some(id) = state.installations.first() {
-                response(200, json!({"id":id}))
+                json(200, json!({"id":id}))
             } else {
-                response(404, json!({"message":"Not Found"}))
+                json(404, json!({"message":"Not Found"}))
             });
         }
         if let Some(org) = path
@@ -2259,9 +2251,9 @@ impl FakeGitHub {
                 if !org.is_empty()
                     && let Some(id) = state.installations.first()
                 {
-                    response(200, json!({"id":id}))
+                    json(200, json!({"id":id}))
                 } else {
-                    response(404, json!({"message":"Not Found"}))
+                    json(404, json!({"message":"Not Found"}))
                 },
             );
         }
@@ -2278,7 +2270,7 @@ impl FakeGitHub {
                 .filter(|repo| repo.installed)
                 .map(|repo| json!({"full_name":repo.name,"private":repo.private}))
                 .collect();
-            return Some(response(200, json!(repos)));
+            return Some(json(200, json!(repos)));
         }
         if path.starts_with("/installation/repositories") {
             let repos: Vec<_> = state
@@ -2287,7 +2279,7 @@ impl FakeGitHub {
                 .filter(|repo| repo.installed)
                 .map(|repo| json!({"full_name":repo.name,"private":repo.private}))
                 .collect();
-            return Some(response(
+            return Some(json(
                 200,
                 json!({"repositories":repos,"total_count":repos.len()}),
             ));
@@ -2314,7 +2306,7 @@ impl FakeGitHub {
             let Some(upstream) = state.repositories.get(repo) else {
                 panic!("unexpected read {path}")
             };
-            return response(
+            return json(
                 200,
                 match kind {
                     "releases.json" => upstream.mirror_releases.clone(),
@@ -2333,7 +2325,7 @@ impl FakeGitHub {
             panic!("unexpected read {path}")
         }
         if state.repositories[&full].deleted {
-            return response(404, json!({"message":"Not Found"}));
+            return json(404, json!({"message":"Not Found"}));
         }
         // Pull reads take the whole state — read lag and `mutate` rules run
         // at the request's point.
@@ -2350,14 +2342,14 @@ impl FakeGitHub {
                 "pulls" => self.create_pull(body, repo, &actor),
                 "issues" => self.create_issue(body, repo, &actor),
                 rest if rest.ends_with("/comments") && rest.starts_with("issues/") => {
-                    response(201, json!({"id":1,"body":body["body"]}))
+                    json(201, json!({"id":1,"body":body["body"]}))
                 }
                 "git/blobs" => {
                     assert_eq!(body["encoding"], "utf-8");
                     let content = body["content"].as_str().unwrap();
                     let sha = blob_sha(content);
                     repo.blobs.insert(sha.clone(), content.to_owned());
-                    response(201, json!({"sha":sha}))
+                    json(201, json!({"sha":sha}))
                 }
                 "git/trees" => self.create_tree(body, repo),
                 "git/commits" => self.create_commit(body, repo, unsigned),
@@ -2382,8 +2374,8 @@ impl FakeGitHub {
             } else if let Some(number) = rest.strip_prefix("issues/") {
                 let n: u64 = number.parse().unwrap();
                 match repo.issues.get(&n) {
-                    Some(issue) => response(200, issue.clone()),
-                    None => response(404, json!({"message":"Not Found"})),
+                    Some(issue) => json(200, issue.clone()),
+                    None => json(404, json!({"message":"Not Found"})),
                 }
             } else if rest == "branches" {
                 let branches: Vec<_> = repo
@@ -2394,11 +2386,11 @@ impl FakeGitHub {
                             .map(|name| json!({"name":name,"commit":{"sha":sha}}))
                     })
                     .collect();
-                response(200, json!(branches))
+                json(200, json!(branches))
             } else if rest == format!("branches/{}", repo.default_branch) {
                 let oid = repo.refs[&format!("refs/heads/{}", repo.default_branch)].clone();
                 let commit = repo.commits.get(&oid).cloned().unwrap_or(json!({}));
-                response(
+                json(
                     200,
                     json!({"name":repo.default_branch,
                            "commit":{"sha":oid,"commit":commit_answer(&oid, &commit)}}),
@@ -2410,17 +2402,17 @@ impl FakeGitHub {
                     .or_else(|| repo.refs.get(&format!("refs/tags/{reference}")))
                     .map_or(reference, String::as_str);
                 match repo.commits.get(oid) {
-                    Some(commit) => response(
+                    Some(commit) => json(
                         200,
                         json!({"sha":oid,
                         "commit":commit_answer(oid, commit),
                         "author":commit_author(commit, "actor", "patchula[bot]"),
                         "committer":commit_author(commit, "committer_login", "web-flow")}),
                     ),
-                    None => response(404, json!({"message":"not found"})),
+                    None => json(404, json!({"message":"not found"})),
                 }
             } else if rest.is_empty() {
-                response(
+                json(
                     200,
                     json!({"id":repo.id,"node_id":repo.node_id,"full_name":repo.name,
                            "default_branch":repo.default_branch,
@@ -2435,26 +2427,26 @@ impl FakeGitHub {
                 // url::Url keeps percent-encoded slashes in a path segment.
                 let branch = branch.replace("%2F", "/");
                 match repo.refs.get(&format!("refs/heads/{branch}")) {
-                    Some(sha) => response(200, json!({"object":{"sha":sha}})),
-                    None => response(404, json!({})),
+                    Some(sha) => json(200, json!({"object":{"sha":sha}})),
+                    None => json(404, json!({})),
                 }
             } else if let Some(sha) = rest.strip_prefix("git/commits/") {
                 match repo.commits.get(sha) {
-                    Some(commit) => response(200, commit_answer(sha, commit)),
-                    None => response(404, json!({"message":"not found"})),
+                    Some(commit) => json(200, commit_answer(sha, commit)),
+                    None => json(404, json!({"message":"not found"})),
                 }
             } else if let Some(sha) = rest.strip_prefix("git/trees/") {
                 match repo.trees.get(sha) {
-                    Some(tree) => response(200, json!({"tree":tree,"truncated":truncated})),
-                    None => response(404, json!({"message":"not found"})),
+                    Some(tree) => json(200, json!({"tree":tree,"truncated":truncated})),
+                    None => json(404, json!({"message":"not found"})),
                 }
             } else if let Some(sha) = rest.strip_prefix("git/blobs/") {
                 match repo.blobs.get(sha) {
-                    Some(content) => response(
+                    Some(content) => json(
                         200,
                         json!({"encoding":"base64","content":STANDARD.encode(content)}),
                     ),
-                    None => response(404, json!({"message":"not found"})),
+                    None => json(404, json!({"message":"not found"})),
                 }
             } else if let Some(matching) = rest.strip_prefix("git/matching-refs/") {
                 let prefix = format!("refs/{matching}");
@@ -2470,9 +2462,9 @@ impl FakeGitHub {
                     .get("if-none-match")
                     .is_some_and(|value| value == &etag)
                 {
-                    return response(304, Value::Null);
+                    return json(304, Value::Null);
                 }
-                let mut reply = response(200, json!(refs));
+                let mut reply = json(200, json!(refs));
                 reply.headers.insert("etag", etag.parse().unwrap());
                 reply
             } else if rest == "tags" {
@@ -2490,15 +2482,15 @@ impl FakeGitHub {
                     .get("if-none-match")
                     .is_some_and(|value| value == &etag)
                 {
-                    return response(304, Value::Null);
+                    return json(304, Value::Null);
                 }
-                let mut reply = response(200, json!(tags));
+                let mut reply = json(200, json!(tags));
                 reply.headers.insert("etag", etag.parse().unwrap());
                 reply
             } else if rest == "contents" {
                 match &repo.contents {
-                    Some(contents) => response(200, contents.clone()),
-                    None => response(404, json!({"message":"not found"})),
+                    Some(contents) => json(200, contents.clone()),
+                    None => json(404, json!({"message":"not found"})),
                 }
             } else if rest == "releases" {
                 let nodes: Vec<_> = repo
@@ -2509,10 +2501,10 @@ impl FakeGitHub {
                                "draft":node["isDraft"],"prerelease":node["isPrerelease"]})
                     })
                     .collect();
-                response(200, json!(nodes))
+                json(200, json!(nodes))
             } else if let Some(_tag) = rest.strip_prefix("releases/tags/") {
                 if !repo.release_tags {
-                    response(404, json!({"message":"not found"}))
+                    json(404, json!({"message":"not found"}))
                 } else {
                     let etag = repo.release_note_body.as_ref().map_or_else(
                         || "\"release-one\"".into(),
@@ -2523,9 +2515,9 @@ impl FakeGitHub {
                         .get("if-none-match")
                         .is_some_and(|value| value == etag.as_str())
                     {
-                        response(304, Value::Null)
+                        json(304, Value::Null)
                     } else {
-                        response(
+                        json(
                             200,
                             json!({"body":repo.release_note_body.clone().unwrap_or_else(|| {
                                 "Release details 🦀\n".repeat(10_000)
@@ -2536,7 +2528,7 @@ impl FakeGitHub {
                     reply
                 }
             } else if rest.starts_with("compare/unknown...") {
-                response(404, json!({"message":"Not Found"}))
+                json(404, json!({"message":"Not Found"}))
             } else if let Some(spec) = rest.strip_prefix("compare/") {
                 let sha = spec.split("...").nth(1).unwrap().split('?').next().unwrap();
                 let history: Vec<_> = repo
@@ -2558,7 +2550,7 @@ impl FakeGitHub {
                         })
                         .collect()
                 };
-                response(
+                json(
                     200,
                     json!({"total_commits":commits.len(),"commits":commits}),
                 )
@@ -2632,7 +2624,7 @@ impl Transport for FakeGitHub {
             }
         }
         let reply = match answer {
-            Some((status, body)) => response(status, body),
+            Some((status, body)) => json(status, body),
             None => {
                 if !ctx.pull_read {
                     self.fire_mutates(&ctx, &mut state);

@@ -170,8 +170,7 @@ pub struct Repository {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolingWarning {
-    /// `merge-without-ci`, `merge-without-required-checks` or
-    /// `security-merge-without-delivery`.
+    /// The tooling rule the configuration breaks; see [`ToolingRule`].
     pub rule: ToolingRule,
     /// The case with its own wording: `reviews-only` when the default branch
     /// requires a review but no checks, `tagged-release` when only tags
@@ -282,7 +281,7 @@ pub struct PackageFile {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Dependency {
-    /// Canonical patchula manager identifier; unknown upstream names stay literal.
+    /// Canonical patchula manager identifier.
     pub manager: Manager,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -459,7 +458,7 @@ pub struct Update {
     pub new_value: Option<String>,
     pub new_version: Option<String>,
     pub new_digest: Option<String>,
-    /// major, minor, patch, digest or pin.
+    /// See [`UpdateKind`].
     pub update_type: UpdateKind,
     pub group: Option<String>,
     /// Lookup metadata.
@@ -545,7 +544,7 @@ pub struct ImageCheck {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageSbom {
     pub digest: String,
-    /// attestation, cosign-att or cosign-sbom.
+    /// Where the SBOM was found; see [`patchula_words::SbomSource`].
     pub source: patchula_words::SbomSource,
     pub generator: String,
 }
@@ -885,7 +884,7 @@ mod tests {
     fn branch_and_pull_request_statuses_are_their_own() {
         let report = |branch: &str, pr: &str| {
             format!(
-                r#"{{"schemaVersion":{SCHEMA_VERSION},"repositories":[{{"repository":"o/r","status":"complete","reason":null,"packageFiles":[]}}],"actions":{{"schemaVersion":3,"dryRun":false,"branches":[{{"repository":"o/r","branch":"b","baseCommit":"c","status":"{branch}","reason":"why","message":"m","previousCommit":null,"commit":null,"verified":null,"lockfilePending":false,"files":[]}}],"pullRequests":[{{"repository":"o/r","branch":"b","number":1,"url":null,"status":"{pr}","reason":"why"}}]}}}}"#
+                r#"{{"schemaVersion":{SCHEMA_VERSION},"repositories":[{{"repository":"o/r","status":"complete","reason":null,"packageFiles":[]}}],"actions":{{"schemaVersion":{ACTIONS_SCHEMA_VERSION},"dryRun":false,"branches":[{{"repository":"o/r","branch":"b","baseCommit":"c","status":"{branch}","reason":"why","message":"m","previousCommit":null,"commit":null,"verified":null,"lockfilePending":false,"files":[]}}],"pullRequests":[{{"repository":"o/r","branch":"b","number":1,"url":null,"status":"{pr}","reason":"why"}}]}}}}"#
             )
         };
         assert!(Report::from_json(report("stale", "closed").as_bytes()).is_ok());
@@ -898,7 +897,7 @@ mod tests {
     fn a_stale_repository_is_a_real_run_with_a_reason() {
         let report = |repo: serde_json::Value, actions: serde_json::Value| {
             serde_json::json!({
-                "schemaVersion": 8,
+                "schemaVersion": SCHEMA_VERSION,
                 "repositories": [repo],
                 "actions": actions,
             })
@@ -908,7 +907,7 @@ mod tests {
             "reason": "default branch moved since extraction; rerun",
             "packageFiles": [],
         });
-        let actions = serde_json::json!({"schemaVersion": 3, "dryRun": false, "branches": []});
+        let actions = serde_json::json!({"schemaVersion": ACTIONS_SCHEMA_VERSION, "dryRun": false, "branches": []});
         let parse =
             |value: &serde_json::Value| Report::from_json(&serde_json::to_vec(value).unwrap());
         // A raced repository reports stale and round-trips with its reason.
@@ -931,14 +930,19 @@ mod tests {
 
     #[test]
     fn reject_future_schema_before_interpreting_payload() {
+        let future = SCHEMA_VERSION + 1;
         assert!(matches!(
-            Report::from_json(br#"{"schemaVersion":9,"future":true}"#),
-            Err(Error::Version(9))
+            Report::from_json(format!(r#"{{"schemaVersion":{future},"future":true}}"#).as_bytes()),
+            Err(Error::Version(version)) if version == future
         ));
         assert!(
-            Report::from_json(br#"{"schemaVersion":8,"repositories":[],"typo":true}"#).is_err()
+            Report::from_json(
+                format!(r#"{{"schemaVersion":{SCHEMA_VERSION},"repositories":[],"typo":true}}"#)
+                    .as_bytes()
+            )
+            .is_err()
         );
-        for old in [1, 2, 3, 4, 5, 6, 7] {
+        for old in 1..SCHEMA_VERSION {
             let report = format!(r#"{{"schemaVersion":{old},"repositories":[]}}"#);
             assert!(matches!(
                 Report::from_json(report.as_bytes()),
@@ -1084,9 +1088,9 @@ mod tests {
     #[test]
     fn action_versions_and_dry_run_states_are_validated() {
         let mut value = serde_json::json!({
-            "schemaVersion": 8,
+            "schemaVersion": SCHEMA_VERSION,
             "repositories": [{"repository":"demo/app","status":"complete","reason":null,"packageFiles":[]}],
-            "actions": {"schemaVersion":3,"dryRun":true,"branches":[{
+            "actions": {"schemaVersion":ACTIONS_SCHEMA_VERSION,"dryRun":true,"branches":[{
                 "repository":"demo/app","branch":"patchula/example","baseCommit":"base",
                 "status":"planned","reason":null,"message":"update example","previousCommit":null,
                 "commit":null,"verified":null,"lockfilePending":false,"files":[]
@@ -1107,9 +1111,8 @@ mod tests {
     }
 }
 
-// These records sorted on string fields before their words were typed, and
-// reports, CLI output and the dashboard list them in that order. They keep
-// sorting by the word's text, not by the enum's declaration order.
+// These records sort by each word's text, not by the enum's declaration
+// order: reports, CLI output and the dashboard list them in that order.
 macro_rules! ordered_by {
     ($name:ident, |$v:ident| $key:expr) => {
         impl Ord for $name {

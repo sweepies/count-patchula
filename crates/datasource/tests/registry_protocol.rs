@@ -1323,6 +1323,53 @@ async fn basic_credentials_reach_a_token_service_on_the_registry_origin_only() {
     assert!(steps.0.lock().unwrap().is_empty());
 }
 
+/// A realm on the registry's host but another port, Docker Hub's auth host
+/// at another path, or a GitLab token path off port 443 is not one of the
+/// registry's token services: it is refused before any request to it.
+#[tokio::test]
+async fn a_realm_off_the_registry_origin_and_port_443_is_refused() {
+    for (image, manifest, realm) in [
+        (
+            "registry.acme.dev/team/app",
+            "https://registry.acme.dev/v2/team/app/manifests/1.0",
+            "https://registry.acme.dev:8443/token",
+        ),
+        (
+            "docker.io/library/app",
+            "https://registry-1.docker.io/v2/library/app/manifests/1.0",
+            "https://auth.docker.io/elsewhere",
+        ),
+        (
+            "registry.gitlab.acme.dev/team/app",
+            "https://registry.gitlab.acme.dev/v2/team/app/manifests/1.0",
+            "https://gitlab.acme.dev:8443/jwt/auth",
+        ),
+    ] {
+        let steps = Arc::new(AuthSteps(Mutex::new(VecDeque::from([(
+            manifest.to_owned(),
+            None,
+            response(
+                401,
+                "",
+                &[(
+                    "www-authenticate",
+                    &format!(r#"Bearer realm="{realm}",service="registry""#),
+                )],
+            ),
+        )]))));
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            auth_client(steps.clone(), dir.path())
+                .await
+                .registry_digest(image, "1.0")
+                .await
+                .is_err(),
+            "{realm}"
+        );
+        assert!(steps.0.lock().unwrap().is_empty(), "{realm}");
+    }
+}
+
 #[tokio::test]
 async fn a_token_service_entry_alone_never_mints_account_tokens() {
     let manifest = "https://registry.gitlab.acme.dev/v2/team/app/manifests/1.0";

@@ -153,7 +153,7 @@ impl Client {
         }
         let (source, package) = (id.source, id.name.as_str());
         if !patchula_datasource::package_name_safe(package) {
-            return Err(Error::Invalid);
+            return Err(Error::Source(patchula_datasource::Error::Invalid));
         }
         let response = match source {
             Source::GithubReleases | Source::GithubTags => {
@@ -191,7 +191,8 @@ impl Client {
                     .http
                     .get(&format!("https://{package}?go-get=1"), "text/html")
                     .await?;
-                let html = std::str::from_utf8(&response.body).map_err(|_| Error::Invalid)?;
+                let html = std::str::from_utf8(&response.body)
+                    .map_err(|_| Error::Source(patchula_datasource::Error::Invalid))?;
                 let found = vanity(html, package);
                 // Verify the authoritative prefix as required by the Go protocol.
                 if let Some((prefix, source)) = &found
@@ -203,13 +204,14 @@ impl Client {
                         .get(&format!("https://{prefix}?go-get=1"), "text/html")
                         .await?;
                     if vanity(
-                        std::str::from_utf8(&response.body).map_err(|_| Error::Invalid)?,
+                        std::str::from_utf8(&response.body)
+                            .map_err(|_| Error::Source(patchula_datasource::Error::Invalid))?,
                         prefix,
                     )
                     .as_ref()
                         != Some(&(prefix.clone(), source.clone()))
                     {
-                        return Err(Error::Invalid);
+                        return Err(Error::Source(patchula_datasource::Error::Invalid));
                     }
                 }
                 return Ok(found.map(|(_, source)| source));
@@ -249,7 +251,7 @@ impl Client {
                     .await?
             }
             Source::Docker | Source::Oci => {
-                return self.sources.image_source(package, version).await;
+                return Ok(self.sources.image_source(package, version).await?);
             }
             Source::Helm => {
                 let chart = self.sources.helm_chart(package).await?;

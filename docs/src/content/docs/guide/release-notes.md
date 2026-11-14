@@ -94,7 +94,9 @@ only ask for timestamps. Changelogs are parsed once per immutable blob.
 ## How notes are rendered
 
 The body stays within 32,000 bytes. Each dependency gets at most 12,000 bytes
-and 32 releases.
+and 32 releases. On every forge the releases in range are taken newest version
+first, whatever order the forge lists them in; once the budget is spent, older
+releases are left out and the notes say they are incomplete.
 
 Under the dependency's name and its Source and Compare links, the notes sit in
 one collapsed block whose summary says what is inside, such as

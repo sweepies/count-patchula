@@ -272,7 +272,7 @@ async fn migrates_previous_schema_without_discarding_http_or_release_data() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        13
+        14
     );
 }
 
@@ -575,6 +575,6 @@ async fn migration_counts_requeues_on_new_and_eleven_schema_queues() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        13
+        14
     );
 }

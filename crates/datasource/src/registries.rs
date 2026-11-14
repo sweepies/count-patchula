@@ -5,15 +5,6 @@ use patchula_http::{CacheError, Derived, conditional};
 fn encode(catalog: &Catalog) -> std::result::Result<Vec<u8>, CacheError> {
     serde_json::to_vec(catalog).map_err(|_| CacheError::Document)
 }
-fn release(version: String) -> Version {
-    Version {
-        version,
-        published_at: None,
-        digest: None,
-        yanked: false,
-        deprecated: false,
-    }
-}
 fn terraform(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, CacheError> {
     #[derive(Deserialize)]
     struct Versions {
@@ -37,7 +28,10 @@ fn terraform(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, Cache
         })
         .ok_or(CacheError::Document)?;
     let mut catalog = Catalog {
-        versions: versions.into_iter().map(|v| release(v.version)).collect(),
+        versions: versions
+            .into_iter()
+            .map(|v| Version::new(v.version))
+            .collect(),
         ..Default::default()
     };
     sort(&mut catalog.versions, Ecosystem::Hashicorp);
@@ -515,7 +509,7 @@ fn catalog_of(files: &[SimpleFile]) -> Catalog {
             .unwrap_or_else(|| file.yanked.is_string());
         let v = releases.entry(version.into()).or_insert_with(|| Version {
             yanked: true,
-            ..release(version.into())
+            ..Version::new(version.into())
         });
         v.yanked &= yanked;
         if let Some(time) = &file.uploaded

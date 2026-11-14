@@ -19,9 +19,11 @@ use markdown::demote_headings;
 pub use markdown::{Links, fit, inert, sanitise};
 use patchula_cache::State;
 use patchula_config::{PackageId, split_package};
-use patchula_datasource::upstream::{ChartNotes, MirrorList, directory, mapped, mirror_url};
+use patchula_datasource::Failure;
+use patchula_datasource::upstream::{
+    ChartNotes, MirrorList, directory, mapped, mirror_url, truncate,
+};
 pub use patchula_datasource::upstream::{Forge, ForgeKind, Repository};
-use patchula_datasource::{Error, Result, truncate};
 use patchula_versioning::{Ecosystem, Parsed, Versioning};
 use patchula_words::Source;
 use serde::{Deserialize, Serialize};
@@ -30,6 +32,62 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+/// Why release notes could not be read.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// A datasource read failed.
+    #[error(transparent)]
+    Source(#[from] patchula_datasource::Error),
+    /// An upstream answer lacks what the notes need.
+    #[error("release-note read failed: {0}")]
+    Upstream(&'static str),
+    /// The same read failed earlier in this batch; its kind and message.
+    #[error("{0}")]
+    Earlier(Failure),
+}
+impl From<patchula_github::Error> for Error {
+    fn from(error: patchula_github::Error) -> Self {
+        Self::Source(error.into())
+    }
+}
+impl From<patchula_http::CacheError> for Error {
+    fn from(error: patchula_http::CacheError) -> Self {
+        Self::Source(error.into())
+    }
+}
+impl From<patchula_cache::Error> for Error {
+    fn from(error: patchula_cache::Error) -> Self {
+        Self::Source(error.into())
+    }
+}
+impl From<patchula_mise::Error> for Error {
+    fn from(error: patchula_mise::Error) -> Self {
+        Self::Source(error.into())
+    }
+}
+impl From<serde_json::Error> for Error {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Source(error.into())
+    }
+}
+impl Error {
+    /// The kind and message a memoised read keeps for later callers.
+    fn failure(&self) -> Failure {
+        match self {
+            Error::Source(error) => Failure {
+                kind: error.kind(),
+                message: error.to_string(),
+            },
+            Error::Upstream(_) => Failure {
+                kind: patchula_words::LookupErrorKind::Other,
+                message: self.to_string(),
+            },
+            Error::Earlier(failure) => failure.clone(),
+        }
+    }
+}
+pub type Result<T> = std::result::Result<T, Error>;
+
 type SharedSections = Arc<tokio::sync::Mutex<Option<Arc<Vec<Section>>>>>;
 /// Parsed upstream blobs memoised per batch. Changelog files and adapter
 /// sections share the map; the key type keeps their formats distinct.
@@ -47,7 +105,7 @@ enum MemoKey {
     },
 }
 type ChangelogCache = Arc<tokio::sync::Mutex<BTreeMap<MemoKey, SharedSections>>>;
-type SharedRead = Arc<tokio::sync::Mutex<Option<std::result::Result<Vec<u8>, String>>>>;
+type SharedRead = Arc<tokio::sync::Mutex<Option<std::result::Result<Vec<u8>, Failure>>>>;
 type ReadCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedRead>>>;
 
 /// The parsed sections of one immutable changelog blob.
@@ -289,11 +347,14 @@ impl Client {
             .clone();
         let mut saved = read.lock().await;
         if let Some(result) = &*saved {
-            return result.clone().map_err(Error::Notes);
+            return result.clone().map_err(Error::Earlier);
         }
-        let result = fetch.await.map_err(|e| e.to_string());
-        *saved = Some(result.clone());
-        result.map_err(Error::Notes)
+        let result = fetch.await;
+        *saved = Some(match &result {
+            Ok(bytes) => Ok(bytes.clone()),
+            Err(error) => Err(error.failure()),
+        });
+        result
     }
     async fn notes_source_repository(
         &self,
@@ -498,23 +559,34 @@ impl Client {
             // Unread chart changes leave the source's notes, marked incomplete.
             Err(_) => notes.incomplete = true,
         }
-        notes.source = self.notes_source_repository(id, target).await?;
-        let Some(repository) = notes.source.as_ref() else {
-            return Ok(notes);
-        };
-        let Some(repo) = repository.github.as_deref() else {
-            let forge = repository.forge.clone();
-            let bounds = note_bounds(source, package, current, target, repository);
-            return match (forge, bounds) {
-                (Some(forge), Some((old, new))) => {
-                    self.forge_notes(notes, &forge, &old, &new, package).await
-                }
-                _ => Ok(notes),
-            };
-        };
-        let Some((old, new)) = note_bounds(source, package, current, target, repository) else {
-            return Ok(notes);
-        };
+        let repository = self.notes_source_repository(id, target).await?;
+        if let Some(repository) = &repository
+            && let Some((old, new)) = note_bounds(source, package, current, target, repository)
+        {
+            if let Some(repo) = repository.github.as_deref() {
+                self.github_notes(&mut notes, repo, repository, old, new, package)
+                    .await?;
+            } else if let Some(forge) = &repository.forge {
+                self.forge_notes(&mut notes, repository, forge, &old, &new, package)
+                    .await;
+            }
+        }
+        notes.source = repository;
+        Ok(notes)
+    }
+
+    /// Notes for a GitHub upstream: release bodies from the mirror's listing,
+    /// then changelog files, then an adapter for upstreams that publish
+    /// elsewhere.
+    async fn github_notes(
+        &self,
+        notes: &mut Notes,
+        repo: &str,
+        repository: &Repository,
+        old: Parsed,
+        new: Parsed,
+        package: &str,
+    ) -> Result<()> {
         let mut bounds = (None, None);
         let mut template = None;
         // The mirror contract does not permit API list fallback, including on
@@ -542,42 +614,35 @@ impl Client {
                     }
                     candidates.push((version, release));
                 }
-                candidates.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
+                newest_first(&mut candidates);
+                // Bodies are read only for the releases the budget can take.
                 let tags: Vec<_> = candidates
                     .iter()
                     .take(NOTES_SECTIONS)
                     .map(|(_, r)| r.tag.clone())
                     .collect();
                 let bodies = self.release_bodies(repo, &tags).await?;
-                let mut bytes = 0;
-                for (index, (version, release)) in candidates.into_iter().enumerate() {
-                    // A PR displays at most 12 KB per dependency. Avoid reading
-                    // hundreds of older bodies that the renderer cannot include.
-                    if bytes >= NOTES_BYTES || index >= NOTES_SECTIONS {
-                        notes.incomplete = true;
-                        break;
-                    }
-                    match &bodies[&release.tag] {
+                versions =
+                    take_releases(notes, candidates, |release| match &bodies[&release.tag] {
+                        Ok(Some(body))
+                            if body.draft || hidden_prerelease(body.prerelease, &new) =>
+                        {
+                            ReleaseText::Empty
+                        }
                         Ok(Some(body)) => {
-                            if body.draft || hidden_prerelease(body.prerelease, &new) {
-                                continue;
-                            }
-                            if let Some(body) = body.body.clone().filter(|b| !b.trim().is_empty()) {
-                                bytes += body.len();
-                                versions.insert(version_id(&version));
-                                notes.sections.push(Section {
-                                    version: version_id(&version),
+                            match body.body.clone().filter(|b| !b.trim().is_empty()) {
+                                Some(body) => ReleaseText::Body {
                                     link: segment_url(
                                         &format!("https://github.com/{repo}/releases/tag/"),
                                         &release.tag,
                                     ),
                                     body,
-                                });
+                                },
+                                None => ReleaseText::Empty,
                             }
                         }
-                        Ok(None) | Err(_) => notes.incomplete = true,
-                    }
-                }
+                        Ok(None) | Err(_) => ReleaseText::Unread,
+                    });
             }
             Err(_) => notes.incomplete = true,
         }
@@ -618,30 +683,16 @@ impl Client {
                     )
                 })
                 .collect();
+            let local = |file: &changelog::File| {
+                repository
+                    .directory
+                    .as_ref()
+                    .is_some_and(|directory| under_directory(&file.path, directory))
+            };
             // Package-local notes win over repository-wide notes for monorepos.
-            files.sort_by_key(|file| {
-                (
-                    repository
-                        .directory
-                        .as_ref()
-                        .is_none_or(|dir| !under_directory(&file.path, dir)),
-                    file.path.clone(),
-                )
-            });
-            if repository.directory.is_some()
-                && files.iter().any(|f| {
-                    repository
-                        .directory
-                        .as_ref()
-                        .is_some_and(|d| under_directory(&f.path, d))
-                })
-            {
-                files.retain(|f| {
-                    repository
-                        .directory
-                        .as_ref()
-                        .is_some_and(|d| under_directory(&f.path, d))
-                });
+            files.sort_by_key(|file| (!local(file), file.path.clone()));
+            if files.iter().any(local) {
+                files.retain(local);
             }
             for file in files {
                 let Ok(sections) = self.changelog_sections(repo, &file).await else {
@@ -687,35 +738,111 @@ impl Client {
                 Err(_) => notes.incomplete = true,
             }
         }
-        // Sort parsed versions once, rather than reparsing inside the comparator.
-        let mut sections: Vec<_> = notes
-            .sections
-            .drain(..)
-            .filter_map(|s| Some((parsed(&s.version)?, s)))
-            .collect();
-        sections.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
-        notes.sections.extend(sections.into_iter().map(|(_, s)| s));
-        if bounds.0.is_none() || bounds.1.is_none() {
-            notes.compare_inferred = true;
+        let ends = Ends {
+            package,
+            repository,
+            old: &old,
+            new: &new,
+        };
+        finish(notes, bounds, template, &ends, |old, new| {
+            compare(repo, old, new)
+        });
+        Ok(())
+    }
+}
+
+/// The compare tags of the current and the target version, as observed.
+type Bounds = (Option<String>, Option<String>);
+
+/// What one release in the budget contributes.
+enum ReleaseText {
+    /// Its notes, and where they are published.
+    Body { link: String, body: String },
+    /// No notes to show: an empty body, a draft or a hidden prerelease.
+    Empty,
+    /// Its body could not be read.
+    Unread,
+}
+
+/// Newest version first, parsed once rather than inside the comparator.
+fn newest_first<T>(items: &mut [(Parsed, T)]) {
+    items.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
+}
+
+/// The one release budget every forge follows: in-range candidates newest
+/// first, at most `NOTES_SECTIONS` of them considered and `NOTES_BYTES` of
+/// bodies taken. Past either, the notes are incomplete and older releases
+/// are not read. The versions that got a section.
+fn take_releases<T>(
+    notes: &mut Notes,
+    candidates: Vec<(Parsed, T)>,
+    mut text: impl FnMut(T) -> ReleaseText,
+) -> BTreeSet<String> {
+    let mut versions = BTreeSet::new();
+    let mut bytes = 0;
+    for (index, (version, candidate)) in candidates.into_iter().enumerate() {
+        if bytes >= NOTES_BYTES || index >= NOTES_SECTIONS {
             notes.incomplete = true;
-            if let Some(template) = template {
-                bounds.0 = bounds
-                    .0
-                    .take()
-                    .or_else(|| inferred_tag(&template, package, repository, &old));
-                bounds.1 = bounds
-                    .1
-                    .take()
-                    .or_else(|| inferred_tag(&template, package, repository, &new));
+            break;
+        }
+        match text(candidate) {
+            ReleaseText::Body { link, body } => {
+                bytes += body.len();
+                versions.insert(version_id(&version));
+                notes.sections.push(Section {
+                    version: version_id(&version),
+                    link,
+                    body,
+                });
             }
+            ReleaseText::Empty => {}
+            ReleaseText::Unread => notes.incomplete = true,
         }
-        if let (Some(old), Some(new)) = (bounds.0, bounds.1) {
-            notes.compare = Some(compare(repo, &old, &new));
-        } else {
-            // No observed tag namespace: do not invent a compare URL.
-            notes.incomplete = true;
+    }
+    versions
+}
+
+/// The range and naming the compare tags are inferred from.
+struct Ends<'a> {
+    package: &'a str,
+    repository: &'a Repository,
+    old: &'a Parsed,
+    new: &'a Parsed,
+}
+
+/// The shared end of every forge's notes: sections sorted newest first, and
+/// the compare link between the observed tags. A tag not observed is
+/// inferred from the namespace `template` and marks the link inferred; with
+/// either tag still unknown there is no link. Either way the notes are
+/// incomplete.
+fn finish(
+    notes: &mut Notes,
+    mut bounds: Bounds,
+    template: Option<String>,
+    ends: &Ends<'_>,
+    compare_link: impl FnOnce(&str, &str) -> String,
+) {
+    let mut sections: Vec<_> = notes
+        .sections
+        .drain(..)
+        .filter_map(|s| Some((parsed(&s.version)?, s)))
+        .collect();
+    newest_first(&mut sections);
+    notes.sections.extend(sections.into_iter().map(|(_, s)| s));
+    if bounds.0.is_none() || bounds.1.is_none() {
+        notes.compare_inferred = true;
+        notes.incomplete = true;
+        if let Some(template) = template {
+            let infer = |version| inferred_tag(&template, ends.package, ends.repository, version);
+            bounds.0 = bounds.0.take().or_else(|| infer(ends.old));
+            bounds.1 = bounds.1.take().or_else(|| infer(ends.new));
         }
-        Ok(notes)
+    }
+    if let (Some(old), Some(new)) = (bounds.0, bounds.1) {
+        notes.compare = Some(compare_link(&old, &new));
+    } else {
+        // No observed tag namespace: do not invent a compare URL.
+        notes.incomplete = true;
     }
 }
 
@@ -725,13 +852,29 @@ const NOTE_HEADINGS: usize = 5;
 /// A single release this short stays expanded: at most this many lines and bytes.
 const SHORT_LINES: usize = 8;
 const SHORT_BYTES: usize = 600;
+/// The smallest budget a dependency's notes render into at all.
+const MIN_RENDER: usize = 512;
+/// The longest package name a heading shows.
+const PACKAGE_NAME: usize = 160;
+/// The longest source or release link rendered.
+const LINK: usize = 512;
+/// Room for the markup around the package name and the source link.
+const SOURCE_MARKUP: usize = 160;
+/// Room past the source line a release needs for the notes to list any.
+const RELEASE_ROOM: usize = 200;
+/// Room for the summary, the closing tag and the notice.
+const FOLD_RESERVE: usize = 700;
+/// Body room a release heading needs beside it to be shown.
+const BODY_ROOM: usize = 40;
+/// The longest version a summary line shows, in characters.
+const SUMMARY_VERSION: usize = 40;
 
 /// A version inside a summary line: plain text, whatever the project calls it.
 fn summary_text(version: &str) -> String {
     version
         .chars()
         .filter(|c| c.is_alphanumeric() || ".+-_~^:/!".contains(*c))
-        .take(40)
+        .take(SUMMARY_VERSION)
         .collect()
 }
 
@@ -739,18 +882,18 @@ impl Notes {
     /// Includes the source/compare links even when no upstream text is published.
     /// Budgets count UTF-8 bytes, a conservative bound on GitHub's character cap.
     pub fn render(&self, package: &str, limit: usize) -> String {
-        if limit < 512 {
+        if limit < MIN_RENDER {
             return String::new();
         }
-        let package = truncate(package, 160)
+        let package = truncate(package, PACKAGE_NAME)
             .replace(['\n', '\r'], " ")
             .replace("<!--", "&lt;!--")
             .replace("-->", "--&gt;");
-        let package = truncate(&package, 160);
+        let package = truncate(&package, PACKAGE_NAME);
         // A chart's own list of changes needs no source; anything else does.
         let chart = self.from_chart && !self.sections.is_empty();
         let fits = |source: &&Repository| {
-            source.url.len() <= 512 && source.url.len() + package.len() + 160 <= limit
+            source.url.len() <= LINK && source.url.len() + package.len() + SOURCE_MARKUP <= limit
         };
         let source = match &self.source {
             None if !chart => {
@@ -790,7 +933,7 @@ impl Notes {
                 );
             }
         }
-        if text.len() + 200 > limit {
+        if text.len() + RELEASE_ROOM > limit {
             return cut();
         }
         let links = match source {
@@ -811,14 +954,12 @@ impl Notes {
         if self.sections.is_empty() {
             text.push_str("No upstream release text or changelog sections found for this range.\n");
         }
-        // Room for the summary, the closing tag and the notice.
-        let reserve = 700;
         let mut releases = String::new();
         let mut shown = 0;
         let mut trimmed = false;
         let mut unreadable = false;
         for section in &self.sections {
-            if section.link.len() > 512 {
+            if section.link.len() > LINK {
                 unreadable = true;
                 continue;
             }
@@ -827,8 +968,8 @@ impl Notes {
             } else {
                 format!("#### [{}]({})\n\n", section.version, section.link)
             };
-            let room = limit.saturating_sub(text.len() + releases.len() + reserve);
-            if heading.len() + 40 > room {
+            let room = limit.saturating_sub(text.len() + releases.len() + FOLD_RESERVE);
+            if heading.len() + BODY_ROOM > room {
                 trimmed = true;
                 break;
             }
@@ -915,6 +1056,62 @@ impl Notes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Offline;
+    impl patchula_http::Transport for Offline {
+        fn send(&self, _: reqwest::Request) -> patchula_http::Exchange<'_> {
+            panic!("unexpected network request")
+        }
+    }
+
+    /// The first failing read returns its own error, so its kind survives;
+    /// a later read of the same key in the batch gets the memoised kind and
+    /// message without fetching again.
+    #[tokio::test]
+    async fn a_failed_read_keeps_its_error_and_is_memoised_by_kind() {
+        let cache = patchula_cache::Cache::open(":memory:", Default::default())
+            .await
+            .unwrap();
+        let transport = Arc::new(Offline);
+        let github = patchula_github::Client::with_transport(
+            "offline",
+            cache.clone(),
+            Default::default(),
+            transport.clone(),
+        )
+        .unwrap();
+        let sources = patchula_datasource::Client::new(
+            github,
+            patchula_datasource::cached(cache.clone(), transport, 1).unwrap(),
+            cache,
+        );
+        let client = Client::new(sources);
+        let missing = || async { Err(Error::from(patchula_http::CacheError::Status(404))) };
+        let first = client.note_read("key", missing()).await.unwrap_err();
+        assert!(
+            matches!(
+                first,
+                Error::Source(patchula_datasource::Error::Http(
+                    patchula_http::CacheError::Status(404)
+                ))
+            ),
+            "{first:?}"
+        );
+        let again = client
+            .note_read(
+                "key",
+                std::future::poll_fn(|_| -> std::task::Poll<Result<Vec<u8>>> {
+                    panic!("memoised reads do not fetch")
+                }),
+            )
+            .await
+            .unwrap_err();
+        let Error::Earlier(failure) = again else {
+            panic!("{again:?}")
+        };
+        assert_eq!(failure.kind, patchula_words::LookupErrorKind::NotFound);
+        assert_eq!(failure.message, first.to_string());
+    }
 
     #[test]
     fn chart_releaser_tags_name_the_chart_then_its_version() {

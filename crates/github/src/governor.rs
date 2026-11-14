@@ -92,6 +92,11 @@ pub(super) struct Governor {
     wait_millis: AtomicU64,
 }
 
+/// The window GitHub's hourly write limit counts in.
+const HOUR: Duration = Duration::from_secs(3600);
+/// GitHub's documented content writes an hour.
+const WRITES_PER_HOUR: usize = 500;
+
 impl Governor {
     pub fn new(concurrency: usize, max_wait: Duration, write_burst: usize) -> Self {
         Self {
@@ -109,7 +114,7 @@ impl Governor {
     /// Serialize REST mutations and GraphQL mutations across all client clones,
     /// paced by a token bucket: `burst` tokens refilling one a second, one
     /// token a write counted from the write's start — under the documented 80
-    /// content requests a minute — inside the documented 500 an hour. A
+    /// content requests a minute — inside the documented [`WRITES_PER_HOUR`]. A
     /// secondary-rate-limit answer cuts the budget to one token for an hour.
     pub async fn content(&self) -> Result<ContentPermit<'_>> {
         let started = Instant::now();
@@ -118,7 +123,7 @@ impl Governor {
         while content
             .hour
             .front()
-            .is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(3600))
+            .is_some_and(|t| now.duration_since(*t) >= HOUR)
         {
             content.hour.pop_front();
         }
@@ -128,8 +133,8 @@ impl Governor {
             .then(|| now + Duration::from_secs_f64(1.0 - content.tokens))
             .into_iter()
             .chain(
-                (content.hour.len() >= 500)
-                    .then(|| *content.hour.front().expect("full hour") + Duration::from_secs(3600)),
+                (content.hour.len() >= WRITES_PER_HOUR)
+                    .then(|| *content.hour.front().expect("full hour") + HOUR),
             )
             .max();
         if let Some(until) = until {
@@ -143,11 +148,14 @@ impl Governor {
         }
         content.tokens = (content.tokens - 1.0).max(0.0);
         content.hour.push_back(now);
-        self.wait_millis.fetch_add(
-            started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-            Ordering::Relaxed,
-        );
+        self.add_wait(started);
         Ok(ContentPermit { _guard: content })
+    }
+
+    /// Count the time since `started` as waiting.
+    fn add_wait(&self, started: Instant) {
+        let waited = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.wait_millis.fetch_add(waited, Ordering::Relaxed);
     }
 
     /// One token while a secondary-rate-limit answer's hour runs, else `burst`.
@@ -199,7 +207,7 @@ impl Governor {
                 .semaphore
                 .acquire()
                 .await
-                .map_err(|_| Error::Configuration)?;
+                .expect("the governor never closes its semaphore");
             let mut state = self.state.lock().await;
             let now = Instant::now();
             let mut until = state.secondary_until.filter(|until| *until > now);
@@ -233,8 +241,7 @@ impl Governor {
             {
                 *available = available.saturating_sub(1);
             }
-            let waited = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-            self.wait_millis.fetch_add(waited, Ordering::Relaxed);
+            self.add_wait(started);
             return Ok(permit);
         }
     }
@@ -298,8 +305,15 @@ impl Governor {
         let rate_status = matches!(status, 403 | 429);
         let retry_after = conditional::retry_after(response);
         let exhausted = rate_status && number(response, "x-ratelimit-remaining") == Some(0);
+        let graphql_answer = resource == "graphql" && status == 200;
+        // Only a rate-limit status or a GraphQL answer can carry a body that
+        // classifies; any other, which may be megabytes, is never parsed.
         // Inspect only to classify; never attach this data to an error or log.
-        let json: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
+        let json: serde_json::Value = if rate_status || graphql_answer {
+            serde_json::from_slice(&response.body).unwrap_or_default()
+        } else {
+            serde_json::Value::Null
+        };
         let message = json
             .get("message")
             .and_then(serde_json::Value::as_str)
@@ -311,7 +325,7 @@ impl Governor {
                 .get("documentation_url")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|url| url.contains("secondary-rate-limits"));
-        let graphql_limit = status == 200
+        let graphql_limit = graphql_answer
             && json
                 .get("errors")
                 .and_then(serde_json::Value::as_array)
@@ -352,7 +366,7 @@ impl Governor {
         let mut state = self.state.lock().await;
         if secondary {
             state.secondary_until = Some(state.secondary_until.map_or(until, |old| old.max(until)));
-            state.content_throttled_until = Some(Instant::now() + Duration::from_secs(3600));
+            state.content_throttled_until = Some(Instant::now() + HOUR);
             tracing::warn!(
                 target: "patchula_github",
                 "secondary rate limit: writes pace at one a second for the next hour"
@@ -403,6 +417,17 @@ mod tests {
             body: Vec::new(),
             stale: None,
         }
+    }
+
+    /// A 200's body classifies only on GraphQL: a REST answer that happens
+    /// to hold a GraphQL-shaped error is content, not a rate limit.
+    #[tokio::test]
+    async fn only_a_graphql_answer_reports_a_limit_in_its_body() {
+        let governor = Governor::new(4, Duration::from_secs(3600), 12);
+        let mut answer = response(200, &[("retry-after", "1".into())]);
+        answer.body = br#"{"errors":[{"type":"RATE_LIMITED","message":"limited"}]}"#.to_vec();
+        assert!(!governor.rate_limited("core", &answer, 0).await.unwrap());
+        assert!(governor.rate_limited("graphql", &answer, 0).await.unwrap());
     }
 
     /// A response still in flight when the limit hit may carry an earlier

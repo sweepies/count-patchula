@@ -1,10 +1,11 @@
 use super::*;
 use patchula_cache::{HttpEntry, HttpKey};
+use patchula_http::conditional;
 use reqwest::{Method, Url};
 use std::{
     collections::HashSet,
     sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
 
@@ -79,24 +80,57 @@ impl ImageConfig {
     }
 }
 
-fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
+/// How far a registry trusts the token realm its challenge names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RealmTrust {
+    /// Not a token service of this registry: no request goes to it.
+    Refused,
+    /// A token service of this registry. It gets only credentials from an
+    /// operator entry of its own.
+    Tokens,
+    /// The registry's own token service: the registry entry's credentials
+    /// may go to it too.
+    Credentials,
+}
+
+/// One rule for the realm a registry at `host` names. The registry entry's
+/// credentials go to a token service on the registry's own origin, Docker
+/// Hub's auth.docker.io, or gitlab.com for its registry. A self-hosted
+/// GitLab's registry at `registry.<instance>` takes tokens from
+/// `<instance>/jwt/auth`, which needs its own entry for credentials. Every
+/// realm is HTTPS with no userinfo, and every realm off the registry's
+/// origin is on port 443.
+fn realm_trust(host: &str, realm: &Url) -> RealmTrust {
+    if realm.scheme() != "https" || !realm.username().is_empty() || realm.password().is_some() {
+        return RealmTrust::Refused;
+    }
+    if Url::parse(&format!("https://{host}/"))
+        .is_ok_and(|registry| registry.origin() == realm.origin())
+    {
+        return RealmTrust::Credentials;
+    }
+    if realm.port_or_known_default() != Some(443) {
+        return RealmTrust::Refused;
+    }
+    let (realm_host, path) = (realm.host_str(), realm.path());
+    if (host == "registry-1.docker.io" && realm_host == Some("auth.docker.io") && path == "/token")
+        || (host == "registry.gitlab.com"
+            && realm_host == Some("gitlab.com")
+            && path == "/jwt/auth")
+    {
+        RealmTrust::Credentials
+    } else if realm_host.is_some()
+        && realm_host == host.strip_prefix("registry.")
+        && path == "/jwt/auth"
+    {
+        RealmTrust::Tokens
+    } else {
+        RealmTrust::Refused
+    }
 }
 fn catalog(tags: Vec<String>) -> Catalog {
     Catalog {
-        versions: tags
-            .into_iter()
-            .map(|version| Version {
-                version,
-                published_at: None,
-                digest: None,
-                deprecated: false,
-                yanked: false,
-            })
-            .collect(),
+        versions: tags.into_iter().map(Version::new).collect(),
         dist_tags: BTreeMap::new(),
     }
 }
@@ -227,12 +261,15 @@ impl Client {
             *saved = None;
             if let Some(key) = &persisted
                 && let Some(entry) = self.cache.http_get(key).await?
-                && let Some(expiry) = entry.expires_at.filter(|expiry| *expiry > now())
+                && let Some(expiry) = entry
+                    .expires_at
+                    .filter(|expiry| *expiry > conditional::unix_now())
                 && let Ok(bearer) = String::from_utf8(entry.body)
             {
                 *saved = Some(Pull {
                     bearer,
-                    expiry: Instant::now() + Duration::from_secs((expiry - now()).max(0) as u64),
+                    expiry: Instant::now()
+                        + Duration::from_secs((expiry - conditional::unix_now()).max(0) as u64),
                 });
             }
         }
@@ -276,17 +313,8 @@ impl Client {
                     .collect();
                 let mut realm = Url::parse(fields.get("realm").ok_or(Error::Invalid)?)
                     .map_err(|_| Error::Invalid)?;
-                if realm.scheme() != "https"
-                    || !realm.username().is_empty()
-                    || realm.password().is_some()
-                    || !(realm.host_str() == Some(host.split(':').next().unwrap_or(host))
-                        || (host == "registry-1.docker.io"
-                            && realm.host_str() == Some("auth.docker.io"))
-                        // GitLab registries take tokens from their GitLab
-                        // instance: registry.gitlab.com from gitlab.com.
-                        || (realm.host_str() == host.strip_prefix("registry.")
-                            && realm.path() == "/jwt/auth"))
-                {
+                let trust = realm_trust(host, &realm);
+                if trust == RealmTrust::Refused {
                     return Err(Error::Invalid);
                 }
                 realm.set_query(None);
@@ -296,19 +324,8 @@ impl Client {
                 realm
                     .query_pairs_mut()
                     .append_pair("scope", &format!("repository:{path}:pull"));
-                let requested_at = now();
-                // The registry entry's basic credentials may go to a token service
-                // on the registry's own origin, Docker Hub's auth.docker.io, or
-                // gitlab.com for its registry; any other needs its own entry.
-                let trusted_realm = Url::parse(&format!("https://{host}/"))
-                    .is_ok_and(|registry| registry.origin() == realm.origin())
-                    || (realm.port_or_known_default() == Some(443)
-                        && ((host == "registry-1.docker.io"
-                            && realm.host_str() == Some("auth.docker.io")
-                            && realm.path() == "/token")
-                            || (host == "registry.gitlab.com"
-                                && realm.host_str() == Some("gitlab.com")
-                                && realm.path() == "/jwt/auth")));
+                let requested_at = conditional::unix_now();
+                let trusted_realm = trust == RealmTrust::Credentials;
                 // Only a registry with its own entry gets an account token, so its
                 // answers are always cached under that entry, never anonymously.
                 let realm_entry = self.http.credential(realm.as_str()).cloned();
@@ -321,10 +338,7 @@ impl Client {
                     }
                     _ => None,
                 };
-                let auth = self
-                    .http
-                    .token_get_with_credentials(realm.as_str(), credentials)
-                    .await?;
+                let auth = self.http.token_get(realm.as_str(), credentials).await?;
                 if !auth.status.is_success() {
                     return Err(patchula_http::CacheError::Status(auth.status.as_u16()).into());
                 }
@@ -352,9 +366,11 @@ impl Client {
                     .saturating_sub(age)
                     .saturating_sub(10);
                 let expiry = Instant::now()
-                    + Duration::from_secs(expires_at.saturating_sub(now()).max(0) as u64);
+                    + Duration::from_secs(
+                        expires_at.saturating_sub(conditional::unix_now()).max(0) as u64,
+                    );
                 if let Some(key) = &persisted
-                    && expires_at > now()
+                    && expires_at > conditional::unix_now()
                     && !auth
                         .headers
                         .get("cache-control")

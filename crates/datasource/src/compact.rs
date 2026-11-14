@@ -47,12 +47,12 @@ pub(super) fn npm(body: &mut dyn std::io::Read) -> Result<Vec<u8>, CacheError> {
         versions: document
             .versions
             .into_iter()
+            // npm's integrity and shasum are not consumed by lookup, so no
+            // digest is kept.
             .map(|(version, node)| Version {
                 published_at: document.time.remove(&version),
-                version,
                 deprecated: node.deprecated.is_some_and(|d| d.active()),
-                digest: None, // npm integrity/shasum is not consumed by lookup.
-                yanked: false,
+                ..Version::new(version)
             })
             .collect(),
     };
@@ -77,11 +77,9 @@ pub(super) fn crates(body: &mut dyn std::io::Read) -> Result<Vec<u8>, CacheError
         }
         let node: CrateVersion = serde_json::from_str(&line).map_err(|_| CacheError::Document)?;
         catalog.versions.push(Version {
-            version: node.vers,
             published_at: node.pubtime,
             yanked: node.yanked,
-            deprecated: false,
-            digest: None,
+            ..Version::new(node.vers)
         });
     }
     catalog.versions.reverse(); // Sparse index is append-only publication order.
@@ -108,14 +106,12 @@ pub(super) fn pypi(body: &mut dyn std::io::Read) -> Result<Vec<u8>, CacheError> 
         }
         let yanked = files.iter().all(|file| file.yanked);
         catalog.versions.push(Version {
-            version,
             published_at: files
                 .into_iter()
                 .filter_map(|file| file.upload_time_iso_8601)
                 .min(),
             yanked,
-            deprecated: false,
-            digest: None,
+            ..Version::new(version)
         });
     }
     sort(&mut catalog.versions, Ecosystem::Pep440);

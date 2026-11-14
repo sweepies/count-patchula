@@ -827,6 +827,6 @@ mod tests {
                 "{scheme:?} {range} {version}"
             );
         }
-        assert!(Ecosystem::Cargo.satisfies("<1", "1.5.0").is_ok());
+        assert!(!Ecosystem::Cargo.satisfies("<1", "1.5.0").unwrap());
     }
 }

@@ -177,13 +177,13 @@ impl Client {
     /// range, then a root changelog for versions without release text.
     pub(super) async fn forge_notes(
         &self,
-        mut notes: Notes,
+        notes: &mut Notes,
+        repository: &Repository,
         forge: &Forge,
         old: &Parsed,
         new: &Parsed,
         package: &str,
-    ) -> Result<Notes> {
-        let repository = notes.source.clone().expect("forge source");
+    ) {
         let (releases, derived) = match forge.kind {
             ForgeKind::Gitlab => (api(forge, "releases?per_page=100"), NOTES_GITLAB_RELEASES),
             ForgeKind::Gitea => (api(forge, "releases?limit=50"), NOTES_GITEA_RELEASES),
@@ -196,33 +196,31 @@ impl Client {
             .await
         {
             Ok(list) => {
-                let mut bytes = 0;
+                let mut candidates = Vec::new();
                 for release in list {
                     let Some(version) =
-                        tag_version(&release.tag, package, &repository).and_then(parsed)
+                        tag_version(&release.tag, package, repository).and_then(parsed)
                     else {
                         continue;
                     };
                     template.get_or_insert_with(|| release.tag.clone());
                     observe(&release.tag, &version, old, new, &mut tags);
-                    if hidden_prerelease(release.prerelease, new)
-                        || !in_range(&version, old, new)
-                        || release.body.trim().is_empty()
-                    {
+                    if hidden_prerelease(release.prerelease, new) || !in_range(&version, old, new) {
                         continue;
                     }
-                    if bytes >= NOTES_BYTES || notes.sections.len() >= NOTES_SECTIONS {
-                        notes.incomplete = true;
-                        continue;
-                    }
-                    bytes += release.body.len();
-                    versions.insert(version_id(&version));
-                    notes.sections.push(Section {
-                        version: version_id(&version),
-                        link: release_link(forge, &release.tag),
-                        body: release.body,
-                    });
+                    candidates.push((version, release));
                 }
+                newest_first(&mut candidates);
+                versions = take_releases(notes, candidates, |release| {
+                    if release.body.trim().is_empty() {
+                        ReleaseText::Empty
+                    } else {
+                        ReleaseText::Body {
+                            link: release_link(forge, &release.tag),
+                            body: release.body,
+                        }
+                    }
+                });
             }
             Err(_) => notes.incomplete = true,
         }
@@ -237,7 +235,7 @@ impl Client {
             {
                 for tag in listed {
                     if let Some(version) =
-                        tag_version(&tag.name, package, &repository).and_then(parsed)
+                        tag_version(&tag.name, package, repository).and_then(parsed)
                     {
                         template.get_or_insert_with(|| tag.name.clone());
                         observe(&tag.name, &version, old, new, &mut tags);
@@ -291,27 +289,14 @@ impl Client {
                 Err(_) => notes.incomplete = true,
             }
         }
-        let mut sections: Vec<_> = notes
-            .sections
-            .drain(..)
-            .filter_map(|s| Some((parsed(&s.version)?, s)))
-            .collect();
-        sections.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
-        notes.sections.extend(sections.into_iter().map(|(_, s)| s));
-        let (mut old_tag, mut new_tag) = tags;
-        if old_tag.is_none() || new_tag.is_none() {
-            notes.compare_inferred = true;
-            notes.incomplete = true;
-            if let Some(template) = template {
-                old_tag = old_tag.or_else(|| inferred_tag(&template, package, &repository, old));
-                new_tag = new_tag.or_else(|| inferred_tag(&template, package, &repository, new));
-            }
-        }
-        if let (Some(old), Some(new)) = (old_tag, new_tag) {
-            notes.compare = Some(compare_link(forge, &old, &new));
-        } else {
-            notes.incomplete = true;
-        }
-        Ok(notes)
+        let ends = Ends {
+            package,
+            repository,
+            old,
+            new,
+        };
+        finish(notes, tags, template, &ends, |old, new| {
+            compare_link(forge, old, new)
+        });
     }
 }

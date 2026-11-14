@@ -1,3 +1,4 @@
+use crate::validate::Issue;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -6,6 +7,18 @@ use std::{
 };
 
 pub const SCHEMA: &str = include_str!("../../../PatchulaSettings.pkl");
+/// The name the settings schema is evaluated under.
+pub const SCHEMA_NAME: &str = "PatchulaSettings.pkl";
+
+/// The largest `github.writeBurst`: the GitHub client's own bound, which
+/// keeps writes under GitHub's content-request rate.
+pub const MAX_WRITE_BURST: usize = 19;
+
+/// Whether `id` is an installation id the server accepts: positive and
+/// within `i64`.
+fn valid_installation(id: u64) -> bool {
+    id > 0 && i64::try_from(id).is_ok()
+}
 
 /// The environment variable naming the settings file, read by both the CLI's
 /// scan commands and `patchula serve`.
@@ -86,9 +99,8 @@ impl Secret {
                 os_bytes(&value)
                     .ok_or_else(|| format!("environment variable {name} is not valid Unicode"))?
             }
-            (None, Some(path)) => {
-                std::fs::read(path).map_err(|_| format!("cannot read {}", path.display()))?
-            }
+            (None, Some(path)) => std::fs::read(path)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?,
             _ => return Err("secret needs exactly one of env and file".into()),
         };
         let end = value
@@ -214,112 +226,142 @@ impl Settings {
         let source = std::fs::read_to_string(path)
             .into_diagnostic()
             .wrap_err_with(|| format!("cannot read settings {}", path.display()))?;
-        let value = crate::evaluate_local(path, "PatchulaSettings.pkl", SCHEMA)?;
+        let value = crate::evaluate_local(path, SCHEMA_NAME, SCHEMA)?;
         let settings: Self = serde_path_to_error::deserialize(value).map_err(|error| {
             crate::problem(path, &source, &error.path().to_string(), &error.to_string())
         })?;
-        settings.validate().map_err(|message| {
-            let field = message.split_whitespace().next().unwrap_or("");
-            crate::problem(path, &source, field, message)
-        })?;
+        settings
+            .validate()
+            .map_err(|issue| crate::problem(path, &source, &issue.field, &issue.message))?;
         Ok(settings)
     }
-    pub fn validate(&self) -> Result<(), &'static str> {
+    /// The first setting out of bounds, naming its field.
+    pub(crate) fn validate(&self) -> Result<(), Issue> {
+        /// `field` and what is wrong with it, read as one sentence.
+        fn issue(field: impl Into<String>, predicate: &str) -> Issue {
+            let field = field.into();
+            let message = format!("{field} {predicate}");
+            Issue { field, message }
+        }
         if !(1..=100).contains(&self.concurrency) {
-            return Err("concurrency must be 1..100");
+            return Err(issue("concurrency", "must be 1..100"));
         }
         // Registry prefixes, mirrors and host-concurrency rules need the HTTP
         // client's types, so patchula-engine's `settings::check` runs them;
         // `Settings::load` callers that build an engine get both.
-        for registry in self.registries.values() {
+        for (key, registry) in &self.registries {
+            let field = |name: &str| format!("registries[{key:?}]{name}");
             match (registry.auth, registry.username.as_deref()) {
                 (Some(RegistryAuth::Basic), Some(name))
                     if !name.is_empty() && !name.contains(':') => {}
                 (Some(RegistryAuth::Bearer) | None, None) => {}
                 _ => {
-                    return Err(
-                        "username is required for basic registries, without a colon, and refused otherwise",
-                    );
+                    return Err(issue(
+                        field(".username"),
+                        "is required for basic registries, without a colon, and refused otherwise",
+                    ));
                 }
             }
             match (registry.auth, &registry.secret) {
                 (Some(_), Some(secret)) => match (&secret.env, &secret.file) {
                     (Some(name), None) if !name.is_empty() && !name.contains('=') => {}
                     (None, Some(path)) if !path.as_os_str().is_empty() => {}
-                    _ => return Err("secret needs exactly one of env and file"),
+                    _ => {
+                        return Err(issue(field(".secret"), "needs exactly one of env and file"));
+                    }
                 },
                 (None, None) if registry.mirror_of.is_some() => {}
-                (None, None) => return Err("auth or mirrorOf is required for each registry"),
-                _ => return Err("secret is required with auth, and refused without it"),
+                (None, None) => return Err(issue(field(""), "needs auth or mirrorOf")),
+                _ => {
+                    return Err(issue(
+                        field(".secret"),
+                        "is required with auth, and refused without it",
+                    ));
+                }
             }
             if registry
                 .allowed_installations
                 .iter()
-                .any(|id| *id == 0 || *id > i64::MAX as u64)
+                .any(|id| !valid_installation(*id))
             {
-                return Err("allowedInstallations IDs must be positive");
+                return Err(issue(
+                    field(".allowedInstallations"),
+                    "IDs must be positive",
+                ));
             }
             // Lockfile tools read the public registry, never a mirror, and an
             // entry without credentials has nothing to give them.
             if registry.tools && (registry.auth.is_none() || registry.mirror_of.is_some()) {
-                return Err("tools needs auth, and does not apply to a mirror");
+                return Err(issue(
+                    field(".tools"),
+                    "needs auth, and does not apply to a mirror",
+                ));
             }
         }
         if !(1..=100).contains(&self.http.default_host_concurrency) {
-            return Err("defaultHostConcurrency must be 1..100");
+            return Err(issue("http.defaultHostConcurrency", "must be 1..100"));
         }
-        if !(1..=19).contains(&self.github.write_burst) {
-            return Err("github.writeBurst must be 1..19");
+        if !(1..=MAX_WRITE_BURST).contains(&self.github.write_burst) {
+            return Err(issue(
+                "github.writeBurst",
+                &format!("must be 1..{MAX_WRITE_BURST}"),
+            ));
         }
         if !(1..=1_000_000).contains(&self.lockfiles.cache_gib) {
-            return Err("lockfiles.cacheGiB must be 1..1000000");
+            return Err(issue("lockfiles.cacheGiB", "must be 1..1000000"));
         }
         let server = &self.server;
         if !(1..=1000).contains(&server.batch_size) {
-            return Err("batchSize must be 1..1000");
+            return Err(issue("server.batchSize", "must be 1..1000"));
         }
         if server.coalescing_ms > 60_000 {
-            return Err("coalescingMs must be 0..60000");
+            return Err(issue("server.coalescingMs", "must be 0..60000"));
         }
         if !(1..=64).contains(&server.workers) {
-            return Err("workers must be 1..64");
+            return Err(issue("server.workers", "must be 1..64"));
         }
         if let Some(cron) = &server.sweep_cron {
             crate::schedule(cron, true)
-                .map_err(|_| "sweepCron must be valid (six or seven fields)")?;
+                .map_err(|_| issue("server.sweepCron", "must be valid (six or seven fields)"))?;
         }
         chrono_tz::Tz::from_str(&server.sweep_timezone)
-            .map_err(|_| "sweepTimezone must be valid")?;
+            .map_err(|_| issue("server.sweepTimezone", "must be valid"))?;
         if server
             .report_directory
             .as_ref()
             .is_some_and(|p| p.as_os_str().is_empty())
         {
-            return Err("reportDirectory must be nonempty");
+            return Err(issue("server.reportDirectory", "must be nonempty"));
         }
         if !(1..=100_000).contains(&server.reports_kept) {
-            return Err("reportsKept must be 1..100000");
+            return Err(issue("server.reportsKept", "must be 1..100000"));
         }
         if server
             .allowed_installations
             .iter()
-            .any(|id| *id == 0 || *id > i64::MAX as u64)
+            .any(|id| !valid_installation(*id))
         {
-            return Err("allowedInstallations IDs must be positive");
+            return Err(issue("server.allowedInstallations", "IDs must be positive"));
         }
         if server
             .allowed_repositories
             .iter()
             .any(|repo| !valid_repo(repo))
         {
-            return Err("allowedRepositories entries must be owner/repo");
+            return Err(issue(
+                "server.allowedRepositories",
+                "entries must be owner/repo",
+            ));
         }
         if server
             .public_url
             .as_deref()
             .is_some_and(|url| public_url(url).is_none())
         {
-            return Err("publicUrl must be an https URL without a query, fragment or user");
+            return Err(issue(
+                "server.publicUrl",
+                "must be an https URL without a query, fragment or user",
+            ));
         }
         Ok(())
     }
@@ -336,7 +378,7 @@ impl Settings {
     }
     pub fn installation_allowed(&self, id: u64) -> bool {
         let allowed = &self.server.allowed_installations;
-        id > 0 && id <= i64::MAX as u64 && (allowed.is_empty() || allowed.contains(&id))
+        valid_installation(id) && (allowed.is_empty() || allowed.contains(&id))
     }
     pub fn allows(&self, id: u64, repo: &str) -> bool {
         let allowed = &self.server.allowed_repositories;
@@ -478,14 +520,54 @@ pub fn from_webhook(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Load settings that amend the schema with `body`, written to `path`.
+    fn load_body(path: &Path, body: &str) -> miette::Result<Settings> {
+        std::fs::write(path, format!("amends \"{SCHEMA_NAME}\"\n{body}\n")).unwrap();
+        Settings::load(path)
+    }
+    /// A registry problem names the registry's field, so the diagnostic
+    /// points at the entry that is wrong.
+    #[test]
+    fn a_registry_problem_names_its_field() {
+        let mut settings = Settings::default();
+        settings.registries.insert(
+            "acme".into(),
+            Registry {
+                auth: Some(RegistryAuth::Basic),
+                username: None,
+                secret: Some(Secret {
+                    env: Some("ACME_TOKEN".into()),
+                    file: None,
+                }),
+                mirror_of: None,
+                allowed_installations: Vec::new(),
+                tools: false,
+            },
+        );
+        let issue = settings.validate().unwrap_err();
+        assert_eq!(issue.field, r#"registries["acme"].username"#);
+        assert!(issue.message.starts_with(&issue.field), "{}", issue.message);
+    }
+    /// An unreadable secret file keeps the io error: not found and permission
+    /// denied read differently.
+    #[test]
+    fn an_unreadable_secret_file_keeps_its_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let error = Secret {
+            env: None,
+            file: Some(missing.clone()),
+        }
+        .read_bytes()
+        .unwrap_err();
+        let io = std::fs::read(&missing).unwrap_err();
+        assert_eq!(error, format!("cannot read {}: {io}", missing.display()));
+    }
     #[test]
     fn reports_kept_is_read_and_bounded() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.pkl");
-        let load = |body: &str| {
-            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
-            Settings::load(&path)
-        };
+        let load = |body: &str| load_body(&path, body);
         assert_eq!(load("").unwrap().server.reports_kept, 200);
         assert_eq!(
             load("server { reportsKept = 5 }")
@@ -551,10 +633,7 @@ mod tests {
     fn the_advertised_url_comes_from_public_url_or_the_webhook() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.pkl");
-        let load = |body: &str| {
-            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
-            Settings::load(&path)
-        };
+        let load = |body: &str| load_body(&path, body);
         let derived = from_webhook("https://patchula.acme.dev/count/webhook?x=1");
         assert_eq!(derived.as_deref(), Some("https://patchula.acme.dev/count"));
         assert_eq!(from_webhook("https://smee.io/abc"), None);
@@ -586,10 +665,7 @@ mod tests {
     fn defaults_match_the_schema() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.pkl");
-        let load = |body: &str| {
-            std::fs::write(&path, format!("amends \"PatchulaSettings.pkl\"\n{body}\n")).unwrap();
-            Settings::load(&path)
-        };
+        let load = |body: &str| load_body(&path, body);
         assert_eq!(load("").unwrap(), Settings::default());
         assert_eq!(
             load("lockfiles { cacheGiB = 1 }")

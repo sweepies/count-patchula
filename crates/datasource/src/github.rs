@@ -122,9 +122,8 @@ impl Client {
             .ok_or(Error::Invalid)?
     }
 
-    /// Batch cold release pages; revalidate warm REST heads concurrently.
-    /// Only semantic release fields affect the refresh fingerprint, so asset
-    /// download counters cannot cause history refetches.
+    /// The release catalogs of `packages`: from the mise-versions mirror
+    /// when it is enabled, otherwise from GitHub's API.
     pub async fn release_catalogs(
         &self,
         packages: &[String],
@@ -134,6 +133,9 @@ impl Client {
         }
         self.api_release_catalogs(packages).await
     }
+    /// Batch cold release pages; revalidate warm REST heads concurrently.
+    /// Only semantic release fields affect the refresh fingerprint, so asset
+    /// download counters cannot cause history refetches.
     pub(super) async fn api_release_catalogs(
         &self,
         packages: &[String],

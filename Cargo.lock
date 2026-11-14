@@ -2384,7 +2384,6 @@ name = "patchula-datasource"
 version = "0.8.1"
 dependencies = [
  "base64 0.23.1",
- "bytes",
  "chrono",
  "futures-util",
  "graphql_client",
@@ -2398,7 +2397,6 @@ dependencies = [
  "patchula-testkit",
  "patchula-versioning",
  "patchula-words",
- "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -2564,7 +2562,6 @@ name = "patchula-notes"
 version = "0.8.1"
 dependencies = [
  "base64 0.23.1",
- "bytes",
  "futures-util",
  "patchula-cache",
  "patchula-config",
@@ -2581,6 +2578,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -2645,7 +2643,9 @@ name = "patchula-testkit"
 version = "0.8.1"
 dependencies = [
  "base64 0.23.1",
+ "bytes",
  "chrono",
+ "futures-util",
  "graphql-parser",
  "patchula-http",
  "patchula-mise",

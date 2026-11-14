@@ -9,6 +9,7 @@ fn fallback(error: &patchula_http::CacheError) -> bool {
     matches!(
         error,
         patchula_http::CacheError::Status(429 | 500..=599)
+            | patchula_http::CacheError::Throttled(_)
             | patchula_http::CacheError::Transport(_)
     )
 }
@@ -85,9 +86,8 @@ impl Client {
                 .filter(|entry| super::github::release_counts(false, entry.prerelease))
                 .map(|entry| {
                     Version::from(Release {
-                        version: entry.tag.clone(),
-                        published_at: entry.date.clone(),
                         digest: None,
+                        ..tag(entry)
                     })
                 })
                 .collect()
@@ -101,25 +101,52 @@ impl Client {
         &self,
         packages: &[String],
     ) -> Result<BTreeMap<String, Result<Catalog>>> {
-        Ok(stream::iter(packages.to_vec())
+        let mirrored: Vec<(String, Result<Option<Catalog>>)> = stream::iter(packages.to_vec())
             .map(|package: String| async move {
-                let result = match self.mirror_catalog(Source::GithubReleases, &package).await {
-                    Ok(Some(catalog)) => Ok(catalog),
-                    Ok(None) => match self
-                        .api_release_catalogs(std::slice::from_ref(&package))
-                        .await
-                    {
-                        Ok(mut catalogs) => catalogs
-                            .remove(&package)
-                            .unwrap_or_else(|| Err(Error::Invalid)),
-                        Err(error) => Err(error),
-                    },
-                    Err(error) => Err(error),
-                };
+                let result = self.mirror_catalog(Source::GithubReleases, &package).await;
                 (package, result)
             })
             .buffer_unordered(MIRROR_FAN_OUT)
             .collect()
-            .await)
+            .await;
+        let mut catalogs = BTreeMap::new();
+        let mut misses = Vec::new();
+        for (package, result) in mirrored {
+            match result {
+                Ok(Some(catalog)) => {
+                    catalogs.insert(package, Ok(catalog));
+                }
+                Ok(None) => misses.push(package),
+                Err(error) => {
+                    catalogs.insert(package, Err(error));
+                }
+            }
+        }
+        // The mirror's misses go to GitHub in one batched call. When the
+        // batch fails as a whole, each miss is asked on its own, so one bad
+        // package cannot fail the others.
+        match self.api_release_catalogs(&misses).await {
+            Ok(mut answered) => {
+                for package in misses {
+                    let result = answered.remove(&package).unwrap_or(Err(Error::Invalid));
+                    catalogs.insert(package, result);
+                }
+            }
+            Err(_) => {
+                for package in misses {
+                    let result = match self
+                        .api_release_catalogs(std::slice::from_ref(&package))
+                        .await
+                    {
+                        Ok(mut answered) => {
+                            answered.remove(&package).unwrap_or(Err(Error::Invalid))
+                        }
+                        Err(error) => Err(error),
+                    };
+                    catalogs.insert(package, result);
+                }
+            }
+        }
+        Ok(catalogs)
     }
 }

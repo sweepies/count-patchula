@@ -2,7 +2,7 @@ use crate::{Error, HttpEntry, Options, Release, ReleaseList, Result};
 
 /// Each migration sets `user_version` to its own number; a cache at version
 /// N runs the ones after it.
-pub(crate) const MIGRATIONS: [&str; 13] = [
+pub(crate) const MIGRATIONS: [&str; 14] = [
     include_str!("migrations/001.sql"),
     include_str!("migrations/002.sql"),
     include_str!("migrations/003.sql"),
@@ -16,6 +16,7 @@ pub(crate) const MIGRATIONS: [&str; 13] = [
     include_str!("migrations/011.sql"),
     include_str!("migrations/012.sql"),
     include_str!("migrations/013.sql"),
+    include_str!("migrations/014.sql"),
 ];
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::{
@@ -60,23 +61,6 @@ fn initialize(mut conn: Connection) -> Result<Connection> {
     for migration in MIGRATIONS.iter().skip(version.max(0) as usize) {
         transaction.execute_batch(migration)?;
     }
-    // Per-build state from another release can never be read again.
-    transaction.execute(
-        "DELETE FROM state WHERE instr(namespace, '+') > 0 \
-         AND substr(namespace, instr(namespace, '+') + 1) != ?1",
-        [crate::BUILD],
-    )?;
-    // A derived body under the old scheme — a representation ending
-    // `+<build>` — is never read again either. `+<build>` sits before the
-    // value's closing quote; `+<digit>` elsewhere in the key is not one.
-    transaction.execute(
-        "DELETE FROM http \
-         WHERE instr(key, '\"representation\":\"') > 0 \
-           AND instr(substr(key, instr(key, '\"representation\":\"') + 18), '+') > 0 \
-           AND instr(substr(key, instr(key, '\"representation\":\"') + 18), '+') \
-             < instr(substr(key, instr(key, '\"representation\":\"') + 18), '\"')",
-        [],
-    )?;
     transaction.commit()?;
     Ok(conn)
 }
@@ -205,6 +189,58 @@ impl Store {
         self.evict()
     }
 
+    /// Write a 304's metadata over the entry, leaving its body untouched.
+    pub fn http_refresh(&mut self, key: &str, entry: &HttpEntry) -> Result<()> {
+        self.conn.execute(
+            "UPDATE http SET etag=?2,last_modified=?3,headers=?4,fetched_at=?5,expires_at=?6,\
+             cache_control=?7 WHERE key=?1",
+            params![
+                key,
+                entry.etag,
+                entry.last_modified,
+                serde_json::to_string(&entry.headers)?,
+                entry.fetched_at,
+                entry.expires_at,
+                entry.cache_control
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn http_remove(&mut self, key: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM http WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    pub fn state(&self, namespace: &str, scope: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM state WHERE namespace=?1 AND scope=?2",
+                params![namespace, scope],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn set_state(&mut self, namespace: &str, scope: &str, value: &[u8]) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO state(namespace,scope,value) VALUES (?1,?2,?3) \
+             ON CONFLICT(namespace,scope) DO UPDATE SET value=excluded.value",
+            params![namespace, scope, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_state(&mut self, namespace: &str, scope: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM state WHERE namespace=?1 AND scope=?2",
+            params![namespace, scope],
+        )?;
+        Ok(())
+    }
+
     fn evict(&self) -> Result<()> {
         let mut total: i64 = self.conn.query_row(
             "SELECT COALESCE(SUM(length(body)),0) FROM http",
@@ -223,15 +259,20 @@ impl Store {
         Ok(())
     }
 
-    pub fn releases(&self, source: &str, package: &str) -> Result<ReleaseList> {
-        let newest = self
+    /// The refresh boundary, without materializing the cached history.
+    pub fn release_head(&self, source: &str, package: &str) -> Result<Option<String>> {
+        Ok(self
             .conn
             .query_row(
                 "SELECT newest FROM release_heads WHERE source=?1 AND package=?2",
                 params![source, package],
                 |row| row.get(0),
             )
-            .optional()?;
+            .optional()?)
+    }
+
+    pub fn releases(&self, source: &str, package: &str) -> Result<ReleaseList> {
+        let newest = self.release_head(source, package)?;
         let mut query = self.conn.prepare("SELECT version,published_at,digest FROM releases WHERE source=?1 AND package=?2 ORDER BY position")?;
         let releases = query
             .query_map(params![source, package], |row| {

@@ -334,8 +334,7 @@ impl Client {
                 })
                 .or_insert_with(|| modified.clone());
         }
-        let wanted = latest;
-        let records: BTreeMap<String, Option<Arc<Advisory>>> = stream::iter(wanted)
+        let records: BTreeMap<String, Option<Arc<Advisory>>> = stream::iter(latest)
             .map(|(id, modified)| async move {
                 let advisory = self.advisory(&id, &modified).await?;
                 Ok::<_, Error>((id, advisory))

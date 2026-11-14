@@ -3,13 +3,17 @@
 
 mod imports;
 pub use imports::import_files;
+mod matching;
+pub use matching::{Filter, Patterns};
 mod model;
 mod package;
 pub mod settings;
 pub use package::{PackageId, Registry, acceptable_registry_url, join_package, split_package};
 mod validate;
+mod virtual_files;
 pub use model::*;
 pub use patchula_words::Window;
+pub use virtual_files::load_files;
 
 use chrono::{DateTime, Duration, Utc};
 use miette::{Diagnostic, IntoDiagnostic, NamedSource, SourceSpan, WrapErr};
@@ -342,9 +346,3 @@ pub fn settings_problem(path: Option<&Path>, field: &str, message: &str) -> miet
         None => miette::miette!("{message}"),
     }
 }
-
-mod matching;
-pub use matching::{Filter, Patterns};
-
-mod virtual_files;
-pub use virtual_files::load_files;

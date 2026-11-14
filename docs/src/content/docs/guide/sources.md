@@ -133,9 +133,11 @@ it to read everything upstream.
 ## Registries and limits
 
 Docker Hub, GHCR and GitLab registries use anonymous registry tokens, cached
-until shortly before they expire. A token comes from the registry's own host,
-except Docker Hub's from `auth.docker.io` and a GitLab registry's
-(`registry.gitlab.com`) from its GitLab instance (`gitlab.com/jwt/auth`).
+until shortly before they expire. A token comes from the registry's own origin,
+except Docker Hub's from `auth.docker.io/token`, and a GitLab registry's
+(`registry.gitlab.com`, or `registry.<instance>` when self-hosted) from its
+GitLab instance's `/jwt/auth`. A token service anywhere else, including the
+registry's host on another port, is refused before any request reaches it.
 Authenticated pulls, Docker Hub's included, use a [private
 registry](#private-registries) entry. When Docker Hub's `ratelimit-remaining`
 hits zero, queued reads stop. A 429 shares a cooldown across the host and

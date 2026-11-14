@@ -6,7 +6,6 @@ pub mod queue;
 pub mod repositories;
 mod store;
 
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -186,14 +185,10 @@ pub trait State: serde::Serialize + serde::de::DeserializeOwned {
     type Scope: serde::Serialize;
 }
 
-/// The release a `+<build>` state namespace was written by. Retired
-/// per-build keys are still recognised so opening can delete rows other
-/// releases wrote.
-pub(crate) const BUILD: &str = env!("CARGO_PKG_VERSION");
-
-/// Whether a `State::NAMESPACE` leaves `@` and `+` to the row key: `@v` starts
-/// the version and `+` the build, which opening the cache relies on.
-const fn plain(name: &str) -> bool {
+/// Whether a name — a `State::NAMESPACE` or a derived representation's name —
+/// is nonempty and leaves `@` and `+` to the key: `@v` starts the version,
+/// and `+` marks the retired per-build keys migration 014 deletes.
+pub const fn plain(name: &str) -> bool {
     let bytes = name.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -459,22 +454,13 @@ impl Cache {
             expires_at: entry.expires_at,
             cache_control: entry.cache_control.clone(),
         };
-        self.call(move |store| {
-            store.conn.execute("UPDATE http SET etag=?2,last_modified=?3,headers=?4,fetched_at=?5,expires_at=?6,cache_control=?7 WHERE key=?1",
-                rusqlite::params![key,entry.etag,entry.last_modified,serde_json::to_string(&entry.headers)?,entry.fetched_at,entry.expires_at,entry.cache_control])?;
-            Ok(())
-        }).await
+        self.call(move |store| store.http_refresh(&key, &entry))
+            .await
     }
 
     pub async fn http_remove(&self, key: &HttpKey) -> Result<()> {
         let key = key.encoded()?;
-        self.call(move |store| {
-            store
-                .conn
-                .execute("DELETE FROM http WHERE key = ?1", [&key])?;
-            Ok(())
-        })
-        .await
+        self.call(move |store| store.http_remove(&key)).await
     }
 
     /// Merge a newest-first page. Return true at the first item already present
@@ -515,17 +501,8 @@ impl Cache {
     /// Read the refresh boundary without materializing the cached history.
     pub async fn release_head(&self, source: &str, package: &str) -> Result<Option<String>> {
         let (source, package) = (source.to_owned(), package.to_owned());
-        self.read(move |store| {
-            Ok(store
-                .conn
-                .query_row(
-                    "SELECT newest FROM release_heads WHERE source=?1 AND package=?2",
-                    rusqlite::params![source, package],
-                    |row| row.get(0),
-                )
-                .optional()?)
-        })
-        .await
+        self.read(move |store| store.release_head(&source, &package))
+            .await
     }
 
     /// The value kept for `scope`, or None when there is none or it no longer
@@ -534,15 +511,7 @@ impl Cache {
         let namespace = state_namespace::<T>();
         let scope = serde_json::to_string(scope)?;
         self.read(move |store| {
-            let value = store
-                .conn
-                .query_row(
-                    "SELECT value FROM state WHERE namespace=?1 AND scope=?2",
-                    rusqlite::params![namespace, scope],
-                    |row| row.get::<_, Vec<u8>>(0),
-                )
-                .optional()?;
-            let Some(bytes) = value else {
+            let Some(bytes) = store.state(&namespace, &scope)? else {
                 return Ok(None);
             };
             match serde_json::from_slice(&bytes) {
@@ -561,28 +530,16 @@ impl Cache {
         let namespace = state_namespace::<T>();
         let scope = serde_json::to_string(scope)?;
         let value = serde_json::to_vec(value)?;
-        self.call(move |store| {
-            store.conn.execute(
-                "INSERT INTO state(namespace,scope,value) VALUES (?1,?2,?3) ON CONFLICT(namespace,scope) DO UPDATE SET value=excluded.value",
-                rusqlite::params![namespace, scope, value],
-            )?;
-            Ok(())
-        })
-        .await
+        self.call(move |store| store.set_state(&namespace, &scope, &value))
+            .await
     }
 
     /// Forget the value kept for `scope`.
     pub async fn clear_state<T: State>(&self, scope: &T::Scope) -> Result<()> {
         let namespace = state_namespace::<T>();
         let scope = serde_json::to_string(scope)?;
-        self.call(move |store| {
-            store.conn.execute(
-                "DELETE FROM state WHERE namespace=?1 AND scope=?2",
-                rusqlite::params![namespace, scope],
-            )?;
-            Ok(())
-        })
-        .await
+        self.call(move |store| store.clear_state(&namespace, &scope))
+            .await
     }
 }
 
@@ -590,11 +547,24 @@ impl Cache {
 mod tests {
     use super::*;
 
-    /// A state row keyed under the retired per-build scheme — a namespace
-    /// ending `+<build>` — is dropped when another release's cache opens;
-    /// code-versioned `name@v` entries and `+` elsewhere are kept.
     #[tokio::test]
-    async fn opening_drops_per_build_state_from_other_releases() {
+    async fn a_fresh_cache_is_at_the_latest_schema() {
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let version = cache
+            .call(|store| {
+                Ok(store
+                    .conn
+                    .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(version, store::MIGRATIONS.len() as i64);
+    }
+
+    /// Migration 014 drops state rows keyed under the retired per-build
+    /// scheme — a namespace ending `+<build>` — and keeps `name@v` entries.
+    #[tokio::test]
+    async fn migration_014_drops_per_build_state() {
         #[derive(Serialize, Deserialize)]
         struct Parsed(u32);
         #[derive(Serialize)]
@@ -617,6 +587,7 @@ mod tests {
                     "INSERT INTO state(namespace, scope, value) VALUES ('test-parsed@v1+0.0.1', '{}', '1'), ('plain@v1', '{}', '1')",
                     [],
                 )?;
+                store.conn.pragma_update(None, "user_version", 13)?;
                 Ok(())
             })
             .await
@@ -696,11 +667,11 @@ mod tests {
         assert_eq!(namespaces, ["test-derived@v1".to_string()]);
     }
 
-    /// A derived body keyed under the old per-build scheme — a
-    /// representation ending `+<build>` — is dropped when the cache opens;
-    /// `@v`-versioned entries and `+` elsewhere in a key are kept.
+    /// Migration 014 drops derived bodies keyed under the retired per-build
+    /// scheme — a representation ending `+<build>` — and keeps `@v`-versioned
+    /// entries and `+` elsewhere in a key.
     #[tokio::test]
-    async fn opening_drops_per_build_http_representations() {
+    async fn migration_014_drops_per_build_http_representations() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("cache.sqlite");
         let cache = Cache::open(&path, Options::default()).await.unwrap();
@@ -726,7 +697,7 @@ mod tests {
         }
         cache
             .call(move |store| {
-                // As an old release wrote it, and the schemes kept today.
+                // The retired scheme, and the schemes in use.
                 for key in [
                     key(Some("doc+0.0.1"), None),
                     key(Some("doc@v1"), None),
@@ -735,6 +706,7 @@ mod tests {
                 ] {
                     store.http_put(&key, &entry)?;
                 }
+                store.conn.pragma_update(None, "user_version", 13)?;
                 Ok(())
             })
             .await

@@ -277,18 +277,6 @@ fn module_files(file: &Path, name: &str) -> [PathBuf; 2] {
     ]
 }
 
-/// Every `.rs` file under `dir`, recursively.
-fn collect(dir: &Path, files: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).unwrap().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect(&path, files);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            files.push(path);
-        }
-    }
-}
-
 /// `text` with `#[cfg(test)]` module bodies blanked out, so impls inside
 /// them — the cache crate's `release!` `test-derived` states and the
 /// test-only scope doubles — are never declared.
@@ -374,8 +362,10 @@ fn declared() -> BTreeMap<String, Declared> {
             continue;
         }
         let krate = entry.file_name().to_string_lossy().into_owned();
-        let mut files = Vec::new();
-        collect(&src, &mut files);
+        let files: Vec<PathBuf> = crate::versions::files_under(&src)
+            .into_iter()
+            .filter(|path| path.extension().is_some_and(|e| e == "rs"))
+            .collect();
         // A `#[cfg(test)] mod name;` resolves to a file; skip those files
         // the way the inline modules' contents are skipped below.
         let mut skip = BTreeSet::new();

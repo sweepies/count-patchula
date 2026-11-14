@@ -118,6 +118,11 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
+/// Lowercase hex of `bytes`.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn failure(message: impl Into<String>) -> Error {
     Error(message.into())
 }
