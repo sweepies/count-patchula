@@ -1909,6 +1909,8 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
 struct ActionsTools {
     files: BTreeMap<String, String>,
     lock: String,
+    /// What every run prints as its `--json` findings.
+    stdout: String,
 }
 impl patchula_process::Executor for ActionsTools {
     fn run(
@@ -1966,7 +1968,7 @@ impl patchula_process::Executor for ActionsTools {
                         .map(|value| value.to_string_lossy().into_owned())
                         .unwrap_or_default()
                 };
-                std::fs::write(env("ACTIONS_LOCK_STDOUT"), "{}").unwrap();
+                std::fs::write(env("ACTIONS_LOCK_STDOUT"), &self.stdout).unwrap();
                 std::fs::write(env("ACTIONS_LOCK_STDERR"), "").unwrap();
                 std::fs::write(env("ACTIONS_LOCK_STATUS"), "0").unwrap();
                 let lock = std::path::Path::new(&env("GH_ACTIONS_LOCK_REPO_ROOT"))
@@ -2042,6 +2044,7 @@ async fn an_actions_update_commits_the_workflow_and_its_lock() {
         .with_executor(Arc::new(ActionsTools {
             files: files.clone(),
             lock: lock(&new),
+            stdout: "{}".into(),
         }));
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
@@ -2086,6 +2089,129 @@ async fn an_actions_update_commits_the_workflow_and_its_lock() {
             "no written lockfile records the update"
         );
     }
+    check_transcript();
+}
+
+/// Lockfile maintenance relocks `actions.lock`: the commit holds the
+/// lockfile alone, and the pull request body lists the ref that moved.
+#[tokio::test(start_paused = true)]
+async fn actions_lock_maintenance_commits_only_the_lock() {
+    let old = "d".repeat(40);
+    let new = "e".repeat(40);
+    let lock = |pin: &str| {
+        format!(
+            "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7'\ndependencies:\n    'actions/checkout@v7':\n        ref: 'v7'\n        commit: 'sha1-{pin}'\n"
+        )
+    };
+    let files = BTreeMap::from([
+        (
+            "patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"\nprs { dashboard = true }\nlockfiles { refresh = true }\nmanagers = new Listing { \"github-actions\" }\n".into(),
+        ),
+        (
+            ".github/workflows/ci.yml".into(),
+            "name: ci\non: push\njobs:\n  t:\n    steps:\n      - uses: actions/checkout@v7\n".into(),
+        ),
+        (".github/workflows/actions.lock".into(), lock(&old)),
+    ]);
+    let fake = sandbox(files.clone(), None, vec![]);
+    fake.github
+        .seed_files("main", &"b".repeat(40), &files, vec![]);
+    {
+        let github = fake.github.clone();
+        fake.hosts
+            .script("mise-versions.jdx.dev", move |request, _| {
+                let path = request.url().path().to_owned();
+                let (repo, kind) = path
+                    .strip_prefix("/data/github/")
+                    .and_then(|doc| doc.rsplit_once('/'))
+                    .expect("a versions-host read");
+                let state = github.state();
+                let upstream = &state.repositories[repo];
+                github::json(
+                    200,
+                    match kind {
+                        "releases.json" => upstream.mirror_releases.clone(),
+                        "tags.json" => upstream.mirror_tags.clone(),
+                        _ => panic!("unexpected read {path}"),
+                    },
+                )
+            });
+    }
+    {
+        let mut state = fake.state();
+        let repo = state.repositories.get_mut("actions/checkout").unwrap();
+        repo.refs.insert("refs/tags/v7".into(), new.clone());
+        repo.commits.insert(new.clone(), json!({"sha":new}));
+        repo.releases.push(json!({
+            "tagName":"v7","publishedAt":"2026-10-01T00:00:00Z",
+            "isDraft":false,"isPrerelease":false}));
+    }
+    let stdout = json!({
+        "valid": true,
+        "findings": [{
+            "workflow": ".github/workflows/ci.yml",
+            "category": "ref-moved",
+            "severity": "warning",
+            "dependency": "actions/checkout@v7",
+            "detail": "ref v7 now resolves to eeeeeee, lockfile pins ddddddd"
+        }]
+    })
+    .to_string();
+    let temp = tempfile::tempdir().unwrap();
+    let runner = patchula_tools::Runner::new(temp.path().join("worktrees"), "offline-installation")
+        .with_executor(Arc::new(ActionsTools {
+            files: files.clone(),
+            lock: lock(&new),
+            stdout,
+        }));
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false)
+        .with_lockfile_runner(runner);
+    // Monday inside the default maintenance window keeps the plan unheld.
+    let now = "2026-10-12T01:00:00Z".parse().unwrap();
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                ..Default::default()
+            },
+            false,
+            false,
+            now,
+        )
+        .await
+        .unwrap();
+    let branches = &report.actions.as_ref().unwrap().branches;
+    let maintenance = branches
+        .iter()
+        .find(|b| b.branch.contains("lock-file-maintenance"))
+        .unwrap_or_else(|| panic!("no maintenance plan: {branches:?}"));
+    assert_eq!(maintenance.status, BranchStatus::Created, "{maintenance:?}");
+    let written: BTreeSet<&str> = maintenance.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        written,
+        BTreeSet::from([".github/workflows/actions.lock"]),
+        "{written:?}"
+    );
+    let prs = open_prs(&fake);
+    let body = prs
+        .iter()
+        .find(|pr| {
+            pr["head"]["ref"]
+                .as_str()
+                .is_some_and(|r| r.contains("lock-file-maintenance"))
+        })
+        .and_then(|pr| pr["body"].as_str())
+        .unwrap_or_else(|| panic!("no maintenance PR: {prs:?}"));
+    assert!(
+        body.contains(
+            "\n- `.github/workflows/ci.yml`\n  - `actions/checkout@v7` now resolves to `eeeeeee`; the lock had `ddddddd`"
+        ),
+        "{body}"
+    );
     check_transcript();
 }
 

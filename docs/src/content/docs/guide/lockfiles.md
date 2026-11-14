@@ -27,7 +27,7 @@ commit. If the tool fails, nothing is published.
 | `mise.lock` | mise | `mise lock` with the lockfile's recorded platforms |
 | `flake.lock` | nix | `nix flake update <input>`, or `nix flake update` for maintenance |
 | `apm.lock.yaml` | APM | `apm lock`, or `apm lock --update` for maintenance |
-| `.github/workflows/actions.lock` | gh-actions-lock | `gh-actions-lock --no-interactive --no-onboard --no-narrow --ignore-local-actions --json=valid,findings <workflows>` |
+| `.github/workflows/actions.lock` | gh-actions-lock | `gh-actions-lock --no-interactive --no-onboard --no-narrow --ignore-local-actions --json=valid,findings <workflows>`, or the same with `--relock` and no workflows for maintenance |
 
 A `mise.lock` records the configuration in its own directory and above it,
 as mise does. A `mise.toml` in a subdirectory is locked by a `mise.lock` of its
@@ -218,7 +218,9 @@ Count finds the listed workflows whose steps reach the file through `$/`,
 nested composites included, runs the tool over exactly those, and the
 read-back wants the new ref under each of them. If a listed workflow or a
 composite on the way cannot be read or parsed, which workflows call it is
-unknown and the update is held with the reason.
+unknown and the update is held with the reason. A workflow or action file
+that is a symlink is left out of the tool's checkout, so whatever reaches it
+fails with the tool's reason, and only the `actions.lock` work is held.
 
 The tool authenticates to github.com only, through `GH_TOKEN`, `GH_HOST` and
 `GH_REPO` and nothing else in its environment: on the App server it gets a
@@ -245,6 +247,30 @@ for the rest.
 `--no-narrow` also leaves a SHA pin as written: an existing pin the update
 moves stays a pin in the workflow, and the lock records it under that SHA
 with the tag it resolves to.
+
+[Lockfile maintenance](#lockfile-maintenance) runs the same command with
+`--relock` and no workflow paths. The tool resolves every ref the listed
+workflows use again, direct and inside composites, and advances each one
+that moved upstream to its new commit: a floating ref such as `v7`, or a tag
+that was moved forward. A moved ref whose old commit is no longer in the
+ref's history is not advanced; it fails the run with the tool's reason, as
+does any other blocking finding in any workflow. The tool resolves every
+workflow in `.github/workflows/`, listed or not, so a broken ref in a
+workflow the lock does not list (a typo, a deleted tag, a private action, a
+workflow that does not parse) fails the relock too. A listed workflow that
+uses an action the lock does not list yet blocks the relock until the
+repository's owner runs `gh actions-lock` to add it. The whole-directory run
+also drops listed workflows that no longer exist, never onboards a workflow
+or action the lock does not list, and never rewrites a workflow: the
+maintenance commit holds `actions.lock` alone. When every listed workflow
+is gone, the tool removes `actions.lock` and the maintenance commit deletes
+it; the PR says so. The regenerated lock must list exactly the listed
+workflows that still exist, or the relock fails, and the proof is
+`--verify-local` over those workflows. The maintenance PR lists each
+moved ref under its workflow, with the commit it now resolves to and the one
+the lock had. No release-age wait applies to what a relock picks up: the
+tool takes no cutoff, so a ref that moved an hour ago is locked like any
+other.
 
 ## The tool store
 
@@ -460,8 +486,11 @@ lockfiles {
 `refresh = true` keeps one `patchula/lock-file-maintenance` branch that
 refreshes every lockfile within the manifests' ranges, at most once per ISO
 week, and no sooner than `waitHours` after the last successful refresh.
-`.github/workflows/actions.lock` is the exception: maintenance never
-touches it, and it changes only with an update to a workflow it lists. The
+For `.github/workflows/actions.lock` maintenance relocks the refs that
+moved upstream in the workflows it lists, as [gh-actions-lock](#gh-actions-lock)
+describes, with no release-age wait. When the relock fails, the branch still
+carries the other lockfiles' refresh and the failure becomes a report
+warning; it fails the branch only when nothing else changed. The
 default window is Monday 00:00 to 04:00 UTC; explicit update windows
 replace it. Windows work as for updates: the first run after a window time
 picks it up, however often the Count runs. A maintenance resolve has no

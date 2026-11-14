@@ -534,6 +534,10 @@ pub enum Refresh {
     LocksBesideManifest(&'static [Manager]),
     /// The managers' manifest files are the work itself.
     Manifests(&'static [Manager]),
+    /// Exactly this repository path claims its directory, not its leaf
+    /// name anywhere in the tree; the run needs one of the managers
+    /// enabled.
+    Path(&'static str, &'static [Manager]),
     /// Maintenance never schedules this ecosystem.
     Never,
 }
@@ -554,6 +558,7 @@ impl Refresh {
             Self::Manifests(managers) => {
                 enabled(managers) && managers.iter().any(|m| manifest_names(*m).contains(&leaf))
             }
+            Self::Path(path, managers) => join(directory, leaf) == *path && enabled(managers),
             Self::Locks(managers) => {
                 managers
                     .iter()
@@ -592,9 +597,9 @@ pub fn refresh(ecosystem: Ecosystem) -> Refresh {
         Ecosystem::Php => Refresh::Locks(&[Manager::Composer]),
         Ecosystem::Nix => Refresh::LocksBesideManifest(&[Manager::Nix]),
         Ecosystem::Apm => Refresh::LocksBesideManifest(&[Manager::Apm]),
-        // Regenerating a listed workflow's entries on its own is `--relock`,
-        // which maintenance does not run.
-        Ecosystem::Actions => Refresh::Never,
+        // `--relock` advances the moved refs of the workflows the lock
+        // already lists; only the one committed path counts.
+        Ecosystem::Actions => Refresh::Path(ACTIONS_LOCK, &[Manager::GithubActions]),
     }
 }
 
@@ -618,6 +623,7 @@ pub fn refresh_jobs(config: &Config, paths: &BTreeSet<String>) -> BTreeSet<Job> 
             Ecosystem::Mise,
             Ecosystem::Go,
             Ecosystem::Terraform,
+            Ecosystem::Actions,
         ]
         .into_iter()
         .find(|ecosystem| refresh(*ecosystem).claims(config, leaf, directory(path), paths)) else {
@@ -976,6 +982,21 @@ pub struct Generated {
     /// What the run wants the report to warn about: facts it could not
     /// enforce, such as a pre-1.100 Cargo ignoring the publish-age keys.
     pub warnings: Vec<String>,
+    /// The `actions.lock` refs a maintenance `--relock` advanced, for the
+    /// pull request body.
+    pub moved: Vec<MovedRef>,
+}
+
+/// One ref a maintenance `--relock` advanced: under `workflow`, which
+/// reaches it directly or through a composite, `dependency`
+/// (`owner/repo@ref`, as the lock keys it) now resolves to `to`; the lock
+/// recorded `from`. Both are commit SHAs.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MovedRef {
+    pub workflow: String,
+    pub dependency: String,
+    pub from: String,
+    pub to: String,
 }
 
 /// One path the run left different from the base commit.

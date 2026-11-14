@@ -289,22 +289,36 @@ fn refresh_claims_locks_and_manifests_only_when_the_manager_is_enabled() {
         "app",
         &paths
     ));
-    // actions.lock is regenerated only with an update: maintenance has no
-    // relock to run, so the lockfile claims nothing.
+    // Path: actions.lock claims maintenance at its one committed path,
+    // while the Actions manager is enabled; the same leaf elsewhere is not
+    // the lock.
     config.managers = vec![Manager::GithubActions];
-    assert!(!refresh(Ecosystem::Actions).claims(
+    let actions = refresh(Ecosystem::Actions);
+    assert!(actions.claims(&config, "actions.lock", ".github/workflows", &paths));
+    assert!(!actions.claims(&config, "actions.lock", "app", &paths));
+    assert!(!actions.claims(&config, "actions.lock", ".forgejo/workflows", &paths));
+    let jobs = patchula_lockfiles::refresh_jobs(
         &config,
-        "actions.lock",
-        ".github/workflows",
-        &paths
-    ));
-    assert!(
-        patchula_lockfiles::refresh_jobs(
-            &config,
-            &[patchula_lockfiles::ACTIONS_LOCK.to_owned()].into()
-        )
-        .is_empty()
+        &[patchula_lockfiles::ACTIONS_LOCK.to_owned()].into(),
     );
+    assert_eq!(
+        jobs.into_iter().collect::<Vec<_>>(),
+        [Job {
+            ecosystem: Ecosystem::Actions,
+            directory: ".github/workflows".into(),
+            scope: Scope::Directory,
+            exact_version: false,
+            publish_age_allow: false,
+            wait_hours: 0,
+        }]
+    );
+    // Without the lockfile there is no job, and without the manager none.
+    assert!(
+        patchula_lockfiles::refresh_jobs(&config, &[".github/workflows/ci.yml".to_owned()].into())
+            .is_empty()
+    );
+    config.managers = vec![Manager::Cargo];
+    assert!(!actions.claims(&config, "actions.lock", ".github/workflows", &paths));
 }
 
 /// `workflows:` is read as gh-actions-lock's parser reads it: a path key it

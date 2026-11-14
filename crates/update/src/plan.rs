@@ -117,6 +117,9 @@ pub struct Plan {
     /// What the plan's lockfile run warned it could not enforce, for the
     /// repository's report warnings.
     lock_warnings: Vec<String>,
+    /// The `actions.lock` refs the plan's maintenance relock advanced, for
+    /// the pull request body.
+    moved_refs: Vec<contract::MovedRef>,
     /// Where the plan is in the lockfile lifecycle; owns the stage's data.
     stage: Stage,
     /// The tree the plan's commit produced, once a write or receipt names it.
@@ -231,6 +234,7 @@ impl Plan {
             public_only: BTreeMap::new(),
             cargo_cooldowns: BTreeMap::new(),
             lock_warnings: Vec::new(),
+            moved_refs: Vec::new(),
             tooling: Vec::new(),
             hold: None,
         }
@@ -260,6 +264,7 @@ impl Plan {
             public_only,
             cargo_cooldowns,
             lock_warnings: Vec::new(),
+            moved_refs: Vec::new(),
             tooling: Vec::new(),
             hold: None,
         }
@@ -333,6 +338,10 @@ impl Plan {
             Kind::Batch(items) => Some(items),
             _ => None,
         }
+    }
+    /// The `actions.lock` refs the plan's maintenance relock advanced.
+    pub fn moved_refs(&self) -> &[contract::MovedRef] {
+        &self.moved_refs
     }
     /// Tooling warnings shown on this PR.
     pub fn callouts(&self) -> &[crate::tooling::Callout] {
@@ -507,6 +516,7 @@ impl Plan {
             }
         };
         self.lock_warnings.extend(generated.warnings);
+        self.moved_refs = generated.moved;
         let mut contents = self.contents.clone();
         let mut deleted = BTreeSet::new();
         let mut added = Vec::new();
@@ -1116,6 +1126,7 @@ fn build(
         failure: hold.as_ref().map(|hold| crate::text::failure(hold.text())),
         hold,
         lock_warnings: Vec::new(),
+        moved_refs: Vec::new(),
     })
 }
 

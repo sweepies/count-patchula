@@ -89,9 +89,10 @@ A repository keeping `.github/workflows/actions.lock` (made by `gh
 actions-lock`) gets it regenerated in the same commit as an update to an
 action in a workflow the lockfile lists; if it cannot be regenerated, the
 update is held with the reason rather than opening a PR whose lock would be
-stale. The Count never adds a workflow or an action to the lockfile, and
-repositories without the file — and workflows it does not list — are
-unchanged. In a listed workflow he adds no new step-level SHA pin, since
+stale. [Lockfile maintenance](/guide/lockfiles/#lockfile-maintenance) also
+relocks the refs that moved upstream in the workflows it lists. The Count
+never adds a workflow or an action to the lockfile, and repositories without
+the file — and workflows it does not list — are unchanged. In a listed workflow he adds no new step-level SHA pin, since
 the lockfile is the pin; an existing pin still upgrades, and reusable
 workflows still pin. See
 [the lockfile run](/guide/lockfiles/#gh-actions-lock) for how the tool is
