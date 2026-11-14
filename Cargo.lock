@@ -2081,7 +2081,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-cache"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -2097,7 +2097,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-cli"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "clx",
@@ -2131,7 +2131,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-config"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2153,7 +2153,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-datasource"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2182,7 +2182,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-engine"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2217,7 +2217,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-github"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -2241,7 +2241,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-http"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -2261,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-lockfiles"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "patchula-config",
  "patchula-manager",
@@ -2274,7 +2274,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-lookup"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "patchula-cache",
@@ -2297,7 +2297,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-manager"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "globset",
  "hcl-edit",
@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-mise"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "patchula-process",
  "patchula-testkit",
@@ -2334,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-notes"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "base64 0.23.1",
  "futures-util",
@@ -2359,7 +2359,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-process"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "rustix",
  "serde",
@@ -2368,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-report"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "patchula-words",
  "serde",
@@ -2378,7 +2378,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-server"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2414,7 +2414,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-testkit"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -2438,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-tools"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2473,7 +2473,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-update"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2508,7 +2508,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-versioning"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "nodejs-semver",
  "patchula-words",
@@ -2519,7 +2519,7 @@ dependencies = [
 
 [[package]]
 name = "patchula-words"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "serde",
  "serde_json",
