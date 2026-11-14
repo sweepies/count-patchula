@@ -466,3 +466,19 @@ async fn a_stuck_install_is_reported_and_retried_by_the_next_lookup() {
         );
     }
 }
+
+/// Bracketed tool options are refused for what they are, and any other
+/// character outside a tool name's for being one.
+#[test]
+fn a_refusal_says_what_the_count_saw() {
+    let message = |tool: &str| patchula_mise::check(tool).unwrap_err().to_string();
+    assert_eq!(
+        message("github:github/gh-actions-lock[bin=gh-actions-lock]"),
+        "tool `github:github/gh-actions-lock[bin=gh-actions-lock]` is not looked up: \
+         the Count does not pass tool options in brackets to mise, since they can send a backend to another host"
+    );
+    assert_eq!(
+        message("node lts"),
+        "tool `node lts` is not looked up: the character ` ` is not allowed in a tool name"
+    );
+}

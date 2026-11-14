@@ -281,10 +281,9 @@ fn walk(
                     .get("registry")
                     .filter(|registry| registry.as_str() != Some("crates-io"))
                 {
-                    skipped.push(skip(match registry.as_str() {
+                    skipped.push(skip(match registry.as_str().and_then(crate::origins::shown) {
                         Some(name) => format!(
-                            "from the alternate registry `{}`, which the Count does not look up",
-                            crate::origins::shown(name)
+                            "from the alternate registry `{name}`, which the Count does not look up"
                         ),
                         None => {
                             "from an alternate registry, which the Count does not look up".into()
@@ -570,6 +569,10 @@ pub(crate) fn cooldown(parsed: &Parsed, path: &str) -> Option<Result<Cooldown, S
 /// unreadable sibling member's configuration cannot fail `path`'s lookups:
 /// Cargo never reads it for them.
 pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<String> {
+    let source = |name: &str| {
+        crate::origins::shown(name)
+            .map_or_else(|| "a source".into(), |name| format!("the source `{name}`"))
+    };
     // A patch from another registry, in any manifest at or above the crate's
     // folder (its workspace's included) or any applying configuration, may
     // stand for any crate, under any of the names Cargo takes for it.
@@ -674,8 +677,8 @@ pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<Str
                 continue;
             }
             return Some(format!(
-                "crates.io replaced by the source `{}`, which the repository does not define",
-                crate::origins::shown(&name)
+                "crates.io replaced by {}, which the repository does not define",
+                source(&name)
             ));
         }
         for table in definitions {
@@ -690,8 +693,8 @@ pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<Str
                 (None, _) if name == "crates-io" => {}
                 (None, _) => {
                     return Some(format!(
-                        "crates.io replaced by the source `{}`, which the Count does not read",
-                        crate::origins::shown(&name)
+                        "crates.io replaced by {}, which the Count does not read",
+                        source(&name)
                     ));
                 }
             }

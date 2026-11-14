@@ -309,7 +309,7 @@ impl Client {
                         || patchula_http::url_prefix(url).is_none()
                     {
                         return Err(Error::Registry(format!(
-                            "cannot read {package} from the registry {url}"
+                            "cannot look up {package} where the repository says it comes from: {url}"
                         )));
                     }
                     index = Some(url.as_str());

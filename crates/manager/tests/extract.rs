@@ -4443,6 +4443,63 @@ fn mise_package_tools_fail_where_the_project_redirects_their_registry() {
     }
 }
 
+/// Options on a mise tool's entry beyond its version and platforms fail
+/// its lookup, and the reason names them when each is plainly a name. A key
+/// that is not leaves every name out rather than repeat what the
+/// repository wrote.
+#[test]
+fn mise_tool_options_fail_the_lookup_naming_them() {
+    let lookup = |text: &str, name: &str| {
+        registry_of(Manager::Mise, &[("mise.toml", text)], "mise.toml", name)
+    };
+    assert_eq!(
+        lookup(
+            "[tools]\nrust = { version = \"1.100.0\", profile = \"minimal\", components = \"clippy,rustfmt\" }\n",
+            "rust"
+        )
+        .as_deref(),
+        Some(
+            "its entry in mise.toml sets `profile` and `components`, which may move where mise installs it from"
+        )
+    );
+    assert_eq!(
+        lookup(
+            "[tools]\n\"forgejo:wvhulle/nu-lint\" = { version = \"1.7.1\", api_url = \"https://codeberg.org/api/v1\", os = [\"linux\"] }\n",
+            "forgejo:wvhulle/nu-lint"
+        )
+        .as_deref(),
+        Some(
+            "its entry in mise.toml sets `api_url`, which may move where mise installs it from"
+        )
+    );
+    assert_eq!(
+        lookup(
+            "[tools]\nnode = { version = \"22.0.0\", a = 1, b = 2, c = 3 }\n",
+            "node"
+        )
+        .as_deref(),
+        Some(
+            "its entry in mise.toml sets `a`, `b` and `c`, which may move where mise installs it from"
+        )
+    );
+    assert_eq!(
+        lookup(
+            "[tools]\nnode = { version = \"22.0.0\", \"api url\" = \"x\", profile = \"y\" }\n",
+            "node"
+        )
+        .as_deref(),
+        Some("its entry in mise.toml has options that may move where mise installs it from")
+    );
+    assert_eq!(
+        lookup(
+            "[tools]\nnode = \"22.0.0\"\n\n[settings]\nurl_replacements = { \"https://github.com\" = \"https://git.acme.dev\" }\n",
+            "node"
+        )
+        .as_deref(),
+        Some("settings in mise.toml may move where mise installs it from")
+    );
+}
+
 /// A repository besides Maven Central, Google's and the Gradle Plugin
 /// Portal fails every lookup of the build however it is filtered — the
 /// Count does not weigh `content` or `exclusiveContent` — and a warning

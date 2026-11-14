@@ -12,7 +12,7 @@
 //! Count cannot check against those tools, make every package's lookup fail.
 //!
 //! Errors are never repeated in reports: serde's messages can quote values.
-use crate::origins::{Named, Origin, Origins, shown};
+use crate::origins::{Named, Origin, Origins};
 use crate::*;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -634,14 +634,21 @@ fn project_settings(tools: &Tools, file: &str, origins: &mut Origins) {
     unverified(tools, &mut origins.uncertain);
 }
 
+/// A `kind` of setting named `name`: with the name when it is plainly one,
+/// as "a `kind`" otherwise.
+fn setting(kind: &str, name: &str) -> String {
+    crate::origins::shown(name).map_or_else(|| format!("a {kind}"), |name| format!("{kind} {name}"))
+}
+
 /// The indexes and other sources one uv settings table configures, `[pip]`
 /// included, since `uv pip` reads it for the project too.
 fn uv_settings(settings: &UvSettings, file: &str, origins: &mut Origins) {
     for key in settings.rest.keys() {
         if !UV_IRRELEVANT.contains(&key.as_str()) {
-            origins
-                .uncertain
-                .push(unreadable(format!("uv setting {} in {file}", shown(key))));
+            origins.uncertain.push(unreadable(format!(
+                "{} in {file}",
+                setting("uv setting", key)
+            )));
         }
     }
     let configured = &mut origins.configured;
@@ -691,8 +698,8 @@ fn uv_settings(settings: &UvSettings, file: &str, origins: &mut Origins) {
         for key in pip.rest.keys() {
             if !UV_PIP_IRRELEVANT.contains(&key.as_str()) {
                 origins.uncertain.push(unreadable(format!(
-                    "uv pip setting {} in {file}",
-                    shown(key)
+                    "{} in {file}",
+                    setting("uv pip setting", key)
                 )));
             }
         }
@@ -718,8 +725,8 @@ fn poetry_settings(poetry: &Poetry, origins: &mut Origins) {
             (Some(url), _) => super::named(url),
             (None, _) if source.name.eq_ignore_ascii_case("pypi") => Named::Public,
             (None, _) => Named::Unusable(format!(
-                "Poetry source {} without a URL",
-                shown(&source.name)
+                "{} without a URL",
+                setting("Poetry source", &source.name)
             )),
         });
     }

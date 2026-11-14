@@ -244,17 +244,14 @@ impl Repositories {
     }
 }
 
-/// `text`, which a repository wrote, when it is plainly a name; a stand-in
-/// otherwise, so nothing a repository wrote reaches a report unchecked.
-pub(crate) fn shown(text: &str) -> String {
-    if !text.is_empty()
+/// `text`, which a repository wrote, when it is plainly a name; none
+/// otherwise, so a report leaves the name out and nothing a repository wrote
+/// reaches it unchecked.
+pub(crate) fn shown(text: &str) -> Option<&str> {
+    (!text.is_empty()
         && text.len() <= 64
         && text
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-    {
-        text.to_owned()
-    } else {
-        "(a name the Count does not repeat)".to_owned()
-    }
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')))
+    .then_some(text)
 }

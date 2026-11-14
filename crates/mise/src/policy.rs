@@ -38,12 +38,17 @@ pub fn check(tool: &str) -> Result<(), Error> {
              a `tool@version` selector is not looked up",
         );
     }
+    if tool.contains('[') {
+        return refuse(
+            "the Count does not pass tool options in brackets to mise, since they can send a backend to another host",
+        );
+    }
     if let Some(bad) = tool
         .chars()
         .find(|c| !(c.is_ascii_alphanumeric() || "._:/@+~%-".contains(*c)))
     {
         return refuse(&format!(
-            "the character `{}` is not allowed; tool options in brackets are not read",
+            "the character `{}` is not allowed in a tool name",
             bad.escape_default()
         ));
     }

@@ -138,6 +138,23 @@ async fn pypi_uses_real_metadata_shapes_and_fresh_bodies() {
             .await
             .is_err()
     );
+    // A registry the Count cannot look the package up in fails it, saying
+    // what the repository set, without a request.
+    let refused = client
+        .lookup(&patchula_config::PackageId {
+            source: Source::Mise,
+            registry: Some(patchula_config::Registry::Unusable(
+                "settings in mise.toml may move where mise installs it from".into(),
+            )),
+            name: "rust".into(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "cannot look up rust where the repository says it comes from: \
+         settings in mise.toml may move where mise installs it from"
+    );
     let runners = client
         .lookup(&patchula_config::PackageId::public(
             Source::GithubRunners,
