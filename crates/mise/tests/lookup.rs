@@ -163,6 +163,9 @@ async fn mise_runs_pinned_in_an_empty_sandbox_with_only_the_given_token() {
             "TF_IN_AUTOMATION",
             "TF_INPUT",
             "TF_CLI_CONFIG_FILE",
+            "AWS_EC2_METADATA_DISABLED",
+            "AWS_CONFIG_FILE",
+            "AWS_SHARED_CREDENTIALS_FILE",
             "MISE_COLOR",
             "MISE_DATA_DIR",
             "MISE_NO_CONFIG",
@@ -179,6 +182,12 @@ async fn mise_runs_pinned_in_an_empty_sandbox_with_only_the_given_token() {
             assert!(allowed.contains(&key.as_str()), "unexpected variable {key}");
         }
         assert_eq!(env["PATH"], "/usr/local/bin:/usr/bin:/bin");
+        // No AWS credential reaches the s3 backend: none is inherited, its
+        // files are in the scratch home, and instance metadata is off.
+        assert_eq!(env["AWS_EC2_METADATA_DISABLED"], "true");
+        for key in ["AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"] {
+            assert!(env[key].starts_with(&home), "{key}");
+        }
     }
 }
 
@@ -216,14 +225,17 @@ async fn the_pinned_mise_is_installed_once_for_every_lookup() {
 }
 
 #[tokio::test]
-async fn plugin_backends_and_option_syntax_never_reach_mise() {
+async fn plugin_backends_and_unsafe_arguments_never_reach_mise() {
     let replay = replay();
     let lookup = lookup(&replay);
     for tool in [
         "asdf:mise-plugins/asdf-tiny",
         "vfox:version-fox/vfox-cmake",
-        "github:jdx/mise[api_url=http://127.0.0.1:9]",
-        "pypi:black[extras=jupyter]",
+        "github:jdx/mise[bin=mise]@1",
+        "pypi:black[extras=-x]",
+        "pypi:black[extras=\"--index-url=x\"]",
+        "pypi:black[extras=x@1]",
+        "asdf:mise-plugins/asdf-tiny[bin=x]",
         "-x",
         "--all",
         "npm:--registry=https://example.invalid",
@@ -467,15 +479,47 @@ async fn a_stuck_install_is_reported_and_retried_by_the_next_lookup() {
     }
 }
 
-/// Bracketed tool options are refused for what they are, and any other
-/// character outside a tool name's for being one.
+/// Options travel to mise in brackets on the tool argument, after `--`,
+/// exactly as the entry's table or name carries them.
+#[tokio::test]
+async fn options_reach_mise_in_brackets_on_the_tool() {
+    let replay = replay();
+    let lookup = lookup(&replay);
+    let tools = [
+        r#"rust[components="clippy,rustfmt",mr_boxington=true,profile="minimal"]"#,
+        r#"forgejo:wvhulle/nu-lint[api_url="https://codeberg.org/api/v1",os=["linux"]]"#,
+        "github:github/gh-actions-lock[bin=gh-actions-lock]",
+    ];
+    for tool in tools {
+        let _ = lookup.ls_remote(&query(tool, None)).await;
+    }
+    let expected: Vec<Vec<String>> = tools
+        .iter()
+        .map(|tool| {
+            ["ls-remote", "--json", "--prerelease", "--", tool]
+                .map(String::from)
+                .to_vec()
+        })
+        .collect();
+    assert_eq!(replay.lookups(), expected);
+    // Nothing installs while a lookup applies them.
+    assert!(
+        replay.calls()[1..]
+            .iter()
+            .all(|call| call.env["MISE_AUTO_INSTALL"] == "0"
+                && call.env["MISE_NO_CONFIG"] == "1"
+                && call.env["MISE_NO_HOOKS"] == "1"
+                && call.env["MISE_NO_ENV"] == "1")
+    );
+}
+
+/// A refused argument says what the Count saw.
 #[test]
 fn a_refusal_says_what_the_count_saw() {
     let message = |tool: &str| patchula_mise::check(tool).unwrap_err().to_string();
     assert_eq!(
-        message("github:github/gh-actions-lock[bin=gh-actions-lock]"),
-        "tool `github:github/gh-actions-lock[bin=gh-actions-lock]` is not looked up: \
-         the Count does not pass tool options in brackets to mise, since they can send a backend to another host"
+        message("github:o/r[bin=x]@1"),
+        "tool `github:o/r[bin=x]@1` is not looked up: its options in brackets do not end the argument"
     );
     assert_eq!(
         message("node lts"),

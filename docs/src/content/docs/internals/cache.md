@@ -338,8 +338,9 @@ GraphQL reads resolve the refs currently needed without revalidating the lists.
 ## mise listings
 
 What `mise ls-remote --json` printed is stored as `mise-ls-remote` state, since
-it has no validators. The scope holds the tool (and a version prefix such as
-`lts`), whom the listing serves, whether mise may read the mise-versions mirror
+it has no validators. The scope holds the tool, its options (the bracketed
+text the tool argument carries, so one set of options never shares another's
+listing), a version prefix such as `lts`, whom the listing serves, whether mise may read the mise-versions mirror
 and the pinned mise version. A listing younger than an hour is reused without
 starting mise. A manual retry replaces it, and only successful lookups are
 stored.
@@ -360,9 +361,9 @@ read the same listings.
   backend names (`github:`, `ubi:`, `aqua:`, `packslip:`, `cargo:` with a
   GitHub URL, or each backend the registry snapshot lists for a shorthand) is
   another one, or its backend reads a package registry or is a core tool.
-  When the Count cannot tell (`go:`, `http:`, `spm:`, an unlisted shorthand
-  and the like), the listing is public only for a repository GitHub reports
-  as public.
+  When the Count cannot tell (`go:`, `http:`, `spm:`, an unlisted shorthand,
+  any tool with options and the like), the listing is public only for a
+  repository GitHub reports as public.
 - The run's credential scope and the repository's numeric id otherwise, with
   a `contents: read` token: the listing of a tool released from the
   repository, or of an unknown one in a private repository (or one whose
@@ -377,4 +378,11 @@ read the same listings.
 A batch lookup checks that its key's access is the one the repository it is
 made for gives, and fails otherwise: a public key never runs without a
 repository to mint for. Off github.com no token reaches mise, so every listing
-there is public. Flake inputs still hand nix the run's token.
+there is public.
+
+Options are part of the tool's package, so they are part of the lookup key,
+and a key's via is a repository whose own entry asked for exactly that tool
+and those options. A tool's options may send mise to another host
+(`api_url`), and mise hands its GitHub token to any host that looks like a
+GitHub API. That token is always minted for a repository that wrote the
+options, so it reaches no further than its writer already can. Flake inputs still hand nix the run's token.

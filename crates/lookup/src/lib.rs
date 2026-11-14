@@ -326,7 +326,9 @@ impl Evaluator {
         let current = dep.resolved.as_deref().unwrap_or(&dep.current);
         for compiled in &self.rules {
             let s = &compiled.rule.select;
-            if !compiled.packages.matches(&dep.package)
+            if !compiled
+                .packages
+                .matches_any(&dep.package, dep.bare_package())
                 || !compiled.dependencies.matches(&dep.name)
                 || !compiled.files.matches(&dep.file)
                 || !any(&s.managers, dep.manager)

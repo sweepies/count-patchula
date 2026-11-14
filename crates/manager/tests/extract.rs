@@ -2156,8 +2156,8 @@ fn mise_http_and_s3_tools_are_skipped_because_they_list_no_versions() {
         .iter()
         .map(|s| (s.file.as_str(), s.line, s.value.as_str(), s.reason.as_str()))
         .collect();
-    let http = "mise's http backend lists versions only with version_list_url, which the Count does not pass";
-    let s3 = "mise's s3 backend lists versions only with version_list_url or version_prefix, which the Count does not pass";
+    let http = "mise's http backend lists versions only with version_list_url, which its entry does not set";
+    let s3 = "mise's s3 backend lists versions only with version_list_url or version_prefix, which its entry does not set";
     assert_eq!(
         skipped,
         [
@@ -4443,60 +4443,270 @@ fn mise_package_tools_fail_where_the_project_redirects_their_registry() {
     }
 }
 
-/// Options on a mise tool's entry beyond its version and platforms fail
-/// its lookup, and the reason names them when each is plainly a name. A key
-/// that is not leaves every name out rather than repeat what the
-/// repository wrote.
+/// The options on a mise tool's entry travel with it to mise in brackets,
+/// sorted and written one way, so its lookup lists what mise installs. A
+/// name that carries brackets keeps them as written. Options the Count
+/// cannot pass fail the lookup without repeating them.
 #[test]
-fn mise_tool_options_fail_the_lookup_naming_them() {
-    let lookup = |text: &str, name: &str| {
-        registry_of(Manager::Mise, &[("mise.toml", text)], "mise.toml", name)
+fn mise_tool_options_travel_with_the_tool_in_brackets() {
+    let extract = |text: &str| {
+        let files: Files = [("mise.toml".to_owned(), fixture(text))]
+            .into_iter()
+            .collect();
+        let mut config = config();
+        config.managers = vec![Manager::Mise];
+        Scanner::new(&config)
+            .unwrap()
+            .extract(&files)
+            .unwrap()
+            .dependencies
+            .into_iter()
+            .map(|d| {
+                (
+                    d.name,
+                    d.package,
+                    d.current,
+                    d.registry.map(|r| r.recorded().to_owned()),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let found = |name: &str, package: &str, current: &str| {
+        (
+            name.to_owned(),
+            package.to_owned(),
+            current.to_owned(),
+            None,
+        )
     };
     assert_eq!(
-        lookup(
-            "[tools]\nrust = { version = \"1.100.0\", profile = \"minimal\", components = \"clippy,rustfmt\" }\n",
-            "rust"
-        )
-        .as_deref(),
-        Some(
-            "its entry in mise.toml sets `profile` and `components`, which may move where mise installs it from"
-        )
+        extract(
+            r#"[tools]
+rust = { version = "1.100.0", profile = "minimal", components = "clippy,rustfmt", mr_boxington = true }
+"forgejo:wvhulle/nu-lint" = { version = "1.7.1", api_url = "https://codeberg.org/api/v1", os = [
+  "linux",
+] }
+"github:github/gh-actions-lock[bin=gh-actions-lock]" = "0.4.1"
+node = ["22.1.0", { version = "24.2.0", os = ["linux"] }]
+"http:tool" = { version = "1.0.0", url = "https://x.example/{{ version }}", version_list_url = "https://x.example/versions" }
+
+[tools.jq]
+version = "1.7.1"
+os = "linux"
+"#
+        ),
+        [
+            found(
+                "rust",
+                r#"rust[components="clippy,rustfmt",mr_boxington=true,profile="minimal"]"#,
+                "1.100.0"
+            ),
+            found(
+                "forgejo:wvhulle/nu-lint",
+                r#"forgejo:wvhulle/nu-lint[api_url="https://codeberg.org/api/v1",os=["linux"]]"#,
+                "1.7.1"
+            ),
+            found(
+                "github:github/gh-actions-lock[bin=gh-actions-lock]",
+                "github:github/gh-actions-lock[bin=gh-actions-lock]",
+                "0.4.1"
+            ),
+            // mise lists a tool with its first request's options.
+            found("node", "node", "22.1.0"),
+            found("node", "node", "24.2.0"),
+            found(
+                "http:tool",
+                r#"http:tool[url="https://x.example/{{ version }}",version_list_url="https://x.example/versions"]"#,
+                "1.0.0"
+            ),
+            found("jq", r#"jq[os="linux"]"#, "1.7.1"),
+        ]
     );
+    for (text, reason) in [
+        (
+            "[tools]\nnode = { version = \"22.0.0\", ratio = 1.5 }\n",
+            "its entry has an option the Count does not pass to mise",
+        ),
+        (
+            "[tools]\nnode = { version = \"22.0.0\", \"api url\" = \"x\" }\n",
+            "its entry has an option the Count does not pass to mise",
+        ),
+        (
+            "[tools]\nnode = { version = \"22.0.0\", url = \"https://user@host/\" }\n",
+            "its options are too long or hold an `@`",
+        ),
+        (
+            "[tools]\n\"github:o/r[bin=x]\" = { version = \"1.0.0\", os = [\"linux\"] }\n",
+            "its entry sets options both in brackets on its name and in its table",
+        ),
+    ] {
+        let found = extract(text);
+        let recorded = found[0].3.as_deref().unwrap_or_default();
+        assert!(recorded.starts_with(reason), "{text}: {recorded}");
+        assert!(!recorded.contains("user@host") && !recorded.contains("api url"));
+        // The tool is looked up by its name, and fails for the reason.
+        assert_eq!(found[0].1, found[0].0, "{text}");
+    }
+    // Settings that may move a tool still fail its lookup.
     assert_eq!(
-        lookup(
-            "[tools]\n\"forgejo:wvhulle/nu-lint\" = { version = \"1.7.1\", api_url = \"https://codeberg.org/api/v1\", os = [\"linux\"] }\n",
-            "forgejo:wvhulle/nu-lint"
-        )
-        .as_deref(),
-        Some(
-            "its entry in mise.toml sets `api_url`, which may move where mise installs it from"
-        )
-    );
-    assert_eq!(
-        lookup(
-            "[tools]\nnode = { version = \"22.0.0\", a = 1, b = 2, c = 3 }\n",
-            "node"
-        )
-        .as_deref(),
-        Some(
-            "its entry in mise.toml sets `a`, `b` and `c`, which may move where mise installs it from"
-        )
-    );
-    assert_eq!(
-        lookup(
-            "[tools]\nnode = { version = \"22.0.0\", \"api url\" = \"x\", profile = \"y\" }\n",
-            "node"
-        )
-        .as_deref(),
-        Some("its entry in mise.toml has options that may move where mise installs it from")
-    );
-    assert_eq!(
-        lookup(
-            "[tools]\nnode = \"22.0.0\"\n\n[settings]\nurl_replacements = { \"https://github.com\" = \"https://git.acme.dev\" }\n",
+        registry_of(
+            Manager::Mise,
+            &[(
+                "mise.toml",
+                "[tools]\nnode = \"22.0.0\"\n\n[settings]\nurl_replacements = { \"https://github.com\" = \"https://git.acme.dev\" }\n",
+            )],
+            "mise.toml",
             "node"
         )
         .as_deref(),
         Some("settings in mise.toml may move where mise installs it from")
+    );
+}
+
+/// The full extraction of `files`, as (file, name, package, registry).
+fn mise_extract(files: &[(&str, &str)]) -> Vec<(String, String, String, Option<String>)> {
+    let files: Files = files
+        .iter()
+        .map(|(path, text)| ((*path).to_owned(), fixture(text)))
+        .collect();
+    let mut config = config();
+    config.managers = vec![Manager::Mise];
+    config.files = vec![patchula_config::FileSet {
+        manager: Manager::Mise,
+        paths: files.keys().cloned().collect(),
+    }];
+    Scanner::new(&config)
+        .unwrap()
+        .extract(&files)
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .map(|d| {
+            (
+                d.file,
+                d.name,
+                d.package,
+                d.registry.map(|r| r.recorded().to_owned()),
+            )
+        })
+        .collect()
+}
+
+/// mise does not merge a tool's options across configuration files: the
+/// highest-precedence file's entry (`mise.local.toml` over `mise.toml` over
+/// `.tool-versions`, a folder's over its parent's) replaces the others
+/// whole, options included, as the pinned mise does. An array lists with
+/// its first request's options. Each entry is looked up with the options
+/// mise lists it with.
+#[test]
+fn mise_options_come_from_the_entry_mise_lists_with() {
+    let found = mise_extract(&[
+        (
+            "mise.toml",
+            "[tools]\njq = { version = \"1.7.1\", foo = \"base\" }\nnode = [{ version = \"24.2.0\", os = [\"linux\"] }, \"22.1.0\"]\n",
+        ),
+        (
+            "mise.local.toml",
+            "[tools]\njq = { version = \"1.7.0\", bar = \"local\" }\n",
+        ),
+        ("app/mise.toml", "[tools]\njq = \"1.6.0\"\n"),
+    ]);
+    let packages: Vec<_> = found
+        .iter()
+        .map(|(file, _, package, registry)| (file.as_str(), package.as_str(), registry.clone()))
+        .collect();
+    assert_eq!(
+        packages,
+        [
+            ("app/mise.toml", "jq", None),
+            ("mise.local.toml", r#"jq[bar="local"]"#, None),
+            ("mise.toml", r#"jq[foo="base"]"#, None),
+            ("mise.toml", r#"node[os=["linux"]]"#, None),
+            ("mise.toml", r#"node[os=["linux"]]"#, None),
+        ]
+    );
+}
+
+/// A task's tool is a runtime request: mise layers its [tools] entry's
+/// options under the task's own, choosing by version. The Count does not
+/// reproduce that, so a task's tool is refused when either has options in a
+/// table; brackets on its name are part of the tool and pass.
+#[test]
+fn mise_task_tools_with_options_are_refused() {
+    let found = mise_extract(&[
+        (
+            "mise.toml",
+            r#"[task_config]
+includes = ["tasks.toml"]
+[tools]
+jq = { version = "1.7.1", foo = "base" }
+[tasks.a]
+tools = { jq = "1.7.1", node = { version = "24.2.0", os = ["linux"] }, "github:o/r[bin=r]" = "1.0.0" }
+"#,
+        ),
+        ("tasks.toml", "[b.tools]\njq = \"1.7.0\"\nuv = \"0.13.6\"\n"),
+        // A folder below the task's is not part of its configuration.
+        (
+            "app/mise.toml",
+            "[tools]\nuv = { version = \"0.13.6\", foo = \"app\" }\n",
+        ),
+    ]);
+    let refused = |file: &str, name: &str| {
+        found
+            .iter()
+            .find(|(f, n, _, _)| f == file && n == name)
+            .unwrap_or_else(|| panic!("{file} {name}"))
+            .3
+            .clone()
+    };
+    let task = Some(
+        "mise layers the options of a task's tool over those of its [tools] entry in a way the \
+         Count does not reproduce, so a task's tool is looked up only when neither has options in \
+         a table"
+            .to_owned(),
+    );
+    assert_eq!(refused("mise.toml", "node"), task);
+    assert_eq!(refused("tasks.toml", "jq"), task);
+    assert_eq!(refused("tasks.toml", "uv"), None);
+    assert_eq!(refused("mise.toml", "github:o/r[bin=r]"), None);
+    let jq: Vec<_> = found
+        .iter()
+        .filter(|(f, n, _, _)| f == "mise.toml" && n == "jq")
+        .map(|(_, _, package, registry)| (package.as_str(), registry.clone()))
+        .collect();
+    assert_eq!(jq, [(r#"jq[foo="base"]"#, None), ("jq", task.clone())]);
+}
+
+/// http and s3 tools are skipped only without the option mise lists them
+/// with, read from the options as mise reads them; s3 reads it per platform
+/// too, http only at the top level. A refused entry fails its lookup rather
+/// than look skipped.
+#[test]
+fn mise_unlisted_backends_read_the_parsed_options() {
+    let found = mise_extract(&[(
+        "mise.toml",
+        r#"[tools]
+"s3:a" = { version = "1.0.0", platforms = { linux-x64 = { version_list_url = "s3://b/a.json" } } }
+"s3:b" = { version = "1.0.0", platforms_linux_x64_version_prefix = "tools/b/" }
+"http:c" = { version = "1.0.0", platforms = { linux-x64 = { version_list_url = "https://x.example/c" } } }
+"http:d[version_list_url=https://x.example/d]" = "1.0.0"
+"http:e[bin=e]" = { version = "1.0.0", version_list_url = "https://x.example/e" }
+"http:f" = { version = "1.0.0", url = "https://x.example/f", note = "a version_list_url=x" }
+"http:g" = { version = "1.0.0", url = 'https://x.example/{{ os(macos="darwin") }}' }
+"#,
+    )]);
+    let names: Vec<_> = found
+        .iter()
+        .map(|(_, name, _, registry)| (name.as_str(), registry.is_some()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("s3:a", false),
+            ("s3:b", false),
+            ("http:d[version_list_url=https://x.example/d]", false),
+            ("http:e[bin=e]", true),
+        ]
     );
 }
 

@@ -571,3 +571,101 @@ async fn public_listings_are_shared_and_repository_listings_are_not() {
     source.lookup(&jq).await.unwrap();
     assert_eq!(lookups(), 6);
 }
+
+/// Options travel to mise on the tool argument, and a listing made with one
+/// set of options serves no other set, nor the tool without them.
+#[tokio::test]
+async fn listings_are_kept_apart_by_their_options() {
+    const MINIMAL: &str = r#"rust[profile="minimal"]"#;
+    const DEFAULT: &str = r#"rust[profile="default"]"#;
+    let replay = Arc::new(MiseReplay::new(vec![
+        run(&["rust"], listing(&["1.99.0"])),
+        run(&[MINIMAL], listing(&["1.100.0"])),
+        run(&[DEFAULT], listing(&["1.101.0"])),
+    ]));
+    let cache = memory().await;
+    let source = client(Some(&replay), cache.clone(), "a-token");
+    let newest = |catalog: patchula_datasource::Catalog| catalog.versions[0].version.clone();
+    for (tool, version) in [
+        ("rust", "1.99.0"),
+        (MINIMAL, "1.100.0"),
+        (DEFAULT, "1.101.0"),
+        (MINIMAL, "1.100.0"),
+    ] {
+        let catalog = source
+            .lookup(&patchula_config::PackageId::public(Source::Mise, tool))
+            .await
+            .unwrap();
+        assert_eq!(newest(catalog), version, "{tool}");
+    }
+    // The second minimal lookup read what the first stored.
+    assert_eq!(
+        replay.lookups(),
+        ["rust", MINIMAL, DEFAULT]
+            .map(|tool| ["ls-remote", "--json", "--prerelease", "--", tool].map(String::from))
+    );
+    // Options with no host in them leave the token as the tool's access gives it.
+    assert_eq!(
+        replay.calls().last().unwrap().env["MISE_GITHUB_TOKEN"],
+        "a-token"
+    );
+}
+
+/// A tool whose options name another host gets the same token as any other
+/// lookup from the repository: one scoped to the repository whose own entry
+/// wrote them, which reaches nothing its writer cannot. Its options key its
+/// listing apart from the tool's github.com one, and a tool with options is
+/// one the Count cannot place, so a private repository keeps it to itself.
+#[tokio::test]
+async fn options_that_name_a_host_get_the_repository_token() {
+    const ELSEWHERE: &str = r#"github:acme/tool[api_url="https://192.0.2.10/api/v3"]"#;
+    let replay = Arc::new(MiseReplay::new(vec![
+        run(&[ELSEWHERE], listing(&["2.0.0"])),
+        run(&["github:acme/tool"], listing(&["1.0.0"])),
+    ]));
+    let cache = memory().await;
+    let elsewhere = patchula_config::PackageId::public(Source::Mise, ELSEWHERE);
+    let credentials = Arc::new(Installation::default());
+    let source = installation(&replay, cache.clone(), credentials);
+    let as_repo = |name: &str, private| {
+        source
+            .clone()
+            .with_mise_repository(Some(repository(name, Some(private))))
+    };
+    assert_eq!(
+        mise_scope_rule(ELSEWHERE, &repository("acme/app", Some(true))),
+        MiseAccess::Repository("acme/app".into())
+    );
+    assert_eq!(
+        mise_scope_rule(ELSEWHERE, &repository("acme/site", Some(false))),
+        MiseAccess::Public
+    );
+    let catalog = as_repo("acme/app", true).lookup(&elsewhere).await.unwrap();
+    assert_eq!(catalog.versions[0].version, "2.0.0");
+    assert_eq!(token(&replay), "scoped-acme/app-ContentsRead");
+    // Another private repository's lookup does not read acme/app's listing.
+    as_repo("acme/api", true).lookup(&elsewhere).await.unwrap();
+    assert_eq!(token(&replay), "scoped-acme/api-ContentsRead");
+    assert_eq!(replay.lookups().len(), 2);
+    // A public repository's listing is public, with a metadata-only token.
+    as_repo("acme/site", false)
+        .lookup(&elsewhere)
+        .await
+        .unwrap();
+    assert_eq!(token(&replay), "scoped-acme/site-MetadataRead");
+    as_repo("acme/docs", false)
+        .lookup(&elsewhere)
+        .await
+        .unwrap();
+    assert_eq!(replay.lookups().len(), 3);
+    // The tool without options is listed on its own.
+    let catalog = as_repo("acme/app", true)
+        .lookup(&patchula_config::PackageId::public(
+            Source::Mise,
+            "github:acme/tool",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(catalog.versions[0].version, "1.0.0");
+    assert_eq!(replay.lookups().len(), 4);
+}

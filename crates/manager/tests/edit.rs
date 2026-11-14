@@ -79,6 +79,19 @@ fn mise_preserves_arrays_inline_tables_subtables_and_tool_version_spacing() {
             .replace("1.0.0", "2.0.0")
     );
 }
+/// A tool whose options travel to mise in brackets is written back by its
+/// version alone: its name, brackets and inline-table options stay byte for
+/// byte as written.
+#[test]
+fn mise_keeps_tool_names_brackets_and_options_as_written() {
+    let old = "[tools]\nrust = { version = \"1.100.0\", profile = \"minimal\", components = \"clippy,rustfmt\", mr_boxington = true }\n\"github:github/gh-actions-lock[bin=gh-actions-lock]\" = \"0.4.1\"\n\"forgejo:wvhulle/nu-lint\" = { version = \"1.7.1\", api_url = \"https://codeberg.org/api/v1\", os = [\n  \"linux\",\n] }\n";
+    assert_eq!(
+        replace(Manager::Mise, "mise.toml", old, "9.9.9", None),
+        old.replace("1.100.0", "9.9.9")
+            .replace("0.4.1", "9.9.9")
+            .replace("1.7.1", "9.9.9")
+    );
+}
 #[test]
 fn action_pins_keep_subpaths_comments_quotes_and_crlf() {
     let sha = "a".repeat(40);

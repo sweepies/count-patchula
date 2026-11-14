@@ -217,6 +217,34 @@ fn node_lts_is_explicit_uses_catalog_evidence_and_respects_ordered_rules() {
     );
 }
 
+/// A rule's `packages` selects a mise tool by its bare name when its options
+/// travel with it in brackets, and an exclusion of the name wins.
+#[test]
+fn rules_select_a_mise_tool_with_or_without_its_options() {
+    let rule = |packages: &[&str]| -> patchula_config::Rule {
+        serde_json::from_value(serde_json::json!({"note":"off", "select":{"packages":packages,"dependencies":[],"managers":["mise"],"files":[],"updates":[],"sources":[],"kinds":[],"current":null},"apply":{"active":false}})).unwrap()
+    };
+    let mut dep = dependency("rust");
+    dep.manager = Manager::Mise;
+    dep.kind = DependencyKind::Tool;
+    dep.source = Source::Mise;
+    dep.scheme = Scheme::Loose;
+    dep.package = r#"rust[profile="minimal"]"#.into();
+    dep.current = "1.99.0".into();
+    dep.resolved = Some(dep.current.clone());
+    for (packages, off) in [
+        (&["rust"][..], true),
+        (&["rust*"][..], true),
+        (&["node"][..], false),
+        (&["*", "!rust"][..], false),
+    ] {
+        let mut cfg = config("benchmark-public");
+        cfg.rules.push(rule(packages));
+        let evaluator = Evaluator::new(&cfg, Default::default()).unwrap();
+        assert_eq!(!evaluator.needs_lookup(&dep), off, "{packages:?}");
+    }
+}
+
 #[test]
 fn equal_precedence_candidates_and_age_boundaries_are_order_independent() {
     let cfg = config("benchmark-public");

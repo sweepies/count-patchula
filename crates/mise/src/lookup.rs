@@ -213,6 +213,7 @@ impl Lookup {
         if let Some(prefix) = query.prefix {
             policy::check(prefix)?;
         }
+        crate::targets::check(query.tool).await?;
         let _slot = self
             .slots
             .acquire()
@@ -236,6 +237,7 @@ impl Lookup {
     /// The backend mise picks for a tool, such as `npm:prettier` for `prettier`.
     pub async fn backend(&self, tool: &str, token: Option<&str>) -> Result<String, Error> {
         policy::check(tool)?;
+        crate::targets::check(tool).await?;
         let _slot = self
             .slots
             .acquire()

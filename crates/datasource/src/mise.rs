@@ -48,7 +48,13 @@ const PUBLIC_SCOPE: &str = "public";
 
 #[derive(Serialize)]
 struct ListingScope {
+    /// The tool's name, without its options.
     tool: String,
+    /// The options passed to mise in brackets, as the tool argument carries
+    /// them: canonical when the Count wrote them from the entry's table, as
+    /// written when the name carried them. One set of options never shares
+    /// another's listing.
+    options: String,
     prefix: String,
     /// `public`, the run's credential scope, or the run's credential scope
     /// and the repository a scoped token was minted for.
@@ -68,7 +74,7 @@ impl FetchedAt for Listing {
 }
 impl State for Listing {
     const NAMESPACE: &'static str = "mise-ls-remote";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     type Scope = ListingScope;
 }
 
@@ -79,7 +85,7 @@ const GIT_REF: &str = "HEAD";
 const NODE_VERSIONS: &str = "actions/node-versions";
 
 fn is_node(tool: &str) -> bool {
-    matches!(tool, "node" | "core:node")
+    matches!(patchula_mise::split(tool).0, "node" | "core:node")
 }
 
 fn date(raw: &str) -> String {
@@ -153,7 +159,9 @@ impl Client {
     /// The token mise is handed under `access`: the run's for `Run`, else a
     /// token scoped to the repository with the permissions the access names,
     /// which fails the lookup rather than fall back to a broader one. Only a
-    /// token for github.com is handed out.
+    /// token for github.com is handed out. A tool's options may send it to
+    /// another host (`api_url`); the token reaches no further than the
+    /// repository whose own entry wrote them, so it is handed out the same.
     async fn mise_token(&self, access: &MiseAccess) -> Result<Option<String>> {
         if !self.github.versions_host_eligible() {
             return Ok(None);
@@ -207,8 +215,10 @@ impl Client {
         prefix: Option<&str>,
         access: &MiseAccess,
     ) -> Result<ListingScope> {
+        let (name, options) = patchula_mise::split(tool);
         Ok(ListingScope {
-            tool: tool.into(),
+            tool: name.into(),
+            options: options.unwrap_or_default().into(),
             prefix: prefix.unwrap_or_default().into(),
             credential_scope: self.listing_credential_scope(access).await?,
             mise_version: lookup.version().into(),
