@@ -327,13 +327,13 @@ impl State for RepoConfig {
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 5;
+    const VERSION: u32 = 6;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 5;
+    const VERSION: u32 = 6;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }

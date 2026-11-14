@@ -9,10 +9,10 @@
 //! runner and the owner's own Cargo do with them: the committed cooldown
 //! and each job's `waitHours` reach the run's Cargo by environment, so
 //! direct updates, transitive crates and maintenance all wait the same
-//! way — a `.cargo/config.toml` above the run's driver no longer leaks in,
+//! way. A `.cargo/config.toml` above the run's driver does not leak in,
 //! since every invocation names its own age.
-//! The registry's builder API is the case generator the reader (PR 2) and
-//! the runner environment (PR 3) generate their matrices from.
+//! The registry's builder API is the case generator the cooldown reader's
+//! and the runner environment's test matrices are built from.
 use super::*;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -414,14 +414,6 @@ fn lock(entries: &[(&str, &str, &[&str])]) -> String {
     out
 }
 
-/// The developer's mise store, where the real tool tests take tools from.
-fn mise_store() -> PathBuf {
-    std::env::var_os("MISE_DATA_DIR").map_or_else(
-        || PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/share/mise"),
-        PathBuf::from,
-    )
-}
-
 /// `mise exec` a real `tool@version` the test needs: install it into the
 /// developer's store when it is not already there, as the task tools are
 /// installed ahead of `test:tools` on CI.
@@ -515,25 +507,8 @@ fn owner_cargo(
     for (key, value) in env {
         command.env(key, value);
     }
-    // A Cargo that cannot finish in two minutes is wedged, not slow: kill
-    // it rather than hang the suite.
-    let mut child = command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(120);
-    let output = loop {
-        if child.try_wait().unwrap().is_some() {
-            break child.wait_with_output().unwrap();
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("owner cargo {args:?} ran past 120 seconds");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    // A Cargo that cannot finish in two minutes is wedged, not slow.
+    let output = run_with_deadline(&mut command, Duration::from_secs(120));
     (
         output.status.success(),
         format!(
@@ -542,21 +517,6 @@ fn owner_cargo(
             String::from_utf8_lossy(&output.stderr)
         ),
     )
-}
-
-/// The files the Count's git checkout sees, written to `dir` for the
-/// owner's own Cargo run. `dir` holds exactly `files` afterwards: a file an
-/// earlier case wrote, a cooldown config or a lock, must not decide this one.
-fn write_tree(dir: &Path, files: &BTreeMap<String, String>) {
-    if dir.exists() {
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-    std::fs::create_dir_all(dir).unwrap();
-    for (path, text) in files {
-        let path = dir.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
 }
 
 /// The cooldowns extraction reads for `files`, what `Snapshot.cargo_cooldowns`

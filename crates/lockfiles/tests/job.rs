@@ -3,35 +3,17 @@
 //! the declarations no lockfile records. `Refresh::claims` applies the same
 //! names to maintenance, so it is covered here too.
 use patchula_lockfiles::{Ecosystem, Job, Scope, job, refresh};
-use patchula_manager::{Dependency, EditForm, Location, Syntax};
+use patchula_manager::Dependency;
 use patchula_report::Update;
-use patchula_words::{DependencyKind, Manager, Scheme, Source, Update as UpdateKind};
+use patchula_words::{DependencyKind, Manager, Source, Update as UpdateKind};
 use std::collections::BTreeSet;
 
 fn dependency(manager: Manager, file: &str) -> Dependency {
     Dependency {
-        manager,
         file: file.into(),
-        location: Location {
-            start: 0,
-            end: 1,
-            line: 1,
-            column: 1,
-            pointer: String::new(),
-        },
-        form: EditForm::Scalar(Syntax::Bare),
         name: "pkg".into(),
         package: "pkg".into(),
-        kind: DependencyKind::Production,
-        current: "1.0.0".into(),
-        resolved: Some("1.0.0".into()),
-        digest: None,
-        source: Source::Npm,
-        scheme: Scheme::Semver,
-        extract: None,
-        included_by: None,
-        registry: None,
-        cooldown: None,
+        ..patchula_manager::testing::dependency(manager, DependencyKind::Production, Source::Npm)
     }
 }
 

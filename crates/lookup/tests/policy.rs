@@ -1,6 +1,6 @@
 use patchula_datasource::{Catalog, Version};
 use patchula_lookup::Evaluator;
-use patchula_manager::{Dependency, EditForm, Location, Syntax};
+use patchula_manager::{Dependency, EditForm, Syntax};
 use patchula_words::{DependencyKind, Manager, Scheme, Source, Update, VersionPolicy};
 fn config(name: &str) -> patchula_config::Config {
     patchula_config::load(
@@ -11,28 +11,15 @@ fn config(name: &str) -> patchula_config::Config {
 }
 fn dependency(name: &str) -> Dependency {
     Dependency {
-        manager: Manager::Npm,
         file: "package.json".into(),
-        location: Location {
-            start: 0,
-            end: 1,
-            line: 1,
-            column: 1,
-            pointer: String::new(),
-        },
         form: EditForm::Scalar(Syntax::Json),
         name: name.into(),
         package: name.into(),
-        kind: DependencyKind::Production,
-        current: "1.0.0".into(),
-        resolved: Some("1.0.0".into()),
-        digest: None,
-        source: Source::Npm,
-        scheme: Scheme::Semver,
-        extract: None,
-        included_by: None,
-        registry: None,
-        cooldown: None,
+        ..patchula_manager::testing::dependency(
+            Manager::Npm,
+            DependencyKind::Production,
+            Source::Npm,
+        )
     }
 }
 fn catalog(values: &[&str]) -> Catalog {

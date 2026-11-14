@@ -1,6 +1,6 @@
 use patchula_datasource::{Advisory, AdvisoryQuery, Affected, Event, Range};
 use patchula_lookup::{advisory_query, affects, fixes, report_advisories};
-use patchula_manager::{Dependency, EditForm, Location, Syntax};
+use patchula_manager::{Dependency, EditForm, Syntax};
 use patchula_versioning::Ecosystem;
 use patchula_words::{DependencyKind, Manager, Scheme, Severity, Source, Update};
 use std::sync::Arc;
@@ -14,32 +14,21 @@ fn dependency(source: Source, package: &str, current: &str, resolved: Option<&st
         _ => (Manager::GithubActions, Scheme::Loose),
     };
     Dependency {
-        manager,
-        file: "manifest".into(),
-        location: Location {
-            start: 0,
-            end: 1,
-            line: 1,
-            column: 1,
-            pointer: String::new(),
-        },
         form: EditForm::Scalar(Syntax::Json),
         name: package.into(),
         package: package.into(),
-        kind: if manager == Manager::GithubActions {
-            DependencyKind::Action
-        } else {
-            DependencyKind::Production
-        },
         current: current.into(),
         resolved: resolved.map(Into::into),
-        digest: None,
-        source,
         scheme,
-        extract: None,
-        included_by: None,
-        registry: None,
-        cooldown: None,
+        ..patchula_manager::testing::dependency(
+            manager,
+            if manager == Manager::GithubActions {
+                DependencyKind::Action
+            } else {
+                DependencyKind::Production
+            },
+            source,
+        )
     }
 }
 

@@ -357,7 +357,7 @@ with something it should not reach. A run chooses its partition like this:
   non-public host — and equally two installations that happen to name the
   same private registry, which never share a partition.
 - **`private-<hash>`** — for runs given operator credentials, named by a
-  hash of the credentials' scopes as before.
+  hash of the credentials' scopes.
 
 There is no read-only lower layer: a run never reads a partition it did
 not choose, since a public package of the same name could then satisfy it
@@ -466,7 +466,8 @@ tools read the registries the repository names, never a
 [mirror](/guide/sources/#mirrors).
 
 When a tool fails while it holds credentials, the failure shows none of its
-output, which may quote what the private registry answered. The repository's
+output, which may quote what the private registry answered, only how it
+failed: a timeout or its exit status. The repository's
 own registry, proxy and TLS settings apply as each tool reads them. npm,
 aube and Bun match credentials by host and path whatever the scheme, and
 Bundler, Composer, uv and Poetry by host whatever the scheme or port: a

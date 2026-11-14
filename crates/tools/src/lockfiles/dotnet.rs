@@ -33,11 +33,7 @@ fn sdk(
         let Some(version) = value["sdk"]["version"].as_str() else {
             continue;
         };
-        if version.split('.').count() == 3
-            && version
-                .split('.')
-                .all(|p| p.bytes().all(|b| b.is_ascii_digit()))
-        {
+        if context::numeric(version, Some(3)) {
             return version.into();
         }
     }
@@ -74,7 +70,9 @@ fn target(cwd: &Path) -> Result<PathBuf, String> {
     Err("no solution or project to restore".into())
 }
 
-fn locks(dir: &Path, out: &mut Vec<PathBuf>) {
+/// Every `packages.lock.json` under `dir`, outside `obj/`, `bin/` and
+/// `.git/`. Symlinked directories are followed.
+pub(super) fn locks(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -93,8 +91,8 @@ fn locks(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 /// The text of every `nuget.config` under `dir`, in any case, or why it
-/// could not be read.
-fn nuget_configs(dir: &Path, out: &mut Vec<std::io::Result<String>>) {
+/// could not be read. Symlinked directories are not followed.
+pub(super) fn nuget_configs(dir: &Path, out: &mut Vec<std::io::Result<String>>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -227,15 +225,11 @@ impl Runner {
             .iter()
             .any(|(path, text)| std::fs::read_to_string(path).ok().as_ref() != Some(text));
         if edited && !before.is_empty() && !changed {
-            return Err(format!(
-                "packages.lock.json did not change after the manifest edit in {}",
-                if directory.is_empty() {
-                    "the repository root"
-                } else {
-                    directory
-                }
-            )
-            .into());
+            return Err(context::unchanged(
+                "packages.lock.json",
+                directory,
+                context::Trigger::ManifestEdit,
+            ));
         }
         Ok(())
     }

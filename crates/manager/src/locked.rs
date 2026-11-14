@@ -201,7 +201,7 @@ fn read(files: &Files) -> Result<Aube, String> {
     };
     for (path, text) in files
         .iter()
-        .filter(|(p, _)| p.rsplit('/').next() == Some("aube-lock.yaml"))
+        .filter(|(p, _)| crate::roles::leaf(p) == "aube-lock.yaml")
     {
         // An unread lock is no lock at all, as with npm's.
         let Ok(text) = text.read() else {

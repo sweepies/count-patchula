@@ -36,13 +36,84 @@ mod real_actions_lock;
 mod real_python_indexes;
 mod real_sparse_registry;
 
+/// A runner over `temp` whose every command goes to `executor`.
+fn test_runner(temp: &Path, executor: Arc<dyn Executor>) -> Runner {
+    Runner::new(temp.join("worktrees"), "offline-installation").with_executor(executor)
+}
+
+/// The developer's mise store, where the real tool tests take tools from.
+fn mise_store() -> PathBuf {
+    std::env::var_os("MISE_DATA_DIR").map_or_else(
+        || PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/share/mise"),
+        PathBuf::from,
+    )
+}
+
+/// Write `files` to `dir`, which holds exactly them afterwards: a file an
+/// earlier case wrote must not decide this one.
+fn write_tree(dir: &Path, files: &BTreeMap<String, String>) {
+    if dir.exists() {
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    std::fs::create_dir_all(dir).unwrap();
+    for (path, text) in files {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+}
+
+/// Run a real tool to completion with its streams drained as it writes,
+/// killing it and failing the test once it runs past `deadline`: a tool
+/// that waits on something outside the test fails it rather than hangs it.
+fn run_with_deadline(
+    command: &mut std::process::Command,
+    deadline: std::time::Duration,
+) -> std::process::Output {
+    use std::io::Read;
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "{command:?} ran past {deadline:?}\n{}\n{}",
+                String::from_utf8_lossy(&stdout.join().unwrap()),
+                String::from_utf8_lossy(&stderr.join().unwrap())
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    std::process::Output {
+        status,
+        stdout: stdout.join().unwrap(),
+        stderr: stderr.join().unwrap(),
+    }
+}
+
 /// What `defaults.toml` pins for a tool, which a repository without its own pin
 /// gets. A defaults bump must not need a test edit, so expectations ask here.
 fn default_version(tool: &str) -> String {
-    tool_defaults().unwrap()["tools"][tool]
-        .as_str()
-        .unwrap_or_else(|| panic!("defaults.toml pins no {tool}"))
-        .to_owned()
+    super::default_version(tool).unwrap().to_owned()
 }
 fn default_spec(tool: &str) -> String {
     format!("{tool}@{}", default_version(tool))
@@ -454,19 +525,31 @@ async fn real_apm_relocks_offline() {
     ]);
     let executor = fixture(files.clone(), false, true);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    // A manifest with no dependencies leaves the lock as APM wrote it.
+    assert_already_current(&p);
+    let calls = executor.calls.lock().unwrap();
     assert!(
-        matches!(
-            p.action().status,
-            BranchStatus::Planned | BranchStatus::Skipped
-        ),
+        recorded(&calls)
+            .iter()
+            .any(|(_, args)| starts(args, &["apm", "lock"])),
+        "{calls:?}"
+    );
+}
+
+/// The tools ran and found every lock current: a skip for that reason, not
+/// one before any tool ran.
+fn assert_already_current(p: &Plan) {
+    assert_eq!(p.action().status, BranchStatus::Skipped, "{:?}", p.action());
+    assert_eq!(
+        p.action().reason.as_deref(),
+        Some("lockfiles already current"),
         "{:?}",
         p.action()
     );
@@ -490,8 +573,7 @@ async fn apm_locks_use_the_lock_only_command() {
         ]);
         let executor = fixture(files.clone(), false, false);
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -685,9 +767,7 @@ async fn a_credentialed_tool_failure_shows_no_output() {
     )
     .unwrap()
     .for_tools();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone())
-        .with_registries(&[entry]);
+    let runner = test_runner(temp.path(), executor.clone()).with_registries(&[entry]);
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -698,6 +778,37 @@ async fn a_credentialed_tool_failure_shows_no_output() {
     let reason = p.action().reason.clone().unwrap();
     assert!(reason.contains("held registry credentials"), "{reason}");
     assert!(!reason.contains("fixture resolution failure"), "{reason}");
+}
+
+/// A credentialed tool's failure keeps how it failed, a timeout or its exit
+/// status, and drops everything it printed.
+#[test]
+fn a_credentialed_tool_failure_keeps_its_kind() {
+    let tool = |failure| contract::Failure::Tool {
+        context: "bun".into(),
+        failure,
+    };
+    let timed_out = held_failure(
+        "bun",
+        &tool(Failure::TimedOut {
+            limit: std::time::Duration::from_secs(180),
+        }),
+    )
+    .to_string();
+    assert!(timed_out.contains("180s time limit"), "{timed_out}");
+    let exited = held_failure(
+        "bun",
+        &tool(Failure::Exited {
+            status: "exit status: 1".into(),
+            stdout: "private registry body".into(),
+            stderr: "private registry error".into(),
+        }),
+    )
+    .to_string();
+    assert!(exited.contains("exit status: 1"), "{exited}");
+    assert!(!exited.contains("private registry"), "{exited}");
+    let io = held_failure("bun", &tool(Failure::Io("quoted".into()))).to_string();
+    assert!(!io.contains("quoted"), "{io}");
 }
 
 /// The fixture's tools, each taking a moment, counting how many run at once.
@@ -757,8 +868,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
         target: 3.min(lockfile_concurrency()),
     });
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     // A first use clears an unproven install under the store's exclusive
     // lock, which waits for any run in progress; a used tool takes the
     // shared lock only, so all three plans can run at once.
@@ -810,8 +920,7 @@ async fn committed_registry_credentials_stop_the_run_before_any_tool() {
         ]);
         let executor = fixture(files.clone(), false, false);
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -845,8 +954,7 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
     ]);
     let executor = fixture(files.clone(), true, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -904,8 +1012,7 @@ async fn all_tools_are_targeted_scrubbed_and_versions_are_read_without_loading_r
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1004,8 +1111,7 @@ async fn node_lockfiles_use_aube_yarn_and_bun_by_lockfile_format() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1059,8 +1165,7 @@ async fn the_npm_engine_setting_restores_native_npm_for_npm_locks() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config_with("npmEngine = \"npm\"");
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1160,8 +1265,7 @@ async fn an_unchanged_lockfile_after_a_manifest_edit_fails_the_branch() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1203,8 +1307,7 @@ async fn a_manifest_edit_outside_the_dependencies_leaves_the_lock_alone() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1236,8 +1339,7 @@ async fn aube_lock_yaml_is_regenerated_in_place_beside_other_lockfiles() {
         }
         let executor = fixture(files.clone(), false, false);
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1281,8 +1383,7 @@ async fn aube_lock_yaml_creation_fails_the_branch() {
     ]);
     let executor = fixture_with(files.clone(), false, false, Some("aube-lock.yaml".into()));
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1314,8 +1415,7 @@ async fn maintenance_refreshes_node_lockfiles_within_the_manifest_ranges() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config_with("npmEngine = \"npm\"");
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1370,48 +1470,86 @@ async fn maintenance_refreshes_node_lockfiles_within_the_manifest_ranges() {
     );
 }
 
+/// A Node project with one local `file:` dependency and stub locks.
+const DETERMINISTIC_NODE: &[(&str, &str)] = &[
+    (
+        "package.json",
+        "{\"name\":\"fixture\",\"version\":\"1.0.0\",\"dependencies\":{\"local-fixture\":\"file:./local\"}}\n",
+    ),
+    (
+        "local/package.json",
+        "{\"name\":\"local-fixture\",\"version\":\"1.0.0\"}\n",
+    ),
+    ("bun.lock", "{}\n"),
+    ("package-lock.json", "{}\n"),
+];
+/// A Cargo package with no dependencies and a stub lock.
+const DETERMINISTIC_CARGO: &[(&str, &str)] = &[
+    (
+        "Cargo.toml",
+        "[package]\nname = 'fixture'\nversion = '1.0.0'\nedition = '2024'\n",
+    ),
+    ("src/lib.rs", "// offline fixture\n"),
+    ("Cargo.lock", "version = 4\n"),
+];
+/// A Go module with no requirements and a stub `go.sum`, which `go mod
+/// download` has nothing to add to.
+const DETERMINISTIC_GO: &[(&str, &str)] = &[
+    ("go.mod", "module example.com/fixture\n\ngo 1.22\n"),
+    ("main.go", "package main\nfunc main() {}\n"),
+    ("go.sum", "\n"),
+];
+
+/// Each real tool regenerates its stub lock, or finds a lock with nothing to
+/// add current, and two runs over the same fixture write the same files.
 #[tokio::test]
 async fn real_tools_produce_deterministic_lockfiles_from_local_offline_fixtures() {
-    for (ecosystem,files,lock) in [
-        (Ecosystem::Node,BTreeMap::from([
-            ("package.json".into(),"{\"name\":\"fixture\",\"version\":\"1.0.0\",\"dependencies\":{\"local-fixture\":\"file:./local\"}}\n".into()),
-            ("local/package.json".into(),"{\"name\":\"local-fixture\",\"version\":\"1.0.0\"}\n".into()),
-            ("bun.lock".into(),"{}\n".into()),
-            ("package-lock.json".into(),"{}\n".into()),
-        ]),"bun.lock"),
-        (Ecosystem::Cargo,BTreeMap::from([
-            ("Cargo.toml".into(),"[package]\nname = 'fixture'\nversion = '1.0.0'\nedition = '2024'\n".into()),
-            ("src/lib.rs".into(),"// offline fixture\n".into()),
-            ("Cargo.lock".into(),"version = 4\n".into()),
-        ]),"Cargo.lock"),
-        (Ecosystem::Go,BTreeMap::from([
-            ("go.mod".into(),"module example.com/fixture\n\ngo 1.22\n".into()),
-            ("main.go".into(),"package main\nfunc main() {}\n".into()),
-            ("go.sum".into(),"\n".into()),
-        ]),"go.mod"),
+    for (ecosystem, fixture_files, lock) in [
+        (Ecosystem::Node, DETERMINISTIC_NODE, Some("bun.lock")),
+        (Ecosystem::Cargo, DETERMINISTIC_CARGO, Some("Cargo.lock")),
+        (Ecosystem::Go, DETERMINISTIC_GO, None),
     ] {
-        let mut outputs=Vec::new();
+        let files: BTreeMap<String, String> = fixture_files
+            .iter()
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .collect();
+        let mut outputs = Vec::new();
         for _ in 0..2 {
-            let executor=fixture(files.clone(),false,true);
-            let temp=tempfile::tempdir().unwrap();
-            let runner=Runner::new(temp.path().join("worktrees"),"offline-installation").with_executor(executor);
-            let mut snapshot=snapshot(&files);
-            let config=config();
-            let mut p=maintenance(&repo(),&config,&snapshot, &[], None, monday()).unwrap().unwrap();
-            assert!(p.lock_jobs().iter().all(|j|j.ecosystem==ecosystem));
-            prepare_one(&runner, &mut p,&mut snapshot,&config).await;
-            assert!(matches!(p.action().status,BranchStatus::Planned|BranchStatus::Skipped),"{ecosystem:?}: {:?}",p.action());
-            assert!(p.lockfiles_ready());
-            assert!(p.contents().contains_key(lock) || ecosystem==Ecosystem::Go);
-            outputs.push((p.contents().clone(),p.deleted().clone()));
+            let executor = fixture(files.clone(), false, true);
+            let temp = tempfile::tempdir().unwrap();
+            let runner = test_runner(temp.path(), executor);
+            let mut snapshot = snapshot(&files);
+            let config = config();
+            let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
+                .unwrap()
+                .unwrap();
+            assert!(p.lock_jobs().iter().all(|j| j.ecosystem == ecosystem));
+            prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+            match lock {
+                Some(lock) => {
+                    assert_eq!(
+                        p.action().status,
+                        BranchStatus::Planned,
+                        "{ecosystem:?}: {:?}",
+                        p.action()
+                    );
+                    assert!(p.lockfiles_ready());
+                    assert!(
+                        p.contents().contains_key(lock),
+                        "{ecosystem:?}: {lock} unchanged"
+                    );
+                }
+                None => assert_already_current(&p),
+            }
+            outputs.push((p.contents().clone(), p.deleted().clone()));
         }
-        assert_eq!(outputs[0],outputs[1],"{ecosystem:?}");
+        assert_eq!(outputs[0], outputs[1], "{ecosystem:?}");
     }
 }
 
 /// aube regenerates pnpm, npm and Yarn Classic locks in place from local
-/// offline fixtures, including npm trees with local `file:` dependencies (fixed
-/// in aube 2.8.1, aube#1796).
+/// offline fixtures, including npm trees with local `file:` dependencies
+/// (aube#1796).
 #[tokio::test]
 async fn real_aube_rewrites_pnpm_npm_and_yarn_classic_locks_in_place() {
     let npm_seed = "{\"name\":\"fixture\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{\"\":{\"name\":\"fixture\",\"version\":\"1.0.0\"}}}\n";
@@ -1457,8 +1595,7 @@ async fn real_aube_rewrites_pnpm_npm_and_yarn_classic_locks_in_place() {
         ]);
         let executor = fixture(files.clone(), false, true);
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1508,8 +1645,7 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
     ]);
     let executor = fixture(files.clone(), false, true);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1741,8 +1877,7 @@ async fn real_cargo_and_go_targeted_updates_retain_the_selected_manifest_and_loc
         };
         let executor = fixture(files.clone(), false, true);
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor);
+        let runner = test_runner(temp.path(), executor);
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -1963,8 +2098,7 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
             newest,
             calls: Mutex::new(Vec::new()),
         });
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let driver = temp.path().join("driver");
         std::fs::create_dir_all(&driver).unwrap();
         let job = Job {
@@ -1984,8 +2118,17 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
                 &driver,
                 &cwd,
                 &job,
-                ("1.100.0", false, None),
-                (&[], &[], &[], false),
+                cargo::CargoDirectory {
+                    rust: "1.100.0",
+                    maintenance: false,
+                    cooldown: None,
+                },
+                cargo::CargoAccess {
+                    env: &[],
+                    credentials: &[],
+                    secrets: &[],
+                    public: false,
+                },
             )
             .await
             .unwrap_or_else(|e| panic!("{locked} -> {target}: {e}"));
@@ -2070,9 +2213,7 @@ async fn cargo_gets_credentialed_registries_from_the_environment() {
     )
     .unwrap()
     .for_tools();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone())
-        .with_registries(&[entry]);
+    let runner = test_runner(temp.path(), executor.clone()).with_registries(&[entry]);
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -2114,8 +2255,7 @@ async fn cargo_lock_adds_a_semver_incompatible_entry_then_pins_the_target() {
         calls: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -2231,6 +2371,10 @@ impl Executor for MiseFixture {
         if spec.args.iter().any(|arg| arg == "git") {
             return self.git.run(spec);
         }
+        // The first run clears an unproven install of the pinned mise.
+        if spec.args.iter().any(|arg| arg == "uninstall") {
+            return Box::pin(async { Ok(Vec::new()) });
+        }
         Box::pin(async move {
             self.calls.lock().unwrap().push(spec.args.clone());
             assert_eq!(spec.env[std::ffi::OsStr::new("MISE_NO_CONFIG")], "1");
@@ -2245,7 +2389,7 @@ impl Executor for MiseFixture {
             assert!(
                 spec.args
                     .iter()
-                    .any(|arg| *arg == format!("aqua:jdx/mise@{}", pinned_mise()))
+                    .any(|arg| *arg == format!("aqua:jdx/mise@{}", default_version("mise")))
             );
             let work =
                 Path::new(&spec.args[spec.args.iter().position(|arg| arg == "--cd").unwrap() + 1]);
@@ -2324,8 +2468,7 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
                 tomls: Mutex::new(Vec::new()),
             });
             let temp = tempfile::tempdir().unwrap();
-            let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-                .with_executor(executor.clone());
+            let runner = test_runner(temp.path(), executor.clone());
             let mut snapshot = snapshot(&files);
             let config = config();
             let dep = patchula_manager::Scanner::new(&config)
@@ -2366,6 +2509,11 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
                 assert_eq!(p.action().files.len(), 2);
                 assert!(p.contents()["mise.lock"].contains("version = \"24.0.0\""));
                 assert!(p.contents()["mise.lock"].contains("version = \"1.4.3\""));
+                // The run went through the shared tool path, which records
+                // the pinned mise as proven.
+                assert!(
+                    runner.installed(&[(patchula_mise::PACKAGE.into(), default_version("mise"))])
+                );
             } else {
                 assert_eq!(
                     p.action().status,
@@ -2409,8 +2557,7 @@ async fn mise_lock_updates_a_tool_that_records_no_platforms() {
             tomls: Mutex::new(Vec::new()),
         });
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let dep = patchula_manager::Scanner::new(&config)
@@ -2500,8 +2647,7 @@ async fn mise_lock_ignores_configuration_below_the_lockfile() {
         configs: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(spy.clone());
+    let runner = test_runner(temp.path(), spy.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let found = patchula_manager::Scanner::new(&config)
@@ -2572,8 +2718,7 @@ async fn mise_lock_in_a_subdirectory_reads_the_configuration_beside_it() {
         tomls: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let dep = patchula_manager::Scanner::new(&config)
@@ -2675,8 +2820,7 @@ async fn mise_lock_records_every_request_a_multi_version_declaration_makes() {
                 },
             });
             let temp = tempfile::tempdir().unwrap();
-            let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-                .with_executor(executor);
+            let runner = test_runner(temp.path(), executor);
             let mut snapshot = snapshot(&files);
             let config = config();
             let dep = patchula_manager::Scanner::new(&config)
@@ -2806,8 +2950,7 @@ fn readable_locks_must_resolve_the_requested_version() {
 }
 
 /// aube cannot read npm v1 locks; every newer lock stays with aube, including
-/// trees with local `file:` dependencies, which aube 2.8.1 keeps valid
-/// (aube#1796).
+/// trees with local `file:` dependencies, which aube keeps valid (aube#1796).
 #[test]
 fn npm_locks_aube_cannot_write_stay_on_native_npm() {
     let case = |files: &[(&str, &str)]| {
@@ -2932,6 +3075,45 @@ fn yarnrc_keeps_settings_but_drops_repository_code_and_credentials() {
     assert!(clean["npmScopes"]["acme"].get("npmAuthToken").is_none());
 }
 
+/// Version pins are dot-separated digits, every part non-empty, and an exact
+/// part count where one is asked for: a .NET SDK of `8..100` is not exact.
+#[test]
+fn numeric_versions_need_digits_in_every_part() {
+    assert!(context::numeric("8.0.100", Some(3)));
+    assert!(context::numeric("3.12", None));
+    assert!(!context::numeric("8..100", Some(3)));
+    assert!(!context::numeric("8.0", Some(3)));
+    assert!(!context::numeric("3.12a", None));
+    assert!(!context::numeric("", None));
+}
+
+/// A Yarn run that stops before the tool starts leaves the committed
+/// `.yarnrc.yml` as it was, not the sanitised copy.
+#[tokio::test]
+async fn yarn_stopped_before_it_runs_keeps_the_committed_yarnrc() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("tree");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let rc = "yarnPath: .yarn/releases/yarn-4.5.0.cjs\nnodeLinker: node-modules\n";
+    std::fs::write(cwd.join(".yarnrc.yml"), rc).unwrap();
+    std::fs::write(cwd.join("yarn.lock"), "__metadata:\n  version: 8\n").unwrap();
+    std::fs::write(cwd.join("package.json"), "{}").unwrap();
+    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation");
+    // No node version: the run fails before Yarn starts.
+    let error = runner
+        .yarn(temp.path(), &cwd, &BTreeMap::new(), true)
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("missing node version"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.join(".yarnrc.yml")).unwrap(),
+        rc
+    );
+}
+
 /// Tools see a repository's registries, never its tokens or other settings,
 /// and a registry they cannot read stays so they stop rather than read the
 /// public package of a private name.
@@ -2976,8 +3158,7 @@ async fn an_unchanged_lockfile_after_a_catalog_edit_fails_the_branch() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -3016,8 +3197,7 @@ async fn real_yarn_berry_uses_a_sanitised_yarnrc_and_restores_it() {
     ]);
     let executor = fixture(files.clone(), false, true);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -3072,8 +3252,7 @@ async fn python_locks_use_uv_and_poetry_with_the_project_interpreter() {
         }
         let executor = fixture(files.clone(), false, false);
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -3128,8 +3307,7 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -3156,7 +3334,7 @@ async fn an_unchanged_python_lock_after_a_targeted_upgrade_fails() {
         p.action()
             .reason
             .as_deref()
-            .is_some_and(|r| r.contains("uv.lock did not change")),
+            .is_some_and(|r| r.contains("uv.lock did not change after the targeted upgrade")),
         "{:?}",
         p.action().reason
     );
@@ -3193,8 +3371,7 @@ async fn real_uv_and_poetry_regenerate_python_locks() {
         ]);
         let executor = fixture(files.clone(), false, true);
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -3355,6 +3532,70 @@ impl Executor for Recorder {
     }
 }
 
+/// The lock walk follows symlinked directories and matches names as bytes,
+/// so a directory whose name is not UTF-8 is still searched; the NuGet
+/// config walk searches such directories too but does not follow links.
+#[cfg(unix)]
+#[test]
+fn dotnet_walks_keep_their_link_and_name_rules() {
+    use std::os::unix::ffi::OsStrExt;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("tree");
+    let outside = temp.path().join("outside");
+    let odd = root.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(&odd).unwrap();
+    std::fs::create_dir_all(root.join("obj")).unwrap();
+    std::fs::write(outside.join("packages.lock.json"), "{}").unwrap();
+    std::fs::write(outside.join("nuget.config"), "<configuration/>").unwrap();
+    std::fs::write(odd.join("packages.lock.json"), "{}").unwrap();
+    std::fs::write(odd.join("NuGet.Config"), "<configuration/>").unwrap();
+    std::fs::write(root.join("obj/packages.lock.json"), "{}").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+    let mut locks = Vec::new();
+    dotnet::locks(&root, &mut locks);
+    locks.sort();
+    let mut expected = vec![
+        odd.join("packages.lock.json"),
+        root.join("linked/packages.lock.json"),
+    ];
+    expected.sort();
+    assert_eq!(locks, expected);
+    let mut configs = Vec::new();
+    dotnet::nuget_configs(&root, &mut configs);
+    assert_eq!(configs.len(), 1, "{configs:?}");
+    assert_eq!(configs[0].as_deref().unwrap(), "<configuration/>");
+}
+
+/// A store that was never prewarmed has no usage record for the pinned mise,
+/// which version lookups install and run: a first `mise lock` must not
+/// uninstall it from under them. Other unproven tools are still cleared.
+#[tokio::test]
+async fn clearing_unproven_tools_keeps_the_pinned_mise() {
+    let temp = tempfile::tempdir().unwrap();
+    let recorder = Arc::new(Recorder(Mutex::new(Vec::new())));
+    let runner = Runner::new(temp.path().join("worktrees"), "x").with_executor(recorder.clone());
+    runner
+        .clear_unproven(&[
+            (patchula_mise::PACKAGE.into(), default_version("mise")),
+            ("node".into(), "20.0.0".into()),
+        ])
+        .await;
+    let calls = recorder.0.lock().unwrap().clone();
+    assert!(
+        calls
+            .iter()
+            .any(|args| args.ends_with(&["uninstall".into(), "node@20.0.0".into()])),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|args| args
+            .iter()
+            .any(|arg| arg.starts_with(patchula_mise::PACKAGE))),
+        "{calls:?}"
+    );
+}
+
 /// Unused tool versions are pruned from the runner's own store; pinned
 /// defaults and recently used versions stay, and prewarming installs defaults.
 #[tokio::test]
@@ -3391,7 +3632,7 @@ async fn tool_store_prunes_unused_versions_and_prewarms_defaults() {
     let installed = runner.prewarm().await.unwrap();
     assert!(installed.contains(&default_spec("uv")) && installed.contains(&default_spec("yarn")));
     assert!(!installed.iter().any(|s| s.starts_with("rust@")));
-    assert!(installed.contains(&format!("aqua:jdx/mise@{}", pinned_mise())));
+    assert!(installed.contains(&format!("aqua:jdx/mise@{}", default_version("mise"))));
 }
 
 /// A version the user already has is hard-linked into the store instead of
@@ -3529,8 +3770,7 @@ async fn real_dotnet_restore_regenerates_packages_lock_json() {
     ]);
     let executor = fixture(files.clone(), false, true);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -3571,22 +3811,15 @@ async fn real_bundler_relocks_offline() {
     ]);
     let executor = fixture(files.clone(), false, true);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut snapshot, &config).await;
-    assert!(
-        matches!(
-            p.action().status,
-            BranchStatus::Planned | BranchStatus::Skipped
-        ),
-        "{:?}",
-        p.action()
-    );
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert!(p.contents().contains_key("Gemfile.lock"));
     let calls = executor.calls.lock().unwrap();
     assert!(recorded(&calls).iter().any(|(specs, args)| {
         specs.iter().any(|s| *s == default_spec("ruby"))
@@ -3623,8 +3856,7 @@ async fn composer_locks_use_static_or_compiled_php() {
     ] {
         let executor = fixture(files.clone(), false, false);
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config_with(setting);
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -3674,8 +3906,7 @@ async fn static_php_requires_an_exact_version() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -3707,8 +3938,7 @@ async fn real_composer_relocks_offline() {
     ]);
     let executor = fixture(files.clone(), false, true);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -4041,8 +4271,7 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
         let executor = Arc::new(SourcedLock {
             calls: Mutex::new(Vec::new()),
         });
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let driver = temp.path().join("driver");
         std::fs::create_dir_all(&driver).unwrap();
         let job = Job {
@@ -4062,8 +4291,17 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
                 &driver,
                 &cwd,
                 &job,
-                ("1.100.0", false, None),
-                (&[], &[], &[], false),
+                cargo::CargoDirectory {
+                    rust: "1.100.0",
+                    maintenance: false,
+                    cooldown: None,
+                },
+                cargo::CargoAccess {
+                    env: &[],
+                    credentials: &[],
+                    secrets: &[],
+                    public: false,
+                },
             )
             .await
             .unwrap_or_else(|e| panic!("git {git}, crates.io {registry}: {e}"));
@@ -4096,8 +4334,7 @@ async fn real_cargo_moves_a_locked_package_without_a_manifest_change() {
     ]);
     let executor = fixture(files.clone(), false, true);
     let temp = tempfile::tempdir().unwrap();
-    let runner =
-        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let runner = test_runner(temp.path(), executor);
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut dep = patchula_manager::Locked {
@@ -4234,8 +4471,7 @@ async fn flake_update(
     files: &BTreeMap<String, String>,
 ) -> (Plan, tempfile::TempDir) {
     let temp = tempfile::tempdir().unwrap();
-    let runner =
-        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let runner = test_runner(temp.path(), executor);
     let mut snapshot = snapshot(files);
     let config = config();
     let extraction = patchula_manager::Scanner::new(&config)
@@ -4354,8 +4590,7 @@ async fn flake_maintenance_skips_refused_inputs() {
         let files = flake(private);
         let executor = nix_fake(&files, flake_lock(private).replace(NIXPKGS, MOVED));
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -4476,8 +4711,7 @@ async fn real_nix_relocks_a_flake_offline() {
     ]);
     let executor = fixture(files.clone(), false, true);
     let temp = tempfile::tempdir().unwrap();
-    let runner =
-        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let runner = test_runner(temp.path(), executor);
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -4584,8 +4818,7 @@ async fn real_nix_refuses_a_declared_http_input_before_fetching() {
     ]);
     let executor = fixture(files.clone(), false, true);
     let temp = tempfile::tempdir().unwrap();
-    let runner =
-        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let runner = test_runner(temp.path(), executor);
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -4655,13 +4888,6 @@ impl Executor for Packslip {
     }
 }
 
-fn pinned_mise() -> String {
-    tool_defaults().unwrap()["tools"]["mise"]
-        .as_str()
-        .unwrap()
-        .to_owned()
-}
-
 /// A host without mise gets the pinned one from packslip, held to mise's
 /// signer, with nothing from the server's environment; a leftover tree and
 /// earlier versions are cleared.
@@ -4669,7 +4895,7 @@ fn pinned_mise() -> String {
 async fn packslip_installs_the_pinned_mise_into_the_store() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("patchula-mise");
-    let version = pinned_mise();
+    let version = default_version("mise");
     std::fs::create_dir_all(root.join(&version).join("man")).unwrap();
     std::fs::create_dir_all(root.join("2000.1.1/bin")).unwrap();
     let packslip = Packslip {
@@ -4709,7 +4935,7 @@ async fn packslip_is_not_run_when_the_store_has_the_pinned_mise() {
     let mise = temp
         .path()
         .join("patchula-mise")
-        .join(pinned_mise())
+        .join(default_version("mise"))
         .join("bin/mise");
     std::fs::create_dir_all(mise.parent().unwrap()).unwrap();
     std::fs::write(&mise, "").unwrap();
@@ -4758,7 +4984,7 @@ async fn a_failed_mise_install_says_why() {
         error,
         format!(
             "packslip could not install mise {}: exit status: 1: Error: 0: HTTP 403 for https://api.github.com/repos/jdx/mise",
-            pinned_mise()
+            default_version("mise")
         )
     );
 }
@@ -5033,8 +5259,7 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                 actions: None,
             });
             let temp = tempfile::tempdir().unwrap();
-            let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-                .with_executor(executor.clone());
+            let runner = test_runner(temp.path(), executor.clone());
             let mut snapshot = snapshot(&files);
             let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
                 .unwrap()
@@ -5175,8 +5400,7 @@ async fn mise_lock_follows_the_tools_tasks_install() {
         configs: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(spy.clone());
+    let runner = test_runner(temp.path(), spy.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let dep = patchula_manager::Scanner::new(&config)
@@ -5243,8 +5467,7 @@ async fn lock_task_file_tool(
         tomls: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
-    let runner =
-        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let runner = test_runner(temp.path(), executor);
     let mut snapshot = snapshot(&files);
     let mut config = config();
     config.files = vec![patchula_config::FileSet {
@@ -5347,8 +5570,7 @@ async fn mise_lock_refuses_a_task_that_declares_a_tool_with_other_options() {
         tomls: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let dep = patchula_manager::Scanner::new(&config)
@@ -5411,8 +5633,7 @@ async fn lock_node_declared_twice(old: &str, lock: String) -> (Plan, Vec<String>
         configs: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(spy.clone());
+    let runner = test_runner(temp.path(), spy.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let dep = patchula_manager::Scanner::new(&config)
@@ -6058,14 +6279,7 @@ async fn go_fetches_only_through_the_proxy_in_the_public_partition() {
         .unwrap()
         .unwrap();
     prepare_one(&runner, &mut p, &mut first, &config).await;
-    assert!(
-        matches!(
-            p.action().status,
-            BranchStatus::Planned | BranchStatus::Skipped
-        ),
-        "{:?}",
-        p.action()
-    );
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
     let root = temp.path().join("cache/tool-caches");
     let envs = go_envs(&executor);
     assert!(!envs.is_empty());
@@ -6183,8 +6397,7 @@ async fn a_repository_that_commits_credentials_runs_no_tool() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -6616,11 +6829,9 @@ const PINNED_TABLE: &[(&str, &str, bool, bool, bool, bool)] = &[
     ("sub/dir/gradle/plugins", "000000000000", false, false, false, false),
 ];
 
-/// Today's per-path update classification, pinned before the file-role
-/// taxonomy: `steers` per ecosystem, `materialized`, `writable`,
-/// `cargo_config` and the nuget.config predicate, for root and nested forms
-/// of representative paths. The taxonomy must reproduce every answer except
-/// the spec's permitted fixes.
+/// The per-path update classification: `steers` per ecosystem,
+/// `materialized`, `writable`, `cargo_config` and the nuget.config
+/// predicate, for root and nested forms of representative paths.
 #[test]
 fn file_classification_is_pinned() {
     const ECOSYSTEMS: &[Ecosystem] = &[
@@ -6646,8 +6857,16 @@ fn file_classification_is_pinned() {
             );
         }
         assert_eq!(materialized(path), mat, "{path}: materialized");
-        assert_eq!(writable(path), writ, "{path}: writable");
-        assert_eq!(cargo_config(path), cargo, "{path}: cargo_config");
+        assert_eq!(
+            patchula_manager::roles::roles(path).writable,
+            writ,
+            "{path}: writable"
+        );
+        assert_eq!(
+            patchula_manager::roles::cargo_config(path),
+            cargo,
+            "{path}: cargo_config"
+        );
         assert_eq!(
             patchula_manager::roles::nuget_config(path),
             nuget,
@@ -6696,9 +6915,7 @@ async fn dotnet_restore_uses_global_json_sdk_and_tree_nuget_configs() {
     )
     .unwrap()
     .for_tools();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone())
-        .with_registries(&[entry]);
+    let runner = test_runner(temp.path(), executor.clone()).with_registries(&[entry]);
     let mut snap1 = snapshot(&files);
     let config = config();
     let p = maintenance(&repo(), &config, &snap1, &[], None, monday())
@@ -6738,8 +6955,7 @@ async fn dotnet_restore_uses_global_json_sdk_and_tree_nuget_configs() {
     let mut executor = fixture(files.clone(), false, false);
     Arc::get_mut(&mut executor).unwrap().extra = vec!["packages.lock.json".into()];
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snap2 = snapshot(&files);
     let mut p = maintenance(&repo(), &config, &snap2, &[], None, monday())
         .unwrap()
@@ -6780,9 +6996,7 @@ async fn go_gets_private_hosts_through_netrc_and_downloads() {
     )
     .unwrap()
     .for_tools();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone())
-        .with_registries(&[entry]);
+    let runner = test_runner(temp.path(), executor.clone()).with_registries(&[entry]);
     let mut snapshot = snapshot(&files);
     let config = patchula_config::load_files(
         "/repo/patchula.pkl",
@@ -6824,8 +7038,7 @@ async fn cargo_runs_update_workspace_for_untargeted_jobs() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -6889,8 +7102,7 @@ async fn cargo_package_job_with_unparseable_versions_still_updates() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = Draft::new(BranchAction {
@@ -6968,8 +7180,7 @@ async fn tool_pins_from_manifests_are_checked_before_any_tool_runs() {
         ]);
         let executor = fixture(files.clone(), false, false);
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -7020,8 +7231,7 @@ async fn checkout_fails_closed_on_unusual_modes_and_disagreements() {
             .insert("mise.toml".into(), "160000 commit".into());
     }
     let temp = tempfile::tempdir().unwrap();
-    let runner =
-        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let runner = test_runner(temp.path(), executor);
     let mut snap1 = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snap1, &[], None, monday())
@@ -7041,8 +7251,7 @@ async fn checkout_fails_closed_on_unusual_modes_and_disagreements() {
     let mut executor = fixture(files.clone(), false, false);
     Arc::get_mut(&mut executor).unwrap().tamper = true;
     let temp = tempfile::tempdir().unwrap();
-    let runner =
-        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let runner = test_runner(temp.path(), executor);
     let mut snap2 = snapshot(&files);
     let mut p = maintenance(&repo(), &config, &snap2, &[], None, monday())
         .unwrap()
@@ -7062,8 +7271,7 @@ async fn checkout_fails_closed_on_unusual_modes_and_disagreements() {
     edited.insert("mise.toml".into(), "[tools]\nnode='23.0.0'\n".into());
     let executor = fixture(edited, false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner =
-        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let runner = test_runner(temp.path(), executor);
     let mut snap3 = snapshot(&files);
     let p = maintenance(&repo(), &config, &snap3, &[], None, monday())
         .unwrap()
@@ -7109,8 +7317,7 @@ async fn tools_cannot_write_outside_their_lockfiles_and_manifests() {
         Arc::get_mut(&mut executor).unwrap().extra =
             vec!["packages.lock.json".into(), extra.into()];
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -7163,8 +7370,7 @@ async fn a_tool_that_produces_no_lockfile_fails() {
         let mut executor = fixture_with(files.clone(), false, false, Some("other.lock".into()));
         Arc::get_mut(&mut executor).unwrap().removes = removes;
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -7197,8 +7403,7 @@ async fn a_flake_job_for_an_input_the_lock_lacks_fails() {
     let files = flake(false);
     let executor = nix_fake(&files, "lock".into());
     let temp = tempfile::tempdir().unwrap();
-    let runner =
-        Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
+    let runner = test_runner(temp.path(), executor);
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -7245,8 +7450,7 @@ async fn bundler_fails_when_the_lock_does_not_move() {
     let mut executor = fixture(files.clone(), false, false);
     Arc::get_mut(&mut executor).unwrap().lock = Some(lock.into());
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let (mut p, _) = lock_only_plan(
@@ -7258,7 +7462,7 @@ async fn bundler_fails_when_the_lock_does_not_move() {
         p.action()
             .reason
             .as_deref()
-            .is_some_and(|r| r.contains("Gemfile.lock did not change")),
+            .is_some_and(|r| r.contains("Gemfile.lock did not change after the targeted upgrade")),
         "{:?}",
         p.action().reason
     );
@@ -7274,8 +7478,7 @@ async fn terraform_relocks_over_a_committed_lock() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -7307,8 +7510,7 @@ async fn tool_versions_with_extra_words_become_mise_arrays() {
         tomls: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let dep = patchula_manager::Scanner::new(&config)
@@ -7361,8 +7563,7 @@ async fn mise_lock_that_drops_platforms_or_moves_the_target_fails() {
             tomls: Mutex::new(Vec::new()),
         });
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let dep = patchula_manager::Scanner::new(&config)
@@ -7469,9 +7670,7 @@ async fn a_failing_installation_token_stops_the_run() {
     let files = BTreeMap::from([("bun.lock".into(), "{}\n".into())]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone())
-        .with_credentials(Arc::new(Failing));
+    let runner = test_runner(temp.path(), executor.clone()).with_credentials(Arc::new(Failing));
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
@@ -7547,9 +7746,7 @@ async fn a_gradle_wrapper_job_takes_the_wrapper_path() {
         requests: Mutex::new(Vec::new()),
     });
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone())
-        .with_http(transport.clone());
+    let runner = test_runner(temp.path(), executor.clone()).with_http(transport.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = Draft::new(BranchAction {
@@ -7784,8 +7981,7 @@ async fn an_action_update_carries_the_regenerated_lock() {
         ],
     );
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let edited = actions_workflow("actions/checkout@v7.0.1");
@@ -7843,8 +8039,7 @@ async fn unlisted_workflows_run_no_tool() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snap = snapshot(&files);
     let config = config();
     let mut p = Draft::new(actions_branch())
@@ -7876,8 +8071,7 @@ async fn unlisted_workflows_run_no_tool() {
     )]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snap = snapshot(&files);
     let mut p = Draft::new(actions_branch())
         .update()
@@ -7975,8 +8169,7 @@ async fn a_composite_action_bump_makes_no_actions_job() {
     );
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snap = snapshot(&files);
     let mut p = Draft::new(actions_branch())
         .update()
@@ -8152,8 +8345,7 @@ async fn blocking_findings_hold_the_update() {
             }],
         );
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = Draft::new(actions_branch())
@@ -8208,8 +8400,7 @@ async fn a_tool_failure_names_the_hold() {
             }],
         );
         let temp = tempfile::tempdir().unwrap();
-        let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-            .with_executor(executor.clone());
+        let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
         let config = config();
         let mut p = Draft::new(actions_branch())
@@ -8240,8 +8431,7 @@ async fn a_corrupt_lockfile_holds_without_a_run() {
     ]);
     let executor = fixture(files.clone(), false, false);
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = Draft::new(actions_branch())
@@ -8301,8 +8491,7 @@ async fn a_valid_report_still_verifies_locally() {
         ],
     );
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = Draft::new(actions_branch())
@@ -8350,8 +8539,7 @@ async fn actions_prepared_with(
         .map(|(path, mode)| ((*path).to_owned(), (*mode).to_owned()))
         .collect();
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snap = snapshot(files);
     let config = config();
     let mut draft = Draft::new(actions_branch()).update();
@@ -8604,8 +8792,7 @@ async fn a_write_beside_the_lock_is_rejected() {
         }],
     );
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = Draft::new(actions_branch())
@@ -8653,8 +8840,7 @@ async fn the_token_never_reaches_a_reason() {
         }],
     );
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = Draft::new(actions_branch())
@@ -8708,8 +8894,7 @@ async fn an_unchanged_lock_is_not_a_failure() {
         ],
     );
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snapshot = snapshot(&files);
     let config = config();
     let mut p = Draft::new(actions_branch())
@@ -8801,8 +8986,7 @@ async fn relock_prepared_with(
         .map(|(path, mode)| ((*path).to_owned(), (*mode).to_owned()))
         .collect();
     let temp = tempfile::tempdir().unwrap();
-    let runner = Runner::new(temp.path().join("worktrees"), "offline-installation")
-        .with_executor(executor.clone());
+    let runner = test_runner(temp.path(), executor.clone());
     let mut snap = snapshot(files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snap, &[], None, monday())

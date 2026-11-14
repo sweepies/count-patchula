@@ -12,12 +12,6 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     output: Output::Default,
 };
 
-/// Lockfile names the Node ecosystem regenerates in place, from the
-/// managers' file roles.
-fn locks() -> Vec<&'static str> {
-    super::node_locks()
-}
-
 /// Workspace files whose `catalog`/`catalogs` feed `catalog:` specifiers.
 const CATALOGS: [&str; 2] = ["pnpm-workspace.yaml", ".yarnrc.yml"];
 
@@ -75,12 +69,12 @@ pub(super) fn family(lock: &str) -> Option<Family> {
     None
 }
 
-pub(super) fn major(version: &str) -> Option<u32> {
+fn major(version: &str) -> Option<u32> {
     version.split('.').next()?.parse().ok()
 }
 
 /// Accept only exact release versions; ranges and dist-tags are not versions.
-pub(super) fn exact(version: &str) -> Option<&str> {
+fn exact(version: &str) -> Option<&str> {
     let core = version.split('+').next().unwrap_or(version);
     if core.is_empty()
         || !core.starts_with(|c: char| c.is_ascii_digit())
@@ -190,7 +184,7 @@ impl Runner {
             public,
         } = context;
         let cwd = root.join(directory);
-        for leaf in locks() {
+        for leaf in node_locks() {
             if !cwd.join(leaf).is_file() {
                 continue;
             }
@@ -228,15 +222,11 @@ impl Runner {
                 return Err("aube wrote aube-lock.yaml instead of the existing lockfile".into());
             }
             if !maintenance && self.lock_unchanged(baseline, root, directory, leaf) {
-                return Err(format!(
-                    "{leaf} did not change after the manifest edit in {}",
-                    if directory.is_empty() {
-                        "the repository root"
-                    } else {
-                        directory
-                    }
-                )
-                .into());
+                return Err(context::unchanged(
+                    leaf,
+                    directory,
+                    context::Trigger::ManifestEdit,
+                ));
             }
         }
         Ok(())
@@ -408,7 +398,7 @@ impl Runner {
         .await
         .map(drop)
     }
-    async fn yarn(
+    pub(super) async fn yarn(
         &self,
         driver: &Path,
         cwd: &Path,
@@ -420,47 +410,41 @@ impl Runner {
         if family(&lock) != Some(Family::Berry) {
             return Err("cannot determine the Yarn lockfile format".into());
         }
-        let default = tool_defaults()?["tools"]["yarn"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        let yarn = yarn_version(manifest.as_deref(), versions, &default)?;
+        let yarn = yarn_version(manifest.as_deref(), versions, default_version("yarn")?)?;
         let args = vec!["install".into(), "--mode=update-lockfile".into()];
         // The manifest as planned, before Yarn may rewrite it in its own layout.
-        let planned = manifest.clone();
+        let planned = manifest;
+        let call = Invocation {
+            descriptor: &DESCRIPTOR,
+            tools: vec![
+                ("node".into(), context::version(versions, "node")?),
+                ("yarn".into(), yarn),
+            ],
+            bin: caches::Bin::Yarn,
+            cwd: Some(cwd.to_path_buf()),
+            env: vec![
+                ("YARN_ENABLE_IMMUTABLE_INSTALLS".into(), "0".into()),
+                ("YARN_IGNORE_PATH".into(), "1".into()),
+                ("YARN_ENABLE_TELEMETRY".into(), "0".into()),
+                ("YARN_ENABLE_PROGRESS_BARS".into(), "0".into()),
+            ],
+            credentials: Vec::new(),
+            secrets: Vec::new(),
+            public,
+            args,
+        };
         // Yarn reads registries, cache keys and catalogs from `.yarnrc.yml`, but
         // the scratch tree holds no `.yarn/` for a `yarnPath` release or
-        // `plugins`, and `${VAR}` references name variables the run never has. Run Yarn on a
-        // copy without them and restore the committed file afterwards.
+        // `plugins`, and `${VAR}` references name variables the run never has.
+        // Run Yarn on a copy without them and restore the committed file
+        // afterwards. Nothing between the two writes can return early.
         let rc = cwd.join(".yarnrc.yml");
         let committed = std::fs::read_to_string(&rc).ok();
-        if let Some(text) = &committed {
-            std::fs::write(&rc, yarnrc(text)?).map_err(|e| e.to_string())?;
+        let sanitized = committed.as_deref().map(yarnrc).transpose()?;
+        if let Some(text) = &sanitized {
+            std::fs::write(&rc, text).map_err(|e| e.to_string())?;
         }
-        let result = self
-            .node_tool(
-                driver,
-                Invocation {
-                    descriptor: &DESCRIPTOR,
-                    tools: vec![
-                        ("node".into(), context::version(versions, "node")?),
-                        ("yarn".into(), yarn),
-                    ],
-                    bin: caches::Bin::Yarn,
-                    cwd: Some(cwd.to_path_buf()),
-                    env: vec![
-                        ("YARN_ENABLE_IMMUTABLE_INSTALLS".into(), "0".into()),
-                        ("YARN_IGNORE_PATH".into(), "1".into()),
-                        ("YARN_ENABLE_TELEMETRY".into(), "0".into()),
-                        ("YARN_ENABLE_PROGRESS_BARS".into(), "0".into()),
-                    ],
-                    credentials: Vec::new(),
-                    secrets: Vec::new(),
-                    public,
-                    args,
-                },
-            )
-            .await;
+        let result = self.node_tool(driver, call).await;
         if let Some(text) = &committed {
             std::fs::write(&rc, text).map_err(|e| e.to_string())?;
         }
@@ -480,8 +464,8 @@ impl Runner {
     }
 }
 
-/// npm lockfiles aube cannot keep valid: format v1, which aube 2.8.1 still
-/// cannot read. Native npm owns these locks.
+/// npm lockfiles aube cannot keep valid: format v1, which aube cannot read.
+/// Native npm owns these locks.
 pub(super) fn aube_cannot_write_npm(cwd: &Path, leaf: &str) -> Result<bool, String> {
     let lock = std::fs::read_to_string(cwd.join(leaf)).map_err(|e| e.to_string())?;
     Ok(serde_json::from_str::<serde_json::Value>(&lock)

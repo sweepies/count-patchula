@@ -48,15 +48,11 @@ impl Runner {
         let before = baseline.get(&lock).map(|b| b.content.as_str());
         let after = std::fs::read_to_string(root.join(&lock)).ok();
         if !maintenance && before == after.as_deref() {
-            return Err(format!(
-                "apm.lock.yaml did not change after the manifest edit in {}",
-                if directory.is_empty() {
-                    "the repository root"
-                } else {
-                    directory
-                }
-            )
-            .into());
+            return Err(context::unchanged(
+                "apm.lock.yaml",
+                directory,
+                context::Trigger::ManifestEdit,
+            ));
         }
         Ok(())
     }

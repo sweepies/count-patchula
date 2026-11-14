@@ -19,7 +19,7 @@ pub(crate) fn parsed<'a>(files: &'a Files, keep: impl Fn(&str) -> bool) -> Parse
     Parsed {
         manifests: files
             .iter()
-            .filter(|(p, _)| keep(p) && (p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock")))
+            .filter(|(p, _)| keep(p) && matches!(roles::leaf(p), "Cargo.toml" | "Cargo.lock"))
             // One the Count could not read fails its crates' lookups
             // instead; see `replaced`.
             .filter_map(|(p, t)| Some((p, t.read().ok()?)))
@@ -51,7 +51,7 @@ pub(super) fn extract(
     files: &BTreeMap<&str, Document<&str>>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
-    if !path.ends_with("Cargo.toml") {
+    if roles::leaf(path) != "Cargo.toml" {
         return Ok(Vec::new());
     }
     let Some(doc) = files.get(path) else {
@@ -64,7 +64,8 @@ pub(super) fn extract(
     if let Some(deps) = files
         .iter()
         .filter(|(p, _)| {
-            p.ends_with("Cargo.toml") && base.starts_with(p.strip_suffix("Cargo.toml").unwrap())
+            roles::leaf(p) == "Cargo.toml"
+                && base.starts_with(p.strip_suffix("Cargo.toml").unwrap_or(p))
         })
         .filter_map(|(p, root)| {
             root.get("workspace")
@@ -500,7 +501,7 @@ pub(crate) fn cooldown(parsed: &Parsed, path: &str) -> Option<Result<Cooldown, S
         let read = dir.starts_with(config_folder(config));
         let Ok(document) = document else {
             if read {
-                unread = unread.or(Some(format!("{config}, which the Count cannot read")));
+                unread = unread.or(Some(Unread::Failed.reason(config)));
             }
             continue;
         };
@@ -508,7 +509,7 @@ pub(crate) fn cooldown(parsed: &Parsed, path: &str) -> Option<Result<Cooldown, S
         // Count does not read.
         if document.get("include").is_some() {
             if read {
-                unread = unread.or(Some(format!("{config}, which the Count cannot read")));
+                unread = unread.or(Some(Unread::Failed.reason(config)));
             }
             continue;
         }
@@ -579,7 +580,7 @@ pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<Str
         if let Some((name, _)) = files.get_key_value(&format!("{folder}Cargo.toml")) {
             let document = parsed.manifests.get(name.as_str());
             let Some(Ok(document)) = document else {
-                return Some(format!("{name}, which the Count cannot read"));
+                return Some(Unread::Failed.reason(name));
             };
             manifests.push((name.as_str(), document.as_table()));
         }
@@ -596,7 +597,7 @@ pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<Str
         let read = dir.starts_with(config_folder(config));
         let Ok(document) = document else {
             if read {
-                return Some(format!("{config}, which the Count cannot read"));
+                return Some(Unread::Failed.reason(config));
             }
             continue;
         };
@@ -622,7 +623,7 @@ pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<Str
     }
     for (config, document) in &documents {
         let read = dir.starts_with(config_folder(config));
-        let unread = || Some(format!("{config}, which the Count cannot read"));
+        let unread = || Some(Unread::Failed.reason(config));
         // A configuration that includes others says things the Count does
         // not read.
         if document.get("include").is_some() {
@@ -719,29 +720,6 @@ pub(crate) struct Descriptor;
 impl crate::Ecosystem for Descriptor {
     fn proposing(&self, dep: &Dependency) -> Proposing {
         Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
-            written: Written::Range,
-            keeps_satisfied: false,
-            unversioned: Unversioned {
-                looked_up: false,
-                opaque: false,
-            },
-            short_tags: ShortTags::Fixed,
-            selector_resolved: false,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
-            pin: Pin {
-                commit: false,
-                needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
-                    && matches!(
-                        dep.kind,
-                        DependencyKind::Action
-                            | DependencyKind::ReusableWorkflow
-                            | DependencyKind::ContainerImage
-                            | DependencyKind::Chart
-                    ),
-                from_catalog: false,
-            },
             lock: Lock {
                 keeps_ranges: true,
                 movable: dep.source == Source::Crates,
@@ -751,12 +729,11 @@ impl crate::Ecosystem for Descriptor {
                     && dep.resolved.is_some()
                     && dep.source == Source::Crates,
             },
-            edits: Edits::Manifest,
-            advisories: Advisories::BySource,
+            ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let leaf = crate::roles::leaf(path);
         matches!(
             leaf,
             "Cargo.toml" | "Cargo.lock" | "rust-toolchain" | "rust-toolchain.toml"
@@ -780,7 +757,7 @@ impl crate::Ecosystem for Descriptor {
         // workspace, whatever `exclude` leaves out.
         let ancestors: std::collections::BTreeSet<String> = files
             .keys()
-            .filter(|p| p.ends_with("Cargo.toml") || p.ends_with("Cargo.lock"))
+            .filter(|p| matches!(roles::leaf(p), "Cargo.toml" | "Cargo.lock"))
             .flat_map(|p| {
                 let mut out = Vec::new();
                 let mut dir = &p[..p.rfind('/').map_or(0, |i| i + 1)];

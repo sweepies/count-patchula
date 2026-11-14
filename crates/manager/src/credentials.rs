@@ -1,7 +1,7 @@
 //! Credentials committed to the repository, refused as hygiene: a
 //! repository must not carry its own registry credentials — they belong
-//! in the operator's `registries` settings. This is no longer a safety
-//! boundary for the shared `public` cache partition; a run reaches
+//! in the operator's `registries` settings. It is not the safety boundary
+//! for the shared `public` cache partition: a run reaches
 //! `public` only when the extraction decided every file it reads is
 //! public-only, so a credential a text scan would miss cannot smuggle a
 //! private fetch there either way.
@@ -299,7 +299,7 @@ fn poetry(text: &str) -> Option<String> {
 /// The index and source URLs `pyproject.toml` or `uv.toml` name, checked
 /// for committed passwords.
 fn python_urls(path: &str, text: &str) -> Option<String> {
-    let leaf = path.rsplit('/').next().unwrap_or(path);
+    let leaf = crate::roles::leaf(path);
     let document = text.parse::<toml_edit::DocumentMut>().ok()?;
     let mut urls: Vec<String> = Vec::new();
     let mut collect = |item: Option<&toml_edit::Item>| {

@@ -19,7 +19,7 @@
 //! fails its lookup), but where it names an index it must be the tool's, and
 //! where it names none the tool must not take the package from an index the
 //! project configures.
-use super::{config, default_spec};
+use super::{config, default_spec, run_with_deadline, stored_zip};
 use patchula_words::Manager;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Write};
@@ -693,20 +693,7 @@ fn tool(dir: &Path, temp: &Path, specs: &[String], args: &[&str]) -> std::proces
     ] {
         command.env_remove(key);
     }
-    // A tool that waits on something outside the test fails it, not hangs it.
-    let mut child = command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let started = std::time::Instant::now();
-    while child.try_wait().unwrap().is_none() {
-        if started.elapsed() > std::time::Duration::from_secs(120) {
-            let _ = child.kill();
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    child.wait_with_output().unwrap()
+    run_with_deadline(&mut command, std::time::Duration::from_secs(120))
 }
 
 /// Serve every index under `/<index>/simple/`, returning the server's base.
@@ -799,75 +786,10 @@ fn wheel(project: &str) -> (String, Vec<u8>, Vec<u8>) {
         b"Wheel-Version: 1.0\nGenerator: patchula-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
             .to_vec();
     let record = format!("{info}/METADATA,,\n{info}/WHEEL,,\n{info}/RECORD,,\n").into_bytes();
-    let bytes = zip(&[
+    let bytes = stored_zip(&[
         (format!("{info}/METADATA"), metadata.clone()),
         (format!("{info}/WHEEL"), wheel_info),
         (format!("{info}/RECORD"), record),
     ]);
     (format!("{dist}-1.0.0-py3-none-any.whl"), bytes, metadata)
-}
-
-/// An uncompressed zip archive.
-fn zip(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
-    fn u16le(out: &mut Vec<u8>, value: usize) {
-        out.extend_from_slice(&u16::try_from(value).unwrap().to_le_bytes());
-    }
-    fn u32le(out: &mut Vec<u8>, value: usize) {
-        out.extend_from_slice(&u32::try_from(value).unwrap().to_le_bytes());
-    }
-    let mut out = Vec::new();
-    let mut central = Vec::new();
-    for (name, data) in entries {
-        let crc = crc32(data) as usize;
-        let offset = out.len();
-        u32le(&mut out, 0x0403_4b50);
-        for value in [20, 0, 0, 0, 0x21] {
-            u16le(&mut out, value);
-        }
-        for value in [crc, data.len(), data.len()] {
-            u32le(&mut out, value);
-        }
-        u16le(&mut out, name.len());
-        u16le(&mut out, 0);
-        out.extend_from_slice(name.as_bytes());
-        out.extend_from_slice(data);
-        u32le(&mut central, 0x0201_4b50);
-        for value in [20, 20, 0, 0, 0, 0x21] {
-            u16le(&mut central, value);
-        }
-        for value in [crc, data.len(), data.len()] {
-            u32le(&mut central, value);
-        }
-        for value in [name.len(), 0, 0, 0, 0] {
-            u16le(&mut central, value);
-        }
-        u32le(&mut central, 0);
-        u32le(&mut central, offset);
-        central.extend_from_slice(name.as_bytes());
-    }
-    let start = out.len();
-    out.extend_from_slice(&central);
-    u32le(&mut out, 0x0605_4b50);
-    for value in [0, 0, entries.len(), entries.len()] {
-        u16le(&mut out, value);
-    }
-    u32le(&mut out, central.len());
-    u32le(&mut out, start);
-    u16le(&mut out, 0);
-    out
-}
-
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for byte in data {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            crc = if crc & 1 == 1 {
-                (crc >> 1) ^ 0xedb8_8320
-            } else {
-                crc >> 1
-            };
-        }
-    }
-    !crc
 }

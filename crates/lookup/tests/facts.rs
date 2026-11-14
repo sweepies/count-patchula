@@ -4,7 +4,7 @@
 //! resolves against, and the advisory ecosystem an action answers to.
 use patchula_datasource::{Advisory, AdvisoryQuery, Affected, Catalog, Event, Range, Version};
 use patchula_lookup::{Evaluator, advisory_query};
-use patchula_manager::{Dependency, EditForm, Location, Syntax};
+use patchula_manager::Dependency;
 use patchula_words::{DependencyKind, Manager, Scheme, Source};
 
 fn eval() -> Evaluator {
@@ -17,28 +17,10 @@ fn eval() -> Evaluator {
 
 fn dep(manager: Manager, kind: DependencyKind) -> Dependency {
     Dependency {
-        manager,
         file: "file".into(),
-        location: Location {
-            start: 0,
-            end: 1,
-            line: 1,
-            column: 1,
-            pointer: String::new(),
-        },
-        form: EditForm::Scalar(Syntax::Bare),
         name: "pkg".into(),
         package: "pkg".into(),
-        kind,
-        current: "1.0.0".into(),
-        resolved: Some("1.0.0".into()),
-        digest: None,
-        source: Source::GithubReleases,
-        scheme: Scheme::Semver,
-        extract: None,
-        included_by: None,
-        registry: None,
-        cooldown: None,
+        ..patchula_manager::testing::dependency(manager, kind, Source::GithubReleases)
     }
 }
 

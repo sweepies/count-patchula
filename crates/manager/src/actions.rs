@@ -670,14 +670,11 @@ pub(crate) struct Descriptor;
 impl crate::Ecosystem for Descriptor {
     fn proposing(&self, dep: &Dependency) -> Proposing {
         Proposing {
-            range: Range::Installed,
-            runtime_toolchain: false,
             written: if dep.kind == DependencyKind::Tool {
                 Written::VersionAtPrecision
             } else {
                 Written::TagAtPrecision
             },
-            keeps_satisfied: false,
             unversioned: Unversioned {
                 looked_up: matches!(dep.source, Source::GithubTags | Source::ForgeTags),
                 opaque: true,
@@ -696,18 +693,9 @@ impl crate::Ecosystem for Descriptor {
                     DependencyKind::Action
                         | DependencyKind::ReusableWorkflow
                         | DependencyKind::ContainerImage
-                        | DependencyKind::Chart
                 ),
                 from_catalog: true,
             },
-            lock: Lock {
-                keeps_ranges: false,
-                movable: false,
-                transitive_movable: dep.kind == DependencyKind::Transitive
-                    && dep.source == Source::Crates,
-                reported: false,
-            },
-            edits: Edits::Manifest,
             advisories: if matches!(
                 dep.kind,
                 DependencyKind::Action | DependencyKind::ReusableWorkflow
@@ -716,16 +704,17 @@ impl crate::Ecosystem for Descriptor {
             } else {
                 Advisories::BySource
             },
+            ..Proposing::BASE
         }
     }
     /// The lockfile is read into the snapshot without being extracted
     /// from: which workflows it lists is the pinning fact, and its
     /// `uses:` entries are the tool's, not dependencies to update.
     fn registry_file(&self, path: &str) -> bool {
-        path == ".github/workflows/actions.lock"
+        path == crate::roles::ACTIONS_LOCK
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
+        let leaf = crate::roles::leaf(path);
         ([
             ".github/workflows/",
             ".gitea/workflows/",
@@ -742,12 +731,6 @@ impl crate::Ecosystem for Descriptor {
         _files: &'a Files,
         _shared: &'a Shared<'a>,
     ) -> Result<Prepared<'a>, String> {
-        Ok(Prepared {
-            extract: Some(Box::new(|path, text, out| {
-                file_result(out, path, extract(path, text));
-                Ok(())
-            })),
-            finish: None,
-        })
+        Ok(Prepared::per_file(extract))
     }
 }

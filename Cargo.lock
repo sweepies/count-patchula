@@ -2534,6 +2534,7 @@ dependencies = [
  "patchula-report",
  "patchula-versioning",
  "patchula-words",
+ "percent-encoding",
  "regex",
  "roxmltree",
  "serde",

@@ -22,6 +22,7 @@ patchula-versioning = { path = "../versioning" }
 semver = "1.0.28"
 
 [dev-dependencies]
+patchula-manager = { path = "../manager", features = ["testing"] }
 serde_json.workspace = true
 tempfile = "3"
 tokio.workspace = true

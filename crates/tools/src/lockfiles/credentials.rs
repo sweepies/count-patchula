@@ -226,15 +226,7 @@ impl Runner {
                 entry,
             ))
         })
-        .map(|(env, entry)| (env.into_iter().collect::<Vec<_>>(), entry))
-        .fold(
-            (Vec::new(), Vec::new()),
-            |(mut env, mut entries), (mut vars, entry)| {
-                env.append(&mut vars);
-                entries.push(entry);
-                (env, entries)
-            },
-        )
+        .fold((Vec::new(), Vec::new()), fold_env)
     }
 
     /// NuGet's `NuGetPackageSourceCredentials_<key>` variables for the
@@ -303,16 +295,18 @@ impl Runner {
             )),
             _ => None,
         })
-        .map(|(env, entry)| (env.into_iter().collect::<Vec<_>>(), entry))
-        .fold(
-            (Vec::new(), Vec::new()),
-            |(mut env, mut entries), (mut vars, entry)| {
-                env.append(&mut vars);
-                entries.push(entry);
-                (env, entries)
-            },
-        )
+        .fold((Vec::new(), Vec::new()), fold_env)
     }
+}
+
+/// Folds one entry's environment pairs into the run's `(env, entries)`.
+fn fold_env<'a, const N: usize>(
+    (mut env, mut entries): (Vec<(String, String)>, Vec<&'a Credential>),
+    (vars, entry): ([(String, String); N], &'a Credential),
+) -> (Vec<(String, String)>, Vec<&'a Credential>) {
+    env.extend(vars);
+    entries.push(entry);
+    (env, entries)
 }
 
 /// The `Credential::scope()`s of `entries`, sorted and deduplicated: the cache

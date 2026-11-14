@@ -74,6 +74,39 @@ struct WrittenEntry {
     uses: Vec<String>,
 }
 
+/// The hold for an action the lockfile does not list: onboarding it is the
+/// owner's step, never the Count's.
+const NOT_ONBOARDED: &str = "an action the lockfile does not list yet; the Count never onboards";
+
+/// A lock key as the tool writes it: the canonical pin when it parses as
+/// one, else the key itself.
+fn canonical(key: &str) -> String {
+    contract::actions_lock_pin(key).unwrap_or_else(|| key.to_owned())
+}
+
+/// A recorded commit without the `sha1-` prefix the tool may write.
+fn commit_hex(commit: &str) -> &str {
+    commit.strip_prefix("sha1-").unwrap_or(commit)
+}
+
+/// Parse `text` as a lockfile, naming it `what` when it does not parse.
+fn written(text: &str, what: &str) -> Result<Written, Failure> {
+    serde_yaml_ng::from_str(text)
+        .map_err(|e| Failure::Text(format!("actions.lock: unparseable {what}: {e}")))
+}
+
+/// The base lockfile's text and the workflows it lists, each with its
+/// entries.
+fn listed(
+    baseline: &BTreeMap<String, BaseFile>,
+) -> Result<(&str, BTreeMap<String, BTreeSet<String>>), Failure> {
+    let Some(base) = baseline.get(contract::ACTIONS_LOCK) else {
+        return Err("actions.lock job without the lockfile".into());
+    };
+    let listed = contract::actions_lock_workflows(&base.content).ok_or_else(corrupt)?;
+    Ok((&base.content, listed))
+}
+
 /// What the base lockfile cannot say means it is corrupt or newer than
 /// this `gh-actions-lock` understands.
 fn corrupt() -> Failure {
@@ -147,9 +180,7 @@ fn reason(category: &str) -> String {
         // The repository is deleted, or the scoped token cannot read it:
         // public actions only until an operator setting names more.
         "repo-unavailable" => "a private action the token cannot read".into(),
-        "onboarding-required" => {
-            "an action the lockfile does not list yet; the Count never onboards".into()
-        }
+        "onboarding-required" => NOT_ONBOARDED.into(),
         other => other.to_owned(),
     }
 }
@@ -251,11 +282,7 @@ impl Runner {
         root: &Path,
         repository: &str,
     ) -> Result<Session, Failure> {
-        let defaults = tool_defaults()?;
-        let version = defaults["tools"][ACTIONS_LOCK_SPEC]
-            .as_str()
-            .ok_or("invalid tool defaults")?
-            .to_owned();
+        let version = default_version(ACTIONS_LOCK_SPEC)?.to_owned();
         // The scratch directory the shell writes the run's streams and
         // status to, and an empty PATH: `gh` and `git` stay unreachable
         // whatever the sandbox has, and `GH_HOST` keeps the tool on
@@ -314,12 +341,7 @@ impl Runner {
             config,
             ..
         } = context;
-        let Some(base) = baseline.get(contract::ACTIONS_LOCK) else {
-            return Err("actions.lock job without the lockfile".into());
-        };
-        let Some(listed) = contract::actions_lock_workflows(&base.content) else {
-            return Err(corrupt());
-        };
+        let (_, listed) = listed(baseline)?;
         // The edited workflows the lock lists, and the listed workflows
         // that call an edited in-repository action file through `$/`:
         // the tool locks a `$/` composite's remote `uses:` under each
@@ -363,7 +385,7 @@ impl Runner {
         }
         let session = self.actions_session(driver, root, work.repository).await?;
         let fix = session
-            .invoke(self, driver, root, Session::args(FIX_FLAGS, &scope))
+            .invoke(self, driver, root, Session::args(&fix_flags(false), &scope))
             .await?;
         check(&fix, "the update")?;
         // `valid` on stdout is not proof: `--no-onboard` exits 0 while
@@ -395,12 +417,7 @@ impl Runner {
             baseline,
             ..
         } = context;
-        let Some(base) = baseline.get(contract::ACTIONS_LOCK) else {
-            return Err("actions.lock job without the lockfile".into());
-        };
-        let Some(listed) = contract::actions_lock_workflows(&base.content) else {
-            return Err(corrupt());
-        };
+        let (base, listed) = listed(baseline)?;
         // Nothing listed is nothing to relock, and `--no-onboard` would
         // add nothing.
         if listed.is_empty() {
@@ -419,11 +436,9 @@ impl Runner {
             })
             .collect();
         let session = self.actions_session(driver, root, work.repository).await?;
-        let mut flags = FIX_FLAGS.to_vec();
-        flags.insert(flags.len() - 1, "--relock");
         // No paths: only a whole-directory run prunes deleted workflows.
         let fix = session
-            .invoke(self, driver, root, Session::args(&flags, &[]))
+            .invoke(self, driver, root, Session::args(&fix_flags(true), &[]))
             .await?;
         check(&fix, "maintenance")?;
         // Workflows and action files stay byte-identical: a narrowing or
@@ -478,18 +493,24 @@ impl Runner {
         if !scope.is_empty() {
             verify(self, &session, driver, root, &scope).await?;
         }
-        moved(&base.content, lock)
+        moved(base, lock)
     }
 }
 
-/// The flags every fix run passes; `--json=valid,findings` stays last.
-const FIX_FLAGS: &[&str] = &[
-    "--no-interactive",
-    "--no-onboard",
-    "--no-narrow",
-    "--ignore-local-actions",
-    "--json=valid,findings",
-];
+/// The flags a fix run passes, with `--relock` for maintenance.
+fn fix_flags(relock: bool) -> Vec<&'static str> {
+    let mut flags = vec![
+        "--no-interactive",
+        "--no-onboard",
+        "--no-narrow",
+        "--ignore-local-actions",
+    ];
+    if relock {
+        flags.push("--relock");
+    }
+    flags.push("--json=valid,findings");
+    flags
+}
 
 /// A fix run's exit status as the run's verdict: 0 passes, 1 holds with
 /// the finding that names the cause — `waiting` is what waits when GitHub
@@ -535,10 +556,7 @@ async fn verify(
         .ok()
         .flatten()
         .unwrap_or_else(|| exit_two(&verified.stderr));
-    Err(held(
-        "an action the lockfile does not list yet; the Count never onboards",
-        &reason,
-    ))
+    Err(held(NOT_ONBOARDED, &reason))
 }
 
 /// The refs a `--relock` advanced: every entry both locks hold whose
@@ -548,23 +566,17 @@ async fn verify(
 /// finding for a moved direct ref but not for one inside a composite,
 /// which it re-pins with the composite's whole closure.
 fn moved(base: &str, lock: &str) -> Result<Vec<contract::MovedRef>, Failure> {
-    let read = |text: &str| -> Result<Written, Failure> {
-        serde_yaml_ng::from_str(text)
-            .map_err(|e| Failure::Text(format!("actions.lock: unparseable lockfile: {e}")))
-    };
-    let canonical = |key: &str| contract::actions_lock_pin(key).unwrap_or_else(|| key.to_owned());
     let commits = |written: &Written| -> BTreeMap<String, String> {
         written
             .dependencies
             .iter()
             .filter_map(|(key, entry)| {
-                let commit = entry.commit.as_deref()?;
-                let commit = commit.strip_prefix("sha1-").unwrap_or(commit);
+                let commit = commit_hex(entry.commit.as_deref()?);
                 Some((canonical(key), commit.to_ascii_lowercase()))
             })
             .collect()
     };
-    let (base, lock) = (read(base)?, read(lock)?);
+    let (base, lock) = (written(base, "lockfile")?, written(lock, "lockfile")?);
     let (before, after) = (commits(&base), commits(&lock));
     let uses: BTreeMap<String, Vec<String>> = lock
         .dependencies
@@ -618,12 +630,7 @@ fn prove(
 ) -> Result<(), Failure> {
     let lock = std::fs::read_to_string(root.join(contract::ACTIONS_LOCK))
         .map_err(|e| Failure::Text(e.to_string()))?;
-    let written: Written = serde_yaml_ng::from_str(&lock).map_err(|e| {
-        Failure::Text(format!(
-            "actions.lock: unparseable regenerated lockfile: {e}"
-        ))
-    })?;
-    let canonical = |key: &str| contract::actions_lock_pin(key).unwrap_or_else(|| key.to_owned());
+    let written = written(&lock, "regenerated lockfile")?;
     let workflows: BTreeMap<&str, BTreeSet<String>> = written
         .workflows
         .iter()
@@ -664,15 +671,13 @@ fn prove(
                 .is_some_and(|entries| entries.contains(&entry))
         }) {
             return Err(held(
-                "an action the lockfile does not list yet; the Count never onboards",
+                NOT_ONBOARDED,
                 &format!("{entry} is not under {workflow}"),
             ));
         }
         if let Some(digest) = &dep.digest {
             let commit = commits.get(&entry).copied().flatten();
-            let recorded = commit
-                .and_then(|commit| commit.strip_prefix("sha1-"))
-                .or(commit);
+            let recorded = commit.map(commit_hex);
             if !recorded.is_some_and(|recorded| recorded.eq_ignore_ascii_case(digest)) {
                 return Err(held(
                     "the lockfile did not record the written pin",

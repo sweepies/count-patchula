@@ -8,7 +8,7 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     versions: false,
     install: Install::Mise,
     proof: Proof::None,
-    run: Run::Direct,
+    run: Run::Mise,
     output: Output::Default,
 };
 
@@ -283,13 +283,10 @@ impl Runner {
             directory,
             config,
             maintenance,
+            public,
             ..
         } = context;
-        let lock_path = if directory.is_empty() {
-            "mise.lock".into()
-        } else {
-            format!("{directory}/mise.lock")
-        };
+        let lock_path = context::join(directory, "mise.lock");
         let original = &baseline
             .get(&lock_path)
             .ok_or("missing committed mise.lock")?
@@ -316,8 +313,7 @@ impl Runner {
                 matches!(
                     path.rsplit('/').next(),
                     Some("mise.toml" | ".mise.toml" | ".tool-versions")
-                ) && (super::directory(path) == directory
-                    || under(directory, super::directory(path)))
+                ) && within(directory, super::directory(path))
             })
             .collect();
         paths.sort_by_key(|path| path.len());
@@ -419,44 +415,44 @@ impl Runner {
         if existing_platforms.is_empty() {
             existing_platforms = old_tools.values().flat_map(platforms).collect();
         }
-        let version = tool_defaults()?["tools"]["mise"]
-            .as_str()
-            .ok_or("missing pinned mise")?;
-        let mut command = self.command(driver);
-        command.args.extend([
-            "exec".into(),
-            format!("{}@{version}", patchula_mise::PACKAGE),
-            "--".into(),
-            "env".into(),
-            "-u".into(),
-            "MISE_NO_CONFIG".into(),
-            "mise".into(),
+        let mut args = vec![
             "--cd".into(),
             work.to_string_lossy().into_owned(),
             "lock".into(),
-        ]);
+        ];
         // A lockfile without any platform entry has none to preserve.
         if !existing_platforms.is_empty() {
-            command.args.extend([
+            args.extend([
                 "--platform".into(),
                 existing_platforms.into_iter().collect::<Vec<_>>().join(","),
             ]);
         }
         if maintenance {
-            command.args.extend([
+            args.extend([
                 "--bump".into(),
                 "--minimum-release-age".into(),
                 format!("{}h", config.defaults.wait_hours),
             ]);
         }
-        command.args.extend(selected.iter().cloned());
-        self.executor
-            .run(command)
-            .await
-            .map_err(|failure| Failure::Tool {
-                context: "mise lock".into(),
-                failure,
-            })?;
+        args.extend(selected.iter().cloned());
+        self.tool(
+            driver,
+            Invocation {
+                descriptor: &DESCRIPTOR,
+                tools: vec![(
+                    patchula_mise::PACKAGE.into(),
+                    default_version("mise")?.into(),
+                )],
+                bin: caches::Bin::Mise,
+                cwd: None,
+                env: Vec::new(),
+                credentials: Vec::new(),
+                secrets: Vec::new(),
+                public,
+                args,
+            },
+        )
+        .await?;
         if std::fs::read_to_string(work.join("mise.toml")).map_err(|e| e.to_string())? != sanitized
         {
             return Err("mise lock modified the requested tool declarations".into());

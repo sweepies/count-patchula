@@ -1,8 +1,7 @@
 //! The facts lookup, the engine and update read from a declaration to
 //! propose for it. Each ecosystem's descriptor states them through
-//! `Ecosystem::proposing`; the named predicates that used to name a manager
-//! in a caller are the oracle under `#[cfg(test)]`, proved equal to the
-//! descriptors' answers over the whole manager × kind × source domain.
+//! `Ecosystem::proposing`, as the fields where its declarations differ from
+//! [`Proposing::BASE`].
 use crate::Dependency;
 
 /// What lookup, the engine and update must know to propose for a
@@ -38,6 +37,38 @@ pub struct Proposing {
     pub edits: Edits,
     /// The advisory identity the source does not give.
     pub advisories: Advisories,
+}
+
+impl Proposing {
+    /// A plain manifest declaration: an installed-version range rewritten
+    /// in place, looked up as a version, with no pin, lockfile or advisory
+    /// fact of its own. A descriptor states only what differs.
+    pub const BASE: Proposing = Proposing {
+        range: Range::Installed,
+        runtime_toolchain: false,
+        written: Written::Range,
+        keeps_satisfied: false,
+        unversioned: Unversioned {
+            looked_up: false,
+            opaque: false,
+        },
+        short_tags: ShortTags::Fixed,
+        selector_resolved: false,
+        resolved_via_listing: false,
+        pin: Pin {
+            commit: false,
+            needs_digest: false,
+            from_catalog: false,
+        },
+        lock: Lock {
+            keeps_ranges: false,
+            movable: false,
+            transitive_movable: false,
+            reported: false,
+        },
+        edits: Edits::Manifest,
+        advisories: Advisories::BySource,
+    };
 }
 
 /// How a dependency's declared value reads as a version constraint.
@@ -160,336 +191,237 @@ impl Dependency {
     }
 }
 
-/// The named predicates #257 moved here verbatim, kept under `#[cfg(test)]`
-/// as the oracle the descriptor-stated [`Proposing`] fields are proved
-/// equal to, plus the two defaulted `Ecosystem` hooks folded into [`Lock`]
-/// (one match each over the descriptors that had them). A follow-up PR
-/// deletes it.
-#[cfg(test)]
-pub(crate) mod oracle {
-    use super::*;
-    use patchula_versioning::Ecosystem;
-    use patchula_words::{DependencyKind, Manager, Source};
-
-    /// An action, reusable workflow or APM package looked up by its
-    /// repository's tags, on GitHub or on a forge, whose ref can be pinned
-    /// to a commit with the tag kept in a comment.
-    pub(crate) fn tagged_action(dep: &Dependency) -> bool {
-        matches!(dep.manager, Manager::GithubActions | Manager::Apm)
-            && matches!(dep.source, Source::GithubTags | Source::ForgeTags)
-    }
-    /// A git ref its tool checks out by name, so an update writes the
-    /// upstream tag exactly as tagged rather than a normalized version.
-    pub(crate) fn exact_tag_ref(dep: &Dependency) -> bool {
-        match dep.manager {
-            Manager::PreCommit | Manager::Apm => true,
-            Manager::Gitlabci | Manager::GitlabciInclude => dep.source == Source::ForgeTags,
-            _ => false,
-        }
-    }
-    /// Looked up only when the ref is a version: a branch ref has no
-    /// version to compare, so only tags are looked up.
-    pub(crate) fn looked_up_only_as_version(dep: &Dependency) -> bool {
-        tagged_action(dep)
-            || dep.manager == Manager::PreCommit
-            || matches!(dep.manager, Manager::Gitlabci | Manager::GitlabciInclude)
-                && dep.source == Source::ForgeTags
-    }
-    /// A proposal for this dependency needs the target's digest.
-    pub(crate) fn needs_digest(dep: &Dependency) -> bool {
-        dep.manager == Manager::Apm
-            || (dep.source == Source::Docker
-                || dep.source == Source::Oci
-                || dep.manager == Manager::GithubActions)
-                && matches!(
-                    dep.kind,
-                    DependencyKind::Action
-                        | DependencyKind::ReusableWorkflow
-                        | DependencyKind::ContainerImage
-                        | DependencyKind::Chart
-                )
-    }
-    /// A peer declaration expresses consumer compatibility: a range, even
-    /// where installed packages pin exact versions.
-    pub(crate) fn peer_range(dep: &Dependency) -> bool {
-        matches!(dep.manager, Manager::Npm | Manager::Bun) && dep.kind == DependencyKind::Peer
-    }
-    /// An unclassifiable current value is an opaque ref, not an error.
-    pub(crate) fn opaque_when_unclassifiable(dep: &Dependency) -> bool {
-        dep.manager == Manager::GithubActions || dep.manager == Manager::PreCommit
-    }
-    /// A short tag such as `v4` floats along its release line.
-    pub(crate) fn short_tags_float(dep: &Dependency) -> bool {
-        dep.manager == Manager::GithubActions && tagged_action(dep)
-    }
-    /// An update writes the tag at the declared precision: `v4` stays a
-    /// `v4.y` tag.
-    pub(crate) fn tag_at_declared_precision(dep: &Dependency) -> bool {
-        dep.manager == Manager::GithubActions
-    }
-    /// A provider constraint the release already satisfies is kept as
-    /// written.
-    pub(crate) fn keeps_satisfied_constraint(dep: &Dependency) -> bool {
-        dep.manager == Manager::Terraform && dep.kind == DependencyKind::Provider
-    }
-    /// The catalog's digest travels with the version.
-    pub(crate) fn digest_from_catalog(dep: &Dependency) -> bool {
-        dep.manager == Manager::GithubActions || tagged_action(dep)
-    }
-    /// `engines.node` and Terraform's `required_version` declare a
-    /// supported runtime range. A version file such as `.nvmrc`,
-    /// `.node-version` or `.terraform-version` records one bare version —
-    /// its scheme cannot express a range — so it is an installed-version
-    /// pin proposed like any other.
-    pub(crate) fn supports_runtime_range(dep: &Dependency) -> bool {
-        matches!(
-            dep.manager,
-            Manager::Npm | Manager::Bun | Manager::Terraform
-        ) && dep.kind == DependencyKind::Toolchain
-            && Ecosystem::of(dep.scheme, dep.source).supports_ranges()
-    }
-    /// A node or Terraform toolchain declaration: `engines.node`,
-    /// `required_version`, or a version file such as `.nvmrc`.
-    pub(crate) fn runtime_toolchain(dep: &Dependency) -> bool {
-        matches!(
-            dep.manager,
-            Manager::Terraform | Manager::Npm | Manager::Bun
-        ) && dep.kind == DependencyKind::Toolchain
-    }
-    /// A selector resolved against the listing: mise's tools, and the
-    /// setup tools GitHub Actions runs.
-    pub(crate) fn selector_resolved(dep: &Dependency) -> bool {
-        dep.manager == Manager::Mise
-            || (dep.manager == Manager::GithubActions && dep.kind == DependencyKind::Tool)
-    }
-    /// mise entries and every `tool` kind resolve a selector against the
-    /// listing.
-    pub(crate) fn resolved_via_listing(dep: &Dependency) -> bool {
-        dep.manager == Manager::Mise || dep.kind == DependencyKind::Tool
-    }
-    /// A transitive Cargo lock entry can move to an exact version of the
-    /// one package.
-    pub(crate) fn transitive_lock_movable(dep: &Dependency) -> bool {
-        dep.kind == DependencyKind::Transitive && dep.source == Source::Crates
-    }
-    /// copier applies the template itself: the dependency is reported,
-    /// never edited.
-    pub(crate) fn report_only(dep: &Dependency) -> bool {
-        dep.manager == Manager::Copier
-    }
-    /// The descriptor `preserves_ranges` hooks, gathered: Cargo, uv/poetry,
-    /// composer and Gemfile ecosystems keep ranges behind their locks.
-    pub(crate) fn preserves_ranges(dep: &Dependency) -> bool {
-        matches!(
-            dep.manager,
-            Manager::Cargo | Manager::Bundler | Manager::Composer | Manager::Pyproject
-        )
-    }
-    /// The descriptor `movable_lockfile` hooks, gathered: Cargo.lock,
-    /// go.mod, composer.lock, Gemfile.lock and uv/poetry locks record the
-    /// resolved version.
-    pub(crate) fn movable_lockfile(dep: &Dependency) -> bool {
-        match dep.manager {
-            Manager::Cargo => dep.source == Source::Crates,
-            Manager::Go => dep.source == Source::Go,
-            Manager::Composer => dep.source == Source::Packagist,
-            Manager::Bundler => dep.source == Source::Rubygems,
-            Manager::Pyproject => dep.source == Source::Pypi,
-            _ => false,
-        }
-    }
-    /// `Dependency::locked` over the two folded hooks, verbatim.
-    pub(crate) fn locked(dep: &Dependency) -> Option<&str> {
-        (preserves_ranges(dep) && movable_lockfile(dep))
-            .then_some(dep.resolved.as_deref())
-            .flatten()
-    }
-    /// The `resolved` version could only have come from a committed
-    /// lockfile: `movable_lockfile` names each declaration its committed
-    /// lockfile records a resolved version for — Cargo.lock, uv.lock,
-    /// poetry.lock, Gemfile.lock, composer.lock and go.mod's `require`
-    /// versions. npm, Bun and Terraform's descriptors name no movable lock,
-    /// but their parsers fill `resolved` only from a committed one:
-    /// package-lock.json, bun.lock, aube-lock.yaml or .terraform.lock.hcl.
-    pub(crate) fn resolved_from_lockfile(dep: &Dependency) -> bool {
-        !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-            && dep.resolved.is_some()
-            && (movable_lockfile(dep)
-                || matches!(
-                    dep.manager,
-                    Manager::Npm | Manager::Bun | Manager::Terraform
-                ))
-    }
-    /// A nix flake input moves by relocking its lock: no manifest edit, and
-    /// each lock's inputs move on their own branch.
-    pub(crate) fn relocks(dep: &Dependency) -> bool {
-        dep.manager == Manager::Nix
-    }
-    /// The advisory identity the source does not give: an action's
-    /// advisories are GitHub Actions'.
-    pub(crate) fn github_actions_advisories(dep: &Dependency) -> bool {
-        dep.manager == Manager::GithubActions
-            && matches!(
-                dep.kind,
-                DependencyKind::Action | DependencyKind::ReusableWorkflow
-            )
-    }
-    /// The advisory identity the source does not give: the `go` toolchain's
-    /// advisories are Go's stdlib's.
-    pub(crate) fn go_stdlib_advisories(dep: &Dependency) -> bool {
-        dep.manager == Manager::Go && dep.kind == DependencyKind::Toolchain && dep.package == "go"
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::oracle;
     use super::*;
-    use crate::{EditForm, Location, Syntax};
+    use crate::testing::dependency as dep;
     use patchula_words::{DependencyKind, Manager, Scheme, Source};
 
-    /// A minimal declaration for the oracle's axes: only `manager`, `kind`,
-    /// `source`, `scheme`, `package` and `resolved` reach a predicate.
-    fn dep(
-        manager: Manager,
-        kind: DependencyKind,
-        source: Source,
-        scheme: Scheme,
-        package: &str,
-        resolved: Option<&str>,
-    ) -> Dependency {
-        Dependency {
-            manager,
-            file: "manifest".into(),
-            location: Location {
-                start: 0,
-                end: 1,
-                line: 1,
-                column: 1,
-                pointer: String::new(),
-            },
-            form: EditForm::Scalar(Syntax::Bare),
-            name: package.into(),
-            package: package.into(),
-            kind,
-            current: "1.0.0".into(),
-            resolved: resolved.map(str::to_owned),
-            digest: None,
-            source,
-            scheme,
-            extract: None,
-            included_by: None,
-            registry: None,
-            cooldown: None,
+    fn facts(manager: Manager, kind: DependencyKind, source: Source) -> Proposing {
+        dep(manager, kind, source).proposing()
+    }
+
+    /// Manifest declarations with no fact of their own propose as the base.
+    #[test]
+    fn plain_declarations_are_the_base() {
+        use DependencyKind::*;
+        for (manager, kind, source) in [
+            (Manager::Maven, Production, Source::Maven),
+            (Manager::Gradle, Build, Source::Maven),
+            (Manager::Nuget, Production, Source::Nuget),
+            (Manager::Helm, Chart, Source::Helm),
+            (Manager::Regex, Production, Source::Npm),
+            (Manager::Woodpecker, Production, Source::Docker),
+        ] {
+            assert_eq!(
+                facts(manager, kind, source),
+                Proposing::BASE,
+                "{manager} {kind} {source}"
+            );
         }
     }
 
-    /// Every field `proposing` answers equals the named predicate the
-    /// descriptor replaced, over `Manager::ALL × DependencyKind::ALL ×
-    /// Source::ALL`, varying `resolved` (`resolved_from_lockfile` and
-    /// `locked` read it), the package name (`go_stdlib_advisories` reads
-    /// it), and the scheme where a predicate reads it
-    /// (`supports_runtime_range` calls `supports_ranges` on it).
+    /// Copier is reported, never edited, and a nix flake input relocks.
     #[test]
-    fn proposing_matches_the_predicates_it_replaced() {
-        let mut rows = 0usize;
-        for &manager in Manager::ALL {
-            for &kind in DependencyKind::ALL {
-                for &source in Source::ALL {
-                    // The only predicate that reads `scheme` is reachable
-                    // only under these managers and this kind; one scheme
-                    // stands in for all elsewhere.
-                    let schemes: &[Scheme] =
-                        if matches!(manager, Manager::Npm | Manager::Bun | Manager::Terraform)
-                            && kind == DependencyKind::Toolchain
-                        {
-                            Scheme::ALL
-                        } else {
-                            &[Scheme::Semver]
-                        };
-                    for resolved in [None, Some("1.2.3")] {
-                        for package in ["go", "example/package"] {
-                            for &scheme in schemes {
-                                let dep = dep(manager, kind, source, scheme, package, resolved);
-                                let expected = Proposing {
-                                    range: if oracle::peer_range(&dep) {
-                                        Range::Peer
-                                    } else if oracle::supports_runtime_range(&dep) {
-                                        Range::Support
-                                    } else {
-                                        Range::Installed
-                                    },
-                                    runtime_toolchain: oracle::runtime_toolchain(&dep),
-                                    written: if oracle::tag_at_declared_precision(&dep) {
-                                        if dep.kind == DependencyKind::Tool {
-                                            Written::VersionAtPrecision
-                                        } else {
-                                            Written::TagAtPrecision
-                                        }
-                                    } else if oracle::exact_tag_ref(&dep) {
-                                        Written::Tag
-                                    } else {
-                                        Written::Range
-                                    },
-                                    keeps_satisfied: oracle::keeps_satisfied_constraint(&dep),
-                                    unversioned: Unversioned {
-                                        looked_up: oracle::looked_up_only_as_version(&dep),
-                                        opaque: oracle::opaque_when_unclassifiable(&dep),
-                                    },
-                                    short_tags: if oracle::short_tags_float(&dep) {
-                                        ShortTags::Floating
-                                    } else {
-                                        ShortTags::Fixed
-                                    },
-                                    selector_resolved: oracle::selector_resolved(&dep),
-                                    resolved_via_listing: oracle::resolved_via_listing(&dep),
-                                    pin: Pin {
-                                        commit: oracle::tagged_action(&dep),
-                                        needs_digest: oracle::needs_digest(&dep),
-                                        from_catalog: oracle::digest_from_catalog(&dep),
-                                    },
-                                    lock: Lock {
-                                        keeps_ranges: oracle::preserves_ranges(&dep),
-                                        movable: oracle::movable_lockfile(&dep),
-                                        transitive_movable: oracle::transitive_lock_movable(&dep),
-                                        reported: oracle::resolved_from_lockfile(&dep),
-                                    },
-                                    edits: if oracle::report_only(&dep) {
-                                        Edits::ReportOnly
-                                    } else if oracle::relocks(&dep) {
-                                        Edits::Relock
-                                    } else {
-                                        Edits::Manifest
-                                    },
-                                    advisories: if oracle::github_actions_advisories(&dep) {
-                                        Advisories::GithubAction
-                                    } else if oracle::go_stdlib_advisories(&dep) {
-                                        Advisories::GoStdlib
-                                    } else {
-                                        Advisories::BySource
-                                    },
-                                };
-                                assert_eq!(
-                                    dep.proposing(),
-                                    expected,
-                                    "{manager} {kind} {source} {scheme} {package} resolved={resolved:?}"
-                                );
-                                assert_eq!(
-                                    dep.proposing().lock.locked(dep.resolved.as_deref()),
-                                    oracle::locked(&dep),
-                                    "locked: {manager} {kind} {source} {scheme} {package} resolved={resolved:?}"
-                                );
-                                rows += 1;
-                            }
-                        }
-                    }
-                }
-            }
+    fn copier_reports_and_nix_relocks() {
+        let copier = facts(
+            Manager::Copier,
+            DependencyKind::Template,
+            Source::GithubTags,
+        );
+        assert_eq!(copier.edits, Edits::ReportOnly);
+        assert_eq!(
+            Proposing {
+                edits: Edits::Manifest,
+                ..copier
+            },
+            Proposing::BASE
+        );
+        let nix = facts(Manager::Nix, DependencyKind::FlakeInput, Source::Nix);
+        assert_eq!(nix.edits, Edits::Relock);
+    }
+
+    /// An action tag pins to a commit, floats along its release line,
+    /// writes at the declared precision and takes GitHub Actions'
+    /// advisories; a setup tool resolves a selector against its listing.
+    #[test]
+    fn actions_pin_float_and_resolve_setup_tools() {
+        let action = facts(
+            Manager::GithubActions,
+            DependencyKind::Action,
+            Source::GithubTags,
+        );
+        assert!(action.pin.commit && action.pin.needs_digest && action.pin.from_catalog);
+        assert_eq!(action.short_tags, ShortTags::Floating);
+        assert_eq!(action.written, Written::TagAtPrecision);
+        assert!(action.unversioned.looked_up && action.unversioned.opaque);
+        assert_eq!(action.advisories, Advisories::GithubAction);
+        let tool = facts(
+            Manager::GithubActions,
+            DependencyKind::Tool,
+            Source::GithubReleases,
+        );
+        assert_eq!(tool.written, Written::VersionAtPrecision);
+        assert!(tool.selector_resolved && tool.resolved_via_listing);
+        assert!(!tool.pin.commit && !tool.pin.needs_digest);
+        assert_eq!(tool.short_tags, ShortTags::Fixed);
+        assert_eq!(tool.advisories, Advisories::BySource);
+        let image = facts(
+            Manager::GithubActions,
+            DependencyKind::ContainerImage,
+            Source::Docker,
+        );
+        assert!(image.pin.needs_digest && !image.pin.commit);
+    }
+
+    /// Refs a tool checks out by name are written exactly as tagged.
+    #[test]
+    fn checked_out_refs_write_the_exact_tag() {
+        let apm = facts(Manager::Apm, DependencyKind::Production, Source::GithubTags);
+        assert_eq!(apm.written, Written::Tag);
+        assert!(apm.pin.commit && apm.pin.needs_digest && apm.pin.from_catalog);
+        assert!(apm.unversioned.looked_up);
+        let hook = facts(Manager::PreCommit, DependencyKind::Tool, Source::GithubTags);
+        assert_eq!(hook.written, Written::Tag);
+        assert!(hook.unversioned.looked_up && hook.unversioned.opaque);
+        assert!(!hook.pin.commit);
+        let include = facts(
+            Manager::GitlabciInclude,
+            DependencyKind::ReusableWorkflow,
+            Source::ForgeTags,
+        );
+        assert_eq!(include.written, Written::Tag);
+        assert!(include.unversioned.looked_up);
+        let image = facts(
+            Manager::Gitlabci,
+            DependencyKind::ContainerImage,
+            Source::Docker,
+        );
+        assert_eq!(image.written, Written::Range);
+        assert!(image.pin.needs_digest && !image.unversioned.looked_up);
+    }
+
+    /// Image and OCI chart references need the target's digest; a chart
+    /// from a Helm repository and a devcontainer feature do not.
+    #[test]
+    fn images_and_oci_charts_need_a_digest() {
+        use DependencyKind::*;
+        for (manager, kind, source, needs) in [
+            (Manager::Dockerfile, ContainerImage, Source::Docker, true),
+            (Manager::Compose, ContainerImage, Source::Docker, true),
+            (Manager::Woodpecker, ContainerImage, Source::Docker, true),
+            (Manager::Devcontainer, ContainerImage, Source::Docker, true),
+            (Manager::Devcontainer, Tool, Source::Docker, false),
+            (Manager::Flux, Chart, Source::Oci, true),
+            (Manager::Helm, Chart, Source::Oci, true),
+            (Manager::Helm, Chart, Source::Helm, false),
+        ] {
+            assert_eq!(
+                facts(manager, kind, source).pin.needs_digest,
+                needs,
+                "{manager} {kind} {source}"
+            );
         }
-        // 9,918 = 29 × 19 × 18 (manager, kind, source) rows, each at two
-        // `resolved` and two `package` values; the 54 rows the scheme read
-        // is reachable on (3 managers × 1 kind × 18 sources) iterate every
-        // scheme instead of one.
-        assert_eq!(rows, (9_918 - 54) * 4 + 54 * 4 * Scheme::ALL.len());
+    }
+
+    /// mise entries and every tool kind resolve a selector against the
+    /// listing.
+    #[test]
+    fn tools_resolve_through_the_listing() {
+        let mise = facts(Manager::Mise, DependencyKind::Tool, Source::Mise);
+        assert!(mise.selector_resolved && mise.resolved_via_listing);
+        for manager in [Manager::Npm, Manager::Nuget, Manager::Devcontainer] {
+            let tool = facts(manager, DependencyKind::Tool, Source::GithubReleases);
+            assert!(tool.resolved_via_listing, "{manager}");
+            assert!(!tool.selector_resolved, "{manager}");
+        }
+    }
+
+    /// Ecosystems with a committed lockfile keep their ranges behind it and
+    /// move it; only Cargo moves a transitive entry.
+    #[test]
+    fn lockfile_ecosystems_keep_ranges_and_move_their_locks() {
+        use DependencyKind::*;
+        for (manager, source) in [
+            (Manager::Cargo, Source::Crates),
+            (Manager::Bundler, Source::Rubygems),
+            (Manager::Composer, Source::Packagist),
+            (Manager::Pyproject, Source::Pypi),
+        ] {
+            let lock = facts(manager, Production, source).lock;
+            assert!(
+                lock.keeps_ranges && lock.movable && lock.reported,
+                "{manager}"
+            );
+            assert_eq!(lock.locked(Some("1.2.3")), Some("1.2.3"), "{manager}");
+        }
+        let python = facts(Manager::Pyproject, Toolchain, Source::Mise).lock;
+        assert!(python.keeps_ranges && !python.movable && !python.reported);
+        assert_eq!(python.locked(Some("3.12.0")), None);
+        assert!(
+            facts(Manager::Cargo, Transitive, Source::Crates)
+                .lock
+                .transitive_movable
+        );
+        assert!(
+            !facts(Manager::Npm, Transitive, Source::Npm)
+                .lock
+                .transitive_movable
+        );
+        let go = facts(Manager::Go, Production, Source::Go).lock;
+        assert!(go.movable && go.reported && !go.keeps_ranges);
+    }
+
+    /// npm, Bun and Terraform fill `resolved` only from a committed lock.
+    #[test]
+    fn node_and_terraform_report_only_what_a_lock_resolved() {
+        for manager in [Manager::Npm, Manager::Bun, Manager::Terraform] {
+            let mut declared = dep(manager, DependencyKind::Production, Source::Npm);
+            assert!(declared.proposing().lock.reported, "{manager}");
+            declared.resolved = None;
+            assert!(!declared.proposing().lock.reported, "{manager}");
+            let lock = declared.proposing().lock;
+            assert!(!lock.keeps_ranges && !lock.movable, "{manager}");
+        }
+    }
+
+    /// A peer declaration and a runtime toolchain range read as ranges; a
+    /// version file's bare version is an installed pin.
+    #[test]
+    fn peers_and_runtime_toolchains_read_as_ranges() {
+        assert_eq!(
+            facts(Manager::Npm, DependencyKind::Peer, Source::Npm).range,
+            Range::Peer
+        );
+        let engines = facts(Manager::Npm, DependencyKind::Toolchain, Source::Npm);
+        assert_eq!(engines.range, Range::Support);
+        assert!(engines.runtime_toolchain);
+        let mut nvmrc = dep(Manager::Npm, DependencyKind::Toolchain, Source::Npm);
+        nvmrc.scheme = Scheme::Loose;
+        assert_eq!(nvmrc.proposing().range, Range::Installed);
+        assert!(nvmrc.proposing().runtime_toolchain);
+        let mut required = dep(
+            Manager::Terraform,
+            DependencyKind::Toolchain,
+            Source::GithubReleases,
+        );
+        required.scheme = Scheme::Hashicorp;
+        assert_eq!(required.proposing().range, Range::Support);
+        let provider = facts(
+            Manager::Terraform,
+            DependencyKind::Provider,
+            Source::Terraform,
+        );
+        assert!(provider.keeps_satisfied && !provider.runtime_toolchain);
+    }
+
+    /// The `go` toolchain's advisories are Go's stdlib's.
+    #[test]
+    fn the_go_toolchain_takes_stdlib_advisories() {
+        let mut go = dep(Manager::Go, DependencyKind::Toolchain, Source::Mise);
+        go.package = "go".into();
+        assert_eq!(go.proposing().advisories, Advisories::GoStdlib);
+        go.package = "toolchain".into();
+        assert_eq!(go.proposing().advisories, Advisories::BySource);
     }
 }

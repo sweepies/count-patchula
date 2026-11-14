@@ -35,8 +35,8 @@ const BACKENDS: &[&str] = &["prettier"];
 async fn main() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mise/listings.json");
     let cache = tempfile::tempdir().unwrap();
-    let probe = Runner::new(cache.path().join("cache.sqlite"), "");
-    let version = probe.mise_lookup().version().to_owned();
+    let runner = Runner::new(cache.path().join("cache"), "");
+    let version = runner.mise_lookup().version().to_owned();
     let recorder = Arc::new(MiseRecorder::new(
         &path,
         Arc::new(SystemExecutor),
@@ -46,9 +46,7 @@ async fn main() {
              each run is what `mise ls-remote --json` or `mise tool --json` printed in the Count's sandbox"
         ),
     ));
-    let lookup = Runner::new(cache.path().join("cache.sqlite"), "")
-        .with_executor(recorder)
-        .mise_lookup();
+    let lookup = runner.with_executor(recorder).mise_lookup();
     let token = std::env::var(patchula_testkit::GH_TOKEN_VAR).ok();
     for listing in LISTINGS {
         let result = lookup
