@@ -714,7 +714,7 @@ pub fn plan(
     let mut package_names = PackageNames::new();
     for dep in dependencies {
         package_names
-            .entry(package_slug(branch_package(dep)))
+            .entry(package_slug(dep.bare_package()))
             .or_default()
             .insert((dep.source, dep.package.clone(), dep.registry.clone()));
     }
@@ -1226,16 +1226,6 @@ pub async fn lock_all(
 fn package_slug(package: &str) -> String {
     slug(split_package(package).map_or(package, |(_, name)| name))
 }
-/// The package a branch is named after: a mise tool without the options it
-/// passes to mise, so `forgejo:org/tool[api_url=…,os=linux]` names its branch
-/// after `forgejo:org/tool`. The options stay in the branch identity.
-fn branch_package(dep: &Dependency) -> &str {
-    if dep.manager == patchula_words::Manager::Mise {
-        patchula_mise::split(&dep.package).0
-    } else {
-        &dep.package
-    }
-}
 fn slug(value: &str) -> String {
     let s = value
         .to_ascii_lowercase()
@@ -1336,7 +1326,7 @@ fn branch_identity(
     } else if update.update_type == UpdateKind::Pin && reference_data {
         (
             serde_json::json!(["pin", dep.source, dep.package]).to_string(),
-            format!("pin-{}", package_slug(branch_package(dep))),
+            format!("pin-{}", package_slug(dep.bare_package())),
         )
     } else if let Some(group) = &update.group {
         let major = update.update_type == UpdateKind::Major;
@@ -1371,7 +1361,9 @@ fn branch_identity(
             }
             .to_string(),
             {
-                let named = package_slug(branch_package(dep));
+                // A mise tool is named without the options it passes to mise;
+                // they stay in its identity.
+                let named = package_slug(dep.bare_package());
                 let sharing = &package_names[&named];
                 // The same tool with other options from the same source keeps
                 // its options in the name, or the two would share a branch name.
@@ -2124,7 +2116,7 @@ mod tests {
             let mut names = PackageNames::new();
             for dep in deps {
                 names
-                    .entry(package_slug(branch_package(dep)))
+                    .entry(package_slug(dep.bare_package()))
                     .or_default()
                     .insert((dep.source, dep.package.clone(), dep.registry.clone()));
             }
