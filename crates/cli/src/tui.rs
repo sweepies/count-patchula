@@ -1102,7 +1102,7 @@ fn draw_updates(frame: &mut Frame, model: &mut Model, area: Rect) {
             Line::from(vec![
                 Span::styled(u.package.clone(), Style::new().bold()),
                 Span::styled(
-                    format!("  {} · {}", u.manager, u.file),
+                    format!("  {} · {}", u.manager, u.place()),
                     Style::new().fg(palette::MUTED.tui()),
                 ),
             ]),
