@@ -30,11 +30,11 @@ jobs:
       id-token: write
     steps:
       - if: inputs.source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - if: inputs.source
-        uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        uses: jdx/mise-action@v5.2.4
         with:
           install_args: rust
           cache: false
@@ -43,14 +43,14 @@ jobs:
       # The key lives in Infisical as sweepies-ops-private-key (project
       # INFISICAL_PROJECT_ID, environment prod), read by the machine identity
       # INFISICAL_IDENTITY_ID, which must allow this repository's main branch.
-      - uses: Infisical/secrets-action@d2e351f16c6ca20d17c85e6c992e04bdeb64e87d # v1.0.18
+      - uses: Infisical/secrets-action@v1.0.18
         with:
           method: oidc
           identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
           project-id: ${{ vars.INFISICAL_PROJECT_ID }}
           env-slug: prod
           secret-name: sweepies-ops-private-key
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      - uses: actions/create-github-app-token@v3.3.0
         id: app
         with:
           client-id: ${{ vars.PATCHULA_CLIENT_ID }}
@@ -64,7 +64,7 @@ jobs:
           permission-checks: read
           permission-statuses: read
       - if: ${{ !inputs.source }}
-        uses: sweepies/count-patchula@ac2e952dc4c403dae4516c550fe03db9f5a4f82b # v0.6.0
+        uses: sweepies/count-patchula@v0.6.0
         with:
           token: ${{ steps.app.outputs.token }}
       # The action from this commit, running the binary built above.

@@ -21,8 +21,20 @@ local linters = new Mapping<String, Step> {
   ["jactionlint"] = (Builtins.jactionlint) {
     glob = List(".github/workflows/*.y*ml", "action.yml")
   }
+  // The workflows' pins live in actions.lock, so .github/zizmor.yml lets their
+  // steps name tags. action.yml goes to other repositories without the
+  // lockfile, so it keeps zizmor's default rule: every action pinned by SHA.
   ["zizmor"] = (Builtins.zizmor) {
-    exclude = List("tests/corpus/**", "fixtures/**")
+    glob = List(".github/workflows/*.y*ml")
+  }
+  ["zizmor-action"] = (Builtins.zizmor) {
+    glob = List("action.yml")
+    check {
+      command { argv = List("zizmor", "--no-progress", "--no-config", "{{files}}") }
+    }
+    fix {
+      command { argv = List("zizmor", "--no-progress", "--no-config", "--fix", "{{files}}") }
+    }
   }
   ["mise"] = Builtins.mise
   // Locked installs (CI, the docs deploy, releases) refuse a tool version

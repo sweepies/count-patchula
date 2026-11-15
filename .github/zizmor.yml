@@ -1,0 +1,9 @@
+# The workflows pin their actions in .github/workflows/actions.lock, which
+# gh-actions-lock writes and GitHub enforces, so a step's `uses:` names a tag.
+# action.yml is published to other repositories, which do not get this
+# lockfile; hk checks it separately with zizmor's default hash-pin policy.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin

@@ -23,13 +23,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@v5.2.4
         with:
           cache: false
-      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
+      - uses: jdx/mr-boxington-action@v1.7.3
         continue-on-error: true
         with:
           backend: github
@@ -58,7 +58,7 @@ jobs:
         run: mise run benchmarks:summary --out "$GITHUB_STEP_SUMMARY"
       - name: Publish report-only results
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: tak-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: benchmark-results/

@@ -43,13 +43,13 @@ jobs:
       RELEASE_PR: ${{ github.event_name == 'pull_request' && github.head_ref == 'release-next' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]' }}
     steps:
       # A push is compared with the commit before it, which needs the history.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
       # A file counts when it matches any pattern of a filter.
       - id: some
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        uses: dorny/paths-filter@v4.0.3
         with:
           filters: |
             rust:
@@ -63,7 +63,7 @@ jobs:
       # A file counts when it matches every pattern: anything outside these
       # may change what the Rust jobs check.
       - id: every
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        uses: dorny/paths-filter@v4.0.3
         with:
           predicate-quantifier: every
           filters: |
@@ -93,7 +93,7 @@ jobs:
       # from this repository (RELEASE_PR): a fork could name its branch
       # release-next and make the task skip its tests.
       - if: env.RELEASE_PR == 'true'
-        uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        uses: jdx/mise-action@v5.2.4
         with:
           cache: false
         env:
@@ -129,24 +129,24 @@ jobs:
       # A pull request's merge commit has the base branch as its first parent.
       FROM_REF: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
           # hk compares against the base branch, or the commit before a push.
           fetch-depth: 0
       # mise checks every stored download against mise.lock before it uses
       # it, so the store is cached instead of the installs.
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@v6.1.0
         with:
           path: &mise-downloads ~/.cache/mise/downloads-cas
           key: &mise-downloads-key mise-downloads-${{ runner.os }}-${{ hashFiles('mise.lock') }}
           restore-keys: &mise-downloads-restore mise-downloads-${{ runner.os }}-
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@v5.2.4
         with:
           cache: false
       - id: cargo-downloads
         if: needs.changes.outputs.rust == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@v6.1.0
         with:
           path: &cargo-downloads |
             ~/.cargo/registry/index
@@ -155,7 +155,7 @@ jobs:
           key: &cargo-downloads-key cargo-downloads-v1-${{ hashFiles('Cargo.lock') }}
           restore-keys: &cargo-downloads-restore cargo-downloads-v1-
       - if: needs.changes.outputs.rust == 'true'
-        uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
+        uses: jdx/mr-boxington-action@v1.7.3
         # The pinned action has no nonfatal-cache input. This also covers its post step.
         continue-on-error: true
         with:
@@ -171,7 +171,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: mise run lint:ci "$FROM_REF"
       - if: always()
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@v4.39.1
         # A fork's pull request gets a read-only token and cannot upload; its
         # findings are still in the log above.
         continue-on-error: true
@@ -181,7 +181,7 @@ jobs:
       # Clippy checks every target, so it fetches every crate the other jobs
       # build; this job alone publishes the downloads, from main.
       - if: github.ref == 'refs/heads/main' && needs.changes.outputs.rust == 'true' && steps.cargo-downloads.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/save@v6.1.0
         continue-on-error: true
         with:
           path: *cargo-downloads
@@ -194,24 +194,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - id: mise-downloads
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@v6.1.0
         with:
           path: *mise-downloads
           key: *mise-downloads-key
           restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@v5.2.4
         with:
           cache: false
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@v6.1.0
         with:
           path: *cargo-downloads
           key: *cargo-downloads-key
           restore-keys: *cargo-downloads-restore
-      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
+      - uses: jdx/mr-boxington-action@v1.7.3
         continue-on-error: true
         with:
           backend: github
@@ -224,7 +224,7 @@ jobs:
       # The corpus lookup runs this binary instead of building its own. Artifacts
       # belong to the run, not the attempt, so a rerun of only the corpus job
       # still finds it, and a rerun of this job replaces it.
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: patchula-debug
           overwrite: true
@@ -250,24 +250,24 @@ jobs:
     env:
       PATCHULA_RECORD: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - id: mise-downloads
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@v6.1.0
         with:
           path: *mise-downloads
           key: *mise-downloads-key
           restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@v5.2.4
         with:
           cache: false
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@v6.1.0
         with:
           path: *cargo-downloads
           key: *cargo-downloads-key
           restore-keys: *cargo-downloads-restore
-      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
+      - uses: jdx/mr-boxington-action@v1.7.3
         continue-on-error: true
         with:
           backend: github
@@ -290,24 +290,24 @@ jobs:
       # cannot lock, so locked mode would refuse them.
       MISE_LOCKED: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - id: mise-downloads
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@v6.1.0
         with:
           path: *mise-downloads
           key: *mise-downloads-key
           restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@v5.2.4
         with:
           cache: false
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@v6.1.0
         with:
           path: *cargo-downloads
           key: *cargo-downloads-key
           restore-keys: *cargo-downloads-restore
-      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
+      - uses: jdx/mr-boxington-action@v1.7.3
         continue-on-error: true
         with:
           backend: github
@@ -320,7 +320,7 @@ jobs:
       # This job installs the base tools and every lockfile engine, so its
       # store holds nearly every download the other jobs need.
       - if: github.ref == 'refs/heads/main' && steps.mise-downloads.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/save@v6.1.0
         continue-on-error: true
         with:
           path: *mise-downloads
@@ -336,26 +336,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - id: mise-downloads
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@v6.1.0
         with:
           path: *mise-downloads
           key: *mise-downloads-key
           restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@v5.2.4
         with:
           cache: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: patchula-debug
           path: ${{ runner.temp }}/bin
       - run: chmod +x "$RUNNER_TEMP/bin/patchula"
       # Registry validators and catalogs carry over between runs, like a real
       # deployment's cache; a cold run still works, just slower. Main publishes.
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@v6.1.0
         with:
           path: ${{ runner.temp }}/corpus-cache
           key: corpus-v2-${{ github.run_id }}
@@ -368,14 +368,14 @@ jobs:
           PATCHULA_BIN: ${{ runner.temp }}/bin/patchula
         run: mise run corpus:report --cache "$RUNNER_TEMP/corpus-cache" --summary "$GITHUB_STEP_SUMMARY"
       - if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/save@v6.1.0
         continue-on-error: true
         with:
           path: ${{ runner.temp }}/corpus-cache
           key: corpus-v2-${{ github.run_id }}
       - name: Publish the corpus report
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: corpus-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: corpus-report.json
@@ -389,15 +389,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@v6.1.0
         with:
           path: *mise-downloads
           key: *mise-downloads-key
           restore-keys: *mise-downloads-restore
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@v5.2.4
         with:
           cache: false
       - run: mise run docs:build
