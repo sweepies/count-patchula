@@ -150,6 +150,50 @@ async fn zero_wait_and_forced_reads_keep_freshness_and_credentials_do_not_share_
     }
 }
 
+/// A stored view is keyed by the operator registry entries it may have been
+/// read with: rotating or removing an entry misses every view read before,
+/// as the HTTP cache misses the responses keyed by the old entry.
+#[tokio::test]
+async fn registry_entries_key_the_views_they_may_have_read() {
+    let cache = memory().await;
+    let registry = Arc::new(Registry::default());
+    for (token, reused) in [
+        (Some("fixture-a"), false),
+        (Some("fixture-a"), true),
+        (Some("fixture-b"), false),
+        (None, false),
+        (None, true),
+    ] {
+        let options = patchula_http::Options {
+            credentials: token
+                .map(|token| {
+                    patchula_http::Credential::new(
+                        "https://npm.acme.dev/",
+                        patchula_http::Auth::Bearer {
+                            token: token.into(),
+                        },
+                    )
+                    .unwrap()
+                })
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let engine =
+            Engine::with_http_options("offline", cache.clone(), 4, registry.clone(), options)
+                .unwrap()
+                .with_versions_host(false);
+        let before = registry.requests.load(Ordering::SeqCst);
+        let (_, evidence) = read(&engine, 24, now(), false).await;
+        assert_eq!(
+            registry.requests.load(Ordering::SeqCst) - before,
+            usize::from(!reused),
+            "{token:?}"
+        );
+        assert_eq!(evidence[&key("fixture")].reused, reused, "{token:?}");
+    }
+}
+
 fn config() -> Config {
     patchula_config::load_files(
         "/repo/patchula.pkl",

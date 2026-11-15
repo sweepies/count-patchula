@@ -7,10 +7,12 @@ use patchula_report::CatalogEvidence;
 /// Saved catalogs read at once while deciding what to refetch.
 const READ_FAN_OUT: usize = 4;
 
+/// A stored catalog view. Read back owned; written borrowing the catalog
+/// the run fetched, so saving it copies nothing.
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Saved {
+pub(crate) struct Saved<'a> {
     fetched_at: i64,
-    catalog: Catalog,
+    catalog: std::borrow::Cow<'a, Catalog>,
     credentialed: bool,
 }
 #[derive(Serialize)]
@@ -18,6 +20,9 @@ pub(crate) struct CatalogScope {
     versions_host: bool,
     package: PackageId,
     credential_scope: String,
+    /// The operator registry entries the view may have been read with,
+    /// as `Engine::registry_scope` digests them.
+    registries: String,
     /// Whom a mise catalog was listed for; `Run` for every other source.
     access: CatalogAccess,
 }
@@ -29,9 +34,9 @@ enum CatalogAccess {
     Public,
     Repository(u64),
 }
-impl State for Saved {
+impl State for Saved<'_> {
     const NAMESPACE: &'static str = "catalog";
-    const VERSION: u32 = 14;
+    const VERSION: u32 = 15;
     // Code-versioned: the view is datasource output decoded into `Catalog`;
     // a stale-but-decodable view from a release whose transforms moved is
     // worse than a miss.
@@ -63,6 +68,7 @@ impl Engine {
             versions_host: key.0,
             package: key.1.clone(),
             credential_scope: self.github.credential_scope().into(),
+            registries: self.registry_scope.clone(),
             access,
         })
     }
@@ -85,7 +91,7 @@ impl Engine {
                 let hours = reuse_hours(*waits.get(&key).unwrap_or(&0));
                 let saved = match self.catalog_scope(&key).await {
                     Some(scope) if !force.contains(&key) && hours.is_some() => {
-                        self.cache.state::<Saved>(&scope).await?
+                        self.cache.state::<Saved<'static>>(&scope).await?
                     }
                     _ => None,
                 };
@@ -105,7 +111,7 @@ impl Engine {
                 if saved.credentialed {
                     credentialed.insert(key.clone());
                 }
-                results.insert(key.clone(), Ok(saved.catalog));
+                results.insert(key.clone(), Ok(saved.catalog.into_owned()));
                 evidence.insert(
                     key,
                     CatalogEvidence {
@@ -127,6 +133,7 @@ impl Engine {
         fetched.extend(forced);
         credentialed.extend(sent);
         credentialed.extend(sent_forced);
+        let mut views = Vec::new();
         for (key, result) in &fetched {
             if let Ok(catalog) = result {
                 // Quota fallbacks may expose an older registry snapshot. Never
@@ -146,18 +153,18 @@ impl Engine {
                 let Some(scope) = self.catalog_scope(key).await else {
                     continue;
                 };
-                self.cache
-                    .set_state(
-                        &scope,
-                        &Saved {
-                            fetched_at: now.timestamp_millis(),
-                            catalog: catalog.clone(),
-                            credentialed: credentialed.contains(key),
-                        },
-                    )
-                    .await?;
+                views.push((
+                    scope,
+                    Saved {
+                        fetched_at: now.timestamp_millis(),
+                        catalog: std::borrow::Cow::Borrowed(catalog),
+                        credentialed: credentialed.contains(key),
+                    },
+                ));
             }
         }
+        self.cache.set_states(&views).await?;
+        drop(views);
         results.extend(fetched);
         Ok((results, evidence, credentialed))
     }
@@ -170,7 +177,7 @@ pub(crate) struct Controls {
 }
 impl State for Controls {
     const NAMESPACE: &'static str = "catalog-controls";
-    const VERSION: u32 = 14;
+    const VERSION: u32 = 15;
     // Code-versioned: the stored keys come from `identity` and `plan`
     // code, and a key written by older code that no longer matches its
     // dependency quietly un-retries a ticked box.

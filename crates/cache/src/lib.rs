@@ -592,6 +592,21 @@ impl Cache {
             .await
     }
 
+    /// Keep every `(scope, value)` pair, replacing earlier values, in one
+    /// writer round trip and one transaction.
+    pub async fn set_states<T: State>(&self, entries: &[(T::Scope, T)]) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let namespace = state_namespace::<T>();
+        let rows = entries
+            .iter()
+            .map(|(scope, value)| Ok((serde_json::to_string(scope)?, serde_json::to_vec(value)?)))
+            .collect::<Result<Vec<_>>>()?;
+        self.call(move |store| store.set_states(&namespace, &rows))
+            .await
+    }
+
     /// Forget the value kept for `scope`.
     pub async fn clear_state<T: State>(&self, scope: &T::Scope) -> Result<()> {
         let namespace = state_namespace::<T>();

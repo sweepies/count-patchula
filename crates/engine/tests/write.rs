@@ -2715,6 +2715,45 @@ async fn a_pulls_listing_failure_fails_the_repository() {
     check_transcript();
 }
 
+/// A lockfile-maintenance plan this repository's config cannot name fails
+/// the repository, not the run: the batch still reports, and the other
+/// repositories' rows and schedule turns survive. The prefix is longer than
+/// config validation allows, so only a config built in code reaches here.
+#[tokio::test(start_paused = true)]
+async fn an_unnameable_maintenance_branch_fails_only_its_repository() {
+    let fake = sandbox(base_files(), Some("package-lock.json"), vec![]);
+    // The registry offers nothing newer, so no update branch is named first.
+    *fake.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"1.0.0"},"versions":{"1.0.0":{}}});
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let mut config = checkbox_config();
+    config.lockfiles.refresh = true;
+    config.prs.branch = format!("{}/", "a".repeat(224));
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config: Some(config),
+                ..Default::default()
+            },
+            false,
+            false,
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("a repository's planning failure never fails the run");
+    let repo = &report.repositories[0];
+    assert_eq!(repo.status, Status::Error, "{repo:?}");
+    assert_eq!(
+        repo.reason.as_deref(),
+        Some("prs.branch produces an invalid Git branch name"),
+        "{repo:?}"
+    );
+    check_transcript();
+}
+
 /// An obsolete owned branch whose deletion GitHub refuses fails the
 /// repository rather than being retried silently.
 #[tokio::test(start_paused = true)]

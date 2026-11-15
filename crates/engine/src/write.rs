@@ -1,6 +1,6 @@
 //! The write path as named steps over one repository's plans, one
 //! authoritative inventory and one shared reconciliation tail.
-use super::{Engine, Error, Result, Stage, Work, fail, stale};
+use super::{Engine, Result, Stage, Work, fail, stale};
 use patchula_config::Config;
 use patchula_manager::Dependency;
 use patchula_report::{
@@ -126,8 +126,13 @@ impl Write<'_> {
                 return Ok(written);
             }
         };
-        self.maintenance(repo, &config, &snapshot, &dependencies, &mut plans, since)
-            .await?;
+        if let Err(failure) = self
+            .maintenance(repo, &config, &snapshot, &dependencies, &mut plans, since)
+            .await?
+        {
+            failed(repo, failure);
+            return Ok(written);
+        }
         // Every write needs the inventory read during lookup; a missing one
         // is a broken invariant, failed closed rather than assumed away.
         // `inventory` is `None` exactly on a dry run from here on.
@@ -254,8 +259,13 @@ impl Write<'_> {
             self.lockfiles(repo, &mut plans, &mut snapshot, &config)
                 .await;
         }
-        let cleanup = match (repo.degraded(), inventory) {
-            (false, Some(inventory)) => self.cleanup(repo, &plans, inventory).await,
+        // Cleanup decides on the lifecycle's degraded flag, the one obsolete
+        // closure used: lockfile warnings added since are no reason to
+        // doubt what extraction and lookup found obsolete.
+        let cleanup = match (lifecycle.as_ref(), inventory) {
+            (Some(state), Some(inventory)) if !state.degraded() => {
+                self.cleanup(repo, &plans, inventory).await
+            }
             _ => Ok(Vec::new()),
         };
         match cleanup {
@@ -404,28 +414,30 @@ impl Write<'_> {
         .map_err(|e| StepFailure::Repo(e.to_string()))
     }
 
-    /// The lockfile-maintenance plan, when one is due. A cache or config
-    /// failure here fails the run, not the repository.
+    /// The lockfile-maintenance plan, when one is due. A planning failure
+    /// comes from this repository's config and fails only the repository
+    /// (`Err`); a cache failure fails the run (the outer `Err`).
     async fn maintenance(
         &self,
-        repo: &mut Repository,
+        repo: &Repository,
         config: &Config,
         snapshot: &patchula_update::Snapshot,
         dependencies: &[Dependency],
         plans: &mut Vec<Plan>,
         since: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<()> {
-        let Some(mut maintenance) = patchula_update::maintenance::maintenance(
+    ) -> Result<std::result::Result<(), StepFailure>> {
+        let planned = patchula_update::maintenance::maintenance(
             repo,
             config,
             snapshot,
             dependencies,
             since,
             self.now,
-        )
-        .map_err(|e| Error::Invalid(e.to_string()))?
-        else {
-            return Ok(());
+        );
+        let mut maintenance = match planned {
+            Ok(Some(maintenance)) => maintenance,
+            Ok(None) => return Ok(Ok(())),
+            Err(error) => return Ok(Err(StepFailure::Repo(error.to_string()))),
         };
         patchula_update::maintenance::defer_completed_refresh(
             &self.engine.cache,
@@ -435,7 +447,7 @@ impl Write<'_> {
         )
         .await?;
         plans.push(maintenance);
-        Ok(())
+        Ok(Ok(()))
     }
 
     /// Dashboard controls onto the plans, then the batch PR over the

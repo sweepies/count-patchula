@@ -680,10 +680,24 @@ impl Change {
 pub fn blob_sha(content: &str) -> String {
     patchula_github::blob_sha(content.as_bytes())
 }
+/// Hex digits of a branch identity's hash that a still-shared label takes.
+const COLLISION_HASH_LEN: usize = 8;
+/// The suffix a label still shared after the manager prefix takes.
+fn collision_suffix(identity: &str) -> String {
+    hash(identity.as_bytes())[..COLLISION_HASH_LEN].to_owned()
+}
+/// The lockfile-maintenance branch's label: the longest label the Count
+/// writes whatever the repository holds. `prs.branch`'s cap leaves room for
+/// it, and for any fixed label with a collision suffix.
+pub(crate) const MAINTENANCE_LABEL: &str = "lock-file-maintenance";
+const _: () = assert!(
+    MAINTENANCE_LABEL.len() >= crate::batch::LABEL.len()
+        && MAINTENANCE_LABEL.len() + 1 + COLLISION_HASH_LEN <= patchula_config::BRANCH_LABEL_ROOM
+);
 /// Readable branch labels; repository planning resolves manager collisions.
 pub fn branch_name(prefix: &str, label: &str) -> Result<String, PlanError> {
     let name = format!("{prefix}{}", label.to_ascii_lowercase());
-    if name.len() > 240
+    if name.len() > patchula_config::MAX_BRANCH_LEN
         || name.starts_with('/')
         || name.ends_with('.')
         || name.contains([' ', '~', '^', ':', '?', '*', '[', '\\'])
@@ -779,8 +793,7 @@ pub fn plan(
     for (label, _) in groups.values() {
         *labels.entry(label.clone()).or_default() += 1;
     }
-    let mut names = BTreeSet::new();
-    let mut plans = Vec::new();
+    let mut named = Vec::new();
     for (identity, (mut label, items)) in groups {
         let items = superseding(items);
         if labels[&label] > 1 {
@@ -790,7 +803,26 @@ pub fn plan(
                 managers.into_iter().collect::<Vec<_>>().join("-")
             );
         }
+        named.push((identity, label, items));
+    }
+    // Names that differ only in case or punctuation (`Sirupsen/logrus` and
+    // `sirupsen/logrus`, groups `Linters` and `linters`) can still share a
+    // label after the manager prefix. Every label still shared takes a
+    // short hash of its branch's identity, which depends on nothing else
+    // the run reads, so the names stay the same from run to run.
+    let mut counts = BTreeMap::<String, usize>::new();
+    for (_, label, _) in &named {
+        *counts.entry(label.clone()).or_default() += 1;
+    }
+    let mut names = BTreeSet::new();
+    let mut plans = Vec::new();
+    for (identity, mut label, items) in named {
+        if counts[&label] > 1 {
+            label = format!("{label}-{}", collision_suffix(&identity));
+        }
         let branch = branch_name(&config.prs.branch, &label)?;
+        // Only a hash collision, or a suffixed label equal to another
+        // branch's own label, is left to refuse.
         if !names.insert(branch.clone()) {
             return Err(PlanError::BranchCollision);
         }

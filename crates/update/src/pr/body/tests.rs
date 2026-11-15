@@ -93,6 +93,31 @@ fn the_moved_ref_list_is_rendered_only_when_refs_moved() {
     assert_ne!(marker, quiet_marker);
 }
 
+/// A maintenance plan has no changes, so its body opens with what it
+/// refreshes and never with a table that has no rows.
+#[test]
+fn the_maintenance_body_has_no_empty_update_table() {
+    let permits = BTreeMap::new();
+    let bodies = bodies(&permits);
+    let plan = testing::Draft::new(action("patchula/lock-file-maintenance"))
+        .maintenance()
+        .identity("a".repeat(64))
+        .file(patchula_report::FileAction {
+            path: "Cargo.lock".into(),
+            blob_sha: String::new(),
+            diff: String::new(),
+        })
+        .build();
+    let (text, _) = bodies.intent(&plan);
+    assert!(!text.contains("| Package |"), "{text}");
+    assert!(
+        text.starts_with(
+            "Scheduled maintenance using the repository's mise tool versions.\n\n- Cargo.lock"
+        ),
+        "{text}"
+    );
+}
+
 /// A relock that pruned the last listed workflow removes `actions.lock`,
 /// and the maintenance body says so; a relock that kept it says nothing.
 #[test]

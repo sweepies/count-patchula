@@ -22,7 +22,15 @@ dependency and the line it moves along:
 Registry-qualified packages use the package name, not the registry URL, so a
 Helm chart from `https://stefanprodan.github.io/podinfo` gets
 `patchula/podinfo-6.x`. When two managers produce the same name, the manager is
-added to tell them apart.
+added to tell them apart. Names that still match, because they differ only in
+case or punctuation (`github.com/Sirupsen/logrus` and
+`github.com/sirupsen/logrus`, or groups `Linters` and `linters`), each get a
+short hash of what the branch updates, such as
+`patchula/go-go-github-com-sirupsen-logrus-1.x-3f2a9c01`. The hash stays
+the same from run to run.
+
+`prs.branch` may be at most 200 characters, so every branch name stays within
+Git's limits; a longer prefix is refused when the config loads.
 
 ## The commit
 
@@ -104,8 +112,10 @@ recreate one.
 When an update is no longer needed (merged elsewhere, dependency removed,
 target superseded), its branch and PR are closed and deleted, with a lease on
 the branch head so nothing unfamiliar is lost. Cleanup waits for the next run
-if the default branch moved since it was read, and is skipped entirely in a run that reported
-warnings, so a file that failed to parse never makes its updates look obsolete.
+if the default branch moved since it was read, and is skipped entirely in a run whose
+extraction or lookup reported warnings, so a file that failed to parse never
+makes its updates look obsolete. Closing obsolete PRs follows the same rule. A
+warning from lockfile generation comes too late to matter, so it skips neither.
 A warm run reads only the branches under `prs.branch`. If a branch the
 receipts name is absent from that walk — GitHub's branch rename keeps its
 pull request open at the new name — the run takes the full write path,

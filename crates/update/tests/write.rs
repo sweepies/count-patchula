@@ -2960,7 +2960,44 @@ async fn lookup_warnings_defer_obsolete_pr_closure() {
     .await
     .unwrap();
     assert!(state.actions.is_empty());
+    assert!(state.degraded());
     assert_eq!(server.state().repo().prs[&1]["state"], "open");
+    check_transcript();
+}
+
+/// The lifecycle reads the repository's degraded state once, when it is
+/// prepared: a warning added later (a lockfile tool's) changes neither the
+/// obsolete closure it already decided nor what branch cleanup reads.
+#[tokio::test(start_paused = true)]
+async fn warnings_after_preparation_leave_the_lifecycle_undegraded() {
+    let (config, mut repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    let state = patchula_update::Lifecycle::prepare_with_controls(
+        &github,
+        &repo,
+        &mut [],
+        &config,
+        chrono::Utc::now(),
+        Default::default(),
+        &Default::default(),
+        "patchula[bot]",
+    )
+    .await
+    .unwrap();
+    repo.warnings
+        .push("Cargo.toml: rust 1.90.0 predates Cargo 1.100's publish-age support".into());
+    assert!(!state.degraded());
+    assert_eq!(server.state().repo().prs[&1]["state"], "closed");
     check_transcript();
 }
 

@@ -26,7 +26,7 @@ pub enum Error {
 pub enum PlanError {
     #[error("prs.branch produces an invalid Git branch name")]
     BranchName,
-    #[error("branch name collision after manager disambiguation; set explicit groups")]
+    #[error("two branches share a name after disambiguation")]
     BranchCollision,
     #[error("missing extracted file {}", .0)]
     MissingExtractedFile(String),
@@ -74,7 +74,7 @@ mod tests {
             ),
             (
                 PlanError::BranchCollision,
-                "branch name collision after manager disambiguation; set explicit groups",
+                "two branches share a name after disambiguation",
             ),
             (
                 PlanError::MissingExtractedFile("a/Cargo.toml".into()),

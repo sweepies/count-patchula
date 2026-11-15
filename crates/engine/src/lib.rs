@@ -127,6 +127,11 @@ pub struct Engine {
     /// The server URL hidden in PRs and the dashboard for the CLI to find.
     advertised_server: Option<String>,
     progress: Arc<dyn Progress>,
+    /// One digest of every operator registry entry's scope: its prefix and
+    /// its credentials' fingerprint. Stored catalog views are keyed by it,
+    /// so adding, removing or rotating an entry misses every view read
+    /// before, as the HTTP cache misses the responses keyed by the entry.
+    registry_scope: String,
 }
 struct Work {
     report: Repository,
@@ -384,25 +389,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 12;
+    const VERSION: u32 = 13;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 15;
+    const VERSION: u32 = 16;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 15;
+    const VERSION: u32 = 16;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 12;
+    const VERSION: u32 = 13;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -467,7 +472,7 @@ use repository_head::repository_head_query::{
 /// bodies.
 pub const REPOSITORY_HEAD_QUERY: &str = repository_head::repository_head_query::QUERY;
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 struct LookupHint {
     catalogs: BTreeSet<LookupKey>,
     digests: BTreeSet<DigestKey>,
@@ -589,6 +594,13 @@ impl Engine {
     ) -> Result<Self> {
         check_concurrency(concurrency)?;
         let mut http_options = http_options;
+        let mut registries: Vec<&str> = http_options
+            .credentials
+            .iter()
+            .map(patchula_http::Credential::scope)
+            .collect();
+        registries.sort_unstable();
+        let registry_scope = patchula_manager::hash(&serde_json::to_vec(&registries)?);
         http_options.rules = patchula_datasource::registry_rules(&http_options);
         let http = Cached::with_options(cache.clone(), transport, http_options)
             .map_err(|e| Error::Invalid(e.to_string()))?;
@@ -608,6 +620,7 @@ impl Engine {
             installation: false,
             advertised_server: None,
             progress: Arc::new(()),
+            registry_scope,
         };
         engine.look_up_mise_tools_with_runner();
         Ok(engine)
@@ -1122,14 +1135,14 @@ impl Engine {
             .state::<BranchHint>(&hint_scope)
             .await?
             .map(|hint| hint.0);
-        let (branch, commit, tree_sha, private) = if let Some(hint) = hint {
+        let (branch, commit, tree_sha, private) = if let Some(hint) = hint.as_deref() {
             // Conditional REST heads are faster than GraphQL snapshots on the
             // measured warm path. Revalidate metadata and the hinted branch in
             // parallel; a rename retries only the newly authoritative branch.
             let metadata_path = format!("repos/{repo}");
             let (metadata, head) = tokio::join!(
                 self.github.get_fresh::<model::Repository>(&metadata_path),
-                self.head(repo, &hint)
+                self.head(repo, hint)
             );
             let metadata = metadata?;
             let private = metadata.private;
@@ -1165,9 +1178,13 @@ impl Engine {
             };
             (head.name, target.oid, target.tree.oid, private)
         };
-        self.cache
-            .set_state(&hint_scope, &BranchHint(branch.clone()))
-            .await?;
+        // An unchanged hint is not rewritten: the write would be a writer
+        // round trip on every scan for nothing.
+        if hint.as_deref() != Some(branch.as_str()) {
+            self.cache
+                .set_state(&hint_scope, &BranchHint(branch.clone()))
+                .await?;
+        }
         let mut report = repo_report(repo, Status::Complete, None);
         report.default_branch = Some(branch);
         report.commit = Some(commit.clone());

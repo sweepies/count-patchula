@@ -114,6 +114,22 @@ fn a_vendored_schema_overrides_the_built_in_one() {
 }
 
 #[test]
+fn a_branch_prefix_longer_than_the_cap_is_refused_at_load() {
+    let longest = format!(
+        "{}/",
+        "a".repeat(patchula_config::MAX_BRANCH_PREFIX_LEN - 1)
+    );
+    let (_dir, path) = fixture(&format!("prs {{ branch = \"{longest}\" }}"));
+    assert_eq!(load(&path).unwrap().prs.branch, longest);
+    let (_dir, path) = fixture(&format!("prs {{ branch = \"a{longest}\" }}"));
+    let error = format!("{:?}", load(&path).unwrap_err());
+    assert!(
+        error.contains("prs.branch") && error.contains("at most"),
+        "{error}"
+    );
+}
+
+#[test]
 fn node_lts_channel_is_typed_and_rule_selectable() {
     let (_dir, path) = fixture(
         "rules = new Listing { new Rule { select { packages = new Listing { \"node\"; \"actions/node-versions\" } } apply { channel = \"lts\" } } }",

@@ -58,7 +58,7 @@ pub fn maintenance(
     let mut plan = Plan::maintenance(
         BranchAction {
             repository: repository.repository.clone(),
-            branch: branch_name(&config.prs.branch, "lock-file-maintenance")?,
+            branch: branch_name(&config.prs.branch, crate::plan::MAINTENANCE_LABEL)?,
             base_commit: repository
                 .commit
                 .clone()
