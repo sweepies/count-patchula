@@ -1,0 +1,52 @@
+# The Count's window: a desktop app that drives the `patchula` CLI.
+#
+# Its own workspace, so the GPU and windowing crates Rune brings stay out of
+# the release binary's lockfile and out of `cargo build --workspace`. It reads
+# the CLI's JSON through the same report types, and links none of the engine.
+[workspace]
+
+[package]
+name = "patchula-gui"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+repository = "https://github.com/sweepies/count-patchula"
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[features]
+# Rune's headless runs (`--snap`, `--tree`, `--script`) in a release build.
+# Debug builds always have them.
+tooling = ["rune/tooling"]
+
+[dependencies]
+patchula-report = { path = "../crates/report" }
+patchula-words = { path = "../crates/words" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Rune is pre-release and asks apps to pin a revision of its `dev` branch.
+# Without Rune's `dbus`, `ogg-audio` and `svg` features: the window needs no
+# tray, portal, audio or SVG images.
+rune = { git = "https://github.com/anomalyco/rune", rev = "38e3535b797377c38a34654ec0e98694e7e46696", default-features = false, features = ["accessibility", "embedded-fonts", "metal-backend"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "38e3535b797377c38a34654ec0e98694e7e46696" }
+
+[dev-dependencies]
+tempfile = "3"
+
+# Rune builds against patched copies of these crates, and cargo does not
+# inherit a dependency's patches. Keep every `rev` here equal to Rune's.
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "38e3535b797377c38a34654ec0e98694e7e46696" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "38e3535b797377c38a34654ec0e98694e7e46696" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "38e3535b797377c38a34654ec0e98694e7e46696" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "38e3535b797377c38a34654ec0e98694e7e46696" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "38e3535b797377c38a34654ec0e98694e7e46696" }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = 0

@@ -149,6 +149,36 @@ dir = "docs"
 tools = { node = "26.13.0", aube = "2.9.0" }
 run = "aube exec wrangler versions upload"
 
+# The Count's window is its own Cargo workspace under gui/, so that Rune's GPU
+# and windowing crates stay out of the release binary and out of `build`,
+# `test` and `lint`. These are its build, test and lint.
+["gui:deps"]
+description = "Install the libraries a Linux build of the window links: libxkbcommon and libwayland-client (Debian and Ubuntu; needs sudo)"
+run = [
+  "sudo apt-get update --quiet",
+  "sudo apt-get install --yes --no-install-recommends libxkbcommon-dev libwayland-dev",
+]
+
+["gui:run"]
+description = "Open the Count's window; forwards its flags and `patchula lookup`'s, such as --demo or owner/repo"
+raw_args = true
+run = "cargo run --locked --manifest-path gui/Cargo.toml --"
+
+["gui:build"]
+description = "Build the release patchula-gui binary"
+run = "cargo build --release --locked --manifest-path gui/Cargo.toml"
+
+["gui:test"]
+description = "Test the Count's window: its model, its CLI driver and its state, with no GPU"
+run = "cargo test --locked --manifest-path gui/Cargo.toml"
+
+["gui:lint"]
+description = "Check the window's formatting and run Clippy on it"
+run = [
+  "cargo fmt --manifest-path gui/Cargo.toml -- --check",
+  "cargo clippy --locked --manifest-path gui/Cargo.toml --all-targets -- -D warnings",
+]
+
 ["corpus:snapshot"]
 description = "Regenerate tests/corpus-extraction.tsv and tests/corpus-proposals.tsv after an intended change"
 env = { PATCHULA_UPDATE_SNAPSHOT = "1" }

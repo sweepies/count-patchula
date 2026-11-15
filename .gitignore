@@ -8,3 +8,4 @@
 /server-reports/
 /benchmark-results/
 .env
+/gui/target/

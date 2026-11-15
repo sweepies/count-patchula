@@ -101,6 +101,7 @@ const sidebar = [
     items: [
       { label: "GitHub Actions", slug: "guide/github-actions" },
       { label: "Terminal UI", slug: "guide/tui" },
+      { label: "Desktop window", slug: "guide/gui" },
       { label: "Applying updates locally", slug: "guide/apply" },
       {
         label: "GitHub App server",
