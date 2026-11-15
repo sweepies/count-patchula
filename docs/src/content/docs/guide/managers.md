@@ -172,6 +172,11 @@ versions the way it installs them, `api_url` and `version_list_url`
 included. Some tools are refused for safety (plugin backends, Git-ref
 installs); see [mise lookups](/guide/sources/#mise-lookups).
 
+The options stay out of the tool's branch name: `"github:org/tool[bin=tool]"`
+updates on `patchula/github-org-tool-1.x`. When the same tool appears with
+different options, each branch name keeps its options so the branches stay
+apart.
+
 `http:` and `s3:` tools without `version_list_url` (or `version_prefix` for s3,
 also per platform under `platforms`) are skipped with a reason, not looked up:
 mise lists their versions only from those options, so there is nothing to
