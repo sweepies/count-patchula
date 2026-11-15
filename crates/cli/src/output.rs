@@ -654,11 +654,15 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
     );
     if !repo.skipped.is_empty() {
         style.heading(out, indent, "Skipped", repo.skipped.len(), Paint::Accent);
+        // On a terminal the reason wraps under its row and the value gives
+        // way, so a long value never cuts the reason; elsewhere each skipped
+        // value stays on one line.
+        let terminal = style.width.is_some();
         let rows: Vec<_> = repo
             .skipped
             .iter()
             .map(|s| {
-                vec![
+                let mut row = vec![
                     (
                         format!(
                             "{}{}",
@@ -668,11 +672,19 @@ fn details(out: &mut String, style: &Style, indent: usize, repo: &Repository) {
                         Paint::Dim,
                     ),
                     (s.value.clone(), Paint::Plain),
-                    (s.reason.clone(), Paint::Dim),
-                ]
+                ];
+                if !terminal {
+                    row.push((s.reason.clone(), Paint::Dim));
+                }
+                row
             })
             .collect();
-        style.table(out, indent + 2, &rows, 2);
+        for (line, skipped) in style.lines(indent + 2, &rows, 1).iter().zip(&repo.skipped) {
+            let _ = writeln!(out, "{line}");
+            if terminal {
+                style.wrap(out, indent + 4, &skipped.reason, Paint::Dim);
+            }
+        }
     }
     warnings(out, style, indent, &repo.warnings);
 }

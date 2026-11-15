@@ -34,17 +34,20 @@ In order:
    `security.quietImages` collapsed under "Silenced" (see
    [container image rebuilds](/guide/security/#container-image-rebuilds));
 4. open update PRs, grouped by update type, then the ones he merged;
-5. pending updates, each with the reason it is held (release age with the time
-   it becomes eligible, such as "eligible 31 Oct 08:29 UTC", PR limits,
-   schedule windows). An update held by the repository's committed [Cargo
-   cooldown](/guide/lookup-policy/#cargos-cooldown) is a plain line naming the
-   config file and the eligible time, with no box to tick — not even the
-   Count can create it early. Once past the floor but still inside
-   `waitHours`, the box returns. A held update's lockfile or tool failure
-   shows a short
-   reason, with the decisive lines of the tool's output (from its first error,
-   at most 10 lines) in a collapsed block. The full output stays in the CLI log
-   and the JSON report;
+5. pending updates, grouped by why they wait, each group collapsed with its
+   count: release age, the repository's cooldown, schedule windows,
+   `prs.concurrent`, `prs.perHour`, and other reasons. A group says its reason
+   once, and whether ticking a box creates the update now; each line names
+   only the update and what is its own, such as the time a release-age hold
+   becomes eligible ("eligible 31 Oct 08:29 UTC"). An update held by the
+   repository's committed [Cargo
+   cooldown](/guide/lookup-policy/#cargos-cooldown) names the config file and
+   the eligible time, with no box to tick — not even the Count can create it
+   early. Once past the floor but still inside `waitHours`, it moves to the
+   release-age group and its box returns. Under other reasons, a held
+   update's lockfile or tool failure shows a short reason, with the decisive
+   lines of the tool's output (from its first error, at most 10 lines) in a
+   collapsed block. The full output stays in the CLI log and the JSON report;
 6. template updates, which have no PR or checkbox
    ([Copier](/guide/managers/#copier)), and, under "Newer versions not proposed",
    releases whose declaration cannot be rewritten to allow them without

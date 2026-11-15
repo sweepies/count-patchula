@@ -6,7 +6,13 @@
 
 ## Pending updates
 
-- [ ] Create it now anyway: `fixture` → 2.0.0 (npm, `package.json`; eligible 16 Oct 00:00 UTC) <!-- patchula-action:{"action":"create","target":"HELD_UPDATE"} -->
+<details><summary>Waiting for their release age (1)</summary>
+
+Too fresh for the configured release age, each until the time shown. Tick one and the Count creates it now anyway.
+
+- [ ] `fixture` → 2.0.0 (npm, `package.json`; eligible 16 Oct 00:00 UTC) <!-- patchula-action:{"action":"create","target":"HELD_UPDATE"} -->
+
+</details>
 
 ## Lookup warnings and errors
 
