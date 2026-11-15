@@ -6,12 +6,11 @@ workflows:
     '.github/workflows/action.yml':
         - 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
         - 'actions/checkout@v7.0.1'
-        - 'jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d'
-        - 'jdx/mise-action@v5.2.4'
+        - 'jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785'
     '.github/workflows/benchmarks.yml':
         - 'actions/checkout@v7.0.1'
         - 'actions/upload-artifact@v7.0.2'
-        - 'jdx/mise-action@v5.2.4'
+        - 'jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785'
         - 'jdx/mr-boxington-action@v1.7.3'
     '.github/workflows/ci.yml':
         - 'actions/cache@v6.1.0'
@@ -20,7 +19,7 @@ workflows:
         - 'actions/upload-artifact@v7.0.2'
         - 'dorny/paths-filter@v4.0.3'
         - 'github/codeql-action@33d7b85da1a04171e211befe2c739303b9a4c066'
-        - 'jdx/mise-action@v5.2.4'
+        - 'jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785'
         - 'jdx/mr-boxington-action@v1.7.3'
     '.github/workflows/patchula.yml':
         - 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
@@ -28,12 +27,11 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/create-github-app-token@v3.3.0'
         - 'infisical/secrets-action@v1.0.18'
-        - 'jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d'
-        - 'jdx/mise-action@v5.2.4'
+        - 'jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785'
         - 'sweepies/count-patchula@v0.6.0'
     '.github/workflows/release-bot.yml':
         - 'actions/checkout@v7.0.1'
-        - 'jdx/mise-action@v5.2.4'
+        - 'jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785'
     '.github/workflows/release.yml':
         - 'actions/attest-build-provenance@v4.2.2'
         - 'actions/attest-sbom@v4.1.0'
@@ -43,7 +41,7 @@ workflows:
         - 'docker/login-action@v4.7.0'
         - 'docker/setup-qemu-action@v4.4.0'
         - 'infisical/secrets-action@v1.0.18'
-        - 'jdx/mise-action@v5.2.4'
+        - 'jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785'
         - 'jdx/packslip@v1.11.2'
 dependencies:
     'actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8':
@@ -137,14 +135,9 @@ dependencies:
         commit: 'sha1-08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8'
         owner_id: 216188
         repo_id: 738284564
-    'jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d':
-        ref: 'v5.2.4'
-        commit: 'sha1-6be3c7ed4c21d4f76b208d351d95aac273ebb76d'
-        owner_id: 216188
-        repo_id: 738284564
-    'jdx/mise-action@v5.2.4':
-        ref: 'v5.2.4'
-        commit: 'sha1-6be3c7ed4c21d4f76b208d351d95aac273ebb76d'
+    'jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785':
+        ref: 'v5.2.8'
+        commit: 'sha1-d5574b52816a478f9d4e6529a3f6ff17a8a36785'
         owner_id: 216188
         repo_id: 738284564
     'jdx/mr-boxington-action@v1.7.3':

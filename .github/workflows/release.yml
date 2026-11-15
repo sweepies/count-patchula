@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: jdx/mise-action@v5.2.4
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           # A release never restores a cache, so nothing cached reaches the artifacts.
           cache: false
@@ -101,7 +101,7 @@ jobs:
           pattern: dist-*
           path: dist
           merge-multiple: true
-      - uses: jdx/mise-action@v5.2.4
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: false
       - name: Run the binary
@@ -138,7 +138,7 @@ jobs:
           pattern: dist-linux-*
           merge-multiple: true
           path: target/dist
-      - uses: jdx/mise-action@v5.2.4
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           # A release never restores a cache, so nothing cached reaches the image.
           cache: false
@@ -189,7 +189,7 @@ jobs:
         with:
           name: image
           path: target/image
-      - uses: jdx/mise-action@v5.2.4
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           # A release never restores a cache, so nothing cached reaches the image.
           cache: false
@@ -273,7 +273,7 @@ jobs:
           env-slug: prod
           secret-name: anthropic-api-key
       - if: vars.INFISICAL_IDENTITY_ID != '' && vars.INFISICAL_PROJECT_ID != ''
-        uses: jdx/mise-action@v5.2.4
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           install: false
           # A release never restores a cache, so nothing cached reaches the artifacts.
