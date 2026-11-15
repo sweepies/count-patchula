@@ -304,7 +304,7 @@ impl Governor {
         let status = response.status.as_u16();
         let rate_status = matches!(status, 403 | 429);
         let retry_after = conditional::retry_after(response);
-        let exhausted = rate_status && number(response, "x-ratelimit-remaining") == Some(0);
+        let spent = number(response, "x-ratelimit-remaining") == Some(0);
         let graphql_answer = resource == "graphql" && status == 200;
         // Only a rate-limit status or a GraphQL answer can carry a body that
         // classifies; any other, which may be megabytes, is never parsed.
@@ -325,27 +325,16 @@ impl Governor {
                 .get("documentation_url")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|url| url.contains("secondary-rate-limits"));
-        let graphql_limit = graphql_answer
-            && json
-                .get("errors")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|errors| {
-                    errors.iter().any(|error| {
-                        error.get("type").and_then(serde_json::Value::as_str)
-                            == Some("RATE_LIMITED")
-                            || error
-                                .get("message")
-                                .and_then(serde_json::Value::as_str)
-                                .is_some_and(|message| {
-                                    message
-                                        .to_ascii_lowercase()
-                                        .contains("secondary rate limit")
-                                })
-                    })
-                });
+        let graphql = GraphqlLimit::classify(graphql_answer, &json);
+        // GitHub answers both GraphQL limits with a 200 and `RATE_LIMITED`.
+        // A spent `x-ratelimit-remaining` names the primary window, which
+        // ends at `x-ratelimit-reset`; without it, or with an error message
+        // naming the secondary limit, the answer is a secondary one.
+        let graphql_primary = graphql.limited && spent && !graphql.names_secondary;
+        let exhausted = rate_status && spent || graphql_primary;
         let secondary = rate_status
             && (status == 429 || retry_after.is_some() || documented_secondary)
-            || graphql_limit;
+            || graphql.limited && !graphql_primary;
         if !exhausted && !secondary {
             return Ok(false);
         }
@@ -381,6 +370,41 @@ impl Governor {
             return Err(Error::RateLimit);
         }
         Ok(true)
+    }
+}
+
+/// What a GraphQL 200's `errors` say about rate limits.
+struct GraphqlLimit {
+    /// Some error is `RATE_LIMITED` or names the secondary limit.
+    limited: bool,
+    /// Some error's message names the secondary limit.
+    names_secondary: bool,
+}
+
+impl GraphqlLimit {
+    fn classify(graphql_answer: bool, json: &serde_json::Value) -> Self {
+        let errors = json
+            .get("errors")
+            .and_then(serde_json::Value::as_array)
+            .filter(|_| graphql_answer)
+            .map_or(&[][..], Vec::as_slice);
+        let names_secondary = errors.iter().any(|error| {
+            error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|message| {
+                    message
+                        .to_ascii_lowercase()
+                        .contains("secondary rate limit")
+                })
+        });
+        let typed = errors.iter().any(|error| {
+            error.get("type").and_then(serde_json::Value::as_str) == Some("RATE_LIMITED")
+        });
+        Self {
+            limited: typed || names_secondary,
+            names_secondary,
+        }
     }
 }
 
@@ -428,6 +452,72 @@ mod tests {
         answer.body = br#"{"errors":[{"type":"RATE_LIMITED","message":"limited"}]}"#.to_vec();
         assert!(!governor.rate_limited("core", &answer, 0).await.unwrap());
         assert!(governor.rate_limited("graphql", &answer, 0).await.unwrap());
+    }
+
+    /// A GraphQL `RATE_LIMITED` answer with a spent primary window is the
+    /// primary limit: it waits for `x-ratelimit-reset` on the graphql bucket
+    /// and leaves writes and the secondary cooldown alone.
+    #[tokio::test]
+    async fn a_spent_graphql_window_is_the_primary_limit() {
+        let governor = Governor::new(4, Duration::from_secs(3600), 12);
+        let reset = epoch_seconds() + 600;
+        let mut answer = response(
+            200,
+            &[
+                ("x-ratelimit-remaining", "0".into()),
+                ("x-ratelimit-reset", reset.to_string()),
+                ("x-ratelimit-resource", "graphql".into()),
+            ],
+        );
+        answer.body = br#"{"errors":[{"type":"RATE_LIMITED","message":"API rate limit already exceeded for user ID 1."}]}"#.to_vec();
+        assert!(governor.rate_limited("graphql", &answer, 0).await.unwrap());
+        let state = governor.state.lock().await;
+        assert!(state.secondary_until.is_none());
+        assert!(state.content_throttled_until.is_none());
+        let bucket = &state.primary["graphql"];
+        assert_eq!(bucket.available, Some(0));
+        let wait = bucket.reset.unwrap() - Instant::now();
+        assert!(wait > Duration::from_secs(590) && wait <= Duration::from_secs(602));
+    }
+
+    /// Without a spent window, or with a message naming the secondary
+    /// limit, a GraphQL `RATE_LIMITED` answer stays a secondary limit.
+    #[tokio::test]
+    async fn a_graphql_limit_without_a_spent_window_is_secondary() {
+        let reset = (epoch_seconds() + 600).to_string();
+        for (headers, message) in [
+            (vec![("x-ratelimit-remaining", "12".to_owned())], "limited"),
+            (vec![], "limited"),
+            (
+                vec![
+                    ("x-ratelimit-remaining", "0".to_owned()),
+                    ("x-ratelimit-reset", reset.clone()),
+                ],
+                "You have exceeded a secondary rate limit.",
+            ),
+        ] {
+            let governor = Governor::new(4, Duration::from_secs(3600), 12);
+            let mut answer = response(200, &headers);
+            answer.body = serde_json::to_vec(&serde_json::json!({
+                "errors": [{"type": "RATE_LIMITED", "message": message}]
+            }))
+            .unwrap();
+            assert!(governor.rate_limited("graphql", &answer, 0).await.unwrap());
+            let state = governor.state.lock().await;
+            assert!(state.secondary_until.is_some(), "{headers:?} {message}");
+            assert!(state.content_throttled_until.is_some());
+            assert!(!state.primary.contains_key("graphql"));
+        }
+    }
+
+    /// A GraphQL answer that spent the last point but carries no limit
+    /// error is an ordinary answer.
+    #[tokio::test]
+    async fn a_graphql_answer_spending_the_last_point_is_not_limited() {
+        let governor = Governor::new(4, Duration::from_secs(3600), 12);
+        let mut answer = response(200, &[("x-ratelimit-remaining", "0".into())]);
+        answer.body = br#"{"data":{"viewer":{"login":"count"}}}"#.to_vec();
+        assert!(!governor.rate_limited("graphql", &answer, 0).await.unwrap());
     }
 
     /// A response still in flight when the limit hit may carry an earlier

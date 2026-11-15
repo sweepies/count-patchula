@@ -87,7 +87,10 @@ patchula serve
 directly instead, but not both a file and a value for the same secret. Secrets
 never appear in settings or command-line arguments, and no key, JWT, token,
 signature or request body is ever logged. Installation tokens live in memory,
-are renewed two minutes before they expire, and never touch SQLite. Keep the
+are renewed two minutes before they expire, and never touch SQLite. A
+token GitHub refuses with 401, such as one revoked or minted before the
+owner approved new permissions, is dropped and the request sent once more
+with a fresh one. Keep the
 host clock synchronised; JWTs are issued 60 seconds in the past.
 
 `/healthz` is liveness. `/readyz` needs valid settings, a working cache and a

@@ -5,11 +5,20 @@ use std::{future::Future, pin::Pin};
 pub type Token<'a> = Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
 /// A repository's numeric id, as a scoped mint names it.
 pub type RepositoryId<'a> = Pin<Box<dyn Future<Output = Result<u64>> + Send + 'a>>;
+/// Forgetting a token GitHub rejected.
+pub type Invalidation<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 pub trait Credentials: Send + Sync {
     /// Stable, non-secret authorization namespace, independent of token rotation.
     fn scope(&self) -> &str;
     fn token(&self) -> Token<'_>;
+    /// Forget `rejected`, a token `token` answered and GitHub refused with
+    /// 401, so the next `token` mints afresh; a token minted since is kept.
+    /// `None` when the credentials cannot mint another token, so a retry
+    /// would send the same one.
+    fn invalidate<'a>(&'a self, _rejected: &'a str) -> Option<Invalidation<'a>> {
+        None
+    }
     /// A token narrowed to `repository` (`owner/name`) and `permissions`,
     /// for a tool the Count runs. Only a GitHub App installation can mint
     /// one, so every other credential answers `None` and the caller decides

@@ -8,13 +8,14 @@ mod governor;
 pub mod model;
 mod pagination;
 pub use blobs::blob_sha;
-pub use credentials::{Credentials, Permissions, RepositoryId, Token};
+pub use credentials::{Credentials, Invalidation, Permissions, RepositoryId, Token};
 pub use governor::{PrimaryLimit, Stats};
 pub use pagination::{GraphqlPage, next_link};
 pub use patchula_http::{Network, Response, Transport};
 
 use governor::Governor;
 use patchula_cache::Cache;
+use patchula_config::settings::MAX_WRITE_BURST;
 use patchula_http::{Derived, conditional};
 use reqwest::{
     Method, Request, StatusCode, Url,
@@ -29,9 +30,6 @@ const ACCEPT: &str = "application/vnd.github+json";
 const API_VERSION: &str = "2022-11-28";
 /// Redirects one REST read follows before it fails.
 const MAX_REDIRECTS: usize = 10;
-/// The largest write burst the content governor allows: under GitHub's 80
-/// content requests a minute, with room for reads the same minute.
-pub const MAX_WRITE_BURST: usize = 19;
 
 /// The headers every GitHub request carries.
 pub(crate) fn base_headers(headers: &mut header::HeaderMap) {
@@ -384,8 +382,6 @@ impl Client {
     async fn exchange(&self, request: &Request, cached: bool) -> Result<Response> {
         let resource = if request.url().path().ends_with("/graphql") {
             "graphql"
-        } else if request.url().path().starts_with("/search/") {
-            "search"
         } else {
             "core"
         };
@@ -406,7 +402,12 @@ impl Client {
                 Method::GET | Method::HEAD | Method::OPTIONS
             )
         };
-        for attempt in 0..=self.0.options.max_retries {
+        // A 401 to refreshable credentials is retried once with a fresh
+        // token: GitHub ran nothing it refused with 401, so even a write is
+        // safe to send again. It does not count against `max_retries`.
+        let mut reauthenticated = false;
+        let mut attempt = 0;
+        while attempt <= self.0.options.max_retries {
             let trace = patchula_http::RequestTrace::new(request.method().as_str(), request.url());
             trace.cache_policy(if cached { "always-revalidate" } else { "cold" }, None);
             let queued = std::time::Instant::now();
@@ -418,12 +419,14 @@ impl Client {
             let permit = self.0.governor.acquire(resource).await?;
             self.0.governor.request();
             let mut outgoing = request.try_clone().ok_or(Error::Configuration)?;
+            let mut sent_token = None;
             if let Some(credentials) = &self.0.credentials {
-                let mut value =
-                    HeaderValue::from_str(&format!("Bearer {}", credentials.token().await?))
-                        .map_err(|_| Error::Configuration)?;
+                let token = credentials.token().await?;
+                let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+                    .map_err(|_| Error::Configuration)?;
                 value.set_sensitive(true);
                 outgoing.headers_mut().insert(header::AUTHORIZATION, value);
+                sent_token = Some(token);
             }
             let result = trace
                 .send(
@@ -438,6 +441,17 @@ impl Client {
                 Err(error) => return Err(Error::Transport(error)),
             };
             self.0.governor.observe(resource, &response).await;
+            if response.status == StatusCode::UNAUTHORIZED
+                && !reauthenticated
+                && let Some((credentials, token)) = self.0.credentials.as_ref().zip(sent_token)
+                && let Some(invalidation) = credentials.invalidate(&token)
+            {
+                invalidation.await;
+                reauthenticated = true;
+                drop(permit);
+                drop(content_permit);
+                continue;
+            }
             // Update the shared cooldown before releasing the in-flight permit.
             let retry = self
                 .0
@@ -453,6 +467,7 @@ impl Client {
                 return Err(Error::RateLimit);
             }
             self.0.governor.retry();
+            attempt += 1;
         }
         Err(Error::RateLimit)
     }

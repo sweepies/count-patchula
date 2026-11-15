@@ -620,9 +620,15 @@ mod tests {
     }
 
     /// Make a current cache look like one at schema `version`, so opening
-    /// it replays the later migrations: 015's column and index go first,
-    /// since adding them again would fail.
+    /// it replays the later migrations: 016's counter and triggers and 015's
+    /// column and index go first, since adding them again would fail.
     fn rewind(store: &Store, version: i64) -> Result<()> {
+        if version < 16 {
+            store.conn.execute_batch(
+                "DROP TRIGGER http_bytes_insert; DROP TRIGGER http_bytes_delete; \
+                 DROP TRIGGER http_bytes_update; DROP TABLE http_bytes;",
+            )?;
+        }
         if version < 15 {
             store.conn.execute_batch(
                 "DROP INDEX http_representation; ALTER TABLE http DROP COLUMN representation;",

@@ -1,7 +1,7 @@
 //! GitHub App JWTs and per-installation access tokens. No credentials reach SQLite.
 use crate::{
-    Credentials, Error, Permissions, RepositoryId, Response, Result, Token, Transport,
-    base_headers, join_api, pagination::next_link, valid_api_url,
+    Credentials, Error, Invalidation, Permissions, RepositoryId, Response, Result, Token,
+    Transport, base_headers, join_api, pagination::next_link, valid_api_url,
 };
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
@@ -402,6 +402,24 @@ impl App {
         }
         Err(Error::Json)
     }
+    /// Forget installation `id`'s full token if it is still `rejected`. A
+    /// token another request minted after the rejection stays cached.
+    async fn invalidate(&self, id: u64, rejected: &str) {
+        let key = Mint {
+            installation: id,
+            scope: None,
+        };
+        let Some(slot) = lock(&self.tokens).get(&key).cloned() else {
+            return;
+        };
+        let mut saved = slot.lock().await;
+        if saved
+            .as_ref()
+            .is_some_and(|token| token.minted.value == rejected)
+        {
+            *saved = None;
+        }
+    }
     async fn mint(&self, key: Mint, now: i64) -> Result<Minted> {
         // Single flight per mint: simultaneous readiness, Git and API
         // requests cannot mint the same token twice.
@@ -467,6 +485,9 @@ impl Credentials for Installation {
     }
     fn token(&self) -> Token<'_> {
         Box::pin(self.app.token_at(self.id, Utc::now().timestamp()))
+    }
+    fn invalidate<'a>(&'a self, rejected: &'a str) -> Option<Invalidation<'a>> {
+        Some(Box::pin(self.app.invalidate(self.id, rejected)))
     }
     fn mints_scoped_tokens(&self) -> bool {
         true
@@ -906,5 +927,138 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(app.installations().await, Err(Error::Pagination)));
+    }
+
+    /// Mints `token-0`, `token-1`, … valid for an hour, and refuses with 401
+    /// every API request whose token is in `revoked`.
+    struct Revoking {
+        mints: AtomicUsize,
+        writes: AtomicUsize,
+        revoked: &'static [&'static str],
+    }
+    impl Transport for Revoking {
+        fn send(&self, request: Request) -> Exchange<'_> {
+            let path = request.url().path().to_owned();
+            let (status, body) = if path == "/app/installations/10/access_tokens" {
+                let mint = self.mints.fetch_add(1, Ordering::SeqCst);
+                let expires = DateTime::from_timestamp(Utc::now().timestamp() + 3600, 0)
+                    .unwrap()
+                    .to_rfc3339();
+                (
+                    reqwest::StatusCode::CREATED,
+                    json!({"token": format!("token-{mint}"), "expires_at": expires}),
+                )
+            } else {
+                assert_eq!(path, "/repos/o/r/issues");
+                self.writes.fetch_add(1, Ordering::SeqCst);
+                let token = request.headers()[header::AUTHORIZATION]
+                    .to_str()
+                    .unwrap()
+                    .strip_prefix("Bearer ")
+                    .unwrap()
+                    .to_owned();
+                if self.revoked.contains(&token.as_str()) {
+                    (
+                        reqwest::StatusCode::UNAUTHORIZED,
+                        json!({"message": "Bad credentials"}),
+                    )
+                } else {
+                    (reqwest::StatusCode::CREATED, json!({"number": 1}))
+                }
+            };
+            Box::pin(async move {
+                Ok(Response {
+                    status,
+                    headers: Default::default(),
+                    body: serde_json::to_vec(&body).unwrap(),
+                    stale: None,
+                })
+            })
+        }
+    }
+
+    async fn revoking_client(revoked: &'static [&'static str]) -> (Arc<Revoking>, crate::Client) {
+        let transport = Arc::new(Revoking {
+            mints: AtomicUsize::new(0),
+            writes: AtomicUsize::new(0),
+            revoked,
+        });
+        let pem = AppKey::generate().pkcs1_pem();
+        let app = App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            Url::parse("https://api.github.com").unwrap(),
+        )
+        .unwrap();
+        let cache = patchula_cache::Cache::open(":memory:", Default::default())
+            .await
+            .unwrap();
+        let client = crate::Client::with_credentials(
+            app.installation(10),
+            cache,
+            crate::Options::default(),
+            transport.clone(),
+        )
+        .unwrap();
+        (transport, client)
+    }
+
+    /// A cached installation token GitHub refuses with 401 (revoked, or
+    /// minted before new permissions) is dropped and the request sent once
+    /// more with a fresh one — a write too, since GitHub ran nothing it
+    /// refused with 401. Later requests keep the fresh token.
+    #[tokio::test]
+    async fn a_refused_installation_token_is_minted_again_and_the_request_retried() {
+        let (transport, client) = revoking_client(&["token-0"]).await;
+        let created: Value = client
+            .post("repos/o/r/issues", json!({"title": "t"}))
+            .await
+            .unwrap();
+        assert_eq!(created["number"], 1);
+        assert_eq!(transport.mints.load(Ordering::SeqCst), 2);
+        assert_eq!(transport.writes.load(Ordering::SeqCst), 2);
+        let _: Value = client
+            .post("repos/o/r/issues", json!({"title": "t"}))
+            .await
+            .unwrap();
+        assert_eq!(transport.mints.load(Ordering::SeqCst), 2);
+        assert_eq!(transport.writes.load(Ordering::SeqCst), 3);
+    }
+
+    /// A fresh token that is refused too is an error after one retry, not
+    /// a loop of mints.
+    #[tokio::test]
+    async fn a_refused_fresh_token_fails_after_one_retry() {
+        let (transport, client) = revoking_client(&["token-0", "token-1"]).await;
+        let refused = client
+            .post::<Value>("repos/o/r/issues", json!({"title": "t"}))
+            .await;
+        assert!(matches!(refused, Err(Error::Status(401))));
+        assert_eq!(transport.mints.load(Ordering::SeqCst), 2);
+        assert_eq!(transport.writes.load(Ordering::SeqCst), 2);
+    }
+
+    /// Invalidating a token another request already replaced keeps the
+    /// replacement.
+    #[tokio::test]
+    async fn invalidating_a_replaced_token_keeps_the_new_one() {
+        let (transport, _client) = revoking_client(&[]).await;
+        let pem = AppKey::generate().pkcs1_pem();
+        let app = App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            Url::parse("https://api.github.com").unwrap(),
+        )
+        .unwrap();
+        let now = Utc::now().timestamp();
+        let first = app.token_at(10, now).await.unwrap();
+        app.invalidate(10, &first).await;
+        let second = app.token_at(10, now).await.unwrap();
+        assert_ne!(second, first);
+        app.invalidate(10, &first).await;
+        assert_eq!(app.token_at(10, now).await.unwrap(), second);
+        assert_eq!(transport.mints.load(Ordering::SeqCst), 2);
     }
 }

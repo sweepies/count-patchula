@@ -117,7 +117,10 @@ those names, so each misses once after the other has run.
 
 The default 256 MiB budget counts compressed HTTP body bytes. An access clock
 approximates LRU and evicts whole HTTP rows, validators included, until the
-cache fits, also on open after the budget is lowered. Release lists and
+cache fits, also on open after the budget is lowered. The total lives in the
+one-row `http_bytes` table, kept by triggers on `http` inside each write's
+transaction (migration 016), so a write compares one row to the budget
+instead of summing the table, and processes sharing the file see one total. Release lists and
 state values are outside the budget, so it does not cap the file size.
 
 ## Releases and state
