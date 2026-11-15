@@ -47,10 +47,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       # A GitHub Actions-only config stands in for this repository's own, so
       # the dry run plans real updates without lockfile tools.
-      # `./` rather than `$/`: gh-actions-lock follows `$/` and unpins the
-      # steps of action.yml, which other repositories run without this
-      # repository's lockfile.
-      - uses: ./ # zizmor: ignore[self-repository]
+      - uses: $/
         with:
           token: ${{ github.token }}
           dry-run: "true"

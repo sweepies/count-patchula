@@ -4,7 +4,9 @@
 version: 'v0.0.3'
 workflows:
     '.github/workflows/action.yml':
+        - 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
         - 'actions/checkout@v7.0.1'
+        - 'jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d'
         - 'jdx/mise-action@v5.2.4'
     '.github/workflows/benchmarks.yml':
         - 'actions/checkout@v7.0.1'
@@ -21,10 +23,12 @@ workflows:
         - 'jdx/mise-action@v5.2.4'
         - 'jdx/mr-boxington-action@v1.7.3'
     '.github/workflows/patchula.yml':
+        - 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
         - 'actions/create-github-app-token@v3.3.0'
         - 'infisical/secrets-action@v1.0.18'
+        - 'jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d'
         - 'jdx/mise-action@v5.2.4'
         - 'sweepies/count-patchula@v0.6.0'
     '.github/workflows/release-bot.yml':
@@ -131,6 +135,11 @@ dependencies:
     'jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8':
         ref: 'v5.1.2'
         commit: 'sha1-08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8'
+        owner_id: 216188
+        repo_id: 738284564
+    'jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d':
+        ref: 'v5.2.4'
+        commit: 'sha1-6be3c7ed4c21d4f76b208d351d95aac273ebb76d'
         owner_id: 216188
         repo_id: 738284564
     'jdx/mise-action@v5.2.4':

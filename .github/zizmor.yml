@@ -2,6 +2,8 @@
 # gh-actions-lock writes and GitHub enforces, so a step's `uses:` names a tag.
 # action.yml is published to other repositories, which do not get this
 # lockfile; hk checks it separately with zizmor's default hash-pin policy.
+# Relock with `gh actions-lock --no-narrow`: without it the tool unpins the
+# action.yml steps it reaches through the action test's `$/`.
 rules:
   unpinned-uses:
     config:
