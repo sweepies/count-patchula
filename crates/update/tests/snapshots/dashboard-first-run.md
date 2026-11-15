@@ -37,7 +37,18 @@
 
 ## Pending updates
 
-- [ ] Create it now anyway: `@astrojs/starlight` → 0.42.8 (npm, `docs/package.json`; eligible 31 Oct 08:29 UTC) <!-- patchula-action:{"action":"create","target":"TARGET"} -->
+<details><summary>Waiting for their release age (1)</summary>
+
+Too fresh for the configured release age, each until the time shown. Tick one and the Count creates it now anyway.
+
+- [ ] `@astrojs/starlight` → 0.42.8 (npm, `docs/package.json`; eligible 31 Oct 08:29 UTC) <!-- patchula-action:{"action":"create","target":"TARGET"} -->
+
+</details>
+
+<details><summary>Held for other reasons (2)</summary>
+
+No box here: each says what holds it.
+
 - chore(deps): update `base64` to 0.23.1: lockfile generation failed: cargo: exit status: 101
   <details>
   <summary>The tool's output</summary>
@@ -54,6 +65,8 @@
 
   </details>
 - chore(deps): update `node` to 26.13.0: lockfile generation failed: mise lock did not resolve node to 26.13.0
+
+</details>
 
 ## Lookup warnings and errors
 

@@ -356,12 +356,10 @@ pub fn render(
                         Action::Recreate(plan.update_key()),
                     ),
                 ));
-        } else if let Some(reason) = &plan.action().reason {
-            let row = if plan.overridable() {
-                checkbox(
-                    &format!("Create it now anyway: {} ({})", titled(plan), safe(reason)),
-                    Action::Create(plan.update_key()),
-                )
+        } else if plan.action().reason.is_some() {
+            let waiting = Waiting::of(plan);
+            let row = if waiting.tickable() {
+                checkbox(&titled(plan), Action::Create(plan.update_key()))
             } else {
                 let failure = plan.failure().expect("every reason keeps its failure");
                 let mut row = format!("- {}: {}\n", titled(plan), escape(&failure.summary));
@@ -371,9 +369,9 @@ pub fn render(
                 row
             };
             sections
-                .entry("Pending updates".into())
+                .entry(PENDING.into())
                 .or_default()
-                .insert((None, row));
+                .insert((Some(waiting as u64), row));
         }
     }
     let mut vulnerabilities = BTreeMap::<(String, String, String), Vulnerable>::new();
@@ -448,36 +446,42 @@ pub fn render(
                     // A hold by the repository's committed cooldown gets no
                     // tick: not even the Count can create it early.
                     let row = match &held.cooldown {
-                        Some(cooldown) => format!(
-                            "- {} → {} ({}, {}): {}'s cooldown binds the Count; eligible {}\n",
-                            code(&dep.name),
-                            safe(&held.version),
-                            safe(metadata.source.as_str()),
-                            code(&file.path),
-                            code(&cooldown.file),
-                            eligible,
-                        ),
-                        None => checkbox(
-                            &format!(
-                                "Create it now anyway: {} → {} ({}, {}; eligible {})",
+                        Some(cooldown) => (
+                            Waiting::Cooldown,
+                            format!(
+                                "- {} → {} ({}, {}; set in {}, eligible {})\n",
                                 code(&dep.name),
                                 safe(&held.version),
                                 safe(metadata.source.as_str()),
                                 code(&file.path),
+                                code(&cooldown.file),
                                 eligible,
                             ),
-                            Action::Create(held_key(
-                                &file.path,
-                                dep,
-                                &held.version,
-                                held.update_type.as_str(),
-                            )),
+                        ),
+                        None => (
+                            Waiting::ReleaseAge,
+                            checkbox(
+                                &format!(
+                                    "{} → {} ({}, {}; eligible {})",
+                                    code(&dep.name),
+                                    safe(&held.version),
+                                    safe(metadata.source.as_str()),
+                                    code(&file.path),
+                                    eligible,
+                                ),
+                                Action::Create(held_key(
+                                    &file.path,
+                                    dep,
+                                    &held.version,
+                                    held.update_type.as_str(),
+                                )),
+                            ),
                         ),
                     };
                     sections
-                        .entry("Pending updates".into())
+                        .entry(PENDING.into())
                         .or_default()
-                        .insert((None, row));
+                        .insert((Some(row.0 as u64), row.1));
                 }
                 let warnings: Vec<_> = repo
                     .warnings
@@ -677,7 +681,7 @@ pub fn render(
         } else {
             3 + match section.as_str() {
                 "Merged" => 1,
-                "Pending updates" => 2,
+                PENDING => 2,
                 "Template updates" | "Newer versions not proposed" => 3,
                 "Updates you closed" => 4,
                 "Lookup warnings and errors" => 5,
@@ -695,6 +699,10 @@ pub fn render(
         .fold((0, 0), |(files, rows), (_, r)| (files + 1, rows + r.len()));
     let mut outer = false;
     for (section, rows) in sections {
+        if section == PENDING {
+            pending(&mut text, rows);
+            continue;
+        }
         if section.starts_with("Detected: ") && !outer {
             // One line stands for every file's list.
             text.push_str(&format!(
@@ -778,6 +786,114 @@ pub fn render(
         text.push_str("\n</details>\n");
     }
     text
+}
+
+const PENDING: &str = "Pending updates";
+
+/// Why a pending update waits. The order is the order of the groups.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Waiting {
+    ReleaseAge,
+    Cooldown,
+    Window,
+    Concurrent,
+    PerHour,
+    Other,
+}
+impl Waiting {
+    const ALL: [Self; 6] = [
+        Self::ReleaseAge,
+        Self::Cooldown,
+        Self::Window,
+        Self::Concurrent,
+        Self::PerHour,
+        Self::Other,
+    ];
+    fn of(plan: &Plan) -> Self {
+        use crate::plan::Hold;
+        if plan.held(&Hold::Window) {
+            Self::Window
+        } else if plan.held(&Hold::Concurrent) {
+            Self::Concurrent
+        } else if plan.held(&Hold::PerHour) {
+            Self::PerHour
+        } else {
+            Self::Other
+        }
+    }
+    /// Whether a tick creates its updates now.
+    fn tickable(self) -> bool {
+        !matches!(self, Self::Cooldown | Self::Other)
+    }
+    fn summary(self) -> &'static str {
+        match self {
+            Self::ReleaseAge => "Waiting for their release age",
+            Self::Cooldown => "Held by the repository's cooldown",
+            Self::Window => "Outside the update windows",
+            Self::Concurrent => "prs.concurrent limit reached",
+            Self::PerHour => "prs.perHour limit reached",
+            Self::Other => "Held for other reasons",
+        }
+    }
+    fn explanation(self) -> &'static str {
+        match self {
+            Self::ReleaseAge => {
+                "Too fresh for the configured release age, each until the time shown."
+            }
+            Self::Cooldown => {
+                "The repository's committed cooldown binds the Count too, so these wait for the time shown with no box to tick."
+            }
+            Self::Window => "They wait for the next update window.",
+            Self::Concurrent => "As many of his PRs are open as prs.concurrent allows.",
+            Self::PerHour => "He has opened as many PRs this hour as prs.perHour allows.",
+            Self::Other => "No box here: each says what holds it.",
+        }
+    }
+}
+
+/// The pending updates, one collapsed group per reason they wait, with the
+/// shared reason said once, bounded like every other section.
+fn pending(text: &mut String, rows: BTreeSet<(Option<u64>, String)>) {
+    const END: &str = "\n</details>\n";
+    let heading = format!("\n## {PENDING}\n");
+    if text.len() + heading.len() + 150 > LIMIT {
+        return;
+    }
+    text.push_str(&heading);
+    for waiting in Waiting::ALL {
+        let group: Vec<_> = rows
+            .iter()
+            .filter(|(rank, _)| *rank == Some(waiting as u64))
+            .map(|(_, row)| row)
+            .collect();
+        if group.is_empty() {
+            continue;
+        }
+        let tick = if waiting.tickable() {
+            " Tick one and the Count creates it now anyway."
+        } else {
+            ""
+        };
+        let start = format!(
+            "\n<details><summary>{} ({})</summary>\n\n{}{tick}\n\n",
+            waiting.summary(),
+            group.len(),
+            waiting.explanation()
+        );
+        if text.len() + start.len() + END.len() + 150 > LIMIT {
+            return;
+        }
+        text.push_str(&start);
+        for row in group {
+            if text.len() + row.len() + END.len() + 150 > LIMIT {
+                text.push_str("\nAdditional entries omitted to fit GitHub's issue body limit.\n");
+                text.push_str(END);
+                return;
+            }
+            text.push_str(row);
+        }
+        text.push_str(END);
+    }
 }
 
 /// A collapsed block of tool output, indented under a list item.

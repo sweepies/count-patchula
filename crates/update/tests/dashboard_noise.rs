@@ -500,7 +500,11 @@ fn a_cooldown_hold_names_its_config_and_offers_no_checkbox() {
     let line = text.lines().find(|l| l.contains("0.42.8")).unwrap();
     assert_eq!(
         line,
-        "- `@astrojs/starlight` → 0.42.8 (npm, `docs/package.json`): `.cargo/config.toml`'s cooldown binds the Count; eligible 31 Oct 08:29 UTC"
+        "- `@astrojs/starlight` → 0.42.8 (npm, `docs/package.json`; set in `.cargo/config.toml`, eligible 31 Oct 08:29 UTC)"
+    );
+    assert!(
+        text.contains("<details><summary>Held by the repository's cooldown (1)</summary>"),
+        "{text}"
     );
     assert!(!line.contains("Create it now anyway"), "{line}");
     assert!(!line.contains("[ ]"), "{line}");

@@ -133,7 +133,7 @@ fn dashboard_orders_pr_numbers_numerically_and_dependency_summaries_last() {
         "## Pending updates",
         "## Lookup warnings",
         "## Report warnings",
-        "<details>",
+        "<summary>Every dependency found",
     ]
     .into_iter()
     .map(|label| text.find(label).unwrap())
@@ -712,16 +712,32 @@ fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
     ];
     let text = dashboard::render(&repository(), &plans, &[], &[], Recheck::NextRun, None);
     let pending = &text[text.find("## Pending updates").unwrap()..];
-    for line in [
-        "Create it now anyway: chore(deps): update left-pad to 2.0.0 (prs.concurrent limit reached)",
-        "Create it now anyway: chore(deps): update is-odd to 2.0.0 (prs.perHour limit reached)",
+    for (summary, line) in [
+        (
+            "<details><summary>prs.concurrent limit reached (1)</summary>",
+            "- [ ] chore(deps): update left-pad to 2.0.0 <!-- patchula-action:",
+        ),
+        (
+            "<details><summary>prs.perHour limit reached (1)</summary>",
+            "- [ ] chore(deps): update is-odd to 2.0.0 <!-- patchula-action:",
+        ),
     ] {
-        let row = pending
-            .lines()
-            .find(|l| l.contains(line))
-            .unwrap_or_else(|| panic!("{line}: {text}"));
-        assert!(row.starts_with("- [ ] "), "{row}");
+        // The reason heads its group once; the row names only the update.
+        let group = &pending[pending
+            .find(summary)
+            .unwrap_or_else(|| panic!("{summary}: {text}"))..];
+        let group = &group[..group.find("</details>").unwrap()];
+        assert_eq!(group.matches("now anyway").count(), 1, "{group}");
+        assert!(group.lines().any(|l| l.starts_with(line)), "{group}");
+        assert!(!group.contains("limit reached)"), "{group}");
     }
+    // Ticking a grouped row still asks for exactly that update.
+    let ticked = text.replacen(
+        "- [ ] chore(deps): update left-pad",
+        "- [x] chore(deps): update left-pad",
+        1,
+    );
+    assert!(dashboard::Controls::checkbox_edited(&text, &ticked));
 }
 
 /// A newer version the Count looked up but cannot write into the declaration
