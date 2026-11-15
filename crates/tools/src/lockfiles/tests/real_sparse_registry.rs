@@ -132,6 +132,8 @@ impl SparseRegistry {
                             digest: None,
                             deprecated: false,
                             yanked: false,
+                            prerelease: false,
+                            unchecked: false,
                         })
                         .collect()
                 })

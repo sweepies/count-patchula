@@ -6,6 +6,7 @@ mod catalog;
 pub use catalog::{Catalog, Version};
 pub(crate) use catalog::{sha256_hex, sort};
 mod compact;
+mod dates;
 #[cfg(test)]
 mod derive_parity;
 mod docker;
@@ -144,8 +145,6 @@ impl std::fmt::Display for Failure {
         f.write_str(&self.message)
     }
 }
-/// Go releases dated through `.info` on a cold lookup, newest first.
-const GO_DATED_RELEASES: usize = 20;
 /// A stored listing or resolution is reused for this long. The tools keep
 /// their own version lists for about as long, and a release-age wait is
 /// evaluated against the dates in the listing, so a stored one never hides
@@ -437,48 +436,32 @@ impl Client {
             latest_version
         };
         sort(&mut versions, Ecosystem::Go);
-        let known = self.cache.releases("go", package).await?;
-        let known: std::collections::HashMap<_, _> = known
-            .releases
-            .into_iter()
-            .map(|v| (v.version, v.published_at))
-            .collect();
-        // Fetch .info only for new releases; retain publication timestamps for
-        // older ones. Never refetch full per-version history on a warm lookup.
-        // A cold lookup dates only the newest releases: older ones are outside
-        // any release-age wait, and a module can list hundreds of versions.
-        // The proxy lists some versions it cannot describe (404); those are
-        // not installable releases and are dropped.
-        let mut reached_known = false;
-        let mut fetched = 0;
-        let mut missing = std::collections::HashSet::new();
-        for version in &mut versions {
-            if let Some(time) = known.get(&version.version) {
-                version.published_at.clone_from(time);
-                reached_known = true;
-            } else if !reached_known && fetched < GO_DATED_RELEASES {
-                fetched += 1;
-                let response = self
-                    .http
-                    .get(
-                        &format!("{prefix}/{}.info", version.version),
-                        "application/json",
-                    )
-                    .await;
-                let response = match response {
-                    Ok(response) => response,
-                    Err(patchula_http::CacheError::Status(404 | 410)) => {
-                        missing.insert(version.version.clone());
-                        continue;
+        // Every listed version is dated through `.info`, once: the answer is
+        // kept, so a warm lookup asks only about versions it has not seen,
+        // including a patch release on an older line. The proxy lists some
+        // versions it cannot describe (404); those are not installable
+        // releases and are dropped.
+        let scope = dates::DatesScope {
+            source: Source::Go,
+            package: package.into(),
+            credential: None,
+        };
+        self.date_versions(&scope, &mut versions, |version| {
+            let url = format!("{prefix}/{version}.info");
+            async move {
+                match self.http.get(&url, "application/json").await {
+                    Ok(response) => {
+                        let info: Value = serde_json::from_slice(&response.body).ok()?;
+                        Some(dates::Dated::At(info["Time"].as_str().map(str::to_owned)))
                     }
-                    Err(error) => return Err(error.into()),
-                };
-                let info: Value = serde_json::from_slice(&response.body)?;
-                version.published_at = info["Time"].as_str().map(str::to_owned);
+                    Err(patchula_http::CacheError::Status(404 | 410)) => {
+                        Some(dates::Dated::Missing)
+                    }
+                    Err(_) => None,
+                }
             }
-        }
-        versions.retain(|v| !missing.contains(&v.version));
-        self.merge("go", package, &versions).await?;
+        })
+        .await?;
         Ok(Catalog {
             versions,
             dist_tags: BTreeMap::from([("latest".into(), latest_version)]),
@@ -508,22 +491,6 @@ impl Client {
             Err(e) => return Err(e.into()),
         };
         Ok(serde_json::from_slice(&response.body)?)
-    }
-    async fn merge(&self, source: &str, package: &str, versions: &[Version]) -> Result<()> {
-        let head = self.cache.release_head(source, package).await?;
-        let mut page = Vec::new();
-        for v in versions {
-            page.push(Release {
-                version: v.version.clone(),
-                published_at: v.published_at.clone(),
-                digest: v.digest.clone(),
-            });
-            if head.as_deref() == Some(&v.version) {
-                break;
-            }
-        }
-        self.cache.merge_releases(source, package, &page).await?;
-        Ok(())
     }
 }
 fn runners(package: &str) -> Result<Catalog> {

@@ -496,11 +496,9 @@ async fn go_skips_latest_for_tagged_versions_and_preserves_pseudo_version_fallba
                 ),
             ));
         }
+        // Every listed version is dated through `.info`; @latest's
+        // pseudo-version already carries its time.
         let mut versions: Vec<_> = list.lines().collect();
-        if let Some(latest) = latest {
-            versions.push(latest);
-        }
-        // The source sorts descending and hydrates every new tagged version.
         versions.sort_by(|a, b| b.cmp(a));
         for version in versions {
             reads.push_back((

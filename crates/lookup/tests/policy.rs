@@ -32,6 +32,8 @@ fn catalog(values: &[&str]) -> Catalog {
                 digest: Some("a".repeat(40)),
                 deprecated: false,
                 yanked: false,
+                prerelease: false,
+                unchecked: false,
             })
             .collect(),
         dist_tags: Default::default(),
@@ -1335,6 +1337,8 @@ fn flake_inputs_get_digest_updates_after_the_release_age_wait() {
             digest: Some(digest),
             deprecated: false,
             yanked: false,
+            prerelease: false,
+            unchecked: false,
         }],
         dist_tags: Default::default(),
     };
@@ -1596,6 +1600,8 @@ fn lock_only_updates_keep_the_wait_the_permitted_filter_and_exact_policy() {
         digest: None,
         deprecated: false,
         yanked: false,
+        prerelease: false,
+        unchecked: false,
     });
     let result = Evaluator::new(&filtered, Default::default())
         .unwrap()
@@ -1960,6 +1966,8 @@ fn a_tagged_action_with_a_short_tag_resolves_through_its_commit_digest() {
         digest: Some(digest.into()),
         deprecated: false,
         yanked: false,
+        prerelease: false,
+        unchecked: false,
     };
     let cat = Catalog {
         versions: vec![
@@ -2191,4 +2199,129 @@ fn a_rule_error_is_the_wait_error_never_a_wait_of_zero() {
     // Lockfile maintenance's wait has no error from a dependency outside
     // crates.io.
     assert_eq!(eval.lockfile_wait_hours(&[dependency("left-pad")]), Ok(0));
+}
+
+/// The versions `permitted` lets through for `dep` on `releases`, sorted,
+/// with no release-age wait.
+fn permitted_targets(dep: &Dependency, filter: &str, releases: &[&str]) -> Vec<String> {
+    let mut cfg = config("renovate-migration");
+    cfg.defaults.wait_hours = 0;
+    cfg.defaults.permitted = Some(filter.into());
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
+    let mut targets: Vec<_> = eval
+        .propose(dep, &catalog(releases))
+        .unwrap()
+        .into_iter()
+        .filter_map(|p| p.new_version)
+        .collect();
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+/// A `permitted` filter that only narrows or excludes keeps prereleases
+/// out; one that names a prerelease, by a regex that matches the
+/// prerelease part or a range naming a prerelease, lets them in.
+#[test]
+fn only_a_permitted_filter_that_asks_for_prereleases_admits_them() {
+    let mut npm = dependency("lib");
+    npm.current = "2.1.0".into();
+    npm.resolved = Some("2.1.0".into());
+    let releases = &["2.1.0", "2.2.0-rc.1", "3.0.0"];
+    assert!(permitted_targets(&npm, "!regex:^3\\.", releases).is_empty());
+    assert!(permitted_targets(&npm, "regex:^2\\.", releases).is_empty());
+    assert!(permitted_targets(&npm, "!semver:>=3", releases).is_empty());
+    assert_eq!(
+        permitted_targets(&npm, "regex:-rc\\.", releases),
+        ["2.2.0-rc.1"]
+    );
+    assert_eq!(
+        permitted_targets(&npm, "semver:>=2.2.0-rc.1", releases),
+        ["2.2.0-rc.1", "3.0.0"]
+    );
+
+    let mut maven = dependency("org.example:lib");
+    maven.manager = Manager::Maven;
+    maven.source = Source::Maven;
+    maven.scheme = Scheme::Maven;
+    maven.current = "1.4".into();
+    maven.resolved = Some("1.4".into());
+    let releases = &["1.4", "1.5-beta1", "2.0"];
+    assert!(permitted_targets(&maven, "semver:[1,2)", releases).is_empty());
+    assert_eq!(
+        permitted_targets(&maven, "semver:[1.5-beta1,2)", releases),
+        ["1.5-beta1"]
+    );
+    assert_eq!(
+        permitted_targets(&maven, "regex:-beta", releases),
+        ["1.5-beta1"]
+    );
+
+    let mut pypi = dependency("lib");
+    pypi.manager = Manager::Pyproject;
+    pypi.source = Source::Pypi;
+    pypi.scheme = Scheme::Pep440;
+    pypi.current = "==2.1.0".into();
+    pypi.resolved = Some("2.1.0".into());
+    let releases = &["2.1.0", "2.2.0rc1", "3.0.0"];
+    assert!(permitted_targets(&pypi, "semver:<3", releases).is_empty());
+    assert_eq!(
+        permitted_targets(&pypi, "semver:>=2.2.0rc1,<3", releases),
+        ["2.2.0rc1"]
+    );
+}
+
+/// A release its source marks as a prerelease (mise passing on GitHub's
+/// flag) is one, even when its version looks stable.
+#[test]
+fn a_release_the_source_marks_as_a_prerelease_is_held_like_one() {
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
+    let mut releases = catalog(&["1.0.0", "2.0.0"]);
+    releases.versions[1].prerelease = true;
+    let proposals = eval.propose(&prettier_tool("1.0.0"), &releases).unwrap();
+    assert!(proposals.is_empty(), "{proposals:?}");
+    // From a flagged current release, a newer flagged one is offered.
+    let mut releases = catalog(&["1.0.0", "2.0.0", "2.1.0"]);
+    releases.versions[1].prerelease = true;
+    releases.versions[2].prerelease = true;
+    let proposals = eval.propose(&prettier_tool("2.0.0"), &releases).unwrap();
+    assert_eq!(proposals.len(), 1, "{proposals:?}");
+    assert_eq!(proposals[0].new_version.as_deref(), Some("2.1.0"));
+}
+
+/// A release whose date the source could not be asked for waits instead of
+/// counting as undated, and is reported; with no wait it is proposed.
+#[test]
+fn an_unchecked_release_waits_instead_of_skipping_the_release_age_wait() {
+    let mut dep = dependency("lib");
+    dep.current = "1.0.0".into();
+    dep.resolved = Some("1.0.0".into());
+    let mut releases = catalog(&["1.0.0", "1.0.1", "1.0.2"]);
+    releases.versions[1].published_at = Some("2026-01-01T00:00:00Z".into());
+    releases.versions[2].unchecked = true;
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
+    let evaluation = eval
+        .evaluate_at(&dep, &releases, instant("2026-10-12T00:00:00Z"))
+        .unwrap();
+    let targets: Vec<_> = evaluation
+        .updates
+        .iter()
+        .filter_map(|p| p.new_version.as_deref())
+        .collect();
+    assert_eq!(targets, ["1.0.1"]);
+    assert_eq!(evaluation.not_proposed.len(), 1);
+    assert_eq!(evaluation.not_proposed[0].version, "1.0.2");
+    let mut cfg = config("renovate-migration");
+    cfg.defaults.wait_hours = 0;
+    let evaluation = Evaluator::new(&cfg, Default::default())
+        .unwrap()
+        .evaluate_at(&dep, &releases, instant("2026-10-12T00:00:00Z"))
+        .unwrap();
+    assert!(
+        evaluation
+            .updates
+            .iter()
+            .any(|p| p.new_version.as_deref() == Some("1.0.2"))
+    );
+    assert!(evaluation.not_proposed.is_empty());
 }

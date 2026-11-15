@@ -503,7 +503,8 @@ impl Evaluator {
             let Ok(parsed) = scheme.parse(&value) else {
                 continue;
             };
-            if !parsed.0.pre.is_empty() || !permitted_matches(effective.permitted, scheme, &value)?
+            if prerelease(&parsed, version)
+                || !permitted_matches(effective.permitted, scheme, &value)?
             {
                 continue;
             }
@@ -713,6 +714,8 @@ impl Evaluator {
         let scheme = Ecosystem::of(dep.scheme, dep.source);
         let mut held_back = Vec::new();
         let mut not_proposed = Vec::new();
+        // Releases held because their source could not be asked for a date.
+        let mut unread: Vec<(String, Update)> = Vec::new();
         let mut eligible = |version: &Version,
                             selected: &str,
                             kind: Update,
@@ -740,6 +743,12 @@ impl Evaluator {
             } else {
                 effective.policy.wait_hours
             };
+            // An unchecked release's date is unknown, not absent: it waits
+            // until a lookup reads it, never skips the wait.
+            if version.unchecked && wait > 0 {
+                unread.push((selected.into(), kind));
+                return Ok(false);
+            }
             let Some(published_at) = version.published_at.as_deref().filter(|_| wait > 0) else {
                 return Ok(true);
             };
@@ -850,9 +859,9 @@ impl Evaluator {
                             scheme.parse(&normalize(&v.version)?).ok()?,
                         ))
                     })
-                    .filter(|(_, _, p)| {
+                    .filter(|(v, _, p)| {
                         scheme.order(p, &ceiling) != Ordering::Greater
-                            && (p.0.pre.is_empty() || !ceiling.0.pre.is_empty())
+                            && (!prerelease(p, v) || !ceiling.0.pre.is_empty())
                     })
                     .collect();
                 candidates.sort_by(|a, b| candidate_order(scheme, &b.2, b.0, &a.2, a.0));
@@ -915,6 +924,12 @@ impl Evaluator {
                     dep.name, dep.current
                 )
             })?;
+        // The current version is a prerelease by its syntax, or because its
+        // source marks it one.
+        let current_prerelease = !baseline.0.pre.is_empty()
+            || catalog.versions.iter().any(|v| {
+                v.prerelease && normalize(&v.version).as_deref() == Some(current.as_str())
+            });
         let policies = [Update::Major, Update::Minor, Update::Patch, Update::Pin]
             .into_iter()
             .map(|kind| self.effective(dep, kind).map(|effective| (kind, effective)))
@@ -1014,11 +1029,11 @@ impl Evaluator {
                 // pin. Widening its ceiling needs compatibility evidence.
                 continue;
             }
-            // Prereleases require a prerelease current or an explicit permitted
-            // filter. This permits deliberate nightly rules without a global flag.
-            if !parsed.0.pre.is_empty()
-                && baseline.0.pre.is_empty()
-                && effective.permitted.is_none()
+            // Prereleases require a prerelease current or a permitted filter
+            // that asks for them; one that only narrows or excludes does not.
+            if prerelease(&parsed, version)
+                && !current_prerelease
+                && !asks_for_prerelease(effective.permitted, scheme, &normalized, &parsed)?
             {
                 continue;
             }
@@ -1055,7 +1070,7 @@ impl Evaluator {
                     .expect("version classification")
                     .1;
                 if !effective.policy.active
-                    || (!parsed.0.pre.is_empty() && baseline.0.pre.is_empty())
+                    || (prerelease(&parsed, version) && !current_prerelease)
                     || (proposing.range == Range::Support
                         && effective.policy.versions == VersionPolicy::Preserve)
                 {
@@ -1286,6 +1301,27 @@ impl Evaluator {
         });
         held_back.sort();
         held_back.dedup();
+        // Likewise for releases held because their date could not be read.
+        not_proposed.extend(
+            unread
+                .into_iter()
+                .filter(|(version, kind)| {
+                    let unread = scheme.parse(version).ok();
+                    !result
+                        .iter()
+                        .filter(|u| u.update_type == *kind)
+                        .filter_map(|u| u.new_version.as_deref().and_then(|v| scheme.parse(v).ok()))
+                        .any(|v| {
+                            unread
+                                .as_ref()
+                                .is_some_and(|h| scheme.order(h, &v) != Ordering::Greater)
+                        })
+                })
+                .map(|(version, _)| NotProposed {
+                    version,
+                    reason: "the registry did not answer for its release date, so it waits until a later lookup reads one".into(),
+                }),
+        );
         not_proposed.sort();
         not_proposed.dedup();
         Ok(Evaluation {
@@ -1452,6 +1488,51 @@ fn any<T: PartialEq>(values: &[T], value: T) -> bool {
     values.is_empty() || values.contains(&value)
 }
 /// Whether `text` passes the `permitted` filter, when one is set.
+/// Whether a release is a prerelease: by its version syntax, or because its
+/// source marks it one (a GitHub release flagged as a prerelease).
+fn prerelease(parsed: &Parsed, version: &Version) -> bool {
+    !parsed.0.pre.is_empty() || version.prerelease
+}
+/// Whether `permitted` deliberately admits the prerelease `text` (see
+/// `Filter::asks_for_prerelease`). Without a filter, nothing asks.
+fn asks_for_prerelease(
+    permitted: Option<&Filter>,
+    scheme: Ecosystem,
+    text: &str,
+    parsed: &Parsed,
+) -> Result<bool> {
+    let Some(filter) = permitted else {
+        return Ok(false);
+    };
+    filter.asks_for_prerelease(scheme, text, &without_prerelease(scheme, text, parsed))
+}
+/// `text` without its prerelease part: the longest prefix, cut before a
+/// separator or where digits and letters meet, that parses as a release
+/// (`2.2.0` for `2.2.0-rc.1`, `3.0` for `3.0rc1`, `1.5` for `1.5-beta1`).
+/// A version that is a prerelease only by its source's flag, or one with
+/// no such prefix, is its own release.
+fn without_prerelease(scheme: Ecosystem, text: &str, parsed: &Parsed) -> String {
+    if parsed.0.pre.is_empty() {
+        return text.to_owned();
+    }
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    for i in (1..chars.len()).rev() {
+        let (at, c) = chars[i];
+        let previous = chars[i - 1].1;
+        let cut = matches!(c, '-' | '.' | '_' | '+')
+            || (c.is_ascii_digit() != previous.is_ascii_digit()
+                && c.is_ascii_alphanumeric()
+                && previous.is_ascii_alphanumeric());
+        if !cut {
+            continue;
+        }
+        let prefix = text[..at].trim_end_matches(['-', '.', '_', '+']);
+        if !prefix.is_empty() && scheme.parse(prefix).is_ok_and(|p| p.0.pre.is_empty()) {
+            return prefix.to_owned();
+        }
+    }
+    text.to_owned()
+}
 fn permitted_matches(permitted: Option<&Filter>, scheme: Ecosystem, text: &str) -> Result<bool> {
     match permitted {
         Some(filter) => filter.matches(scheme, text),

@@ -331,6 +331,8 @@ fn a_fix_skips_the_release_age_wait_and_group_but_other_releases_still_wait() {
                 digest: None,
                 deprecated: false,
                 yanked: false,
+                prerelease: false,
+                unchecked: false,
             })
             .collect(),
         dist_tags: Default::default(),
@@ -390,6 +392,8 @@ fn the_lowest_release_fixing_the_most_is_proposed_past_permitted_filters() {
                 digest: None,
                 deprecated: false,
                 yanked: false,
+                prerelease: false,
+                unchecked: false,
             })
             .collect(),
         dist_tags: Default::default(),
@@ -549,6 +553,8 @@ fn a_fix_bypasses_a_committed_cargo_cooldown_and_the_proposal_says_so() {
         digest: None,
         deprecated: false,
         yanked: false,
+        prerelease: false,
+        unchecked: false,
     };
     let catalog = patchula_datasource::Catalog {
         versions: vec![
@@ -671,6 +677,8 @@ fn a_transitive_fix_inside_the_cooldown_is_marked_the_same_way() {
                 digest: None,
                 deprecated: false,
                 yanked: false,
+                prerelease: false,
+                unchecked: false,
             },
             patchula_datasource::Version {
                 version: "0.3.23".into(),
@@ -678,6 +686,8 @@ fn a_transitive_fix_inside_the_cooldown_is_marked_the_same_way() {
                 digest: None,
                 deprecated: false,
                 yanked: false,
+                prerelease: false,
+                unchecked: false,
             },
         ],
         dist_tags: Default::default(),
@@ -744,6 +754,8 @@ fn a_transitive_crates_catalog_only_dates_its_fix() {
         digest: None,
         deprecated: false,
         yanked: false,
+        prerelease: false,
+        unchecked: false,
     };
     let catalog = patchula_datasource::Catalog {
         versions: vec![
@@ -794,6 +806,8 @@ fn a_transitive_fix_waits_out_security_applys_wait() {
         digest: None,
         deprecated: false,
         yanked: false,
+        prerelease: false,
+        unchecked: false,
     };
     let catalog = |ago: i64| patchula_datasource::Catalog {
         versions: vec![version("0.3.20", 4000), version("0.3.23", ago)],
@@ -846,6 +860,8 @@ fn a_transitive_fix_inside_a_committed_cooldown_still_waits_for_security_apply()
         digest: None,
         deprecated: false,
         yanked: false,
+        prerelease: false,
+        unchecked: false,
     };
     let catalog = |ago: i64| patchula_datasource::Catalog {
         versions: vec![version("0.3.20", 4000), version("0.3.23", ago)],

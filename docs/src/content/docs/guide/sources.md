@@ -9,7 +9,7 @@ manager, and rules can select by it.
 |---|---|---|
 | `npm` | package name | the npm registry, full metadata for publication times, dist-tags and deprecations |
 | `crates` | crate name | the crates.io sparse index, with publication times; yanked releases are skipped |
-| `go` | module path | the Go module proxy (`@v/list`, `.info` for new versions only) |
+| `go` | module path | the Go module proxy (`@v/list`, and `.info` once for each version it has not dated yet) |
 | `pypi` | normalised name | the PyPI JSON API, falling back to the PEP 691 simple API |
 | `docker` | image | registry v2 tags and manifests on Docker Hub, GHCR and other registries |
 | `oci` | `registry/chart` | OCI registry tags for Helm charts |
@@ -19,8 +19,8 @@ manager, and rules can select by it.
 | `github-runners` | runner family | a catalog of GitHub-hosted runner labels |
 | `forge-tags` | `host/path` | GitLab and Gitea/Forgejo tags, for pre-commit hooks and GitLab CI includes and components |
 | `mise` | tool name, as written in `mise.toml` | `mise ls-remote --json`, run by the Count's pinned mise ([mise lookups](#mise-lookups)) |
-| `maven` | `group:artifact` | `maven-metadata.xml` on Maven Central, Google Maven or the Gradle plugin portal |
-| `nuget` | package ID | the nuget.org flat container and registration pages |
+| `maven` | `group:artifact` | `maven-metadata.xml` on Maven Central, Google Maven or the Gradle plugin portal; each POM's `Last-Modified`, read once per version, dates it |
+| `nuget` | package ID | the nuget.org flat container and every registration page, for dates and unlisted and deprecated flags |
 | `rubygems` | gem name | the RubyGems versions API |
 | `packagist` | `vendor/name` | Packagist's p2 metadata |
 
@@ -60,7 +60,9 @@ version, its date, whether it is a prerelease and, for GitHub-hosted tools, a
 release URL. Backends leave out what they do not know: Node lists a date only,
 and some `go:` versions have no date and so no release-age wait. Prereleases
 are listed, and the Count's [prerelease rules](/guide/lookup-policy/) decide
-whether to offer them; mise's `prerelease` flag does not filter.
+whether to offer them. A version mise marks `prerelease`, such as a GitHub
+release flagged as one, counts as a prerelease even when it looks stable, just
+as it does for `github-releases`.
 
 The Count runs mise the way he runs the lockfile tools, and more strictly:
 
@@ -176,7 +178,10 @@ configuration.
 By default (`useVersionsHost = true`), public GitHub repositories that appear in
 mise's registry are read from the public
 [mise-versions](https://mise-versions.jdx.dev) mirror instead of the GitHub API:
-`releases.json` and `tags.json`, validated by ETag. Repositories outside the
+`releases.json` and `tags.json`, validated by ETag. The mirror dates a tag only
+by its release, so when a `github-tags` lookup finds a tag without one, which
+may be an annotated tag with a tagger date, that repository's tags are read
+from GitHub instead. Repositories outside the
 registry, including private ones, go straight to GitHub. If the mirror fails
 with a transport error, 429 or 5xx, the Count falls back to GitHub; a 403, 404 or
 empty list does not, and a truncated list is reported as an incomplete lookup.

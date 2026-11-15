@@ -49,6 +49,8 @@ fn every_example_has_implemented_dispatch_for_the_twelve_repo_matrix() {
                     published_at: None,
                     digest: None,
                     yanked: false,
+                    prerelease: false,
+                    unchecked: false,
                     deprecated: false,
                 });
                 evaluator

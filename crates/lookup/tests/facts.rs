@@ -34,6 +34,8 @@ fn catalog(values: &[&str]) -> Catalog {
                 digest: None,
                 deprecated: false,
                 yanked: false,
+                prerelease: false,
+                unchecked: false,
             })
             .collect(),
         dist_tags: Default::default(),

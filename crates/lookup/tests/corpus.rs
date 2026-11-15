@@ -110,6 +110,8 @@ fn ladder(dep: &Dependency) -> Catalog {
                 digest: Some(hash(format!("{}:next-revision", dep.package).as_bytes())),
                 deprecated: false,
                 yanked: false,
+                prerelease: false,
+                unchecked: false,
             }],
             dist_tags: Default::default(),
         };
@@ -227,6 +229,8 @@ fn ladder(dep: &Dependency) -> Catalog {
                 digest: Some(digest),
                 deprecated: false,
                 yanked: rung.yanked,
+                prerelease: false,
+                unchecked: false,
             });
         }
     }
@@ -257,6 +261,8 @@ fn ladder(dep: &Dependency) -> Catalog {
             digest: Some(hash(version.as_bytes())),
             deprecated: false,
             yanked: false,
+            prerelease: false,
+            unchecked: false,
         }));
     catalog
 }

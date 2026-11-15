@@ -265,6 +265,9 @@ impl Client {
             .into_iter()
             .map(|release| Version {
                 published_at: release.created_at.as_deref().map(date),
+                // A GitHub-backed tool's release flagged as a prerelease is
+                // one, even when its version looks stable.
+                prerelease: release.prerelease == Some(true),
                 ..Version::new(release.version)
             })
             .collect();

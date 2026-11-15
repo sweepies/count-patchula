@@ -7,6 +7,22 @@ proposes the newest version that is permitted, not deprecated, not yanked and
 old enough. Prereleases are only considered when the current version is
 already a prerelease, or when a rule's `permitted` filter asks for them.
 
+A release is a prerelease when its version says so (`2.0.0-rc.1`, `3.0rc1`,
+`1.5-beta1`), or when its source marks it one: a GitHub release flagged as a
+prerelease, listed through mise. A `permitted` filter asks for a prerelease
+only on purpose; one that just narrows or excludes versions does not:
+
+- A `regex:` filter asks when it matches the prerelease but not the same
+  version without its prerelease part, so the prerelease part is what
+  matched: `regex:-rc\.` and `regex:nightly` ask, `regex:^2\.` does not.
+  A version that is a prerelease only by its source's flag has no
+  prerelease part, so no `regex:` filter asks for it.
+- A `semver:` range asks when it names a prerelease version itself and
+  the prerelease is inside it: `semver:>=3.0.0-rc.1` or `semver:[1.0-beta1,2)` ask,
+  `semver:^2` and `semver:[1,2)` do not.
+- A negated filter (`!regex:...`, `!semver:...`) only excludes and never
+  asks.
+
 The current version comes from the lockfile when there is one. An npm range on
 its own only tells the Count which class an update belongs to; he never
 pretends the range's floor is what you have installed.
@@ -18,7 +34,13 @@ with a publication date becomes eligible that many hours after it was
 published. Brand-new releases are where broken and malicious versions tend to
 show up, and a day is usually enough for someone else to notice.
 
-- Undated releases have no wait. `waitHours = 0` turns the wait off.
+- Releases the registry gives no date have no wait. `waitHours = 0` turns
+  the wait off.
+- A release whose date the Count could not read, because the request for it
+  failed or the registry has not described it yet, waits until a later
+  lookup reads one; the report lists it as a notice. Go, Maven and NuGet
+  date every version, not just the newest, so a new patch release on an
+  older line waits like any other.
 - [Reference data](/guide/configuration/#reference-data), such as CA root
   bundles, has no wait by default.
 - Versions you already use, and versions pinned in lockfiles, are never held

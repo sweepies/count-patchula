@@ -1,12 +1,10 @@
 //! Maven repositories: `maven-metadata.xml` lists versions, and each POM's
-//! `Last-Modified` dates the newest releases for the release-age wait.
+//! `Last-Modified` dates every one of them for the release-age wait.
 use super::*;
 use patchula_config::split_package;
 
 const CENTRAL: &str = "https://repo.maven.apache.org/maven2";
 const GOOGLE: &str = "https://dl.google.com/dl/android/maven2";
-/// Only recent releases can still be inside a release-age wait.
-const DATED: usize = 10;
 
 /// `group:artifact`, optionally prefixed by `repository-url|`. Android groups
 /// default to Google's Maven repository, everything else to Maven Central.
@@ -61,7 +59,7 @@ fn versions(
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const MAVEN_METADATA: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("maven-metadata", 1, versions);
+    patchula_http::Derived::new("maven-metadata", 2, versions);
 
 /// The directory holding an artifact's `maven-metadata.xml`.
 fn base(package: &str) -> Result<String> {
@@ -87,27 +85,43 @@ impl Client {
         let listed: Vec<String> = serde_json::from_slice(&response.body)?;
         let mut versions: Vec<Version> = listed.into_iter().map(Version::new).collect();
         sort(&mut versions, Ecosystem::Maven);
-        let dates = futures_util::future::join_all(versions.iter().take(DATED).map(|v| {
-            let url = format!("{base}/{0}/{artifact}-{0}.pom", v.version);
+        // Every version is dated once, by its POM, and the answer kept: a
+        // new release on an older line is dated like a new major. A version
+        // without a POM is not resolvable and is dropped; a failed request
+        // leaves the version unchecked, which policy holds.
+        let scope = dates::DatesScope {
+            source: Source::Maven,
+            package: base.clone(),
+            credential: self
+                .http
+                .credential(&format!("{base}/"))
+                .map(|entry| entry.scope().to_owned()),
+        };
+        self.date_versions(&scope, &mut versions, |version| {
+            let url = format!("{base}/{version}/{artifact}-{version}.pom");
             async move {
-                let response = self
-                    .http
-                    .registry_head(&url, "application/xml", None)
-                    .await
-                    .ok()?;
-                let modified = response.headers.get("last-modified")?.to_str().ok()?;
-                chrono::DateTime::parse_from_rfc2822(modified)
-                    .ok()
-                    .map(|t| {
-                        t.to_utc()
-                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-                    })
+                match self.http.registry_head(&url, "application/xml", None).await {
+                    Ok(response) => Some(dates::Dated::At(
+                        response
+                            .headers
+                            .get("last-modified")
+                            .and_then(|modified| modified.to_str().ok())
+                            .and_then(|modified| {
+                                chrono::DateTime::parse_from_rfc2822(modified).ok()
+                            })
+                            .map(|t| {
+                                t.to_utc()
+                                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                            }),
+                    )),
+                    Err(patchula_http::CacheError::Status(404 | 410)) => {
+                        Some(dates::Dated::Missing)
+                    }
+                    Err(_) => None,
+                }
             }
-        }))
-        .await;
-        for (version, date) in versions.iter_mut().zip(dates) {
-            version.published_at = date;
-        }
+        })
+        .await?;
         Ok(Catalog {
             versions,
             dist_tags: BTreeMap::new(),

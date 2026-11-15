@@ -331,3 +331,97 @@ async fn releases_github_marks_as_prereleases_stay_out_whichever_source_answers(
         assert!(catalog.versions.iter().all(|v| v.digest.is_none()));
     }
 }
+
+/// The mirror dates tags only by their releases. A tag it leaves undated may
+/// be annotated, so GitHub's own tag catalog answers instead, and dates it
+/// by its tagger.
+#[tokio::test]
+async fn a_tag_the_mirror_leaves_undated_is_dated_through_github() {
+    struct Annotated(Mutex<Vec<String>>);
+    impl Transport for Annotated {
+        fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+            Box::pin(async move {
+                let path = request.url().path().to_owned();
+                self.0.lock().unwrap().push(path.clone());
+                let commit = "a".repeat(40);
+                let annotated = "f".repeat(40);
+                let body = if request.url().host_str() != Some("api.github.com") {
+                    if path.ends_with("tags.json") {
+                        json!({"tags":[{"tag":"v2.0.0","sha":commit},{"tag":"v2.1.0","sha":"b".repeat(40)}],"truncated":false})
+                    } else {
+                        json!({"releases":[{"tag":"v2.0.0","date":"2026-01-01T00:00:00Z","prerelease":false}],"truncated":false})
+                    }
+                } else if path == "/graphql" {
+                    let body: serde_json::Value =
+                        serde_json::from_slice(request.body().unwrap().as_bytes().unwrap())
+                            .unwrap();
+                    if body["query"].as_str().unwrap().contains("releases(") {
+                        json!({"data":{"r0":{"releases":{"nodes":[
+                            {"tagName":"v2.0.0","publishedAt":"2026-01-01T00:00:00Z","isDraft":false,"isPrerelease":false}
+                        ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}})
+                    } else {
+                        let mut objects = serde_json::Map::new();
+                        for i in 0..2 {
+                            let sha = body["variables"][format!("s{i}")].as_str().unwrap();
+                            let node = if sha == commit {
+                                json!({"oid":sha,"__typename":"Commit"})
+                            } else {
+                                json!({"oid":sha,"__typename":"Tag","tagger":{"date":"2026-03-01T00:00:00Z"},"target":{"__typename":"Commit","oid":"b".repeat(40)}})
+                            };
+                            objects.insert(format!("t{i}"), node);
+                        }
+                        json!({"data":{"repository":objects}})
+                    }
+                } else {
+                    assert_eq!(path, "/repos/FiloSottile/age/git/matching-refs/tags/");
+                    json!([
+                        {"ref":"refs/tags/v2.0.0","object":{"sha":commit}},
+                        {"ref":"refs/tags/v2.1.0","object":{"sha":annotated}}
+                    ])
+                };
+                Ok(Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: Default::default(),
+                    body: body.to_string().into_bytes(),
+                    stale: None,
+                })
+            })
+        }
+    }
+    let cache = memory().await;
+    let transport = Arc::new(Annotated(Mutex::new(Vec::new())));
+    let github = patchula_github::Client::with_transport(
+        "offline",
+        cache.clone(),
+        Default::default(),
+        transport.clone(),
+    )
+    .unwrap();
+    let catalog = Client::new(
+        github,
+        patchula_datasource::cached(cache.clone(), transport.clone(), 4).unwrap(),
+        cache,
+    )
+    .lookup(&patchula_config::PackageId::public(
+        Source::GithubTags,
+        "FiloSottile/age",
+    ))
+    .await
+    .unwrap();
+    let date = |tag: &str| {
+        catalog
+            .versions
+            .iter()
+            .find(|v| v.version == tag)
+            .and_then(|v| v.published_at.clone())
+    };
+    assert_eq!(date("v2.1.0").as_deref(), Some("2026-03-01T00:00:00Z"));
+    assert_eq!(date("v2.0.0").as_deref(), Some("2026-01-01T00:00:00Z"));
+    let requests = transport.0.lock().unwrap();
+    assert!(requests.iter().any(|path| path.ends_with("tags.json")));
+    assert!(
+        requests
+            .iter()
+            .any(|path| path.ends_with("/matching-refs/tags/"))
+    );
+}
