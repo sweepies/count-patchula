@@ -17,11 +17,20 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
     let bare = path.starts_with(".forgejo/").then_some(FORGEJO_ACTIONS);
     let forge = path.starts_with(".forgejo/") || path.starts_with(".gitea/");
     let root: Value = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
+    // Every scalar is located through the file's YAML structure, parsed
+    // once: a matching line inside a `run: |` script is text, never a step.
+    let mut file = Workflow {
+        path,
+        text,
+        bare,
+        locations: crate::yaml_locations::parse(text)?,
+        out: Vec::new(),
+    };
     let mut used = std::collections::BTreeSet::new();
     if let Some(jobs) = root.get("jobs").and_then(Value::as_mapping) {
         for (job, value) in jobs {
             let job = job.as_str().unwrap_or("?");
+            let at = format!("/jobs/{}", pointer_token(job));
             // Forgejo and Gitea runner labels name the instance's own runners.
             if let Some(runs_on) = value.get("runs-on").filter(|_| !forge) {
                 let scope = runner_scope(text, job)?;
@@ -32,71 +41,44 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
                     &format!("/jobs/{job}/runs-on"),
                     &scope,
                     &mut used,
-                    &mut out,
+                    &mut file.out,
                 )?;
             }
             if let Some(reference) = value.get("uses").and_then(Value::as_str) {
-                add(
-                    path,
-                    text,
+                file.add(
                     reference,
-                    Locator::Uses,
-                    &format!("/jobs/{job}/uses"),
+                    &format!("{at}/uses"),
+                    &format!("{at}/uses"),
                     DependencyKind::ReusableWorkflow,
-                    bare,
-                    &mut used,
-                    &mut out,
                 )?;
             }
             if let Some(steps) = value.get("steps").and_then(Value::as_sequence) {
-                steps_extract(
-                    path,
-                    text,
-                    steps,
-                    &format!("/jobs/{job}/steps"),
-                    bare,
-                    &mut used,
-                    &mut out,
-                )?;
+                file.steps(steps, &format!("{at}/steps"))?;
             }
             if let Some(container) = value.get("container")
                 && let Some(image) = container
                     .as_str()
                     .or_else(|| container.get("image").and_then(Value::as_str))
             {
-                add(
-                    path,
-                    text,
+                file.add(
                     image,
-                    if container.is_string() {
-                        Locator::Container
+                    &format!("{at}/container"),
+                    &if container.is_string() {
+                        format!("{at}/container")
                     } else {
-                        Locator::Image
+                        format!("{at}/container/image")
                     },
-                    &format!("/jobs/{job}/container"),
                     DependencyKind::ContainerImage,
-                    bare,
-                    &mut used,
-                    &mut out,
                 )?;
             }
             if let Some(services) = value.get("services").and_then(Value::as_mapping) {
                 for (name, service) in services {
                     if let Some(image) = service.get("image").and_then(Value::as_str) {
-                        add(
-                            path,
-                            text,
-                            image,
-                            Locator::Image,
-                            &format!(
-                                "/jobs/{job}/services/{}/image",
-                                name.as_str().unwrap_or("?")
-                            ),
-                            DependencyKind::ContainerImage,
-                            bare,
-                            &mut used,
-                            &mut out,
-                        )?;
+                        let pointer = format!(
+                            "{at}/services/{}/image",
+                            pointer_token(name.as_str().unwrap_or("?"))
+                        );
+                        file.add(image, &pointer, &pointer, DependencyKind::ContainerImage)?;
                     }
                 }
             }
@@ -108,268 +90,237 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
         .and_then(|runs| runs.get("steps"))
         .and_then(Value::as_sequence)
     {
-        steps_extract(path, text, steps, "/runs/steps", bare, &mut used, &mut out)?;
+        file.steps(steps, "/runs/steps")?;
     }
-    Ok(out)
+    Ok(file.out)
 }
-fn steps_extract(
-    path: &str,
-    text: &Lines<'_>,
-    steps: &[Value],
-    pointer: &str,
-    bare: Option<&str>,
-    used: &mut std::collections::BTreeSet<usize>,
-    out: &mut Vec<Dependency>,
-) -> Result<(), String> {
-    for (i, step) in steps.iter().enumerate() {
-        if let Some(reference) = step.get("uses").and_then(Value::as_str) {
-            add(
-                path,
-                text,
-                reference,
-                Locator::Uses,
-                &format!("{pointer}/{i}/uses"),
-                DependencyKind::Action,
-                bare,
-                used,
-                out,
-            )?;
-            setup_input(path, text, reference, step, &format!("{pointer}/{i}"), out)?;
+
+/// One workflow or action file being extracted.
+struct Workflow<'a, 'b> {
+    path: &'a str,
+    text: &'a Lines<'b>,
+    bare: Option<&'a str>,
+    /// Every scalar's span, by its pointer under the document (`/0`).
+    locations: BTreeMap<String, Location>,
+    out: Vec<Dependency>,
+}
+
+impl Workflow<'_, '_> {
+    fn steps(&mut self, steps: &[Value], pointer: &str) -> Result<(), String> {
+        for (i, step) in steps.iter().enumerate() {
+            if let Some(reference) = step.get("uses").and_then(Value::as_str) {
+                let uses = format!("{pointer}/{i}/uses");
+                self.add(reference, &uses, &uses, DependencyKind::Action)?;
+                self.setup_input(reference, step, &format!("{pointer}/{i}"))?;
+            }
         }
+        Ok(())
     }
-    Ok(())
-}
 
-fn setup_input(
-    path: &str,
-    text: &Lines<'_>,
-    reference: &str,
-    step: &Value,
-    pointer: &str,
-    out: &mut Vec<Dependency>,
-) -> Result<(), String> {
-    let action = reference.split('@').next().unwrap_or(reference);
-    let action = action
-        .strip_prefix("https://")
-        .or_else(|| action.strip_prefix("http://"))
-        .and_then(|rest| rest.split_once('/'))
-        .map_or(action, |(_, path)| path);
-    let (key, name, package, extract) = match action {
-        "oven-sh/setup-bun" => ("bun-version", "bun", "bun", None),
-        "actions/setup-node" => (
-            "node-version",
-            "node",
-            "actions/node-versions",
-            Some(r"^v?(?<version>\d+\.\d+\.\d+)(?:-|$)"),
-        ),
-        "actions/setup-go" => (
-            "go-version",
-            "go",
-            "actions/go-versions",
-            Some(r"^v?(?<version>\d+\.\d+\.\d+)(?:-|$)"),
-        ),
-        "golangci/golangci-lint-action" => (
-            "version",
-            "golangci/golangci-lint",
-            "golangci/golangci-lint",
-            None,
-        ),
-        "goreleaser/goreleaser-action" => (
-            "version",
-            "goreleaser/goreleaser",
-            "goreleaser/goreleaser",
-            None,
-        ),
-        _ => return Ok(()),
-    };
-    let Some(value) = step.get("with").and_then(|v| v.get(key)).and_then(|v| {
-        v.as_str()
-            .map(str::to_owned)
-            .or_else(|| v.as_u64().map(|n| n.to_string()))
-    }) else {
-        return Ok(());
-    };
-    if value.contains("${{") {
-        return Ok(());
-    }
-    let pointer = format!("/0{pointer}/with/{key}");
-    let locations = crate::yaml_locations::parse(text)?;
-    let location = locations
-        .get(&pointer)
-        .cloned()
-        .ok_or_else(|| format!("cannot locate setup input {pointer}"))?;
-    out.push(Dependency {
-        cooldown: None,
-        manager: Manager::GithubActions,
-        file: path.into(),
-        location,
-        form: EditForm::Scalar(Syntax::Yaml),
-        name: name.into(),
-        package: package.into(),
-        kind: DependencyKind::Tool,
-        current: value.clone(),
-        resolved: (value != "latest").then_some(value),
-        digest: None,
-        source: if action == "oven-sh/setup-bun" {
-            Source::Npm
-        } else {
-            Source::GithubReleases
-        },
-        scheme: if action == "oven-sh/setup-bun" {
-            Scheme::Semver
-        } else {
-            Scheme::Loose
-        },
-        extract: extract.map(str::to_owned),
-        included_by: None,
-        registry: None,
-    });
-    Ok(())
-}
-/// The YAML keys `add` finds a scalar under.
-#[derive(Clone, Copy)]
-enum Locator {
-    Uses,
-    Container,
-    Image,
-}
-
-impl Locator {
-    /// The pattern locating this key's scalar in the file's text.
-    fn pattern(self) -> &'static Regex {
-        static USES: std::sync::LazyLock<Regex> =
-            std::sync::LazyLock::new(|| locator_pattern("uses"));
-        static CONTAINER: std::sync::LazyLock<Regex> =
-            std::sync::LazyLock::new(|| locator_pattern("container"));
-        static IMAGE: std::sync::LazyLock<Regex> =
-            std::sync::LazyLock::new(|| locator_pattern("image"));
-        match self {
-            Self::Uses => &USES,
-            Self::Container => &CONTAINER,
-            Self::Image => &IMAGE,
+    fn setup_input(&mut self, reference: &str, step: &Value, pointer: &str) -> Result<(), String> {
+        let path = self.path;
+        let action = reference.split('@').next().unwrap_or(reference);
+        let action = action
+            .strip_prefix("https://")
+            .or_else(|| action.strip_prefix("http://"))
+            .and_then(|rest| rest.split_once('/'))
+            .map_or(action, |(_, path)| path);
+        let (key, name, package, extract) = match action {
+            "oven-sh/setup-bun" => ("bun-version", "bun", "bun", None),
+            "actions/setup-node" => (
+                "node-version",
+                "node",
+                "actions/node-versions",
+                Some(r"^v?(?<version>\d+\.\d+\.\d+)(?:-|$)"),
+            ),
+            "actions/setup-go" => (
+                "go-version",
+                "go",
+                "actions/go-versions",
+                Some(r"^v?(?<version>\d+\.\d+\.\d+)(?:-|$)"),
+            ),
+            "golangci/golangci-lint-action" => (
+                "version",
+                "golangci/golangci-lint",
+                "golangci/golangci-lint",
+                None,
+            ),
+            "goreleaser/goreleaser-action" => (
+                "version",
+                "goreleaser/goreleaser",
+                "goreleaser/goreleaser",
+                None,
+            ),
+            _ => return Ok(()),
+        };
+        let Some(value) = step.get("with").and_then(|v| v.get(key)).and_then(|v| {
+            v.as_str()
+                .map(str::to_owned)
+                .or_else(|| v.as_u64().map(|n| n.to_string()))
+        }) else {
+            return Ok(());
+        };
+        if value.contains("${{") {
+            return Ok(());
         }
+        let pointer = format!("/0{pointer}/with/{}", pointer_token(key));
+        let location = self
+            .locations
+            .get(&pointer)
+            .cloned()
+            .ok_or_else(|| format!("cannot locate setup input {pointer}"))?;
+        self.out.push(Dependency {
+            cooldown: None,
+            manager: Manager::GithubActions,
+            file: path.into(),
+            location,
+            form: EditForm::Scalar(Syntax::Yaml),
+            name: name.into(),
+            package: package.into(),
+            kind: DependencyKind::Tool,
+            current: value.clone(),
+            resolved: (value != "latest").then_some(value),
+            digest: None,
+            source: if action == "oven-sh/setup-bun" {
+                Source::Npm
+            } else {
+                Source::GithubReleases
+            },
+            scheme: if action == "oven-sh/setup-bun" {
+                Scheme::Semver
+            } else {
+                Scheme::Loose
+            },
+            extract: extract.map(str::to_owned),
+            included_by: None,
+            registry: None,
+        });
+        Ok(())
     }
-}
 
-/// The locator pattern for YAML key `key`.
-fn locator_pattern(key: &str) -> Regex {
-    Regex::new(&format!(
-        r#"(?m)^\s*(?:-\s*)?{}:\s*(?<value>[^\n]+)"#,
-        regex::escape(key)
-    ))
-    .expect("action locator pattern")
-}
-
-#[allow(clippy::too_many_arguments)]
-fn add(
-    path: &str,
-    text: &Lines<'_>,
-    reference: &str,
-    key: Locator,
-    pointer: &str,
-    kind: DependencyKind,
-    bare: Option<&str>,
-    used: &mut std::collections::BTreeSet<usize>,
-    out: &mut Vec<Dependency>,
-) -> Result<(), String> {
-    if reference.starts_with("./") || reference.contains("${{") {
-        return Ok(());
+    /// The span of the scalar at `at` (a pointer without the document's
+    /// `/0`), run on to the end of its line so the version comment is
+    /// edited with it. Only a block-style scalar qualifies: nothing but
+    /// whitespace and a comment may follow it, and no flow collection may
+    /// open before it, where a comment added on pinning would swallow the
+    /// collection's closing bracket.
+    fn located(&self, at: &str) -> Result<(usize, usize), String> {
+        let unsupported = || {
+            format!("cannot locate {at}; flow-style or aliased YAML scalars are not supported yet")
+        };
+        let location = self
+            .locations
+            .get(&format!("/0{at}"))
+            .ok_or_else(unsupported)?;
+        let text: &str = self.text;
+        let line_start = text[..location.start].rfind('\n').map_or(0, |n| n + 1);
+        let line_end = text[location.end..]
+            .find('\n')
+            .map_or(text.len(), |n| location.end + n);
+        let rest = &text[location.end..line_end];
+        let tail = rest.trim_start_matches([' ', '\t']);
+        let block = !text[line_start..location.start].contains(['{', '['])
+            && (tail.trim_end_matches('\r').is_empty()
+                || (tail.starts_with('#') && tail.len() < rest.len()));
+        if !block {
+            return Err(unsupported());
+        }
+        Ok((location.start, line_end))
     }
-    // YAML parsing selects only semantic uses/container nodes. The line locator
-    // retains the original scalar (and its pin comment) for later editing.
-    let pattern = key.pattern();
-    let located = pattern
-        .captures_iter(text)
-        .find_map(|c| {
-            let m = c.name("value")?;
-            let raw = m.as_str();
-            let scalar = raw.split(" #").next()?.trim().trim_matches(['\'', '"']);
-            (scalar == reference && !used.contains(&m.start())).then_some((m.start(), m.end(), raw))
-        })
-        .ok_or_else(|| {
-            format!(
-                "cannot locate {pointer}; flow-style or aliased YAML scalars are not supported yet"
+
+    /// `pointer` is the one the dependency records; `at` the one its
+    /// scalar sits at.
+    fn add(
+        &mut self,
+        reference: &str,
+        pointer: &str,
+        at: &str,
+        kind: DependencyKind,
+    ) -> Result<(), String> {
+        let (path, text, bare) = (self.path, self.text, self.bare);
+        if reference.starts_with("./") || reference.contains("${{") {
+            return Ok(());
+        }
+        let (start, end) = self.located(at)?;
+        let raw = &text[start..end];
+        let image = kind == DependencyKind::ContainerImage || reference.starts_with("docker://");
+        let (name, package, source, current, digest, resolved) = if image {
+            let value = reference.strip_prefix("docker://").unwrap_or(reference);
+            let (value, digest) = value
+                .split_once('@')
+                .map_or((value, None), |(v, d)| (v, Some(d.to_owned())));
+            let (package, current) = value
+                .rsplit_once(':')
+                .filter(|(_, tag)| !tag.contains('/'))
+                .unwrap_or((value, "latest"));
+            (
+                package.into(),
+                package.into(),
+                Source::Docker,
+                current.into(),
+                digest,
+                None,
             )
-        })?;
-    used.insert(located.0);
-    let image = kind == DependencyKind::ContainerImage || reference.starts_with("docker://");
-    let (name, package, source, current, digest, resolved) = if image {
-        let value = reference.strip_prefix("docker://").unwrap_or(reference);
-        let (value, digest) = value
-            .split_once('@')
-            .map_or((value, None), |(v, d)| (v, Some(d.to_owned())));
-        let (package, current) = value
-            .rsplit_once(':')
-            .filter(|(_, tag)| !tag.contains('/'))
-            .unwrap_or((value, "latest"));
-        (
-            package.into(),
-            package.into(),
-            Source::Docker,
-            current.into(),
-            digest,
-            None,
-        )
-    } else {
-        // The first `@` ends the name, as the runner and gh-actions-lock
-        // read it: a ref such as `release@2024` keeps its own `@`.
-        let Some((name, reference)) = reference.split_once('@') else {
-            return Ok(());
-        };
-        let Some((name, package, source)) = repository(name, bare) else {
-            return Ok(());
-        };
-        let digest = commit_hash(reference).then(|| reference.to_owned());
-        let comment = located
-            .2
-            .split_once(" #")
-            .map(|(_, c)| c.trim())
-            .and_then(|c| c.split_whitespace().next());
-        let version = if digest.is_some() {
-            comment.filter(|v| version_comment(v))
         } else {
-            Some(reference)
+            // The first `@` ends the name, as the runner and gh-actions-lock
+            // read it: a ref such as `release@2024` keeps its own `@`.
+            let Some((name, reference)) = reference.split_once('@') else {
+                return Ok(());
+            };
+            let Some((name, package, source)) = repository(name, bare) else {
+                return Ok(());
+            };
+            let digest = commit_hash(reference).then(|| reference.to_owned());
+            let comment = raw
+                .split_once(" #")
+                .map(|(_, c)| c.trim())
+                .and_then(|c| c.split_whitespace().next());
+            let version = if digest.is_some() {
+                comment.filter(|v| version_comment(v))
+            } else {
+                Some(reference)
+            };
+            (
+                name,
+                package,
+                source,
+                version.unwrap_or(reference).into(),
+                digest,
+                version.map(str::to_owned),
+            )
         };
-        (
+        self.out.push(Dependency {
+            cooldown: None,
+            manager: Manager::GithubActions,
+            file: path.into(),
+            location: Location::new(text, start, end, pointer.into()),
+            form: if image {
+                EditForm::Image {
+                    syntax: Syntax::Yaml,
+                    digest_pointer: None,
+                    comment: true,
+                }
+            } else {
+                EditForm::Scalar(Syntax::Yaml)
+            },
             name,
             package,
-            source,
-            version.unwrap_or(reference).into(),
+            kind: if image {
+                DependencyKind::ContainerImage
+            } else {
+                kind
+            },
+            current,
+            resolved,
             digest,
-            version.map(str::to_owned),
-        )
-    };
-    out.push(Dependency {
-        cooldown: None,
-        manager: Manager::GithubActions,
-        file: path.into(),
-        location: Location::new(text, located.0, located.1, pointer.into()),
-        form: if image {
-            EditForm::Image {
-                syntax: Syntax::Yaml,
-                digest_pointer: None,
-                comment: true,
-            }
-        } else {
-            EditForm::Scalar(Syntax::Yaml)
-        },
-        name,
-        package,
-        kind: if image {
-            DependencyKind::ContainerImage
-        } else {
-            kind
-        },
-        current,
-        resolved,
-        digest,
-        source,
-        scheme: if image { Scheme::Docker } else { Scheme::Loose },
-        extract: None,
-        included_by: None,
-        registry: None,
-    });
-    Ok(())
+            source,
+            scheme: if image { Scheme::Docker } else { Scheme::Loose },
+            extract: None,
+            included_by: None,
+            registry: None,
+        });
+        Ok(())
+    }
 }
 
 /// The name, lookup package and source of an action repository. A URL names

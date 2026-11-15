@@ -80,18 +80,17 @@ fn scalar(dep: &Dependency, raw: &str) -> Result<String, String> {
     let syntax = dep.form.syntax();
     if syntax == Syntax::Json {
         serde_json::from_str(raw).map_err(|e| e.to_string())
-    } else if matches!(syntax, Syntax::Yaml | Syntax::YamlName) {
+    } else if syntax == Syntax::Yaml {
         let value: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(raw).map_err(|e| e.to_string())?;
-        // GitLab refs are tag names: a plain `1.0` is the text, not a float.
-        if value.is_number() && syntax == Syntax::YamlName {
+        // A plain number is read as written, as extraction reads it: a tag
+        // `1.10` is not the float 1.1.
+        if value.is_number() {
             return Ok(raw.trim().into());
         }
         value
             .as_str()
             .map(str::to_owned)
-            .or_else(|| value.as_u64().map(|v| v.to_string()))
-            .or_else(|| value.as_f64().map(|v| v.to_string()))
             .ok_or_else(|| "unsupported YAML scalar".into())
     } else if syntax == Syntax::Toml {
         let doc = toml_edit::Document::parse(format!("v = {raw}")).map_err(|e| e.to_string())?;
@@ -122,7 +121,7 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
     }
     if raw.starts_with('\'') {
         let delimiter = if raw.starts_with("'''") { "'''" } else { "'" };
-        let escaped = if matches!(syntax, Syntax::Yaml | Syntax::YamlName) {
+        let escaped = if syntax == Syntax::Yaml {
             target.replace('\'', "''")
         } else {
             if target.contains('\'') {
@@ -132,10 +131,12 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
         };
         return Ok(format!("{delimiter}{escaped}{delimiter}"));
     }
-    if matches!(syntax, Syntax::Yaml | Syntax::YamlName) {
-        let parsed =
-            serde_yaml_ng::from_str::<serde_yaml_ng::Value>(target).map_err(|e| e.to_string())?;
-        if parsed.as_str() != Some(target) && !parsed.is_number() {
+    if syntax == Syntax::Yaml {
+        // A plain scalar stays plain only when YAML reads it back as this
+        // very text. Anything else, a number such as `1.10` (read as 1.1)
+        // or `20240101` (rendered by Helm as 2.0240101e+07) included, is
+        // quoted.
+        if !plain_yaml(target) {
             return serde_json::to_string(target).map_err(|e| e.to_string());
         }
     } else if syntax == Syntax::Gradle {
@@ -157,6 +158,30 @@ fn quote(dep: &Dependency, raw: &str, target: &str) -> Result<String, String> {
         return Err("unsafe unquoted replacement".into());
     }
     Ok(target.into())
+}
+
+/// Whether `target`, written as a plain YAML scalar, reads back as the
+/// string `target`. Checked under YAML 1.2 (serde_yaml_ng) and the YAML 1.1
+/// spellings Go and Ruby parsers still give other types: `yes` and `on`,
+/// `010` octals, `1_000` integers, sexagesimals like `1:20` and floats.
+fn plain_yaml(target: &str) -> bool {
+    let Ok(parsed) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(target) else {
+        return false;
+    };
+    if parsed.as_str() != Some(target) {
+        return false;
+    }
+    static YAML_1_1: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(concat!(
+            r"^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF",
+            r"|[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*(?:[eE][-+]?[0-9]+)?",
+            r"|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?",
+            r"|[-+]?0b[01_]+|[-+]?0[0-7_]+|[-+]?0x[0-9a-fA-F_]+|[-+]?[0-9][0-9_]*",
+            r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)|~|null|Null|NULL|=)$"
+        ))
+        .expect("YAML 1.1 scalar pattern")
+    });
+    !YAML_1_1.is_match(target)
 }
 
 fn image_edits(

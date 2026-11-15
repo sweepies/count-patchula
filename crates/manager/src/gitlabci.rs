@@ -85,7 +85,7 @@ impl Scan<'_, '_> {
             self.text,
             image,
             location,
-            Syntax::YamlName,
+            Syntax::Yaml,
             None,
         ) {
             self.out.push(dep);
@@ -163,7 +163,9 @@ impl Scan<'_, '_> {
             manager: Manager::Gitlabci,
             file: self.path.into(),
             location: Location::new(self.text, start, end, pointer.into()),
-            form: EditForm::Scalar(Syntax::YamlName),
+            // The version is the tail of a larger scalar: quoting it alone
+            // would break the scalar, so only a bare token may replace it.
+            form: EditForm::Scalar(Syntax::InnerToken),
             name: format!("{server}/{path}"),
             package: format!("{server}/{project}"),
             kind: DependencyKind::ReusableWorkflow,
@@ -214,7 +216,7 @@ impl Scan<'_, '_> {
             manager: Manager::GitlabciInclude,
             file: self.path.into(),
             location,
-            form: EditForm::Scalar(Syntax::YamlName),
+            form: EditForm::Scalar(Syntax::Yaml),
             name: project.into(),
             package: format!("{host}/{project}"),
             kind: DependencyKind::ReusableWorkflow,

@@ -474,6 +474,8 @@ fn gitlab_ci_pins_images_and_bumps_include_and_component_refs_in_place() {
         old.replace("'v1.2.0'", "'v1.3.0'")
     );
 }
+/// A component's version is the tail of its scalar and stays bare; a whole
+/// `ref:` that YAML would read as the float 1.1 is quoted.
 #[test]
 fn gitlab_numeric_refs_keep_their_text() {
     let old = "include:\n  - component: gitlab.com/grp/proj/comp@1.0\n  - project: grp/proj\n    ref: 1.0\n";
@@ -489,7 +491,69 @@ fn gitlab_numeric_refs_keep_their_text() {
             "1.10",
             None
         ),
-        old.replace("ref: 1.0", "ref: 1.10")
+        old.replace("ref: 1.0", "ref: \"1.10\"")
+    );
+}
+
+/// A plain YAML value stays plain only when YAML reads the new text back
+/// as that same string; `tag: 1.10` would be the float 1.1 to Helm.
+#[test]
+fn yaml_values_are_quoted_unless_they_read_back_as_the_same_string() {
+    let old = "image:\n  repository: example/app\n  tag: 1.9\n";
+    assert_eq!(
+        replace(Manager::HelmValues, "values.yaml", old, "1.10", None),
+        old.replace("1.9", "\"1.10\"")
+    );
+    let old = "image:\n  repository: example/app\n  tag: v1.9\n";
+    assert_eq!(
+        replace(Manager::HelmValues, "values.yaml", old, "v1.10", None),
+        old.replace("v1.9", "v1.10")
+    );
+    let old = "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nimages:\n  - name: nginx\n    newTag: 1.10\nhelmCharts:\n  - name: podinfo\n    repo: https://stefanprodan.github.io/podinfo\n    version: 2\n";
+    assert_eq!(
+        replace(Manager::Kustomize, "kustomization.yaml", old, "3", None),
+        old.replace("newTag: 1.10", "newTag: \"3\"")
+            .replace("version: 2", "version: \"3\"")
+    );
+    let old = "jobs:\n  a:\n    steps:\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20.1.0\n";
+    assert_eq!(
+        replace(
+            Manager::GithubActions,
+            ".github/workflows/ci.yml",
+            old,
+            "yes",
+            None
+        )
+        .lines()
+        .last(),
+        Some("          node-version: \"yes\"")
+    );
+}
+
+/// A `uses:` line inside a step's script is text: the edit lands on the
+/// real step, comment and all.
+#[test]
+fn action_edits_skip_matching_lines_inside_run_scripts() {
+    let old = "jobs:\n  a:\n    steps:\n      - run: |\n          cat > w.yml <<EOF\n          - uses: actions/checkout@v3\n          EOF\n      - uses: actions/checkout@v3 # pinned\n";
+    let dependencies = Scanner::new(&config(Manager::GithubActions))
+        .unwrap()
+        .extract(&read_files([(
+            ".github/workflows/ci.yml".into(),
+            old.into(),
+        )]))
+        .unwrap()
+        .dependencies;
+    assert_eq!(dependencies.len(), 1);
+    let dep = &dependencies[0];
+    assert_eq!(
+        &old[dep.location.start..dep.location.end],
+        "actions/checkout@v3 # pinned"
+    );
+    assert!(dep.location.start > old.find("- uses: actions/checkout@v3 #").unwrap());
+    let changes = edits(dep, old, "v4", None).unwrap();
+    assert_eq!(
+        apply(old, changes).unwrap(),
+        old.replace("checkout@v3 # pinned", "checkout@v4 # pinned")
     );
 }
 

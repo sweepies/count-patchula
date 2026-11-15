@@ -1167,7 +1167,6 @@ npm	javascript/next.js/packages/next/package.json	buffer	5.6.0	-
 npm	javascript/next.js/packages/next/package.json	busboy	1.6.0	-
 npm	javascript/next.js/packages/next/package.json	bytes	3.1.1	-
 npm	javascript/next.js/packages/next/package.json	caniuse-lite	^1.0.30001579	-
-npm	javascript/next.js/packages/next/package.json	ci-info	watson/ci-info#f43f6a1cefff47fb361c88cf4b943fdbcaafe540	-
 npm	javascript/next.js/packages/next/package.json	cli-select	1.1.2	-
 npm	javascript/next.js/packages/next/package.json	client-only	0.0.1	-
 npm	javascript/next.js/packages/next/package.json	commander	12.1.0	-

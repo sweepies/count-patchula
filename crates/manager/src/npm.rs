@@ -30,22 +30,27 @@ fn alias<'a>(name: &'a str, value: &'a str) -> (&'a str, &'a str) {
         .and_then(|v| v.rsplit_once('@'))
         .unwrap_or((name, value))
 }
-/// Whether `value` names a registry version rather than a local path,
-/// workspace member, patch, git or HTTP source. The `scheme:` check is the
-/// public verdict's local-source taxonomy, so the protocols it calls local
-/// are no registry versions here either; nor is `patch:`, whose version
-/// belongs to the locator it wraps. `npm:` stays, since it aliases one.
+/// Whether `value` names a registry version: a version, range or dist-tag,
+/// or an `npm:name@version` alias of one. Anything else is not, and fails
+/// closed: every other `scheme:` (git, forge shorthands such as `gitlab:`,
+/// URLs, local protocols, `patch:`), the `owner/repo` GitHub shorthand, a
+/// path, or a tarball file. Looking such a dependency up by its name on the
+/// public registry would find someone else's package.
 fn registry(value: &str) -> bool {
-    if value.starts_with(['$', '.', '/']) || value.contains("github:") {
-        return false;
-    }
-    if let Some((scheme, _)) = value.split_once(':')
-        && (crate::public::LOCAL_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str())
-            || scheme.eq_ignore_ascii_case("patch"))
-    {
-        return false;
-    }
-    !["git", "http"].iter().any(|p| value.starts_with(p))
+    let spec = match value.strip_prefix("npm:") {
+        Some(alias) => match alias.rsplit_once('@') {
+            Some((name, version)) if !name.is_empty() => version,
+            _ => return false,
+        },
+        None => value,
+    };
+    let lower = spec.to_ascii_lowercase();
+    // A scheme, a path (`~/x`, `owner/repo`, `C:\x`) or an environment
+    // variable; `~1.2` is a range.
+    let source = spec.contains([':', '/', '\\']) || spec.starts_with(['$', '.']);
+    let tarball =
+        [".tgz", ".tar"].iter().any(|ext| lower.ends_with(ext)) || lower.ends_with(".tar.gz");
+    !source && !tarball
 }
 
 pub(super) fn extract(
@@ -405,7 +410,7 @@ pub(super) fn node_version(path: &str, text: &Lines<'_>, manager: Manager) -> Ve
 
 /// Whether `url` is on npm's or Yarn's public registry host, over https or the
 /// plain http some old `.npmrc` files still name.
-fn public(url: &str) -> bool {
+pub(crate) fn public(url: &str) -> bool {
     crate::web_host(url)
         .is_some_and(|host| matches!(host.as_str(), "registry.npmjs.org" | "registry.yarnpkg.com"))
 }
@@ -773,8 +778,12 @@ impl crate::Ecosystem for Descriptor {
                 out.locked
                     .extend(locked::aube(files, &mut out.dependencies, manager, npm)?);
                 if npm {
-                    out.locked
-                        .extend(locked::npm(files, finish_locks.as_ref(), &out.dependencies));
+                    out.locked.extend(locked::npm(
+                        files,
+                        finish_locks.as_ref(),
+                        &out.dependencies,
+                        npmrcs,
+                    ));
                 }
                 assign_registries(&mut out.dependencies, &mut out.locked, npmrcs);
                 Ok(())

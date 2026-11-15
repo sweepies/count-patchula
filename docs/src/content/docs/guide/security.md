@@ -42,7 +42,10 @@ warning.
 
 Most vulnerable code arrives through dependencies of dependencies, which only
 a lockfile records. The Count checks every registry package in `Cargo.lock`,
-`package-lock.json` and `aube-lock.yaml` too. A lockfile-only package that turns out to be
+`package-lock.json` and `aube-lock.yaml` too. In `package-lock.json` a package
+counts as a registry package when its `resolved` URL is on the public npm
+registry or on the registry `.npmrc` names for it; one resolved from another
+URL, such as a tarball, is not checked under its name. A lockfile-only package that turns out to be
 vulnerable shows up in the report, the dashboard and the TUI as a dependency of
 kind `transitive` on its lockfile. Packages without a known vulnerability stay
 out of the report.

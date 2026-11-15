@@ -46,9 +46,8 @@ const PUBLIC_HOSTS: &[&str] = &["github.com", "gitlab.com", "bitbucket.org", "co
 
 /// The `scheme:` prefixes that name a local source — a path, a link, a
 /// workspace member — which fetches nothing. `patch:` is not one: it wraps
-/// another package's locator, which can fetch. npm's specifier check
-/// reads the same list, so a protocol one calls local the other does too.
-pub(crate) const LOCAL_SCHEMES: &[&str] = &[
+/// another package's locator, which can fetch.
+const LOCAL_SCHEMES: &[&str] = &[
     "file",
     "link",
     "workspace",

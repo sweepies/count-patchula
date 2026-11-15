@@ -74,8 +74,6 @@ pub(super) fn dockerfile(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>
                 .then(|| value.trim() == "`")
         })
         .map_or('\\', |backtick| if backtick { '`' } else { '\\' });
-    let heredoc =
-        Regex::new(r#"<<(-?)(["']?)([A-Za-z_][A-Za-z0-9_]*)["']?"#).map_err(|e| e.to_string())?;
     // Terminators of the heredocs still open, and whether each strips tabs.
     let mut bodies = std::collections::VecDeque::<(String, bool)>::new();
     // Join continuations while retaining the original byte range.
@@ -119,11 +117,7 @@ pub(super) fn dockerfile(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>
                 .iter()
                 .any(|k| v.eq_ignore_ascii_case(k))
         }) {
-            bodies.extend(
-                heredoc
-                    .captures_iter(&instruction)
-                    .map(|c| (c[3].to_owned(), &c[1] == "-")),
-            );
+            bodies.extend(heredocs(&instruction));
         }
         if parts.first().is_some_and(|v| v.eq_ignore_ascii_case("ARG")) {
             if !seen_from && let Some((name, value)) = parts.get(1).and_then(|v| v.split_once('='))
@@ -188,6 +182,79 @@ pub(super) fn dockerfile(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>
         instruction.clear();
     }
     Ok(out)
+}
+
+/// The heredocs an instruction opens: each terminator, and whether its
+/// body's leading tabs are stripped (`<<-`). BuildKit's rule: the
+/// instruction splits into shell words, quotes kept, and a heredoc is a
+/// whole unquoted word `<<NAME` or `<<-NAME`, optionally after a file
+/// descriptor (`2<<NAME`), whose name holds no further `<`. A here-string
+/// (`<<<word`), `cat<<EOF` and a `<<EOF` inside quotes open none. A quoted
+/// name (`<<"EOF"`) ends at its unquoted text.
+fn heredocs(instruction: &str) -> Vec<(String, bool)> {
+    shell_words(instruction)
+        .into_iter()
+        .filter_map(|word| {
+            let word = word.trim_start_matches(|c: char| c.is_ascii_digit());
+            let rest = word.strip_prefix("<<")?;
+            let (chomp, rest) = rest.strip_prefix('-').map_or((false, rest), |r| (true, r));
+            if rest.is_empty() || rest.contains('<') {
+                return None;
+            }
+            let name = unquoted(rest);
+            (!name.is_empty()).then_some((name, chomp))
+        })
+        .collect()
+}
+
+/// Shell words split at unquoted whitespace, with their quotes and
+/// backslash escapes kept as written.
+fn shell_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (None, c) if c.is_whitespace() => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+                continue;
+            }
+            (None | Some('"'), '\\') => {
+                word.push(c);
+                if let Some(next) = chars.next() {
+                    word.push(next);
+                }
+                continue;
+            }
+            (None, '\'' | '"') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            _ => {}
+        }
+        word.push(c);
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// A shell word with its quotes and escapes removed.
+fn unquoted(word: &str) -> String {
+    let mut out = String::new();
+    let mut quote = None;
+    let mut chars = word.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (None | Some('"'), '\\') => out.extend(chars.next()),
+            (None, '\'' | '"') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
