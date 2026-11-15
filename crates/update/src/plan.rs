@@ -408,6 +408,10 @@ impl Plan {
     pub fn held(&self, hold: &Hold) -> bool {
         self.hold.as_ref() == Some(hold)
     }
+    /// Whether a dashboard tick to create the update anyway lifts the hold.
+    pub fn overridable(&self) -> bool {
+        self.hold.as_ref().is_some_and(Hold::overridable)
+    }
     /// Release a hold a dashboard tick may lift; a plan held for any other
     /// reason stays held.
     pub fn lift(&mut self) {
