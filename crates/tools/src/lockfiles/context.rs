@@ -65,6 +65,45 @@ pub(super) fn version(versions: &BTreeMap<String, String>, tool: &str) -> Result
         .ok_or_else(|| format!("missing {tool} version"))
 }
 
+/// Repository files a run replaces with what its tools may see, put back
+/// when dropped, so a run that fails, stops early or is cancelled leaves
+/// the committed files as they were.
+#[derive(Default)]
+pub(super) struct Replaced(Vec<(std::path::PathBuf, String)>);
+
+impl Replaced {
+    /// Write `text` over `path`, whose committed text is `committed`.
+    pub(super) fn replace(
+        &mut self,
+        path: &Path,
+        committed: String,
+        text: &str,
+    ) -> Result<(), String> {
+        self.0.push((path.to_path_buf(), committed));
+        std::fs::write(path, text).map_err(|e| e.to_string())
+    }
+    /// Put every committed file back, reporting the first that cannot be.
+    pub(super) fn restore(mut self) -> Result<(), String> {
+        let mut result = Ok(());
+        for (path, text) in std::mem::take(&mut self.0) {
+            if let Err(e) = std::fs::write(&path, text)
+                && result.is_ok()
+            {
+                result = Err(e.to_string());
+            }
+        }
+        result
+    }
+}
+
+impl Drop for Replaced {
+    fn drop(&mut self) {
+        for (path, text) in &self.0 {
+            let _ = std::fs::write(path, text);
+        }
+    }
+}
+
 /// Files only this user can read, removed when dropped, so tools that run
 /// later never see what they hold.
 #[derive(Default)]

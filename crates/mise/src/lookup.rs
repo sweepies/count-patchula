@@ -1,5 +1,5 @@
 //! Version lists from the pinned mise, run in a sandbox.
-use crate::{Error, policy, sandbox_env};
+use crate::{Error, policy, sandbox_env, without_plugins};
 use patchula_process::{CommandSpec, Executor, Failure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -135,15 +135,10 @@ impl Lookup {
         versions_host: bool,
     ) -> CommandSpec {
         let mut env = sandbox_env(home, &self.data);
+        without_plugins(&mut env);
         // Nothing installs while looking up: the pinned mise is installed first
         // and a lookup never needs another tool.
         env.insert("MISE_AUTO_INSTALL".into(), "0".into());
-        // Registry shorthands that list an asdf or vfox plugin fall through to
-        // the next backend, or fail when there is none.
-        env.insert(
-            "MISE_DISABLE_BACKENDS".into(),
-            policy::PLUGIN_BACKENDS.join(",").into(),
-        );
         env.insert(
             "MISE_USE_VERSIONS_HOST".into(),
             if versions_host { "1" } else { "0" }.into(),
@@ -209,11 +204,10 @@ impl Lookup {
     /// `mise ls-remote --json --prerelease`, as mise lists the tool. Prereleases
     /// are listed so the Count's own policy decides who is offered one.
     pub async fn ls_remote(&self, query: &Query<'_>) -> Result<Vec<Release>, Error> {
-        policy::check(query.tool)?;
         if let Some(prefix) = query.prefix {
             policy::check(prefix)?;
         }
-        crate::targets::check(query.tool).await?;
+        crate::admit(query.tool).await?;
         let _slot = self
             .slots
             .acquire()
@@ -236,8 +230,7 @@ impl Lookup {
     }
     /// The backend mise picks for a tool, such as `npm:prettier` for `prettier`.
     pub async fn backend(&self, tool: &str, token: Option<&str>) -> Result<String, Error> {
-        policy::check(tool)?;
-        crate::targets::check(tool).await?;
+        crate::admit(tool).await?;
         let _slot = self
             .slots
             .acquire()

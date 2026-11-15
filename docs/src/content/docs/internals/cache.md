@@ -22,9 +22,11 @@ there. The CLI's default directory is shared by every checkout on the machine,
 so concurrent local runs use one database through WAL and the busy timeout.
 Opening takes an exclusive lock on `cache.lock` while it checks and migrates
 the database, and migrations read the schema version inside an immediate
-transaction. In the tool store, each tool run holds `patchula-store.lock`
-shared, and removing versions (clearing an unproven install, `tools prune`)
-holds it exclusive, so no run loses a tool it is using.
+transaction. In the tool store, each tool run, and the `mise install` before a
+version's first run, holds `patchula-store.lock` shared, and removing versions
+(clearing an unproven install, `tools prune`) holds it exclusive, so no run
+loses a tool it is using. A version is proven once `mise install` succeeds,
+however the tool then exits.
 
 ## Threads and transactions
 

@@ -1,5 +1,12 @@
 //! Runs one external command with an explicit environment, a time limit, a
 //! bounded output and a process group that dies with it.
+//!
+//! The command leads a process group of its own. Everything it starts and
+//! leaves behind (MSBuild nodes, build helpers, daemons) is killed with the
+//! group once the leader exits, however it exits, and when the run times
+//! out or is cancelled: nothing outlives the call holding the run's
+//! environment, and nothing left holding the output pipes keeps the call
+//! waiting. A process that leaves the group (`setsid`) escapes this.
 #![forbid(unsafe_code)]
 use std::{
     collections::BTreeMap, error::Error, ffi::OsString, fmt, future::Future, path::PathBuf,
@@ -124,6 +131,40 @@ fn failure_stream(captured: &[u8], cut_short: bool, secrets: &[String]) -> Strin
 }
 
 pub struct SystemExecutor;
+
+/// The process group a command leads, killed when dropped: on cancellation,
+/// on a timeout, and after the leader exits. Pipe contents survive the
+/// kill, so the drains still read everything the leader wrote.
+struct Group {
+    #[cfg(unix)]
+    leader: Option<rustix::process::Pid>,
+}
+
+impl Group {
+    fn new(pid: Option<u32>) -> Self {
+        #[cfg(not(unix))]
+        let _ = pid;
+        Self {
+            #[cfg(unix)]
+            leader: pid
+                .and_then(|pid| i32::try_from(pid).ok())
+                .and_then(rustix::process::Pid::from_raw),
+        }
+    }
+    fn kill(&self) {
+        #[cfg(unix)]
+        if let Some(leader) = self.leader {
+            let _ = rustix::process::kill_process_group(leader, rustix::process::Signal::KILL);
+        }
+    }
+}
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
 async fn drain(
     mut reader: impl AsyncRead + Unpin,
     limit: usize,
@@ -169,7 +210,9 @@ impl Executor for SystemExecutor {
                 program: spec.program.clone(),
                 message: e.to_string(),
             })?;
-            let pid = child.id();
+            // Declared after `child`, so on cancellation the group dies
+            // before `kill_on_drop` kills the leader.
+            let group = Group::new(child.id());
             let stdout = child
                 .stdout
                 .take()
@@ -189,7 +232,13 @@ impl Executor for SystemExecutor {
                 .min(FAILURE_STREAM_LIMIT);
             let result = tokio::time::timeout(spec.timeout, async {
                 let (status, out, err) = tokio::join!(
-                    child.wait(),
+                    async {
+                        let status = child.wait().await;
+                        // What the leader left running dies now, so the
+                        // drains end at what was already written.
+                        group.kill();
+                        status
+                    },
                     drain(stdout, spec.output_limit),
                     // Room for a secret that starts inside the kept window.
                     drain(stderr, FAILURE_STREAM_LIMIT + longest)
@@ -199,14 +248,7 @@ impl Executor for SystemExecutor {
             .await;
             match result {
                 Err(_) => {
-                    #[cfg(unix)]
-                    if let Some(pid) = pid
-                        .and_then(|pid| i32::try_from(pid).ok())
-                        .and_then(rustix::process::Pid::from_raw)
-                    {
-                        let _ =
-                            rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-                    }
+                    group.kill();
                     let _ = child.kill().await;
                     let _ = child.wait().await;
                     Err(Failure::TimedOut {
@@ -262,6 +304,88 @@ mod tests {
         let text = failure_stream(&out, false, &secrets);
         assert_eq!(text.len(), FAILURE_STREAM_LIMIT - 1);
         assert!(text.ends_with('x'));
+    }
+
+    /// `sh -c script` with a limit far past what any of these tests take.
+    #[cfg(target_os = "linux")]
+    fn shell(script: &str) -> CommandSpec {
+        CommandSpec {
+            program: PathBuf::from("/bin/sh"),
+            args: vec!["-c".into(), script.into()],
+            cwd: std::env::temp_dir(),
+            env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+            secrets: Vec::new(),
+            timeout: Duration::from_secs(60),
+            output_limit: 4096,
+            complete_output: false,
+        }
+    }
+
+    /// Whether `pid` is a live process: a zombie waiting for its reaper
+    /// is dead.
+    #[cfg(target_os = "linux")]
+    fn alive(pid: &str) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit_once(") ")
+                .is_some_and(|(_, rest)| !rest.starts_with('Z') && !rest.starts_with('X'))
+        })
+    }
+
+    /// Waits up to five seconds for `pid` to die.
+    #[cfg(target_os = "linux")]
+    async fn dies(pid: &str) -> bool {
+        for _ in 0..50 {
+            if !alive(pid) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        false
+    }
+
+    /// A grandchild the command leaves running dies when the command exits,
+    /// and holding the output pipe open does not keep the call waiting.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_grandchild_does_not_outlive_a_command_that_exits() {
+        for (script, fails) in [
+            ("sleep 300 & echo $!", false),
+            ("sleep 300 & echo $!; exit 3", true),
+        ] {
+            let started = std::time::Instant::now();
+            let result = SystemExecutor.run(shell(script)).await;
+            assert!(started.elapsed() < Duration::from_secs(30), "{script}");
+            let pid = match (result, fails) {
+                (Ok(out), false) => String::from_utf8(out).unwrap(),
+                (Err(Failure::Exited { stdout, .. }), true) => stdout,
+                (other, _) => panic!("{script}: {other:?}"),
+            };
+            let pid = pid.trim().to_owned();
+            assert!(!pid.is_empty(), "{script}");
+            assert!(dies(&pid).await, "{script}: grandchild {pid} survived");
+        }
+    }
+
+    /// A cancelled call kills the whole group, not only the command.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_cancelled_command_takes_its_grandchildren_with_it() {
+        let file = std::env::temp_dir().join(format!(
+            "patchula-process-cancel-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+        ));
+        let script = format!("sleep 300 & echo $! > '{}'; wait", file.display());
+        let run = SystemExecutor.run(shell(&script));
+        let cancelled = tokio::time::timeout(Duration::from_secs(2), run).await;
+        assert!(cancelled.is_err(), "the command finished on its own");
+        let pid = std::fs::read_to_string(&file).unwrap();
+        let _ = std::fs::remove_file(&file);
+        let pid = pid.trim().to_owned();
+        assert!(
+            dies(&pid).await,
+            "grandchild {pid} survived the cancellation"
+        );
     }
 
     #[tokio::test]

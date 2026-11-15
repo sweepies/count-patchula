@@ -103,7 +103,9 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
 - With the backends `asdf` and `vfox` disabled (`MISE_DISABLE_BACKENDS`), and
   names for them refused before mise starts. A backend prefix mise does not
   know fails in mise, which runs no plugin for it. Nothing installs during a lookup
-  (`MISE_AUTO_INSTALL=0`).
+  (`MISE_AUTO_INSTALL=0`). [`mise lock`](/guide/lockfiles/) runs with the
+  same backends disabled and the same name and option checks, including the
+  instance-metadata one, on every tool it locks.
 - With a GitHub token as `MISE_GITHUB_TOKEN`, only when he talks to
   github.com, and no other credential: mise's `gh` login, credential command
   and Git credential helper lookups are off. As a GitHub App (`patchula serve`,
