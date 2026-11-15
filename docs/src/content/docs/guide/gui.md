@@ -27,6 +27,9 @@ mise run gui:build                    # gui/target/release/patchula-gui
 mise run gui:run -- --demo            # open it on a made-up report
 ```
 
+The first build downloads Rune's Git repository, about 160 MB, before it
+compiles anything; on a slow connection that takes several minutes.
+
 On Linux the build links `libxkbcommon` and `libwayland-client`: install
 `libxkbcommon-dev` and `libwayland-dev` (Debian and Ubuntu) first, which
 `mise run gui:deps` does. macOS needs nothing more than Rust. Windows is
