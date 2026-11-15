@@ -1,0 +1,11 @@
+#!/usr/bin/env nu
+#MISE description="In the release workflow: check that the pushed tag is v<version> of patchula-cli, so a tag never releases another version"
+#USAGE arg "<tag>" help="The pushed tag, such as v1.2.3"
+
+def main [tag: string] {
+  let version = ^cargo metadata --format-version 1 --no-deps --locked | from json | get packages | where name == "patchula-cli" | first | get version
+  if $tag != $"v($version)" {
+    error make --unspanned {msg: $"tag ($tag) does not match patchula-cli ($version)"}
+  }
+  print $"($tag) matches patchula-cli ($version)"
+}
