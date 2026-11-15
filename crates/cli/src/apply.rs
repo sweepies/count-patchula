@@ -314,7 +314,7 @@ fn summary(
             (u.kind.to_string(), kind_paint(u.kind)),
             (u.name.clone(), Paint::Bold),
             (format!("{} → {}", u.current, u.target()), Paint::Plain),
-            (u.file.clone(), Paint::Dim),
+            (u.place(), Paint::Dim),
         ]
     };
     let writes = !options.check && !options.dry_run;

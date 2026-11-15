@@ -22,6 +22,8 @@ pub struct Update {
     pub fixes: Vec<String>,
     /// Byte offsets of every occurrence, used to apply the edit locally.
     pub starts: Vec<usize>,
+    /// The line of every occurrence, in order, for showing where it is.
+    pub lines: Vec<usize>,
     /// A package only its lockfile names, which only its package manager can update.
     pub transitive: bool,
     /// The current version came from a lockfile, which an edit here leaves stale.
@@ -38,13 +40,30 @@ pub enum Pick {
     Applied,
 }
 impl Update {
+    /// What the update moves to. A pinned digest that follows a new version
+    /// (a GitHub Action pinned by commit, say) is left out: the version says
+    /// it. The digest shows only when it is all that changes.
     pub fn target(&self) -> String {
         match (&self.value, &self.version, &self.digest) {
-            (Some(value), _, Some(digest)) => format!("{value}@{}", short(digest)),
-            (Some(value), _, None) => value.clone(),
+            (Some(value), _, Some(digest)) if *value == self.current => {
+                format!("{value}@{}", short(digest))
+            }
+            (Some(value), _, _) => value.clone(),
+            (None, Some(version), Some(digest)) if *version == self.current => {
+                format!("{version}@{}", short(digest))
+            }
             (None, Some(version), _) => version.clone(),
             (None, None, Some(digest)) => short(digest),
             (None, None, None) => self.current.clone(),
+        }
+    }
+    /// The file and the first line the dependency appears on, with how many
+    /// more occurrences the file holds: `ci.yml:96 (+6)`.
+    pub fn place(&self) -> String {
+        match self.lines.as_slice() {
+            [] => self.file.clone(),
+            [line] => format!("{}:{line}", self.file),
+            [line, rest @ ..] => format!("{}:{line} (+{})", self.file, rest.len()),
         }
     }
 }
@@ -79,6 +98,11 @@ pub fn updates(report: &Report) -> Vec<Update> {
                 let starts: Vec<usize> = metadata
                     .map(|m| m.locations.iter().map(|l| l.start).collect())
                     .unwrap_or_default();
+                let mut lines: Vec<usize> = metadata
+                    .map(|m| m.locations.iter().map(|l| l.line).collect())
+                    .unwrap_or_default();
+                lines.sort_unstable();
+                lines.dedup();
                 for update in &dep.updates {
                     updates.push(Update {
                         repository: repo.repository.clone(),
@@ -112,6 +136,7 @@ pub fn updates(report: &Report) -> Vec<Update> {
                             })
                             .collect(),
                         starts: starts.clone(),
+                        lines: lines.clone(),
                         transitive: metadata
                             .is_some_and(|m| m.kinds.contains(&DependencyKind::Transitive)),
                         locked: metadata
@@ -145,6 +170,7 @@ mod tests {
             published_at: None,
             fixes: Vec::new(),
             starts: Vec::new(),
+            lines: Vec::new(),
             transitive: false,
             locked: false,
             pick: Pick::Open,
@@ -155,7 +181,11 @@ mod tests {
     fn target_prefers_the_new_value_then_version_then_digest() {
         assert_eq!(
             update(Some("2.0.0"), Some("2.0.0"), Some("sha256:abcdef")).target(),
-            "2.0.0@abcdef"
+            "2.0.0"
+        );
+        assert_eq!(
+            update(Some("1.0.0"), None, Some("sha256:abcdef")).target(),
+            "1.0.0@abcdef"
         );
         assert_eq!(update(Some("^2.0.0"), None, None).target(), "^2.0.0");
         assert_eq!(
@@ -167,6 +197,16 @@ mod tests {
             "0123456789ab"
         );
         assert_eq!(update(None, None, None).target(), "1.0.0");
+    }
+
+    #[test]
+    fn place_names_the_first_line_and_counts_the_rest() {
+        let mut u = update(None, None, None);
+        assert_eq!(u.place(), "package.json");
+        u.lines = vec![3];
+        assert_eq!(u.place(), "package.json:3");
+        u.lines = vec![3, 9, 12];
+        assert_eq!(u.place(), "package.json:3 (+2)");
     }
 
     #[test]

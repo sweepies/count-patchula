@@ -555,7 +555,7 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
     assert!(out.is_empty());
     assert!(err.contains("3 updates await in 2 files"), "{err}");
     assert!(
-        err.contains("  minor  alpine     3.19.0 → 3.24.3@be2656061b53  Dockerfile\n"),
+        err.contains("  minor  alpine     3.19.0 → 3.24.3  Dockerfile:1\n"),
         "{err}"
     );
     let (code, out, err) = apply(&["--dry-run"]).await;
