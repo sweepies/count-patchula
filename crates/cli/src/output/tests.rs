@@ -224,6 +224,44 @@ fn a_terminal_fits_rows_to_its_width_but_leaves_links_whole() {
     );
 }
 
+/// A long skipped value gives way to its reason on a terminal, and a pipe
+/// keeps the whole item on one line.
+#[test]
+fn a_long_skipped_value_never_cuts_its_reason() {
+    let mut repo = repository("local/web-chat");
+    let value = "http:nix[url=https://hydra.nixos.org/build/312345678/download/1/nix-2.31.2-x86_64-linux,checksum=sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0,bin=nix]";
+    let reason = "mise's http backend takes its version from the URL, which the Count can't rewrite without guessing";
+    repo["skipped"] = json!([{"manager": "mise", "path": "mise.toml", "line": 12, "value": value, "reason": reason}]);
+    let report: Report = serde_json::from_value(json!({
+        "schemaVersion": 8,
+        "repositories": [repo]
+    }))
+    .unwrap();
+    let style = Style {
+        color: false,
+        width: Some(50),
+    };
+    let text = super::report(&report, &style);
+    let section = &text[text.find("Skipped (1)").unwrap()..];
+    let section = &section[..section.find("\n\n").map_or(section.len(), |at| at + 1)];
+    for line in section.lines() {
+        assert!(console::measure_text_width(line) <= 50, "{line}");
+    }
+    assert!(
+        section.contains("  mise.toml:12  http:nix[url="),
+        "{section}"
+    );
+    assert!(section.contains('…'), "{section}");
+    let wrapped: Vec<_> = section.lines().skip(2).map(str::trim).collect();
+    assert_eq!(wrapped.join(" "), reason, "{section}");
+    check("skipped-narrow.txt", section);
+    let plain = report_text(&report);
+    assert!(
+        plain.contains(&format!("  mise.toml:12  {value}  {reason}\n")),
+        "{plain}"
+    );
+}
+
 #[test]
 fn one_advisory_on_one_version_in_two_manifests_is_one_vulnerability() {
     let rsa = |version: &str| {

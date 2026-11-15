@@ -1,0 +1,5 @@
+Skipped (1)
+  mise.toml:12  http:nix[url=https://hydra.nixos.…
+    mise's http backend takes its version from
+    the URL, which the Count can't rewrite without
+    guessing
