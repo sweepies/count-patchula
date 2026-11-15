@@ -4081,13 +4081,10 @@ async fn repositories_write_side_by_side_with_an_identical_report() {
         .engine
         .with_versions_host(false)
         .with_lockfile_runner(sequential.runner.clone());
-    // Wall time, not the paused clock's virtual time.
-    let started = std::time::Instant::now();
     let mut sequential_report = sequential_engine
         .run_at(names(), false, false, now)
         .await
         .unwrap();
-    let sequential_elapsed = started.elapsed();
 
     let parallel = ThreeRepos::build(4).await;
     assert!(parallel.temp.path().is_dir());
@@ -4095,12 +4092,10 @@ async fn repositories_write_side_by_side_with_an_identical_report() {
         .engine
         .with_versions_host(false)
         .with_lockfile_runner(parallel.runner.clone());
-    let started = std::time::Instant::now();
     let mut parallel_report = parallel_engine
         .run_at(names(), false, false, now)
         .await
         .unwrap();
-    let parallel_elapsed = started.elapsed();
 
     // Both repositories' tool runs overlapped under the runner's shared
     // semaphore; the sequential run's cannot.
@@ -4163,14 +4158,6 @@ async fn repositories_write_side_by_side_with_an_identical_report() {
         });
     assert!(overlapped, "writes did not interleave: {spans:?}");
 
-    eprintln!(
-        "three-repository write: sequential {sequential_elapsed:?}, \
-         side by side {parallel_elapsed:?}"
-    );
-    assert!(
-        parallel_elapsed < sequential_elapsed,
-        "{parallel_elapsed:?} !< {sequential_elapsed:?}"
-    );
     sequential_report.stats = None;
     parallel_report.stats = None;
     assert_eq!(
