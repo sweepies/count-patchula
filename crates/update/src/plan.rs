@@ -714,7 +714,7 @@ pub fn plan(
     let mut package_names = PackageNames::new();
     for dep in dependencies {
         package_names
-            .entry(package_slug(&dep.package))
+            .entry(package_slug(branch_package(dep)))
             .or_default()
             .insert((dep.source, dep.package.clone(), dep.registry.clone()));
     }
@@ -1226,6 +1226,16 @@ pub async fn lock_all(
 fn package_slug(package: &str) -> String {
     slug(split_package(package).map_or(package, |(_, name)| name))
 }
+/// The package a branch is named after: a mise tool without the options it
+/// passes to mise, so `forgejo:org/tool[api_url=…,os=linux]` names its branch
+/// after `forgejo:org/tool`. The options stay in the branch identity.
+fn branch_package(dep: &Dependency) -> &str {
+    if dep.manager == patchula_words::Manager::Mise {
+        patchula_mise::split(&dep.package).0
+    } else {
+        &dep.package
+    }
+}
 fn slug(value: &str) -> String {
     let s = value
         .to_ascii_lowercase()
@@ -1326,7 +1336,7 @@ fn branch_identity(
     } else if update.update_type == UpdateKind::Pin && reference_data {
         (
             serde_json::json!(["pin", dep.source, dep.package]).to_string(),
-            format!("pin-{}", package_slug(&dep.package)),
+            format!("pin-{}", package_slug(branch_package(dep))),
         )
     } else if let Some(group) = &update.group {
         let major = update.update_type == UpdateKind::Major;
@@ -1361,9 +1371,19 @@ fn branch_identity(
             }
             .to_string(),
             {
-                let package = package_slug(&dep.package);
+                let named = package_slug(branch_package(dep));
+                let sharing = &package_names[&named];
+                // The same tool with other options from the same source keeps
+                // its options in the name, or the two would share a branch name.
+                let package = if sharing.iter().any(|(source, package, registry)| {
+                    *source == dep.source && *registry == dep.registry && *package != dep.package
+                }) {
+                    package_slug(&dep.package)
+                } else {
+                    named
+                };
                 let manager = match &dep.registry {
-                    _ if package_names[&package].len() <= 1 => String::default(),
+                    _ if sharing.len() <= 1 => String::default(),
                     // The whole registry, path included: one host can serve several.
                     Some(registry) => {
                         format!(
@@ -2084,6 +2104,54 @@ mod tests {
         let (_, plain) =
             branch_identity(&dep, &reported(), &update(), &[dep.clone()], &names, None);
         assert!(plain.starts_with("left-pad-"), "{plain}");
+    }
+
+    /// A mise tool's options are passed to mise but kept out of its branch
+    /// name, unless the same tool with other options would share that name.
+    #[test]
+    fn a_mise_tool_branch_is_named_without_its_options() {
+        let tool = |package: &str| {
+            let mut dep = dep();
+            dep.manager = Manager::Mise;
+            dep.source = Source::Mise;
+            dep.file = "mise.toml".into();
+            dep.name = patchula_mise::split(package).0.into();
+            dep.package = package.into();
+            dep
+        };
+        let linux = tool("forgejo:org/tool[api_url=https://codeberg.org/api/v1,os=linux]");
+        let names = |deps: &[&Dependency]| -> PackageNames {
+            let mut names = PackageNames::new();
+            for dep in deps {
+                names
+                    .entry(package_slug(branch_package(dep)))
+                    .or_default()
+                    .insert((dep.source, dep.package.clone(), dep.registry.clone()));
+            }
+            names
+        };
+        let (identity, branch) = branch_identity(
+            &linux,
+            &reported(),
+            &update(),
+            std::slice::from_ref(&linux),
+            &names(&[&linux]),
+            None,
+        );
+        assert_eq!(branch, "forgejo-org-tool-1.x");
+        assert!(identity.contains("os=linux"), "{identity}");
+
+        let macos = tool("forgejo:org/tool[os=macos]");
+        let both = [linux.clone(), macos.clone()];
+        let (_, apart) = branch_identity(
+            &macos,
+            &reported(),
+            &update(),
+            &both,
+            &names(&[&linux, &macos]),
+            None,
+        );
+        assert_eq!(apart, "mise-forgejo-org-tool-os-macos-1.x");
     }
 }
 
