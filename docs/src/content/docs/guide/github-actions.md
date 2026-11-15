@@ -123,8 +123,8 @@ build these files on one organization module.
 | `repositories` | this repository | `owner/repo` names, separated by spaces or newlines |
 | `all-repos` | `false` | Every repository the token can reach |
 | `dry-run` | `false` | Print planned branches and diffs without writing |
-| `version` | the action's version, or the latest release when the action is not used at a release tag | The Count version to install, such as `@@version@@` |
-| `binary` | | The path to a `patchula` binary to run instead of installing a release, such as one built from source to try unreleased changes. Overrides `version` |
+| `version` | the action's version, or the latest release when the action is not used at a release tag | The Count version to install, such as `@@version@@`; 0.9.0 or later |
+| `binary` | | The path to a `patchula` binary to run instead of installing a release, such as one built from source to try unreleased changes; 0.9.0 or later. Overrides `version` |
 | `settings` | | The path to an operator [settings](/reference/settings/) file, for HTTP limits and other operator settings. The action does not check out your repository, so add `actions/checkout` before it when the file lives there. Empty falls back to `PATCHULA_SETTINGS`, then `~/.config/patchula/settings.pkl`, then the defaults |
 | `args` | | Extra `patchula run` arguments, such as `--config-dir policy` |
 
@@ -133,7 +133,13 @@ saved after every run and restored on the next, so later runs are much faster
 than the first. Entries are keyed by the cache schema the binary reads
 (`patchula cache schema`), so moving to a release with a new schema, or back to
 an older one, starts from a cold cache instead of failing on a database it
-cannot read. Releases older than the command key by their version. Where a repository keeps
+cannot read.
+
+The action runs Count Patchula 0.9.0 or later, the first release with
+`patchula cache schema`. Given an older `version` or `binary`, it fails the
+step with an error naming the binary rather than running it.
+
+Where a repository keeps
 [`.github/workflows/actions.lock`](/guide/managers/#actions-lock), the
 lockfile tool authenticates with the token the run was given — the
 `token` input's token — scoped to the repository when the App can mint one.
