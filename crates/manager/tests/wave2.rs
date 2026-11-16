@@ -241,18 +241,36 @@ fn flux_chart_refs_still_extract_embedded_image_pins() {
     assert_eq!(deps[0].package, "ghcr.io/example/app");
 }
 
+/// Every pseudo-version form names its commit: no earlier tag, after a
+/// release (`-0.`) and after a prerelease (`.0.`), `+incompatible` or not.
 #[test]
 fn go_pseudo_versions_retain_observed_identity() {
     let deps = extract(&read_files([
-        ("go.mod".into(), "module example.org/demo\nrequire example.org/lib v0.0.0-20240102030405-abcdef123456\nrequire example.org/plain v1.2.3\n".into()),
+        ("go.mod".into(), "module example.org/demo\nrequire example.org/lib v0.0.0-20240102030405-abcdef123456\nrequire example.org/patch v1.2.4-0.20240102030405-bcdef1234567\nrequire example.org/pre v1.0.0-rc.1.0.20240102030405-cdef12345678\nrequire example.org/compat v2.0.1-0.20240102030405-def123456789+incompatible\nrequire example.org/tagged v1.2.3-x.20240102030405-abcdef123456\nrequire example.org/plain v1.2.3\n".into()),
     ]));
-    assert_eq!(
+    for (name, digest) in [
+        ("example.org/lib", "abcdef123456"),
+        ("example.org/patch", "bcdef1234567"),
+        ("example.org/pre", "cdef12345678"),
+        ("example.org/compat", "def123456789"),
+    ] {
+        assert_eq!(
+            deps.iter()
+                .find(|d| d.name == name)
+                .unwrap()
+                .digest
+                .as_deref(),
+            Some(digest),
+            "{name}"
+        );
+    }
+    // A prerelease that only looks dated is a tag, not a pseudo-version.
+    assert!(
         deps.iter()
-            .find(|d| d.name == "example.org/lib")
+            .find(|d| d.name == "example.org/tagged")
             .unwrap()
             .digest
-            .as_deref(),
-        Some("abcdef123456")
+            .is_none()
     );
     assert!(
         deps.iter()
@@ -811,6 +829,54 @@ fn gradle_lexing_is_bounded_and_reads_keyword_slashies() {
     assert!(open.dependencies.is_empty());
 }
 
+/// Only a whole unquoted shell word opens a heredoc, as BuildKit reads one:
+/// a here-string `<<<word` or a quoted `"<<EOF"` opens none, so the
+/// instructions after it are still read.
+#[test]
+fn dockerfile_here_strings_and_quoted_markers_open_no_heredoc() {
+    for text in [
+        "RUN cat <<<foo\nFROM alpine:3.20\n",
+        "RUN echo \"<<EOF\"\nFROM alpine:3.20\n",
+        "RUN echo 'x <<EOF y'\nFROM alpine:3.20\n",
+        "RUN echo \\<<EOF\nFROM alpine:3.20\n",
+    ] {
+        let deps = extract(&read_files([("Dockerfile".into(), text.into())]));
+        assert_eq!(
+            deps.iter()
+                .map(|d| (d.package.as_str(), d.current.as_str()))
+                .collect::<Vec<_>>(),
+            [("alpine", "3.20")],
+            "{text:?}"
+        );
+    }
+}
+
+/// kustomize, Flux and Helm read tags and chart versions as strings, so a
+/// plain number is its text as written: `1.10` is not the float 1.1.
+#[test]
+fn numeric_yaml_tags_and_versions_keep_their_text() {
+    let files = read_files([
+        ("kustomization.yaml".into(), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nimages:\n  - name: nginx\n    newTag: 1.10\nhelmCharts:\n  - name: podinfo\n    repo: https://stefanprodan.github.io/podinfo\n    version: 2.0\n".into()),
+        ("apps/oci.yaml".into(), "apiVersion: source.toolkit.fluxcd.io/v1\nkind: OCIRepository\nmetadata:\n  name: chart\nspec:\n  url: oci://ghcr.io/example/charts/app\n  ref:\n    tag: 1.20\n".into()),
+        ("values.yaml".into(), "image:\n  repository: example/app\n  tag: 3.10\n".into()),
+    ]);
+    let mut found: Vec<(String, String)> = extract(&files)
+        .iter()
+        .map(|d| (d.package.clone(), d.current.clone()))
+        .collect();
+    found.sort();
+    let expected: Vec<(String, String)> = [
+        ("example/app", "3.10"),
+        ("ghcr.io/example/charts/app", "1.20"),
+        ("https://stefanprodan.github.io/podinfo|podinfo", "2.0"),
+        ("nginx", "1.10"),
+    ]
+    .iter()
+    .map(|(p, v)| ((*p).into(), (*v).into()))
+    .collect();
+    assert_eq!(found, expected);
+}
+
 /// Docker joins a continued line without a space, strips a byte-order mark,
 /// honours the escape directive and does not read heredoc bodies.
 #[test]
@@ -820,6 +886,7 @@ fn dockerfiles_are_read_the_way_docker_reads_them() {
         "\u{feff}FROM nginx:1.26\n",
         "# escape=`\nFROM `\n  nginx:1.26\n",
         "FROM nginx:1.26\nRUN <<EOT\nFROM alpine:3.20\nEOT\nCOPY <<-EOF /x\n\tFROM busybox:1\n\tEOF\n",
+        "FROM nginx:1.26\nRUN 3<<\"END\" cat <&3\nFROM alpine:3.20\nEND\n",
     ] {
         let deps = extract(&read_files([("Dockerfile".into(), text.into())]));
         assert_eq!(

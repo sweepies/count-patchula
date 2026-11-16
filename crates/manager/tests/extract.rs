@@ -311,7 +311,7 @@ fn catalogs_and_node_version_files_are_npm_dependencies() {
 /// name no registry version, in manifests and catalogs alike; `npm:` still
 /// aliases one.
 #[test]
-fn local_protocol_specifiers_are_not_registry_versions() {
+fn only_registry_specifiers_are_registry_versions() {
     let mut config = config();
     config.managers = vec![Manager::Npm];
     let scanner = Scanner::new(&config).unwrap();
@@ -323,7 +323,21 @@ fn local_protocol_specifiers_are_not_registry_versions() {
                 "patch-dep":"patch:real@npm:1.0.0#./fixes/dep.patch",
                 "exec-dep":"exec:./script.sh",
                 "linked":"link:../x",
+                "gitlab-dep":"gitlab:acme/foo",
+                "bitbucket-dep":"bitbucket:acme/foo#v1",
+                "gist-dep":"gist:11081aaa281",
+                "hub-dep":"github:acme/foo",
+                "git-dep":"git+ssh://git@example.com/acme/foo.git",
+                "shorthand":"acme/foo",
+                "shorthand-ref":"acme/foo#semver:^1.0",
+                "home":"~/src/foo",
+                "tarball":"foo-1.0.0.tgz",
+                "url":"https://example.com/foo.tgz",
+                "unknown":"jsr:@std/path@1",
+                "bare-alias":"npm:@scope/real",
                 "aliased":"npm:real@^2.0.0",
+                "tilde":"~1.2.3",
+                "tag":"latest",
                 "plain":"^1.2.3"
             }}"#
             .into(),
@@ -342,6 +356,8 @@ fn local_protocol_specifiers_are_not_registry_versions() {
         names,
         [
             ("package.json", "aliased", "^2.0.0"),
+            ("package.json", "tilde", "~1.2.3"),
+            ("package.json", "tag", "latest"),
             ("package.json", "plain", "^1.2.3"),
             ("pnpm-workspace.yaml", "realdep", "1.2.3"),
         ]
@@ -1004,6 +1020,51 @@ fn lockfile_only_registry_packages_are_listed_apart_from_dependencies() {
     let dep = bar.dependency();
     assert_eq!(dep.kind, DependencyKind::Transitive);
     assert_eq!(dep.file, "package-lock.json");
+}
+
+/// A lockfile package is from a registry only when its `resolved` URL is
+/// on the public registry or on the registry its `.npmrc` names for it: a
+/// tarball elsewhere is not checked under its public name.
+#[test]
+fn lockfile_packages_resolved_off_their_registry_are_not_listed() {
+    let files = read_files([
+        (
+            ".npmrc".into(),
+            "@acme:registry=https://npm.acme.dev/repo/\n".into(),
+        ),
+        ("package.json".into(), r#"{"dependencies":{}}"#.into()),
+        (
+            "package-lock.json".into(),
+            r#"{"lockfileVersion":3,"packages":{
+                "":{},
+                "node_modules/public":{"version":"1.0.0","resolved":"https://registry.npmjs.org/public/-/public-1.0.0.tgz"},
+                "node_modules/mirror":{"version":"1.0.0","resolved":"https://registry.yarnpkg.com/mirror/-/mirror-1.0.0.tgz"},
+                "node_modules/tarball":{"version":"1.0.0","resolved":"https://example.com/tarball-1.0.0.tgz"},
+                "node_modules/@acme/ui":{"version":"2.0.0","resolved":"https://npm.acme.dev/repo/@acme/ui/-/ui-2.0.0.tgz"},
+                "node_modules/@acme/beside":{"version":"2.0.0","resolved":"https://npm.acme.dev/other/@acme/beside/-/beside-2.0.0.tgz"},
+                "node_modules/@acme/public":{"version":"2.0.0","resolved":"https://registry.npmjs.org/@acme/public/-/public-2.0.0.tgz"},
+                "node_modules/dup":{"version":"3.0.0"},
+                "node_modules/public/node_modules/dup":{"version":"3.0.0"}
+            }}"#
+            .into(),
+        ),
+    ]);
+    let extraction = Scanner::new(&config()).unwrap().extract(&files).unwrap();
+    let locked: Vec<_> = extraction
+        .locked
+        .iter()
+        .map(|l| (l.package.as_str(), l.registry.is_some()))
+        .collect();
+    assert_eq!(
+        locked,
+        [
+            ("public", false),
+            ("mirror", false),
+            ("@acme/ui", true),
+            ("@acme/public", true),
+            ("dup", false),
+        ]
+    );
 }
 
 /// `aube-lock.yaml` is pnpm's v9 format: `importers` give each manifest's

@@ -49,20 +49,36 @@ impl Locked {
     }
 }
 
-fn direct(
-    dependencies: &[Dependency],
-    manager: Manager,
-    lock: &str,
-    package: &str,
-    version: &str,
-) -> bool {
-    let root = lock.rsplit_once('/').map_or("", |(dir, _)| dir);
-    dependencies.iter().any(|d| {
-        d.manager == manager
-            && d.package == package
-            && d.resolved.as_deref() == Some(version)
-            && (root.is_empty() || d.file.starts_with(&format!("{root}/")))
-    })
+/// The manifests that declare each package at each resolved version, for
+/// one manager, indexed once rather than scanned per lockfile entry.
+struct Direct<'a>(BTreeMap<(&'a str, &'a str), Vec<&'a str>>);
+
+impl<'a> Direct<'a> {
+    fn new(dependencies: &'a [Dependency], manager: Manager) -> Self {
+        let mut index = BTreeMap::<_, Vec<_>>::new();
+        for dep in dependencies.iter().filter(|d| d.manager == manager) {
+            if let Some(resolved) = dep.resolved.as_deref() {
+                index
+                    .entry((dep.package.as_str(), resolved))
+                    .or_default()
+                    .push(dep.file.as_str());
+            }
+        }
+        Self(index)
+    }
+    /// Whether a manifest under the lockfile's directory declares the
+    /// package at this version.
+    fn contains(&self, lock: &str, package: &str, version: &str) -> bool {
+        let root = lock.rsplit_once('/').map_or("", |(dir, _)| dir);
+        self.0.get(&(package, version)).is_some_and(|files| {
+            files.iter().any(|file| {
+                root.is_empty()
+                    || file
+                        .strip_prefix(root)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+        })
+    }
 }
 
 /// crates.io packages in each `Cargo.lock`.
@@ -71,6 +87,7 @@ pub(crate) fn cargo(
     documents: &BTreeMap<&str, Document<&str>>,
     dependencies: &[Dependency],
 ) -> Vec<Locked> {
+    let direct = Direct::new(dependencies, Manager::Cargo);
     let mut out = Vec::new();
     for (path, doc) in documents.iter().filter(|(p, _)| p.ends_with("Cargo.lock")) {
         let Some(packages) = doc.get("package").and_then(Item::as_array_of_tables) else {
@@ -91,7 +108,7 @@ pub(crate) fn cargo(
             let (Some(text), Some(span)) = (version.as_str(), version.span()) else {
                 continue;
             };
-            if !registry || direct(dependencies, Manager::Cargo, path, name, text) {
+            if !registry || direct.contains(path, name, text) {
                 continue;
             }
             out.push(Locked {
@@ -115,11 +132,18 @@ pub(crate) fn cargo(
 }
 
 /// Registry packages under `node_modules` in each `package-lock.json`.
+/// A package is from a registry when its entry names no `resolved` URL, or
+/// one on the public registry or on the registry its `.npmrc` names for it
+/// (or its settings cannot be read, so its lookup fails rather than
+/// guess). Any other URL is a tarball or git source whose name may be
+/// someone else's on the public registry.
 pub(crate) fn npm(
     files: &Files,
     locks: &BTreeMap<&str, Value<'_>>,
     dependencies: &[Dependency],
+    npmrcs: &BTreeMap<&str, crate::npm::Npmrc>,
 ) -> Vec<Locked> {
+    let direct = Direct::new(dependencies, Manager::Npm);
     let mut out = Vec::new();
     for (path, root) in locks
         .iter()
@@ -129,6 +153,7 @@ pub(crate) fn npm(
             continue;
         };
         let lines = Lines::new(read_text(files, path));
+        let mut seen = std::collections::BTreeSet::new();
         for entry in &packages.properties {
             let key = entry.name.as_str();
             let Some((_, name)) = key.rsplit_once("node_modules/") else {
@@ -140,15 +165,18 @@ pub(crate) fn npm(
             let Some(version) = object.get_string("version") else {
                 continue;
             };
-            let from_registry = object
-                .get_string("resolved")
-                .is_none_or(|r| r.value.starts_with("https://"));
+            let from_registry = object.get_string("resolved").is_none_or(|resolved| {
+                crate::npm::public(&resolved.value)
+                    || match crate::npm::named_for(path, name, npmrcs) {
+                        crate::origins::Named::Public => false,
+                        crate::origins::Named::Url(registry) => under(&resolved.value, &registry),
+                        crate::origins::Named::Unusable(_) => true,
+                    }
+            });
             if object.get_boolean("link").is_some_and(|l| l.value)
                 || !from_registry
-                || direct(dependencies, Manager::Npm, path, name, &version.value)
-                || out.iter().any(|l: &Locked| {
-                    l.file == *path && l.package == name && l.version == version.value
-                })
+                || direct.contains(path, name, &version.value)
+                || !seen.insert((name, version.value.to_string()))
             {
                 continue;
             }
@@ -170,6 +198,15 @@ pub(crate) fn npm(
         }
     }
     out
+}
+
+/// Whether `url` is on the registry at `registry` (a URL with no trailing
+/// slash): the same host, and a path under the registry's own.
+fn under(url: &str, registry: &str) -> bool {
+    let path = |u: &str| u.splitn(4, '/').nth(3).unwrap_or("").to_owned();
+    let base = path(registry);
+    crate::web_host(url).is_some_and(|host| crate::web_host(registry) == Some(host))
+        && (base.is_empty() || path(url).starts_with(&format!("{base}/")))
 }
 
 /// What an `aube-lock.yaml` records: the version each importer's manifest
@@ -304,13 +341,15 @@ pub(crate) fn aube(
             .get(&(dep.file.clone(), dep.name.clone()))
             .cloned();
     }
+    if !transitive {
+        return Ok(Vec::new());
+    }
+    let direct = Direct::new(dependencies, manager);
     let mut out: Vec<Locked> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for (file, package, version, location) in lock.transitive {
-        if !transitive
-            || direct(dependencies, manager, &file, &package, &version)
-            || out
-                .iter()
-                .any(|l| l.file == file && l.package == package && l.version == version)
+        if direct.contains(&file, &package, &version)
+            || !seen.insert((file.clone(), package.clone(), version.clone()))
         {
             continue;
         }

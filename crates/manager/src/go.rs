@@ -74,16 +74,7 @@ pub(super) fn extract(
                 kind: DependencyKind::Production,
                 current: version.as_str().into(),
                 resolved: Some(version.as_str().into()),
-                digest: version
-                    .as_str()
-                    .rsplit_once('-')
-                    .and_then(|(prefix, hash)| {
-                        (prefix.rsplit('-').next().is_some_and(|time| {
-                            time.len() == 14 && time.bytes().all(|b| b.is_ascii_digit())
-                        }) && hash.len() == 12
-                            && hash.bytes().all(|b| b.is_ascii_hexdigit()))
-                        .then(|| hash.to_owned())
-                    }),
+                digest: pseudo_commit(version.as_str()).map(str::to_owned),
                 source: Source::Go,
                 scheme: Scheme::Go,
                 extract: None,
@@ -140,6 +131,27 @@ const REPLACED: &str = "replaced by a `replace` directive or taken from the work
 /// The modules `replace` directives in `text` (a `go.mod` or `go.work`)
 /// name on their left, whatever version they replace; none when a
 /// directive is not one the Count can read.
+/// The commit a Go pseudo-version names, in any of its three forms:
+/// `v0.0.0-20240101120000-abcdef123456` (no earlier tag),
+/// `v1.2.4-0.20240101120000-abcdef123456` (after a release) and
+/// `v1.0.0-rc.1.0.20240101120000-abcdef123456` (after a prerelease), each
+/// optionally `+incompatible`. The pattern is Go's own
+/// (`golang.org/x/mod/module.IsPseudoVersion`), with the 12-digit commit
+/// hash a git revision takes.
+fn pseudo_commit(version: &str) -> Option<&str> {
+    static PSEUDO: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(concat!(
+            r"^v[0-9]+\.(?:0\.0-|[0-9]+\.[0-9]+-(?:[^+]*\.)?0\.)[0-9]{14}",
+            r"-(?<hash>[0-9a-f]{12})(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+        ))
+        .expect("Go pseudo-version pattern")
+    });
+    PSEUDO
+        .captures(version)
+        .and_then(|c| c.name("hash"))
+        .map(|m| m.as_str())
+}
+
 fn replaced(text: &str) -> Option<BTreeSet<String>> {
     let mut out = BTreeSet::new();
     let mut block = false;

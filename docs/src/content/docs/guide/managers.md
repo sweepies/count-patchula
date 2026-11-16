@@ -8,7 +8,11 @@ and `files` replaces one manager's file patterns.
 
 Edits are surgical. Each dependency is extracted with the exact byte range of
 its version, and an update rewrites those bytes and nothing else, keeping your
-quoting, comments and formatting.
+quoting, comments and formatting. A YAML value is read as written: a plain
+`tag: 1.10` is the tag `1.10`, not the number 1.1. A new plain YAML value stays
+unquoted only when YAML reads it back as the same text; otherwise it is
+written in double quotes, so `tag: 1.9` becomes `tag: "1.10"` and `version: 2`
+becomes `version: "3"`.
 
 | Manager | Files | Lockfile the Count regenerates |
 |---|---|---|
@@ -57,8 +61,12 @@ branch cleanup or auto-merge.
 
 `npm` covers dependencies, devDependencies, peers, optional dependencies,
 aliases (`npm:pkg@^1`), nested overrides, resolutions and `packageManager`.
-`workspace:`, `file:`, `link:`, `catalog:`, `portal:`, `patch:` and the other
-local protocols name no registry version and are left alone. Catalogs are
+Only a version, range or dist-tag names a registry version. Everything else
+is left alone, since the package of that name on the registry may be someone
+else's: `workspace:`, `file:`, `link:`, `catalog:`, `portal:`, `patch:` and
+the other local protocols, `github:`, `gitlab:`, `bitbucket:`, `gist:`, git
+and tarball URLs, any other `scheme:`, the `owner/repo` GitHub shorthand,
+paths and `.tgz` files. Catalogs are
 dependencies where they are declared: `catalog` and named `catalogs` in
 `pnpm-workspace.yaml`, `.yarnrc.yml` for Yarn 4, and the root `package.json`
 for Bun. `.nvmrc` and `.node-version` pin Node; aliases such as
@@ -71,7 +79,9 @@ updated twice. Binary `bun.lockb` is not supported; switch to text `bun.lock`.
 ## GitHub Actions
 
 Workflow steps, reusable workflows, job containers, services and composite
-action steps. `run:` text, expressions and local `./` actions are ignored.
+action steps, found through the file's YAML structure. `run:` text, even a
+line in it that looks like a step, expressions and local `./` actions are
+ignored.
 Actions and images are pinned to digests by default, keeping the version in a
 comment. A SHA pin with a version comment (`@8e5e7e5... # v4.2.2`) upgrades
 both; one without a comment cannot safely pick a replacement tag, so it stays
@@ -204,7 +214,10 @@ uses, is listed as skipped, and so is a module the workspace itself holds:
 its requirement is not what the build uses, and moving it past a
 version-specific replacement would take the build off the replacement. A
 `replace` directive, `go.work` or used module the Count cannot read fails
-every lookup of that module.
+every lookup of that module. A pseudo-version records the commit it names, in
+all three of Go's forms (`v0.0.0-20240101120000-abcdef123456`,
+`v1.2.4-0.20240101120000-abcdef123456` and
+`v1.0.0-rc.1.0.20240101120000-abcdef123456`).
 
 Terraform reads providers, registry modules and the provider lock with a real
 HCL parser; `.terraform-version` pins Terraform itself.
@@ -281,7 +294,10 @@ When `apm.lock.yaml` sits beside `apm.yml`, the Count refreshes it with
 ## Containers and Kubernetes
 
 Dockerfiles support global `ARG` substitution, continuations, `--platform` and
-stage aliases; `scratch` and references to earlier stages are skipped. Compose
+stage aliases; `scratch` and references to earlier stages are skipped. Heredoc
+bodies are not instructions. As in BuildKit, a heredoc opens only at a whole
+unquoted word (`<<EOF`, `<<-EOF`, `<<"EOF"`), not at a here-string (`<<<word`)
+or inside quotes. Compose
 reads each service's `image`. Kubernetes reads workload images, Kustomize its
 `images` and `helmCharts` transforms, Flux its repositories and releases, and
 Helm values files their `repository`/`tag`/`digest` maps. ConfigMaps, Secrets

@@ -2,14 +2,10 @@ use crate::*;
 use patchula_config::join_package;
 use serde_yaml_ng::Value;
 
-fn scalar(v: &Value) -> Option<String> {
-    v.as_str()
-        .map(str::to_owned)
-        .or_else(|| v.as_i64().map(|v| v.to_string()))
-        .or_else(|| v.as_f64().map(|v| v.to_string()))
-}
+/// A string field: kinds, names, URLs. Versions and tags are read with
+/// [`Scan::version`], which keeps a plain number's text.
 fn get(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(scalar)
+    v.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 pub(super) fn docs(text: &str) -> Result<Vec<Value>, String> {
     serde_yaml_ng::Deserializer::from_str(text)
@@ -51,6 +47,16 @@ impl Scan<'_, '_> {
     fn location(&self, pointer: &str) -> Result<Location, String> {
         self.locations.get(pointer).cloned().ok_or_else(||format!("cannot locate YAML scalar {pointer}; aliased/template scalars need a concrete value"))
     }
+    /// A version or tag at `pointer`, as the tool reading it sees it. These
+    /// fields are strings to kustomize, Flux and Helm's image templates, so a
+    /// plain number is its text as written: `1.10`, not the float 1.1.
+    fn version(&self, value: &Value, pointer: &str) -> Result<Option<String>, String> {
+        if value.is_number() {
+            let location = self.location(pointer)?;
+            return Ok(Some(self.text[location.start..location.end].to_owned()));
+        }
+        Ok(value.as_str().map(str::to_owned))
+    }
     /// `digest_pointer` is the pointer of the sibling field holding the image
     /// digest when the located value is the tag alone.
     fn image(
@@ -84,7 +90,7 @@ impl Scan<'_, '_> {
         version: &Value,
         pointer: &str,
     ) -> Result<(), String> {
-        let Some(current) = scalar(version) else {
+        let Some(current) = self.version(version, pointer)? else {
             return Ok(());
         };
         let location = self.location(pointer)?;
@@ -111,10 +117,13 @@ impl Scan<'_, '_> {
     fn images(&mut self, value: &Value, pointer: &str, values: bool) -> Result<(), String> {
         match value {
             Value::Mapping(map) => {
-                if values
-                    && let (Some(repo), Some(tag)) =
-                        (get(value, "repository"), value.get("tag").and_then(scalar))
-                {
+                let tag_pointer = format!("{pointer}/tag");
+                let repo = get(value, "repository").filter(|_| values);
+                let tag = match value.get("tag").filter(|_| repo.is_some()) {
+                    Some(tag) => self.version(tag, &tag_pointer)?,
+                    None => None,
+                };
+                if let (Some(repo), Some(tag)) = (repo, tag) {
                     let repo = get(value, "registry")
                         .filter(|r| !r.is_empty())
                         .map_or(repo.clone(), |r| format!("{r}/{repo}"));
@@ -124,11 +133,7 @@ impl Scan<'_, '_> {
                             .filter(|d| !d.is_empty())
                             .map_or(String::new(), |d| format!("@{d}"))
                     );
-                    self.image(
-                        &image,
-                        &format!("{pointer}/tag"),
-                        Some(format!("{pointer}/digest")),
-                    )?;
+                    self.image(&image, &tag_pointer, Some(format!("{pointer}/digest")))?;
                 }
                 for (key, v) in map {
                     let Some(key) = key.as_str() else {
@@ -267,14 +272,19 @@ pub(super) fn extract(
                 if let Some(items) = doc.get("images").and_then(Value::as_sequence) {
                     for (i, image) in items.iter().enumerate() {
                         let name = get(image, "newName").or_else(|| get(image, "name"));
-                        if let (Some(name), Some(tag)) = (name, get(image, "newTag")) {
+                        let tag_pointer = format!("{pointer}/images/{i}/newTag");
+                        let tag = match image.get("newTag").filter(|_| name.is_some()) {
+                            Some(tag) => scan.version(tag, &tag_pointer)?,
+                            None => None,
+                        };
+                        if let (Some(name), Some(tag)) = (name, tag) {
                             let full = format!(
                                 "{name}:{tag}{}",
                                 get(image, "digest").map_or(String::new(), |d| format!("@{d}"))
                             );
                             scan.image(
                                 &full,
-                                &format!("{pointer}/images/{i}/newTag"),
+                                &tag_pointer,
                                 Some(format!("{pointer}/images/{i}/digest")),
                             )?;
                         } else if let Some(image) = image.as_str() {

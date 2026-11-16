@@ -162,8 +162,8 @@ pub enum Syntax {
     /// Raw text a custom extractor captured; a replacement may hold
     /// whitespace.
     Text,
-    /// A span inside a quoted string; a replacement holding a quote,
-    /// backslash or whitespace is refused.
+    /// A span inside a quoted string or a plain YAML scalar; a replacement
+    /// holding a quote, backslash or whitespace is refused.
     InnerToken,
     /// A span inside a quoted string where spaces are allowed; a
     /// replacement holding a quote or backslash is refused.
@@ -172,11 +172,10 @@ pub enum Syntax {
     Gradle,
     /// A JSON string literal, quotes included in the location.
     Json,
-    /// A YAML scalar, quotes included when the file quotes it.
+    /// A YAML scalar, quotes included when the file quotes it. A plain
+    /// number is read as written (`1.10` stays `1.10`), and a replacement
+    /// stays plain only when YAML reads it back as the same string.
     Yaml,
-    /// A YAML scalar holding a tag name or ref: a plain number stays text
-    /// rather than decoding as a float.
-    YamlName,
     /// A TOML string literal, quotes included in the location.
     Toml,
 }
