@@ -54,6 +54,39 @@ real-installation proof lives ignored in `crates/github/tests/app.rs`: set
 `PATCHULA_TEST_OTHER_PRIVATE_REPO`, then run
 `mise exec -- cargo test -p patchula-github --test app -- --ignored`.
 
+## Token scope
+
+The cache namespace of a client built from a token is a SHA-256 of the
+token, which a token minted per run changes every run. `Client::identify`
+replaces it, before the client is cloned, for an installation token (`ghs_`,
+which includes an Action's `GITHUB_TOKEN`). It reads, live and never from the
+cache:
+
+- `GET /installation/repositories?per_page=100`, at most ten pages, for
+  `repository_selection` and the repository ids;
+- GraphQL `viewer { databaseId }`, the App's bot user;
+- `GET /repos/{repository}/commits?per_page=1` on a repository in the set,
+  a private one when there is one, which needs `contents: read`.
+
+The scope is then `{api root}|app:{bot id}/repos:{sha256 of the sorted ids}`
+whatever the selection, so a token narrowed to some repositories never shares
+the full installation's entries even if GitHub called its selection `all`.
+Any non-2xx answer, a missing or unknown `repository_selection` or one that
+changes between pages, a listing past the page cap, empty, naming a
+repository twice or whose count disagrees with `total_count`, a viewer
+without an id, or a failed contents read keeps the token hash. An
+installation with more than a thousand repositories therefore keeps it too.
+Personal, OAuth and user tokens keep it without a request. The [threat
+model](/internals/threat-model/#cache-scopes) says why the scope may leave
+permissions out.
+
+`unrevalidated::ENDPOINTS` lists every endpoint whose cached answer is
+returned without asking GitHub: Git blobs, recursive trees and commits, under
+`repos/{owner}/{repo}` or a renamed repository's `repositories/{id}`. A read
+that skips revalidation on anything else fails with `Error::Unrevalidated`,
+and a unit test checks the path of every `get_immutable` call in the
+workspace against the list.
+
 ## Transport
 
 reqwest 0.13 uses HTTP/2 negotiation, rustls, gzip, brotli and zstd
@@ -81,15 +114,17 @@ read whose answer cannot change, a Git blob, commit or tree named by its SHA:
 the cache holds need no request, the rest go through GraphQL fifty to a query,
 and a blob counts from GraphQL only when its text hashes to the SHA asked for.
 Binary, truncated or mismatched blobs come through REST instead. Either way the
-blob is cached as its REST representation. A 304 reuses the
+blob is cached as its REST representation. A cached blob counts only when it
+hashes to its SHA too; one that does not is dropped and read again. A 304 reuses the
 cached status and body and merges headers, keeping a cached pagination `Link`
 if GitHub omits it. `no-store`, `Vary: *` and `Vary: User-Agent` responses are
 not kept. Any other `Vary` names a header the key holds (`Accept`, the API
 version), one the client never sends, `Accept-Encoding` (bodies are stored
 decoded) or authorization, which the key's credential namespace covers: a
 refreshed token is the same installation. So `Vary` never splits the key. Keys include the normalised URL, `Accept`, the API
-version and a SHA-256 namespace of the credential, so data is never shared
-between credentials; tokens are never stored in keys. Cookies and
+version and a SHA-256 namespace of the credential's scope (see [token
+scope](#token-scope)), so data is shared only between credentials with the
+same reach; tokens are never stored in keys. Cookies and
 authorization are never cached.
 
 ## Writes

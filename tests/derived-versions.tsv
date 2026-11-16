@@ -41,11 +41,11 @@ oci-config-notes	1	crates/datasource/src/docker.rs,crates/datasource/src/upstrea
 oci-tags	1	crates/datasource/src/docker.rs,crates/http/src/derive.rs	serde,serde_json	1793d5ba9d90c2f7d4f7cc78cbdb2bf199bc463dbfa454c8296e3e13f6fa1808
 image-platform	4	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json,sha2	1c9dde1bd7781e14e0a02afe2256d2fad4044258a7a12ba9fe708422b81bd4d6
 sbom-os	4	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	base64,serde,serde_json,sha2	1c9dde1bd7781e14e0a02afe2256d2fad4044258a7a12ba9fe708422b81bd4d6
-github-release-head	6	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	ebec9a065bad0efc69cf90fa79b64c3fd40ea93fe498c572b184f760bbfe1320
+github-release-head	7	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	4bd4bb7c7a8b0ee7da15155341a383c23f0a292d9bc6b491cafa6289a9233b46
 anonymous-registry-pull-token	1	crates/datasource/src/docker.rs	chrono,serde,serde_json	e8d7be4142dd9b7f394b4f633656f200b7003bd1fec689a051750576ef313cd3
-notes-adapter-listing	7	crates/notes/src/adapters.rs,crates/http/src/derive.rs	serde,serde_json	51afbd233292614a4563542f50198d2340ea23efe6128cb2cfb4d84de36f9d67
-parsed-postgres-sgml	7	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	0f919d21d51d698e46b47a0b76386d90295027ee1d5442efc3e315917d5cff95
-parsed-go-history	7	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	0f919d21d51d698e46b47a0b76386d90295027ee1d5442efc3e315917d5cff95
+notes-adapter-listing	8	crates/notes/src/adapters.rs,crates/http/src/derive.rs	serde,serde_json	4cf11b537d34ef0b7b3c90ba08f00d183a58309d93d9e8061f03abacc33fabec
+parsed-postgres-sgml	8	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	3b44ae53e09ea9f90310d7e52b57608bd9d000c0a2c694df349acbb1818bc0ef
+parsed-go-history	8	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	3b44ae53e09ea9f90310d7e52b57608bd9d000c0a2c694df349acbb1818bc0ef
 notes-changelog-directory	2	crates/notes/src/changelog.rs,crates/http/src/derive.rs	serde,serde_json	cfdbcf0b889ca0085086dff4fce9c425bea04ca7048d310529c5419650d06bfb
 parsed-changelog	2	crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	base64,regex,serde,serde_json	33540363ff352bdb20e06527ad2df8ff69c7c82b85dc682647f1545f551da1d3
 notes-gitlab-releases	2	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	2ae8edbf23c93e30b731507b8357a7a1f7bdb76475796a83fb9288e57570439e

@@ -517,6 +517,7 @@ async fn views_are_kept_per_access_and_a_repository_view_by_its_id() {
         memory().await,
         Arc::new(Registry::default()),
     )
+    .await
     .unwrap();
     let at = |access: MiseAccess| (false, PackageId::public(Source::Npm, "fixture"), access);
     let keys = [

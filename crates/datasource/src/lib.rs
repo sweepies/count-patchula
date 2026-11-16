@@ -105,6 +105,7 @@ impl Error {
                 | GithubError::Graphql(_)
                 | GithubError::Pagination
                 | GithubError::Redirect
+                | GithubError::Unrevalidated
                 | GithubError::MissingBody,
             )
             | Error::Cache(_)

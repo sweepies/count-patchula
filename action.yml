@@ -84,9 +84,10 @@ runs:
         fi
         echo "bin=$bin" >> "$GITHUB_OUTPUT"
         echo "lineage=s$schema" >> "$GITHUB_OUTPUT"
-    # The cache holds HTTP validators, write receipts and the lockfile tool
-    # store. Each run saves a new entry and restores the newest one.
-    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+    # The cache holds HTTP validators, write receipts, Git objects and the
+    # lockfile tool store. Each run restores the newest entry and, when the
+    # step after the run allows it, saves a new one.
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/patchula
         key: patchula-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.patchula.outputs.lineage }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -126,3 +127,41 @@ runs:
         mkdir -p "$CACHE_DIR"
         args+=(--cache "$CACHE_DIR")
         "$PATCHULA_BIN" "${args[@]}"
+    # The saved cache is as confidential as the token that filled it, and a
+    # fork's pull request can restore a public repository's cache without
+    # holding any secret. So a public repository saves it only when the token
+    # is an installation token that reaches this repository alone. Anything
+    # the check cannot prove, a personal token included, saves nothing.
+    - name: Decide whether to save the cache
+      id: save
+      shell: bash
+      env:
+        PATCHULA_TOKEN: ${{ inputs.token }}
+      run: |
+        set -uo pipefail
+        get() {
+          printf 'Authorization: Bearer %s\n' "$PATCHULA_TOKEN" |
+            curl -fsS --max-time 30 -H @- -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' "$GITHUB_API_URL/$1"
+        }
+        save=false
+        if repository=$(get "repos/$GITHUB_REPOSITORY"); then
+          private=$(jq -r '.private' <<< "$repository")
+          id=$(jq -r '.id' <<< "$repository")
+          if [ "$private" = true ]; then
+            save=true
+          elif [ "$private" = false ] && [[ "$PATCHULA_TOKEN" == ghs_* ]] &&
+            listing=$(get "installation/repositories?per_page=2") &&
+            [ "$(jq -r '[.total_count, (.repositories | map(.id) | join(","))] | join(" ")' <<< "$listing")" = "1 $id" ]; then
+            save=true
+          fi
+        fi
+        if [ "$save" != true ]; then
+          echo "::notice::The Count's cache is not saved: this repository is not private and the token was not shown to reach it alone."
+        fi
+        echo "save=$save" >> "$GITHUB_OUTPUT"
+    - if: steps.save.outputs.save == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/patchula
+        key: patchula-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.patchula.outputs.lineage }}-${{ github.run_id }}-${{ github.run_attempt }}

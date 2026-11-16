@@ -50,6 +50,7 @@ async fn from_settings_builds_the_configured_engine() {
         cache,
         Arc::new(Never),
     )
+    .await
     .unwrap();
     let Err(error) = engine.set_batch_options(0, patchula_words::Recheck::NextRun) else {
         panic!("batch options were accepted")
@@ -64,7 +65,9 @@ async fn from_settings_builds_the_configured_engine() {
         patchula_words::Recheck::NextRun,
         cache,
         Arc::new(Never),
-    ) else {
+    )
+    .await
+    else {
         panic!("the engine was built")
     };
     assert!(error.to_string().contains("concurrency"), "{error}");

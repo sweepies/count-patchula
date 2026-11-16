@@ -389,25 +389,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 14;
+    const VERSION: u32 = 15;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 17;
+    const VERSION: u32 = 18;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 17;
+    const VERSION: u32 = 18;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 14;
+    const VERSION: u32 = 15;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -667,7 +667,7 @@ impl Engine {
     /// cache limit; `auth` is the GitHub identity; `concurrency` and `recheck`
     /// are the batch's current values. Advisory checks are on, as both entry
     /// points run them.
-    pub fn from_settings(
+    pub async fn from_settings(
         settings: &patchula_config::settings::Settings,
         credentials: Vec<patchula_http::Credential>,
         auth: Auth,
@@ -684,17 +684,24 @@ impl Engine {
         let github_options = self::settings::github_options(settings);
         let github = match &auth {
             // A token run is the CLI's: its GitHub concurrency is the HTTP
-            // options' GitHub host limit, not the server's setting.
-            Auth::Token(token) => Github::with_transport(
-                token,
-                cache.clone(),
-                GithubOptions {
-                    concurrency: http_options.github_limit(),
-                    write_burst: github_options.write_burst,
-                    ..Default::default()
-                },
-                transport.clone(),
-            )?,
+            // options' GitHub host limit, not the server's setting. Its cache
+            // scope is the token's reach when GitHub reports one, so an
+            // installation token minted per run still finds the last run's
+            // entries.
+            Auth::Token(token) => {
+                Github::with_transport(
+                    token,
+                    cache.clone(),
+                    GithubOptions {
+                        concurrency: http_options.github_limit(),
+                        write_burst: github_options.write_burst,
+                        ..Default::default()
+                    },
+                    transport.clone(),
+                )?
+                .identify()
+                .await
+            }
             Auth::Credentials(credentials) => Github::with_credentials(
                 credentials.clone(),
                 cache.clone(),
@@ -1672,6 +1679,7 @@ mod tests {
                 Cache::open(":memory:", Default::default()).await.unwrap(),
                 Arc::new(Never),
             )
+            .await
             .unwrap()
         };
         let installation = engine(Auth::Credentials(Arc::new(Minting))).await;
@@ -1756,6 +1764,7 @@ mod tests {
             cache,
             Arc::new(Never),
         )
+        .await
         .unwrap();
         assert_eq!(engine.github.write_burst(), 1);
     }

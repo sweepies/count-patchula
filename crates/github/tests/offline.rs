@@ -129,14 +129,14 @@ async fn a_vary_response_is_stored_once_and_revalidated_but_vary_star_is_not() {
     // prove nothing was stored.
     for _ in 0..3 {
         client
-            .get_immutable_response("repos/o/r/vary-star")
+            .get_immutable_response("repos/o/r/git/blobs/star")
             .await
             .unwrap();
     }
     let counts = transport.counts.lock().unwrap();
     // One store and one revalidation: the Vary response lives under a single key.
     assert_eq!(counts["/repos/o/r/vary"], 2);
-    assert_eq!(counts["/repos/o/r/vary-star"], 3);
+    assert_eq!(counts["/repos/o/r/git/blobs/star"], 3);
 }
 
 /// Answers every request with the same JSON body, and counts them.
@@ -200,8 +200,10 @@ struct Blobs {
     rest: AtomicUsize,
 }
 const HI: &str = "45b983be36b73c0788dc9cbcb76cbb80fc7bb057";
-const HO: &str = "8a3a5f1d1b5e7b8b9f1a1f2fa8ba9c2bb3f2e9f1";
-const BIN: &str = "0000000000000000000000000000000000000b1b";
+// `printf 'ho\n' | git hash-object --stdin`
+const HO: &str = "ab4a98190cf776b43cb0fe57cef231fb93fd07e6";
+// The blob of the bytes 0 and 1.
+const BIN: &str = "bdc955b7b2e610ad5a72302b139a2e6cb325519a";
 impl Transport for Blobs {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
         Box::pin(async move {

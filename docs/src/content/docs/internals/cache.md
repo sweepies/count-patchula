@@ -51,6 +51,9 @@ Keys normalise method case, the URL (authority, default port, path, fragment)
 and header names. Query order is kept, because repeated parameters can be
 order-sensitive. Callers choose the vary-relevant headers; for authenticated
 data they include a digest of the credential namespace, never a raw token.
+GitHub's namespace is the credential scope, which names the credential's
+reach (see [token scope](/internals/github-client/#token-scope)); hints,
+catalogs, listings and `inventory-actor` state are keyed by it too.
 The conditional-GET protocol the registry cache and the GitHub client share —
 keys, entries, validators, 304 merges, `Retry-After` and bounded decoding —
 lives in `patchula_http::conditional`; each client keeps its own freshness

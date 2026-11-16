@@ -710,6 +710,7 @@ impl Engines {
                 self.cache.clone(),
                 self.transport.clone(),
             )
+            .await
             .map_err(Error::cause("cannot create batch engine"))?;
             *slot = Some((key, engine));
         }

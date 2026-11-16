@@ -1194,6 +1194,7 @@ async fn report(
         cache,
         transport,
     )
+    .await
     .map_err(engine_failure)?;
     if let Some(spinner) = &spinner {
         engine = engine.with_progress(spinner.clone());
