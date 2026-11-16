@@ -705,16 +705,84 @@ fn links_keep_their_labels_and_only_bare_references_gain_readable_labels() {
     ] {
         assert_eq!(sanitise(link, Links::Github("google/uuid")), link);
     }
-    let text = "([#149](https://github.com/google/uuid/issues/149))\n[other/repo#2][ref]\n[ref]: https://github.com/other/repo/pull/2\n[#3](https://example.org/a#3 \"title\") #4 other/repo#5 `#6`";
+    let text = "([#149](https://github.com/google/uuid/issues/149))\n[other/repo#2][ref]\n\n[ref]: https://github.com/other/repo/pull/2\n\n[#3](https://example.org/a#3 \"title\") #4 other/repo#5 `#6`";
     assert_eq!(
         sanitise(text, Links::Github("google/uuid")),
-        "([#149](https://redirect.github.com/google/uuid/issues/149))\n[other/repo#2][ref]\n[ref]: https://redirect.github.com/other/repo/pull/2\n[#3](https://example.org/a#3 \"title\") [google/uuid#4](https://redirect.github.com/google/uuid/issues/4) [other/repo#5](https://redirect.github.com/other/repo/issues/5) `#6`"
+        "([#149](https://redirect.github.com/google/uuid/issues/149))\n[other/repo#2][ref]\n\n[ref]: https://redirect.github.com/other/repo/pull/2\n\n[#3](https://example.org/a#3 \"title\") [google/uuid#4](https://redirect.github.com/google/uuid/issues/4) [other/repo#5](https://redirect.github.com/other/repo/issues/5) `#6`"
     );
     let nested = "[**Fix #149** and `code #3`](https://github.com/google/uuid/issues/149)";
     assert_eq!(
         sanitise(nested, Links::Github("google/uuid")),
         nested.replace("https://github.com/", "https://redirect.github.com/")
     );
+}
+
+#[test]
+fn bracketed_text_github_shows_literally_is_neutralised_like_prose() {
+    let links = Links::Github("google/uuid");
+    let issue12 = "[google/uuid#12](https://redirect.github.com/google/uuid/issues/12)";
+    for (text, expected) in [
+        // No definition for the reference.
+        (
+            "Thanks [@alice][1]",
+            "Thanks [@\u{200d}alice][1]".to_owned(),
+        ),
+        ("[#12][x]", format!("[{issue12}][x]")),
+        ("[@alice][]", "[@\u{200d}alice][]".to_owned()),
+        // Parentheses that are not a CommonMark destination.
+        (
+            "[@org/team](see notes)",
+            "[@\u{200d}org/team](see notes)".to_owned(),
+        ),
+        ("[@alice](a (b)", "[@\u{200d}alice](a (b)".to_owned()),
+        ("[@alice](<a\nb>)", "[@\u{200d}alice](<a\nb>)".to_owned()),
+        (
+            "[@alice](a \"title)",
+            "[@\u{200d}alice](a \"title)".to_owned(),
+        ),
+        ("[@alice](\n\na)", "[@\u{200d}alice](\n\na)".to_owned()),
+        ("[@alice](a\\ b)", "[@\u{200d}alice](a\\ b)".to_owned()),
+        // Definitions GitHub does not honour: in code, interrupting a
+        // paragraph, with an escaped bracket, or with trailing text.
+        (
+            "```\n[1]: https://example.org\n```\n[@alice][1]",
+            "```\n[1]: https://example.org\n```\n[@\u{200d}alice][1]".to_owned(),
+        ),
+        (
+            "text\n[1]: https://example.org\n\n[@alice][1]",
+            "text\n[1]: https://example.org\n\n[@\u{200d}alice][1]".to_owned(),
+        ),
+        (
+            "[@alice][a\\]\n\n[a\\]: https://example.org",
+            "[@\u{200d}alice][a\\]\n\n[a\\]: https://example.org".to_owned(),
+        ),
+        (
+            "[@alice][1]\n\n[1]: https://example.org trailing",
+            "[@\u{200d}alice][1]\n\n[1]: https://example.org trailing".to_owned(),
+        ),
+        // Links do not nest: the inner one wins, the outer text is literal.
+        (
+            "[@alice [b](https://example.org)](https://example.com)",
+            "[@\u{200d}alice [b](https://example.org)](https://example.com)".to_owned(),
+        ),
+    ] {
+        assert_eq!(sanitise(text, links), expected, "{text}");
+    }
+    // Real links keep their labels.
+    for link in [
+        "[@alice][1]\n\n[1]: https://example.org",
+        "[@alice][]\n\n[@alice]: https://example.org",
+        "[@alice]\n\n## Links\n[@alice]: https://example.org \"title\"",
+        "[@alice](https://example.org)",
+        "[@alice](<a b>)",
+        "[@alice](https://example.org/(a)b)",
+        "[@alice](\n  https://example.org\n  \"t\")",
+        "[@alice](https://example.org 'it\\'s')",
+        "[![@badge](https://example.org/b.svg)](https://example.org)",
+        "[#12](https://example.org (title))",
+    ] {
+        assert_eq!(sanitise(link, links), link, "{link}");
+    }
 }
 
 #[test]
