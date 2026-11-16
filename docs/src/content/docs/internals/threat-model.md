@@ -155,6 +155,40 @@ dependency whose scripts, backend or gemspec write a marker file, reached
 directly and through a registry package, and checks that the marker never
 appears.
 
+## Cache scopes
+
+Results the Count keeps from GitHub (Git objects, HTTP validators, catalogs,
+listings, hints) are keyed by a credential scope that names the credential's
+reach, never its secret:
+
+- an App installation by the App and the installation;
+- an installation token (`ghs_`: an Action's App token or `GITHUB_TOKEN`) by
+  the API root, its App's bot user and either the whole account it is
+  installed on or the exact set of repositories it reaches, as GitHub
+  reports them for that token in the run. Anything unexpected in that
+  report keeps the token hash;
+- any other token (personal, OAuth or user tokens) by a hash of the token,
+  since GitHub does not report what it reaches.
+
+Two credentials share entries only when their reach is the same. A token
+narrowed to some repositories shares nothing with the full installation.
+
+Permissions are not part of the scope. Everything the cache answers without
+asking GitHub needs at most `contents: read` on a repository in the reach,
+and an installation token has the same permissions on every repository it
+reaches. So a token run uses its reach as the scope only after the token has
+read a repository's contents in that run, a private one when the reach has
+any. Anything that needs more is asked of GitHub every time.
+
+The scope is not a secret, so the cache file is trusted like the operator's
+settings: whoever can write the file the Count opens can plant entries in
+it. On a runner that is whoever can write the Actions cache the workflow
+restores, which is the operator, or the repository's own writers when the
+workflow lives in the repository it updates. A Git blob read from the cache
+must hash to its SHA, so a planted blob is read from GitHub again. Trees,
+commits, catalogs, listings and hints cannot be checked that way and stay
+plantable by that writer, as public registry responses always were.
+
 ## Out of scope
 
 - Protecting a repository from its own writers.

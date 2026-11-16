@@ -5,6 +5,7 @@ pub mod app;
 mod blobs;
 mod credentials;
 mod governor;
+mod identity;
 pub mod model;
 mod pagination;
 pub use blobs::blob_sha;
@@ -482,7 +483,8 @@ impl Client {
 
     /// A GET whose answer never changes, such as a Git blob by its SHA: a
     /// cached success is returned without asking GitHub again. The cache key
-    /// carries the credential scope, so another credential never reads it.
+    /// carries the credential scope, so a credential with another reach never
+    /// reads it.
     pub async fn get_immutable_response(&self, path: &str) -> Result<Response> {
         self.get_representation(path, None, Read::Immutable)
             .await?

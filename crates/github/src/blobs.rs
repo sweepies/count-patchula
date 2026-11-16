@@ -2,7 +2,10 @@
 //! in batches, else through REST. A blob read through GraphQL counts only when
 //! its text hashes to the SHA asked for, so a binary, truncated or re-encoded
 //! answer is never taken for the blob. Either way the blob is kept in the
-//! cache as its REST representation, so a later read needs no request.
+//! cache as its REST representation, so a later read needs no request. A
+//! cached blob counts only when it hashes to its SHA too: the cache is a file
+//! a run restores, and its scope names a reach, not a secret, so an entry
+//! planted under it is dropped and the blob read from GitHub again.
 use crate::{Client, Error, Read, Result, SENT};
 use base64::Engine;
 use futures_util::{StreamExt, stream};
@@ -69,9 +72,19 @@ impl Client {
         let mut missing = Vec::new();
         for item in cached {
             match item? {
-                (sha, Some(response)) => {
-                    out.insert(sha, decode(&response.body)?);
-                }
+                (sha, Some(response)) => match decode(&response.body) {
+                    Ok(content) if blob_sha(&content) == sha => {
+                        out.insert(sha, content);
+                    }
+                    _ => {
+                        self.0
+                            .cache
+                            .http_remove(&self.blob_key(repo, &sha)?)
+                            .await
+                            .map_err(|_| Error::Cache)?;
+                        missing.push(sha);
+                    }
+                },
                 (sha, None) => missing.push(sha),
             }
         }
@@ -109,9 +122,14 @@ impl Client {
             .into_iter()
             .filter(|sha| !out.contains_key(sha))
             .collect();
+        // The cache pass above already took every cached blob that hashes
+        // right, so these always ask GitHub.
         let fetched: Vec<Result<(String, Vec<u8>)>> = stream::iter(rest)
             .map(|sha| async move {
-                let response = self.get_immutable_response(&path(repo, &sha)).await?;
+                let response = self
+                    .get_representation(&path(repo, &sha), None, Read::Revalidate)
+                    .await?
+                    .ok_or(Error::MissingBody)?;
                 Ok((sha, decode(&response.body)?))
             })
             .buffer_unordered(self.concurrency())
@@ -187,23 +205,27 @@ impl Client {
             body,
             stale: None,
         };
+        self.0
+            .cache
+            .http_put(
+                &self.blob_key(repo, sha)?,
+                &conditional::entry(&response, conditional::unix_now()),
+            )
+            .await
+            .map_err(|_| Error::Cache)
+    }
+
+    /// The cache key a blob's REST representation is kept under.
+    fn blob_key(&self, repo: &str, sha: &str) -> Result<patchula_cache::HttpKey> {
         let url = self.url(&path(repo, sha))?;
-        let key = conditional::key(
+        conditional::key(
             "GET",
             url.as_str(),
             SENT,
             None,
             Some(self.credential_scope()),
         )
-        .map_err(|_| Error::Cache)?;
-        self.0
-            .cache
-            .http_put(
-                &key,
-                &conditional::entry(&response, conditional::unix_now()),
-            )
-            .await
-            .map_err(|_| Error::Cache)
+        .map_err(|_| Error::Cache)
     }
 }
 
