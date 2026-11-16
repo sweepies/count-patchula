@@ -3,6 +3,7 @@
 mod actions;
 mod apm;
 mod bundler;
+pub use bundler::{RenderedGemfile, render_gemfile};
 mod copier;
 mod edit;
 pub use actions::replacement as action_replacement;

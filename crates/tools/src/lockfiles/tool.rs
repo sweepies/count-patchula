@@ -24,7 +24,7 @@ pub(super) enum Install {
 /// them installed.
 #[derive(Clone, Copy)]
 pub(super) enum Run {
-    /// The binary itself: `mise exec -- tools -- bin args`.
+    /// The binary's program (`Bin::program`): `mise exec -- tools -- bin args`.
     Direct,
     /// Through rustup: the named tool's pin is the toolchain,
     /// `rustup run <version> bin`, with the run's own Cargo home.

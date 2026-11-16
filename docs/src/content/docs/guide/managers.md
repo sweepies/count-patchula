@@ -296,7 +296,11 @@ dependencies, PEP 735 dependency groups, uv's dev, constraint and override
 dependencies, and Poetry's dependencies and groups. Edits touch only the
 version specifier. URL requirements, unversioned names and Poetry `git`/`path`
 sources are skipped. Names are PEP 503 normalised and resolved from `uv.lock` or
-`poetry.lock`; `.python-version` pins CPython.
+`poetry.lock`; `.python-version` pins CPython. Neither uv nor Poetry may build
+a package to lock it, so an update whose lock would need a build (a workspace
+package with `dynamic` metadata, or a dependency with only a source
+distribution) is skipped with the reason; see
+[lockfiles](/guide/lockfiles/#uv-poetry-and-bundler-run-no-repository-or-package-code).
 
 pip requirements files are not maintained: each is listed as skipped, with
 the reason. pip takes each package from whatever index the
@@ -394,8 +398,13 @@ section of the lock) are listed as skipped; where each gem comes from is in
 [package registries](/guide/sources/#package-registries). Gems with two
 requirement strings are skipped too, and so are gems with no requirement at all: any version satisfies them, so only
 [lockfile maintenance](/guide/lockfiles/#lockfile-maintenance) moves them.
-Evaluating a Gemfile runs Ruby, so `bundle lock` runs in a scrubbed
-environment that ignores any repository `.bundle/config`.
+Evaluating a Gemfile runs Ruby, so Bundler never sees the repository's:
+`bundle lock` runs on a Gemfile the Count renders from its reading, outside
+the checkout. An update whose Gemfile needs a form the Count does not render
+(a `gemspec`, a gem from git, a path or a forge, or any line it does not
+read), or whose `Gemfile.lock` has a `GIT`, `PATH` or `PLUGIN SOURCE`
+section, is skipped with the reason; see
+[lockfiles](/guide/lockfiles/#uv-poetry-and-bundler-run-no-repository-or-package-code).
 
 `composer` reads `require` and `require-dev`, skipping platform packages
 (`php`, `ext-*`, `lib-*`), `dev-` branches and `*`. Packages from path, VCS

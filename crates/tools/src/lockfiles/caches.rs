@@ -92,6 +92,14 @@ impl Bin {
             Self::Mise => "mise",
         }
     }
+    /// The program `Run::Direct` starts: the binary itself, except Poetry,
+    /// which only ever runs under the Count's launcher, through Python.
+    pub(super) fn program(self) -> &'static str {
+        match self {
+            Self::Poetry => "python",
+            other => other.name(),
+        }
+    }
     /// How the binary's cache is wired, keyed by the binary itself rather
     /// than a string a call site could rename.
     pub(super) fn cache(self) -> Option<Cache> {
