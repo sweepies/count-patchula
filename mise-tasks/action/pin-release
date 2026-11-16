@@ -1,0 +1,27 @@
+#!/usr/bin/env nu
+#MISE description="In the Action workflow: pin the latest release for the dry run, write that release's config schema beside the stand-in config, and hand its version to the action step through GITHUB_OUTPUT"
+#MISE tools={gh="2.103.3"}
+
+# The action runs a released Count, which can predate this checkout's schema,
+# so the stand-in config must amend the release's own schema.
+def main [] {
+  let version = ^gh release view --repo $env.GITHUB_REPOSITORY --json tagName | from json | get tagName | str replace --regex '^v' ''
+  let target = "tests/action/PatchulaConfig.pkl" | path expand --no-symlink
+  let schema = release-schema $version
+  # The checkout's file links to the repository's schema: replace the link,
+  # not the file it points to.
+  rm --force $target
+  $schema | save $target
+  $"version=($version)\n" | save --append $env.GITHUB_OUTPUT
+  print $"pinned ($version) and wrote its schema"
+}
+
+# mise runs outside the checkout, so none of its config applies, and it
+# installs the release whatever tools the workflow step enabled.
+def release-schema [version: string]: nothing -> string {
+  cd $env.RUNNER_TEMP
+  hide-env --ignore-errors MISE_ENABLE_TOOLS
+  with-env {MISE_MINIMUM_RELEASE_AGE: "0"} {
+    ^mise exec $"packslip:sweepies/count-patchula@($version)" -- patchula config schema
+  }
+}

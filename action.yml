@@ -21,10 +21,10 @@ inputs:
     description: Print the planned branches and diffs without writing to GitHub.
     default: "false"
   version:
-    description: Count Patchula version to run. Empty means the version of this action, or the latest release when the action is not used at a release tag.
+    description: Count Patchula version to run, 0.9.0 or later. Empty means the version of this action, or the latest release when the action is not used at a release tag.
     default: ""
   binary:
-    description: The path to a patchula binary to run instead of installing a release, such as one built from source. Overrides version.
+    description: The path to a patchula binary to run instead of installing a release, such as one built from source, 0.9.0 or later. Overrides version.
     default: ""
   settings:
     description: Path to an operator settings file (amending PatchulaSettings.pkl) for HTTP limits and other operator settings. The action does not check out the repository, so check it out first when the file lives there. Empty falls back to PATCHULA_SETTINGS, then ~/.config/patchula/settings.pkl, then the defaults.
@@ -46,8 +46,8 @@ runs:
         working_directory: ${{ runner.temp }}
     # Installs the binary first, so the cache below can be keyed by the cache
     # schema it reads. A binary refuses a cache from a newer schema, so each
-    # schema keeps its own lineage. Older releases, without
-    # `patchula cache schema`, key by their version instead.
+    # schema keeps its own lineage. The action runs 0.9.0 and later, the
+    # releases with `patchula cache schema`, and refuses an older binary.
     - name: Install Count Patchula
       id: patchula
       shell: bash
@@ -78,16 +78,12 @@ runs:
           fi
           bin=$(cd "$RUNNER_TEMP" && MISE_MINIMUM_RELEASE_AGE=0 mise exec "packslip:sweepies/count-patchula@$version" -- sh -c 'command -v patchula')
         fi
-        if schema=$("$bin" cache schema 2>/dev/null) && [[ "$schema" =~ ^[0-9]+$ ]]; then
-          lineage="s$schema"
-        elif [[ "$("$bin" --version)" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-          lineage="v${BASH_REMATCH[1]}"
-        else
-          echo "::error::cannot tell which cache $bin reads" >&2
+        if ! schema=$("$bin" cache schema) || ! [[ "$schema" =~ ^[0-9]+$ ]]; then
+          echo "::error::$bin has no 'patchula cache schema', so it predates 0.9.0, the oldest release this action runs. Set version (or binary) to 0.9.0 or later." >&2
           exit 1
         fi
         echo "bin=$bin" >> "$GITHUB_OUTPUT"
-        echo "lineage=$lineage" >> "$GITHUB_OUTPUT"
+        echo "lineage=s$schema" >> "$GITHUB_OUTPUT"
     # The cache holds HTTP validators, write receipts and the lockfile tool
     # store. Each run saves a new entry and restores the newest one.
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -128,12 +124,5 @@ runs:
           args+=("${extra[@]}")
         fi
         mkdir -p "$CACHE_DIR"
-        # The version input can install any release. Releases up to 0.4.0 take
-        # --cache as the SQLite file; later ones take the directory holding it.
-        help=$("$PATCHULA_BIN" run --help)
-        if [[ "$help" == *'--cache <DIR>'* ]]; then
-          args+=(--cache "$CACHE_DIR")
-        else
-          args+=(--cache "$CACHE_DIR/cache.sqlite")
-        fi
+        args+=(--cache "$CACHE_DIR")
         "$PATCHULA_BIN" "${args[@]}"

@@ -1,0 +1,24 @@
+#!/usr/bin/env nu
+#MISE description="In the release workflow: unpack one platform's archive from dist and check that its patchula runs and reports the archive's version"
+#USAGE arg "<platform>" help="The archive's platform, such as linux-x64-musl"
+
+def main [platform: string] {
+  let archives = glob $"dist/patchula-v*-($platform).tar.gz"
+  if ($archives | length) != 1 {
+    error make --unspanned {msg: $"expected one ($platform) archive in dist, found ($archives | length)"}
+  }
+  let archive = $archives | first
+  let name = $archive | path basename
+  let version = $name | parse $"patchula-v{version}-($platform).tar.gz" | first | get version
+  let out = mktemp --directory --tmpdir patchula-smoke.XXXXXX
+  ^tar --extract --gzip --file $archive --directory $out
+  let patchula = $out | path join bin patchula
+  let reported = ^$patchula --version | str trim
+  if $reported != $"patchula ($version)" {
+    error make --unspanned {msg: $"($name) reports '($reported)', not patchula ($version)"}
+  }
+  if (^$patchula config check --help | complete).exit_code != 0 {
+    error make --unspanned {msg: $"($name): patchula config check --help failed"}
+  }
+  print $"ok ($name): ($reported)"
+}
