@@ -100,13 +100,7 @@ pub fn sanitise(text: &str, links: Links<'_>) -> String {
         ))
         .expect("upstream Markdown tokens")
     });
-    static DEFINITIONS: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"(?m)^[ \t]{0,3}\[([^\]\n]+)\]:").expect("reference definitions")
-    });
-    let references: BTreeSet<_> = DEFINITIONS
-        .captures_iter(text)
-        .map(|c| reference_label(&c[1]))
-        .collect();
+    let (definitions, references) = definitions(text);
     let mut output = String::with_capacity(text.len());
     let mut offset = 0;
     let mut fences = Fences::default();
@@ -144,73 +138,28 @@ pub fn sanitise(text: &str, links: Links<'_>) -> String {
             offset += end;
             continue;
         }
-        // Preserve labels (including nested/image/reference labels) verbatim.
-        // Destinations and reference definitions are visited separately below.
-        if rest.starts_with('[') {
-            let mut depth = 0;
-            let mut escaped = false;
-            let mut end = None;
-            let mut code_delimiter = 0;
-            let mut backticks = 0;
-            for (i, ch) in rest.char_indices() {
-                if ch == '`' && !escaped {
-                    backticks += 1;
-                    continue;
+        // A link's label is kept verbatim: GitHub links nothing inside it.
+        // Only a label GitHub really renders as a link (or a reference
+        // definition) qualifies; any other bracketed text is prose, since
+        // GitHub shows it literally, mentions and references included.
+        if rest.starts_with('[')
+            && let Some(end) = label_end(rest)
+        {
+            let after = &rest[end..];
+            let destination = inline_destination(after);
+            let definition = definitions.contains(&offset) && after.starts_with(':');
+            if definition || is_link(&rest[1..end - 1], after, &references) {
+                output.push_str(&rest[..end]);
+                offset += end;
+                if let Some(destination) = destination {
+                    output.push_str(&redirect_destination(destination));
+                    offset += destination.len();
+                } else if definition {
+                    let destination = after.split_inclusive('\n').next().unwrap();
+                    output.push_str(&redirect_destination(destination));
+                    offset += destination.len();
                 }
-                if backticks > 0 {
-                    if code_delimiter == 0 {
-                        code_delimiter = backticks;
-                    } else if code_delimiter == backticks {
-                        code_delimiter = 0;
-                    }
-                    backticks = 0;
-                }
-                if code_delimiter > 0 {
-                    continue;
-                }
-                if escaped {
-                    escaped = false;
-                    continue;
-                }
-                match ch {
-                    '\\' => escaped = true,
-                    '[' => depth += 1,
-                    ']' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = Some(i + 1);
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(end) = end {
-                let destination = inline_destination(&rest[end..]);
-                let definition = rest[end..].starts_with(':')
-                    && text[..offset]
-                        .rsplit('\n')
-                        .next()
-                        .unwrap_or("")
-                        .trim()
-                        .is_empty();
-                if destination.is_some()
-                    || definition
-                    || rest[end..].starts_with('[')
-                    || references.contains(&reference_label(&rest[1..end - 1]))
-                {
-                    output.push_str(&rest[..end]);
-                    offset += end;
-                    if let Some(destination) = destination {
-                        output.push_str(&redirect_destination(destination));
-                        offset += destination.len();
-                    } else if definition {
-                        let destination = rest[end..].split_inclusive('\n').next().unwrap();
-                        output.push_str(&redirect_destination(destination));
-                        offset += destination.len();
-                    }
-                    continue;
-                }
+                continue;
             }
         }
         if let Some(c) = TOKENS.captures(rest) {
@@ -283,35 +232,273 @@ fn reference_label(text: &str) -> String {
         .to_lowercase()
 }
 
-fn inline_destination(text: &str) -> Option<&str> {
-    if !text.starts_with('(') {
-        return None;
+/// Link reference definitions GitHub honours: where each one's `[` sits, and
+/// their normalised labels. Strict on purpose: a definition missed here only
+/// leaves its links' labels neutralised, while one counted that GitHub does
+/// not honour would leave a literal `[@name][label]` live. A definition sits
+/// outside code, starts a block (after a blank line, a heading or another
+/// definition, since it cannot interrupt a paragraph), and fits on one line:
+/// `[label]: destination`, then optionally a closed title.
+fn definitions(text: &str) -> (BTreeSet<usize>, BTreeSet<String>) {
+    static DEFINITION: LazyLock<regex::Regex> = LazyLock::new(|| {
+        // No backslash: an escaped `\]` would not close the label.
+        regex::Regex::new(r"^ {0,3}\[([^\[\]\\\n]+)\]:").expect("reference definition")
+    });
+    let mut offsets = BTreeSet::new();
+    let mut labels = BTreeSet::new();
+    let mut starts_block = true;
+    for (offset, line, fenced) in lines_with_fences(text) {
+        if fenced || Fences::opens(line) {
+            starts_block = true;
+            continue;
+        }
+        let definition = starts_block
+            .then(|| DEFINITION.captures(line))
+            .flatten()
+            .filter(|c| definition_tail(&line[c.get(0).unwrap().end()..]))
+            .map(|c| reference_label(&c[1]))
+            .filter(|label| !label.is_empty());
+        starts_block = match definition {
+            Some(label) => {
+                offsets.insert(offset + line.find('[').expect("a definition's label"));
+                labels.insert(label);
+                true
+            }
+            None => line.trim().is_empty() || heading(line).is_some(),
+        };
     }
+    (offsets, labels)
+}
+
+/// Whether the rest of a definition's line, after `[label]:`, is a
+/// destination and an optional title, and nothing else.
+fn definition_tail(text: &str) -> bool {
+    let bytes = text.trim_end_matches(['\n', '\r']).as_bytes();
+    let start = bytes
+        .iter()
+        .position(|b| !matches!(b, b' ' | b'\t'))
+        .unwrap_or(bytes.len());
+    let Some(end) = destination_end(bytes, start).filter(|end| *end > start) else {
+        return false;
+    };
+    let spaces = |at: usize| {
+        at + bytes[at..]
+            .iter()
+            .take_while(|b| matches!(b, b' ' | b'\t'))
+            .count()
+    };
+    let mut rest = spaces(end);
+    if rest > end
+        && let Some(title) = title_end(bytes, rest)
+    {
+        rest = spaces(title);
+    }
+    rest == bytes.len()
+}
+
+/// Whether GitHub renders `[label]` followed by `after` as a link or image:
+/// an inline destination, or a reference (full, collapsed or shortcut) to a
+/// defined label. Links do not nest, so a label holding a link is not one.
+fn is_link(label: &str, after: &str, references: &BTreeSet<String>) -> bool {
+    if holds_link(label, references) {
+        return false;
+    }
+    if inline_destination(after).is_some() {
+        return true;
+    }
+    let defined = |label: &str| references.contains(&reference_label(label));
+    match after.starts_with('[').then(|| label_end(after)).flatten() {
+        // `[label][]`
+        Some(2) => defined(label),
+        // `[text][label]`; an undefined second label leaves both literal.
+        Some(end) => defined(&after[1..end - 1]),
+        // `[label]`
+        None => defined(label),
+    }
+}
+
+/// Whether link text holds something that may be a link: brackets followed
+/// by `(` or `[`, or around a defined label. Images may sit in link text and
+/// do not count. It errs towards yes, which only neutralises a label.
+fn holds_link(text: &str, references: &BTreeSet<String>) -> bool {
+    let mut open = Vec::new();
+    let mut previous = None;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, ch)) = chars.next() {
+        match ch {
+            '\\' => {
+                chars.next();
+                previous = None;
+                continue;
+            }
+            '[' => open.push((i, previous == Some('!'))),
+            ']' => {
+                if let Some((start, image)) = open.pop()
+                    && !image
+                    && (text[i + 1..].starts_with(['(', '['])
+                        || references.contains(&reference_label(&text[start + 1..i])))
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        previous = Some(ch);
+    }
+    false
+}
+
+/// The end of the bracketed label at the start of `text`, with nested
+/// brackets balanced and code spans and escapes skipped.
+fn label_end(text: &str) -> Option<usize> {
     let mut depth = 0;
     let mut escaped = false;
-    let mut quote = None;
+    let mut code_delimiter = 0;
+    let mut backticks = 0;
     for (i, ch) in text.char_indices() {
+        if ch == '`' && !escaped {
+            backticks += 1;
+            continue;
+        }
+        if backticks > 0 {
+            if code_delimiter == 0 {
+                code_delimiter = backticks;
+            } else if code_delimiter == backticks {
+                code_delimiter = 0;
+            }
+            backticks = 0;
+        }
+        if code_delimiter > 0 {
+            continue;
+        }
         if escaped {
             escaped = false;
-        } else if ch == '\\' {
-            escaped = true;
-        } else if quote == Some(ch) {
-            quote = None;
-        } else if quote.is_none() {
-            match ch {
-                '\'' | '"' => quote = Some(ch),
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(&text[..=i]);
-                    }
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
                 }
-                _ => {}
             }
+            _ => {}
         }
     }
     None
+}
+
+/// The `(destination "title")` after a link label, when CommonMark reads it
+/// as one: optional whitespace (at most one line ending), a destination in
+/// `<…>` or one without spaces or control characters and with balanced
+/// parentheses, an optional title after whitespace, optional whitespace,
+/// then `)`. Anything else, such as `(see notes)`, leaves the label literal.
+fn inline_destination(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    if bytes.first() != Some(&b'(') {
+        return None;
+    }
+    let start = link_space(bytes, 1)?;
+    let end = destination_end(bytes, start)?;
+    let mut close = link_space(bytes, end)?;
+    if close > end
+        && let Some(title) = title_end(bytes, close)
+    {
+        close = link_space(bytes, title)?;
+    }
+    (bytes.get(close) == Some(&b')')).then(|| &text[..=close])
+}
+
+/// Whether a backslash at `at` escapes the ASCII punctuation after it.
+fn escapes(bytes: &[u8], at: usize) -> bool {
+    bytes[at] == b'\\' && bytes.get(at + 1).is_some_and(u8::is_ascii_punctuation)
+}
+
+/// Past spaces, tabs and at most one line ending; none where a blank line
+/// would end the paragraph.
+fn link_space(bytes: &[u8], mut at: usize) -> Option<usize> {
+    let mut line_ending = false;
+    loop {
+        match bytes.get(at) {
+            Some(b' ' | b'\t') => at += 1,
+            Some(b'\n' | b'\r') => {
+                if line_ending {
+                    return None;
+                }
+                line_ending = true;
+                at += if bytes[at..].starts_with(b"\r\n") {
+                    2
+                } else {
+                    1
+                };
+            }
+            _ => return Some(at),
+        }
+    }
+}
+
+/// The end of a link destination starting at `at`, which may be empty.
+fn destination_end(bytes: &[u8], mut at: usize) -> Option<usize> {
+    if bytes.get(at) == Some(&b'<') {
+        at += 1;
+        loop {
+            match *bytes.get(at)? {
+                _ if escapes(bytes, at) => at += 2,
+                b'>' => return Some(at + 1),
+                b'<' | b'\n' | b'\r' => return None,
+                _ => at += 1,
+            }
+        }
+    }
+    let mut depth = 0_usize;
+    while let Some(&b) = bytes.get(at) {
+        match b {
+            _ if escapes(bytes, at) => {
+                at += 2;
+                continue;
+            }
+            b'(' => depth += 1,
+            b')' if depth == 0 => break,
+            b')' => depth -= 1,
+            _ if b <= b' ' || b == 0x7f => break,
+            _ => {}
+        }
+        at += 1;
+    }
+    (depth == 0).then_some(at)
+}
+
+/// The end of a link title in `"…"`, `'…'` or `(…)` starting at `at`. A
+/// title holds no blank line, and a parenthesised one no unescaped `(`.
+fn title_end(bytes: &[u8], mut at: usize) -> Option<usize> {
+    let close = match bytes.get(at)? {
+        b'"' => b'"',
+        b'\'' => b'\'',
+        b'(' => b')',
+        _ => return None,
+    };
+    let parenthesised = close == b')';
+    let mut blank = false;
+    at += 1;
+    loop {
+        let b = *bytes.get(at)?;
+        match b {
+            _ if escapes(bytes, at) => {
+                at += 2;
+                blank = false;
+                continue;
+            }
+            _ if b == close => return Some(at + 1),
+            b'(' if parenthesised => return None,
+            b'\n' if blank => return None,
+            b'\n' => blank = true,
+            b' ' | b'\t' | b'\r' => {}
+            _ => blank = false,
+        }
+        at += 1;
+    }
 }
 
 fn redirect_destination(text: &str) -> String {

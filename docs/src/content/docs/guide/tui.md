@@ -16,7 +16,8 @@ patchula tui --once | less    # a plain-text snapshot instead
 It takes the same flags as [`lookup`](/reference/cli/#patchula-lookup): `--cache`,
 `--config`, `--concurrency` and the rest. It needs a terminal on both stdin and
 stdout; `--once` prints a snapshot of the updates and exits, for pipes and CI
-logs.
+logs, with the [exit code](/reference/cli/) `lookup` would give: 1 when a
+repository could not be read, 4 when a lookup failed.
 
 In a checkout with no `patchula.pkl` the Count [asks
 first](/guide/configuration/#where-the-config-lives).
