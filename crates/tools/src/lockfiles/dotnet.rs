@@ -137,12 +137,15 @@ const INVARIANT: &str = "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT";
 /// The restore's environment. The server image has no ICU and sets
 /// `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` instead; the tool's environment
 /// starts empty, so the server's setting is passed on. The NuGet caches are
-/// the cache partition's.
+/// the cache partition's. MSBuild starts no worker nodes that outlive the
+/// restore to serve later builds: they would hold the run's credentials
+/// until the executor kills the process group.
 pub(super) fn restore_env(invariant: Option<String>) -> Vec<(String, String)> {
     let mut env = vec![
         ("DOTNET_CLI_TELEMETRY_OPTOUT".into(), "1".into()),
         ("DOTNET_NOLOGO".into(), "1".into()),
         ("DOTNET_SKIP_FIRST_TIME_EXPERIENCE".into(), "1".into()),
+        ("MSBUILDDISABLENODEREUSE".into(), "1".into()),
     ];
     if let Some(invariant) = invariant {
         env.push((INVARIANT.into(), invariant));

@@ -254,6 +254,31 @@ fn merged(
     Ok(Some(toml_edit::value(array)))
 }
 
+/// The tool arguments a declaration hands mise: the name, with each
+/// request's options in brackets as a lookup passes them.
+fn arguments(name: &str, spec: &toml_edit::Item) -> Result<Vec<String>, String> {
+    let bracketed = |table: &dyn toml_edit::TableLike| {
+        patchula_mise::bracketed(name, table)
+            .map_err(|e| format!("mise.lock is not regenerated: {name}: {e}"))
+    };
+    let unreadable =
+        || format!("mise.lock is not regenerated: {name} has a declaration the Count cannot check");
+    match spec {
+        toml_edit::Item::Table(table) => Ok(vec![bracketed(table)?]),
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(table)) => Ok(vec![bracketed(table)?]),
+        toml_edit::Item::Value(toml_edit::Value::String(_)) => Ok(vec![name.to_owned()]),
+        toml_edit::Item::Value(toml_edit::Value::Array(requests)) => requests
+            .iter()
+            .map(|request| match request {
+                toml_edit::Value::String(_) => Ok(name.to_owned()),
+                toml_edit::Value::InlineTable(table) => bracketed(table),
+                _ => Err(unreadable()),
+            })
+            .collect(),
+        _ => Err(unreadable()),
+    }
+}
+
 /// The selected tools a task installs for itself.
 fn task_declarations(
     task: &toml_edit::Item,
@@ -397,6 +422,18 @@ impl Runner {
         }
         if selected.is_empty() || selected.iter().any(|name| !tools.contains_key(name)) {
             return Err("mise.lock tool has no literal project declaration".into());
+        }
+        // mise locks each tool with its options as it would list it, so each
+        // passes the checks a lookup makes before mise sees it.
+        let requested = tools
+            .iter()
+            .map(|(name, spec)| arguments(name, spec))
+            .collect::<Result<Vec<_>, _>>()?
+            .concat();
+        for tool in requested {
+            patchula_mise::admit(&tool)
+                .await
+                .map_err(|e| format!("mise.lock is not regenerated: {e}"))?;
         }
         let mut doc = toml_edit::DocumentMut::new();
         doc["tools"] = toml_edit::Item::Table(tools);

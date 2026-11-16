@@ -71,3 +71,17 @@ pub fn sandbox_env(home: &Path, data: &Path) -> BTreeMap<OsString, OsString> {
     .map(|(k, v)| (k.into(), v))
     .collect()
 }
+
+/// Turns off mise's plugin backends, `asdf` and `vfox`, which clone a plugin
+/// and run its scripts, for a mise that handles tool names a repository
+/// chose: a lookup, or `mise lock` on its configuration. A registry
+/// shorthand that lists one falls through to its next backend, or fails
+/// when there is none; a name with one is refused before mise starts
+/// (`admit`). The Count's own lockfile tools are named by the Count and
+/// install as mise's registry has them.
+pub fn without_plugins(env: &mut BTreeMap<OsString, OsString>) {
+    env.insert(
+        "MISE_DISABLE_BACKENDS".into(),
+        crate::policy::PLUGIN_BACKENDS.join(",").into(),
+    );
+}

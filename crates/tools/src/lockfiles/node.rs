@@ -157,19 +157,20 @@ impl Runner {
         // scope never resolves to the public package of its name. They get
         // only those lines, never tokens or settings that change how they
         // run, and the committed files come back afterwards.
-        let npmrcs: Vec<_> = context
+        let mut npmrcs = context::Replaced::default();
+        for (path, blob) in context
             .baseline
             .iter()
             .filter(|(path, _)| path.rsplit('/').next() == Some(".npmrc"))
-            .map(|(path, blob)| (context.root.join(path), blob.content.clone()))
-            .collect();
-        for (path, text) in &npmrcs {
-            std::fs::write(path, npmrc(text)).map_err(|e| e.to_string())?;
+        {
+            npmrcs.replace(
+                &context.root.join(path),
+                blob.content.clone(),
+                &npmrc(&blob.content),
+            )?;
         }
         let result = self.node_locks(context).await;
-        for (path, text) in &npmrcs {
-            std::fs::write(path, text).map_err(|e| e.to_string())?;
-        }
+        npmrcs.restore()?;
         result
     }
     async fn node_locks(&self, context: context::Context<'_>) -> Result<(), Failure> {
@@ -208,7 +209,7 @@ impl Runner {
                     self.aube(driver, &cwd, leaf, versions, maintenance, public)
                         .await?
                 }
-                Engine::Yarn => self.yarn(driver, &cwd, versions, public).await?,
+                Engine::Yarn => self.yarn(driver, root, &cwd, versions, public).await?,
             }
             if !cwd.join(leaf).is_file() {
                 return Err(format!("tool did not produce {leaf}").into());
@@ -401,6 +402,7 @@ impl Runner {
     pub(super) async fn yarn(
         &self,
         driver: &Path,
+        root: &Path,
         cwd: &Path,
         versions: &BTreeMap<String, String>,
         public: bool,
@@ -433,21 +435,23 @@ impl Runner {
             public,
             args,
         };
-        // Yarn reads registries, cache keys and catalogs from `.yarnrc.yml`, but
-        // the scratch tree holds no `.yarn/` for a `yarnPath` release or
+        // Yarn reads registries, cache keys and catalogs from every
+        // `.yarnrc.yml` from its working directory up to the filesystem root,
+        // but the scratch tree holds no `.yarn/` for a `yarnPath` release or
         // `plugins`, and `${VAR}` references name variables the run never has.
-        // Run Yarn on a copy without them and restore the committed file
-        // afterwards. Nothing between the two writes can return early.
-        let rc = cwd.join(".yarnrc.yml");
-        let committed = std::fs::read_to_string(&rc).ok();
-        let sanitized = committed.as_deref().map(yarnrc).transpose()?;
-        if let Some(text) = &sanitized {
-            std::fs::write(&rc, text).map_err(|e| e.to_string())?;
+        // Run Yarn on copies without them, each one from the project up to
+        // the tree root, and restore the committed files afterwards. Above
+        // the tree root are the Count's own directories.
+        let mut rcs = context::Replaced::default();
+        for dir in cwd.ancestors().take_while(|dir| dir.starts_with(root)) {
+            let rc = dir.join(".yarnrc.yml");
+            if let Ok(committed) = std::fs::read_to_string(&rc) {
+                let sanitized = yarnrc(&committed)?;
+                rcs.replace(&rc, committed, &sanitized)?;
+            }
         }
         let result = self.node_tool(driver, call).await;
-        if let Some(text) = &committed {
-            std::fs::write(&rc, text).map_err(|e| e.to_string())?;
-        }
+        rcs.restore()?;
         result?;
         // Berry rewrites the manifest in its own layout. Keep the planned text
         // when only the formatting changed, and refuse a real manifest edit.

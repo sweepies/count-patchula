@@ -30,7 +30,9 @@ pub(super) enum Run {
     /// `rustup run <version> bin`, with the run's own Cargo home.
     Rustup(&'static str),
     /// The pinned mise itself, with the project configuration the outer
-    /// `--no-config` turns off: `env -u MISE_NO_CONFIG mise args`.
+    /// `--no-config` turns off: `env -u MISE_NO_CONFIG mise args`. The
+    /// tools it reads are the repository's, so the run always has the
+    /// plugin backends off (`patchula_mise::without_plugins`).
     Mise,
     /// Through `/bin/sh -c`, for a tool whose exit status and streams the
     /// run must keep whole rather than letting the executor turn a nonzero

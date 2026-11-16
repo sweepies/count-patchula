@@ -43,6 +43,15 @@ with different versions is locked at each. mise locks the same version with
 different options as a separate entry, which the Count cannot write, so that
 update fails with a message saying so.
 
+`mise lock` runs the way a [mise lookup](/guide/sources/#mise-lookups) does:
+each tool it locks, with its options, passes the same name and option checks
+first, so a name with an `asdf:` or `vfox:` backend or an option pointing at
+a cloud instance-metadata endpoint fails the update before mise starts. mise
+runs with those plugin backends disabled. A tool whose registry entry lists a
+plugin backend first, such as `yarn` or `poetry`, is locked with its next
+backend (`aqua:yarnpkg/berry`, `pypi:poetry`), and the lock entry's `backend`
+records that one.
+
 A Cargo update across a semver-incompatible boundary, such as `0.22` to `0.23`
 or `1.x` to `2.x`, adds a second entry beside the old one, because other crates
 may still require it. The Count runs `cargo update --workspace` for it, which
@@ -278,8 +287,10 @@ Tools install into the Count's own mise data directory, separate from yours:
 `PATCHULA_TOOLS_DIR`, or `tools/` in the cache directory. It persists
 between runs, so keep it on a volume. The Count installs his own pinned mise
 there on first use and runs that for every tool and lookup; the mise on `PATH`
-only installs and starts it. Each successful tool run records its
-`tool@version` and a timestamp.
+only installs and starts it. A tool version is recorded with a timestamp
+once `mise install` has installed it, apart from the run that uses it, and
+each successful run refreshes the timestamp. A tool that fails keeps its
+install.
 
 - `patchula tools install` prewarms every pinned default, for example in an
   image build.
@@ -289,9 +300,9 @@ only installs and starts it. Each successful tool run records its
   inputs, and a `nixpkgs` input alone takes several hundred MB. The next nix
   run downloads what it needs again, so run prune on a schedule if you update
   flakes.
-- An install that never completed a run is redone from scratch on first use
-  (30-minute allowance).
-- Known versions keep a 180-second limit per command.
+- An install that was never recorded, such as one cut short, is removed and
+  redone from scratch on first use (30-minute allowance).
+- Every tool run has a 180-second limit per command.
 
 On a local run, Node, Go, Bun, aube, Yarn, uv and Terraform versions you
 already have in your own mise (`MISE_DATA_DIR`, or `~/.local/share/mise`, on
@@ -312,16 +323,25 @@ allowlisted environment with its own HOME, npm config, Cargo home and Go paths.
 Parent tokens, cloud credentials, Git helpers and your tool configuration are
 not inherited. Git alone gets a temporary credential header for the
 installation token, kept out of URLs, arguments and stored config. Yarn runs
-the release the Count pins, on a copy of `.yarnrc.yml` without `yarnPath`,
-plugins or `${VAR}` interpolations, since the scratch tree holds no `.yarn/`
-and the run has none of the variables; a `${VAR}` registry stays, so Yarn
-stops on it. npm, pnpm, aube and Bun see each `.npmrc` with only its
+the release the Count pins. It reads every `.yarnrc.yml` from the project up
+to the filesystem root, so each one from the project up to the repository
+root is replaced for the run by a copy without `yarnPath`, plugins or
+`${VAR}` interpolations, since the scratch tree holds no `.yarn/` and the run
+has none of the variables; a `${VAR}` registry stays, so Yarn stops on it.
+The committed files come back afterwards. npm, pnpm, aube and Bun see each `.npmrc` with only its
 `registry=` and `@scope:registry=` lines, so a private scope resolves where
 your own installs would, never to the public package of its name.
 
 Install scripts are skipped wherever a tool allows it (npm, aube, which also
 writes Yarn Classic locks, Bun, and Composer with plugins off too), because a
 lockfile needs none of them.
+
+Each tool runs as the leader of its own process group. Whatever it leaves
+running, such as MSBuild worker nodes or a build helper, is killed when it
+exits, however it exits, and when it times out or the run is cancelled, so
+nothing it started keeps the run's environment past it unless it leaves the
+group on purpose (`setsid`). dotnet is also told not to keep
+MSBuild nodes for reuse (`MSBUILDDISABLENODEREUSE=1`).
 
 Output is kept only when something fails, at most 4 KiB of each stream.
 

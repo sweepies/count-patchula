@@ -345,17 +345,18 @@ impl Runner {
     }
     #[cfg(not(unix))]
     pub(super) fn seed(&self, _: &[(String, String)]) {}
-    /// Whether every `tool@version` has run before, so mise will not install
-    /// it within this call; pruning forgets versions as it removes them.
+    /// Whether every `tool@version` has been installed and recorded, so a
+    /// call needs no `mise install`; pruning forgets versions as it removes
+    /// them.
     pub(super) fn installed(&self, tools: &[(String, String)]) -> bool {
         let usage = read_usage(&self.mise_data);
         tools
             .iter()
             .all(|(tool, version)| usage.contains_key(&format!("{tool}@{version}")))
     }
-    /// Uninstall versions no run has completed with. An install cut short (a
-    /// timeout, a crash) can leave a directory mise treats as installed but
-    /// that holds no binaries; only a recorded run proves an install works.
+    /// Uninstall versions never recorded. An install cut short (a timeout, a
+    /// crash) can leave a directory mise treats as installed but that holds
+    /// no binaries; only a `mise install` that finished proves it complete.
     /// Rust goes through rustup, and the pinned mise package is also what
     /// version lookups run, which install it without recording a use, so
     /// neither is ever uninstalled here.

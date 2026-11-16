@@ -494,21 +494,62 @@ impl Runner {
         .map_err(|e| e.to_string())??;
         Ok((env, Some(hold)))
     }
-    async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Failure> {
+    /// mise's toolchain environment for a rustup-run tool: the Count's
+    /// rustup home, and the Cargo home rustup installs into, apart from the
+    /// run's own.
+    fn rustup_env(&self, spec: &mut patchula_process::CommandSpec) -> Result<(), String> {
+        spec.env
+            .insert("RUSTUP_HOME".into(), self.rustup_home.as_os_str().into());
+        let install_home = self.cache.join("tool-cargo");
+        std::fs::create_dir_all(&install_home).map_err(|e| e.to_string())?;
+        spec.env
+            .insert("CARGO_HOME".into(), install_home.into_os_string());
+        Ok(())
+    }
+    /// Install a call's tools with `mise install`, apart from running them,
+    /// and record them as proven once mise has installed them: how the tool
+    /// then exits says nothing about the install, so a failing run never
+    /// leaves its toolchain to be cleared and installed again.
+    async fn install(&self, driver: &Path, call: &Invocation) -> Result<(), Failure> {
         let mut spec = self.command(driver);
-        // A first use installs the tool inside this call, from scratch.
+        spec.timeout = tools::INSTALL_TIMEOUT;
+        if let Run::Rustup(_) = call.descriptor.run {
+            self.rustup_env(&mut spec)?;
+        }
+        spec.args.push("install".into());
+        spec.args.extend(
+            call.tools
+                .iter()
+                .map(|(tool, version)| format!("{tool}@{version}")),
+        );
+        self.executor
+            .run(spec)
+            .await
+            .map_err(|failure| Failure::Tool {
+                context: "mise install".into(),
+                failure,
+            })?;
+        let tools = call.tools.clone();
+        self.off_runtime(move |runner| runner.record_use(&tools))
+            .await?;
+        Ok(())
+    }
+    async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Failure> {
+        // A first use clears what an unfinished install left and seeds from
+        // the user's store, under the exclusive lock so no run loses a tool.
         if !self.installed(&call.tools) {
-            {
-                let _store = tools::lock_store(&self.mise_data, true).await?;
-                if !self.installed(&call.tools) {
-                    self.clear_unproven(&call.tools).await;
-                    let tools = call.tools.clone();
-                    self.off_runtime(move |runner| runner.seed(&tools)).await?;
-                }
+            let _store = tools::lock_store(&self.mise_data, true).await?;
+            if !self.installed(&call.tools) {
+                self.clear_unproven(&call.tools).await;
+                let tools = call.tools.clone();
+                self.off_runtime(move |runner| runner.seed(&tools)).await?;
             }
-            spec.timeout = tools::INSTALL_TIMEOUT;
         }
         let _store = tools::lock_store(&self.mise_data, false).await?;
+        if !self.installed(&call.tools) {
+            self.install(driver, &call).await?;
+        }
+        let mut spec = self.command(driver);
         if let Some(cwd) = &call.cwd {
             spec.cwd.clone_from(cwd);
         }
@@ -537,17 +578,12 @@ impl Runner {
                     .find(|(tool, _)| tool.as_str() == toolchain)
                     .map(|(_, version)| version.clone())
                     .ok_or("missing tool version")?;
-                spec.env
-                    .insert("RUSTUP_HOME".into(), self.rustup_home.as_os_str().into());
                 let cargo_home = spec
                     .env
                     .get(std::ffi::OsStr::new("CARGO_HOME"))
                     .ok_or("missing isolated Cargo home")?
                     .clone();
-                let install_home = self.cache.join("tool-cargo");
-                std::fs::create_dir_all(&install_home).map_err(|e| e.to_string())?;
-                spec.env
-                    .insert("CARGO_HOME".into(), install_home.into_os_string());
+                self.rustup_env(&mut spec)?;
                 let rustc = self.rustup.with_file_name("rustc");
                 if rustc.is_file() {
                     spec.env.insert("RUSTC".into(), rustc.into_os_string());
@@ -562,12 +598,17 @@ impl Runner {
                 ]);
             }
             Run::Direct => spec.args.push(call.bin.name().into()),
-            Run::Mise => spec.args.extend([
-                "env".into(),
-                "-u".into(),
-                "MISE_NO_CONFIG".into(),
-                call.bin.name().into(),
-            ]),
+            Run::Mise => {
+                // The inner mise reads the repository's tools, so it runs
+                // no plugin backend, as a lookup does not.
+                patchula_mise::without_plugins(&mut spec.env);
+                spec.args.extend([
+                    "env".into(),
+                    "-u".into(),
+                    "MISE_NO_CONFIG".into(),
+                    call.bin.name().into(),
+                ]);
+            }
             Run::Shell => spec.args.push("/bin/sh".into()),
         }
         spec.args.extend(call.args);
@@ -578,6 +619,7 @@ impl Runner {
             .run(spec)
             .await
             .map_err(|failure| Failure::Tool { context, failure })?;
+        // A successful run refreshes when its tools were last used.
         let tools = call.tools;
         self.off_runtime(move |runner| runner.record_use(&tools))
             .await?;
