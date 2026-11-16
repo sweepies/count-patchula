@@ -19,10 +19,20 @@ pub struct Version {
     pub digest: Option<String>,
     pub deprecated: bool,
     pub yanked: bool,
+    /// The source marks this release a prerelease, whatever its version
+    /// syntax says (a GitHub release flagged as one, listed through mise).
+    #[serde(default)]
+    pub prerelease: bool,
+    /// The source was not asked for this release's date and flags, or the
+    /// request failed: `published_at`, `deprecated` and `yanked` say
+    /// nothing. Policy holds such a release instead of reading it as
+    /// undated, so a missing answer never skips the release-age wait.
+    #[serde(default)]
+    pub unchecked: bool,
 }
 impl Version {
     /// A listed version with no date or digest, neither deprecated nor
-    /// yanked.
+    /// yanked: the source has been asked and has nothing more to say.
     pub fn new(version: String) -> Self {
         Self {
             version,
@@ -30,6 +40,15 @@ impl Version {
             digest: None,
             deprecated: false,
             yanked: false,
+            prerelease: false,
+            unchecked: false,
+        }
+    }
+    /// A listed version whose date and flags the source was not asked for.
+    pub fn unchecked(version: String) -> Self {
+        Self {
+            unchecked: true,
+            ..Self::new(version)
         }
     }
 }

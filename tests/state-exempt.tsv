@@ -24,4 +24,5 @@ nix-prefetch	refetched inside the one-hour freshness window
 osv-listing	refetched within the advisory freshness window (`http.advisoryFreshnessSecs`, default 3600 s; the window bounds how long a listing derived by an older build is served)
 quiet-run	the run's head, report hash and next-due instant — a stale hash fails toward a full run
 receipts-prefix	names the prefix the receipts were saved under — a fact
+release-dates	a registry's answer about one immutable release (its date, or that it cannot be served) — a fact
 verified-write-receipts	receipts of what a write proved, not derived bytes

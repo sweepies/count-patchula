@@ -119,16 +119,35 @@ async fn prereleases_stay_in_the_catalog_for_the_policy_to_decide() {
         .unwrap();
     for version in ["3.0.0-alpha.0", "3.0.0-alpha.11", "1.11.0-rc.1"] {
         assert!(
-            prettier.versions.iter().any(|v| v.version == version),
+            prettier
+                .versions
+                .iter()
+                .any(|v| v.version == version && v.prerelease),
             "{version}"
         );
     }
-    // GitHub-backed tools mark them too, with versions that look stable.
+    assert!(
+        prettier
+            .versions
+            .iter()
+            .any(|v| v.version == "3.0.0" && !v.prerelease)
+    );
+    // GitHub-backed tools mark them too, and the flag is carried even where
+    // the version would look stable, so policy treats it as a prerelease.
     let jq = source
         .lookup(&patchula_config::PackageId::public(Source::Mise, "jq"))
         .await
         .unwrap();
-    assert!(jq.versions.iter().any(|v| v.version == "1.7rc2"));
+    assert!(
+        jq.versions
+            .iter()
+            .any(|v| v.version == "1.7rc2" && v.prerelease)
+    );
+    assert!(
+        jq.versions
+            .iter()
+            .any(|v| v.version == "1.7.1" && !v.prerelease)
+    );
 }
 
 #[tokio::test]

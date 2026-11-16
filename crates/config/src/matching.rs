@@ -129,4 +129,39 @@ impl Filter {
         };
         Ok(yes != self.negated)
     }
+    /// Whether the filter deliberately admits the prerelease `text`, whose
+    /// version without its prerelease part is `release`. A negated filter
+    /// only excludes, so it never asks. A `regex:` filter asks when it
+    /// matches the prerelease but not its release, so the match comes from
+    /// the prerelease part (`regex:-rc\.`, `regex:nightly`). A `semver:`
+    /// range asks when it names a prerelease version itself
+    /// (`semver:>=3.0.0-rc.1`, `semver:[1.0-beta1,2)`) and matches `text`.
+    pub fn asks_for_prerelease(
+        &self,
+        scheme: Ecosystem,
+        text: &str,
+        release: &str,
+    ) -> Result<bool, String> {
+        if self.negated {
+            return Ok(false);
+        }
+        match &self.kind {
+            FilterKind::Regex(regex) => Ok(regex.is_match(text) && !regex.is_match(release)),
+            FilterKind::Semver(range) => {
+                Ok(names_prerelease(scheme, range) && self.matches(scheme, text)?)
+            }
+        }
+    }
+}
+/// Whether a range's text names a prerelease version in `scheme`'s syntax.
+fn names_prerelease(scheme: Ecosystem, range: &str) -> bool {
+    use patchula_versioning::Versioning;
+    range
+        .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+')))
+        .filter(|token| !token.is_empty())
+        .any(|token| {
+            scheme
+                .parse(token)
+                .is_ok_and(|version| !version.0.pre.is_empty())
+        })
 }

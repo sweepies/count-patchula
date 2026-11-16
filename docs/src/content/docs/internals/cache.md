@@ -132,6 +132,13 @@ inserted version to `merge_release_page` as `after`, which tells a refresh
 prefix apart from initial pagination. The newest item is also kept in
 `release_heads`.
 
+Sources that date one version per request (Go's `.info`, a Maven POM's
+`Last-Modified`) keep each answer as `release-dates` state, per package and,
+for Maven, per operator registry entry: a version's date, or that the
+registry cannot serve it. A lookup asks only about listed versions with no
+answer yet, wherever they sort; a failed request stores nothing, so the
+version stays unchecked and the next lookup asks again.
+
 Typed values the Count keeps between runs (hints, extractions, catalog views,
 receipts and the like) live in `state`; the server queue, installations and
 repositories keep their own tables. A state row is one value, keyed by a

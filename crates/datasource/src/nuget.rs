@@ -1,6 +1,11 @@
-//! nuget.org: the flat container lists versions; the newest registration
-//! page dates them and marks unlisted (yanked) and deprecated releases.
+//! nuget.org: the flat container lists versions; the registration pages,
+//! every one of them, date them and mark unlisted (yanked) and deprecated
+//! releases.
 use super::*;
+use futures_util::{StreamExt, stream};
+
+/// Registration pages read at once.
+const PAGE_FAN_OUT: usize = 4;
 
 #[derive(Serialize, Deserialize)]
 struct Entry {
@@ -22,7 +27,7 @@ fn listing(
     serde_json::to_vec(&index.versions).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NUGET_FLAT: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("nuget-flat", 1, listing);
+    patchula_http::Derived::new("nuget-flat", 2, listing);
 fn entries(items: &serde_json::Value) -> Vec<Entry> {
     items
         .as_array()
@@ -43,24 +48,28 @@ fn entries(items: &serde_json::Value) -> Vec<Entry> {
         })
         .collect()
 }
-/// The registration index: the newest page's entries, inline or as a link.
+/// The registration index: every page, its entries inline or as a link.
 fn registration(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let index: serde_json::Value = patchula_http::conditional::json_document(body)
         .map_err(|_| patchula_http::CacheError::Document)?;
-    let newest = index["items"].as_array().and_then(|pages| pages.last());
-    let compact = match newest {
-        Some(page) if page["items"].is_array() => {
-            serde_json::json!({"entries": entries(&page["items"])})
-        }
-        Some(page) => serde_json::json!({"page": page["@id"]}),
-        None => serde_json::json!({"entries": []}),
-    };
-    serde_json::to_vec(&compact).map_err(|_| patchula_http::CacheError::Document)
+    let pages: Vec<serde_json::Value> = index["items"]
+        .as_array()
+        .ok_or(patchula_http::CacheError::Document)?
+        .iter()
+        .map(|page| {
+            if page["items"].is_array() {
+                serde_json::json!({"entries": entries(&page["items"])})
+            } else {
+                serde_json::json!({"page": page["@id"]})
+            }
+        })
+        .collect();
+    serde_json::to_vec(&pages).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NUGET_REGISTRATION: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("nuget-registration", 1, registration);
+    patchula_http::Derived::new("nuget-registration", 2, registration);
 fn page(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let page: serde_json::Value = patchula_http::conditional::json_document(body)
         .map_err(|_| patchula_http::CacheError::Document)?;
@@ -68,7 +77,17 @@ fn page(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_h
         .map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NUGET_REGISTRATION_PAGE: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("nuget-registration-page", 1, page);
+    patchula_http::Derived::new("nuget-registration-page", 2, page);
+
+/// How a version is matched between the flat container and the
+/// registration: case-insensitive and without build metadata, which the
+/// flat container leaves out.
+fn identity(version: &str) -> String {
+    version
+        .split_once('+')
+        .map_or(version, |(version, _)| version)
+        .to_ascii_lowercase()
+}
 
 impl Client {
     pub(crate) async fn nuget(&self, package: &str) -> Result<Catalog> {
@@ -89,12 +108,12 @@ impl Client {
             .await?;
         let listed: Vec<String> = serde_json::from_slice(&response.body)?;
         #[derive(Deserialize)]
-        struct Metadata {
+        struct Page {
             #[serde(default)]
             entries: Vec<Entry>,
             page: Option<String>,
         }
-        let mut metadata: Metadata = serde_json::from_slice(
+        let pages: Vec<Page> = serde_json::from_slice(
             &self
                 .http
                 .get_derived(
@@ -105,34 +124,51 @@ impl Client {
                 .await?
                 .body,
         )?;
-        if let Some(url) = metadata
-            .page
-            .take()
-            .filter(|u| u.starts_with("https://api.nuget.org/"))
-        {
-            metadata.entries = serde_json::from_slice::<Metadata>(
-                &self
-                    .http
-                    .get_derived(&url, "application/json", &NUGET_REGISTRATION_PAGE)
-                    .await?
-                    .body,
-            )?
-            .entries;
+        // Every page is read, not just the newest: a page holds 64 versions
+        // counted from the oldest, so an older line's new patch release, or
+        // an unlisted one, can sit on any of them. A page that fails fails
+        // the lookup rather than leave its versions looking listed.
+        let pages: Vec<Result<Vec<Entry>>> = stream::iter(pages)
+            .map(|page| async move {
+                let Some(url) = page.page else {
+                    return Ok(page.entries);
+                };
+                if !url.starts_with("https://api.nuget.org/") {
+                    return Err(Error::Invalid);
+                }
+                Ok(serde_json::from_slice::<Page>(
+                    &self
+                        .http
+                        .get_derived(&url, "application/json", &NUGET_REGISTRATION_PAGE)
+                        .await?
+                        .body,
+                )?
+                .entries)
+            })
+            .buffered(PAGE_FAN_OUT)
+            .collect()
+            .await;
+        let mut metadata = Vec::new();
+        for page in pages {
+            metadata.extend(page?);
         }
         let known: BTreeMap<String, Entry> = metadata
-            .entries
             .into_iter()
-            .map(|e| (e.version.to_ascii_lowercase(), e))
+            .map(|e| (identity(&e.version), e))
             .collect();
         let mut versions: Vec<Version> = listed
             .into_iter()
             .map(|version| {
-                let entry = known.get(&version.to_ascii_lowercase());
-                Version {
-                    published_at: entry.and_then(|e| e.published.clone()),
-                    deprecated: entry.is_some_and(|e| e.deprecated),
-                    yanked: entry.is_some_and(|e| !e.listed),
-                    ..Version::new(version)
+                // A version the registration does not describe yet (it
+                // trails the flat container) is unchecked, which policy holds.
+                match known.get(&identity(&version)) {
+                    Some(entry) => Version {
+                        published_at: entry.published.clone(),
+                        deprecated: entry.deprecated,
+                        yanked: !entry.listed,
+                        ..Version::new(version)
+                    },
+                    None => Version::unchecked(version),
                 }
             })
             .collect();

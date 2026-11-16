@@ -114,8 +114,10 @@ async fn nuget_versions_take_dates_and_flags_from_the_registration() {
     assert!(!at("13.0.2").yanked && !at("13.0.2").deprecated);
     // Unlisted is yanked; a deprecation object marks deprecated.
     assert!(at("13.0.1").yanked && at("13.0.1").deprecated);
-    // A version the registration does not know lists without metadata.
-    assert!(at("12.0.3").published_at.is_none() && !at("12.0.3").yanked);
+    // A version the registration does not describe yet is unchecked, which
+    // policy holds, rather than listed and undated.
+    assert!(at("12.0.3").unchecked && at("12.0.3").published_at.is_none());
+    assert!(!at("13.0.2").unchecked);
     assert!(steps.0.lock().unwrap().is_empty());
 }
 
@@ -153,7 +155,8 @@ async fn nuget_registration_follows_only_nugets_own_pages() {
         ),
         (
             "https://api.nuget.org/v3/registration5-gz-semver2/offsite/index.json".into(),
-            // A page link off nuget.org is never requested.
+            // A page link off nuget.org is never requested, and fails the
+            // lookup rather than leave its versions looking listed.
             response(
                 200,
                 r#"{"items":[{"@id":"https://evil.example.com/page.json","count":1}]}"#,
@@ -173,15 +176,67 @@ async fn nuget_registration_follows_only_nugets_own_pages() {
             Source::Nuget,
             "offsite",
         ))
+        .await;
+    assert!(offsite.is_err());
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+/// Every registration page is read: an older page holds an unlisted patch
+/// release on an older line, which must not look listed and undated.
+#[tokio::test]
+async fn nuget_reads_every_registration_page() {
+    let older = "https://api.nuget.org/v3/registration5-gz-semver2/lib/page-6.json";
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            "https://api.nuget.org/v3-flatcontainer/lib/index.json".into(),
+            response(200, r#"{"versions":["6.0.1","6.0.5","7.0.0"]}"#, &[]),
+        ),
+        (
+            "https://api.nuget.org/v3/registration5-gz-semver2/lib/index.json".into(),
+            response(
+                200,
+                &format!(
+                    r#"{{"items":[
+                        {{"@id":"{older}","count":2,"lower":"6.0.1","upper":"6.0.5"}},
+                        {{"count":1,"lower":"7.0.0","upper":"7.0.0","items":[
+                            {{"catalogEntry":{{"version":"7.0.0","published":"2024-06-01T00:00:00Z","listed":true}}}}
+                        ]}}
+                    ]}}"#
+                ),
+                &[],
+            ),
+        ),
+        (
+            older.into(),
+            response(
+                200,
+                r#"{"items":[
+                    {"catalogEntry":{"version":"6.0.1","published":"2023-01-01T00:00:00Z","listed":true}},
+                    {"catalogEntry":{"version":"6.0.5+build.7","published":"2024-07-01T00:00:00Z","listed":false}}
+                ]}"#,
+                &[],
+            ),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = client(steps.clone(), dir.path())
+        .await
+        .lookup(&patchula_config::PackageId::public(Source::Nuget, "lib"))
         .await
         .unwrap();
-    assert_eq!(offsite.versions.len(), 1);
-    assert!(offsite.versions[0].published_at.is_none());
+    let patch = catalog
+        .versions
+        .iter()
+        .find(|v| v.version == "6.0.5")
+        .unwrap();
+    assert!(patch.yanked && !patch.unchecked);
+    assert_eq!(patch.published_at.as_deref(), Some("2024-07-01T00:00:00Z"));
+    assert!(catalog.versions.iter().all(|v| !v.unchecked));
     assert!(steps.0.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn maven_reads_versions_and_dates_the_newest_from_poms() {
+async fn maven_reads_versions_and_dates_each_from_its_pom() {
     let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
         (
             "https://maven.acme.dev/com/acme/lib/maven-metadata.xml".into(),
@@ -256,6 +311,80 @@ async fn maven_reads_versions_and_dates_the_newest_from_poms() {
         .unwrap();
     assert_eq!(central.versions[0].version, "3.0.0");
     assert!(central.versions[0].published_at.is_none());
+    assert!(!central.versions[0].unchecked);
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+
+/// Every Maven version is dated once, not just the newest ten; a later
+/// lookup asks only about versions it has not dated, wherever they sort.
+/// A failed POM request leaves its version unchecked and is asked again; a
+/// version without a POM is dropped.
+#[tokio::test]
+async fn maven_dates_every_version_once_and_retries_failures() {
+    let base = "https://repo.maven.apache.org/maven2/com/example/lib";
+    let metadata = |versions: &[&str]| {
+        let listed: String = versions
+            .iter()
+            .map(|v| format!("<version>{v}</version>"))
+            .collect();
+        response(
+            200,
+            &format!("<metadata><versioning><versions>{listed}</versions></versioning></metadata>"),
+            &[("cache-control", "no-store")],
+        )
+    };
+    let pom = |version: &str| format!("{base}/{version}/lib-{version}.pom");
+    let dated = || {
+        response(
+            200,
+            "",
+            &[
+                ("last-modified", "Wed, 01 Jan 2025 00:00:00 GMT"),
+                ("cache-control", "no-store"),
+            ],
+        )
+    };
+    let mut first: Vec<String> = (0..12).map(|n| format!("3.{n}.0")).collect();
+    first.push("3.3.1".into());
+    let first: Vec<&str> = first.iter().map(String::as_str).collect();
+    let mut steps = VecDeque::from([(format!("{base}/maven-metadata.xml"), metadata(&first))]);
+    for version in &first {
+        if *version == "3.3.1" {
+            steps.push_back((pom(version), response(503, "", &[])));
+        } else {
+            steps.push_back((pom(version), dated()));
+        }
+    }
+    let mut second = first.clone();
+    second.push("3.3.2");
+    second.push("3.3.3");
+    steps.push_back((format!("{base}/maven-metadata.xml"), metadata(&second)));
+    steps.push_back((pom("3.3.1"), dated()));
+    steps.push_back((pom("3.3.2"), dated()));
+    steps.push_back((pom("3.3.3"), response(404, "", &[])));
+    let steps = Arc::new(Steps(Mutex::new(steps)));
+    let dir = tempfile::tempdir().unwrap();
+    let sources = client(steps.clone(), dir.path()).await;
+    let id = patchula_config::PackageId::public(Source::Maven, "com.example:lib");
+    let catalog = sources.lookup(&id).await.unwrap();
+    let at = |catalog: &patchula_datasource::Catalog, version: &str| {
+        catalog
+            .versions
+            .iter()
+            .find(|v| v.version == version)
+            .cloned()
+    };
+    let failed = at(&catalog, "3.3.1").unwrap();
+    assert!(failed.unchecked && failed.published_at.is_none());
+    assert_eq!(
+        at(&catalog, "3.0.0").unwrap().published_at.as_deref(),
+        Some("2025-01-01T00:00:00Z")
+    );
+    let catalog = sources.lookup(&id).await.unwrap();
+    let retried = at(&catalog, "3.3.1").unwrap();
+    assert!(!retried.unchecked && retried.published_at.is_some());
+    assert!(at(&catalog, "3.3.2").unwrap().published_at.is_some());
+    assert!(at(&catalog, "3.3.3").is_none());
     assert!(steps.0.lock().unwrap().is_empty());
 }
 

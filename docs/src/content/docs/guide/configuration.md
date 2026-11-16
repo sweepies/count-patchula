@@ -169,7 +169,7 @@ lockfile is not an update type; it is configured under
 | `releaseNotes`, `bodyNotes` | release notes in the PR body, and extra lines of your own |
 | `waitHours` | release-age wait in whole hours; `0` turns it off |
 | `windows` | when proposals may be created |
-| `permitted` | a version filter targets must match, such as `"semver:^24"`; an explicit filter also allows prereleases |
+| `permitted` | a version filter targets must match, such as `"semver:^24"`; a filter that names a prerelease also allows prereleases ([prereleases](/guide/lookup-policy/)) |
 
 Windows are five-field cron expressions in an IANA timezone; weekdays count
 0 or 7 for Sunday and 1 for Monday. Each time an expression names opens a turn:

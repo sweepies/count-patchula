@@ -35,9 +35,9 @@ fn tags(
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const FORGE_GITLAB_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("forge-gitlab-tags", 1, gitlab);
+    patchula_http::Derived::new("forge-gitlab-tags", 2, gitlab);
 pub(crate) const FORGE_GITEA_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("forge-gitea-tags", 1, gitea);
+    patchula_http::Derived::new("forge-gitea-tags", 2, gitea);
 
 fn forge(package: &str) -> Result<Forge> {
     Repository::from_url(&format!("https://{package}"))

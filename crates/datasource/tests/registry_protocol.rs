@@ -11,13 +11,16 @@ use std::{
 struct Steps(Mutex<VecDeque<(String, Response)>>);
 impl Transport for Steps {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
-        let (url, response) = self
-            .0
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("unexpected network read");
-        assert_eq!(request.url().as_str(), url);
+        // Sources fan out reads (Go's `.info` dating, for one), so the
+        // requests and each URL's own sequence are under test, not the
+        // interleaving of different URLs.
+        let mut steps = self.0.lock().unwrap();
+        let at = steps
+            .iter()
+            .position(|(url, _)| url == request.url().as_str())
+            .unwrap_or_else(|| panic!("unexpected network read: {}", request.url()));
+        let (_, response) = steps.remove(at).unwrap();
+        drop(steps);
         if response.status == 304 {
             assert_eq!(request.headers()["if-none-match"], "\"tags\"");
         }
@@ -496,11 +499,9 @@ async fn go_skips_latest_for_tagged_versions_and_preserves_pseudo_version_fallba
                 ),
             ));
         }
+        // Every listed version is dated through `.info`; @latest's
+        // pseudo-version already carries its time.
         let mut versions: Vec<_> = list.lines().collect();
-        if let Some(latest) = latest {
-            versions.push(latest);
-        }
-        // The source sorts descending and hydrates every new tagged version.
         versions.sort_by(|a, b| b.cmp(a));
         for version in versions {
             reads.push_back((

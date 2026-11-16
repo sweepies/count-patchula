@@ -69,7 +69,16 @@ impl Client {
                 ));
             }
             // Tags carry no reliable dates of their own; the releases
-            // document dates them.
+            // document dates them. A tag it leaves undated may be an
+            // annotated tag, which GitHub dates by its tagger: the mirror
+            // cannot tell, so GitHub's own tag catalog answers instead.
+            if tags
+                .tags
+                .iter()
+                .any(|tag| dates.get(&tag.tag).cloned().flatten().is_none())
+            {
+                return Ok(None);
+            }
             tags.tags
                 .iter()
                 .map(|tag| {
