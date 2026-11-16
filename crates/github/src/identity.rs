@@ -3,31 +3,33 @@
 //! Action's `GITHUB_TOKEN`) is minted fresh for every run, so that scope
 //! would never carry anything from one run to the next. Such a token is
 //! scoped by the reach GitHub reports for it instead: the App's bot user and
-//! either the whole account it is installed on or the exact set of
-//! repositories it reaches. Every other token keeps the token hash, since
-//! its bytes are already stable and GitHub does not report its reach.
+//! the exact set of repository ids the token lists. `repository_selection`
+//! never shapes the scope, so a token narrowed to some repositories can
+//! never share the full installation's entries, whatever GitHub calls its
+//! selection. Every other token keeps the token hash, since its bytes are
+//! already stable and GitHub does not report its reach.
 //!
 //! The reach is read live on every run and never cached, and anything
-//! unexpected keeps the token hash: an error answer, an unknown
-//! `repository_selection`, a listing longer than `PAGES` pages or one whose
-//! count disagrees with `total_count`, an `all` listing with no repositories
-//! or with repositories under more than one owner, or a token that cannot
-//! read the contents of a repository in its set.
+//! unexpected keeps the token hash: an error answer, a missing or unknown
+//! `repository_selection` or one that changes between pages, a listing
+//! longer than `PAGES` pages, empty, naming a repository twice or whose
+//! count disagrees with `total_count`, a viewer without an id, or a token
+//! that cannot read the contents of a repository in its set.
 //!
-//! Permissions are not part of the scope. Everything a cache entry under it
-//! answers without asking GitHub (Git objects, catalogs, listings, hints)
-//! needs at most `contents: read` on a repository the token reaches, and an
-//! installation token's permissions are the same on every repository it
-//! reaches, so the scope is used only after the token has read a
-//! repository's contents in this run.
+//! Permissions are not part of the scope. Every endpoint the scoped cache
+//! answers without asking GitHub (`crate::unrevalidated`) needs at most
+//! `contents: read` on a repository the token reaches, and an installation
+//! token's permissions are the same on every repository it reaches, so the
+//! scope is used only after the token has read a repository's contents in
+//! this run.
 use crate::{Client, Response, decode, hex, next_link};
 use reqwest::{Method, Url};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, sync::Arc};
 
-/// Pages of `installation/repositories` a selected listing may take. A token
-/// that reaches more repositories keeps the token hash.
+/// Pages of `installation/repositories` a listing may take. A token that
+/// reaches more repositories keeps the token hash.
 const PAGES: usize = 10;
 const PER_PAGE: usize = 100;
 
@@ -44,12 +46,6 @@ struct Repository {
     full_name: String,
     /// A missing flag counts as private.
     private: Option<bool>,
-    owner: Owner,
-}
-
-#[derive(Deserialize)]
-struct Owner {
-    id: u64,
 }
 
 #[derive(Deserialize)]
@@ -65,7 +61,7 @@ struct ViewerId {
 
 /// What `installation/repositories` says a token reaches.
 struct Reach {
-    /// `owner:{account id}/all` or `repos:{sha256 of the sorted ids}`.
+    /// `repos:{sha256 of the sorted ids}`.
     scope: String,
     /// A repository in the set whose contents the token must read: a
     /// private one when the set has any, since any token reads a public
@@ -139,14 +135,9 @@ impl Client {
                 return None;
             }
             repositories.extend(page.repositories);
-            // An `all` installation reaches the whole account, so one page
-            // names it; a selected set is read to its end.
-            let next = next_link(&response, &url).ok()?;
-            match (page_selection.as_str(), next) {
-                ("all", _) | (_, None) => {
-                    return reach(&page_selection, page.total_count, repositories);
-                }
-                (_, Some(next)) => url = self.url(next.as_str()).ok()?,
+            match next_link(&response, &url).ok()? {
+                Some(next) => url = self.url(next.as_str()).ok()?,
+                None => return reach(&page_selection, page.total_count, repositories),
             }
         }
         None
@@ -171,36 +162,23 @@ impl Client {
 }
 
 /// The reach a complete listing names, or `None` when it names none the
-/// rules accept.
+/// rules accept. Either selection is keyed by the ids the token lists.
 fn reach(selection: &str, total: usize, repositories: Vec<Repository>) -> Option<Reach> {
+    if !matches!(selection, "all" | "selected") {
+        return None;
+    }
     let probe = repositories
         .iter()
         .min_by_key(|repository| (repository.private == Some(false), repository.id))?
         .full_name
         .clone();
-    match selection {
-        "all" => {
-            let owners: BTreeSet<u64> = repositories.iter().map(|r| r.owner.id).collect();
-            if owners.len() != 1 {
-                return None;
-            }
-            let owner = *owners.first()?;
-            Some(Reach {
-                scope: format!("owner:{owner}/all"),
-                probe,
-            })
-        }
-        "selected" => {
-            let ids: BTreeSet<u64> = repositories.iter().map(|r| r.id).collect();
-            if ids.len() != total || repositories.len() != total {
-                return None;
-            }
-            let joined = ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
-            Some(Reach {
-                scope: format!("repos:{}", hex(&Sha256::digest(joined.as_bytes()))),
-                probe,
-            })
-        }
-        _ => None,
+    let ids: BTreeSet<u64> = repositories.iter().map(|r| r.id).collect();
+    if ids.len() != total || repositories.len() != total {
+        return None;
     }
+    let joined = ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+    Some(Reach {
+        scope: format!("repos:{}", hex(&Sha256::digest(joined.as_bytes()))),
+        probe,
+    })
 }

@@ -63,21 +63,29 @@ which includes an Action's `GITHUB_TOKEN`). It reads, live and never from the
 cache:
 
 - `GET /installation/repositories?per_page=100`, at most ten pages, for
-  `repository_selection`, the repository ids and their owner's id;
+  `repository_selection` and the repository ids;
 - GraphQL `viewer { databaseId }`, the App's bot user;
 - `GET /repos/{repository}/commits?per_page=1` on a repository in the set,
   a private one when there is one, which needs `contents: read`.
 
-The scope is then `{api root}|app:{bot id}/owner:{account id}/all` for an
-`all` installation (one listing page names the account) and `{api
-root}|app:{bot id}/repos:{sha256 of the sorted ids}` for `selected`. Any
-non-2xx answer, a missing or unknown `repository_selection`, a selected
-listing past the page cap or whose count disagrees with `total_count`, an
-`all` listing with no repositories or with repositories under more than one
-owner, or a failed contents read keeps the token hash. Personal, OAuth and
-user tokens keep it without a request. The [threat
+The scope is then `{api root}|app:{bot id}/repos:{sha256 of the sorted ids}`
+whatever the selection, so a token narrowed to some repositories never shares
+the full installation's entries even if GitHub called its selection `all`.
+Any non-2xx answer, a missing or unknown `repository_selection` or one that
+changes between pages, a listing past the page cap, empty, naming a
+repository twice or whose count disagrees with `total_count`, a viewer
+without an id, or a failed contents read keeps the token hash. An
+installation with more than a thousand repositories therefore keeps it too.
+Personal, OAuth and user tokens keep it without a request. The [threat
 model](/internals/threat-model/#cache-scopes) says why the scope may leave
 permissions out.
+
+`unrevalidated::ENDPOINTS` lists every endpoint whose cached answer is
+returned without asking GitHub: Git blobs, recursive trees and commits, under
+`repos/{owner}/{repo}` or a renamed repository's `repositories/{id}`. A read
+that skips revalidation on anything else fails with `Error::Unrevalidated`,
+and a unit test checks the path of every `get_immutable` call in the
+workspace against the list.
 
 ## Transport
 

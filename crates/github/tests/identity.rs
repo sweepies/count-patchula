@@ -131,7 +131,7 @@ async fn memory() -> Cache {
 }
 
 #[tokio::test]
-async fn an_installation_token_for_a_whole_account_is_scoped_by_its_bot_and_owner() {
+async fn an_installation_token_for_a_whole_account_is_scoped_by_its_repository_ids() {
     let transport = Arc::new(Installation::new(vec![listing(
         Some("all"),
         3,
@@ -140,7 +140,10 @@ async fn an_installation_token_for_a_whole_account_is_scoped_by_its_bot_and_owne
     let client = identified(INSTALLATION_TOKEN, transport.clone(), memory().await).await;
     assert_eq!(
         client.credential_scope(),
-        sha256_hex("https://api.github.com/|app:41/owner:7/all")
+        sha256_hex(&format!(
+            "https://api.github.com/|app:41/repos:{}",
+            sha256_hex("1,2,3")
+        ))
     );
     // The probe reads a private repository's contents, the lowest id first.
     assert_eq!(*transport.probed.lock().unwrap(), ["o7/r2"]);
@@ -234,12 +237,15 @@ async fn an_installation_token_keeps_the_token_hash_on_anything_unexpected() {
             Installation::new(vec![listing(Some("all"), 0, vec![])]),
         ),
         (
-            "an all listing under two owners",
-            Installation::new(vec![listing(
-                Some("all"),
-                2,
-                vec![listed(1, 7, true), listed(2, 8, true)],
-            )]),
+            "an all listing past the page cap",
+            Installation {
+                endless: true,
+                ..Installation::new(vec![listing(Some("all"), 1, vec![listed(1, 7, true)])])
+            },
+        ),
+        (
+            "an all count below total_count",
+            Installation::new(vec![listing(Some("all"), 2, vec![listed(1, 7, true)])]),
         ),
         (
             "selections that change between pages",
@@ -313,17 +319,26 @@ async fn installation_tokens_share_entries_only_with_the_exact_same_reach() {
     assert_ne!(next.credential_scope(), token_scope("ghs_secondRunToken"));
     next.get_immutable_response(&path).await.unwrap();
     assert_eq!(second.other.load(Ordering::SeqCst), 0);
-    // A token narrowed to the same repositories is another reach.
-    let narrowed = Arc::new(Installation::new(vec![listing(
+    // A selected token listing the same repositories is the same reach.
+    let selected = Arc::new(Installation::new(vec![listing(
         Some("selected"),
         2,
         repositories(),
+    )]));
+    let client = identified("ghs_selectedToken", selected.clone(), cache().await).await;
+    assert_eq!(client.credential_scope(), next.credential_scope());
+    // A token narrowed to fewer repositories is another reach, even when
+    // GitHub calls its selection `all`.
+    let narrowed = Arc::new(Installation::new(vec![listing(
+        Some("all"),
+        1,
+        vec![listed(1, 7, true)],
     )]));
     let client = identified("ghs_narrowedToken", narrowed.clone(), cache().await).await;
     assert_ne!(client.credential_scope(), next.credential_scope());
     client.get_immutable_response(&path).await.unwrap();
     assert_eq!(narrowed.other.load(Ordering::SeqCst), 1);
-    // So is another App's bot on the same account.
+    // So is another App's bot on the same repositories.
     let other_app = Arc::new(Installation {
         viewer: (200, json!({"data":{"viewer":{"databaseId":42}}})),
         ..Installation::new(vec![listing(Some("all"), 2, repositories())])
@@ -352,6 +367,28 @@ async fn a_shared_client_is_returned_unchanged() {
     let client = client.identify().await;
     assert_eq!(client.credential_scope(), token_scope(INSTALLATION_TOKEN));
     assert_eq!(clone.credential_scope(), token_scope(INSTALLATION_TOKEN));
+}
+
+#[tokio::test]
+async fn a_read_that_skips_revalidation_must_name_a_listed_endpoint() {
+    let transport = Arc::new(Installation::new(vec![]));
+    let client = Client::with_transport(
+        "ghp_privateTestCredential123",
+        memory().await,
+        Options::default(),
+        transport.clone(),
+    )
+    .unwrap();
+    for path in ["repos/o/r/contents/a", "repos/o/r/git/trees/abc"] {
+        assert!(
+            matches!(
+                client.get_immutable_response(path).await,
+                Err(patchula_github::Error::Unrevalidated)
+            ),
+            "{path}"
+        );
+    }
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 0);
 }
 
 /// REST blobs whose first answer is `planted\n` and every later one the

@@ -163,22 +163,32 @@ reach, never its secret:
 
 - an App installation by the App and the installation;
 - an installation token (`ghs_`: an Action's App token or `GITHUB_TOKEN`) by
-  the API root, its App's bot user and either the whole account it is
-  installed on or the exact set of repositories it reaches, as GitHub
-  reports them for that token in the run. Anything unexpected in that
-  report keeps the token hash;
+  the API root, its App's bot user and the exact set of repository ids
+  GitHub lists for that token in the run. What GitHub calls the selection
+  (`all` or `selected`) never shapes the scope. Anything unexpected in the
+  listing keeps the token hash;
 - any other token (personal, OAuth or user tokens) by a hash of the token,
   since GitHub does not report what it reaches.
 
 Two credentials share entries only when their reach is the same. A token
-narrowed to some repositories shares nothing with the full installation.
+narrowed to fewer repositories shares nothing with the full installation.
 
-Permissions are not part of the scope. Everything the cache answers without
-asking GitHub needs at most `contents: read` on a repository in the reach,
-and an installation token has the same permissions on every repository it
-reaches. So a token run uses its reach as the scope only after the token has
-read a repository's contents in that run, a private one when the reach has
-any. Anything that needs more is asked of GitHub every time.
+Permissions are not part of the scope. The endpoints the cache answers
+without asking GitHub are listed in one place,
+`patchula_github::unrevalidated::ENDPOINTS`: Git blobs, trees and commits by
+SHA, each needing `contents: read`. A read that skips revalidation on any
+other endpoint fails, and a test fails when a call site names one. An
+installation token has the same permissions on every repository it reaches,
+so a token run uses its reach as the scope only after the token has read a
+repository's contents in that run, a private one when the reach has any.
+Everything else is asked of GitHub every time.
+
+An installation's scope does not change when a repository leaves it. Git
+objects already cached from that repository stay readable under the
+installation's scope until they are evicted, though the installation could no
+longer fetch them.
+
+### Planting
 
 The scope is not a secret, so the cache file is trusted like the operator's
 settings: whoever can write the file the Count opens can plant entries in
@@ -188,6 +198,16 @@ workflow lives in the repository it updates. A Git blob read from the cache
 must hash to its SHA, so a planted blob is read from GitHub again. Trees,
 commits, catalogs, listings and hints cannot be checked that way and stay
 plantable by that writer, as public registry responses always were.
+
+### Confidentiality
+
+The cache file is as confidential as the widest credential that filled it:
+it holds Git objects, catalogs and listings from every repository that
+credential reached. Whoever can read the file reads them. A fork's pull
+request can restore a public repository's Actions cache without holding any
+secret, so the action saves its cache in a public repository only when the
+token is an installation token whose listing is that repository alone. It
+saves nothing when it cannot show that, a personal token included.
 
 ## Out of scope
 

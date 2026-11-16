@@ -129,12 +129,27 @@ build these files on one organization module.
 | `args` | | Extra `patchula run` arguments, such as `--config-dir policy` |
 
 The cache, with HTTP validators, write receipts and the lockfile tools, is
-saved after every run and restored on the next. With an App installation
-token, or the workflow's own `GITHUB_TOKEN`, Git blobs, package catalogs, tool
-listings and lookup hints carry over to the next run's freshly minted token
-when it reaches the same repositories: the whole account, or exactly the same
-set (a token narrowed to fewer repositories starts its own). A personal token
-carries everything over as long as it stays the same token. Entries are keyed by the cache schema the binary reads
+restored at the start of every run and saved at the end. With an App
+installation token, or the workflow's own `GITHUB_TOKEN`, Git blobs, package
+catalogs, tool listings and lookup hints carry over to the next run's freshly
+minted token when it lists exactly the same repositories; adding or removing
+a repository, or narrowing the token, starts a new cache. An installation
+that reaches more than a thousand repositories gets no carry-over. A personal
+token carries everything over as long as it stays the same token.
+
+:::caution[Public repositories]
+The saved cache holds data from every repository the token reaches, private
+ones included, and a pull request from a fork can restore a public
+repository's cache. So in a public repository the action saves the cache
+only when the token is an installation token that reaches that repository
+alone, such as the one-repository setup above or `GITHUB_TOKEN`. Run an
+organization-wide token from a private runner repository. A run that cannot
+save says so in a notice and still works, just without the cache. If an older
+release of the action already saved a cache in a public repository with a
+wider token, delete those caches (`gh cache delete --all`).
+:::
+
+Entries are keyed by the cache schema the binary reads
 (`patchula cache schema`), so moving to a release with a new schema, or back to
 an older one, starts from a cold cache instead of failing on a database it
 cannot read.

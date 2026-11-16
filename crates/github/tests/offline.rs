@@ -129,14 +129,14 @@ async fn a_vary_response_is_stored_once_and_revalidated_but_vary_star_is_not() {
     // prove nothing was stored.
     for _ in 0..3 {
         client
-            .get_immutable_response("repos/o/r/vary-star")
+            .get_immutable_response("repos/o/r/git/blobs/star")
             .await
             .unwrap();
     }
     let counts = transport.counts.lock().unwrap();
     // One store and one revalidation: the Vary response lives under a single key.
     assert_eq!(counts["/repos/o/r/vary"], 2);
-    assert_eq!(counts["/repos/o/r/vary-star"], 3);
+    assert_eq!(counts["/repos/o/r/git/blobs/star"], 3);
 }
 
 /// Answers every request with the same JSON body, and counts them.

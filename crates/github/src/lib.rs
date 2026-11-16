@@ -8,6 +8,7 @@ mod governor;
 mod identity;
 pub mod model;
 mod pagination;
+pub mod unrevalidated;
 pub use blobs::blob_sha;
 pub use credentials::{Credentials, Invalidation, Permissions, RepositoryId, Token};
 pub use governor::{PrimaryLimit, Stats};
@@ -91,6 +92,10 @@ pub enum Error {
     /// `MAX_REDIRECTS` times.
     #[error("GitHub redirects loop or exceed the redirect budget")]
     Redirect,
+    /// A read that skips revalidation named an endpoint missing from
+    /// `unrevalidated::ENDPOINTS`.
+    #[error("GitHub endpoint may not be answered from the cache without asking")]
+    Unrevalidated,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -565,6 +570,9 @@ impl Client {
         for _ in 0..MAX_REDIRECTS {
             if !visited.insert(url.clone()) {
                 return Err(Error::Redirect);
+            }
+            if read != Read::Revalidate && !unrevalidated::listed(&self.0.options.api_url, &url) {
+                return Err(Error::Unrevalidated);
             }
             let mut request = self.request(Method::GET, url.clone());
             // One key per request: the client sends a fixed header set, so any
