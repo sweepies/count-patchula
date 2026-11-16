@@ -130,13 +130,15 @@ Renovate's other schemes, including `regex` versioning, `node`, `debian`,
 
 | Lockfile | Count Patchula |
 |---|---|
-| `package-lock.json` | aube by default, npm with `npmEngine = "npm"` |
+| `package-lock.json` | aube by default, npm with `npmEngine = "npm"`; with npm, git and forge dependencies are [refused](/guide/lockfiles/#what-is-refused) |
 | `aube-lock.yaml`, `pnpm-lock.yaml` | aube |
-| `yarn.lock` | aube for Classic, Yarn for Berry |
+| `yarn.lock` | aube for Classic, Yarn for Berry; Berry git, forge and `exec:` dependencies are [refused](/guide/lockfiles/#what-is-refused) |
 | `bun.lock` | Bun |
 | `Cargo.lock`, `go.sum`, `.terraform.lock.hcl` | yes |
-| `uv.lock`, `poetry.lock` | yes |
-| `packages.lock.json`, `Gemfile.lock`, `composer.lock` | yes |
+| `uv.lock`, `poetry.lock` | yes, without building; what needs a build is [refused](/guide/lockfiles/#what-is-refused) |
+| `Gemfile.lock` | yes, from a Gemfile the Count renders; `gemspec`, `path:`, `git:` and other unrendered forms are [refused](/guide/lockfiles/#what-is-refused) |
+| `composer.lock` | yes |
+| `packages.lock.json` | no; updates that would move it are skipped, since `dotnet restore` runs MSBuild code |
 | `mise.lock`, `flake.lock`, `apm.lock.yaml` | yes |
 | `actions.lock` | yes, for workflows the lockfile already lists; lockfile maintenance relocks moved refs |
 | `bun.lockb`, `Chart.lock`, `gradle.lockfile`, `Pipfile.lock`, `pdm.lock`, `pylock.toml` | no; updates beside them hold as lockfile-pending |

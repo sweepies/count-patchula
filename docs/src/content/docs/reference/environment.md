@@ -9,7 +9,6 @@ description: "The environment variables patchula reads, the commands that use th
 | `PATCHULA_RECHECK` | `run`, server | `now` or `next-run`: when a ticked checkbox says it takes effect |
 | `PATCHULA_SETTINGS` | `lookup`, `run`, `apply`, `tui`, server | the operator [settings](/reference/settings/) file |
 | `PATCHULA_TOOLS_DIR` | `run`, `tools`, server | the tool store, holding the lockfile tools, the pinned mise that lists `mise` tools, and the mise packslip installs when there is none on `PATH`; default `tools/` in the cache directory |
-| `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` | lockfiles | passed on to `dotnet restore`, whose environment otherwise starts empty; the container image sets `1` because it has no ICU |
 | `XDG_CACHE_HOME` | local commands, server | the user cache directory on Linux and other non-macOS systems, holding `patchula/` (the server's default is `patchula/server`); default `~/.cache`. macOS uses `~/Library/Caches` |
 | `PATCHULA_SERVER` | `lookup`, `run`, `tui`, `auth` | the [server](/guide/server/#run-from-your-machine) URL for `--remote`, and for `auth` without `--server` |
 | `XDG_CONFIG_HOME` | `lookup`, `run`, `apply`, `tui`, `auth` | where the default operator settings (`patchula/settings.pkl`), the server sign-ins (`patchula/servers.json`) and per-repository server choices (`patchula/repositories.json`) live; default `~/.config` |

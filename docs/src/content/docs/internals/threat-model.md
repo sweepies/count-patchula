@@ -34,11 +34,17 @@ It may:
 
 It may not:
 
-- run code on the Count's machine. That covers plugin backends (asdf, vfox),
-  lifecycle scripts, hooks, build logic, credential helpers and anything else
-  that executes something the repository chose. The Count runs as one user,
-  with his credentials, his cache and, under an App, the private key, so code
-  running there reaches all of them.
+- run code on the Count's machine. Code the repository chose includes the
+  code of every package it depends on, directly or through other packages:
+  the repository picks the packages, and may pick the registry they come
+  from. That covers plugin backends (asdf, vfox), lifecycle scripts, hooks,
+  build logic such as PEP 517 backends, gemspecs and MSBuild targets, the
+  preparation of git dependencies, credential helpers and anything else that
+  executes something the repository or a package chose. Resolving a lock
+  reads package metadata; it never executes anything fetched. The Count runs
+  as one user, with his credentials, his cache and, under an App, the private
+  key, so code running there reaches all of them. A sandbox would not make
+  that code acceptable; the rule is that it never runs.
 - obtain a credential wider than its own reach: the installation token, the
   App key, another repository's token, an operator registry credential meant
   for other repositories, or the machine's own credentials. Cloud
@@ -52,18 +58,88 @@ It may not:
 
 - **Follow, don't refuse.** If the Count can reproduce what a repository
   declares, he does it. He refuses only what would run code chosen by the
-  repository, or what he cannot reproduce faithfully.
+  repository or its packages, or what he cannot reproduce faithfully.
 - **Scope credentials, don't strip them.** Give each lookup the narrowest
   credential its repository is entitled to. Don't withhold that credential
   because a repository-chosen host could see it.
 - **Never run code a repository chose.** Plugin backends, lifecycle scripts,
-  hooks and the like stay off for every repository.
+  hooks, build backends and the like stay off for every repository. When a
+  lock cannot be regenerated without running such code, the update that
+  needs it is skipped, and lockfile maintenance with it, with a reason that
+  stands on the dashboard and in the report until the repository changes. No
+  pull request is opened or updated with a stale lock instead.
 - **Keep shared results honest.** A shared cache key includes everything that
   changes the answer: the options, the source, and the reach of the
   credential that fetched it.
 - **Argument hygiene is separate from trust.** Rejecting values that a tool
   would read as flags, selectors or extra arguments is about parsing
   correctly, and applies to every repository.
+
+## How each tool keeps to it
+
+Every lockfile tool runs with an allowlisted environment, its own HOME and no
+inherited configuration, and the Count's own checkout runs apart from it.
+On top of that, each tool keeps the rule like this:
+
+- **mise** (lookups and `mise lock`): plugin backends are disabled, and every
+  tool name and option passes the lookup's checks before mise starts.
+- **npm** (`lockfiles.npmEngine = "npm"`, and format v1 locks):
+  `--ignore-scripts`. npm prepares a git dependency by packing it, which runs
+  its scripts whatever `--ignore-scripts` says, before pacote 22, and the
+  pinned npm ships an older pacote. So the update is refused when any
+  `package.json` in the tree, its `overrides`, or the lock names a source
+  outside the allowlist of registry versions, local paths and plain tarballs
+  (git URLs, forge shorthands such as `github:` or `owner/repo`, forge archive
+  URLs). The run has no Git transport (`GIT_ALLOW_PROTOCOL` names none), so a
+  git dependency of a registry package fails to fetch, and a guard the Count
+  loads into every Node process of the run stops pacote's preparation process
+  before it starts, for a GitHub dependency pinned to a commit, which arrives
+  over HTTPS. A regenerated lock that records a git source is thrown away and
+  the update refused.
+- **Yarn Berry**: the Count's pinned release, every `.yarnrc.yml` up to the
+  repository root replaced for the run by a copy without `yarnPath`,
+  `plugins` or `networkSettings`, and `enableScripts` off. Yarn packs git and
+  GitHub dependencies whatever `enableScripts` says, and runs `exec:`
+  generators, so the same refusal covers manifests, `resolutions`, catalogs,
+  `packageExtensions`, `yarn.lock` and `exec:`. The run has no Git transport,
+  and the GitHub hosts Yarn's GitHub fetcher downloads from are closed in the
+  run's user configuration. A regenerated lock that records a git source is
+  thrown away.
+- **aube** (pnpm, npm and Yarn Classic locks) and **Bun**:
+  `--ignore-scripts`. Neither runs a git dependency's scripts, directly or
+  through a registry package; the canary tests run both with Git reachable to
+  prove it.
+- **uv**: `uv lock --no-build` with `UV_NO_BUILD=1`, so uv reads metadata
+  only from wheels and static `pyproject.toml` tables. A project whose root
+  or members have metadata uv would have to build, or a dependency only an
+  sdist provides, is refused.
+- **Poetry**: Poetry builds sdists to read their metadata, and no setting
+  stops it. It runs under a Count-owned launcher that replaces its PEP 517
+  build entry points with a refusal and runs only on Poetry versions a canary
+  test covers; anything else refuses the update.
+- **Bundler**: a Gemfile is Ruby, so Bundler never reads the repository's.
+  The Count renders a Gemfile from his own parsed model and runs Bundler on
+  it, beside a copy of `Gemfile.lock`, in a scratch directory outside the
+  checkout, with `BUNDLE_VERSION=system`, no repository `.bundle/config` or
+  `BUNDLE_*` settings, and no Git transport; only `Gemfile.lock` comes back.
+  `gemspec`, `path:`, `git:`, `github:` and other forge keys, `git_source`,
+  `plugin`, `eval_gemfile`, `install_if`, any line the Count does not read,
+  and a lock with `GIT`, `PATH` or `PLUGIN SOURCE` sections are refused.
+- **dotnet**: `packages.lock.json` is not regenerated at all. `dotnet
+  restore` evaluates MSBuild projects, props and targets from the repository
+  and from every package it restores, so every update that would move one is
+  refused.
+- **Composer**: `--no-scripts --no-plugins --no-install`.
+- **Cargo**, **Go**, **Terraform**, **APM** and **gh-actions-lock** resolve
+  from metadata and checksums and run nothing they fetch. **nix** locks
+  inputs without evaluating the flake's outputs, with `max-jobs = 0` and the
+  flake's `nixConfig` ignored. The Gradle wrapper is checked against Gradle's
+  published checksum, not run.
+
+Each refusal and Git guard has a canary test that runs the real tool over a
+dependency whose scripts, backend or gemspec write a marker file, reached
+directly and through a registry package, and checks that the marker never
+appears.
 
 ## Out of scope
 

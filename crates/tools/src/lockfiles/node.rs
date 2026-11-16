@@ -2,6 +2,8 @@
 //! Berry `yarn.lock`, Bun for `bun.lock`.
 use super::*;
 
+mod sources;
+
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[Manager::Npm, Manager::Bun],
     tools: &["node", "bun", "aube", "yarn"],
@@ -196,6 +198,7 @@ impl Runner {
             {
                 engine = Engine::Npm;
             }
+            refuse_code_sources(engine, root, baseline, directory, leaf)?;
             match engine {
                 Engine::Bun => {
                     self.bun(driver, &cwd, versions, maintenance, public)
@@ -213,6 +216,16 @@ impl Runner {
             }
             if !cwd.join(leaf).is_file() {
                 return Err(format!("tool did not produce {leaf}").into());
+            }
+            // A registry package can bring in a source the files above did
+            // not name; a lock that records one is thrown away. One the
+            // Count cannot read is left to the checks that follow.
+            if let sources::Lock::Refused(reason) = lock_sources(
+                engine,
+                &format!("the regenerated {}", context::join(directory, leaf)),
+                &std::fs::read_to_string(cwd.join(leaf)).unwrap_or_default(),
+            ) {
+                return Err(Failure::Refused(reason));
             }
             // aube writes its own lockfile when it is not told which one to keep.
             if engine == Engine::Aube
@@ -329,6 +342,8 @@ impl Runner {
             "--no-audit".into(),
             "--no-fund".into(),
         ];
+        let guard = driver.join("npm-prepare-guard.cjs");
+        std::fs::write(&guard, NPM_PREPARE_GUARD).map_err(|e| e.to_string())?;
         self.node_tool(
             driver,
             Invocation {
@@ -336,7 +351,13 @@ impl Runner {
                 tools: vec![("node".into(), context::version(versions, "node")?)],
                 bin: caches::Bin::Npm,
                 cwd: None,
-                env: Vec::new(),
+                env: vec![
+                    ("GIT_ALLOW_PROTOCOL".into(), NO_GIT_TRANSPORT.into()),
+                    (
+                        "NODE_OPTIONS".into(),
+                        format!("--require={}", guard.to_string_lossy()),
+                    ),
+                ],
                 credentials: Vec::new(),
                 secrets: Vec::new(),
                 public,
@@ -429,6 +450,8 @@ impl Runner {
                 ("YARN_IGNORE_PATH".into(), "1".into()),
                 ("YARN_ENABLE_TELEMETRY".into(), "0".into()),
                 ("YARN_ENABLE_PROGRESS_BARS".into(), "0".into()),
+                ("YARN_ENABLE_SCRIPTS".into(), "0".into()),
+                ("GIT_ALLOW_PROTOCOL".into(), NO_GIT_TRANSPORT.into()),
             ],
             credentials: Vec::new(),
             secrets: Vec::new(),
@@ -438,7 +461,9 @@ impl Runner {
         // Yarn reads registries, cache keys and catalogs from every
         // `.yarnrc.yml` from its working directory up to the filesystem root,
         // but the scratch tree holds no `.yarn/` for a `yarnPath` release or
-        // `plugins`, and `${VAR}` references name variables the run never has.
+        // `plugins`, `${VAR}` references name variables the run never has,
+        // and `networkSettings` could reopen the hosts the run's user
+        // configuration closes.
         // Run Yarn on copies without them, each one from the project up to
         // the tree root, and restore the committed files afterwards. Above
         // the tree root are the Count's own directories.
@@ -467,6 +492,106 @@ impl Runner {
         Ok(())
     }
 }
+
+/// The tool name a refusal gives for `engine`, or `None` for an engine that
+/// locks git dependencies without running their scripts (aube, Bun).
+fn refusing(engine: Engine) -> Option<&'static str> {
+    match engine {
+        Engine::Npm => Some("npm"),
+        Engine::Yarn => Some("Yarn"),
+        Engine::Aube | Engine::Bun => None,
+    }
+}
+
+/// What the lock text `text`, labelled `path`, says about its sources to
+/// `engine`.
+fn lock_sources(engine: Engine, path: &str, text: &str) -> sources::Lock {
+    match engine {
+        Engine::Npm => sources::npm_lock(path, text),
+        Engine::Yarn => sources::berry_lock(path, text),
+        Engine::Aube | Engine::Bun => sources::Lock::Clean,
+    }
+}
+
+/// Refuse a run of npm or Yarn whose files name a source the tool can only
+/// lock by running code the dependency chose (see `sources`): every
+/// `package.json` in the tree, since a workspace or a local path can reach
+/// any of them, the lock itself, and for Yarn every `.yarnrc.yml` it reads,
+/// from the project up to the tree root, for catalogs and package
+/// extensions.
+fn refuse_code_sources(
+    engine: Engine,
+    root: &Path,
+    baseline: &BTreeMap<String, BaseFile>,
+    directory: &str,
+    leaf: &str,
+) -> Result<(), Failure> {
+    let Some(tool) = refusing(engine) else {
+        return Ok(());
+    };
+    for path in baseline
+        .keys()
+        .filter(|path| path.rsplit('/').next() == Some("package.json"))
+    {
+        if let Ok(text) = std::fs::read_to_string(root.join(path))
+            && let Some(reason) = sources::manifest(tool, path, &text)
+        {
+            return Err(Failure::Refused(reason));
+        }
+    }
+    let lock = context::join(directory, leaf);
+    match lock_sources(
+        engine,
+        &lock,
+        &std::fs::read_to_string(root.join(&lock)).unwrap_or_default(),
+    ) {
+        sources::Lock::Clean => {}
+        sources::Lock::Refused(reason) => return Err(Failure::Refused(reason)),
+        sources::Lock::Unreadable => {
+            return Err(Failure::Refused(format!(
+                "{lock} is not a lock the Count can read, so nothing proves {tool} would regenerate it without running code"
+            )));
+        }
+    }
+    if engine == Engine::Yarn {
+        for dir in root
+            .join(directory)
+            .ancestors()
+            .take_while(|dir| dir.starts_with(root))
+        {
+            let rc = dir.join(".yarnrc.yml");
+            if let Ok(text) = std::fs::read_to_string(&rc) {
+                let path = rc.strip_prefix(root).unwrap_or(&rc).to_string_lossy();
+                if let Some(reason) = sources::yarnrc(&path, &text) {
+                    return Err(Failure::Refused(reason));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A `GIT_ALLOW_PROTOCOL` naming no transport Git has, so every clone,
+/// fetch and ls-remote a run starts fails before it connects. npm and Yarn
+/// get it: a git dependency the Count's checks did not see, such as one a
+/// registry package declares, never reaches the packing that would run its
+/// scripts.
+pub(super) const NO_GIT_TRANSPORT: &str = "none";
+
+/// Loaded into every Node process of an npm run (`NODE_OPTIONS=--require`).
+/// pacote prepares a git dependency by starting `npm install` in its
+/// checkout with `_PACOTE_NO_PREPARE_` set, and before pacote 22 it does so
+/// whatever `--ignore-scripts` says. A GitHub dependency pinned to a commit
+/// arrives as a codeload tarball over HTTPS, so Git's transport setting does
+/// not stop it. The guard stops that process before it reads anything the
+/// dependency holds.
+pub(super) const NPM_PREPARE_GUARD: &str = "if (process.env._PACOTE_NO_PREPARE_ !== undefined) {\n  process.stderr.write('patchula: git dependency preparation refused\\n');\n  process.exit(97);\n}\n";
+
+/// Yarn's user configuration for every run: its GitHub fetcher downloads a
+/// repository archive over HTTPS and packs it, running its scripts, so the
+/// hosts it downloads from are closed. Project `networkSettings` are dropped
+/// from the run's copies of `.yarnrc.yml`, so none can reopen them.
+const YARN_CLOSED_HOSTS: &[&str] = &["github.com", "codeload.github.com"];
 
 /// npm lockfiles aube cannot keep valid: format v1, which aube cannot read.
 /// Native npm owns these locks.
@@ -545,7 +670,8 @@ pub(super) fn npm_auth(registries: &[patchula_http::Credential]) -> String {
     out
 }
 
-/// Yarn's user configuration giving each registry entry its credentials.
+/// Yarn's user configuration: each registry entry's credentials, and the
+/// GitHub hosts closed (`YARN_CLOSED_HOSTS`).
 pub(super) fn yarn_auth(registries: &[patchula_http::Credential]) -> Result<String, String> {
     let mut entries = serde_yaml_ng::Mapping::new();
     for entry in registries {
@@ -566,28 +692,38 @@ pub(super) fn yarn_auth(registries: &[patchula_http::Credential]) -> Result<Stri
         entries.insert(entry.prefix().trim_end_matches('/').into(), auth.into());
     }
     let mut root = serde_yaml_ng::Mapping::new();
-    root.insert("npmRegistries".into(), entries.into());
+    if !entries.is_empty() {
+        root.insert("npmRegistries".into(), entries.into());
+    }
+    let mut closed = serde_yaml_ng::Mapping::new();
+    for host in YARN_CLOSED_HOSTS {
+        let mut settings = serde_yaml_ng::Mapping::new();
+        settings.insert("enableNetwork".into(), false.into());
+        closed.insert((*host).into(), settings.into());
+    }
+    root.insert("networkSettings".into(), closed.into());
     serde_yaml_ng::to_string(&root).map_err(|e| e.to_string())
 }
 
-/// The run's npm, Bun and Yarn user configuration holding registry
-/// credentials, gone when dropped.
+/// The run's npm, Bun and Yarn user configuration, holding registry
+/// credentials when there are any, gone when dropped. Yarn's is written
+/// for every run: it also closes the hosts `YARN_CLOSED_HOSTS` names.
 fn registry_credentials(
     driver: &Path,
     registries: &[patchula_http::Credential],
 ) -> Result<context::Private, String> {
     let mut written = context::Private::default();
+    let home = driver.join("home");
+    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    written.write(&home.join(".yarnrc.yml"), &yarn_auth(registries)?)?;
     if registries.is_empty() {
         return Ok(written);
     }
-    let home = driver.join("home");
-    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     let npm = npm_auth(registries);
     // npm reads the sandbox's user configuration, Bun `~/.npmrc`.
     for name in ["npm-user.cfg", ".npmrc"] {
         written.write(&home.join(name), &npm)?;
     }
-    written.write(&home.join(".yarnrc.yml"), &yarn_auth(registries)?)?;
     Ok(written)
 }
 
@@ -611,16 +747,19 @@ pub(super) fn npmrc(text: &str) -> String {
 }
 
 /// `.yarnrc.yml` without what the scratch tree lacks: a `yarnPath` release,
-/// `plugins`, and the variables `${VAR}` interpolations name.
+/// `plugins`, and the variables `${VAR}` interpolations name; and without
+/// `networkSettings`, which could reopen a host the run closes.
 pub(super) fn yarnrc(text: &str) -> Result<String, String> {
     fn clean(value: &mut serde_yaml_ng::Value) {
         if let Some(map) = value.as_mapping_mut() {
             map.retain(|key, value| {
                 // A `${VAR}` registry stays, so Yarn stops on it rather than
                 // reading the public registry instead.
-                !matches!(key.as_str(), Some("yarnPath" | "plugins"))
-                    && (key.as_str() == Some("npmRegistryServer")
-                        || !value.as_str().is_some_and(|s| s.contains("${")))
+                !matches!(
+                    key.as_str(),
+                    Some("yarnPath" | "plugins" | "networkSettings")
+                ) && (key.as_str() == Some("npmRegistryServer")
+                    || !value.as_str().is_some_and(|s| s.contains("${")))
             });
             for (_, value) in map.iter_mut() {
                 clean(value);
@@ -697,9 +836,22 @@ mod registry_credentials {
         for name in ["npm-user.cfg", ".npmrc", ".yarnrc.yml"] {
             assert!(!home.join(name).exists(), "{name}");
         }
-        // With no entries, nothing is written.
+        // With no entries, no npm credentials are written, and Yarn's
+        // configuration only closes the GitHub hosts.
         let _none = registry_credentials(driver.path(), &[]).unwrap();
         assert!(!home.join(".npmrc").exists());
+        assert!(!home.join("npm-user.cfg").exists());
+        let yarn: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(home.join(".yarnrc.yml")).unwrap())
+                .unwrap();
+        assert!(yarn.get("npmRegistries").is_none(), "{yarn:?}");
+        for host in YARN_CLOSED_HOSTS {
+            assert_eq!(
+                yarn["networkSettings"][*host]["enableNetwork"],
+                serde_yaml_ng::Value::Bool(false),
+                "{host}"
+            );
+        }
     }
 
     #[cfg(unix)]

@@ -33,6 +33,7 @@ fn validate_targets(
 }
 
 mod real_actions_lock;
+mod real_node_sources;
 mod real_python_indexes;
 mod real_sparse_registry;
 
@@ -147,6 +148,13 @@ struct Fixture {
     /// run's GitHub requests tunnel through, and the scripted answers a
     /// faked one reports.
     actions: Option<ActionsFixture>,
+    /// A loopback npm registry the run's Node tools fetch from, so they
+    /// run online rather than offline; the run reaches it through the
+    /// repository's `.npmrc` and `.yarnrc.yml`.
+    node_registry: Option<Arc<real_node_sources::NodeRegistry>>,
+    /// A `GIT_ALLOW_PROTOCOL` the test gives every real run in place of the
+    /// runner's, to show what a tool does once Git can fetch.
+    git_protocols: Option<&'static str>,
 }
 /// One scripted `gh-actions-lock` invocation: the streams and status the
 /// run's shell captures, and what the run writes to the tree.
@@ -349,7 +357,8 @@ impl Executor for Fixture {
                     std::fs::create_dir_all(&cargo).unwrap();
                     std::fs::write(cargo.join("config.toml"),format!("[source.crates-io]\nreplace-with='fixture'\n[source.fixture]\ndirectory='{}'\n",vendor.display())).unwrap();
                 }
-                if spec.args.iter().any(|a| a == "bun") {
+                let online_node = self.node_registry.is_some();
+                if spec.args.iter().any(|a| a == "bun") && !online_node {
                     spec.args.push("--offline".into());
                 }
                 // A module proxy on disk for the Go fixture's module.
@@ -380,14 +389,21 @@ impl Executor for Fixture {
                     ("GOPROXY", "off"),
                     ("GOSUMDB", "off"),
                 ] {
-                    // The sparse fixture is the one host Cargo may reach.
-                    if sparse_cargo && key == "CARGO_NET_OFFLINE" {
+                    // The sparse fixture is the one host Cargo may reach, and
+                    // the loopback npm registry the one Node tools may.
+                    if (sparse_cargo && key == "CARGO_NET_OFFLINE")
+                        || (online_node && key == "NPM_CONFIG_OFFLINE")
+                    {
                         continue;
                     }
                     spec.env.insert(key.into(), value.into());
                 }
                 if let Some(goproxy) = goproxy {
                     spec.env.insert("GOPROXY".into(), goproxy.into());
+                }
+                if let Some(protocols) = self.git_protocols {
+                    spec.env
+                        .insert("GIT_ALLOW_PROTOCOL".into(), protocols.into());
                 }
                 // The real gh-actions-lock tunnels every GitHub request
                 // through the test's CONNECT proxy, which refuses any
@@ -670,6 +686,8 @@ fn fixture_with(
         removes: Vec::new(),
         sparse: None,
         actions: None,
+        node_registry: None,
+        git_protocols: None,
     })
 }
 /// A fixture whose `gh-actions-lock` invocations run the real pinned tool
@@ -3087,7 +3105,6 @@ fn lockfile_engine_pins_match_the_repository_mise_tasks() {
         "python",
         "uv",
         "poetry",
-        "dotnet",
         "ruby",
         "apm",
         actions::ACTIONS_LOCK_SPEC,
@@ -3712,41 +3729,6 @@ impl Executor for Recorder {
     }
 }
 
-/// The lock walk follows symlinked directories and matches names as bytes,
-/// so a directory whose name is not UTF-8 is still searched; the NuGet
-/// config walk searches such directories too but does not follow links.
-#[cfg(unix)]
-#[test]
-fn dotnet_walks_keep_their_link_and_name_rules() {
-    use std::os::unix::ffi::OsStrExt;
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("tree");
-    let outside = temp.path().join("outside");
-    let odd = root.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
-    std::fs::create_dir_all(&outside).unwrap();
-    std::fs::create_dir_all(&odd).unwrap();
-    std::fs::create_dir_all(root.join("obj")).unwrap();
-    std::fs::write(outside.join("packages.lock.json"), "{}").unwrap();
-    std::fs::write(outside.join("nuget.config"), "<configuration/>").unwrap();
-    std::fs::write(odd.join("packages.lock.json"), "{}").unwrap();
-    std::fs::write(odd.join("NuGet.Config"), "<configuration/>").unwrap();
-    std::fs::write(root.join("obj/packages.lock.json"), "{}").unwrap();
-    std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
-    let mut locks = Vec::new();
-    dotnet::locks(&root, &mut locks);
-    locks.sort();
-    let mut expected = vec![
-        odd.join("packages.lock.json"),
-        root.join("linked/packages.lock.json"),
-    ];
-    expected.sort();
-    assert_eq!(locks, expected);
-    let mut configs = Vec::new();
-    dotnet::nuget_configs(&root, &mut configs);
-    assert_eq!(configs.len(), 1, "{configs:?}");
-    assert_eq!(configs[0].as_deref().unwrap(), "<configuration/>");
-}
-
 /// A store that was never prewarmed has no usage record for the pinned mise,
 /// which version lookups install and run: a first `mise lock` must not
 /// uninstall it from under them. Other unproven tools are still cleared.
@@ -3933,50 +3915,6 @@ fn real_mise_accepts_every_prewarm_spec() {
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-/// Real dotnet restores a project's packages.lock.json offline and leaves no
-/// obj/ intermediates behind.
-#[tokio::test]
-async fn real_dotnet_restore_regenerates_packages_lock_json() {
-    let project = "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net9.0</TargetFramework>\n    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>\n  </PropertyGroup>\n</Project>\n";
-    let files = BTreeMap::from([
-        ("app/App.csproj".to_string(), project.to_string()),
-        (
-            "app/packages.lock.json".to_string(),
-            "{\"version\": 1, \"dependencies\": {\"net8.0\": {}}}\n".to_string(),
-        ),
-    ]);
-    let executor = fixture(files.clone(), false, true);
-    let temp = tempfile::tempdir().unwrap();
-    let runner = test_runner(temp.path(), executor.clone());
-    let mut snapshot = snapshot(&files);
-    let config = config();
-    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
-        .unwrap()
-        .unwrap();
-    p = Draft::from(p)
-        .lock_jobs(vec![Job {
-            ecosystem: Ecosystem::Dotnet,
-            directory: "app".into(),
-            scope: Scope::Directory,
-            exact_version: false,
-            publish_age_allow: false,
-            wait_hours: 0,
-        }])
-        .build();
-    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
-    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
-    assert!(
-        p.contents()["app/packages.lock.json"].contains("net9.0"),
-        "{}",
-        p.contents()["app/packages.lock.json"]
-    );
-    assert!(
-        !p.contents().keys().any(|k| k.contains("/obj/")),
-        "{:?}",
-        p.contents().keys()
     );
 }
 
@@ -5250,23 +5188,6 @@ async fn a_failed_mise_install_says_why() {
     );
 }
 
-/// dotnet restore gets the server's invariant-globalization setting, which
-/// the image sets because it has no ICU, and nothing when the server has none.
-/// MSBuild never keeps worker nodes alive past the restore.
-#[test]
-fn dotnet_restore_passes_on_invariant_globalization() {
-    let invariant = dotnet::restore_env(Some("1".into()));
-    for env in [&invariant, &dotnet::restore_env(None)] {
-        assert!(env.contains(&("MSBUILDDISABLENODEREUSE".into(), "1".into())));
-    }
-    assert!(invariant.contains(&("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT".into(), "1".into())));
-    assert!(
-        !dotnet::restore_env(None)
-            .iter()
-            .any(|(key, _)| key == "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT")
-    );
-}
-
 /// One in-range update of a direct dependency, as the report carries it: no
 /// `newValue`, because the declaration stays as it is.
 fn lock_only_plan(
@@ -5522,6 +5443,8 @@ async fn lock_only_jobs_reach_their_exact_target_in_every_lockfile_tool() {
                 )),
                 sparse: None,
                 actions: None,
+                node_registry: None,
+                git_protocols: None,
             });
             let temp = tempfile::tempdir().unwrap();
             let runner = test_runner(temp.path(), executor.clone());
@@ -6157,7 +6080,6 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         (caches::Bin::Composer, "COMPOSER_CACHE_DIR"),
         (caches::Bin::Uv, "UV_CACHE_DIR"),
         (caches::Bin::Poetry, "POETRY_CACHE_DIR"),
-        (caches::Bin::Dotnet, "NUGET_PACKAGES"),
         (caches::Bin::Bundle, "BUNDLE_USER_CACHE"),
     ] {
         let (env, hold) = runner
@@ -6201,18 +6123,6 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     assert_eq!(
         go.iter().find(|(k, _)| k == "GOFLAGS").unwrap().1,
         "-mod=mod -modcacherw"
-    );
-    let (dotnet, _) = runner
-        .use_caches(&call(
-            caches::Bin::Dotnet,
-            credentials::scopes([npm.clone()].iter()),
-            false,
-        ))
-        .await
-        .unwrap();
-    assert!(
-        !dotnet.iter().any(|(k, _)| k == "NUGET_FALLBACK_PACKAGES"),
-        "no shared fallback feed: {dotnet:?}"
     );
     // Credential files stay in the per-run HOME: nothing a run writes under a
     // partition names a credential file.
@@ -7148,98 +7058,59 @@ fn update() -> Update {
     }
 }
 
-/// `dotnet restore` runs against the one project under the job's directory,
-/// on the SDK the nearest global.json names, with the nuget.configs the tree
-/// carries deciding which sources get credentials.
+/// No tool regenerates a `packages.lock.json`: restore evaluates MSBuild,
+/// which runs code the repository and its packages chose. An update or
+/// maintenance that would move one is skipped with that reason, and nothing
+/// runs, not even the checkout's tools.
 #[tokio::test]
-async fn dotnet_restore_uses_global_json_sdk_and_tree_nuget_configs() {
+async fn packages_lock_json_is_refused_without_running_dotnet() {
     let files = BTreeMap::from([
         ("a/b/app.csproj".into(), "<Project/>\n".into()),
         ("a/b/packages.lock.json".into(), "old lock\n".into()),
-        ("a/b/global.json".into(), "not json\n".into()),
-        ("a/global.json".into(), "{}\n".into()),
         (
             "global.json".into(),
             "{\"sdk\":{\"version\":\"8.0.100\"}}\n".into(),
         ),
-        (
-            "nuget.config".into(),
-            "<?xml version=\"1.0\"?>\n<configuration><packageSources><add key=\"acme\" value=\"https://nuget.acme.dev/feed\" /></packageSources></configuration>\n".into(),
-        ),
-        ("a/NuGet.Config".into(), "<configuration/>\n".into()),
     ]);
-    let mut executor = fixture(files.clone(), false, false);
-    Arc::get_mut(&mut executor).unwrap().extra = vec!["packages.lock.json".into()];
-    let temp = tempfile::tempdir().unwrap();
-    let entry = patchula_http::Credential::new(
-        "https://nuget.acme.dev",
-        patchula_http::Auth::Basic {
-            username: "ci".into(),
-            password: "pw".into(),
-        },
-    )
-    .unwrap()
-    .for_tools();
-    let runner = test_runner(temp.path(), executor.clone()).with_registries(&[entry]);
-    let mut snap1 = snapshot(&files);
-    let config = config();
-    let p = maintenance(&repo(), &config, &snap1, &[], None, monday())
-        .unwrap()
-        .unwrap();
-    let mut draft = Draft::from(p);
-    draft
-        .lock_jobs_mut()
-        .retain(|j| j.ecosystem == Ecosystem::Dotnet);
-    let mut p = draft.build();
-    assert_eq!(p.lock_jobs().len(), 1);
-    prepare_one(&runner, &mut p, &mut snap1, &config).await;
-    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
-    let calls = executor.calls.lock().unwrap().clone();
-    let restore = calls
-        .iter()
-        .find(|args| args.iter().any(|a| a == "restore"))
-        .unwrap_or_else(|| panic!("no restore call: {calls:?}"));
-    assert!(
-        restore.iter().any(|a| a.ends_with("app.csproj")),
-        "{restore:?}"
-    );
-    assert!(restore.iter().any(|a| a == "--force-evaluate"));
-    assert_eq!(
-        p.contents()["a/b/packages.lock.json"],
-        "extra\n",
-        "{:?}",
-        p.action()
-    );
-
-    // An edited manifest whose lock does not change fails the branch.
-    let files = {
-        let mut files = files.clone();
-        files.insert("a/b/packages.lock.json".into(), "extra\n".into());
-        files
-    };
-    let mut executor = fixture(files.clone(), false, false);
-    Arc::get_mut(&mut executor).unwrap().extra = vec!["packages.lock.json".into()];
-    let temp = tempfile::tempdir().unwrap();
-    let runner = test_runner(temp.path(), executor.clone());
-    let mut snap2 = snapshot(&files);
-    let mut p = maintenance(&repo(), &config, &snap2, &[], None, monday())
-        .unwrap()
-        .unwrap();
-    let mut draft = Draft::from(p);
-    draft
-        .lock_jobs_mut()
-        .retain(|j| j.ecosystem == Ecosystem::Dotnet);
-    p = draft
-        .update()
-        .content("a/b/app.csproj", "<Project/>\n")
-        .build();
-    prepare_one(&runner, &mut p, &mut snap2, &config).await;
-    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
-    let reason = p.action().reason.clone().unwrap_or_default();
-    assert!(
-        reason.contains("packages.lock.json did not change after the manifest edit"),
-        "{reason}"
-    );
+    for update in [false, true] {
+        let executor = fixture(files.clone(), false, false);
+        let temp = tempfile::tempdir().unwrap();
+        let runner = test_runner(temp.path(), executor.clone());
+        let mut snap = snapshot(&files);
+        let config = config();
+        let p = maintenance(&repo(), &config, &snap, &[], None, monday())
+            .unwrap()
+            .unwrap();
+        let mut draft = Draft::from(p);
+        draft
+            .lock_jobs_mut()
+            .retain(|j| j.ecosystem == Ecosystem::Dotnet);
+        let mut p = if update {
+            draft
+                .update()
+                .content("a/b/app.csproj", "<Project><!-- edited --></Project>\n")
+                .build()
+        } else {
+            draft.build()
+        };
+        assert_eq!(p.lock_jobs().len(), 1);
+        prepare_one(&runner, &mut p, &mut snap, &config).await;
+        assert_eq!(p.action().status, BranchStatus::Skipped, "{:?}", p.action());
+        let reason = p.action().reason.clone().unwrap_or_default();
+        assert!(
+            reason.contains("packages.lock.json in a/b is not regenerated")
+                && reason.contains("MSBuild"),
+            "{reason}"
+        );
+        assert!(!p.lockfiles_ready());
+        let calls = executor.calls.lock().unwrap();
+        assert!(
+            !calls
+                .iter()
+                .any(|args| args.iter().any(|a| a.starts_with("dotnet"))),
+            "dotnet ran: {calls:?}"
+        );
+    }
 }
 
 /// Go runs `go mod download` unless asked to tidy, and GOPRIVATE plus a
@@ -7565,22 +7436,19 @@ async fn checkout_fails_closed_on_unusual_modes_and_disagreements() {
 #[tokio::test]
 async fn tools_cannot_write_outside_their_lockfiles_and_manifests() {
     for (extra, expected) in [
-        (
-            "src/main.rs",
-            "tool modified unexpected file a/b/src/main.rs",
-        ),
+        ("src/main.rs", "tool modified unexpected file src/main.rs"),
         (
             "mise.lock",
-            "tool modified unexpected mise lockfile a/b/mise.lock",
+            "tool modified unexpected mise lockfile mise.lock",
         ),
     ] {
+        // Yarn runs in the project directory, where the fixture writes.
         let files = BTreeMap::from([
-            ("a/b/app.csproj".into(), "<Project/>\n".into()),
-            ("a/b/packages.lock.json".into(), "old lock\n".into()),
+            ("package.json".into(), "{}\n".into()),
+            ("yarn.lock".into(), BERRY_LOCK.into()),
         ]);
         let mut executor = fixture(files.clone(), false, false);
-        Arc::get_mut(&mut executor).unwrap().extra =
-            vec!["packages.lock.json".into(), extra.into()];
+        Arc::get_mut(&mut executor).unwrap().extra = vec![extra.into()];
         let temp = tempfile::tempdir().unwrap();
         let runner = test_runner(temp.path(), executor.clone());
         let mut snapshot = snapshot(&files);
@@ -7591,7 +7459,7 @@ async fn tools_cannot_write_outside_their_lockfiles_and_manifests() {
         let mut draft = Draft::from(p);
         draft
             .lock_jobs_mut()
-            .retain(|j| j.ecosystem == Ecosystem::Dotnet);
+            .retain(|j| j.ecosystem == Ecosystem::Node);
         p = draft.build();
         prepare_one(&runner, &mut p, &mut snapshot, &config).await;
         assert_eq!(

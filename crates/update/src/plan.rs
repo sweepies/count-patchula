@@ -438,8 +438,14 @@ impl Plan {
         self.set_reason(Some(reason.into()));
     }
     /// Lockfile generation failed; the report keeps the reason and the
-    /// dashboard the typed failure, both from the same error.
+    /// dashboard the typed failure, both from the same error. A refusal is
+    /// no failure: the update is skipped with its reason, which stands
+    /// until the repository changes, and nothing is written.
     pub fn lockfiles_failed(&mut self, error: contract::Failure) {
+        if let contract::Failure::Refused(reason) = error {
+            self.hold(Hold::Blocked(reason));
+            return;
+        }
         self.action.status = BranchStatus::Error;
         let reason = format!("lockfile generation failed: {error}");
         self.action.reason = Some(reason.clone());
@@ -448,7 +454,9 @@ impl Plan {
                 &format!("lockfile generation failed: {context}"),
                 &failure,
             ),
-            contract::Failure::Text(_) => crate::text::failure(&reason),
+            contract::Failure::Text(_) | contract::Failure::Refused(_) => {
+                crate::text::failure(&reason)
+            }
         });
     }
     /// The lockfile work this plan asks a [`contract::Generate`] run for, or
