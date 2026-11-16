@@ -19,10 +19,10 @@ commit. If the tool fails, nothing is published.
 | `Cargo.lock` | Cargo | `cargo update -p <crate>@<old> --precise <target>` |
 | `go.sum` | Go | `go get <module>@<target>`, then `go mod download` or `go mod tidy` |
 | `.terraform.lock.hcl` | Terraform | `terraform providers lock` |
-| `uv.lock` | uv | `uv lock --upgrade-package <package>`, or `<package>==<target>` for a [lockfile-only update](#in-range-updates) |
-| `poetry.lock` | Poetry | `poetry lock --no-plugins` |
+| `uv.lock` | uv | `uv lock --no-build --upgrade-package <package>`, or `<package>==<target>` for a [lockfile-only update](#in-range-updates) |
+| `poetry.lock` | Poetry | `poetry lock --no-plugins`, under the Count's [launcher](#uv-poetry-and-bundler-run-no-repository-or-package-code) |
 | `packages.lock.json` | none | not regenerated; see [what is refused](#what-is-refused) |
-| `Gemfile.lock` | Bundler | `bundle lock --update <gems>` |
+| `Gemfile.lock` | Bundler | `bundle lock --update <gems>`, on a Gemfile the Count [renders](#uv-poetry-and-bundler-run-no-repository-or-package-code) |
 | `composer.lock` | Composer | `composer update <packages> --with-all-dependencies --minimal-changes --no-install --no-scripts --no-plugins`, plus `--with <package>:<target>` for a lockfile-only update |
 | `mise.lock` | mise | `mise lock` with the lockfile's recorded platforms |
 | `flake.lock` | nix | `nix flake update <input>`, or `nix flake update` for maintenance |
@@ -336,6 +336,47 @@ your own installs would, never to the public package of its name.
 Install scripts are skipped wherever a tool allows it (npm, aube, which also
 writes Yarn Classic locks, Bun, Yarn, and Composer with plugins off too),
 because a lockfile needs none of them.
+
+### uv, Poetry and Bundler run no repository or package code
+
+Python and Ruby tools can only answer some questions by running code: uv and
+Poetry build a package whose metadata is not static to read it, which runs
+its build backend, and Bundler evaluates the Gemfile, which is Ruby, and the
+gemspecs it names. The Count never lets them, for any repository. What can
+be locked without running code is locked; an update whose lock cannot be is
+skipped with the reason on the dashboard and in the run report, never
+written with a stale lock, and lockfile maintenance is skipped the same way.
+
+- **uv** runs with `--no-build` (and `UV_NO_BUILD=1`), so every package it
+  resolves comes as a wheel or not at all, and with the interpreter given by
+  version (`UV_PYTHON`). `--no-build` does not cover the workspace's own
+  packages, which uv builds whenever their metadata is dynamic, even a
+  dynamic version alone, so an update is refused when any `pyproject.toml`
+  of the workspace (the project's own, and every one under a uv workspace
+  root above it) declares `dynamic` metadata, or lists a workspace member
+  outside the workspace. A package that has only a source distribution, or
+  a path dependency whose metadata is not static, is refused when uv
+  reports it would have to build it.
+- **Poetry** has no setting that stops builds while locking. It runs only
+  under the Count's launcher, which replaces every entry point that builds a
+  package (the PEP 517 hook call, pypa/build's builder, Poetry's isolated
+  builder and its metadata build) or loads a plugin with one that stops the
+  process, then starts Poetry. An update whose lock would need a build is
+  refused, and so is one in a repository that pins a Poetry version other
+  than the Count's default (2.5.1), which is the version the launcher is
+  tested against.
+- **Bundler** never sees the repository's Gemfile. The Count renders one
+  from its own reading of it, with only `source`, `gem`, `group`,
+  `platforms` and `ruby` lines rebuilt from their parsed values, and runs
+  `bundle lock` on that beside a copy of `Gemfile.lock`, in a scratch
+  directory outside the checkout; only `Gemfile.lock` comes back. Bundler
+  runs with the Ruby's own Bundler (`BUNDLE_VERSION=system`, never a version
+  the lock names, which it would download and run), no repository
+  `.bundle/config`, and no git transport. An update is refused when the
+  Gemfile holds a `gemspec`, a gem from `path:`, `git:`, `github:` or another
+  forge, `git_source`, `plugin`, `eval_gemfile`, `install_if`, or any line
+  the Count does not read, or when `Gemfile.lock` has a `GIT`, `PATH` or
+  `PLUGIN SOURCE` section.
 
 Each tool runs as the leader of its own process group. Whatever it leaves
 running, such as a helper process, is killed when it exits, however it

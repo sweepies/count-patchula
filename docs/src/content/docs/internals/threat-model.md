@@ -109,19 +109,33 @@ On top of that, each tool keeps the rule like this:
   `--ignore-scripts`. Neither runs a git dependency's scripts, directly or
   through a registry package; the canary tests run both with Git reachable to
   prove it.
-- **uv**: `uv lock --no-build` with `UV_NO_BUILD=1`, so uv reads metadata
-  only from wheels and static `pyproject.toml` tables. A project whose root
-  or members have metadata uv would have to build, or a dependency only an
-  sdist provides, is refused.
-- **Poetry**: Poetry builds sdists to read their metadata, and no setting
-  stops it. It runs under a Count-owned launcher that replaces its PEP 517
-  build entry points with a refusal and runs only on Poetry versions a canary
-  test covers; anything else refuses the update.
+- **uv**: `uv lock --no-build` with `UV_NO_BUILD=1` and the interpreter
+  named by version (`UV_PYTHON`), so every dependency comes as a wheel or
+  not at all; one only an sdist provides, or a path dependency with
+  non-static metadata, ends in uv's "building is disabled" answer, which is
+  a refusal. `--no-build` does not stop uv building the workspace's own
+  packages, which it does whenever their metadata is dynamic (a dynamic
+  version alone included), so before uv runs the Count refuses the update
+  when any `pyproject.toml` of the workspace (the project's own, and every
+  one below a uv workspace root above it) declares `dynamic` metadata, or a
+  workspace `members` or `exclude` glob leaves the workspace root.
+- **Poetry**: Poetry builds packages to read metadata that is not static,
+  and no setting stops it while locking. It runs only under a Count-owned
+  launcher (`python -I poetry_guard.py`) that replaces every build entry
+  point (the PEP 517 hook call, pypa/build's builder, Poetry's isolated
+  builder and metadata build, the installer's Chef) and plugin loading with
+  an immediate exit, and that refuses to start when the installed Poetry is
+  not the version the Count asked for or an entry point it replaces is
+  missing. The Count runs it only on Poetry 2.5.1, the default its canary
+  test covers; a repository that pins another Poetry is refused, and so is
+  a lock the launcher stopped.
 - **Bundler**: a Gemfile is Ruby, so Bundler never reads the repository's.
   The Count renders a Gemfile from his own parsed model and runs Bundler on
   it, beside a copy of `Gemfile.lock`, in a scratch directory outside the
-  checkout, with `BUNDLE_VERSION=system`, no repository `.bundle/config` or
-  `BUNDLE_*` settings, and no Git transport; only `Gemfile.lock` comes back.
+  checkout, with `BUNDLE_VERSION=system` (never a Bundler the lock names,
+  which it would download and run), `BUNDLE_APP_CONFIG` pointed away from
+  any repository `.bundle/config`, and no Git transport; only
+  `Gemfile.lock` comes back.
   `gemspec`, `path:`, `git:`, `github:` and other forge keys, `git_source`,
   `plugin`, `eval_gemfile`, `install_if`, any line the Count does not read,
   and a lock with `GIT`, `PATH` or `PLUGIN SOURCE` sections are refused.

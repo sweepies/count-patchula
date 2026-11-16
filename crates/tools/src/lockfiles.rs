@@ -593,7 +593,7 @@ impl Runner {
                     call.bin.name().to_owned(),
                 ]);
             }
-            Run::Direct => spec.args.push(call.bin.name().into()),
+            Run::Direct => spec.args.push(call.bin.program().into()),
             Run::Mise => {
                 // The inner mise reads the repository's tools, so it runs
                 // no plugin backend, as a lookup does not.
@@ -632,6 +632,30 @@ impl Runner {
             return result;
         }
         result.map_err(|failure| held_failure(bin, &failure))
+    }
+    /// [`held_tool`](Self::held_tool), where a run that `refused` says
+    /// stopped short of running code the repository or a package chose
+    /// becomes `refusal(why)`, decided before any output is withheld. The
+    /// reason is the Count's own text, never the tool's output.
+    async fn refusable_tool(
+        &self,
+        driver: &Path,
+        call: Invocation,
+        refused: fn(&patchula_process::Failure) -> Option<&'static str>,
+        refusal: impl FnOnce(&str) -> Failure,
+    ) -> Result<Vec<u8>, Failure> {
+        let bin = call.bin.name();
+        let held = !call.credentials.is_empty();
+        let result = self.tool(driver, call).await;
+        if let Err(Failure::Tool { failure, .. }) = &result
+            && let Some(why) = refused(failure)
+        {
+            return Err(refusal(why));
+        }
+        match result {
+            Err(failure) if held => Err(held_failure(bin, &failure)),
+            result => result,
+        }
     }
 }
 

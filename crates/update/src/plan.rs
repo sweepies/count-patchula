@@ -496,8 +496,9 @@ impl Plan {
         })
     }
     /// A finished run's files join the plan, or its failure becomes the
-    /// plan's error. Returns the base blobs of the files the run changed,
-    /// the same for every plan, for `lock_all` to join into the snapshot.
+    /// plan's error (a refusal, its hold). Returns the base blobs of the
+    /// files the run changed, the same for every plan, for `lock_all` to
+    /// join into the snapshot.
     pub fn locked(
         &mut self,
         result: Result<contract::Generated, contract::Failure>,

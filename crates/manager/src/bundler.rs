@@ -421,8 +421,30 @@ struct Call {
 enum Value {
     Str(String),
     Sym(String),
-    /// `true`, `false`, `nil` or a list of plain values.
-    Literal,
+    /// `true`, `false` or `nil`.
+    Word(String),
+    /// `[…]` of plain values.
+    List(Vec<Value>),
+    /// `%i[…]` or `%w[…]`: the letter and the words.
+    Words(char, Vec<String>),
+}
+
+impl Value {
+    /// The value as Ruby source. Every string came out of `tokens`, which
+    /// takes none holding a quote, backslash or `#`, so a double-quoted
+    /// string reads back as the same text and interpolates nothing.
+    fn ruby(&self) -> String {
+        match self {
+            Self::Str(s) => format!("\"{s}\""),
+            Self::Sym(s) => format!(":{s}"),
+            Self::Word(w) => w.clone(),
+            Self::List(values) => format!(
+                "[{}]",
+                values.iter().map(Self::ruby).collect::<Vec<_>>().join(", ")
+            ),
+            Self::Words(letter, words) => format!("%{letter}[{}]", words.join(" ")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -438,7 +460,7 @@ enum Token {
     Open,
     Close,
     /// `%i[…]` or `%w[…]`.
-    List,
+    List(char, Vec<String>),
     LBracket,
     RBracket,
 }
@@ -494,13 +516,14 @@ fn tokens(line: &str) -> Option<Vec<Token>> {
                 && bytes.get(i + 2) == Some(&b'[') =>
             {
                 let end = i + 3 + line[i + 3..].find(']')?;
-                if !line[i + 3..end]
+                let items: Vec<String> = line[i + 3..end]
                     .split_whitespace()
-                    .all(|item| item.bytes().all(word))
-                {
+                    .map(str::to_owned)
+                    .collect();
+                if !items.iter().all(|item| item.bytes().all(word)) {
                     return None;
                 }
-                out.push(Token::List);
+                out.push(Token::List(char::from(bytes[i + 1]), items));
                 i = end + 1;
             }
             b if b.is_ascii_alphabetic() || b == b'_' => {
@@ -570,20 +593,19 @@ fn value(rest: &[Token], i: &mut usize) -> Option<Value> {
     Some(match token {
         Token::Str(s) => Value::Str(s.clone()),
         Token::Sym(s) => Value::Sym(s.clone()),
-        Token::Word(w) if matches!(w.as_str(), "true" | "false" | "nil") => Value::Literal,
-        Token::List => Value::Literal,
+        Token::Word(w) if matches!(w.as_str(), "true" | "false" | "nil") => Value::Word(w.clone()),
+        Token::List(letter, items) => Value::Words(*letter, items.clone()),
         Token::LBracket => {
-            let mut first = true;
+            let mut values = Vec::new();
             while rest.get(*i) != Some(&Token::RBracket) {
-                if !first {
+                if !values.is_empty() {
                     (rest.get(*i)? == &Token::Comma).then_some(())?;
                     *i += 1;
                 }
-                first = false;
-                value(rest, i)?;
+                values.push(value(rest, i)?);
             }
             *i += 1;
-            Value::Literal
+            Value::List(values)
         }
         _ => return None,
     })
@@ -765,6 +787,92 @@ pub(crate) fn source_urls(text: &str) -> Vec<String> {
     urls
 }
 
+/// A Gemfile as the Count renders it for Bundler.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RenderedGemfile {
+    /// The Gemfile Bundler evaluates.
+    pub text: String,
+    /// Files beside the Gemfile that it reads (`ruby file:`), by name.
+    pub reads: Vec<String>,
+}
+
+/// `text`, a Gemfile, rebuilt from the Count's reading of it: every line
+/// one of the plain forms `Reading::line` knows, written back from its
+/// parsed values, so Bundler evaluates nothing the repository wrote as
+/// Ruby. Anything that would need Ruby the Count did not write — a line it
+/// cannot read, a `gemspec`, or a gem from git, a path or a forge, whose
+/// gemspec Bundler would evaluate — is an error naming it.
+pub fn render_gemfile(text: &str) -> Result<RenderedGemfile, String> {
+    let mut reading = Reading::default();
+    let mut rendered = String::new();
+    let mut reads = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let at = |what: &str| format!("line {} {what}", index + 1);
+        let Some(call) = tokens(line).and_then(|tokens| call(&tokens)) else {
+            return Err(at("is not a form the Count reads"));
+        };
+        let keys = || call.options.iter().map(|(key, _)| key.as_str());
+        if call.head == "gemspec" {
+            return Err(at("loads a gemspec, which Bundler evaluates as Ruby"));
+        }
+        if call.head == "gem" && keys().any(|key| OUTSIDE_KEYS.contains(&key)) {
+            return Err(at(
+                "takes a gem from git, a path or a forge, whose gemspec Bundler evaluates as Ruby",
+            ));
+        }
+        if !reading.line(&call) {
+            return Err(at("is not a form the Count reads"));
+        }
+        if call.head.is_empty() {
+            continue;
+        }
+        for (key, value) in &call.options {
+            if call.head == "ruby" && key == "file" {
+                match value {
+                    Value::Str(name)
+                        if !name.contains(['/', '\\']) && !matches!(name.as_str(), "." | "..") =>
+                    {
+                        reads.push(name.clone());
+                    }
+                    _ => return Err(at("reads a file that is not beside the Gemfile")),
+                }
+            }
+        }
+        let mut parts: Vec<String> = call
+            .positional
+            .iter()
+            .map(|value| match value {
+                // Bundler's name for RubyGems, as the URL it stands for.
+                Value::Sym(s) if call.head == "source" && s == "rubygems" => {
+                    "\"https://rubygems.org\"".to_owned()
+                }
+                value => value.ruby(),
+            })
+            .collect();
+        parts.extend(
+            call.options
+                .iter()
+                .map(|(key, value)| format!("{key}: {}", value.ruby())),
+        );
+        rendered.push_str(&call.head);
+        if !parts.is_empty() {
+            rendered.push(' ');
+            rendered.push_str(&parts.join(", "));
+        }
+        if call.block {
+            rendered.push_str(" do");
+        }
+        rendered.push('\n');
+    }
+    if !reading.blocks.is_empty() {
+        return Err("a block is never closed".into());
+    }
+    Ok(RenderedGemfile {
+        text: rendered,
+        reads,
+    })
+}
+
 pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 
 pub(crate) struct Descriptor;
@@ -890,6 +998,88 @@ mod tests {
             "gem \"a', '1.0\", git: \"https://github.com/acme/a\"",
         ] {
             assert!(!reads(line), "{line}");
+        }
+    }
+
+    /// The rendered Gemfile holds the plain forms alone, rebuilt from their
+    /// parsed values: comments and spacing go, meaning stays.
+    #[test]
+    fn a_plain_gemfile_renders_from_its_reading() {
+        let rendered = render_gemfile(
+            "# frozen_string_literal: true\n\
+             source :rubygems\n\
+             ruby file: \".ruby-version\"\n\
+             gem 'pg', '>= 1.1', '< 2.0', require: false # db\n\
+             gem \"debug\", platforms: %i[ mri windows ], require: \"debug/prelude\"\n\
+             gem \"tzinfo-data\", :platforms => [:mingw, :mswin]\n\
+             source \"https://gems.acme.dev\" do\n\
+             \x20 gem(\"private\", \"~> 1.0\")\n\
+             end\n\
+             group :development, :test, optional: true do\n\
+             \x20 gem \"rspec\", source: \"https://rubygems.org\"\n\
+             end\n",
+        )
+        .unwrap();
+        assert_eq!(
+            rendered.text,
+            "source \"https://rubygems.org\"\n\
+             ruby file: \".ruby-version\"\n\
+             gem \"pg\", \">= 1.1\", \"< 2.0\", require: false\n\
+             gem \"debug\", platforms: %i[mri windows], require: \"debug/prelude\"\n\
+             gem \"tzinfo-data\", platforms: [:mingw, :mswin]\n\
+             source \"https://gems.acme.dev\" do\n\
+             gem \"private\", \"~> 1.0\"\n\
+             end\n\
+             group :development, :test, optional: true do\n\
+             gem \"rspec\", source: \"https://rubygems.org\"\n\
+             end\n"
+        );
+        assert_eq!(rendered.reads, [".ruby-version"]);
+    }
+
+    /// Anything the Count did not read, and every form that makes Bundler
+    /// evaluate a gemspec, is refused with the line that holds it.
+    #[test]
+    fn a_gemfile_that_needs_ruby_is_not_rendered() {
+        for (text, reason) in [
+            (
+                "source \"https://rubygems.org\"\ngemspec\n",
+                "line 2 loads a gemspec",
+            ),
+            (
+                "gem \"a\", path: \"vendor/a\"\n",
+                "line 1 takes a gem from git",
+            ),
+            (
+                "gem \"a\", git: \"https://example.test/a.git\"\n",
+                "line 1 takes a gem from git",
+            ),
+            (
+                "gem \"a\", github: \"acme/a\"\n",
+                "line 1 takes a gem from git",
+            ),
+            ("File.write(\"marker\", \"ran\")\n", "line 1 is not a form"),
+            ("eval_gemfile \"Gemfile.local\"\n", "line 1 is not a form"),
+            ("git_source(:acme) { |r| r }\n", "line 1 is not a form"),
+            ("plugin \"bundler-acme\"\n", "line 1 is not a form"),
+            ("install_if -> { true } do\n", "line 1 is not a form"),
+            ("gem \"a\", install_if: true\n", "line 1 is not a form"),
+            ("path \"vendor\" do\nend\n", "line 1 is not a form"),
+            (
+                "git \"https://example.test/a.git\" do\nend\n",
+                "line 1 is not a form",
+            ),
+            (
+                "source \"https://x.test\", type: :acme\n",
+                "line 1 is not a form",
+            ),
+            ("=begin\n=end\n", "line 1 is not a form"),
+            ("__END__\n", "line 1 is not a form"),
+            ("group :test do\n", "a block is never closed"),
+            ("ruby file: \"../.ruby-version\"\n", "line 1 reads a file"),
+        ] {
+            let error = render_gemfile(text).unwrap_err();
+            assert!(error.starts_with(reason), "{text:?}: {error}");
         }
     }
 }
