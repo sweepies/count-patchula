@@ -24,6 +24,22 @@ const DISCOVERY_PAGES: u32 = 5;
 type Result<T> = std::result::Result<T, (u8, miette::Report)>;
 use crate::{fail, usage};
 
+/// A server to run on. `app` is the client ID of the GitHub App that wrote
+/// the advertisement discovery found it by: sign-in then uses that App only,
+/// and a server that later names another App is refused. A server the user
+/// names (`PATCHULA_SERVER`, `--server`) has none; the user vouches for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Server {
+    pub url: String,
+    app: Option<String>,
+}
+impl Server {
+    /// A server the user named.
+    pub fn named(url: String) -> Self {
+        Self { url, app: None }
+    }
+}
+
 /// The server named by `PATCHULA_SERVER`, if it is set.
 pub fn configured(services: &Services) -> Result<Option<String>> {
     #[cfg(test)]
@@ -61,14 +77,15 @@ pub use patchula_server::remote::protocol::Mode;
 /// Runs `repositories` on the server and returns its report.
 pub async fn report(
     services: &Services,
-    server: &str,
+    target: &Server,
     repositories: Vec<String>,
     mode: Mode,
 ) -> Result<patchula_report::Report> {
+    let server = target.url.as_str();
     let transport = services.remote_transport().map_err(fail)?;
     let body = serde_json::to_value(Start { mode, repositories })
         .map_err(|_| fail("cannot encode the run request"))?;
-    let mut token = token(services, &*transport, server).await?;
+    let mut token = token(services, &*transport, target).await?;
     let mut response = send(
         &*transport,
         Method::POST,
@@ -80,7 +97,7 @@ pub async fn report(
     if response.0 == 401 {
         // GitHub revoked the stored token; sign in again once.
         forget_login(services, server)?;
-        token = login(services, &*transport, server).await?;
+        token = login(services, &*transport, target).await?;
         response = send(
             &*transport,
             Method::POST,
@@ -167,7 +184,7 @@ fn rejected(server: &str, status: u16, value: &Value) -> (u8, miette::Report) {
 /// `patchula auth login`: sign in now, replacing any stored token.
 pub async fn sign_in(services: &Services, server: &str) -> Result<String> {
     let transport = services.remote_transport().map_err(fail)?;
-    login(services, &*transport, server).await
+    login(services, &*transport, &Server::named(server.to_owned())).await
 }
 
 /// `patchula auth logout`: forget the server's token, and which checkouts
@@ -192,17 +209,27 @@ fn forget_login(services: &Services, server: &str) -> Result<bool> {
 }
 
 /// The user's answer for a repository's advertised server. A refusal keeps
-/// the URL too, so signing out of that server asks again.
+/// the URL too, so signing out of that server asks again. `app` is the
+/// client ID discovery verified, so a later sign-in uses the same App.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Choice {
     server: String,
     remote: bool,
+    app: String,
+}
+impl Choice {
+    fn target(self) -> Server {
+        Server {
+            url: self.server,
+            app: Some(self.app),
+        }
+    }
 }
 
 /// The server for the current checkout's `repository`: the one the user chose
 /// before, or one the Count advertises, if the user wants it. None runs here.
-pub async fn choose(services: &Services, repository: &str) -> Result<Option<String>> {
+pub async fn choose(services: &Services, repository: &str) -> Result<Option<Server>> {
     if let Some(choice) = load::<Choice>(services, CHOICES)?.remove(repository) {
         if !choice.remote {
             return Ok(None);
@@ -211,12 +238,12 @@ pub async fn choose(services: &Services, repository: &str) -> Result<Option<Stri
             "patchula: running {repository} on {}, as you chose; --here runs it on this machine",
             choice.server
         );
-        return Ok(Some(choice.server));
+        return Ok(Some(choice.target()));
     }
     if !services.interactive() {
         return Ok(None);
     }
-    let Some(server) = discover(services, repository).await else {
+    let Some((server, app)) = discover(services, repository).await else {
         return Ok(None);
     };
     let remote = services
@@ -233,6 +260,7 @@ pub async fn choose(services: &Services, repository: &str) -> Result<Option<Stri
                 Choice {
                     server: server.clone(),
                     remote,
+                    app: app.clone(),
                 },
             );
             true
@@ -241,16 +269,24 @@ pub async fn choose(services: &Services, repository: &str) -> Result<Option<Stri
     eprintln!(
         "patchula: remembered for {repository}. --remote or --here overrides it once; patchula auth logout --server {server} asks again"
     );
-    Ok(remote.then_some(server))
+    Ok(remote.then_some(Server {
+        url: server,
+        app: Some(app),
+    }))
 }
 
 /// The server for `--remote` in the current checkout's `repository`: the one
 /// remembered for it, whatever the answer was, or one the Count advertises.
-pub async fn find(services: &Services, repository: &str) -> Result<Option<String>> {
+pub async fn find(services: &Services, repository: &str) -> Result<Option<Server>> {
     if let Some(choice) = load::<Choice>(services, CHOICES)?.remove(repository) {
-        return Ok(Some(choice.server));
+        return Ok(Some(choice.target()));
     }
-    Ok(discover(services, repository).await)
+    Ok(discover(services, repository)
+        .await
+        .map(|(url, app)| Server {
+            url,
+            app: Some(app),
+        }))
 }
 
 /// `GET /repos/{owner}/{repo}/issues` — the `issue` schema trimmed to the
@@ -273,10 +309,14 @@ struct DiscoveryAuthor {
     kind: String,
 }
 
-/// The server URL in the newest open issue or PR that the server's own bot
-/// wrote. Anyone can paste the marker, and any installed App can write as a
-/// bot, so the author must be the bot the server names.
-async fn discover(services: &Services, repository: &str) -> Option<String> {
+/// The server URL, and the client ID of its App, from the newest open issue
+/// or PR whose author is the GitHub App the server signs in with. Anyone can
+/// paste the marker, any installed App can write as a bot, and the advertised
+/// server answers whatever it likes, so only GitHub can tie the two: the
+/// author's App, as `GET /apps/{slug}` describes it, must have the client ID
+/// the server hands the device flow. The sign-in then always goes to the App
+/// that wrote the marker. Anything that cannot be checked is skipped.
+async fn discover(services: &Services, repository: &str) -> Option<(String, String)> {
     let transport = services.transport().ok()?;
     // Public repositories answer without a token.
     let token = services.token().await;
@@ -307,8 +347,15 @@ async fn discover(services: &Services, repository: &str) -> Option<String> {
             if !checked.insert((server.clone(), author.login.clone())) {
                 continue;
             }
-            if names_bot(services, &server).await.as_deref() == Some(author.login.as_str()) {
-                return Some(server);
+            let Some(info) = auth_info(services, &server).await else {
+                continue;
+            };
+            if info.bot != author.login {
+                continue;
+            }
+            let app = app_client_id(&*transport, token.as_deref(), &author.login).await;
+            if app.as_deref() == Some(info.client_id.as_str()) {
+                return Some((server, info.client_id));
             }
         }
         if items.len() < 100 {
@@ -317,8 +364,39 @@ async fn discover(services: &Services, repository: &str) -> Option<String> {
     }
     None
 }
-/// The bot login the server says its App writes as.
-async fn names_bot(services: &Services, server: &str) -> Option<String> {
+/// `GET /apps/{app_slug}` — the `integration` schema trimmed to its client ID.
+#[derive(Deserialize)]
+struct DiscoveryApp {
+    client_id: String,
+}
+/// The client ID of the App a bot login (`{slug}[bot]`) writes for, as GitHub
+/// describes it.
+async fn app_client_id(
+    transport: &dyn Transport,
+    token: Option<&str>,
+    login: &str,
+) -> Option<String> {
+    let slug = login
+        .strip_suffix("[bot]")
+        .filter(|slug| !slug.is_empty())
+        .filter(|slug| slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))?;
+    let (status, value) = send(
+        transport,
+        Method::GET,
+        &format!("https://api.github.com/apps/{slug}"),
+        token,
+        None,
+    )
+    .await
+    .ok()?;
+    (status == 200)
+        .then(|| serde_json::from_value::<DiscoveryApp>(value).ok())
+        .flatten()
+        .map(|app| app.client_id)
+        .filter(|id| !id.is_empty())
+}
+/// What the server says about its App: the bot it writes as and its client ID.
+async fn auth_info(services: &Services, server: &str) -> Option<AuthInfo> {
     let transport = services.remote_transport().ok()?;
     let (status, value) = send(
         &*transport,
@@ -332,7 +410,6 @@ async fn names_bot(services: &Services, server: &str) -> Option<String> {
     (status == 200)
         .then(|| serde_json::from_value::<AuthInfo>(value).ok())
         .flatten()
-        .map(|info| info.bot)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -409,10 +486,10 @@ fn save<T: Serialize>(path: &std::path::Path, entries: &BTreeMap<String, T>) -> 
 }
 
 /// A usable token for the server: the stored one, a refreshed one, or a new sign-in.
-async fn token(services: &Services, transport: &dyn Transport, server: &str) -> Result<String> {
+async fn token(services: &Services, transport: &dyn Transport, target: &Server) -> Result<String> {
     let now = chrono::Utc::now().timestamp();
-    let Some(stored) = load::<Login>(services, LOGINS)?.remove(server) else {
-        return login(services, transport, server).await;
+    let Some(stored) = load::<Login>(services, LOGINS)?.remove(&target.url) else {
+        return login(services, transport, target).await;
     };
     if stored.expires_at.is_none_or(|at| at > now + 60) {
         return Ok(stored.access_token);
@@ -421,7 +498,7 @@ async fn token(services: &Services, transport: &dyn Transport, server: &str) -> 
         .refresh_token
         .filter(|_| stored.refresh_expires_at.is_none_or(|at| at > now + 60))
     {
-        let client_id = client_id(transport, server).await?;
+        let client_id = client_id(transport, target).await?;
         let (_, value) = send_form(
             transport,
             ACCESS_TOKEN_URL,
@@ -433,11 +510,11 @@ async fn token(services: &Services, transport: &dyn Transport, server: &str) -> 
         )
         .await?;
         if let Some(login) = granted(&value, now) {
-            store(services, server, login.clone())?;
+            store(services, &target.url, login.clone())?;
             return Ok(login.access_token);
         }
     }
-    login(services, transport, server).await
+    login(services, transport, target).await
 }
 
 fn granted(value: &Value, now: i64) -> Option<Login> {
@@ -457,7 +534,10 @@ fn store(services: &Services, server: &str, login: Login) -> Result<()> {
     .map(|_| ())
 }
 
-async fn client_id(transport: &dyn Transport, server: &str) -> Result<String> {
+/// The client ID of the App to sign in with, as the server names it. A
+/// discovered server must still name the App that advertised it.
+async fn client_id(transport: &dyn Transport, target: &Server) -> Result<String> {
+    let server = target.url.as_str();
     let (status, value) = send(
         transport,
         Method::GET,
@@ -469,14 +549,21 @@ async fn client_id(transport: &dyn Transport, server: &str) -> Result<String> {
     if status != 200 {
         return Err(rejected(server, status, &value));
     }
-    serde_json::from_value::<AuthInfo>(value)
+    let client_id = serde_json::from_value::<AuthInfo>(value)
         .map(|info| info.client_id)
-        .map_err(|_| fail(format!("{server} did not name its GitHub App")))
+        .map_err(|_| fail(format!("{server} did not name its GitHub App")))?;
+    match &target.app {
+        Some(app) if *app != client_id => Err(fail(format!(
+            "{server} now names a different GitHub App than the one that advertised it; patchula auth logout --server {server} forgets it"
+        ))),
+        _ => Ok(client_id),
+    }
 }
 
 /// GitHub's device flow for the server's App.
-async fn login(services: &Services, transport: &dyn Transport, server: &str) -> Result<String> {
-    let client_id = client_id(transport, server).await?;
+async fn login(services: &Services, transport: &dyn Transport, target: &Server) -> Result<String> {
+    let server = target.url.as_str();
+    let client_id = client_id(transport, target).await?;
     let (_, device) = send_form(transport, DEVICE_CODE_URL, &[("client_id", &client_id)]).await?;
     if device["error"] == "device_flow_disabled" {
         return Err(disabled(server));

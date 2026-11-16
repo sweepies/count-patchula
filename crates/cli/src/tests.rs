@@ -613,7 +613,8 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
     assert!(err.contains("nothing to apply"), "{err}");
 }
 
-#[tokio::test]
+// Multi-threaded, as `main` is: the TUI checks the tree with a blocking git call.
+#[tokio::test(flavor = "multi_thread")]
 async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/cli/apply-lookup-failure.json");
@@ -742,6 +743,61 @@ async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
     assert_eq!(repo.lookup_failures.len(), 1, "{repo:?}");
     assert_eq!(repo.lookup_failures[0].name, "is-number");
     assert_eq!(run(&app, &services).await.unwrap(), 4);
+    // So does a `tui --once` snapshot of it.
+    let once = App::parse_from(&[
+        OsStr::new("tui"),
+        OsStr::new("--once"),
+        OsStr::new("--cache"),
+        cache.as_os_str(),
+    ])
+    .unwrap();
+    assert_eq!(run(&once, &services).await.unwrap(), 4);
+}
+
+#[test]
+fn exit_codes_rank_errors_then_stale_runs_then_lookup_failures() {
+    use patchula_report::{Report, Status};
+    let report = |statuses: &[Status], failed: bool| {
+        let mut report: Report = serde_json::from_value(serde_json::json!({
+            "schemaVersion": patchula_report::SCHEMA_VERSION,
+            "repositories": [],
+        }))
+        .unwrap();
+        for status in statuses {
+            let mut repo: patchula_report::Repository = serde_json::from_value(serde_json::json!({
+                "repository": "acme/app", "status": "complete", "reason": null, "packageFiles": [],
+            }))
+            .unwrap();
+            repo.status = *status;
+            if failed {
+                repo.lookup_failures = serde_json::from_value(serde_json::json!([{
+                    "manager": "npm", "path": "package.json", "name": "ms", "package": "ms",
+                    "datasource": "npm", "kind": "network", "message": "HTTP 503",
+                }]))
+                .unwrap();
+            }
+            report.repositories.push(repo);
+        }
+        report
+    };
+    let app = App::parse_from(&[OsStr::new("run"), OsStr::new("acme/app")]).unwrap();
+    let Some(super::Command::Run(run)) = &app.command else {
+        panic!("run");
+    };
+    for (statuses, failed, lookup, real) in [
+        (&[Status::Complete][..], false, 0, 0),
+        (&[Status::Complete], true, super::LOOKUP_FAILED, 0),
+        (
+            &[Status::Stale, Status::Complete],
+            true,
+            super::STALE,
+            super::STALE,
+        ),
+        (&[Status::Stale, Status::Error], true, 1, 1),
+    ] {
+        assert_eq!(super::exit_code(&report(statuses, failed), None), lookup);
+        assert_eq!(super::exit_code(&report(statuses, failed), Some(run)), real);
+    }
 }
 
 #[tokio::test]

@@ -22,7 +22,7 @@ pub const PALETTE: Palette = Palette::DEFAULT
 /// Count Patchula vants to update your deps. A modern dependency updater with strong defaults.
 ///
 /// Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error;
-/// `lookup` and `apply` add 4 = a lookup failed; `apply` adds 3 = updates still waiting;
+/// `lookup`, `tui --once` and `apply` add 4 = a lookup failed; `apply` adds 3 = updates still waiting;
 /// `run` adds 5 = a repository changed during the run; run again.
 #[derive(Cli)]
 #[usage(
@@ -290,7 +290,7 @@ pub struct Serve {
 pub struct Tui {
     #[usage(flatten)]
     pub lookup: Lookup,
-    /// Print a plain-text snapshot of the updates and exit, for pipes and CI logs.
+    /// Print a plain-text snapshot of the updates and exit with `lookup`'s exit code, for pipes and CI logs.
     #[usage(long)]
     pub once: bool,
 }

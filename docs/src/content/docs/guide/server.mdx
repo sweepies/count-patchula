@@ -225,9 +225,14 @@ shutdown deadline.
 The server hides its URL in an HTML comment in each PR and dashboard it writes.
 `patchula lookup`, `run` or `tui` in a checkout, with no repository named and
 neither `--remote` nor `--here`, looks for that comment in the 500 most
-recently updated open issues and PRs. The comment counts only if its author is
-the bot that the server names at `/api/v1/auth`, so a comment pasted by someone
-else, or written by another App, is ignored. If it finds a server, it asks once
+recently updated open issues and PRs. The comment counts only if a GitHub App
+wrote it, the server names that App's bot at `/api/v1/auth`, and GitHub's own
+description of that App (`GET /apps/{slug}`) has the client ID the server
+hands out for sign-in. A comment pasted by a person is ignored, and a server
+advertised in another App's comment can only ever sign you in to that other
+App, never to the Count's; when GitHub cannot be asked, nothing is found. The
+client ID is remembered with your answer, and a server that later names a
+different App is refused before sign-in. If it finds a server, it asks once
 whether to run there, and remembers your answer for that repository in
 `~/.config/patchula/repositories.json` until you sign out of that server with
 `patchula auth logout`:

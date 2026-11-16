@@ -382,8 +382,9 @@ async fn tui_command(
     };
     let model = tui::Model::new(&report, origin);
     if tui.once {
+        // A snapshot in CI fails the way `lookup` would.
         write!(io::stdout().lock(), "{}", tui::snapshot(&model))
-            .map(|_| 0)
+            .map(|_| exit_code(&report, None))
             .map_err(fail)
     } else {
         tui::interact(model)
@@ -519,7 +520,6 @@ async fn batch(
     run: Option<&cli::Run>,
     services: &Services,
 ) -> Result<u8, (u8, miette::Report)> {
-    use patchula_report::Status;
     let (report, _) = report(app, options, run, services).await?;
     let write = |text: &str| -> Result<(), (u8, miette::Report)> {
         write!(io::stdout().lock(), "{text}").map_err(fail)
@@ -554,37 +554,35 @@ async fn batch(
                 .join(", ")
         );
     }
-    let errors = report
+    Ok(exit_code(&report, run))
+}
+
+/// The exit code a finished lookup or run reports: 1 when a repository
+/// failed, `STALE` when one changed during a run, `LOOKUP_FAILED` when a
+/// lookup (not a run) could not read a dependency, else 0.
+fn exit_code(report: &patchula_report::Report, run: Option<&cli::Run>) -> u8 {
+    use patchula_report::Status;
+    let any = |status: Status| report.repositories.iter().any(|repo| repo.status == status);
+    let failures = report
         .repositories
         .iter()
-        .filter(|repo| repo.status == Status::Error)
-        .count();
-    let failures: usize = report
-        .repositories
-        .iter()
-        .map(|repo| repo.lookup_failures.len())
-        .sum();
-    let raced = report
-        .repositories
-        .iter()
-        .filter(|repo| repo.status == Status::Stale)
-        .count();
-    Ok(if errors > 0 {
+        .any(|repo| !repo.lookup_failures.is_empty());
+    if any(Status::Error) {
         1
-    } else if raced > 0 {
+    } else if any(Status::Stale) {
         STALE
-    } else if failures > 0 && run.is_none() {
+    } else if failures && run.is_none() {
         LOOKUP_FAILED
     } else {
         0
-    })
+    }
 }
 
 /// A lookup or run on a server. Only the repositories and the mode travel;
 /// the server applies each repository's own `patchula.pkl`.
 async fn remote_report(
     services: &Services,
-    server: &str,
+    server: &remote::Server,
     repositories: Vec<String>,
     run: Option<&cli::Run>,
 ) -> Result<patchula_report::Report, (u8, miette::Report)> {
@@ -715,7 +713,7 @@ enum Source {
     GitHub(Vec<String>),
     /// A Count Patchula server.
     Remote {
-        server: String,
+        server: remote::Server,
         repositories: Vec<String>,
     },
 }
@@ -750,13 +748,13 @@ async fn source(
                 ))
             })?;
             return Ok(Source::Remote {
-                server,
+                server: remote::Server::named(server),
                 repositories: options.repositories.clone(),
             });
         }
         let repository = current_repository().await.map_err(|e| (USAGE, e))?;
         let server = match remote::configured(services)? {
-            Some(server) => server,
+            Some(server) => remote::Server::named(server),
             None => remote::find(services, &repository).await?.ok_or_else(|| {
                 usage(format!(
                     "--remote found no Count server for {repository}; set {} to the server's URL",

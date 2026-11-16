@@ -16,6 +16,10 @@ struct Fake {
     revoked: Vec<&'static str>,
     /// Answer the issues listing with an element that cannot decode.
     broken_issues: bool,
+    /// GitHub cannot describe the server's App.
+    no_app: bool,
+    /// The server names this client ID instead of its App's.
+    client_id: Option<&'static str>,
 }
 impl Transport for Fake {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
@@ -56,6 +60,9 @@ impl Transport for Fake {
                             // Anyone can write a marker; only the server's own bot counts.
                             json!({"user": {"type": "User", "login": "human"},
                             "body": "<!-- patchula-server:https://evil.acme.dev -->"}),
+                            // Another App's bot copied a marker in: the
+                            // attacker's server claims that bot but hands
+                            // out the Count App's client ID.
                             json!({"user": {"type": "Bot", "login": "other[bot]"},
                             "body": "<!-- patchula-server:https://evil.acme.dev -->"}),
                             json!({"user": {"type": "Bot", "login": "imposter[bot]"},
@@ -68,12 +75,21 @@ impl Transport for Fake {
                 (200, json!(items))
             }
             ("GET", "https://evil.acme.dev/api/v1/auth") => {
-                (200, json!({"clientId": "Iv23evil", "bot": "evil[bot]"}))
+                (200, json!({"clientId": "Iv23client", "bot": "other[bot]"}))
             }
             ("GET", "https://patchula.acme.dev/api/v1/auth") => (
                 200,
-                json!({"clientId": "Iv23client", "bot": "patchula[bot]"}),
+                json!({"clientId": self.client_id.unwrap_or("Iv23client"), "bot": "patchula[bot]"}),
             ),
+            ("GET", "https://api.github.com/apps/other") => {
+                (200, json!({"slug": "other", "client_id": "Iv23other"}))
+            }
+            ("GET", "https://api.github.com/apps/patchula") if self.no_app => {
+                (404, json!({"message": "Not Found"}))
+            }
+            ("GET", "https://api.github.com/apps/patchula") => {
+                (200, json!({"slug": "patchula", "client_id": "Iv23client"}))
+            }
             ("POST", DEVICE_CODE_URL) => {
                 assert_eq!(body, "client_id=Iv23client");
                 (
@@ -358,17 +374,17 @@ async fn a_checkout_finds_the_server_the_count_advertises_and_remembers_yes() {
     let chosen = choose(&asking(fake.clone(), dir.path(), true), "acme/app")
         .await
         .unwrap();
-    assert_eq!(chosen.as_deref(), Some(SERVER));
+    assert_eq!(chosen.map(|s| s.url).as_deref(), Some(SERVER));
     assert_eq!(
         choices(dir.path()),
-        json!({"acme/app": {"server": SERVER, "remote": true}})
+        json!({"acme/app": {"server": SERVER, "remote": true, "app": "Iv23client"}})
     );
     // Remembered: no question, and no GitHub request, even without a terminal.
     fake.requests.lock().unwrap().clear();
     let again = choose(&services(fake.clone(), dir.path()), "acme/app")
         .await
         .unwrap();
-    assert_eq!(again.as_deref(), Some(SERVER));
+    assert_eq!(again.map(|s| s.url).as_deref(), Some(SERVER));
     assert!(fake.requests.lock().unwrap().is_empty());
     // Signing out asks again next time.
     run(
@@ -390,7 +406,7 @@ async fn no_is_remembered_and_runs_here() {
     assert_eq!(chosen, None);
     assert_eq!(
         choices(dir.path()),
-        json!({"acme/app": {"server": SERVER, "remote": false}})
+        json!({"acme/app": {"server": SERVER, "remote": false, "app": "Iv23client"}})
     );
     fake.requests.lock().unwrap().clear();
     let again = choose(&asking(fake.clone(), dir.path(), true), "acme/app")
@@ -406,6 +422,96 @@ async fn no_is_remembered_and_runs_here() {
     .await
     .unwrap();
     assert_eq!(choices(dir.path()), json!({}));
+}
+
+#[tokio::test]
+async fn a_marker_from_another_app_is_skipped_even_if_its_server_claims_that_bot() {
+    // evil.acme.dev claims other[bot], which wrote its marker, and hands out
+    // the Count App's client ID; GitHub says other[bot]'s App has another.
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(Fake::default());
+    assert_eq!(
+        discover(&services(fake.clone(), dir.path()), "acme/app").await,
+        Some((SERVER.to_owned(), "Iv23client".to_owned()))
+    );
+    let requests = methods(&fake);
+    assert!(requests.contains(&"GET https://api.github.com/apps/other".to_owned()));
+    // The impostor's bot is not the one the server names: GitHub is not asked.
+    assert!(!requests.iter().any(|r| r.ends_with("/apps/imposter")));
+}
+
+#[tokio::test]
+async fn an_app_github_cannot_describe_discovers_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(Fake {
+        no_app: true,
+        ..Fake::default()
+    });
+    assert_eq!(
+        discover(&services(fake, dir.path()), "acme/app").await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_server_whose_app_does_not_match_its_author_discovers_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(Fake {
+        client_id: Some("Iv23other"),
+        ..Fake::default()
+    });
+    assert_eq!(
+        discover(&services(fake, dir.path()), "acme/app").await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_bot_login_that_is_not_an_app_slug_is_never_looked_up() {
+    let fake = Fake::default();
+    for login in [
+        "../users/x[bot]",
+        "[bot]",
+        "patchula",
+        "a/b[bot]",
+        "a?b[bot]",
+    ] {
+        assert_eq!(app_client_id(&fake, None, login).await, None, "{login}");
+    }
+    assert!(fake.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_remembered_server_that_names_another_app_is_refused_before_sign_in() {
+    // Discovery verified Iv23client; the server now hands out another ID.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("repositories.json"),
+        json!({"acme/app": {"server": SERVER, "remote": true, "app": "Iv23client"}}).to_string(),
+    )
+    .unwrap();
+    let fake = Arc::new(Fake {
+        client_id: Some("Iv23evil"),
+        ..Fake::default()
+    });
+    let services = services(fake.clone(), dir.path());
+    let target = find(&services, "acme/app").await.unwrap().unwrap();
+    let error = report(&services, &target, vec!["acme/app".into()], Mode::Lookup)
+        .await
+        .unwrap_err();
+    assert!(
+        error.1.to_string().contains("names a different GitHub App"),
+        "{}",
+        error.1
+    );
+    assert!(
+        !methods(&fake)
+            .iter()
+            .any(|r| r.contains("github.com/login"))
+    );
+    // A server the user names is theirs to vouch for.
+    let named = Server::named(SERVER.to_owned());
+    assert_eq!(client_id(&*fake, &named).await.unwrap(), "Iv23evil");
 }
 
 #[tokio::test]
@@ -507,7 +613,7 @@ async fn run_statuses_surface_their_own_failures() {
         });
         report(
             &run_services(fake, dir.path()),
-            SERVER,
+            &Server::named(SERVER.into()),
             vec!["acme/app".into()],
             Mode::Lookup,
         )
@@ -570,7 +676,7 @@ async fn a_rejected_run_start_says_the_run_is_gone() {
     });
     let Err((code, error)) = report(
         &run_services(fake, dir.path()),
-        SERVER,
+        &Server::named(SERVER.into()),
         vec!["acme/app".into()],
         Mode::Lookup,
     )
@@ -590,7 +696,7 @@ async fn a_run_that_never_finishes_times_out_with_the_servers_limit() {
     let fake = Arc::new(RunFake::default());
     let Err((code, error)) = report(
         &run_services(fake, dir.path()),
-        SERVER,
+        &Server::named(SERVER.into()),
         vec!["acme/app".into()],
         Mode::Lookup,
     )
