@@ -272,6 +272,15 @@ impl Config {
         {
             return fail("prs.branch", "expected a nonempty, valid Git branch prefix");
         }
+        if branch.len() > crate::MAX_BRANCH_PREFIX_LEN {
+            return fail(
+                "prs.branch",
+                format!(
+                    "expected at most {} characters, so every branch name fits",
+                    crate::MAX_BRANCH_PREFIX_LEN
+                ),
+            );
+        }
         Ok(())
     }
 }

@@ -45,6 +45,16 @@ pub const SCHEMA: &str = include_str!("../../../PatchulaConfig.pkl");
 /// when the repository has no copy of its own.
 pub const SCHEMA_NAME: &str = "PatchulaConfig.pkl";
 
+/// The longest branch name the Count writes.
+pub const MAX_BRANCH_LEN: usize = 240;
+/// Room every branch keeps after `prs.branch` for its label: the longest
+/// label the Count always writes plus a collision suffix. The update crate
+/// asserts at compile time that its fixed labels fit.
+pub const BRANCH_LABEL_ROOM: usize = 40;
+/// The longest `prs.branch` a config may set, so every fixed label still
+/// fits under [`MAX_BRANCH_LEN`].
+pub const MAX_BRANCH_PREFIX_LEN: usize = MAX_BRANCH_LEN - BRANCH_LABEL_ROOM;
+
 /// The starter `patchula.pkl`: the schema's defaults and nothing else. The CLI
 /// writes it when a working tree has none.
 pub const STARTER: &str = include_str!("../../../examples/defaults.pkl");

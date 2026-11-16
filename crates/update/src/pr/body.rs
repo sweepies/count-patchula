@@ -66,10 +66,17 @@ impl Bodies<'_> {
         let mut text = tooling_section(plan.callouts());
         text.push_str(&security_section(plan.changes()));
         text.push_str(&image_section(plan.changes()));
-        text.push_str("| Package | Change | Type | File |\n| --- | --- | --- | --- |\n");
+        // A plan without changes, lockfile maintenance's, has no table rows,
+        // so it gets no table either.
+        if !plan.changes().is_empty() {
+            text.push_str("| Package | Change | Type | File |\n| --- | --- | --- | --- |\n");
+        }
         if plan.is_maintenance() {
+            if !text.is_empty() {
+                text.push('\n');
+            }
             text.push_str(&format!(
-                "\nScheduled {} using the repository's mise tool versions.\n",
+                "Scheduled {} using the repository's mise tool versions.\n",
                 safe(self.maintenance_group)
             ));
             for file in &plan.action().files {

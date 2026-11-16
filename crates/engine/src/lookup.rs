@@ -23,6 +23,9 @@ pub(super) struct Discovery {
     /// The credential scope the hints are scoped by.
     credential_scope: String,
     hint: LookupHint,
+    /// Each repository's stored hint as read, so an unchanged one is not
+    /// written again.
+    known: BTreeMap<String, LookupHint>,
 }
 
 /// What the scan stage produced.
@@ -53,9 +56,15 @@ pub(super) struct Plan {
     /// Mutable action refs whose current commit is read up front, and
     /// whether a manual retry revalidates each.
     current_refs: BTreeMap<DigestKey, bool>,
-    /// Each scanned repository's replacement lookup hint and the packages
-    /// it may name, written once the run's mutable tags are known.
-    hints: Vec<(LookupHintScope, LookupHint, BTreeSet<String>)>,
+    /// Each scanned repository's replacement lookup hint, the packages it
+    /// may name and the hint stored before the run, written once the run's
+    /// mutable tags are known.
+    hints: Vec<(
+        LookupHintScope,
+        LookupHint,
+        BTreeSet<String>,
+        Option<LookupHint>,
+    )>,
     /// OSV queries to ask, and whether a manual retry revalidates each.
     advisories: BTreeMap<patchula_datasource::AdvisoryQuery, bool>,
 }
@@ -141,6 +150,7 @@ impl Engine {
         let schema_hash = patchula_manager::hash(patchula_config::SCHEMA.as_bytes());
         let credential_scope = self.github.credential_scope().to_owned();
         let mut hint = LookupHint::default();
+        let mut known = BTreeMap::new();
         for repo in &repos {
             let scope = LookupHintScope {
                 repository: repo.clone(),
@@ -148,10 +158,11 @@ impl Engine {
                 schema_hash: schema_hash.clone(),
                 credential_scope: credential_scope.clone(),
             };
-            if let Some(known) = self.cache.state::<LookupHint>(&scope).await? {
-                hint.catalogs.extend(known.catalogs);
-                hint.digests.extend(known.digests);
-                hint.tags.extend(known.tags);
+            if let Some(stored) = self.cache.state::<LookupHint>(&scope).await? {
+                hint.catalogs.extend(stored.catalogs.iter().cloned());
+                hint.digests.extend(stored.digests.iter().cloned());
+                hint.tags.extend(stored.tags.iter().cloned());
+                known.insert(repo.clone(), stored);
             }
         }
         Ok(Discovery {
@@ -161,6 +172,7 @@ impl Engine {
             schema_hash,
             credential_scope,
             hint,
+            known,
         })
     }
 
@@ -647,6 +659,7 @@ impl Engine {
                         tags: BTreeSet::new(),
                     },
                     packages,
+                    discovery.known.get(&repo.report.repository).cloned(),
                 ));
             }
         }
@@ -662,14 +675,18 @@ impl Engine {
         plan: &Plan,
         tags: &BTreeSet<DigestKey>,
     ) -> Result<()> {
-        for (scope, hint, packages) in &plan.hints {
+        for (scope, hint, packages, known) in &plan.hints {
             let mut hint = hint.clone();
             hint.tags = tags
                 .iter()
                 .filter(|(package, _)| packages.contains(package))
                 .cloned()
                 .collect();
-            self.cache.set_state(scope, &hint).await?;
+            // An unchanged hint is not rewritten: each write is a writer
+            // round trip and flushes the access-touch set.
+            if known.as_ref() != Some(&hint) {
+                self.cache.set_state(scope, &hint).await?;
+            }
         }
         Ok(())
     }

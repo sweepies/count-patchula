@@ -256,6 +256,19 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_states(&mut self, namespace: &str, rows: &[(String, Vec<u8>)]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for (scope, value) in rows {
+            tx.execute(
+                "INSERT INTO state(namespace,scope,value) VALUES (?1,?2,?3) \
+                 ON CONFLICT(namespace,scope) DO UPDATE SET value=excluded.value",
+                params![namespace, scope, value],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn clear_state(&mut self, namespace: &str, scope: &str) -> Result<()> {
         self.conn.execute(
             "DELETE FROM state WHERE namespace=?1 AND scope=?2",

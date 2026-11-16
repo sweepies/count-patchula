@@ -325,7 +325,10 @@ on every full write.
 ## Catalog views and release age
 
 Successful catalog views are stored as `catalog` state, scoped to the
-package, whether the versions host may stand in and the credential scope. A
+package, whether the versions host may stand in, the credential scope and a
+digest of every operator registry entry's scope (its prefix and credentials
+fingerprint), so adding, removing or rotating an entry misses every view read
+before, as the HTTP cache does. A
 dependency with a positive effective `waitHours`
 reuses a catalog younger than `clamp(waitHours - 1, 1, 24)` hours, 23 hours
 for the default 24-hour wait. Zero keeps the usual HTTP freshness. Dependencies

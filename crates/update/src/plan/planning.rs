@@ -402,6 +402,119 @@ fn flake_branches_keep_the_directory_apart_from_the_input() {
     );
 }
 
+/// The branches `plan` names for `files`, with each reported dependency
+/// (`path`, `manager`, `name`, `current`, `group`) moving to 1.9.0.
+fn named_branches(
+    files: &BTreeMap<String, String>,
+    reported: &[(&str, &str, &str, &str, Option<&str>)],
+) -> Vec<String> {
+    let config = config();
+    let extraction = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(files))
+        .unwrap();
+    let mut package_files = BTreeMap::<&str, Vec<serde_json::Value>>::new();
+    for (path, manager, name, current, group) in reported {
+        package_files.entry(path).or_default().push(serde_json::json!({
+            "manager": manager, "name": name, "package": name,
+            "current": {"value": current, "version": current.trim_start_matches('v'), "digest": null},
+            "updates": [{"newValue": current.replace("1.0.0", "1.9.0"), "newVersion": "1.9.0",
+                "newDigest": null, "updateType": "minor", "group": group}]
+        }));
+    }
+    let mut repository = repo();
+    repository.package_files = serde_json::from_value(serde_json::Value::Array(
+        package_files
+            .into_iter()
+            .map(|(path, dependencies)| serde_json::json!({"path": path, "dependencies": dependencies}))
+            .collect(),
+    ))
+    .unwrap();
+    let plans = crate::plan(
+        &repository,
+        &config,
+        &extraction.dependencies,
+        &snapshot(files),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap();
+    let mut branches: Vec<_> = plans.iter().map(|p| p.action().branch.clone()).collect();
+    branches.sort();
+    branches
+}
+
+#[test]
+fn names_that_differ_only_in_case_or_punctuation_take_a_stable_hash() {
+    let go = |module: &str, path: &str| {
+        format!("module example.com/{module}\n\ngo 1.22\n\nrequire {path} v1.0.0\n")
+    };
+    let files = BTreeMap::from([
+        (
+            "a/go.mod".to_string(),
+            go("a", "github.com/Sirupsen/logrus"),
+        ),
+        (
+            "b/go.mod".to_string(),
+            go("b", "github.com/sirupsen/logrus"),
+        ),
+    ]);
+    let reported = [
+        (
+            "a/go.mod",
+            "go",
+            "github.com/Sirupsen/logrus",
+            "v1.0.0",
+            None,
+        ),
+        (
+            "b/go.mod",
+            "go",
+            "github.com/sirupsen/logrus",
+            "v1.0.0",
+            None,
+        ),
+    ];
+    let branches = named_branches(&files, &reported);
+    assert_eq!(branches.len(), 2, "{branches:?}");
+    assert_ne!(branches[0], branches[1]);
+    for branch in &branches {
+        let suffix = branch
+            .strip_prefix("patchula/go-go-github-com-sirupsen-logrus-1.x-")
+            .unwrap_or_else(|| panic!("{branch}"));
+        assert!(
+            suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_hexdigit()),
+            "{branch}"
+        );
+    }
+    // The same names on every run, whatever order the files are reported in.
+    let mut reversed = reported;
+    reversed.reverse();
+    assert_eq!(named_branches(&files, &reversed), branches);
+
+    // Groups whose names differ only in case get the same treatment.
+    let files = BTreeMap::from([(
+        "package.json".to_string(),
+        "{\"devDependencies\":{\"eslint\":\"1.0.0\",\"prettier\":\"1.0.0\"}}\n".to_string(),
+    )]);
+    let reported = [
+        ("package.json", "npm", "eslint", "1.0.0", Some("Linters")),
+        ("package.json", "npm", "prettier", "1.0.0", Some("linters")),
+    ];
+    let branches = named_branches(&files, &reported);
+    assert_eq!(branches.len(), 2, "{branches:?}");
+    assert_ne!(branches[0], branches[1]);
+    assert!(
+        branches
+            .iter()
+            .all(|b| b.starts_with("patchula/npm-linters-")
+                && b.len() == "patchula/npm-linters-".len() + 8),
+        "{branches:?}"
+    );
+    assert_eq!(named_branches(&files, &reported), branches);
+}
+
 /// Bundler, Composer and Poetry lock-only updates, with the lock they start from.
 /// Manager, source, files, manifest, package, locked version and ecosystem.
 type LockOnlyCase = (

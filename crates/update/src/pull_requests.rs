@@ -599,8 +599,19 @@ pub struct Lifecycle {
     /// `PerHour` hold first decays an hour after this instant, or an hour
     /// after the run when every counted PR is the run's own.
     pub per_hour_oldest: Option<DateTime<Utc>>,
+    /// Whether extraction or lookup left the repository uncertain, read
+    /// once when the lifecycle is prepared, before lockfile generation adds
+    /// its own warnings. Obsolete-PR closure and branch cleanup both decide
+    /// on this one value, so they never disagree about what is obsolete.
+    degraded: bool,
 }
 impl Lifecycle {
+    /// Whether the evidence this lifecycle decided obsolescence on was
+    /// uncertain. Branch cleanup reads this, not the repository's warnings
+    /// at cleanup time.
+    pub fn degraded(&self) -> bool {
+        self.degraded
+    }
     pub fn set_advertised_server(&mut self, url: Option<String>) {
         self.server = url;
     }
@@ -686,6 +697,7 @@ impl Lifecycle {
             batched: controls.batched.clone(),
             server: None,
             per_hour_oldest: None,
+            degraded: repository.degraded(),
         };
         let owner = view::Owner { actor, repo };
         // The hourly count only exists when `prs.perHour` is set: the pull
@@ -725,7 +737,7 @@ impl Lifecycle {
             } else {
                 Vec::new()
             };
-            let obsolete: BTreeSet<u64> = if repository.degraded() {
+            let obsolete: BTreeSet<u64> = if state.degraded {
                 BTreeSet::new()
             } else {
                 view::obsolete(&pulls, &desired, controls, owner)
