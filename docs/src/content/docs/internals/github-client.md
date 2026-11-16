@@ -18,7 +18,13 @@ repository's or organisation's installation, list installations and read the
 App's bot login, client ID and webhook URL. `App::installation` returns
 credentials that mint installation access tokens on demand. A token is reused
 until two minutes before it expires, and one lock per App means simultaneous
-requests never mint twice. App requests resolve against the configured API
+requests never mint twice. When GitHub refuses a request with 401, the client
+asks the credentials to forget the token it sent (`Credentials::invalidate`)
+and sends the request once more with a fresh one; a token another request
+minted in the meantime is kept. GitHub runs nothing it refuses with 401, so
+the retry is safe for writes too, and it does not count against the
+rate-limit retries. A second 401 is returned. Credentials that cannot mint
+another token answer `None` and are not retried. App requests resolve against the configured API
 root, so an Enterprise deployment's App endpoints work too. No credential
 reaches SQLite.
 
@@ -147,15 +153,20 @@ to minimise secondary limits. A token run (the CLI) sizes it from the
 host limit capped at 16 (see [host limits](/internals/cache/#host-limits)).
 No cap guarantees against secondary throttling.
 
-The governor tracks the `x-ratelimit-*` headers per resource (core, search and
-graphql), reserves known remaining capacity for in-flight requests and waits
+The governor tracks the `x-ratelimit-*` headers per resource, as
+`x-ratelimit-resource` names it (core and graphql for the requests the Count
+sends), reserves known remaining capacity for in-flight requests and waits
 until an exhausted window resets, plus one second. A 304 refunds its
 reservation. While a bucket is exhausted its reset only moves later, so a
 response still in flight can't cut short a wait a rate-limit answer set. Once
 the reset passes the bucket is unknown again and queued requests go ahead.
 
-Secondary 403 and 429 responses (`Retry-After`, documented secondary or abuse
-messages, or GraphQL `RATE_LIMITED` errors) set a cooldown shared by all tasks.
+GitHub answers both GraphQL limits with a 200 and a `RATE_LIMITED` error. With
+`x-ratelimit-remaining: 0` and no error message naming the secondary limit,
+the answer is the primary limit: the graphql bucket waits until
+`x-ratelimit-reset`, and writes are not throttled. Secondary 403 and 429
+responses (`Retry-After`, documented secondary or abuse messages) and the
+other GraphQL `RATE_LIMITED` answers set a cooldown shared by all tasks.
 `Retry-After` seconds or dates are honoured; otherwise the delay starts at 60
 seconds and doubles. When a primary reset and `Retry-After` both apply, the
 longer wait wins. By default a request is retried three times, and a requested

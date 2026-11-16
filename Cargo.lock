@@ -2225,6 +2225,7 @@ dependencies = [
  "futures-util",
  "jsonwebtoken",
  "patchula-cache",
+ "patchula-config",
  "patchula-http",
  "patchula-testkit",
  "reqwest",

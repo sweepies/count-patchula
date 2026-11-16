@@ -2,7 +2,7 @@ use crate::{Error, HttpEntry, Options, Release, ReleaseList, Result};
 
 /// Each migration sets `user_version` to its own number; a cache at version
 /// N runs the ones after it.
-pub(crate) const MIGRATIONS: [&str; 15] = [
+pub(crate) const MIGRATIONS: [&str; 16] = [
     include_str!("migrations/001.sql"),
     include_str!("migrations/002.sql"),
     include_str!("migrations/003.sql"),
@@ -18,6 +18,7 @@ pub(crate) const MIGRATIONS: [&str; 15] = [
     include_str!("migrations/013.sql"),
     include_str!("migrations/014.sql"),
     include_str!("migrations/015.sql"),
+    include_str!("migrations/016.sql"),
 ];
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
@@ -282,22 +283,31 @@ impl Store {
         Ok(())
     }
 
+    /// Evict the least recently used HTTP rows until the bodies fit the
+    /// budget. The total is the trigger-kept `http_bytes` row (migration
+    /// 016), read again after each delete, so no write scans the table and
+    /// a concurrent process's writes count too.
     fn evict(&self) -> Result<()> {
-        let mut total: i64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(length(body)),0) FROM http",
-            [],
-            |row| row.get(0),
-        )?;
-        while total as u64 > self.options.http_body_budget {
-            let (key, size): (String, i64) = self.conn.query_row(
-                "SELECT key,length(body) FROM http ORDER BY last_access,key LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
+        loop {
+            let total: i64 = self
+                .conn
+                .query_row("SELECT total FROM http_bytes", [], |row| row.get(0))?;
+            if u64::try_from(total).unwrap_or(0) <= self.options.http_body_budget {
+                return Ok(());
+            }
+            let Some(key) = self
+                .conn
+                .query_row(
+                    "SELECT key FROM http ORDER BY last_access,key LIMIT 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+            else {
+                return Ok(());
+            };
             self.conn.execute("DELETE FROM http WHERE key=?1", [key])?;
-            total = total.saturating_sub(size);
         }
-        Ok(())
     }
 
     /// The refresh boundary, without materializing the cached history.

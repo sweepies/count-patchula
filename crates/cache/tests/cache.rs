@@ -272,8 +272,87 @@ async fn migrates_previous_schema_without_discarding_http_or_release_data() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        patchula_cache::SCHEMA as i64
     );
+    // Migration 016 starts the byte counter at the bodies already stored.
+    assert_eq!(
+        counted_bytes(&conn),
+        zstd::stream::encode_all(&b"old body"[..], 3).unwrap().len() as i64
+    );
+}
+
+/// The trigger-kept body total and the sum it stands for.
+fn counted_bytes(conn: &rusqlite::Connection) -> i64 {
+    let (total, sum): (i64, i64) = conn
+        .query_row(
+            "SELECT (SELECT total FROM http_bytes), \
+             (SELECT COALESCE(SUM(length(body)), 0) FROM http)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(total, sum, "the counter drifted from the table");
+    total
+}
+
+/// The byte counter follows every write to `http` — insert, overwrite
+/// with another size, 304 refresh, removal and eviction — including writes
+/// from a second handle on the same file, as a concurrent process makes,
+/// and eviction keeps the table inside the budget.
+#[tokio::test]
+async fn the_body_byte_counter_tracks_every_write_and_bounds_the_table() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("cache.sqlite");
+    let body = |seed: usize, len: usize| -> Vec<u8> {
+        (0..len)
+            .map(|i| ((i * 31 + seed * 7 + i / 13) % 251) as u8)
+            .collect()
+    };
+    let size = zstd::stream::encode_all(body(0, 4096).as_slice(), 3)
+        .unwrap()
+        .len() as u64;
+    let budget = size * 5;
+    let options = Options {
+        http_body_budget: budget,
+    };
+    let first = Cache::open(&path, options.clone()).await.unwrap();
+    let second = Cache::open(&path, options).await.unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    first
+        .http_put(&key("a"), &entry(body(1, 4096)))
+        .await
+        .unwrap();
+    second
+        .http_put(&key("b"), &entry(body(2, 4096)))
+        .await
+        .unwrap();
+    assert!(counted_bytes(&conn) > 0);
+    first
+        .http_put(&key("a"), &entry(body(3, 64)))
+        .await
+        .unwrap();
+    counted_bytes(&conn);
+    second
+        .http_refresh(&key("b"), &entry(Vec::new()))
+        .await
+        .unwrap();
+    counted_bytes(&conn);
+    first.http_remove(&key("b")).await.unwrap();
+    counted_bytes(&conn);
+    for i in 0..40 {
+        let cache = if i % 2 == 0 { &first } else { &second };
+        cache
+            .http_put(&key(&format!("k{i}")), &entry(body(i + 10, 4096)))
+            .await
+            .unwrap();
+        let total = counted_bytes(&conn);
+        assert!(total as u64 <= budget, "{total} bytes over {budget}");
+    }
+    assert!(counted_bytes(&conn) as u64 > budget - size * 2);
+    let rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM http", [], |row| row.get(0))
+        .unwrap();
+    assert!((4..=6).contains(&rows), "{rows} rows");
 }
 
 #[tokio::test]
@@ -604,6 +683,6 @@ async fn migration_counts_requeues_on_new_and_eleven_schema_queues() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        patchula_cache::SCHEMA as i64
     );
 }
