@@ -353,9 +353,7 @@ The image is built with [apko](https://github.com/chainguard-dev/apko) from
 [packslip](https://packslip.dev), on Wolfi's glibc, and starts `patchula serve`
 as user and group 10001. Lockfile tools are not in the image: mise installs
 each one into the volume the first time a repository needs it (see [what the
-runner needs](/installation/#what-the-runner-needs)). The image has no ICU, so
-it sets `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`, which the runner passes on
-to dotnet. The image sets no `HEALTHCHECK` or `EXPOSE`; configure the [health
+runner needs](/installation/#what-the-runner-needs)). The image sets no `HEALTHCHECK` or `EXPOSE`; configure the [health
 check](#health-check) and publish 8080 yourself.
 
 Each build takes Wolfi's current packages, so a release picks up Wolfi's
@@ -385,7 +383,6 @@ must be writable by user 10001.
 | `PATCHULA_SERVER_CACHE` | `/var/lib/patchula` |
 | `PATCHULA_TOOLS_DIR` | `/var/lib/patchula/tools` |
 | `RUSTUP_HOME` | `/var/lib/patchula/rustup` |
-| `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` | `1` |
 
 The credentials have no default. Mount your [settings](#settings) file over
 `/etc/patchula/settings.pkl`, or point `PATCHULA_SETTINGS` at another path.

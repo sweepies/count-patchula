@@ -265,11 +265,6 @@ url = "https://github.com/jdx/communique/releases/download/v1.8.0/communique-aar
 signer = "sigstore-oidc:https://github.com/jdx/communique/.github/workflows/release.yml"
 repository_ids = { repository = "1155542902" }
 
-[[tools.dotnet]]
-version = "10.0.403"
-backend = "core:dotnet"
-specifiers = ["10.0.403"]
-
 [[tools."forgejo:wvhulle/nu-lint"]]
 version = "1.7.1"
 backend = "forgejo:wvhulle/nu-lint"

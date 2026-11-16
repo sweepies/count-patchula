@@ -88,7 +88,7 @@ missing, and behaviour that changes their pull requests. The
 ### Registry credentials are operator settings {#registry-credentials}
 
 - **Renovate:** `hostRules` in the repository config, with secrets encrypted for the app or passed in by the self-hosted runner
-- **The Count:** [`registries`](/guide/sources/#private-registries) in the operator settings file, keyed by URL prefix, with secrets from environment variables or files. A repository config cannot name a credential or a host to send one to — and a repository that commits one anyway, as an explicit credential setting a tool or lookup reads (auth keys in `.npmrc`, `.yarnrc.yml`, `pnpm-workspace.yaml`, `composer.json`, `nuget.config`, `poetry.toml`, `pyproject.toml` or `.cargo/config`, or a user **and** password in a field that names a registry URL), is refused outright as hygiene: no lookups, no branches. Credentials cover registry reads, version lookups and image manifest and SBOM reads alike, for the sources that take a registry URL. Lockfile tools get an entry's credentials only when it sets `tools = true`, and as they run repository and package code, any repository the Count processes can then read them
+- **The Count:** [`registries`](/guide/sources/#private-registries) in the operator settings file, keyed by URL prefix, with secrets from environment variables or files. A repository config cannot name a credential or a host to send one to — and a repository that commits one anyway, as an explicit credential setting a tool or lookup reads (auth keys in `.npmrc`, `.yarnrc.yml`, `pnpm-workspace.yaml`, `composer.json`, `nuget.config`, `poetry.toml`, `pyproject.toml` or `.cargo/config`, or a user **and** password in a field that names a registry URL), is refused outright as hygiene: no lookups, no branches. Credentials cover registry reads, version lookups and image manifest and SBOM reads alike, for the sources that take a registry URL. Lockfile tools get an entry's credentials only when it sets `tools = true`, and any repository given them can fetch through them by naming that registry
 - **Why:** One server serves many organisations, and a repository config can point a dependency at any URL
 
 ### Packages come from their lockfile {#lockfile-registries}
@@ -230,6 +230,12 @@ See [container image rebuilds](/guide/security/#container-image-rebuilds).
 - **Renovate:** Regenerates npm, pnpm and Yarn locks with npm, pnpm and Yarn
 - **The Count:** Regenerates `aube-lock.yaml`, `pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json` and Yarn Classic `yarn.lock` with aube; `lockfiles.npmEngine = "npm"` restores native npm for npm lockfiles. Berry `yarn.lock` stays with Yarn
 - **Why:** Lockfile updates are 10 to 30 times faster; [why aube](/guide/lockfiles/#why-aube-for-npm-pnpm-and-yarn-classic) lists how its output differs from each tool's
+
+### Lockfiles that need repository or package code are refused {#refused-lockfiles}
+
+- **Renovate:** Runs each lockfile tool as the tool runs, so regenerating a lock may run code from the repository and its dependencies: `bundle lock` evaluates the Gemfile and gemspecs, `dotnet restore` evaluates MSBuild projects and package targets, uv and Poetry build source distributions for their metadata, and npm and Yarn pack git dependencies, running their scripts
+- **The Count:** Never runs code a repository or one of its packages chose. An update whose lock cannot be regenerated without it is skipped with the reason, and lockfile maintenance is held the same way: `packages.lock.json` is never regenerated; npm (native) and Yarn Berry locks are refused when a manifest, override, catalog or the lock names a git, forge or `exec:` source; uv locks without building, Poetry only through a launcher that disables its build backends, and Bundler only from a Gemfile the Count renders, with `gemspec`, `path:`, `git:` and other forms he does not render refused. See [what is refused](/guide/lockfiles/#what-is-refused)
+- **Why:** The Count runs as one user for every repository, with its credentials and cache; code one repository's dependency runs there reaches all of them. See the [threat model](/internals/threat-model/)
 
 ### actions.lock {#actions-lock}
 

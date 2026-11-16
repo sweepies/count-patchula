@@ -1010,7 +1010,7 @@ pub struct BaseFile {
 }
 
 /// Why lockfile generation failed: a tool's process failure kept structured
-/// with what ran it, or reason text.
+/// with what ran it, reason text, or a refusal.
 #[derive(Debug)]
 pub enum Failure {
     Tool {
@@ -1019,12 +1019,17 @@ pub enum Failure {
         failure: patchula_process::Failure,
     },
     Text(String),
+    /// The lock cannot be regenerated without running code the repository
+    /// or a dependency chose, so no tool ran for it, or its result was
+    /// thrown away. The update is skipped with this reason rather than
+    /// failed: it stands until the repository changes, not until a retry.
+    Refused(String),
 }
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Tool { context, failure } => write!(f, "{context}: {failure}"),
-            Self::Text(text) => f.write_str(text),
+            Self::Text(text) | Self::Refused(text) => f.write_str(text),
         }
     }
 }

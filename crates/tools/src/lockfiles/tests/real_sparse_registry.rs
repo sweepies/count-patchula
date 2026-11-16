@@ -287,7 +287,7 @@ fn crate_file(name: &str, vers: &str, deps: &[(String, String)]) -> Vec<u8> {
 }
 
 /// A ustar archive of `entries`.
-fn tar(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
+pub(super) fn tar(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
     fn field(header: &mut [u8], range: std::ops::Range<usize>, value: &[u8]) {
         header[range].copy_from_slice(value);
     }
@@ -322,7 +322,7 @@ fn tar(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
 }
 
 /// A gzip member wrapping `data` in uncompressed deflate blocks.
-fn gzip(data: &[u8]) -> Vec<u8> {
+pub(super) fn gzip(data: &[u8]) -> Vec<u8> {
     let mut out = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff".to_vec();
     for (last, chunk) in data
         .chunks(65_535)

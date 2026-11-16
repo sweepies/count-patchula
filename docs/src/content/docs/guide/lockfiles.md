@@ -21,7 +21,7 @@ commit. If the tool fails, nothing is published.
 | `.terraform.lock.hcl` | Terraform | `terraform providers lock` |
 | `uv.lock` | uv | `uv lock --upgrade-package <package>`, or `<package>==<target>` for a [lockfile-only update](#in-range-updates) |
 | `poetry.lock` | Poetry | `poetry lock --no-plugins` |
-| `packages.lock.json` | dotnet | `dotnet restore --force-evaluate` |
+| `packages.lock.json` | none | not regenerated; see [what is refused](#what-is-refused) |
 | `Gemfile.lock` | Bundler | `bundle lock --update <gems>` |
 | `composer.lock` | Composer | `composer update <packages> --with-all-dependencies --minimal-changes --no-install --no-scripts --no-plugins`, plus `--with <package>:<target>` for a lockfile-only update |
 | `mise.lock` | mise | `mise lock` with the lockfile's recorded platforms |
@@ -58,8 +58,9 @@ may still require it. The Count runs `cargo update --workspace` for it, which
 locks what the edited manifests need and moves no other package, then pins the
 entry to the target with `--precise` if Cargo locked a newer release.
 
-Install scripts are skipped (see [Isolation](#isolation) for the code that
-still runs). A lockfile that does not change after an edit that
+Install scripts are skipped, and no tool runs code from the repository or
+its packages; a lock that cannot be regenerated without it is refused (see
+[what is refused](#what-is-refused)). A lockfile that does not change after an edit that
 changed recorded dependencies fails the branch, so a tool that says "up to date"
 without re-resolving cannot publish a stale lock. An edit that cannot affect the
 lock, such as a description, is not a failure. Where the Count can read the
@@ -141,7 +142,7 @@ from `packageManager` in `package.json`, then a Yarn 2 or newer pin in
 
 Tools run through `mise exec` with an explicit version. A repository's own pins
 win: `mise.toml` and `.tool-versions` entries for the relevant tool,
-`.python-version`, `.ruby-version`, `global.json`, `packageManager`, and the
+`.python-version`, `.ruby-version`, `packageManager`, and the
 highest of the pin and `go.mod`'s `go`/`toolchain` lines for Go. Repository
 tasks, environment blocks and hooks are never loaded. Otherwise the runner's
 pinned defaults apply:
@@ -156,7 +157,6 @@ pinned defaults apply:
 | Go | 1.27.3 |
 | Terraform | 1.17.1 |
 | Python, uv, Poetry | 3.15.2, 0.13.6, 2.5.1 |
-| .NET SDK | 10.0.403 |
 | Ruby | 4.0.9 |
 | PHP, Composer | 8.5.8, 2.10.3 |
 | APM | 0.35.0 |
@@ -309,7 +309,7 @@ already have in your own mise (`MISE_DATA_DIR`, or `~/.local/share/mise`, on
 the same filesystem as the store) are hard-linked into the store instead of
 downloaded. That takes no time or extra disk, and pruning never touches your
 installs. Each version is borrowed once; if that fails, mise installs it.
-Python, Ruby, PHP and .NET installs depend on where they live, so they are
+Python, Ruby and PHP installs depend on where they live, so they are
 always installed fresh, as are APM and any install with a symlink leading outside its
 own directory. The server never borrows.
 
@@ -325,37 +325,71 @@ not inherited. Git alone gets a temporary credential header for the
 installation token, kept out of URLs, arguments and stored config. Yarn runs
 the release the Count pins. It reads every `.yarnrc.yml` from the project up
 to the filesystem root, so each one from the project up to the repository
-root is replaced for the run by a copy without `yarnPath`, plugins or
-`${VAR}` interpolations, since the scratch tree holds no `.yarn/` and the run
-has none of the variables; a `${VAR}` registry stays, so Yarn stops on it.
+root is replaced for the run by a copy without `yarnPath`, plugins,
+`networkSettings` or `${VAR}` interpolations, since the scratch tree holds no
+`.yarn/`, the run closes some hosts (see [what is refused](#what-is-refused))
+and has none of the variables; a `${VAR}` registry stays, so Yarn stops on it.
 The committed files come back afterwards. npm, pnpm, aube and Bun see each `.npmrc` with only its
 `registry=` and `@scope:registry=` lines, so a private scope resolves where
 your own installs would, never to the public package of its name.
 
 Install scripts are skipped wherever a tool allows it (npm, aube, which also
-writes Yarn Classic locks, Bun, and Composer with plugins off too), because a
-lockfile needs none of them.
+writes Yarn Classic locks, Bun, Yarn, and Composer with plugins off too),
+because a lockfile needs none of them.
 
 Each tool runs as the leader of its own process group. Whatever it leaves
-running, such as MSBuild worker nodes or a build helper, is killed when it
-exits, however it exits, and when it times out or the run is cancelled, so
-nothing it started keeps the run's environment past it unless it leaves the
-group on purpose (`setsid`). dotnet is also told not to keep
-MSBuild nodes for reuse (`MSBUILDDISABLENODEREUSE=1`).
+running, such as a helper process, is killed when it exits, however it
+exits, and when it times out or the run is cancelled, so nothing it started
+keeps the run's environment past it unless it leaves the group on purpose
+(`setsid`).
 
 Output is kept only when something fails, at most 4 KiB of each stream.
 
-:::danger[Lockfile tools run repository and package code]
-Regenerating a lockfile runs code from the repository and from its
-dependencies: Bundler evaluates the Gemfile and gemspecs, dotnet evaluates
-MSBuild projects and targets, uv and Poetry build source distributions to read
-their metadata, and Yarn and npm prepare git dependencies by running their
-build scripts. The tools run unsandboxed, as the Count's own user, so that code
-can read anything the Count can: its environment and settings secrets, the
-GitHub App credentials, and what other runs on the same host hold at the time.
-Run the Count only for repositories you trust that far, or turn lockfile
-updates off for the others.
+:::note[No tool runs repository or package code]
+Regenerating a lockfile reads package metadata and nothing else: no tool runs
+code from the repository or from the packages it depends on, directly or
+through other packages. A lock that cannot be regenerated without running
+such code is [refused](#what-is-refused) instead. The
+[threat model](/internals/threat-model/#how-each-tool-keeps-to-it) lists the
+guard each tool runs under.
 :::
+
+## What is refused
+
+Some locks cannot be regenerated without running code a dependency chose.
+The update that needs one is skipped, with the reason on the dashboard and in
+the run report, and lockfile maintenance is held the same way. The reason
+stands until the repository changes; no pull request is opened or updated
+with a stale lock.
+
+- **npm and Yarn Berry git dependencies.** npm (with `npmEngine = "npm"`, or
+  for a format v1 lock) and Yarn pack a git dependency to prepare it, which
+  runs its `prepare` and pack scripts whatever `--ignore-scripts` or
+  `enableScripts` say. The update is refused when any `package.json` in the
+  repository, its `overrides` or `resolutions`, a Yarn catalog or
+  `packageExtensions` entry, or the lock names a source other than a registry
+  version, range or tag, an `npm:` alias, `jsr:`, `workspace:`, `catalog:`, a
+  local path (`file:`, `link:`, `portal:`, `./`), a Yarn `patch:` of one of
+  those, or an http(s) `.tgz` or `.tar.gz` that is not on a git forge. That
+  refuses git URLs, `github:` and other forge shorthands, `owner/repo`, forge
+  archive URLs and Yarn's `exec:`. Their runs also have no Git transport, a
+  guard in npm's runs stops the process npm starts to prepare a git
+  dependency, and Yarn's runs cannot reach the GitHub hosts its GitHub
+  fetcher downloads from, so a git dependency of a registry package fails
+  the run instead; a regenerated lock that records one is thrown away and the
+  update refused. aube and Bun lock git dependencies without running their
+  scripts, so pnpm, aube, Bun and (through aube) npm and Yarn Classic locks
+  are not refused for them.
+- **`packages.lock.json`.** `dotnet restore` evaluates MSBuild projects,
+  props and targets, the repository's and those of every package it
+  restores, so no NuGet lock is regenerated. An update to a project with a
+  `packages.lock.json` is skipped.
+- **uv, Poetry and Bundler** projects whose lock needs a build or a Gemfile
+  form the Count does not render: uv metadata it would have to build, a
+  Poetry version without a canary-covered launcher, and a Gemfile with
+  `gemspec`, `path:`, `git:`, `github:` and other forge keys, `git_source`,
+  `plugin`, `eval_gemfile`, `install_if` or a line the Count does not read, or
+  a `Gemfile.lock` with `GIT`, `PATH` or `PLUGIN SOURCE` sections.
 
 ## Tool caches
 
@@ -393,18 +427,14 @@ internal module the proxy cannot serve, is rerun in the installation
 partition with Go's default environment, so repositories with internal
 modules keep working.
 
-Partitions keep honest repositories' private packages apart; they are
-not an isolation boundary. Lockfile tools run repository code
-unsandboxed — Bundler evaluating the Gemfile, uv or Poetry building
-sdists, MSBuild evaluating project files — so code from any installed
-repository can read every partition on the host, `public`, another
-installation's and another credential set's alike. That is within the
-trust model above: every installation is trusted, and lockfile tools run
-repository code anyway.
+Partitions keep each repository's private packages apart. No lockfile tool
+runs repository or package code, so what a run can reach is what its tool
+fetches: a run reads only the partition it chose, and a package it caches
+there is never served to a run that could not have fetched it.
 
 A partition a run uses is held shared, so eviction never removes one in use,
 and tools whose caches are not documented for concurrent use — aube, Bun,
-Yarn, Composer, Poetry, NuGet and Bundler — run one at a time in it.
+Yarn, Composer, Poetry and Bundler — run one at a time in it.
 Partitions unused for 14 days are pruned, and `lockfiles.cacheGiB` (default
 20, minimum 1) caps their size: the least recently used private partitions
 go first, `public` last.
@@ -415,9 +445,9 @@ Lockfile tools get a [registry entry's](/guide/sources/#private-registries)
 credentials only when the entry sets `tools = true`; APM, Nix, `mise lock` and
 the Gradle wrapper read no private registries and get none. In the server,
 `allowedInstallations` decides which installations' tools are given them,
-and the CLI gives them to every repository it runs on. As lockfile tools run
-repository and package code, any repository the Count processes can read a
-credential it holds, so neither setting is a boundary.
+and the CLI gives them to every repository it runs on. Any repository given
+an entry's credentials can fetch through them by naming that registry, so
+these settings decide which repositories may read it.
 
 Each tool gets the credentials in the form it reads, only for its own run:
 
@@ -426,7 +456,6 @@ Each tool gets the credentials in the form it reads, only for its own run:
 | aube (npm, pnpm and Yarn Classic locks), npm, Bun | `//host/path/:_authToken` or `:_auth` in its user configuration | bearer, basic | prefix |
 | Yarn (Berry locks) | `npmRegistries` in its user configuration | bearer, basic | the registry URL, exactly |
 | Cargo | `CARGO_REGISTRIES_<NAME>_INDEX` and `_TOKEN` | bearer, basic | the sparse index URL of each registry `.cargo/config.toml` or `.cargo/config` names |
-| dotnet | `NuGetPackageSourceCredentials_<key>` | basic | the URL of each source a `nuget.config` adds |
 | Poetry | `POETRY_HTTP_BASIC_<NAME>_USERNAME` and `_PASSWORD`, and `~/.netrc` | basic | the URL of each `[[tool.poetry.source]]`; host |
 | Bundler | `BUNDLE_<HOST>` | basic | host |
 | Composer | `COMPOSER_AUTH` | bearer, basic | host |
@@ -456,10 +485,7 @@ directories cannot impose one the repository never committed. A
 `resolver.incompatible-publish-age = "allow"`. Rust older than 1.100
 ignores the variables: the cooldown still binds the direct targets lookup
 picks, but the run warns that transitive crates in that directory do not
-wait. dotnet
-reads every `nuget.config` in the tree, since a project can name any of them,
-and gives no source credentials if it cannot read one; NuGet compares source
-keys without case. Poetry reads the project's
+wait. Poetry reads the project's
 `pyproject.toml`. A name defined more than one way, or that the tool would fold onto another
 name, gets nothing, and so does a URL not written in its normal form (lowercase host, no
 user, escapes or backslashes). Go fetches the modules under a credentialed
@@ -470,10 +496,10 @@ Bundler, Composer, Go, uv and Terraform send credentials to every URL on the
 host, so they only get an entry whose prefix is a bare host, with no path or
 port, and that is the only entry on its host, for any installation. A
 credential a tool cannot take is left out without a warning, and the tool
-then fails on the registry: a bearer entry for Bundler, dotnet, Go, Poetry or
+then fails on the registry: a bearer entry for Bundler, Go, Poetry or
 uv, a basic one for Terraform, a `.netrc` user or password with whitespace,
-quotes, a backslash or `#`, a NuGet user or password with `;`, a source or
-registry name outside ASCII letters, digits, `-`, `_` and (for NuGet and
+quotes, a backslash or `#`, a source or
+registry name outside ASCII letters, digits, `-`, `_` and (for
 Poetry) `.`, a Bundler or Terraform host with `_`, a Bundler host without a
 dot, a Bundler user or password with characters other than letters, digits
 and `-._~!$&'()*,;=` (and `:` in a password),
@@ -522,6 +548,7 @@ for one of them (a `current` filter that is not a valid requirement, say),
 maintenance is held with that error, named for the dependency, rather than
 relocking with no wait; a Cargo update's job is held the same way.
 Failures do not count as a completed refresh, and a closed maintenance PR can
-come back the following week.
+come back the following week. A lock the Count [refuses](#what-is-refused)
+holds maintenance with that reason, like an update.
 
 `tidyGo = true` runs `go mod tidy` instead of `go mod download` after Go updates.

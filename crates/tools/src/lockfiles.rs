@@ -376,11 +376,7 @@ impl Runner {
                 Ecosystem::Mise => self.mise_lock(context, &jobs).await?,
                 Ecosystem::Python => self.python_locks(context, &jobs).await?,
                 Ecosystem::GradleWrapper => self.gradle_wrapper(context).await?,
-                Ecosystem::Dotnet => {
-                    let edited = work.edits.keys().any(|p| under(p, context.directory))
-                        && !context.maintenance;
-                    self.dotnet_restore(context, edited).await?;
-                }
+                Ecosystem::Dotnet => return Err(dotnet::refused(context.directory)),
                 Ecosystem::Ruby => self.bundle_lock(context, &jobs).await?,
                 Ecosystem::Php => self.composer_lock(context, &jobs).await?,
                 Ecosystem::Nix => self.flake_lock(context, &jobs).await?,
@@ -654,6 +650,8 @@ fn held_failure(bin: &str, failure: &Failure) -> Failure {
         // The runner's own failures, before the tool ran or around it,
         // hold nothing the tool printed.
         Failure::Text(text) => text.clone(),
+        // A refusal is the runner's own finding and stays one.
+        Failure::Refused(text) => return Failure::Refused(text.clone()),
     };
     Failure::Text(format!(
         "{bin} failed while it held registry credentials ({how}), so its output is not shown"

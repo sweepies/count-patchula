@@ -20,35 +20,6 @@ def --wrapped run-in [image: string, platform: string, entrypoint: string, ...ar
   ^docker run --rm --platform $platform --entrypoint $entrypoint $image ...$args | complete
 }
 
-# A project whose packages.lock.json is stale. The lockfile runner restores
-# it with mise's dotnet in an environment that starts empty, as below. The
-# image has no ICU, so dotnet only starts with the invariant-globalization
-# setting the image sets and the runner passes on; without it, the restore
-# must fail.
-const NUGET_PROJECT = '<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
-    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-  </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-  </ItemGroup>
-</Project>
-'
-
-const NUGET_RESTORE = 'set -eu
-mise=$1 dotnet=$2 invariant=$3
-cp -r /smoke /tmp/app
-cd /tmp/app
-env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp/home MISE_DATA_DIR=/var/lib/patchula/tools MISE_YES=1 \
-  DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 NUGET_PACKAGES=/tmp/nuget "$invariant" \
-  "$mise" exec "dotnet@$dotnet" -- dotnet restore App.csproj --force-evaluate >&2
-cat packages.lock.json'
-
-def restore [image: string, volume: string, work: string, mise: string, dotnet: string, invariant: string] {
-  ^docker run --rm --volume $"($volume):/var/lib/patchula" --volume $"($work)/nuget:/smoke:ro" --entrypoint sh $image -c $NUGET_RESTORE sh $mise $dotnet $invariant | complete
-}
-
 def main [--arch: string = "amd64"] {
   let image = $"patchula:smoke-($arch)"
   let platform = $"linux/($arch)"
@@ -64,7 +35,6 @@ def main [--arch: string = "amd64"] {
   let config = ^docker image inspect --format '{{json .Config}}' $image | from json
   check "runs as 10001" (((run-in $image $platform id -u).stdout | str trim) == "10001")
   check "a volume at /var/lib/patchula" ($config.Volumes has "/var/lib/patchula")
-  check "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1" ("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1" in $config.Env)
   check "annotations" ($annotations."org.opencontainers.image.source" == "https://github.com/sweepies/count-patchula" and $annotations."org.opencontainers.image.licenses" == "MIT" and $annotations."org.opencontainers.image.revision" == (^git rev-parse HEAD | str trim))
   check "config check-settings" ((^docker run --rm $image config check-settings /etc/patchula/settings.pkl | complete).exit_code == 0)
   check "git over https with the image's CA bundle" ((run-in $image $platform git ls-remote --heads https://github.com/sweepies/count-patchula main).exit_code == 0)
@@ -78,10 +48,8 @@ def main [--arch: string = "amd64"] {
     ^openssl req -newkey rsa:2048 -nodes -keyout $"($work)/github.key" -out $"($work)/github.csr" -subj "/CN=api.github.com"
     "subjectAltName=DNS:api.github.com\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n" | save $"($work)/github.ext"
     ^openssl x509 -req -in $"($work)/github.csr" -CA $"($work)/ca.pem" -CAkey $"($work)/ca.key" -CAcreateserial -days 1 -extfile $"($work)/github.ext" -out $"($work)/github.pem"
-    mkdir $"($work)/www" $"($work)/nuget"
+    mkdir $"($work)/www"
     '{"slug":"patchula-smoke","client_id":"smoke"}' | save $"($work)/www/app"
-    $NUGET_PROJECT | save $"($work)/nuget/App.csproj"
-    '{"version": 1, "dependencies": {"net9.0": {}}}' | save $"($work)/nuget/packages.lock.json"
     ^chmod -R a+rX $work
     let credentials = [--env PATCHULA_APP_ID=12345 --env $"PATCHULA_APP_PRIVATE_KEY=(open --raw $'($work)/app.pem')" --env $"PATCHULA_WEBHOOK_SECRET=(random chars -l 32)"]
 
@@ -122,14 +90,6 @@ def main [--arch: string = "amd64"] {
     if $node.exit_code != 0 { print ($node.stderr | lines | last 10 | str join "\n") }
     check $"mise installs and runs node as 10001 \(($node.stdout | str trim)\) in (since $started)" ($node.exit_code == 0)
 
-    let dotnet = open crates/tools/src/lockfiles/defaults.toml | get tools.dotnet
-    let started = date now
-    let nuget = restore $image $volume $work $mise $dotnet "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1"
-    if $nuget.exit_code != 0 { print ($nuget.stderr | lines | last 30 | str join "\n") }
-    let resolved = try { $nuget.stdout | from json | get dependencies."net9.0"."Newtonsoft.Json".resolved } catch { "none" }
-    check $"dotnet ($dotnet) from mise rewrites a NuGet lockfile as 10001 \(Newtonsoft.Json ($resolved)\) in (since $started)" ($nuget.exit_code == 0 and $resolved == "13.0.4")
-    let icu = restore $image $volume $work $mise $dotnet "PATCHULA_SMOKE=1"
-    check "and fails without DOTNET_SYSTEM_GLOBALIZATION_INVARIANT, for want of ICU" ($icu.exit_code != 0 and ($icu.stderr =~ "ICU"))
     "passed"
   } catch {|e| $e.msg }
   if $out != "passed" { print (^docker logs $name | complete | get stderr | lines | last 20 | str join "\n") }

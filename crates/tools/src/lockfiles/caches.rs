@@ -53,7 +53,6 @@ pub(super) enum Bin {
     Uv,
     Poetry,
     Bundle,
-    Dotnet,
     Terraform,
     Nix,
     Apm,
@@ -86,7 +85,6 @@ impl Bin {
             Self::Uv => "uv",
             Self::Poetry => "poetry",
             Self::Bundle => "bundle",
-            Self::Dotnet => "dotnet",
             Self::Terraform => "terraform",
             Self::Nix => "nix",
             Self::Apm => "apm",
@@ -130,13 +128,6 @@ impl Bin {
             Self::Composer => cache(&[("COMPOSER_CACHE_DIR", "composer")], true),
             Self::Poetry => cache(&[("POETRY_CACHE_DIR", "poetry")], true),
             Self::Bundle => cache(&[("BUNDLE_USER_CACHE", "bundler")], true),
-            Self::Dotnet => cache(
-                &[
-                    ("NUGET_PACKAGES", "nuget/packages"),
-                    ("NUGET_HTTP_CACHE_PATH", "nuget/http-cache"),
-                ],
-                true,
-            ),
             // Terraform's `providers lock` keeps no package cache, nix and
             // apm keep their own, and `mise lock` downloads only to checksum.
             Self::Terraform | Self::Nix | Self::Apm | Self::ActionsLock | Self::Mise => {

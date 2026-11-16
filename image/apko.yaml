@@ -54,9 +54,7 @@ paths:
 # The lockfile runner starts each tool with a temporary HOME and a PATH of
 # /usr/local/bin:/usr/bin:/bin, and keeps mise and its installs in
 # PATCHULA_TOOLS_DIR. Everything worth keeping is under the volume, including
-# rustup's toolchains, which RUSTUP_HOME would otherwise put under HOME. There
-# is no ICU, so .NET runs with invariant globalization, which the runner passes
-# on to dotnet.
+# rustup's toolchains, which RUSTUP_HOME would otherwise put under HOME.
 environment:
   HOME: /home/patchula
   PATCHULA_LISTEN: 0.0.0.0:8080
@@ -64,7 +62,6 @@ environment:
   PATCHULA_SERVER_CACHE: /var/lib/patchula
   PATCHULA_TOOLS_DIR: /var/lib/patchula/tools
   RUSTUP_HOME: /var/lib/patchula/rustup
-  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
 
 work-dir: /var/lib/patchula
 volumes:

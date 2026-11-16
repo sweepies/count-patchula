@@ -382,8 +382,10 @@ Versions keep their release variant: Guava's `33.4.8-android` never becomes
 `nuget` reads `PackageReference`, `PackageVersion` and `GlobalPackageReference`
 items, local tools and the SDK in `global.json` (feature-band releases only).
 `$(Property)` and floating `*` versions are skipped. Where each package comes
-from is in [package registries](/guide/sources/#package-registries). Lockfiles are restored
-with `dotnet restore --force-evaluate`.
+from is in [package registries](/guide/sources/#package-registries). A `packages.lock.json`
+is not regenerated, because `dotnet restore` evaluates MSBuild code from the
+repository and its packages: an update to a project with one is skipped with
+that reason (see [what is refused](/guide/lockfiles/#what-is-refused)).
 
 `bundler` reads `gem "name", "requirement"` lines and the `ruby` directive,
 resolving from `Gemfile.lock`, plus `.ruby-version`. Gems from git, a path or

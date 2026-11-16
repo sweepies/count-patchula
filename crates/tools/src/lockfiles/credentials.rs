@@ -6,7 +6,7 @@
 //! match credentials by host rather than by prefix, so they only get an entry whose prefix is a bare host,
 //! with no path or port, and that is the only entry on its host: a path would
 //! widen to the whole host, and another entry there, for any installation,
-//! would have its URLs given this one's credentials. Cargo, NuGet and Poetry
+//! would have its URLs given this one's credentials. Cargo and Poetry
 //! match them by the name the repository gives a registry, so a name gets
 //! the entry its URL falls under, as a lookup would.
 use super::Runner;
@@ -229,41 +229,6 @@ impl Runner {
         .fold((Vec::new(), Vec::new()), fold_env)
     }
 
-    /// NuGet's `NuGetPackageSourceCredentials_<key>` variables for the
-    /// basic entries the `packageSources` of `nuget.config` files fall under,
-    /// by source key. NuGet compares keys without case, so keys that differ
-    /// only in case are one. The value separates fields by `;`, so a user or
-    /// password holding `;` is left out.
-    pub(super) fn nuget_env<'a>(
-        &'a self,
-        sources: &[Definitions],
-    ) -> (Vec<(String, String)>, Vec<&'a Credential>) {
-        self.named(
-            sources,
-            str::to_uppercase,
-            |name| plain(name, &['-', '_', '.']),
-            |url: &str| Some(url),
-        )
-        .into_iter()
-        .filter_map(|(_, name, _, entry)| match &entry.auth {
-            Auth::Basic { username, password }
-                if !username.contains(';') && !password.contains(';') =>
-            {
-                Some((
-                    (
-                        format!("NuGetPackageSourceCredentials_{name}"),
-                        format!(
-                            "Username={username};Password={password};ValidAuthenticationTypes=basic"
-                        ),
-                    ),
-                    entry,
-                ))
-            }
-            _ => None,
-        })
-        .unzip()
-    }
-
     /// Poetry's `POETRY_HTTP_BASIC_<NAME>_USERNAME` and `_PASSWORD`
     /// variables for the basic entries the `[[tool.poetry.source]]` URLs of
     /// `pyproject.toml` fall under: the name in uppercase, with `-` and `.` as
@@ -361,34 +326,6 @@ fn plain(name: &str, extra: &[char]) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
-}
-
-/// Whether `node` is the element `name`, in any case or namespace, as NuGet
-/// reads it.
-fn named(node: &roxmltree::Node, name: &str) -> bool {
-    node.is_element() && node.tag_name().name().eq_ignore_ascii_case(name)
-}
-
-/// The sources a `nuget.config` adds, by key and URL, or None if the Count
-/// cannot read it.
-pub(super) fn nuget_sources(text: &str) -> Option<Definitions> {
-    let document = roxmltree::Document::parse(text).ok()?;
-    let sources = document
-        .root_element()
-        .children()
-        .filter(|node| named(node, "packageSources"))
-        .flat_map(|sources| sources.children())
-        .filter(|node| named(node, "add"))
-        .filter_map(|add| {
-            let attribute = |name: &str| {
-                add.attributes()
-                    .find(|attribute| attribute.name().eq_ignore_ascii_case(name))
-                    .map(|attribute| attribute.value().to_owned())
-            };
-            Some((attribute("key")?, attribute("value")?))
-        })
-        .collect();
-    Some(sources)
 }
 
 /// The sources a `pyproject.toml` gives Poetry, by name and URL. A file
@@ -654,66 +591,6 @@ mod tests {
                 "ci:pw:x".to_string()
             )]
         );
-    }
-
-    #[test]
-    fn nuget_sources_get_basic_credentials_by_key() {
-        let runner = runner(vec![
-            entry("https://nuget.acme.dev", basic("ci", "pw")).for_tools(),
-            entry("https://semi.acme.dev", basic("ci", "a;b")).for_tools(),
-            entry("https://token.acme.dev", bearer("t")).for_tools(),
-        ]);
-        let sources = nuget_sources(
-            r#"<?xml version="1.0"?>
-<configuration>
-  <packageSources>
-    <clear />
-    <add key="acme.feed" value="https://nuget.acme.dev/v3/index.json" />
-    <add key="semi" value="https://semi.acme.dev/v3/index.json" />
-    <add key="token" value="https://token.acme.dev/v3/index.json" />
-    <add key="has space" value="https://nuget.acme.dev/other/index.json" />
-    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
-  </packageSources>
-</configuration>"#,
-        )
-        .unwrap();
-        assert_eq!(sources.len(), 5);
-        assert_eq!(
-            runner.nuget_env(&[sources]).0,
-            [(
-                "NuGetPackageSourceCredentials_acme.feed".to_string(),
-                "Username=ci;Password=pw;ValidAuthenticationTypes=basic".to_string()
-            )]
-        );
-        assert!(nuget_sources("<configuration").is_none());
-        // NuGet reads elements and attributes in any case or namespace.
-        assert_eq!(
-            nuget_sources(
-                "<configuration xmlns=\"urn:x\"><PackageSources><Add Key=\"feed\" Value=\"https://nuget.acme.dev/\" /></PackageSources></configuration>",
-            ),
-            Some(vec![(
-                "feed".to_string(),
-                "https://nuget.acme.dev/".to_string()
-            )])
-        );
-        // Keys differ in case only, or come twice in one file.
-        for config in [
-            "<configuration><packageSources><add key=\"Feed\" value=\"https://nuget.acme.dev/a/\" /></packageSources></configuration>",
-            "<configuration><packageSources><add key=\"feed\" value=\"https://nuget.acme.dev/a/\" /><add key=\"feed\" value=\"https://nuget.acme.dev/b/\" /></packageSources></configuration>",
-        ] {
-            let feed = nuget_sources(
-                "<configuration><packageSources><add key=\"feed\" value=\"https://nuget.acme.dev/a/\" /></packageSources></configuration>",
-            )
-            .unwrap();
-            assert_eq!(runner.nuget_env(std::slice::from_ref(&feed)).0.len(), 1);
-            assert!(
-                runner
-                    .nuget_env(&[feed, nuget_sources(config).unwrap()])
-                    .0
-                    .is_empty(),
-                "{config}"
-            );
-        }
     }
 
     #[test]
