@@ -273,7 +273,7 @@ async fn apply_inner(
                     format!("{}: expected new file is already present", file.path).into(),
                 ));
             }
-            modes.insert(file.path.as_str(), NEW_FILE_MODE.to_owned());
+            modes.insert(file.path.clone(), NEW_FILE_MODE.to_owned());
             continue;
         }
         let stale = || {
@@ -298,7 +298,7 @@ async fn apply_inner(
         {
             return Err(stale());
         }
-        modes.insert(file.path.as_str(), entry.mode.clone());
+        modes.insert(file.path.clone(), entry.mode.clone());
     }
     let old = match client
         .get_fresh::<GitRef>(&ref_path(&repo, &plan.action().branch))
@@ -363,10 +363,7 @@ async fn apply_inner(
                     return !existing_entries.iter().any(|e| e.path == *p);
                 }
                 existing_entries.iter().any(|e| {
-                    e.path == *p
-                        && e.sha == blob_sha(c)
-                        && e.mode == modes[p.as_str()]
-                        && e.kind == "blob"
+                    e.path == *p && e.sha == blob_sha(c) && e.mode == modes[p] && e.kind == "blob"
                 })
             });
             // On the same base, also reject leftover edits from an older plan.
@@ -385,7 +382,7 @@ async fn apply_inner(
                 } else {
                     expected.insert(
                         path.clone(),
-                        json!([blob_sha(content), modes[path.as_str()], "blob"]),
+                        json!([blob_sha(content), modes[path], "blob"]),
                     );
                 }
             }
@@ -400,9 +397,9 @@ async fn apply_inner(
         .iter()
         .map(|(path, content)| {
             if plan.deleted().contains(path) {
-                json!({"path":path,"mode":modes[path.as_str()],"type":"blob","sha":null})
+                json!({"path":path,"mode":modes[path],"type":"blob","sha":null})
             } else {
-                json!({"path":path,"mode":modes[path.as_str()],"type":"blob","content":content})
+                json!({"path":path,"mode":modes[path],"type":"blob","content":content})
             }
         })
         .collect();

@@ -908,7 +908,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
     // lock, which waits for any run in progress; a used tool takes the
     // shared lock only, so all three plans can run at once.
     runner.record_use(&[("go".into(), default_version("go"))]);
-    let mut snapshot = snapshot(&files);
+    let snapshot = snapshot(&files);
     let config = config();
     let mut plans: Vec<_> = (0..3)
         .map(|_| {
@@ -918,7 +918,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
         })
         .collect();
     let finished = std::sync::atomic::AtomicUsize::new(0);
-    patchula_update::lock_all(&runner, &mut plans, &mut snapshot, &config, &|| {
+    patchula_update::lock_all(&runner, &mut plans, &snapshot, &config, &|| {
         finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     })
     .await;
@@ -9334,7 +9334,7 @@ async fn relock_prepared_with(
         .collect();
     let temp = tempfile::tempdir().unwrap();
     let runner = test_runner(temp.path(), executor.clone());
-    let mut snap = snapshot(files);
+    let snap = snapshot(files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snap, &[], None, monday())
         .unwrap()
@@ -9349,7 +9349,7 @@ async fn relock_prepared_with(
     let warnings = patchula_update::lock_all(
         &runner,
         std::slice::from_mut(&mut p),
-        &mut snap,
+        &snap,
         &config,
         &|| {},
     )
