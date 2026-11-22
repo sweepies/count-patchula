@@ -28,6 +28,7 @@ regex = "1"
 percent-encoding = "2"
 sha1 = "0.11"
 sha2 = "0.11.1"
+syn = { version = "3", default-features = false, features = ["full", "parsing", "visit"] }
 tempfile = "3"
 
 [dev-dependencies]
