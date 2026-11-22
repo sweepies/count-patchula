@@ -77,7 +77,6 @@ impl Engine {
         keys: BTreeSet<LookupKey>,
         waits: &BTreeMap<LookupKey, u32>,
         force: &BTreeSet<LookupKey>,
-        sources: &Sources,
         vias: &MiseVias,
         now: DateTime<Utc>,
     ) -> Result<(Catalogs, Evidence, BTreeSet<LookupKey>)> {
@@ -125,9 +124,9 @@ impl Engine {
                 ordinary.insert(key);
             }
         }
-        let fresh = sources.revalidating();
+        let fresh = self.sources.revalidating();
         let ((mut fetched, sent), (forced, sent_forced)) = tokio::join!(
-            self.catalogs(ordinary, sources, vias),
+            self.catalogs(ordinary, &self.sources, vias),
             self.catalogs(forced, &fresh, vias)
         );
         fetched.extend(forced);
@@ -139,7 +138,7 @@ impl Engine {
                 // Quota fallbacks may expose an older registry snapshot. Never
                 // reset its age by promoting it into a newly fetched view.
                 if matches!(key.1.source, Source::Docker | Source::Oci)
-                    && !sources.registry_stale(&key.1.name).await.is_empty()
+                    && !self.sources.registry_stale(&key.1.name).await.is_empty()
                 {
                     continue;
                 }
