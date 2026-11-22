@@ -49,7 +49,8 @@ or at its URL followed by `index.md`.
    manager, exact pins (ranges kept for Cargo, `pyproject.toml`, Bundler and
    Composer, whose lockfiles hold the version; npm and Bun
    stay exact), digest pins for actions and images, a 24-hour release-age wait,
-   one PR per update with at most ten ordinary ones open at once (security fixes
+   one PR per update (a Pkl package shares one with its repository's other
+   dependencies) with at most ten ordinary ones open at once (security fixes
    are not held back by that limit), a dependency dashboard issue, and no
    auto-merge except for reference data such as CA bundles.
 
@@ -95,7 +96,8 @@ or at its URL followed by `index.md`.
    patchula run acme/my-app
    ```
 
-   The first run opens one PR per update, up to ten ordinary ones at once (security
+   The first run opens one PR per update (a Pkl package shares one with its
+   repository's other dependencies), up to ten ordinary ones at once (security
    fixes are exempt from that limit), and a Dependency Dashboard issue that lists
    the rest. Lockfiles are regenerated with the real tools,
    which mise installs on first use. A repeat run on an unchanged repository

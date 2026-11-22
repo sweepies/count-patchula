@@ -45,19 +45,31 @@ fn go_repository(module: &str) -> Option<String> {
     owner_repo(parts.next()?, parts.next()?)
 }
 
-/// A tool without options whose backends, as the compiled-in registry
-/// snapshot lists them, read exactly one GitHub repository, or an explicit
-/// `go:github.com/<owner>/<repo>/...` tool.
+/// A tool the Count would look up, without options, whose backends, as the
+/// compiled-in registry snapshot lists them, read exactly one GitHub
+/// repository; an explicit `github:` or `ubi:` backend naming exactly
+/// `<owner>/<repo>`; or an explicit `go:github.com/<owner>/<repo>/...` tool.
 fn mise_repository(tool: &str) -> Option<String> {
-    if patchula_mise::split(tool).1.is_some() {
+    // A refused tool is never looked up, and its options may have been
+    // dropped while reading it, so it says nothing about its repository.
+    if patchula_mise::check(tool).is_err() || patchula_mise::split(tool).1.is_some() {
         return None;
     }
     if let Some(module) = tool.strip_prefix("go:") {
         return go_repository(module);
     }
+    if let Some(("github" | "ubi", rest)) = tool.split_once(':')
+        && rest.split('/').count() != 2
+    {
+        return None;
+    }
     let sources = patchula_mise::github_sources(tool)?;
-    match sources.len() {
-        1 => sources.into_iter().next(),
+    let mut sources = sources.iter();
+    let (Some(repository), None) = (sources.next(), sources.next()) else {
+        return None;
+    };
+    match repository.split('/').collect::<Vec<_>>()[..] {
+        [owner, repo] => owner_repo(owner, repo),
         _ => None,
     }
 }
@@ -65,22 +77,62 @@ fn mise_repository(tool: &str) -> Option<String> {
 /// What a dependency's own policy says about joining its repository's
 /// group, for one update kind.
 pub(crate) struct Candidate {
-    /// Not ignored, active, and no group set by defaults or a rule, `""`
-    /// included.
+    /// Not ignored, active, able to share a pull request, and no group set
+    /// by defaults or a rule, `""` included.
     pub ungrouped: bool,
     pub commit_prefix: String,
 }
 
-/// For each repository and update kind, the commit prefixes of the Pkl
-/// packages (`[0]`) and of the other dependencies (`[1]`) that could join
-/// its group.
+/// The update kinds the planner puts on one branch: majors on their own,
+/// minors, patches and digests together.
+const TRACKS: [(bool, &[Update]); 2] = [
+    (true, &[Update::Major]),
+    (false, &[Update::Minor, Update::Patch, Update::Digest]),
+];
+
+/// The kinds on `kind`'s branch. Pins never group.
+fn track(kind: Update) -> Option<&'static [Update]> {
+    let major = match kind {
+        Update::Pin => return None,
+        kind => kind == Update::Major,
+    };
+    TRACKS
+        .into_iter()
+        .find_map(|(m, kinds)| (m == major).then_some(kinds))
+}
+
+/// The commit prefix every member on a track shares: `Some` when a
+/// dependency is a candidate for every kind on the track, all with one
+/// prefix.
+fn member_prefix(
+    kinds: &[Update],
+    mut candidate: impl FnMut(Update) -> Option<Candidate>,
+) -> Option<String> {
+    let mut prefix = None::<String>;
+    for kind in kinds {
+        let c = candidate(*kind).filter(|c| c.ungrouped)?;
+        match &prefix {
+            Some(p) if *p != c.commit_prefix => return None,
+            _ => prefix = Some(c.commit_prefix),
+        }
+    }
+    prefix
+}
+
+/// The groups that form, by repository and track (`true` for majors), with
+/// the one commit prefix their members share.
 #[derive(Default)]
-pub(crate) struct Groups(BTreeMap<(String, Update), [BTreeSet<String>; 2]>);
+pub(crate) struct Groups(BTreeMap<(String, bool), String>);
 
 impl Groups {
-    /// Collect the candidates among `dependencies`; `candidate` gives a
+    /// Find the groups among `dependencies`; `candidate` gives a
     /// dependency's policy for a kind, or `None` when it cannot be
     /// evaluated, which keeps it out.
+    ///
+    /// A repository's track forms a group when Pkl packages and other
+    /// dependencies of it are both members there, and every member writes
+    /// the same commit prefix, so the group never holds a branch for
+    /// conflicting prefixes.
     pub fn collect<'a>(
         dependencies: impl IntoIterator<Item = &'a Dependency>,
         mut candidate: impl FnMut(&Dependency, Update) -> Option<Candidate>,
@@ -93,40 +145,43 @@ impl Groups {
         }
         let mut groups = BTreeMap::new();
         for (repository, deps) in found {
-            // Pkl packages alone (a pantry) or other dependencies alone (a
-            // Go module and its mise tool) form no group.
-            if !deps.iter().any(|d| d.source == Source::Pkl)
-                || deps.iter().all(|d| d.source == Source::Pkl)
-            {
-                continue;
-            }
-            for kind in Update::ALL.iter().copied() {
-                let mut sides: [BTreeSet<String>; 2] = Default::default();
+            for (major, kinds) in TRACKS {
+                let mut sides = [false; 2];
+                let mut prefixes = BTreeSet::new();
                 for dep in &deps {
-                    if let Some(c) = candidate(dep, kind)
-                        && c.ungrouped
-                    {
-                        sides[side(dep)].insert(c.commit_prefix);
+                    if let Some(prefix) = member_prefix(kinds, |kind| candidate(dep, kind)) {
+                        sides[side(dep)] = true;
+                        prefixes.insert(prefix);
                     }
                 }
-                groups.insert((repository.clone(), kind), sides);
+                // Pkl packages alone (a pantry) or other dependencies alone
+                // (a Go module and its mise tool) form no group.
+                if sides == [true, true] && prefixes.len() == 1 {
+                    groups.insert(
+                        (repository.clone(), major),
+                        prefixes.pop_first().expect("one prefix"),
+                    );
+                }
             }
         }
         Self(groups)
     }
 
-    /// The group `dep` joins for `kind`: its repository, when it is a
-    /// candidate itself and a candidate on the other side shares its commit
-    /// prefix, so the group never holds for conflicting prefixes.
-    pub fn group(&self, dep: &Dependency, kind: Update, own: &Candidate) -> Option<String> {
-        if !own.ungrouped || self.0.is_empty() {
+    /// The group `dep` joins for `kind`: its repository, when that track
+    /// formed a group and `dep` is a member of it.
+    pub fn group(
+        &self,
+        dep: &Dependency,
+        kind: Update,
+        candidate: impl FnMut(Update) -> Option<Candidate>,
+    ) -> Option<String> {
+        let kinds = track(kind)?;
+        if self.0.is_empty() {
             return None;
         }
         let repository = declared_repository(dep)?;
-        let sides = self.0.get(&(repository.clone(), kind))?;
-        sides[1 - side(dep)]
-            .contains(&own.commit_prefix)
-            .then_some(repository)
+        let prefix = self.0.get(&(repository.clone(), kind == Update::Major))?;
+        (member_prefix(kinds, candidate).as_ref() == Some(prefix)).then_some(repository)
     }
 }
 
@@ -187,6 +242,19 @@ mod tests {
                 Some("apple/pkl-go"),
             ),
             (Source::Mise, "asdf:jdx/hk", None),
+            // Refused tools, and backends naming no canonical owner/repo.
+            (Source::Mise, "github:jdx/hk/sub@1", None),
+            (
+                Source::Mise,
+                "go:github.com/apple/pkl-go/cmd/pkl-gen-go@1",
+                None,
+            ),
+            (Source::Mise, "github:jdx/..", None),
+            (Source::Mise, "github:jdx/hk?x=1", None),
+            (Source::Mise, "github:jdx/hk/sub", None),
+            (Source::Mise, "ubi:jdx/hk/sub", None),
+            (Source::Mise, "-hk", None),
+            (Source::Mise, "aqua:jdx/hk", Some("jdx/hk")),
             (Source::Mise, "node", None),
             (Source::Mise, "no-such-tool-in-the-snapshot", None),
             (Source::GithubReleases, "jdx/hk", Some("jdx/hk")),

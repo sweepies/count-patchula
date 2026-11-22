@@ -358,3 +358,133 @@ fn an_advisory_fix_keeps_its_own_pull_request() {
     assert_eq!(fix.group, None);
     assert_eq!(group(&eval, &deps[1]).as_deref(), Some("apple/pkl-go"));
 }
+
+/// Minors, patches and digests share one branch, so a dependency joins only
+/// when it may for all three, with one commit prefix across them; anything
+/// else would hold the branch for conflicting prefixes.
+#[test]
+fn a_prefix_that_differs_across_a_track_forms_no_group() {
+    let mut config = config();
+    config.rules.push(rule(
+        serde_json::json!({"updates": ["patch"]}),
+        serde_json::json!({"commitPrefix": "fix(deps):"}),
+    ));
+    let mut package = hk_package();
+    package.current = "2.11.0".into();
+    package.resolved = Some("2.11.0".into());
+    let deps = [hk_tool(), package];
+    let eval = evaluator(&config, &deps);
+    let release = catalog(&["2.10.0", "2.11.0", "2.11.1"]);
+    for dep in &deps {
+        for update in eval.propose(dep, &release).unwrap() {
+            assert_eq!(update.group, None, "{} {update:?}", dep.package);
+        }
+    }
+}
+
+#[test]
+fn members_with_two_prefixes_form_no_group() {
+    let mut config = config();
+    config.rules.push(rule(
+        serde_json::json!({"files": ["b.pkl", "mise.toml"]}),
+        serde_json::json!({"commitPrefix": "build(deps):"}),
+    ));
+    let mut a = pkl_go_package();
+    a.file = "a.pkl".into();
+    let mut b = pkl_go_package();
+    b.file = "b.pkl".into();
+    let generator = dep(
+        Manager::Mise,
+        Source::Mise,
+        "mise.toml",
+        "go:github.com/apple/pkl-go/cmd/pkl-gen-go",
+        "0.9.0",
+    );
+    let deps = [a, pkl_go_module(), b, generator];
+    let eval = evaluator(&config, &deps);
+    assert_eq!(groups(&eval, &deps), [None, None, None, None]);
+}
+
+/// A dependency that may not take one kind on the track is no member for
+/// any of them, so its branch does not change between a patch and a minor.
+#[test]
+fn membership_holds_for_the_whole_track() {
+    let mut config = config();
+    config.rules.push(rule(
+        serde_json::json!({"sources": ["mise"], "updates": ["minor"]}),
+        serde_json::json!({"active": false}),
+    ));
+    let deps = [hk_tool(), hk_package()];
+    let eval = evaluator(&config, &deps);
+    let patch = eval
+        .propose(&deps[1], &catalog(&["2.10.0", "2.10.1"]))
+        .unwrap();
+    assert_eq!(patch[0].update_type, Update::Patch);
+    assert_eq!(patch[0].group, None);
+    assert_eq!(group(&eval, &deps[1]), None);
+}
+
+#[test]
+fn pins_never_group() {
+    let mut latest = hk_tool();
+    latest.kind = DependencyKind::Tool;
+    latest.current = "latest".into();
+    latest.resolved = None;
+    let deps = [latest.clone(), hk_package()];
+    let eval = evaluator(&config(), &deps);
+    let mut versions = catalog(&["2.10.0", "2.11.0"]);
+    versions.dist_tags.insert("latest".into(), "2.11.0".into());
+    let pins = eval.propose(&latest, &versions).unwrap();
+    assert!(
+        pins.iter().any(|p| p.update_type == Update::Pin),
+        "{pins:?}"
+    );
+    assert!(pins.iter().all(|p| p.group.is_none()), "{pins:?}");
+
+    let action = Dependency {
+        file: ".github/workflows/ci.yml".into(),
+        form: EditForm::Scalar(Syntax::Yaml),
+        name: "jdx/hk".into(),
+        package: "jdx/hk".into(),
+        current: "v2.10.0".into(),
+        resolved: Some("v2.10.0".into()),
+        scheme: Scheme::Loose,
+        ..patchula_manager::testing::dependency(
+            Manager::GithubActions,
+            DependencyKind::Action,
+            Source::GithubTags,
+        )
+    };
+    let deps = [action.clone(), hk_package()];
+    let eval = evaluator(&config(), &deps);
+    let pin = eval
+        .digest_proposal(&action, &"a".repeat(40))
+        .unwrap()
+        .expect("a digest pin");
+    assert_eq!(pin.update_type, Update::Pin);
+    assert_eq!(pin.group, None);
+    // The action is still a partner for the Pkl package's version updates.
+    assert_eq!(group(&eval, &deps[1]).as_deref(), HK);
+}
+
+/// A Copier template is reported, never edited, so it can share no PR.
+#[test]
+fn a_report_only_dependency_is_no_partner() {
+    let template = Dependency {
+        file: ".copier-answers.yml".into(),
+        ..dep(
+            Manager::Copier,
+            Source::GithubTags,
+            ".copier-answers.yml",
+            "jdx/hk",
+            "v2.10.0",
+        )
+    };
+    let template = Dependency {
+        kind: DependencyKind::Template,
+        ..template
+    };
+    let deps = [template, hk_package()];
+    let eval = evaluator(&config(), &deps);
+    assert_eq!(group(&eval, &deps[1]), None);
+}

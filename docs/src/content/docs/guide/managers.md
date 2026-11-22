@@ -336,6 +336,18 @@ Rules select these dependencies by the source `pkl`, not `github-releases` as
 in Renovate, by the package above, or by the dependency name, which is the
 package's own name: `hk`, so `dependencies { "hk" }` selects it.
 
+These URIs are skipped:
+
+- a host other than `github.com` and `pkg.pkl-lang.org`, or a path on them
+  that names no release;
+- a URI that pins a checksum (`@1.0.0::sha256:…`);
+- a release tag that does not hold the package version exactly once;
+- a version that is not a semantic version;
+- a URI written with escapes or as a text block.
+
+`PklProject` dependencies are not read yet: updating one also means
+regenerating `PklProject.deps.json`.
+
 ### Pkl packages move with their repository's other dependencies
 
 A tool often ships a Pkl package from the same repository: hk's `hk` mise tool
@@ -353,7 +365,7 @@ registry:
 |---|---|
 | `pkl` | the repository in the table above |
 | `go` | `github.com/<owner>/<repo>` and paths below it; vanity paths name none |
-| `mise` | a tool without options whose backends in mise's registry name one GitHub repository (`hk`, `github:jdx/hk`), or a `go:github.com/<owner>/<repo>/…` tool such as `pkl-gen-go` |
+| `mise` | a tool without options that the Count looks up: an explicit `github:<owner>/<repo>` or `ubi:<owner>/<repo>` backend; another GitHub backend such as `aqua:` naming one repository; a registry shorthand such as `hk` whose backends in mise's registry all name one GitHub repository; or a `go:github.com/<owner>/<repo>/…` tool such as `pkl-gen-go` |
 | `github-releases`, `github-tags` | the package, `<owner>/<repo>` |
 
 A package from a registry the repository names counts for no repository.
@@ -367,31 +379,24 @@ keeps it out:
 ```pkl
 rules {
   new Rule {
-    note = "hk's Pkl package gets PRs of its own."
+    note = "Pkl packages get PRs of their own."
     select { sources { "pkl" } }
     apply { group = "" }
   }
 }
 ```
 
-A dependency joins only when, for that kind of update, a dependency from the
-other side (Pkl or not) is active, has no group set and has the same
-`commitPrefix`. So `""` on either side, or on every Pkl package as above,
-separates them all. A group of your own named `jdx/hk` shares the branch,
+Majors share one branch, and minors, patches and digests another, so each
+branch is decided on its own. A dependency is a member of a branch's group
+when it is active, has no group set and can open pull requests (a Copier
+template, which is only reported, cannot) for every kind of update on that
+branch. The group forms only when Pkl packages and other dependencies are
+both members and every member has the same `commitPrefix` for all those
+kinds; otherwise each keeps its own branch, so the group never holds a pull
+request for conflicting prefixes. So `""` on either side, or on every Pkl
+package as above, separates them all. New pins never group. A group of your own named `jdx/hk` shares the branch,
 which is how to add something else to it. Security fixes still get a PR of
 their own, since `security.apply` sets `group = ""`.
-
-These URIs are skipped:
-
-- a host other than `github.com` and `pkg.pkl-lang.org`, or a path on them
-  that names no release;
-- a URI that pins a checksum (`@1.0.0::sha256:…`);
-- a release tag that does not hold the package version exactly once;
-- a version that is not a semantic version;
-- a URI written with escapes or as a text block.
-
-`PklProject` dependencies are not read yet: updating one also means
-regenerating `PklProject.deps.json`.
 
 ## Containers and Kubernetes
 

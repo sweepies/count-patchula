@@ -219,6 +219,10 @@ impl Evaluator {
     fn candidate(&self, dep: &Dependency, effective: &Effective<'_>) -> repository::Candidate {
         repository::Candidate {
             ungrouped: !self.ignored(dep)
+                && !matches!(
+                    dep.proposing().edits,
+                    patchula_manager::Edits::ReportOnly(_)
+                )
                 && effective.policy.active
                 && effective.policy.group.is_none(),
             commit_prefix: effective.policy.commit_prefix.clone(),
@@ -280,9 +284,16 @@ impl Evaluator {
     fn effective(&self, dep: &Dependency, update: Update) -> Result<Effective<'_>> {
         let mut effective = self.ruled(dep, update)?;
         if effective.policy.group.is_none() {
-            effective.policy.group =
-                self.groups
-                    .group(dep, update, &self.candidate(dep, &effective));
+            let group = self.groups.group(dep, update, |kind| {
+                if kind == update {
+                    Some(self.candidate(dep, &effective))
+                } else {
+                    self.ruled(dep, kind)
+                        .ok()
+                        .map(|other| self.candidate(dep, &other))
+                }
+            });
+            effective.policy.group = group;
         }
         Ok(effective)
     }
