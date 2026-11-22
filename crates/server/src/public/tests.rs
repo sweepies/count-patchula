@@ -118,10 +118,7 @@ async fn recorded(github: &Arc<FakeGitHub>) -> Cache {
         &client,
         "patchula[bot]",
         1,
-        &Recorded {
-            report: &report(),
-            withheld: report(),
-        },
+        &report(),
         Utc::now(),
         // Discovery has not listed acme/late yet; acme/stranger is not ours.
         &|repo: String| Box::pin(async move { repo == "acme/late" }),
@@ -215,10 +212,7 @@ async fn anyone_reads_what_the_last_run_left_of_public_repositories() {
         &client,
         "patchula[bot]",
         1,
-        &Recorded {
-            report: &report(),
-            withheld: report(),
-        },
+        &report(),
         Utc::now(),
         // Discovery has not listed acme/late yet; acme/stranger is not ours.
         &|repo: String| Box::pin(async move { repo == "acme/late" }),
@@ -365,9 +359,9 @@ fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
         "packageFiles": [{"path": "deploy.yaml",
             "dependencies": [dependency(private, "helm", true), dependency("nginx", "docker", false)]}]}]}))
     .unwrap();
-    let shown = withheld(&report);
+    let shown = withheld(&report.repositories[0]);
     let files = &report.repositories[0].package_files;
-    let [hidden, public] = &shown.repositories[0].package_files[0].dependencies[..] else {
+    let [hidden, public] = &shown.package_files[0].dependencies[..] else {
         panic!("two dependencies")
     };
     assert_eq!(hidden.package, private);
@@ -377,7 +371,7 @@ fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
     assert!(hidden.metadata.as_ref().unwrap().held_back.is_empty());
     assert_eq!(public, &files[0].dependencies[1]);
     // A warning that names it could quote what the registry answered.
-    assert_eq!(shown.repositories[0].warnings, ["a config warning"]);
+    assert_eq!(shown.warnings, ["a config warning"]);
 }
 
 #[test]
@@ -409,8 +403,8 @@ fn withheld_classifies_every_metadata_field() {
         packages: 3,
         ..Default::default()
     });
-    let shown = withheld(&report);
-    let dep = &shown.repositories[0].package_files[0].dependencies[0];
+    let shown = withheld(&report.repositories[0]);
+    let dep = &shown.package_files[0].dependencies[0];
     // What the declaration itself says stays.
     assert_eq!(dep.current.value.as_deref(), Some("^1.0.0"));
     assert_eq!(dep.current.digest.as_deref(), Some("sha256:abc"));
@@ -437,6 +431,7 @@ async fn only_a_private_repository_is_stored_without_what_credentials_found() {
     let repository = |name: &str| {
         json!({"repository": name, "status": "complete", "reason": null,
             "defaultBranch": "main", "commit": "c".repeat(40),
+            "warnings": [format!("digest of {chart}:2.0.0: registry said hello")],
             "packageFiles": [{"path": "deploy.yaml", "dependencies": [{
                 "manager": "regex", "name": chart, "package": chart,
                 "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
@@ -467,10 +462,7 @@ async fn only_a_private_repository_is_stored_without_what_credentials_found() {
         &client,
         "patchula[bot]",
         1,
-        &Recorded {
-            report: &report,
-            withheld: withheld(&report),
-        },
+        &report,
         Utc::now(),
         &|_: String| Box::pin(async { false }),
     )
@@ -483,11 +475,16 @@ async fn only_a_private_repository_is_stored_without_what_credentials_found() {
         }
     };
     // The public repository shows the update, as its dashboard does.
-    assert!(snapshot("acme/app").await.contains("1.1.0"));
-    // The private one is stored without it, in case it later becomes public.
+    let app = snapshot("acme/app").await;
+    assert!(
+        app.contains("1.1.0") && app.contains("registry said hello"),
+        "{app}"
+    );
+    // The private one is stored without it or the warning that quotes the
+    // registry, in case it later becomes public.
     let secret = snapshot("acme/secret").await;
     assert!(
-        secret.contains(chart) && !secret.contains("1.1.0"),
+        secret.contains(chart) && !secret.contains("1.1.0") && !secret.contains("registry said"),
         "{secret}"
     );
     patchula_testkit::transcripts::check(&transcripts());

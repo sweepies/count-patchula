@@ -8,7 +8,7 @@ use axum::{
     http::StatusCode,
     routing::{get, post},
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures_util::future::BoxFuture;
 use patchula_cache::{
     Cache,
@@ -567,12 +567,8 @@ impl Batch for Engines {
                 && attribution.reasons.iter().all(|reason| reason == "sweep");
             if quiet_sweep {
                 let quiet = {
-                    let mut slot = SlotGuard::new(self.engine(id, settings).await?);
-                    let quiet = slot
-                        .engine()
-                        .map_err(Error::new)?
-                        .sweep_quiet(&repositories, Utc::now())
-                        .await;
+                    let mut slot = self.engine(id, settings).await?;
+                    let quiet = slot.engine().sweep_quiet(&repositories, Utc::now()).await;
                     slot.finish();
                     quiet
                 };
@@ -592,11 +588,10 @@ impl Batch for Engines {
                 }
             }
             let started = Utc::now();
-            let (result, withheld) = {
-                let mut slot = SlotGuard::new(self.engine(id, settings).await?);
+            let result = {
+                let mut slot = self.engine(id, settings).await?;
                 let result = slot
                     .engine()
-                    .map_err(Error::new)?
                     .run(
                         patchula_engine::Options {
                             repositories: repositories.clone(),
@@ -607,38 +602,15 @@ impl Batch for Engines {
                     )
                     .await;
                 slot.finish();
-                let withheld = result.as_ref().ok().map(crate::public::withheld);
-                (result, withheld)
+                result
             };
-            let record = if let (Ok(report), Some(withheld)) = (&result, withheld) {
-                // The record runs past the batch's end so its reads never
-                // hold the batch's claims; the worker spawns it after the
-                // claims finish, bounded by the record permits.
-                let (cache, client, bot, member) = (
-                    self.cache.clone(),
-                    client.clone(),
-                    self.bot_login.clone(),
-                    self.member(id),
-                );
-                let report = report.clone();
-                Some(RecordJob(Box::pin(async move {
-                    crate::public::record(
-                        &cache,
-                        &client,
-                        &bot,
-                        id,
-                        &crate::public::Recorded {
-                            report: &report,
-                            withheld,
-                        },
-                        started,
-                        &member,
-                    )
-                    .await;
-                })))
-            } else {
-                None
-            };
+            // The record runs past the batch's end so its reads never hold
+            // the batch's claims; the worker spawns it after the claims
+            // finish, bounded by the record permits.
+            let record = result
+                .as_ref()
+                .ok()
+                .map(|report| self.record_job(id, client.clone(), report.clone(), started));
             let report = match &result {
                 Ok(report) => report.clone(),
                 Err(error) => {
@@ -672,6 +644,19 @@ impl Batch for Engines {
     }
 }
 impl Engines {
+    /// Records a writing run's report for the public API.
+    fn record_job(
+        &self,
+        id: u64,
+        client: Client,
+        report: Report,
+        started: DateTime<Utc>,
+    ) -> RecordJob {
+        let (cache, bot, member) = (self.cache.clone(), self.bot_login.clone(), self.member(id));
+        RecordJob(Box::pin(async move {
+            crate::public::record(&cache, &client, &bot, id, &report, started, &member).await;
+        }))
+    }
     /// Asks GitHub whether a repository is in this App's installation `id`.
     fn member(&self, id: u64) -> impl Fn(String) -> BoxFuture<'static, bool> + Send + Sync + use<> {
         let app = self.app.clone();
@@ -687,11 +672,7 @@ impl Engines {
     /// secret applies without a restart. A change to the `http` settings or to
     /// the installation's credentials replaces the engine, since its clients
     /// are built from them.
-    async fn engine(
-        &self,
-        id: u64,
-        settings: &Settings,
-    ) -> Result<tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>, Error> {
+    async fn engine(&self, id: u64, settings: &Settings) -> Result<SlotGuard, Error> {
         let (credentials, failed) = patchula_engine::settings::credentials(settings, Some(id));
         for (prefix, reason) in &failed {
             tracing::error!(target: "patchula_server", installation = id, registry = %prefix, reason = %reason,
@@ -714,7 +695,7 @@ impl Engines {
             .map_err(Error::cause("cannot create batch engine"))?;
             *slot = Some((key, engine));
         }
-        let (_, engine) = slot.as_mut().ok_or(Error::new("missing batch engine"))?;
+        let (_, engine) = slot.as_mut().expect("the engine was built above");
         engine
             .set_batch_options(settings.concurrency, settings.recheck(self.recheck))
             .map_err(Error::cause("invalid batch options"))?;
@@ -724,7 +705,7 @@ impl Engines {
                 .advertised(self.derived_url.as_deref())
                 .filter(|_| self.signs_in),
         );
-        Ok(slot)
+        Ok(SlotGuard::new(slot))
     }
 }
 /// The installation's engine slot while a batch or a remote run holds it.
@@ -741,11 +722,10 @@ impl SlotGuard {
     fn new(slot: tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>) -> Self {
         Self { slot, armed: true }
     }
-    fn engine(&mut self) -> Result<&mut Engine, &'static str> {
-        self.slot
-            .as_mut()
-            .map(|(_, engine)| engine)
-            .ok_or("missing batch engine")
+    /// Only [`Engines::engine`] builds a guard, and only over a built engine.
+    fn engine(&mut self) -> &mut Engine {
+        let (_, engine) = self.slot.as_mut().expect("a guarded slot holds an engine");
+        engine
     }
     /// The run returned; the engine it used is whole, so keep it.
     fn finish(mut self) {
@@ -771,23 +751,22 @@ impl crate::remote::Runner for Engines {
         use crate::remote::Mode;
         Box::pin(async move {
             let started = Utc::now();
-            let (report, withheld) = {
+            let report = {
                 // The installation's own lock, so a remote run never races its
                 // queued batches.
-                let slot = self.engine(installation, settings).await.map_err(|error| {
+                let mut slot = self.engine(installation, settings).await.map_err(|error| {
                     tracing::error!(target: "patchula_server", installation, %error,
                         "remote run cannot start");
                     error.message()
                 })?;
-                let mut slot = SlotGuard::new(slot);
                 let options = patchula_engine::Options {
                     repositories,
                     ..patchula_engine::Options::default()
                 };
                 let result = match mode {
-                    Mode::Lookup => slot.engine()?.lookup(options).await,
-                    Mode::DryRun => slot.engine()?.run(options, true, false).await,
-                    Mode::Run => slot.engine()?.run(options, false, false).await,
+                    Mode::Lookup => slot.engine().lookup(options).await,
+                    Mode::DryRun => slot.engine().run(options, true, false).await,
+                    Mode::Run => slot.engine().run(options, false, false).await,
                 }
                 .map_err(|error| {
                     tracing::error!(target: "patchula_server", installation, %error,
@@ -795,9 +774,7 @@ impl crate::remote::Runner for Engines {
                     "the run failed on the server"
                 });
                 slot.finish();
-                let report = result?;
-                let withheld = crate::public::withheld(&report);
-                (report, withheld)
+                result?
             };
             if mode == Mode::Run {
                 match installation_client(
@@ -812,19 +789,9 @@ impl crate::remote::Runner for Engines {
                             "remote run not recorded for the public API");
                     }
                     Ok(client) => {
-                        crate::public::record(
-                            &self.cache,
-                            &client,
-                            &self.bot_login,
-                            installation,
-                            &crate::public::Recorded {
-                                report: &report,
-                                withheld,
-                            },
-                            started,
-                            &self.member(installation),
-                        )
-                        .await
+                        self.record_job(installation, client, report.clone(), started)
+                            .0
+                            .await
                     }
                 }
                 tracing::info!(target: "patchula_server", installation, user = login, "remote run report");
