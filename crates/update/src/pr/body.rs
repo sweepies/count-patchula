@@ -24,6 +24,12 @@ const IMAGE_CAP: usize = 13_000;
 /// The image section's table of fixed advisories, within [`IMAGE_CAP`], so
 /// the lines after it keep room.
 const IMAGE_TABLE_CAP: usize = 8_000;
+/// The callout that opens the image section's warnings; reserved whole
+/// whenever there are warnings.
+const IMAGE_WARNING: &str =
+    "> [!WARNING]\n> **The Count can't tell whether this rebuild fixes any vulnerabilities.**\n";
+/// The most a block break takes: two newlines after a cut line.
+const BLOCK_BREAK: usize = 2;
 /// The bytes of advisory links a line on what a rebuild fixes lists
 /// before it counts the rest.
 const FIXED_LINKS: usize = 3_000;
@@ -740,7 +746,16 @@ fn image_section(changes: &[crate::Change]) -> String {
             ));
         }
     }
-    let mut text = crate::body::Body::new(IMAGE_CAP, 0);
+    // The section always ends on a block break, so the table after it
+    // starts its own block; with warnings, their callout and the breaks
+    // around them are reserved too, so a full section never drops or cuts
+    // them.
+    let reserve = if warnings.is_empty() {
+        BLOCK_BREAK
+    } else {
+        3 * BLOCK_BREAK + IMAGE_WARNING.len()
+    };
+    let mut text = crate::body::Body::new(IMAGE_CAP, reserve);
     if !rows.is_empty() {
         let verified = fixed_ids.len() - listed.len();
         text.push(
@@ -816,19 +831,31 @@ fn image_section(changes: &[crate::Change]) -> String {
         );
     }
     if !warnings.is_empty() {
-        text.push(
-            "> [!WARNING]\n> **The Count can't tell whether this rebuild fixes any vulnerabilities.**\n",
-            usize::MAX,
-        );
+        end_block(&mut text);
+        text.push_reserved(IMAGE_WARNING);
         for warning in warnings {
             text.push(&format!(">\n> {warning}\n"), usize::MAX);
         }
-        text.push("\n", usize::MAX);
+        end_block(&mut text);
     }
     for note in notes {
         text.push(&format!("{note}\n\n"), usize::MAX);
     }
+    end_block(&mut text);
     text.into_text()
+}
+/// End `text`'s last block with a blank line, out of the reserve, unless
+/// it is empty or already ends so.
+fn end_block(text: &mut crate::body::Body) {
+    let current = text.text();
+    let missing = if current.is_empty() || current.ends_with("\n\n") {
+        ""
+    } else if current.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    text.push_reserved(missing);
 }
 /// Advisory IDs as osv.dev links, as many as fit in `budget` bytes, with a
 /// count of the rest.

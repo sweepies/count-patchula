@@ -446,7 +446,7 @@ mod security_tests {
 }
 
 mod image_tests {
-    use super::{IMAGE_CAP, IMAGE_TABLE_CAP, image_section};
+    use super::{BODY_LIMIT, IMAGE_CAP, IMAGE_TABLE_CAP, IMAGE_WARNING, image_section};
     use patchula_report::{ImageAdvisory, ImageCheck};
 
     fn change(package: &str, check: ImageCheck) -> crate::Change {
@@ -478,7 +478,9 @@ mod image_tests {
 
     /// An image section past its budget stays within `IMAGE_CAP`, its table
     /// within `IMAGE_TABLE_CAP`, and a full table still leaves the lines
-    /// after it their room.
+    /// after it their room. The warning callout stays whole, the section
+    /// ends on a block break so the update table starts its own block, and
+    /// the whole body fits.
     #[test]
     fn an_oversized_image_section_keeps_its_limits() {
         let mut check = state("checked");
@@ -509,6 +511,8 @@ mod image_tests {
         changes.extend((0..80).map(|n| change(&format!("image-{n}"), state("no-sbom"))));
         let text = image_section(&changes);
         assert!(text.len() <= IMAGE_CAP, "{}", text.len());
+        assert!(text.ends_with("\n\n"), "{:?}", &text[text.len() - 200..]);
+        assert!(text.contains(IMAGE_WARNING), "{text}");
         let table = text.find("| Advisory |").unwrap();
         let listed = text.find("\nAnd 200 more listed by OSV: ").unwrap();
         assert!(listed - table <= IMAGE_TABLE_CAP, "{}", listed - table);
@@ -517,6 +521,16 @@ mod image_tests {
         assert!(text.contains(" not listed here.\n"), "{text}");
         assert!(text.contains("> [!WARNING]\n"), "{text}");
         assert!(text.matches("publishes no SBOM").count() < 80, "{text}");
+        // In the whole body the update table opens a block of its own.
+        let permits = std::collections::BTreeMap::new();
+        let plan = super::update_plan("patchula/debian-1.x", changes);
+        let (intent, _) = super::bodies(&permits).intent(&plan);
+        assert!(
+            intent.contains("\n\n| Package | Change | Type | File |\n"),
+            "{intent}"
+        );
+        let body = super::bodies(&permits).draft(&plan).finish();
+        assert!(body.len() <= BODY_LIMIT, "{}", body.len());
     }
 
     #[test]

@@ -33,6 +33,15 @@ impl Body {
             self.room(cap),
         ));
     }
+    /// Append `text` whole out of the reserve, which the caller sized to
+    /// hold it: what must never be cut, such as a closing block break.
+    pub(crate) fn push_reserved(&mut self, text: &str) {
+        self.reserved = self
+            .reserved
+            .checked_sub(text.len())
+            .expect("reserved text within its reserve");
+        self.text.push_str(text);
+    }
     /// The text so far; the caller appends the reserved markers.
     pub(crate) fn text(&self) -> &str {
         &self.text
@@ -63,5 +72,15 @@ mod tests {
         let mut body = Body::new(4, 0);
         body.push("héllo", usize::MAX);
         assert_eq!(body.text(), "hél");
+    }
+
+    #[test]
+    fn reserved_text_lands_whole_after_the_budget_is_spent() {
+        let mut body = Body::new(10, 2);
+        body.push(&"x".repeat(20), usize::MAX);
+        assert_eq!(body.text(), "x".repeat(8));
+        body.push_reserved("\n\n");
+        assert_eq!(body.text().len(), 10);
+        assert_eq!(body.room(usize::MAX), 0);
     }
 }
