@@ -133,7 +133,7 @@ pub async fn command(
         (String::new(), true)
     };
     // Conflicts are the planner's to report, the same skips the TUI shows.
-    chosen.sort_by_key(|u| u.kind.rank());
+    chosen.sort_by_key(|u| u.kind);
     chosen.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
     let plan = plan::plan(&local, &chosen).map_err(crate::fail)?;
     let writes = !options.dry_run && !options.check;

@@ -62,6 +62,9 @@ macro_rules! words {
 
             /// Every variant, in declaration order.
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// Every variant's word, in declaration order.
+            pub const WORDS: &'static [&'static str] = &[$($word),+];
         }
 
         impl std::fmt::Display for $name {
@@ -146,13 +149,16 @@ words!(
 });
 
 words!(
-    /// The kind of update a release proposes.
+    /// The kind of update a release proposes, in the order competing
+    /// proposals apply in when several could write the same declaration:
+    /// the widest change first, a pin ahead of a bare digest move. It is
+    /// also the order the CLI and TUI list kinds in.
     Update {
     Major => "major",
     Minor => "minor",
     Patch => "patch",
-    Digest => "digest",
     Pin => "pin",
+    Digest => "digest",
 });
 
 words!(
@@ -327,62 +333,6 @@ pub struct Window {
     pub zone: String,
 }
 
-impl Update {
-    /// Every kind in the order competing proposals apply in when several
-    /// could write the same declaration: the widest change first, a pin
-    /// ahead of a bare digest move. Declaration order (`Ord`) does not give
-    /// this, and it is the order the CLI and TUI list kinds in.
-    pub const RANKED: [Self; 5] = [
-        Self::Major,
-        Self::Minor,
-        Self::Patch,
-        Self::Pin,
-        Self::Digest,
-    ];
-
-    /// [`Self::RANKED`]'s words.
-    pub const RANKED_WORDS: [&'static str; 5] = {
-        let mut words = [""; 5];
-        let mut i = 0;
-        while i < 5 {
-            words[i] = Self::RANKED[i].as_str();
-            i += 1;
-        }
-        words
-    };
-
-    /// `RANKED` holds every kind exactly once, checked when this compiles.
-    const _RANKED_IS_COMPLETE: () = {
-        assert!(Self::RANKED.len() == Self::ALL.len());
-        let mut i = 0;
-        while i < Self::ALL.len() {
-            let mut found = 0;
-            let mut j = 0;
-            while j < Self::RANKED.len() {
-                if Self::RANKED[j] as u8 == Self::ALL[i] as u8 {
-                    found += 1;
-                }
-                j += 1;
-            }
-            assert!(found == 1, "Update::RANKED must hold every kind once");
-            i += 1;
-        }
-    };
-
-    /// The kind's position in [`Self::RANKED`].
-    pub const fn rank(self) -> u8 {
-        let () = Self::_RANKED_IS_COMPLETE;
-        let mut i = 0;
-        while i < Self::RANKED.len() {
-            if Self::RANKED[i] as u8 == self as u8 {
-                return i as u8;
-            }
-            i += 1;
-        }
-        unreachable!()
-    }
-}
-
 /// A Python project name in PEP 503 normal form: lowercase, with every run
 /// of `-`, `_` and `.` one `-`. Two spellings name the same project exactly
 /// when their normal forms are equal.
@@ -454,10 +404,18 @@ mod tests {
 
     #[test]
     fn declaration_order_is_ord_and_all() {
-        assert!(Update::Major < Update::Minor);
-        assert!(Update::Digest < Update::Pin);
-        assert_eq!(Update::ALL[0], Update::Major);
-        assert_eq!(Update::ALL.len(), 5);
+        assert_eq!(
+            Update::ALL,
+            [
+                Update::Major,
+                Update::Minor,
+                Update::Patch,
+                Update::Pin,
+                Update::Digest
+            ]
+        );
+        assert!(Update::Major < Update::Minor && Update::Pin < Update::Digest);
+        assert_eq!(Update::WORDS, ["major", "minor", "patch", "pin", "digest"]);
     }
 
     #[test]
@@ -476,22 +434,5 @@ mod tests {
         assert_eq!(Severity::advisory("low"), Some(Severity::Low));
         assert_eq!(Severity::advisory("moderate-ish"), None);
         assert_eq!(Severity::advisory(""), None);
-    }
-
-    #[test]
-    fn rank_orders_competing_kinds_widest_first() {
-        assert_eq!(
-            Update::RANKED,
-            [
-                Update::Major,
-                Update::Minor,
-                Update::Patch,
-                Update::Pin,
-                Update::Digest
-            ]
-        );
-        for (i, kind) in Update::RANKED.iter().enumerate() {
-            assert_eq!(kind.rank() as usize, i, "{kind:?}");
-        }
     }
 }

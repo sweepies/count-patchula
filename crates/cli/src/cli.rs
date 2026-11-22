@@ -84,7 +84,7 @@ pub struct App {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpdateType(pub patchula_words::Update);
 impl usage_rs::spec::ValueEnum for UpdateType {
-    const CHOICES: &'static [&'static str] = &patchula_words::Update::RANKED_WORDS;
+    const CHOICES: &'static [&'static str] = patchula_words::Update::WORDS;
 
     fn from_choice(value: &str) -> Option<Self> {
         value.parse().ok().map(Self)
