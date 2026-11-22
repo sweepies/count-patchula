@@ -43,6 +43,7 @@ patchula-words = { path = "../words" }
 [dev-dependencies]
 patchula-update = { path = ".", features = ["testing"] }
 patchula-github = { path = "../github", features = ["testing"] }
+patchula-lookup = { path = "../lookup", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
 patchula-http = { path = "../http" }
 patchula-testkit = { path = "../testkit" }

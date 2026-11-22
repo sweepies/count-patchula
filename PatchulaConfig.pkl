@@ -122,8 +122,11 @@ class Window {
   zone: String = "UTC"
 }
 
-/// Policy applied before rules. No implicit grouping, and nothing merges by
-/// default except reference data, through the built-in rule below.
+/// Policy applied before rules. Nothing merges by default except reference
+/// data, through the built-in rule below. The only implicit group is a Pkl
+/// package's repository: a Pkl package and the other dependencies its GitHub
+/// repository ships share the group `owner/repo` when nothing sets a group
+/// for them.
 class Policy {
   active: Boolean = true
   /// `exact` pins every declaration. The built-in rules below set `preserve`
@@ -137,7 +140,8 @@ class Policy {
   /// Container images and OCI Helm charts.
   imageDigests: Boolean = true
   merge: Boolean = false
-  /// Nonempty groups share a PR; an empty string forces individual PRs.
+  /// Nonempty groups share a PR; an empty string forces individual PRs and
+  /// keeps a dependency out of its Pkl repository group.
   group: String? = null
   labels: Listing<String> = new { "dependencies" }
   commitPrefix: String = "chore(deps):"

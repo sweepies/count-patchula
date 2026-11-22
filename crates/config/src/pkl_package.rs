@@ -36,7 +36,7 @@ pub fn pkl_segment(part: &str) -> bool {
 }
 
 /// A GitHub owner or repository name.
-fn github_segment(part: &str) -> bool {
+pub fn github_segment(part: &str) -> bool {
     !part.is_empty()
         && !matches!(part, "." | "..")
         && part

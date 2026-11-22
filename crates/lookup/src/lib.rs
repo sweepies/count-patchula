@@ -3,6 +3,7 @@
 mod advisories;
 pub use advisories::{advisory_query, affects, fixes, report_advisories};
 pub mod images;
+mod repository;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use patchula_config::{Config, Filter, Policy};
 use patchula_datasource::{Catalog, Version};
@@ -11,6 +12,7 @@ use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy};
 use patchula_versioning::{Ecosystem, Parsed};
 use patchula_words::{DependencyKind, ReleaseChannel, Source, Update, VersionPolicy};
 use regex::Regex;
+pub use repository::declared_repository;
 use std::cmp::Ordering;
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -34,11 +36,23 @@ pub struct NotProposed {
     pub version: String,
     pub reason: String,
 }
+/// What the evaluator reads from the repository beyond its configuration.
+#[derive(Default)]
+pub struct Context<'a> {
+    /// Workflow paths the repository's `actions.lock` lists, when it has
+    /// one: the pinning decision reads them.
+    pub locked_workflows: std::collections::BTreeSet<String>,
+    /// Every dependency extracted from the repository: the built-in Pkl
+    /// repository group reads which of them share a GitHub repository.
+    pub dependencies: Vec<&'a Dependency>,
+}
 pub struct Evaluator {
     config: Config,
     /// Workflow paths the repository's `actions.lock` lists, when it has
     /// one: the pinning decision reads them.
     locked_workflows: std::collections::BTreeSet<String>,
+    /// The built-in Pkl repository groups and who may join them.
+    groups: repository::Groups,
     /// `dep.extract` patterns, compiled once per distinct pattern.
     extractors: std::sync::Mutex<std::collections::BTreeMap<String, Result<Regex>>>,
 }
@@ -75,8 +89,10 @@ impl<'a> Effective<'a> {
             wait_hours,
             windows
         );
+        // `""` stays set: an explicit "no group" must outrank the built-in
+        // repository group, and `proposal` drops it from the update.
         if let Some(group) = &o.group {
-            p.group = (!group.is_empty()).then(|| group.clone());
+            p.group = Some(group.clone());
         }
         if let Some(digest) = o.digest {
             self.digest = digest;
@@ -184,15 +200,33 @@ impl Evaluator {
             catalog: None,
         })
     }
-    pub fn new(
-        config: &Config,
-        locked_workflows: std::collections::BTreeSet<String>,
-    ) -> Result<Self> {
-        Ok(Self {
+    pub fn new(config: &Config, context: Context<'_>) -> Result<Self> {
+        let mut evaluator = Self {
             config: config.clone(),
-            locked_workflows,
+            locked_workflows: context.locked_workflows,
+            groups: Default::default(),
             extractors: Default::default(),
-        })
+        };
+        let groups = repository::Groups::collect(context.dependencies, |dep, kind| {
+            evaluator
+                .ruled(dep, kind)
+                .ok()
+                .map(|effective| evaluator.candidate(dep, &effective))
+        });
+        evaluator.groups = groups;
+        Ok(evaluator)
+    }
+    fn candidate(&self, dep: &Dependency, effective: &Effective<'_>) -> repository::Candidate {
+        repository::Candidate {
+            ungrouped: !self.ignored(dep)
+                && !matches!(
+                    dep.proposing().edits,
+                    patchula_manager::Edits::ReportOnly(_)
+                )
+                && effective.policy.active
+                && effective.policy.group.is_none(),
+            commit_prefix: effective.policy.commit_prefix.clone(),
+        }
     }
     pub fn ignored(&self, dep: &Dependency) -> bool {
         let config = &self.config;
@@ -244,7 +278,27 @@ impl Evaluator {
                 .is_ok()
             && self.digest_policy_applies(dep)
     }
+    /// The policy for one update of `dep`: defaults, then rules, then the
+    /// built-in Pkl repository group when nothing set a group. A caller
+    /// layers `security.apply` on top, so an advisory fix keeps its own PR.
     fn effective(&self, dep: &Dependency, update: Update) -> Result<Effective<'_>> {
+        let mut effective = self.ruled(dep, update)?;
+        if effective.policy.group.is_none() {
+            let group = self.groups.group(dep, update, |kind| {
+                if kind == update {
+                    Some(self.candidate(dep, &effective))
+                } else {
+                    self.ruled(dep, kind)
+                        .ok()
+                        .map(|other| self.candidate(dep, &other))
+                }
+            });
+            effective.policy.group = group;
+        }
+        Ok(effective)
+    }
+    /// The policy for one update of `dep` from defaults and rules alone.
+    fn ruled(&self, dep: &Dependency, update: Update) -> Result<Effective<'_>> {
         let mut effective = Effective {
             policy: self.config.defaults.clone(),
             digest: if matches!(
@@ -1577,7 +1631,14 @@ mod tests {
                 )
             };
         let locked = std::collections::BTreeSet::from([".github/workflows/ci.yml".to_owned()]);
-        let eval = Evaluator::new(&config, locked).unwrap();
+        let eval = Evaluator::new(
+            &config,
+            Context {
+                locked_workflows: locked,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         // Suppressed: new pin on a step action in a listed workflow.
         let action = dep(".github/workflows/ci.yml", DependencyKind::Action, None);
         assert!(!eval.digest_policy_applies(&action));

@@ -30,13 +30,4 @@ rules {
     }
     apply { active = false }
   }
-  new Rule {
-    note =
-      "hk.pkl imports hk's Pkl package at the version mise.toml installs, so the two move together."
-    select {
-      dependencies { "hk" }
-      managers { "mise"; "pkl" }
-    }
-    apply { group = "hk" }
-  }
 }

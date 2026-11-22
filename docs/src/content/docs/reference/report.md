@@ -124,7 +124,7 @@ when this list is not empty.
 |---|---|
 | `newValue`, `newVersion`, `newDigest` | The target; at least one is set. A `null` `newValue` with a `newVersion` is a lockfile-only update: only a lockfile changes. For a direct dependency that is a release its declaration already allows; a transitive package, which has no declaration, moves the same way |
 | `updateType` | `major`, `minor`, `patch`, `digest` or `pin` |
-| `group` | The group name from configuration, or null |
+| `group` | The group name from configuration, the built-in [Pkl repository group](/guide/managers/#pkl-packages-move-with-their-repositorys-other-dependencies) (`owner/repo`), or null |
 | `policy` | Optional. The policy that applies: versions, wait, windows, merge, labels. `waitHours` is the effective wait: a committed Cargo cooldown is already folded in |
 | `releaseAge` | Optional. `publishedAt` and the `evaluatedAt` it was judged against |
 | `fixes` | Optional. IDs of the current version's advisories that the target no longer has |

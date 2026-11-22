@@ -348,6 +348,56 @@ These URIs are skipped:
 `PklProject` dependencies are not read yet: updating one also means
 regenerating `PklProject.deps.json`.
 
+### Pkl packages move with their repository's other dependencies
+
+A tool often ships a Pkl package from the same repository: hk's `hk` mise tool
+and its `pkg.pkl-lang.org/github.com/jdx/hk/hk` package, or the
+`github.com/apple/pkl-go` Go module and the `pkl.golang` package. When a
+repository declares both a Pkl package and another dependency from the same
+GitHub repository, their updates share the group named after it, `jdx/hk` or
+`apple/pkl-go`, on the branch `patchula/jdx-hk` (`patchula/major-jdx-hk` for
+majors).
+
+The GitHub repository is read from the declarations alone, never from a
+registry:
+
+| Source | Repository |
+|---|---|
+| `pkl` | the repository in the table above |
+| `go` | `github.com/<owner>/<repo>` and paths below it; vanity paths name none |
+| `mise` | a tool without options that the Count looks up: an explicit `github:<owner>/<repo>` or `ubi:<owner>/<repo>` backend; another GitHub backend such as `aqua:` naming one repository; a registry shorthand such as `hk` whose backends in mise's registry all name one GitHub repository; or a `go:github.com/<owner>/<repo>/…` tool such as `pkl-gen-go` |
+| `github-releases`, `github-tags` | the package, `<owner>/<repo>` |
+
+A package from a registry the repository names counts for no repository.
+Packages of one repository without another dependency from it, such as
+`pkl.toml` and `k8s.contrib` from `apple/pkl-pantry`, stay apart, and so do
+dependencies of one repository without a Pkl package among them.
+
+Any group set for a dependency wins, `defaults.group` included, and `""`
+keeps it out:
+
+```pkl
+rules {
+  new Rule {
+    note = "Pkl packages get PRs of their own."
+    select { sources { "pkl" } }
+    apply { group = "" }
+  }
+}
+```
+
+Majors share one branch, and minors, patches and digests another, so each
+branch is decided on its own. A dependency is a member of a branch's group
+when it is active, has no group set and can open pull requests (a Copier
+template, which is only reported, cannot) for every kind of update on that
+branch. The group forms only when Pkl packages and other dependencies are
+both members and every member has the same `commitPrefix` for all those
+kinds; otherwise each keeps its own branch, so the group never holds a pull
+request for conflicting prefixes. So `""` on either side, or on every Pkl
+package as above, separates them all. New pins never group. A group of your own named `jdx/hk` shares the branch,
+which is how to add something else to it. Security fixes still get a PR of
+their own, since `security.apply` sets `group = ""`.
+
 ## Containers and Kubernetes
 
 Dockerfiles support global `ARG` substitution, continuations, `--platform` and

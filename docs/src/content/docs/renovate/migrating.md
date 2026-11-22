@@ -13,7 +13,9 @@ with a config you understand.
 `helpers:pinGitHubActionDigests` and `docker:pinDigests` mostly describe what
 the Count does without being asked: exact pins (Cargo, `pyproject.toml`, Bundler and Composer default to `preserve` instead, and move the lockfile for releases a range already allows), digest pins for actions and
 images, semantic commit prefixes, the dependency dashboard and one PR per
-update. A config with nothing in it is close.
+update, except that a Pkl package
+[shares one](/guide/managers/#pkl-packages-move-with-their-repositorys-other-dependencies)
+with its repository's other dependencies. A config with nothing in it is close.
 
 ```pkl
 // patchula.pkl

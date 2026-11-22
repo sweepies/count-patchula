@@ -440,6 +440,120 @@ fn named_branches(
     branches
 }
 
+/// Plans for hk's mise tool at `tool` and hk's Pkl package at `package`,
+/// with each update proposed by lookup against releases up to `release`.
+fn hk_plans(config: &Config, tool: &str, package: &str, release: &str) -> Vec<Plan> {
+    let files = BTreeMap::from([
+        (
+            "mise.toml".to_string(),
+            format!("[tools]\nhk = \"{tool}\"\n"),
+        ),
+        (
+            "hk.pkl".to_string(),
+            format!(
+                "amends \"package://pkg.pkl-lang.org/github.com/jdx/hk/hk@{package}#/Config.pkl\"\n"
+            ),
+        ),
+    ]);
+    let dependencies = patchula_manager::Scanner::new(config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies;
+    assert_eq!(dependencies.len(), 2, "{dependencies:?}");
+    let evaluator = patchula_lookup::Evaluator::new(
+        config,
+        patchula_lookup::Context {
+            dependencies: dependencies.iter().collect(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let catalog = patchula_datasource::Catalog {
+        versions: [tool, package, release]
+            .iter()
+            .map(|v| patchula_datasource::Version {
+                version: (*v).into(),
+                published_at: None,
+                digest: None,
+                deprecated: false,
+                yanked: false,
+                prerelease: false,
+                unchecked: false,
+            })
+            .collect(),
+        dist_tags: Default::default(),
+    };
+    let mut package_files = BTreeMap::<&str, Vec<serde_json::Value>>::new();
+    for dep in &dependencies {
+        let updates = evaluator.propose(dep, &catalog).unwrap();
+        assert_eq!(updates.len(), 1, "{updates:?}");
+        package_files
+            .entry(&dep.file)
+            .or_default()
+            .push(serde_json::json!({
+                "manager": dep.manager, "name": dep.name, "package": dep.package,
+                "current": {"value": dep.current, "version": dep.current, "digest": null},
+                "updates": updates,
+            }));
+    }
+    let mut repository = repo();
+    repository.package_files = serde_json::from_value(serde_json::Value::Array(
+        package_files
+            .into_iter()
+            .map(|(path, dependencies)| serde_json::json!({"path": path, "dependencies": dependencies}))
+            .collect(),
+    ))
+    .unwrap();
+    crate::plan(
+        &repository,
+        config,
+        &dependencies,
+        &snapshot(&files),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap()
+}
+
+/// A Pkl package and the mise tool from the same repository, which lookup
+/// puts in the built-in `jdx/hk` group, move on one branch named after the
+/// repository, with one title for the one release.
+#[test]
+fn a_pkl_repository_group_is_one_branch_with_one_title() {
+    let plans = hk_plans(&config(), "2.10.0", "2.10.0", "2.11.0");
+    assert_eq!(plans.len(), 1);
+    let action = plans[0].action();
+    assert_eq!(action.branch, "patchula/jdx-hk");
+    assert_eq!(action.message, "chore(deps): update hk to 2.11.0");
+    assert_eq!(plans[0].changes().len(), 2);
+}
+
+/// A patch prefix differs from the minor's on the shared non-major branch,
+/// so the tool's minor and the package's patch form no group, and neither
+/// is held for conflicting prefixes.
+#[test]
+fn a_pkl_repository_group_never_holds_for_conflicting_prefixes() {
+    let mut config = config();
+    config.rules.push(
+        serde_json::from_value(serde_json::json!({
+            "note": "patches are fixes",
+            "select": {"packages": [], "dependencies": [], "managers": [], "files": [],
+                "updates": ["patch"], "sources": [], "kinds": [], "current": null},
+            "apply": {"commitPrefix": "fix(deps):"},
+        }))
+        .unwrap(),
+    );
+    let plans = hk_plans(&config, "2.10.0", "2.11.0", "2.11.1");
+    let branches: BTreeSet<_> = plans.iter().map(|p| p.action().branch.as_str()).collect();
+    assert_eq!(branches.len(), 2, "{branches:?}");
+    assert!(!branches.contains("patchula/jdx-hk"), "{branches:?}");
+    for plan in &plans {
+        assert_eq!(plan.action().reason, None, "{:?}", plan.action());
+    }
+}
+
 #[test]
 fn names_that_differ_only_in_case_or_punctuation_take_a_stable_hash() {
     let go = |module: &str, path: &str| {

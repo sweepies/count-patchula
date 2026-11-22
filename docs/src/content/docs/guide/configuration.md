@@ -83,7 +83,10 @@ starts out cautious:
   them (see [version policies](/guide/versioning/#version-policies)); GitHub
   Actions (`actionDigests`) and container images and OCI charts
   (`imageDigests`) are pinned to digests;
-- every update gets its own PR with the `dependencies` label and a
+- every update gets its own PR, except that a Pkl package and the other
+  dependencies its GitHub repository ships
+  [share one](/guide/managers/#pkl-packages-move-with-their-repositorys-other-dependencies),
+  with the `dependencies` label and a
   `chore(deps):` commit prefix (`fix(deps):` for [security fixes](/guide/security/#security-updates-go-first)),
   and release notes are included;
 - nothing auto-merges, except [reference data](#reference-data) such as CA
@@ -164,7 +167,7 @@ lockfile is not an update type; it is configured under
 | `channel` | `stable`, or `lts` for the line the source's catalog marks `lts` |
 | `digest` | `false` opts out of digest pinning |
 | `merge` | allow [auto-merge](/guide/auto-merge/) |
-| `group` | updates with the same group share a PR; `""` forces separate PRs |
+| `group` | updates with the same group share a PR; `""` forces separate PRs, and keeps a dependency out of its [Pkl package's repository group](/guide/managers/#pkl-packages-move-with-their-repositorys-other-dependencies) |
 | `labels`, `commitPrefix` | PR labels and commit message prefix |
 | `releaseNotes`, `bodyNotes` | release notes in the PR body, and extra lines of your own |
 | `waitHours` | release-age wait in whole hours; `0` turns it off |

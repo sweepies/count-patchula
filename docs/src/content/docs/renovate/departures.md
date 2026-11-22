@@ -20,8 +20,16 @@ missing, and behaviour that changes their pull requests. The
 ### No presets; explicit defaults {#explicit-defaults}
 
 - **Renovate:** Most of a typical config comes from presets such as `config:recommended`
-- **The Count:** No presets. The schema's defaults are exact versions, except that Cargo, `pyproject.toml`, Bundler and Composer default to `preserve` (a release a range already allows moves the committed lockfile and leaves the manifest alone), digest pins for actions and images, manual merges, one PR per update, release notes, a dependency label and a semantic commit prefix
+- **The Count:** No presets. The schema's defaults are exact versions, except that Cargo, `pyproject.toml`, Bundler and Composer default to `preserve` (a release a range already allows moves the committed lockfile and leaves the manifest alone), digest pins for actions and images, manual merges, one PR per update (a Pkl package [shares one](#pkl-repository-groups) with its repository's other dependencies), release notes, a dependency label and a semantic commit prefix
 - **Why:** Every default is visible in the schema, so a config says exactly what it changes
+
+### Pkl packages group with their repository {#pkl-repository-groups}
+
+- **Renovate:** Nothing is grouped without a rule or preset
+- **The Count:** A Pkl package and the other dependencies its GitHub repository ships, such as the `hk` mise tool and hk's Pkl package, share the group `owner/repo` and the branch `patchula/jdx-hk`, unless something sets a group for them; `group = ""` keeps them apart
+- **Why:** The package describes the tool's configuration at the tool's version, so moving one without the other breaks the build
+
+See [Pkl](/guide/managers/#pkl-packages-move-with-their-repositorys-other-dependencies).
 
 ### Default excluded paths {#default-exclude}
 

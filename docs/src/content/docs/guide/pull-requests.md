@@ -15,6 +15,7 @@ dependency and the line it moves along:
 | a dependency on its 4.x line | `patchula/hono-4.x` |
 | a container variant | `patchula/python-3.x-slim` |
 | a group | `patchula/eslint`, and `patchula/major-eslint` for its majors |
+| a [Pkl package's repository](/guide/managers/#pkl-packages-move-with-their-repositorys-other-dependencies) | `patchula/jdx-hk`, and `patchula/major-jdx-hk` for its majors |
 | new pins and digests | `patchula/pin-dependencies` |
 | lockfile maintenance | `patchula/lock-file-maintenance` |
 | the batch | `patchula/batch` |

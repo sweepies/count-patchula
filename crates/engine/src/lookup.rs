@@ -574,7 +574,12 @@ impl Engine {
                 .map(|config| {
                     Evaluator::new(
                         config,
-                        patchula_update::actions_locked_workflows(&repo.snapshot),
+                        patchula_lookup::Context {
+                            locked_workflows: patchula_update::actions_locked_workflows(
+                                &repo.snapshot,
+                            ),
+                            dependencies: repo.dependencies.iter().map(|d| &d.dependency).collect(),
+                        },
                     )
                 })
                 .transpose()
