@@ -2793,6 +2793,85 @@ async fn a_banner_comes_down_when_the_pr_closes_mid_rebuild_or_the_run_stops() {
     check_transcript();
 }
 
+/// An obsolete PR showing the server's banner: the Count's own closure
+/// drops the banner, and a PR its owner closes while the run prepares —
+/// after the open listing, before the closure's fresh read — still loses
+/// the banner in the acknowledgement pass, and stays closed.
+#[tokio::test(start_paused = true)]
+async fn an_obsolete_bannered_pr_never_keeps_its_banner_however_it_closes() {
+    let mut servers = Vec::new();
+    for case in ["count", "owner"] {
+        let (config, repo) = pr_config();
+        let (mut p, snapshot) = make_plan("22.0.0");
+        let server = fake(&snapshot);
+        servers.push(server.clone());
+        let github = client(server.clone()).await;
+        pr_cycle(
+            &github,
+            &repo,
+            &config,
+            std::slice::from_mut(&mut p),
+            &snapshot,
+        )
+        .await;
+        let own = {
+            let mut s = server.state();
+            let commit = s
+                .repo_mut()
+                .commits
+                .get_mut(p.action().commit.as_ref().unwrap())
+                .unwrap();
+            commit["message"] = json!(commit["message"].as_str().unwrap().replace(
+                "Patchula-Base: base",
+                "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ));
+            let pr = s.repo_mut().prs.get_mut(&1).unwrap();
+            let own = pr["body"].as_str().unwrap().to_owned();
+            pr["body"] = json!(own.replacen(
+                "<!-- patchula-begin -->\n",
+                &format!(
+                    "<!-- patchula-begin -->\n{REBASING}\n> **The Count is sinking his teeth into this branch:** re-checking it against `main`…\n<!-- patchula-rebasing-end -->\n\n"
+                ),
+                1,
+            ));
+            own
+        };
+        if case == "owner" {
+            server.close_pulls_on_read();
+        }
+        let mut state = patchula_update::Lifecycle::prepare_with_controls(
+            &github,
+            &repo,
+            &mut [],
+            &config,
+            chrono::Utc::now(),
+            Default::default(),
+            &Default::default(),
+            "patchula[bot]",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            state.actions[0].status,
+            if case == "count" {
+                patchula_report::PullRequestStatus::Closed
+            } else {
+                patchula_report::PullRequestStatus::Skipped
+            }
+        );
+        state.acknowledge(&github).await.unwrap();
+        let s = server.state();
+        let pr = &s.repo().prs[&1];
+        assert_eq!(pr["state"], "closed");
+        let body = pr["body"].as_str().unwrap();
+        assert!(!body.contains(REBASING), "{case}: {body}");
+        if case == "owner" {
+            assert_eq!(body, own);
+        }
+    }
+    check_transcript();
+}
+
 /// A ticked re-check box: the server's acknowledgement shows the banner
 /// once and keeps the box ticked for the run, which finds the banner up
 /// and writes no second one; its rewrite replaces both. A plain rebuild,

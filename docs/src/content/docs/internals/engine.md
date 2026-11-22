@@ -67,7 +67,8 @@ scope: the head commit, a hash of the report row (tooling, lookup and
 release-age evaluation timestamps, catalog evidence, stats and clock fields
 excluded), `next_due` — the earliest instant time alone can change the
 answer: a held-back release's eligibility, a schedule window, a lockfile
-defer, an hourly PR quota freeing — and the run's timestamp. The server's
+defer, an hourly PR quota freeing — and the run's timestamp. A run that does not complete removes the
+row, so nothing it left behind is skipped over. The server's
 quiet sweep check runs only
 for batches the sweep alone claimed: candidates are rebuilt from the cached
 config and extraction without a head check, the hinted digests are

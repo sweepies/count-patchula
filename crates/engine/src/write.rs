@@ -398,10 +398,18 @@ impl Write<'_> {
         if self.dry_run {
             return;
         }
-        for work in work
-            .iter_mut()
-            .filter(|work| work.report.status == Status::Complete)
-        {
+        for work in work.iter_mut() {
+            if work.report.status != Status::Complete {
+                // A run that did not complete — one that left a banner up
+                // among them — leaves no earlier answer for the sweep to
+                // skip the repository with; the next sweep runs it in full.
+                if let Err(error) = self.engine.clear_quiet(&work.report.repository).await {
+                    work.report
+                        .warnings
+                        .push(format!("quiet run cache: {error}"));
+                }
+                continue;
+            }
             if let Err(error) = self
                 .engine
                 .record_run(&work.report.repository, self.now)

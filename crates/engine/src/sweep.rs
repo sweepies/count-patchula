@@ -269,6 +269,15 @@ impl Engine {
         Ok(Some(Work::from_extraction(report, config, cached)))
     }
 
+    /// Forgets the repository's stored answer for the sweep, after a run
+    /// that did not complete: nothing it left behind may be skipped over.
+    pub(crate) async fn clear_quiet(&self, repo: &str) -> Result<()> {
+        self.cache
+            .clear_state::<QuietRun>(&self.credential_scope(repo))
+            .await?;
+        Ok(())
+    }
+
     /// A complete run's stored answer for the sweep: the row's lookup hash,
     /// the head and branch it belongs to, its next due instant and when it
     /// ran. A repository missing any piece stores nothing and always runs.

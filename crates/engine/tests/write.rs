@@ -3039,8 +3039,32 @@ const REBASING: &str = "<!-- patchula-rebasing -->";
 
 /// A first run that opens PR #1, then a ticked box on it carrying the
 /// server's banner, as the acknowledgement leaves it before the batch.
-async fn server_acknowledged(fake: &Sandbox, engine: &Engine, now: chrono::DateTime<chrono::Utc>) {
-    checkbox_run(engine, &checkbox_config(), now).await;
+/// With `config`, the runs use that override; without it, the
+/// repository's own `patchula.pkl`, which the sweep's stored answer needs.
+async fn server_acknowledged(
+    fake: &Sandbox,
+    engine: &Engine,
+    now: chrono::DateTime<chrono::Utc>,
+    config: Option<patchula_config::Config>,
+) {
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config,
+                ..Default::default()
+            },
+            false,
+            false,
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        report.repositories[0].status,
+        Status::Complete,
+        "{report:?}"
+    );
     {
         let mut state = fake.state();
         let pr = state.repo_mut().prs.get_mut(&1).unwrap();
@@ -3064,9 +3088,11 @@ async fn server_acknowledged(fake: &Sandbox, engine: &Engine, now: chrono::DateT
 }
 
 /// The server's banner is up when someone closes the PR mid-run. The run
-/// leaves the PR closed and takes the banner down; when that write fails,
-/// the repository fails and records no quiet-run answer, so nothing hides
-/// the banner until a run takes it down.
+/// leaves the PR closed and takes the banner down, and the sweep may skip
+/// the repository on that complete run's answer. When the write fails, the
+/// repository fails and the earlier run's answer is forgotten, so the
+/// sweep runs it again instead of skipping it with the banner up. The
+/// runs read the repository's own config, so the sweep can match.
 #[tokio::test(start_paused = true)]
 async fn a_server_banner_comes_down_when_the_pr_closes_mid_run_or_the_repository_fails() {
     let mut keep = Vec::new();
@@ -3078,7 +3104,7 @@ async fn a_server_banner_comes_down_when_the_pr_closes_mid_run_or_the_repository
             .unwrap()
             .with_versions_host(false);
         let now = chrono::Utc::now();
-        server_acknowledged(&fake, &engine, now).await;
+        server_acknowledged(&fake, &engine, now, None).await;
         fake.github.close_pulls_on_read();
         if fails {
             fake.github
@@ -3093,7 +3119,6 @@ async fn a_server_banner_comes_down_when_the_pr_closes_mid_run_or_the_repository
             .run_at(
                 Options {
                     repositories: vec!["demo/sandbox".into()],
-                    config: Some(checkbox_config()),
                     ..Default::default()
                 },
                 false,
@@ -3118,14 +3143,14 @@ async fn a_server_banner_comes_down_when_the_pr_closes_mid_run_or_the_repository
                     .is_some_and(|r| r.contains("acknowledgement")),
                 "{repo:?}"
             );
-            let quiet = engine
-                .sweep_quiet(&["demo/sandbox".into()], at + chrono::Duration::minutes(1))
-                .await
-                .unwrap();
-            assert!(quiet.is_empty(), "{quiet:?}");
         } else {
             assert_eq!(repo.status, Status::Complete, "{repo:?}");
         }
+        let quiet = engine
+            .sweep_quiet(&["demo/sandbox".into()], at + chrono::Duration::minutes(1))
+            .await
+            .unwrap();
+        assert_eq!(quiet.is_empty(), fails, "fails={fails}: {quiet:?}");
     }
     check_transcript();
 }
@@ -3144,7 +3169,7 @@ async fn a_cleanup_failure_withdraws_the_banner_and_keeps_the_tick() {
             .unwrap()
             .with_versions_host(false);
         let now = chrono::Utc::now();
-        server_acknowledged(&fake, &engine, now).await;
+        server_acknowledged(&fake, &engine, now, Some(checkbox_config())).await;
         if closes {
             fake.github.close_pulls_on_read();
         }

@@ -720,6 +720,15 @@ impl Lifecycle {
             degraded: repository.degraded(),
             bannered: BTreeSet::new(),
         };
+        // Every open PR of his showing a banner, read off the listing
+        // before any fresh read can see it closed: one someone closes
+        // during preparation still loses its banner at the end of the run.
+        state.bannered = state
+            .prs
+            .iter()
+            .filter(|t| owned_pr(&t.pr, &state.actor, &state.repo) && banner::shown(body(&t.pr)))
+            .map(|t| t.pr.number)
+            .collect();
         let owner = view::Owner { actor, repo };
         // The hourly count only exists when `prs.perHour` is set: the pull
         // listing, walked only until a page ends with a PR created before
@@ -849,6 +858,8 @@ impl Lifecycle {
                 )
                 .await?;
             pr.mark_closed(text);
+            // The closure body carries no banner.
+            state.bannered.remove(&number);
             state.actions.push(action(
                 repo,
                 &name,
@@ -891,16 +902,6 @@ impl Lifecycle {
                     .insert(plan.action().branch.clone(), suppressor.pr.number);
             }
         }
-        state.bannered = state
-            .prs
-            .iter()
-            .filter(|t| {
-                t.pr.state == "open"
-                    && owned_pr(&t.pr, &state.actor, &state.repo)
-                    && banner::shown(body(&t.pr))
-            })
-            .map(|t| t.pr.number)
-            .collect();
         Ok(state)
     }
 
