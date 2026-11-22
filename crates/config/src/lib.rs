@@ -66,10 +66,7 @@ pub fn defaults() -> miette::Result<Config> {
     let path = format!("/repo/{CONFIG_PATH}");
     load_files(
         &path,
-        std::collections::BTreeMap::from([
-            (path.clone(), STARTER.to_owned()),
-            (format!("/repo/{SCHEMA_NAME}"), SCHEMA.to_owned()),
-        ]),
+        std::collections::BTreeMap::from([(path.clone(), STARTER.to_owned())]),
     )
 }
 
@@ -262,7 +259,7 @@ pub fn evaluate_local(
             })
         }))
         .map_err(|error| miette::miette!("{error}"))?;
-    virtual_files::evaluate_modules(&entry, files, true)
+    virtual_files::evaluate(&entry, files)
 }
 
 /// An evaluation error that points at no source, such as Pkl's type check of a
