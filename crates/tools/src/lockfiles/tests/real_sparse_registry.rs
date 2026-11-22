@@ -1013,7 +1013,7 @@ async fn real_cargo_before_1_100_runs_clean_with_cooldown_keys_set() {
     let temp = tempfile::tempdir().unwrap();
     let runner =
         Runner::new(temp.path().join("worktrees"), "offline-installation").with_executor(executor);
-    let mut snapshot = sparse_snapshot(&files);
+    let snapshot = sparse_snapshot(&files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
         .unwrap()
@@ -1058,7 +1058,7 @@ async fn real_cargo_before_1_100_runs_clean_with_cooldown_keys_set() {
     let warnings = patchula_update::lock_all(
         &runner,
         std::slice::from_mut(&mut p),
-        &mut snapshot,
+        &snapshot,
         &config,
         &|| {},
     )

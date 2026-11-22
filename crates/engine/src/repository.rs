@@ -8,11 +8,12 @@
 //! handed a [`Listing`] and a [`Source`].
 use crate::{Error, Result};
 use patchula_config::Config;
+use patchula_lockfiles::BaseFile;
 use patchula_manager::{
     Files, MORE_ROUNDS, SHARED_NAME_LIMIT, Scanner, Skipped, Text, Unread, committed_credentials,
     credential_reason, linked_settings, registry_settings,
 };
-use patchula_update::{Blob, tooling};
+use patchula_update::tooling;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -67,7 +68,7 @@ pub struct View {
     /// The files read, and the ones that could not be, as unreadable.
     pub files: Files,
     /// The blobs of the files read, for the snapshot's write-back.
-    pub blobs: BTreeMap<String, Blob>,
+    pub blobs: BTreeMap<String, BaseFile>,
     /// The files among `paths` the Count does not maintain.
     pub unsupported: Vec<Skipped>,
     pub warnings: Vec<String>,
@@ -243,7 +244,7 @@ fn place(
     content: Content,
     primary: bool,
     files: &mut Files,
-    blobs: &mut BTreeMap<String, Blob>,
+    blobs: &mut BTreeMap<String, BaseFile>,
 ) -> Result<()> {
     let bytes = match content {
         Ok(bytes) => bytes,
@@ -275,7 +276,7 @@ fn place(
     files.insert(entry.path.clone(), Text::Read(text.clone()));
     blobs.insert(
         entry.path.clone(),
-        Blob {
+        BaseFile {
             sha,
             mode: entry.mode.clone(),
             content: text,

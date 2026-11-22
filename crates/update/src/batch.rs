@@ -489,7 +489,7 @@ mod tests {
             paths: BTreeSet::from(["package.json".to_string()]),
             files: BTreeMap::from([(
                 "package.json".to_string(),
-                crate::Blob {
+                patchula_lockfiles::BaseFile {
                     sha: crate::blob_sha(text),
                     mode: "100644".into(),
                     content: text.into(),

@@ -586,6 +586,8 @@ pub struct Lifecycle {
     /// write receipt may settle them, so the next run renders them again.
     unsettled: BTreeSet<String>,
     pub(crate) recheck: Recheck,
+    /// The inventory's merge settings, which the engine sets once the
+    /// lifecycle is prepared.
     merge_settings: Option<crate::automerge::Settings>,
     maintenance_policy: patchula_config::Policy,
     maintenance_group: String,
@@ -1154,13 +1156,11 @@ impl Lifecycle {
         let enabled = pr.pr.auto_merge.is_some();
         let mut native = enabled;
         if merge && !enabled {
-            if self.merge_settings.is_none() {
-                let meta = client
-                    .get_fresh::<model::Repository>(&format!("repos/{}", self.repo))
-                    .await?;
-                self.merge_settings = Some(crate::automerge::Settings::from_rest(&meta));
-            }
-            let settings = self.merge_settings.as_ref().expect("repository settings");
+            // The inventory read them; a lifecycle without them is a broken
+            // invariant, refused rather than read another way.
+            let settings = self.merge_settings.as_ref().ok_or(Error::Refused(
+                "repository merge settings missing from the inventory".into(),
+            ))?;
             if settings.native {
                 let method = settings.method.as_ref().ok_or(Error::Refused(
                     "repository has no enabled merge method".into(),

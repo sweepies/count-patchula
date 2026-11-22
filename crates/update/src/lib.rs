@@ -17,9 +17,8 @@ mod trailers;
 pub use cleanup::{cleanup, delete_owned, owned};
 pub use error::{Error, PlanError};
 pub use receipts::{
-    DefaultBranch, DefaultCommit, INVENTORY_ISSUES_QUERY, INVENTORY_LAST_QUERY,
-    INVENTORY_NEXT_QUERY, INVENTORY_QUERY, INVENTORY_REFS_QUERY, Inventory, Issue, Page,
-    RestoreOutcome, restore_inventory, save_receipts,
+    DefaultBranch, DefaultCommit, INVENTORY_LAST_QUERY, INVENTORY_NEXT_QUERY, INVENTORY_QUERY,
+    Inventory, Issue, Page, RestoreOutcome, restore_inventory, save_receipts,
 };
 #[cfg(feature = "testing")]
 pub use receipts::{seed_receipts, stored_receipts};
@@ -32,8 +31,8 @@ mod state_parity;
 pub use plan::testing;
 mod write;
 pub use plan::{
-    Blob, Change, Hold, Plan, Snapshot, actions_locked_workflows, blob_sha, branch_name, lock_all,
-    plan, unified,
+    Change, Hold, Plan, Snapshot, actions_locked_workflows, blob_sha, branch_name, lock_all, plan,
+    unified,
 };
 pub use write::{REF_UPDATE, apply_all};
 

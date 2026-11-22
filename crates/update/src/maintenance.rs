@@ -74,8 +74,6 @@ pub fn maintenance(
         },
         jobs,
         fingerprint,
-        snapshot.public_only.clone(),
-        snapshot.cargo_cooldowns.clone(),
     );
     if let Some(error) = wait_error {
         plan.hold(Hold::Blocked(error));

@@ -17,16 +17,19 @@ use std::collections::{BTreeMap, BTreeSet};
 const TABLE_CAP: usize = 18_000;
 /// The plan's own `bodyNotes`, after the table.
 const BODY_NOTES_CAP: usize = 22_000;
-/// The security section's advisory rows.
+/// The security section, header and advisory rows.
 const ADVISORY_CAP: usize = 6_000;
-/// The image section's table of fixed advisories.
+/// The whole image section.
+const IMAGE_CAP: usize = 13_000;
+/// The image section's table of fixed advisories, within [`IMAGE_CAP`], so
+/// the lines after it keep room.
 const IMAGE_TABLE_CAP: usize = 8_000;
-/// The image section's OSV-listed and warning lines.
-const IMAGE_LISTED_CAP: usize = 11_000;
-/// The image section's notes.
-const IMAGE_NOTES_CAP: usize = 12_000;
-/// The image section's line on what the new image brings in.
-const IMAGE_BRINGS_IN_CAP: usize = 13_000;
+/// The callout that opens the image section's warnings; reserved whole
+/// whenever there are warnings.
+const IMAGE_WARNING: &str =
+    "> [!WARNING]\n> **The Count can't tell whether this rebuild fixes any vulnerabilities.**\n";
+/// The most a block break takes: two newlines after a cut line.
+const BLOCK_BREAK: usize = 2;
 /// The bytes of advisory links a line on what a rebuild fixes lists
 /// before it counts the rest.
 const FIXED_LINKS: usize = 3_000;
@@ -79,17 +82,19 @@ impl Bodies<'_> {
                 "Scheduled {} using the repository's mise tool versions.\n",
                 safe(self.maintenance_group)
             ));
+            // The lists take what `TABLE_CAP` leaves after the text so far.
+            let mut lists = crate::body::Body::new(TABLE_CAP, text.len());
             for file in &plan.action().files {
-                append(&mut text, &format!("\n- {}", cell(&file.path)), TABLE_CAP);
+                lists.push(&format!("\n- {}", cell(&file.path)), usize::MAX);
             }
-            moved_section(&mut text, plan.moved_refs());
+            moved_section(&mut lists, plan.moved_refs());
             if plan.deleted().contains(patchula_lockfiles::ACTIONS_LOCK) {
-                append(
-                    &mut text,
+                lists.push(
                     "\n\nEvery workflow `actions.lock` listed is gone, so the lockfile is removed.\n",
-                    TABLE_CAP,
+                    usize::MAX,
                 );
             }
+            text.push_str(lists.text());
         }
         for c in plan.changes() {
             let target = crate::plan::with_digest(
@@ -120,9 +125,11 @@ impl Bodies<'_> {
             text.push_str(&crate::batch::render(items));
         }
         let body_notes: BTreeSet<_> = plan.changes().iter().flat_map(|c| &c.body_notes).collect();
+        let mut notes = crate::body::Body::new(BODY_NOTES_CAP, text.len());
         for note in body_notes {
-            append(&mut text, &format!("\n{}\n", safe(note)), BODY_NOTES_CAP);
+            notes.push(&format!("\n{}\n", safe(note)), usize::MAX);
         }
+        text.push_str(notes.text());
         let ranges: Vec<_> = plan
             .changes()
             .iter()
@@ -598,14 +605,19 @@ fn security_section(changes: &[crate::Change]) -> String {
     if rows.is_empty() {
         return String::new();
     }
-    let mut text = format!(
-        "> [!IMPORTANT]\n> This update fixes {} known vulnerabilit{}. The Count does not care for anyone else drawing blood.\n\n| Advisory | Severity | Package | Summary |\n| --- | --- | --- | --- |\n",
-        rows.len(),
-        if rows.len() == 1 { "y" } else { "ies" }
+    let mut section = crate::body::Body::new(ADVISORY_CAP, 0);
+    section.push(
+        &format!(
+            "> [!IMPORTANT]\n> This update fixes {} known vulnerabilit{}. The Count does not care for anyone else drawing blood.\n\n| Advisory | Severity | Package | Summary |\n| --- | --- | --- | --- |\n",
+            rows.len(),
+            if rows.len() == 1 { "y" } else { "ies" }
+        ),
+        usize::MAX,
     );
     for row in rows {
-        append(&mut text, &row, ADVISORY_CAP);
+        section.push(&row, usize::MAX);
     }
+    let mut text = section.into_text();
     text.push('\n');
     text
 }
@@ -734,49 +746,64 @@ fn image_section(changes: &[crate::Change]) -> String {
             ));
         }
     }
-    let mut text = String::new();
+    // The section always ends on a block break, so the table after it
+    // starts its own block; with warnings, their callout and the breaks
+    // around them are reserved too, so a full section never drops or cuts
+    // them.
+    let reserve = if warnings.is_empty() {
+        BLOCK_BREAK
+    } else {
+        3 * BLOCK_BREAK + IMAGE_WARNING.len()
+    };
+    let mut text = crate::body::Body::new(IMAGE_CAP, reserve);
     if !rows.is_empty() {
         let verified = fixed_ids.len() - listed.len();
-        text.push_str(&if listed.is_empty() {
-            format!(
-                "> [!IMPORTANT]\n> This rebuild fixes {verified} known vulnerabilit{} in the image's OS packages, according to OSV.dev. The Count does not care for anyone else drawing blood.\n\n",
-                if verified == 1 { "y" } else { "ies" }
-            )
-        } else {
-            format!(
-                "> [!IMPORTANT]\n> This rebuild fixes known vulnerabilities in the image's OS packages. The Count read OSV.dev's record for the {verified} below, and OSV.dev lists {} more that the new image no longer has. The Count does not care for anyone else drawing blood.\n\n",
-                listed.len()
-            )
-        });
-        text.push_str("| Advisory | Severity | Package | Old | New | Platforms |\n| --- | --- | --- | --- | --- | --- |\n");
+        text.push(
+            &if listed.is_empty() {
+                format!(
+                    "> [!IMPORTANT]\n> This rebuild fixes {verified} known vulnerabilit{} in the image's OS packages, according to OSV.dev. The Count does not care for anyone else drawing blood.\n\n",
+                    if verified == 1 { "y" } else { "ies" }
+                )
+            } else {
+                format!(
+                    "> [!IMPORTANT]\n> This rebuild fixes known vulnerabilities in the image's OS packages. The Count read OSV.dev's record for the {verified} below, and OSV.dev lists {} more that the new image no longer has. The Count does not care for anyone else drawing blood.\n\n",
+                    listed.len()
+                )
+            },
+            usize::MAX,
+        );
+        let mut table = crate::body::Body::new(IMAGE_TABLE_CAP, 0);
+        table.push(
+            "| Advisory | Severity | Package | Old | New | Platforms |\n| --- | --- | --- | --- | --- | --- |\n",
+            usize::MAX,
+        );
         for row in &rows {
-            append(&mut text, row, IMAGE_TABLE_CAP);
+            table.push(row, usize::MAX);
         }
+        text.push(table.text(), usize::MAX);
         if !listed.is_empty() {
-            append(
-                &mut text,
+            text.push(
                 &format!(
                     "\nAnd {} more listed by OSV: {}.\n",
                     listed.len(),
                     id_links(&listed, FIXED_LINKS)
                 ),
-                IMAGE_LISTED_CAP,
+                usize::MAX,
             );
         }
-        text.push('\n');
+        text.push("\n", usize::MAX);
     } else if !listed.is_empty() {
-        append(
-            &mut text,
+        text.push(
             &format!(
                 "OSV.dev lists {} advisor{} that the new image no longer has, but the Count read no record that confirms one, so he doesn't count this rebuild as a security fix: {}.\n\n",
                 listed.len(),
                 if listed.len() == 1 { "y" } else { "ies" },
                 id_links(&listed, FIXED_LINKS)
             ),
-            IMAGE_LISTED_CAP,
+            usize::MAX,
         );
     }
-    let also = if text.is_empty() { "" } else { " also" };
+    let also = if text.text().is_empty() { "" } else { " also" };
     let mut introduced = brings_in;
     if !brings_in_listed.is_empty() {
         let links = id_links(&brings_in_listed, BROUGHT_LINKS);
@@ -795,28 +822,40 @@ fn image_section(changes: &[crate::Change]) -> String {
         });
     }
     if !introduced.is_empty() {
-        append(
-            &mut text,
+        text.push(
             &format!(
                 "The new image{also} brings in {}.\n\n",
                 introduced.join("; ")
             ),
-            IMAGE_BRINGS_IN_CAP,
+            usize::MAX,
         );
     }
     if !warnings.is_empty() {
-        text.push_str(
-            "> [!WARNING]\n> **The Count can't tell whether this rebuild fixes any vulnerabilities.**\n",
-        );
+        end_block(&mut text);
+        text.push_reserved(IMAGE_WARNING);
         for warning in warnings {
-            append(&mut text, &format!(">\n> {warning}\n"), IMAGE_LISTED_CAP);
+            text.push(&format!(">\n> {warning}\n"), usize::MAX);
         }
-        text.push('\n');
+        end_block(&mut text);
     }
     for note in notes {
-        append(&mut text, &format!("{note}\n\n"), IMAGE_NOTES_CAP);
+        text.push(&format!("{note}\n\n"), usize::MAX);
     }
-    text
+    end_block(&mut text);
+    text.into_text()
+}
+/// End `text`'s last block with a blank line, out of the reserve, unless
+/// it is empty or already ends so.
+fn end_block(text: &mut crate::body::Body) {
+    let current = text.text();
+    let missing = if current.is_empty() || current.ends_with("\n\n") {
+        ""
+    } else if current.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    text.push_reserved(missing);
 }
 /// Advisory IDs as osv.dev links, as many as fit in `budget` bytes, with a
 /// count of the rest.
@@ -841,35 +880,33 @@ fn id_links(ids: &BTreeSet<String>, budget: usize) -> String {
 }
 /// The refs a maintenance relock advanced in `actions.lock`, one line
 /// each under its workflow; nothing when none moved.
-fn moved_section(text: &mut String, moved: &[patchula_lockfiles::MovedRef]) {
+fn moved_section(text: &mut crate::body::Body, moved: &[patchula_lockfiles::MovedRef]) {
     if moved.is_empty() {
         return;
     }
-    append(
-        text,
+    text.push(
         "\n\nRefs that moved upstream, now locked at their new commits:\n",
-        TABLE_CAP,
+        usize::MAX,
     );
     let mut workflows: BTreeMap<&str, Vec<&patchula_lockfiles::MovedRef>> = BTreeMap::new();
     for entry in moved {
         workflows.entry(&entry.workflow).or_default().push(entry);
     }
     for (workflow, entries) in workflows {
-        append(text, &format!("\n- {}", code(workflow)), TABLE_CAP);
+        text.push(&format!("\n- {}", code(workflow)), usize::MAX);
         for entry in entries {
-            append(
-                text,
+            text.push(
                 &format!(
                     "\n  - {} now resolves to {}; the lock had {}",
                     code(&entry.dependency),
                     code(short(&entry.to)),
                     code(short(&entry.from))
                 ),
-                TABLE_CAP,
+                usize::MAX,
             );
         }
     }
-    append(text, "\n", TABLE_CAP);
+    text.push("\n", usize::MAX);
 }
 /// A commit SHA as the moved-ref list shows it: its first seven characters.
 fn short(sha: &str) -> &str {
@@ -894,12 +931,6 @@ fn cell(text: &str) -> String {
 /// A table cell of third-party prose, such as an advisory summary.
 fn prose_cell(text: &str) -> String {
     cell(&crate::text::inert(text))
-}
-fn append(text: &mut String, addition: &str, limit: usize) {
-    let remaining = limit.saturating_sub(text.len());
-    if remaining > 0 {
-        text.push_str(patchula_datasource::upstream::truncate(addition, remaining));
-    }
 }
 
 #[cfg(test)]

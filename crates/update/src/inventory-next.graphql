@@ -6,6 +6,8 @@ query InventoryNextQuery(
     $cursor: String
     $issueFilter: IssueFilters
     $issueCursor: String
+    $refs: Boolean!
+    $issues: Boolean!
 ) {
     viewer {
         login
@@ -18,7 +20,8 @@ query InventoryNextQuery(
                 oid
             }
         }
-        issues(states: [OPEN], filterBy: $issueFilter, first: 100, after: $issueCursor) {
+        issues(states: [OPEN], filterBy: $issueFilter, first: 100, after: $issueCursor)
+            @include(if: $issues) {
             pageInfo {
                 hasNextPage
                 endCursor
@@ -35,7 +38,8 @@ query InventoryNextQuery(
                 }
             }
         }
-        refs(refPrefix: $prefix, query: $refQuery, first: 100, after: $cursor) {
+        refs(refPrefix: $prefix, query: $refQuery, first: 100, after: $cursor)
+            @include(if: $refs) {
             pageInfo {
                 hasNextPage
                 endCursor

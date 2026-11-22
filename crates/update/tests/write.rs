@@ -3,6 +3,7 @@
 use patchula_cache::Cache;
 use patchula_config::{Config, Rebase};
 use patchula_github::Client;
+use patchula_lockfiles::BaseFile;
 use patchula_manager::{Files, Scanner};
 use patchula_report::{
     BranchStatus, Current, Dependency as ReportDependency, DependencyMetadata, PackageFile,
@@ -10,7 +11,7 @@ use patchula_report::{
 };
 use patchula_testkit::github::{FakeGitHub, Matcher};
 use patchula_update::testing::Draft;
-use patchula_update::{Blob, Plan, Snapshot, blob_sha, branch_name, plan};
+use patchula_update::{Plan, Snapshot, blob_sha, branch_name, plan};
 use patchula_words::{Manager, Source, Update as UpdateKind};
 use serde_json::{Value, json};
 use std::{
@@ -66,7 +67,7 @@ fn setup(
         paths: BTreeSet::from(["mise.toml".into()]),
         files: BTreeMap::from([(
             "mise.toml".into(),
-            Blob {
+            BaseFile {
                 sha: blob_sha(text),
                 mode: "100644".into(),
                 content: text.into(),
@@ -184,7 +185,6 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(
@@ -203,7 +203,6 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(
@@ -222,7 +221,6 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(
@@ -247,7 +245,6 @@ async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     let (repeat, _) = make_plan("22.0.0");
@@ -265,7 +262,6 @@ async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(
@@ -297,7 +293,6 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
             "main",
             "patchula[bot]",
             Rebase::Behind,
-            false,
         )
         .await;
         {
@@ -328,7 +323,6 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
             "main",
             "patchula[bot]",
             Rebase::Behind,
-            false,
         )
         .await;
         assert_eq!(repeat.action().status, BranchStatus::Updated);
@@ -347,19 +341,8 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
     check_transcript();
 }
 #[tokio::test(start_paused = true)]
-async fn dry_run_plans_diffs_and_never_sends_mutations() {
-    let (mut plan, snapshot) = make_plan("22.0.0");
-    let server = fake(&snapshot);
-    patchula_update::apply_all(
-        &client(server.clone()).await,
-        std::slice::from_mut(&mut plan),
-        &snapshot,
-        "main",
-        "patchula[bot]",
-        Rebase::Behind,
-        true,
-    )
-    .await;
+async fn the_planner_alone_records_each_files_diff() {
+    let (plan, _) = make_plan("22.0.0");
     assert_eq!(
         plan.action().status,
         BranchStatus::Planned,
@@ -376,9 +359,6 @@ async fn dry_run_plans_diffs_and_never_sends_mutations() {
             .diff
             .contains("+node = '22.0.0' # keep")
     );
-    assert!(server.state().writes().is_empty());
-    assert!(server.state().requests().is_empty());
-    check_transcript();
 }
 #[tokio::test(start_paused = true)]
 async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() {
@@ -395,7 +375,6 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
             "main",
             "patchula[bot]",
             mode,
-            false,
         )
         .await;
         {
@@ -418,7 +397,6 @@ async fn behind_rebases_and_conflicts_keeps_an_identical_manifest_on_old_base() 
             "main",
             "patchula[bot]",
             mode,
-            false,
         )
         .await;
         assert_eq!(
@@ -446,7 +424,6 @@ async fn human_commit_is_protected_even_with_copied_patchula_markers() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     server
@@ -464,7 +441,6 @@ async fn human_commit_is_protected_even_with_copied_patchula_markers() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(
@@ -492,7 +468,6 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
             "main",
             "patchula[bot]",
             Rebase::Behind,
-            false,
         )
         .await;
         {
@@ -516,7 +491,6 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
             "main",
             "patchula[bot]",
             Rebase::Behind,
-            false,
         )
         .await;
         assert_eq!(
@@ -542,7 +516,6 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
         "main",
         "patchula[bot]",
         Rebase::Conflicts,
-        false,
     )
     .await;
     let blob = snapshot.files.get_mut("mise.toml").unwrap();
@@ -584,7 +557,6 @@ async fn conflicts_mode_recreates_when_the_default_changes_a_touched_file() {
         "main",
         "patchula[bot]",
         Rebase::Conflicts,
-        false,
     )
     .await;
     assert_eq!(
@@ -635,7 +607,6 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
             "main",
             "patchula[bot]",
             Rebase::Behind,
-            false,
         )
         .await;
         assert_eq!(
@@ -680,7 +651,6 @@ async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert!(
@@ -710,7 +680,7 @@ fn grouped_files_and_prefixes_are_stable_when_occurrence_order_changes() {
     let text = "node 20.0.0 # preserve\n";
     snapshot.files.insert(
         ".tool-versions".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(text),
             mode: "100644".into(),
             content: text.into(),
@@ -789,7 +759,7 @@ fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
     r.updates[0].new_value = Some("2.0.0".into());
     snapshot.files = BTreeMap::from([(
         "package.json".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(text),
             mode: "100644".into(),
             content: text.into(),
@@ -861,7 +831,7 @@ fn a_zero_x_crates_in_range_release_yields_to_its_next_minor() {
         .map(|(path, content)| {
             (
                 path.clone(),
-                Blob {
+                BaseFile {
                     sha: blob_sha(content),
                     mode: "100644".into(),
                     content: content.to_owned(),
@@ -941,7 +911,7 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
     r.updates[0].new_value = Some("2.0.0".into());
     snapshot.files = BTreeMap::from([(
         "package.json".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(text),
             mode: "100644".into(),
             content: text.into(),
@@ -1035,7 +1005,6 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     let old = "patchula/node-major-0123456789abcdef";
@@ -1069,7 +1038,6 @@ async fn migration_deletes_owned_hash_branch_with_a_lease_and_preserves_human_wo
         "main",
         &[p],
         &inventory,
-        false,
     )
     .await
     .unwrap();
@@ -1113,7 +1081,7 @@ fn container_occurrences_across_managers_share_target_and_slug_collisions_gain_m
     });
     snapshot.files.insert(
         "Dockerfile".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(text),
             mode: "100644".into(),
             content: text.into(),
@@ -1139,7 +1107,7 @@ fn container_occurrences_across_managers_share_target_and_slug_collisions_gain_m
     let text = "node 20.0.0\n";
     snapshot.files.insert(
         ".tool-versions".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(text),
             mode: "100644".into(),
             content: text.into(),
@@ -1201,24 +1169,6 @@ async fn shared_base_write_trace_and_request_budget() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        true,
-    )
-    .await;
-    assert_eq!(github.stats().await.requests, 0);
-    eprintln!(
-        "dry-run: {} requests, simulated elapsed {:?}",
-        github.stats().await.requests,
-        started.elapsed()
-    );
-    let started = tokio::time::Instant::now();
-    patchula_update::apply_all(
-        &github,
-        &mut plans,
-        &snapshot,
-        "main",
-        "patchula[bot]",
-        Rebase::Behind,
-        false,
     )
     .await;
     assert!(
@@ -1284,7 +1234,6 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     {
@@ -1300,7 +1249,6 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert!(
@@ -1354,6 +1302,18 @@ async fn pr_cycle(
     plans: &mut [Plan],
     snapshot: &Snapshot,
 ) -> Vec<patchula_report::PullRequestAction> {
+    merging_cycle(client, repo, config, plans, snapshot, Default::default()).await
+}
+/// `pr_cycle` with the merge settings the engine hands the lifecycle from
+/// the run's inventory.
+async fn merging_cycle(
+    client: &Client,
+    repo: &Repository,
+    config: &Config,
+    plans: &mut [Plan],
+    snapshot: &Snapshot,
+    settings: patchula_update::automerge::Settings,
+) -> Vec<patchula_report::PullRequestAction> {
     let mut state = patchula_update::Lifecycle::prepare_with_controls(
         client,
         repo,
@@ -1366,6 +1326,7 @@ async fn pr_cycle(
     )
     .await
     .unwrap();
+    state.set_merge_settings(settings);
     patchula_update::apply_all(
         client,
         plans,
@@ -1373,7 +1334,6 @@ async fn pr_cycle(
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     publish(&mut state, client, plans).await;
@@ -1467,7 +1427,6 @@ async fn verified_receipts_reduce_warm_write_to_one_inventory_and_detect_changes
             "main",
             "patchula[bot]",
             config.prs.rebase,
-            false,
         )
         .await;
         publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
@@ -1692,7 +1651,6 @@ async fn a_retryable_notes_failure_is_fetched_again_on_the_next_run() {
         "main",
         "patchula[bot]",
         config.prs.rebase,
-        false,
     )
     .await;
     publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
@@ -1742,7 +1700,6 @@ async fn a_retryable_notes_failure_is_fetched_again_on_the_next_run() {
         "main",
         "patchula[bot]",
         config.prs.rebase,
-        false,
     )
     .await;
     publish(&mut lifecycle, &github, std::slice::from_mut(&mut next)).await;
@@ -1832,7 +1789,6 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             "main",
             "patchula[bot]",
             Rebase::Behind,
-            false,
         )
         .await;
         assert_eq!(next.action().status, BranchStatus::Rebased);
@@ -1952,7 +1908,6 @@ async fn receipts_save_verified_branches_despite_unrelated_pr_errors_and_skips()
         "main",
         "patchula[bot]",
         config.prs.rebase,
-        false,
     )
     .await;
     publish(&mut lifecycle, &github, &mut plans).await;
@@ -2486,18 +2441,10 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
         );
         let cache = github.cache();
         let inventory = read_inventory(&github, &cache).await;
-        let cleanup = patchula_update::cleanup(
-            &github,
-            &cache,
-            "demo/app",
-            "base",
-            "main",
-            &[],
-            &inventory,
-            false,
-        )
-        .await
-        .unwrap();
+        let cleanup =
+            patchula_update::cleanup(&github, &cache, "demo/app", "base", "main", &[], &inventory)
+                .await
+                .unwrap();
         assert_eq!(cleanup.len(), usize::from(!human));
         let s = server.state();
         assert_eq!(
@@ -2786,7 +2733,6 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
@@ -2875,12 +2821,15 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
         repo.merge.squash = true;
     }
     let github = client(server.clone()).await;
-    let actions = pr_cycle(
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let settings = read_inventory(&github, &cache).await.merge_settings;
+    let actions = merging_cycle(
         &github,
         &repo,
         &config,
         std::slice::from_mut(&mut p),
         &snapshot,
+        settings.clone(),
     )
     .await;
     assert_eq!(
@@ -2903,12 +2852,13 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
     let mut draft = Draft::from(next);
     draft.changes_mut()[0].merge = true;
     let mut next = draft.lockfile_pending(true).build();
-    pr_cycle(
+    merging_cycle(
         &github,
         &repo,
         &config,
         std::slice::from_mut(&mut next),
         &snapshot,
+        settings,
     )
     .await;
     let s = server.state();
@@ -3078,7 +3028,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
             .map(|(p, c)| {
                 (
                     p.clone(),
-                    Blob {
+                    BaseFile {
                         sha: blob_sha(c),
                         mode: "100644".into(),
                         content: c.clone(),
@@ -3270,7 +3220,6 @@ async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert!(
@@ -3317,7 +3266,6 @@ async fn single_branch_ref_failure_names_githubs_reason() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(p.action().status, BranchStatus::Error);
@@ -3363,7 +3311,6 @@ async fn no_ref_update_names_the_default_branch() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(single.action().status, BranchStatus::Created);
@@ -3385,7 +3332,6 @@ async fn no_ref_update_names_the_default_branch() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert!(
@@ -3411,18 +3357,10 @@ async fn no_ref_update_names_the_default_branch() {
     }
     let cache = github.cache();
     let inventory = read_inventory(&github, &cache).await;
-    let actions = patchula_update::cleanup(
-        &github,
-        &cache,
-        "demo/app",
-        "base",
-        "main",
-        &[],
-        &inventory,
-        false,
-    )
-    .await
-    .unwrap();
+    let actions =
+        patchula_update::cleanup(&github, &cache, "demo/app", "base", "main", &[], &inventory)
+            .await
+            .unwrap();
     assert!(actions.iter().any(|a| a.status == BranchStatus::Deleted));
     let names = ref_update_names(&server);
     assert!(names.len() > before);
@@ -3443,7 +3381,6 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(plans[0].action().status, BranchStatus::Created);
@@ -3463,18 +3400,10 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
     );
     let before = ref_update_names(&server).len();
-    let actions = patchula_update::cleanup(
-        &github,
-        &cache,
-        "demo/app",
-        "base",
-        "main",
-        &[],
-        &inventory,
-        false,
-    )
-    .await
-    .unwrap();
+    let actions =
+        patchula_update::cleanup(&github, &cache, "demo/app", "base", "main", &[], &inventory)
+            .await
+            .unwrap();
     assert!(actions.is_empty());
     assert_eq!(ref_update_names(&server).len(), before);
     // A recorded base GitHub cannot compare marks a branch that is not the
@@ -3495,18 +3424,10 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         .refs
         .insert("refs/heads/main".into(), "base".into());
     let inventory = read_inventory(&github, &cache).await;
-    let actions = patchula_update::cleanup(
-        &github,
-        &cache,
-        "demo/app",
-        "base",
-        "main",
-        &[],
-        &inventory,
-        false,
-    )
-    .await
-    .unwrap();
+    let actions =
+        patchula_update::cleanup(&github, &cache, "demo/app", "base", "main", &[], &inventory)
+            .await
+            .unwrap();
     assert!(actions.is_empty());
     assert_eq!(ref_update_names(&server).len(), before);
     retag(
@@ -3520,18 +3441,10 @@ async fn cleanup_deletes_nothing_once_the_default_branch_moves() {
         .refs
         .insert("refs/heads/main".into(), "base".into());
     let inventory = read_inventory(&github, &cache).await;
-    let actions = patchula_update::cleanup(
-        &github,
-        &cache,
-        "demo/app",
-        "base",
-        "main",
-        &[],
-        &inventory,
-        false,
-    )
-    .await
-    .unwrap();
+    let actions =
+        patchula_update::cleanup(&github, &cache, "demo/app", "base", "main", &[], &inventory)
+            .await
+            .unwrap();
     assert!(actions.iter().any(|a| a.status == BranchStatus::Deleted));
     check_transcript();
 }
@@ -3695,35 +3608,19 @@ async fn cleanup_deletes_the_same_branches_probing_only_heads_the_inventory_miss
         .repo_mut()
         .refs
         .insert("refs/heads/patchula/moved".into(), "m-moved".into());
-    let actions = patchula_update::cleanup(
-        &github,
-        &cache,
-        "demo/app",
-        "base",
-        "main",
-        &[],
-        &inventory,
-        false,
-    )
-    .await
-    .unwrap();
+    let actions =
+        patchula_update::cleanup(&github, &cache, "demo/app", "base", "main", &[], &inventory)
+            .await
+            .unwrap();
     // The deleted set is the sequential probes': the two owned branches.
     assert_eq!(actions, before);
     // Only the moved head still needed its tip read.
     assert_eq!(tip_reads(&server), 1);
     // Its negative answer is kept: a second run skips it without probing.
-    let actions = patchula_update::cleanup(
-        &github,
-        &cache,
-        "demo/app",
-        "base",
-        "main",
-        &[],
-        &inventory,
-        false,
-    )
-    .await
-    .unwrap();
+    let actions =
+        patchula_update::cleanup(&github, &cache, "demo/app", "base", "main", &[], &inventory)
+            .await
+            .unwrap();
     assert!(actions.is_empty());
     assert_eq!(tip_reads(&server), 1);
     check_transcript();
@@ -3794,19 +3691,11 @@ async fn a_probe_error_stops_cleanup_after_the_deletions_before_it() {
         .repo_mut()
         .refs
         .insert("refs/heads/patchula/m-moved".into(), "m-new".into());
-    let failure = patchula_update::cleanup(
-        &github,
-        &cache,
-        "demo/app",
-        "base",
-        "main",
-        &[],
-        &inventory,
-        false,
-    )
-    .await
-    .unwrap_err()
-    .to_string();
+    let failure =
+        patchula_update::cleanup(&github, &cache, "demo/app", "base", "main", &[], &inventory)
+            .await
+            .unwrap_err()
+            .to_string();
     assert_eq!(failure, before);
     let refs = || server.state().repo().refs.clone();
     assert!(refs().contains_key("refs/heads/patchula/z-owned"));
@@ -3820,7 +3709,7 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
     let old = "obsolete checksum\n";
     snapshot.files.insert(
         "go.sum".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(old),
             mode: "100644".into(),
             content: old.into(),
@@ -3828,7 +3717,7 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
     );
     snapshot.files.insert(
         "Cargo.lock".into(),
-        Blob {
+        BaseFile {
             sha: String::new(),
             mode: "100644".into(),
             content: String::new(),
@@ -3859,7 +3748,6 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(p.action().status, BranchStatus::Created, "{:?}", p.action());
@@ -4046,7 +3934,7 @@ fn reference_data_pins_get_their_own_branch() {
             .map(|(p, c)| {
                 (
                     p.clone(),
-                    Blob {
+                    BaseFile {
                         sha: blob_sha(c),
                         mode: "100644".into(),
                         content: c.clone(),
@@ -4249,7 +4137,6 @@ async fn paginated_inventory_connections_close_the_receipts_fast_path() {
             "main",
             "patchula[bot]",
             config.prs.rebase,
-            false,
         )
         .await;
         publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
@@ -4327,7 +4214,6 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(first.action().status, BranchStatus::Created);
@@ -4351,7 +4237,6 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(
@@ -4450,7 +4335,6 @@ async fn ungenerated_lockfiles_fail_before_any_github_request() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
@@ -4492,7 +4376,6 @@ async fn unmarked_and_badly_marked_branch_tips_are_protected() {
             "main",
             "patchula[bot]",
             Rebase::Behind,
-            false,
         )
         .await;
         assert_eq!(first.action().status, BranchStatus::Created);
@@ -4511,7 +4394,6 @@ async fn unmarked_and_badly_marked_branch_tips_are_protected() {
             "main",
             "patchula[bot]",
             Rebase::Behind,
-            false,
         )
         .await;
         assert_eq!(
@@ -4620,7 +4502,6 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
         "main",
         "patchula[bot]",
         Rebase::Behind,
-        false,
     )
     .await;
     publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
@@ -4836,7 +4717,6 @@ async fn an_overfull_tail_drops_the_controls_but_keeps_ownership() {
         "main",
         "patchula[bot]",
         config.prs.rebase,
-        false,
     )
     .await;
     publish(&mut lifecycle, &github, std::slice::from_mut(&mut p)).await;
@@ -5238,7 +5118,6 @@ async fn an_unreadable_closed_branch_protects_its_plan_only() {
         "main",
         "patchula[bot]",
         config.prs.rebase,
-        false,
     )
     .await;
     publish(&mut lifecycle, &github, &mut plans).await;

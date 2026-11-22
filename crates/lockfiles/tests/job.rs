@@ -1,8 +1,7 @@
 //! `job()`'s dispatch names a manager on every arm and guard; these cases
 //! pin each one's answer — the work it yields, the formats it refuses, and
-//! the declarations no lockfile records. `Refresh::claims` applies the same
-//! names to maintenance, so it is covered here too.
-use patchula_lockfiles::{Ecosystem, Job, Scope, job, refresh};
+//! the declarations no lockfile records.
+use patchula_lockfiles::{Ecosystem, Job, Scope, job};
 use patchula_manager::Dependency;
 use patchula_report::Update;
 use patchula_words::{DependencyKind, Manager, Source, Update as UpdateKind};
@@ -243,64 +242,6 @@ fn a_flake_input_is_moved_by_name() {
             wait_hours: 0,
         })
     );
-}
-
-#[test]
-fn refresh_claims_locks_and_manifests_only_when_the_manager_is_enabled() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
-    let mut config = patchula_config::load(&root).unwrap();
-    config.managers = vec![Manager::Cargo];
-    let paths = paths(&["app/flake.nix"]);
-    // Locks: a supported lockfile claims only while its manager is enabled.
-    let cargo = refresh(Ecosystem::Cargo);
-    assert!(cargo.claims(&config, "Cargo.lock", "app", &paths));
-    config.managers = vec![Manager::Go];
-    assert!(!cargo.claims(&config, "Cargo.lock", "app", &paths));
-    // Manifests: the manifest itself is the work.
-    assert!(refresh(Ecosystem::Go).claims(&config, "go.mod", "app", &paths));
-    assert!(!refresh(Ecosystem::Go).claims(&config, "go.sum", "app", &paths));
-    // LocksBesideManifest: a lock claims only beside its manifest.
-    config.managers = vec![Manager::Nix];
-    let nix = refresh(Ecosystem::Nix);
-    assert!(nix.claims(&config, "flake.lock", "app", &paths));
-    assert!(!nix.claims(&config, "flake.lock", "other", &paths));
-    assert!(!nix.claims(&config, "flake.nix", "app", &paths));
-    assert!(!refresh(Ecosystem::GradleWrapper).claims(
-        &config,
-        "gradle-wrapper.properties",
-        "app",
-        &paths
-    ));
-    // Path: actions.lock claims maintenance at its one committed path,
-    // while the Actions manager is enabled; the same leaf elsewhere is not
-    // the lock.
-    config.managers = vec![Manager::GithubActions];
-    let actions = refresh(Ecosystem::Actions);
-    assert!(actions.claims(&config, "actions.lock", ".github/workflows", &paths));
-    assert!(!actions.claims(&config, "actions.lock", "app", &paths));
-    assert!(!actions.claims(&config, "actions.lock", ".forgejo/workflows", &paths));
-    let jobs = patchula_lockfiles::refresh_jobs(
-        &config,
-        &[patchula_lockfiles::ACTIONS_LOCK.to_owned()].into(),
-    );
-    assert_eq!(
-        jobs.into_iter().collect::<Vec<_>>(),
-        [Job {
-            ecosystem: Ecosystem::Actions,
-            directory: ".github/workflows".into(),
-            scope: Scope::Directory,
-            exact_version: false,
-            publish_age_allow: false,
-            wait_hours: 0,
-        }]
-    );
-    // Without the lockfile there is no job, and without the manager none.
-    assert!(
-        patchula_lockfiles::refresh_jobs(&config, &[".github/workflows/ci.yml".to_owned()].into())
-            .is_empty()
-    );
-    config.managers = vec![Manager::Cargo];
-    assert!(!actions.claims(&config, "actions.lock", ".github/workflows", &paths));
 }
 
 /// `workflows:` is read as gh-actions-lock's parser reads it: a path key it

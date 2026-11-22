@@ -129,38 +129,6 @@ impl Serialize for Job {
         state.end()
     }
 }
-impl<'de> Deserialize<'de> for Job {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct Fields {
-            ecosystem: Ecosystem,
-            directory: String,
-            package: Option<String>,
-            current: Option<String>,
-            target: Option<String>,
-            lock_only: bool,
-            publish_age_allow: bool,
-            wait_hours: u32,
-        }
-        let fields = Fields::deserialize(deserializer)?;
-        let scope = match fields.package {
-            Some(package) => Scope::Package {
-                package,
-                current: fields.current,
-                target: fields.target,
-            },
-            None => Scope::Directory,
-        };
-        Ok(Self {
-            ecosystem: fields.ecosystem,
-            directory: fields.directory,
-            scope,
-            exact_version: fields.lock_only,
-            publish_age_allow: fields.publish_age_allow,
-            wait_hours: fields.wait_hours,
-        })
-    }
-}
 
 /// The directory `path` sits in: everything before its last `/`.
 pub fn directory(path: &str) -> &str {
@@ -175,7 +143,7 @@ pub fn join(directory: &str, leaf: &str) -> String {
     }
 }
 /// The paths under `dir`, which sort together.
-pub fn subtree<'a>(paths: &'a BTreeSet<String>, dir: &'a str) -> impl Iterator<Item = &'a String> {
+fn subtree<'a>(paths: &'a BTreeSet<String>, dir: &'a str) -> impl Iterator<Item = &'a String> {
     let prefix = if dir.is_empty() {
         String::new()
     } else {
@@ -321,22 +289,10 @@ pub fn job(
         Manager::Bundler if dep.kind == patchula_words::DependencyKind::Toolchain => {
             return Ok(None);
         }
-        Manager::Bundler => {
-            let Some(root) = nearest_dir(
-                paths,
-                directory(&dep.file),
-                lock_names(Manager::Bundler).supported,
-            ) else {
-                return Ok(None);
-            };
-            root
-        }
-        Manager::Composer => {
-            let Some(root) = nearest_dir(
-                paths,
-                directory(&dep.file),
-                lock_names(Manager::Composer).supported,
-            ) else {
+        manager @ (Manager::Bundler | Manager::Composer) => {
+            let Some(root) =
+                nearest_dir(paths, directory(&dep.file), lock_names(manager).supported)
+            else {
                 return Ok(None);
             };
             root
@@ -503,15 +459,16 @@ pub fn job(
         },
         exact_version: targeted && update.new_value.is_none(),
         publish_age_allow: update.cooldown.is_some(),
-        // The wait the update's policy answered to, floor folded in; a
-        // batched update records no policy, so the planner re-derives it.
+        // The wait the update's policy answered to, floor folded in. Only
+        // Cargo reads it, and the planner derives Cargo's from the rules;
+        // the others still carry it into the plan fingerprint.
         wait_hours: update.policy.as_ref().map_or(0, |policy| policy.wait_hours),
     }))
 }
 
 /// How scheduled lockfile maintenance finds an ecosystem's work in a
 /// snapshot, from the same file roles `job()` maps dependencies through.
-pub enum Refresh {
+enum Refresh {
     /// A supported lockfile of any listed manager claims the directory;
     /// the run needs one of them enabled in `config.managers`.
     Locks(&'static [Manager]),
@@ -530,7 +487,7 @@ pub enum Refresh {
 impl Refresh {
     /// Whether `leaf` in `directory` is this ecosystem's maintenance work
     /// under `config`, given the snapshot's paths.
-    pub fn claims(
+    fn claims(
         &self,
         config: &Config,
         leaf: &str,
@@ -568,7 +525,7 @@ impl Refresh {
 /// How maintenance discovers `ecosystem`'s work; `job()` does not consult
 /// this — extraction already applied `config.managers` to the dependencies
 /// it reports, while maintenance sees raw paths.
-pub fn refresh(ecosystem: Ecosystem) -> Refresh {
+fn refresh(ecosystem: Ecosystem) -> Refresh {
     match ecosystem {
         Ecosystem::Node => Refresh::Locks(&[Manager::Npm, Manager::Bun]),
         Ecosystem::Cargo => Refresh::Locks(&[Manager::Cargo]),
@@ -815,11 +772,7 @@ pub fn actions_lock_callers(
             let directory = segments.join("/");
             let mut action = None;
             for name in ["action.yml", "action.yaml"] {
-                let path = if directory.is_empty() {
-                    name.to_owned()
-                } else {
-                    format!("{directory}/{name}")
-                };
+                let path = join(&directory, name);
                 if let Some(content) = text(&path)? {
                     action = Some((path, content));
                     break;
@@ -1004,7 +957,7 @@ pub struct GeneratedFile {
 }
 
 /// A repository file as the base commit holds it.
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BaseFile {
     pub sha: String,
     pub mode: String,
@@ -1054,3 +1007,6 @@ pub trait Generate: Send + Sync {
         config: &'a Config,
     ) -> Pin<Box<dyn Future<Output = Result<Generated, Failure>> + Send + 'a>>;
 }
+
+#[cfg(test)]
+mod tests;

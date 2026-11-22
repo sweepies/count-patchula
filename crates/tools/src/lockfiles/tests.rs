@@ -6,7 +6,7 @@ use patchula_update::maintenance::{
     MaintenanceSuccess, maintenance, record_refresh, refresh_scope,
 };
 use patchula_update::testing::Draft;
-use patchula_update::{Blob, Hold, Plan, Snapshot, blob_sha};
+use patchula_update::{Hold, Plan, Snapshot, blob_sha};
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 /// One plan through the batch entry point, as the engine calls it.
@@ -23,13 +23,16 @@ fn job(
     contract::job(dep, update, &snapshot.paths)
 }
 
-/// `validate_targets` for a plan's work, as callers held it.
+/// `validate_targets` for a plan's work, as callers held it; it reads no
+/// snapshot verdicts.
 fn validate_targets(
     plan: &Plan,
     config: &Config,
     files: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    super::validate_targets(&plan.lock_work().expect("planned lock work"), config, files)
+    let snapshot = Snapshot::default();
+    let work = plan.lock_work(&snapshot).expect("planned lock work");
+    super::validate_targets(&work, config, files)
 }
 
 mod real_actions_lock;
@@ -760,7 +763,7 @@ fn snapshot(files: &BTreeMap<String, String>) -> Snapshot {
             .map(|(p, c)| {
                 (
                     p.clone(),
-                    Blob {
+                    BaseFile {
                         sha: blob_sha(c),
                         mode: "100644".into(),
                         content: c.clone(),
@@ -905,7 +908,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
     // lock, which waits for any run in progress; a used tool takes the
     // shared lock only, so all three plans can run at once.
     runner.record_use(&[("go".into(), default_version("go"))]);
-    let mut snapshot = snapshot(&files);
+    let snapshot = snapshot(&files);
     let config = config();
     let mut plans: Vec<_> = (0..3)
         .map(|_| {
@@ -915,7 +918,7 @@ async fn plans_regenerate_lockfiles_side_by_side() {
         })
         .collect();
     let finished = std::sync::atomic::AtomicUsize::new(0);
-    patchula_update::lock_all(&runner, &mut plans, &mut snapshot, &config, &|| {
+    patchula_update::lock_all(&runner, &mut plans, &snapshot, &config, &|| {
         finished.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     })
     .await;
@@ -927,7 +930,6 @@ async fn plans_regenerate_lockfiles_side_by_side() {
         executor.most.load(std::sync::atomic::Ordering::SeqCst),
         executor.target
     );
-    assert!(snapshot.files.contains_key("go.sum"));
 }
 
 /// A registry credential committed to a file a tool reads stops the run
@@ -1027,7 +1029,6 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
         "main",
         "patchula[bot]",
         patchula_config::Rebase::Behind,
-        false,
     )
     .await;
     assert!(p.action().commit.is_none());
@@ -6947,18 +6948,6 @@ fn nearest_takes_the_deepest_lock_directory_above_a_file() {
     assert_eq!(nearest("Cargo.toml", &["Cargo.lock"]), None);
 }
 
-#[test]
-fn subtree_lists_only_paths_under_the_directory() {
-    let paths: BTreeSet<String> = ["a/x", "a/b/y", "a-b/z", "ab/w", "c"]
-        .map(String::from)
-        .into();
-    let under = |dir| subtree(&paths, dir).cloned().collect::<Vec<_>>();
-    assert_eq!(under("a"), ["a/b/y", "a/x"]);
-    assert_eq!(under("a/b"), ["a/b/y"]);
-    assert_eq!(under("d"), Vec::<String>::new());
-    assert_eq!(under("").len(), 5);
-}
-
 /// (path, steers bitmask over ECOSYSTEMS, materialized, writable,
 /// cargo_config, nuget.config)
 #[rustfmt::skip]
@@ -7421,11 +7410,11 @@ async fn cargo_runs_update_workspace_for_untargeted_jobs() {
     );
 }
 
-/// Each descriptor's install and refresh rules: cargo installs through
-/// rustup (nothing through mise), the Gradle wrapper never schedules
-/// maintenance, and PHP installs only when both tools are pinned.
+/// Each descriptor's install rules: cargo installs through rustup
+/// (nothing through mise), and PHP installs only when both tools are
+/// pinned.
 #[test]
-fn install_specs_and_refresh_claims_cover_the_special_cases() {
+fn install_specs_cover_the_special_cases() {
     let defaults = tool_defaults().unwrap();
     assert!(
         descriptor(Ecosystem::Cargo)
@@ -7439,14 +7428,6 @@ fn install_specs_and_refresh_claims_cover_the_special_cases() {
             .install_specs(&missing)
             .is_empty()
     );
-    let config = config();
-    let paths = BTreeSet::from(["gradle/wrapper/gradle-wrapper.properties".to_string()]);
-    assert!(!contract::refresh(Ecosystem::GradleWrapper).claims(
-        &config,
-        "gradle-wrapper.properties",
-        "gradle/wrapper",
-        &paths
-    ));
 }
 
 /// Cargo's lockfile reader answers empty for a lockfile it cannot parse,
@@ -9353,7 +9334,7 @@ async fn relock_prepared_with(
         .collect();
     let temp = tempfile::tempdir().unwrap();
     let runner = test_runner(temp.path(), executor.clone());
-    let mut snap = snapshot(files);
+    let snap = snapshot(files);
     let config = config();
     let mut p = maintenance(&repo(), &config, &snap, &[], None, monday())
         .unwrap()
@@ -9368,7 +9349,7 @@ async fn relock_prepared_with(
     let warnings = patchula_update::lock_all(
         &runner,
         std::slice::from_mut(&mut p),
-        &mut snap,
+        &snap,
         &config,
         &|| {},
     )

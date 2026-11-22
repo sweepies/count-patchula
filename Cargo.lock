@@ -2197,6 +2197,7 @@ dependencies = [
  "patchula-engine",
  "patchula-github",
  "patchula-http",
+ "patchula-lockfiles",
  "patchula-lookup",
  "patchula-manager",
  "patchula-notes",

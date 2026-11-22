@@ -527,7 +527,7 @@ mod tests {
                 .map(|(p, c)| {
                     (
                         p.to_string(),
-                        crate::Blob {
+                        patchula_lockfiles::BaseFile {
                             sha: String::new(),
                             mode: "100644".into(),
                             content: c.to_string(),
