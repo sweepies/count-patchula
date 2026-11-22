@@ -471,9 +471,6 @@ impl crate::Ecosystem for Descriptor {
     fn selected(&self, _config: &Config, path: &str) -> bool {
         crate::roles::leaf(path) == "pom.xml"
     }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Maven, path).registry
-    }
     fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
         let referenced: std::collections::BTreeSet<String> = referenced(files)
             .into_iter()

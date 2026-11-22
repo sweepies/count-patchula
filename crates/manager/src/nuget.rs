@@ -777,12 +777,6 @@ impl crate::Ecosystem for Descriptor {
     fn selected(&self, _config: &patchula_config::Config, path: &str) -> bool {
         selected(path)
     }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Nuget, path).registry
-    }
-    fn backend_settings(&self, path: &str) -> bool {
-        config_file(path)
-    }
     fn prepare<'a>(
         &self,
         _scanner: &'a Scanner,

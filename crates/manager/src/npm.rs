@@ -694,12 +694,6 @@ impl crate::Ecosystem for Descriptor {
                 | ".npmrc"
         )
     }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(self.manager, path).registry
-    }
-    fn backend_settings(&self, path: &str) -> bool {
-        self.registry_file(path)
-    }
     fn locked_source(&self) -> Option<Source> {
         Some(Source::Npm)
     }

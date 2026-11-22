@@ -897,9 +897,6 @@ impl crate::Ecosystem for Descriptor {
             "Gemfile" | "Gemfile.lock" | ".ruby-version"
         )
     }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Bundler, path).registry
-    }
     fn prepare<'a>(
         &self,
         _scanner: &'a Scanner,

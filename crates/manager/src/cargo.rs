@@ -742,18 +742,12 @@ impl crate::Ecosystem for Descriptor {
             "Cargo.toml" | "Cargo.lock" | "rust-toolchain" | "rust-toolchain.toml"
         )
     }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Cargo, path).registry
-    }
     fn locked_source(&self) -> Option<Source> {
         Some(Source::Crates)
     }
     fn inventory_only(&self, _dep: &Dependency, raw: &str) -> bool {
         // workspace=true is inventory; the root declaration owns its version.
         raw == "true"
-    }
-    fn backend_settings(&self, path: &str) -> bool {
-        config_file(path)
     }
     fn more<'a>(&self, files: &'a Files) -> Option<crate::PathPredicate<'a>> {
         // The manifests above a crate's, which can patch it as its

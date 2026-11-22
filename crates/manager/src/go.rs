@@ -389,9 +389,6 @@ impl crate::Ecosystem for Descriptor {
     fn selected(&self, _config: &Config, path: &str) -> bool {
         crate::roles::leaf(path) == "go.mod"
     }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Go, path).registry
-    }
     fn declared_form(
         &self,
         dep: &Dependency,

@@ -329,9 +329,6 @@ impl crate::Ecosystem for Descriptor {
     fn selected(&self, _config: &Config, path: &str) -> bool {
         matches!(crate::roles::leaf(path), "composer.json" | "composer.lock")
     }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Composer, path).registry
-    }
     fn prepare<'a>(
         &self,
         _scanner: &'a Scanner,

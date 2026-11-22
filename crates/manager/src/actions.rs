@@ -658,12 +658,6 @@ impl crate::Ecosystem for Descriptor {
             ..Proposing::BASE
         }
     }
-    /// The lockfile is read into the snapshot without being extracted
-    /// from: which workflows it lists is the pinning fact, and its
-    /// `uses:` entries are the tool's, not dependencies to update.
-    fn registry_file(&self, path: &str) -> bool {
-        path == crate::roles::ACTIONS_LOCK
-    }
     fn selected(&self, _config: &Config, path: &str) -> bool {
         let leaf = crate::roles::leaf(path);
         ([

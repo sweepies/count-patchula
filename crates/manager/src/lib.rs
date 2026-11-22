@@ -513,20 +513,11 @@ pub(crate) type Finisher<'a> = Box<dyn FnMut(&mut Extraction) -> Result<(), Stri
 pub(crate) trait Ecosystem {
     /// The default file rule, used unless `files` config overrides it.
     fn selected(&self, config: &Config, path: &str) -> bool;
-    /// Settings files read whatever `files`/`exclude` select.
-    fn registry_file(&self, _path: &str) -> bool {
-        false
-    }
     /// Whether another format shares `path`'s name with this ecosystem's
     /// files, so a selected file of that name may not be one of its own:
     /// `.pkl` is also Python's pickle extension. See
     /// [`Scanner::shared_name`].
     fn shared_name(&self, _path: &str) -> bool {
-        false
-    }
-    /// The settings a package backend of this ecosystem reads, which mise's
-    /// own rule reuses rather than naming files itself.
-    fn backend_settings(&self, _path: &str) -> bool {
         false
     }
     /// A predicate for the paths among the tree a later round must read,
@@ -818,12 +809,12 @@ impl Scanner {
     /// applies to an npm extractor with npm disabled, which reads `.npmrc`
     /// for its registries.
     fn registry_file(&self, path: &str) -> bool {
-        (self.npm_enabled() && ecosystem(Manager::Npm).registry_file(path))
+        (self.npm_enabled() && roles::eco_roles(Manager::Npm, path).registry)
             || self
                 .config
                 .managers
                 .iter()
-                .any(|m| ecosystem(*m).registry_file(path))
+                .any(|m| roles::eco_roles(*m, path).registry)
     }
     /// The pip requirements files among `paths`, which the Count does not
     /// maintain, as skipped entries saying why, when Python projects are
@@ -1109,7 +1100,8 @@ mod tests {
     }
 
     /// The per-path classification: `needs`, `registry_settings`,
-    /// `linked_settings`, `credential_scope`, public-verdict coverage and each manager's `registry_file`, for root
+    /// `linked_settings`, `credential_scope`, public-verdict coverage and
+    /// each manager's `registry` role, for root
     /// and nested forms of representative paths.
     #[test]
     fn file_classification_is_pinned() {
@@ -1123,7 +1115,7 @@ mod tests {
             &'static str,
         );
         /// (path, needs, registry_settings, linked_settings, credential_scope,
-        /// public verdict, registry_file managers)
+        /// public verdict, registry managers)
         #[rustfmt::skip]
         const TABLE: &[Row] = &[
             ("package.json", true, false, None, false, true, ""),
@@ -1425,10 +1417,10 @@ mod tests {
             );
             let managers: Vec<&str> = super::Manager::ALL
                 .iter()
-                .filter(|m| super::ecosystem(**m).registry_file(path))
+                .filter(|m| super::roles::eco_roles(**m, path).registry)
                 .map(|m| m.as_str())
                 .collect();
-            assert_eq!(managers.join(","), registry, "{path}: registry_file");
+            assert_eq!(managers.join(","), registry, "{path}: registry");
         }
     }
 

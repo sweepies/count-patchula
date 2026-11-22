@@ -23,8 +23,7 @@ pub struct LockNames {
 /// The roles one file name can have for one manager's ecosystem.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EcoRoles {
-    /// A settings file read whatever `files`/`exclude` select: the
-    /// ecosystem's `registry_file` answer.
+    /// A settings file read whatever `files`/`exclude` select.
     pub registry: bool,
     /// Can say where packages come from.
     pub settings: bool,
@@ -246,15 +245,8 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             roles.writable = named(GRADLE_WRAPPER, path);
         }
         Manager::Mise => {
-            roles.registry = crate::mise::config_file(path)
-                || [
-                    Manager::Npm,
-                    Manager::Pyproject,
-                    Manager::Cargo,
-                    Manager::Nuget,
-                ]
-                .iter()
-                .any(|m| crate::ecosystem(*m).backend_settings(path));
+            // A package backend mise runs in the project reads its settings.
+            roles.registry = crate::mise::config_file(path) || crate::mise::backend_settings(path);
             roles.settings = crate::mise::config_file(path);
             roles.read = named(MISE_SELECTED, path);
             roles.writable = named(lock_names(Manager::Mise).supported, path);
@@ -273,6 +265,10 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             // work holds an Actions job (checkout.rs), so nothing here
             // is `read` and `.github/dependabot.yml` stays out.
             roles.writable = path == ACTIONS_LOCK;
+            // The lockfile is read into the snapshot without being
+            // extracted from: which workflows it lists is the pinning
+            // fact, and its `uses:` entries are the tool's.
+            roles.registry = roles.writable;
             // A workflow or action file can steer the run's fetches: it
             // names the repositories the tool resolves.
             roles.steers = github_workflow(path) || action_file(path) || roles.writable;
@@ -469,9 +465,9 @@ mod tests {
     /// Every file the tools read credentials from is scanned for committed
     /// ones, and every other file that can say where packages come from
     /// names here why it is not. The probes are every name the taxonomy
-    /// lists plus a path for each predicate, at the root and nested, so a
-    /// settings file added without a `credential_scan` fails here until it
-    /// gets one or a reason.
+    /// lists plus a path for each predicate the unscanned list names, at
+    /// the root and nested, so a settings file added without a
+    /// `credential_scan` fails here until it gets one or a reason.
     #[test]
     fn credential_bearing_settings_are_scanned() {
         /// Files whose tools read credentials, or credentialed registry
@@ -492,110 +488,76 @@ mod tests {
             ".cargo/config.toml",
             ".cargo/config",
         ];
-        /// Settings and registry files with no scan, and why. Those marked
-        /// "not scanned yet" can hold credentials their tools read and are
-        /// gaps in the hygiene check, not in the `public` partition's
-        /// boundary.
-        const UNSCANNED: &[(&str, &str)] = &[
-            ("pdm.toml", "not scanned yet: PDM repository passwords"),
-            ("pixi.toml", "names channels and indexes only"),
+        /// Files that can name registries with no scan, and why. Those
+        /// "not scanned yet" can hold credentials their tools read: gaps
+        /// in the hygiene check, not in the `public` partition's boundary.
+        const UNSCANNED: &[(&[&str], &str)] = &[
+            (&["pdm.toml"], "not scanned yet: PDM repository passwords"),
             (
-                "hatch.toml",
-                "Hatch reads publish credentials from its user config",
-            ),
-            ("uv.lock", "a lockfile: names, versions, hashes and sources"),
-            (
-                "poetry.lock",
-                "a lockfile: names, versions, hashes and sources",
-            ),
-            (
-                "Gemfile.lock",
-                "a lockfile: names, versions, hashes and sources",
-            ),
-            (
-                "composer.lock",
-                "a lockfile: names, versions, hashes and sources",
-            ),
-            (
-                ".bundle/config",
+                &[".bundle/config"],
                 "not scanned yet: BUNDLE_<HOST> credentials",
             ),
+            (&["settings.xml"], "not scanned yet: Maven server passwords"),
+            (&["pixi.toml"], "names channels and indexes only"),
             (
-                "Cargo.toml",
+                &["hatch.toml"],
+                "Hatch reads publish credentials from user config",
+            ),
+            (
+                &[
+                    "uv.lock",
+                    "poetry.lock",
+                    "Gemfile.lock",
+                    "composer.lock",
+                    ACTIONS_LOCK,
+                ],
+                "a lockfile: names, versions, hashes and sources",
+            ),
+            (
+                &["Cargo.toml"],
                 "Cargo reads registry tokens only from its config",
             ),
-            ("go.work", "Go reads credentials from .netrc or GOAUTH"),
+            (&["go.work"], "Go reads credentials from .netrc or GOAUTH"),
             (
-                "pom.xml",
+                &["pom.xml", ".mvn/maven.config"],
                 "Maven reads server credentials from settings.xml",
             ),
-            ("settings.xml", "not scanned yet: Maven server passwords"),
             (
-                ".mvn/maven.config",
-                "command-line flags; credentials live in settings.xml",
-            ),
-            ("build.gradle", "a build script, out of the check's scope"),
-            (
-                "settings.gradle.kts",
-                "a build script, out of the check's scope",
-            ),
-            (
-                "buildSrc/src/main/kotlin/Conventions.kt",
+                &[
+                    "build.gradle",
+                    "settings.gradle.kts",
+                    "buildSrc/src/main/kotlin/Conventions.kt",
+                ],
                 "build logic, out of the check's scope",
             ),
             (
-                "App.csproj",
+                &[
+                    "App.csproj",
+                    "Build.targets",
+                    "Directory.Packages.props",
+                    "Directory.Build.props",
+                    "Directory.Build.targets",
+                ],
                 "NuGet reads source credentials only from nuget.config",
             ),
             (
-                "Build.targets",
-                "NuGet reads source credentials only from nuget.config",
-            ),
-            (
-                "Directory.Packages.props",
-                "NuGet reads source credentials only from nuget.config",
-            ),
-            (
-                "Directory.Build.props",
-                "NuGet reads source credentials only from nuget.config",
-            ),
-            (
-                "Directory.Build.targets",
-                "NuGet reads source credentials only from nuget.config",
-            ),
-            ("mise.toml", "environment values, out of the check's scope"),
-            (".mise.toml", "environment values, out of the check's scope"),
-            (
-                "mise.local.toml",
-                "environment values, out of the check's scope",
-            ),
-            (
-                ".miserc.toml",
-                "environment values, out of the check's scope",
-            ),
-            (
-                ".miserc.local.toml",
-                "environment values, out of the check's scope",
-            ),
-            (
-                "mise.production.toml",
-                "environment values, out of the check's scope",
-            ),
-            (
-                "mise/config.toml",
-                "environment values, out of the check's scope",
-            ),
-            (
-                ".config/mise/config.toml",
-                "environment values, out of the check's scope",
-            ),
-            (
-                ".config/mise/conf.d/tools.toml",
+                &[
+                    "mise.toml",
+                    ".mise.toml",
+                    "mise.local.toml",
+                    ".miserc.toml",
+                    ".miserc.local.toml",
+                    "mise.production.toml",
+                    "mise/config.toml",
+                    ".config/mise/config.toml",
+                    ".config/mise/conf.d/tools.toml",
+                ],
                 "environment values, out of the check's scope",
             ),
         ];
+        let unscanned = |probe: &str| UNSCANNED.iter().any(|(names, _)| names.contains(&probe));
         let mut probes: Vec<&str> = SCANNED.to_vec();
-        probes.extend(UNSCANNED.iter().map(|(path, _)| *path));
+        probes.extend(UNSCANNED.iter().flat_map(|(names, _)| names.iter()));
         probes.extend(NODE_SETTINGS.iter().chain(PNPM_WORKSPACE));
         probes.extend(PYTHON_SETTINGS.iter().chain(PIP_SETTINGS));
         probes.extend(MISE_SELECTED);
@@ -604,23 +566,6 @@ mod tests {
             probes.extend(manifest_names(*manager));
             probes.extend(locks.supported.iter().chain(locks.unsupported));
         }
-        probes.extend([
-            ".bundle/config",
-            "go.work",
-            "pom.xml",
-            "settings.xml",
-            ".mvn/maven.config",
-            "build.gradle",
-            "settings.gradle.kts",
-            "buildSrc/src/main/kotlin/Conventions.kt",
-            "App.csproj",
-            "Build.targets",
-            "mise/config.toml",
-            ".config/mise/config.toml",
-            ".config/mise/conf.d/tools.toml",
-            "mise.production.toml",
-            ACTIONS_LOCK,
-        ]);
         let mut unlisted = Vec::new();
         for probe in probes {
             for path in [probe.to_owned(), format!("sub/dir/{probe}")] {
@@ -632,7 +577,7 @@ mod tests {
                     assert!(credential_scope(&path), "{path} is not scanned");
                 } else if names_registries {
                     assert!(!credential_scope(&path), "{path} is scanned but not listed");
-                    if !UNSCANNED.iter().any(|(listed, _)| *listed == probe) {
+                    if !unscanned(probe) {
                         unlisted.push(path);
                     }
                 }
