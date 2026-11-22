@@ -119,8 +119,8 @@ fn shown(uri: &str) -> String {
     }
 }
 
-/// How a Git LFS pointer file starts: the file's contents are elsewhere.
-const LFS_POINTER: &str = "version https://git-lfs.github.com/spec/v1\n";
+/// The first line of a Git LFS pointer file, whose contents are elsewhere.
+const LFS_POINTER: &str = "version https://git-lfs.github.com/spec/v1";
 
 /// The package URIs `text` imports; one this manager cannot read is
 /// recorded in `skipped` with the reason. A module pklr cannot lex is an
@@ -136,7 +136,7 @@ pub(super) fn extract(
     text: &Lines<'_>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
-    if text.starts_with(LFS_POINTER) {
+    if text.lines().next() == Some(LFS_POINTER) {
         return Ok(Vec::new());
     }
     let imports = match patchula_config::pkl_imports(text) {
