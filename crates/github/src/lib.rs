@@ -286,11 +286,6 @@ impl Client {
         self.0.options.concurrency
     }
 
-    /// The write budget's token count this client paces writes with.
-    pub fn write_burst(&self) -> usize {
-        self.0.options.write_burst
-    }
-
     /// The request cap `graphql_pages` applies to a connection walk, for a
     /// caller that paginates more than one connection in a single document
     /// and so drives the cursor loop itself.
@@ -349,10 +344,11 @@ impl Client {
         Ok(())
     }
 
-    /// Public metadata reads share the transport pool but never GitHub auth.
     /// A registry client on this client's cache and transport, following
-    /// `rules`. Its options are the defaults at this client's concurrency,
-    /// which was validated when the client was built.
+    /// `rules`, that never sends GitHub auth. Its options are the defaults at
+    /// this client's concurrency, which was validated when the client was
+    /// built.
+    #[cfg(feature = "testing")]
     pub fn public_http(
         &self,
         rules: std::sync::Arc<dyn patchula_http::RegistryRules>,
@@ -489,15 +485,21 @@ impl Client {
     /// cached success is returned without asking GitHub again. The cache key
     /// carries the credential scope, so a credential with another reach never
     /// reads it.
-    pub async fn get_immutable_response(&self, path: &str) -> Result<Response> {
+    async fn immutable_response(&self, path: &str) -> Result<Response> {
         self.get_representation(path, None, Read::Immutable)
             .await?
             .ok_or(Error::MissingBody)
     }
 
-    /// `get_immutable_response` decoded, as `get_fresh` decodes `get`.
+    /// The raw answer `get_immutable` decodes.
+    #[cfg(feature = "testing")]
+    pub async fn get_immutable_response(&self, path: &str) -> Result<Response> {
+        self.immutable_response(path).await
+    }
+
+    /// `immutable_response` decoded, as `get_fresh` decodes `get`.
     pub async fn get_immutable<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let response = self.get_immutable_response(path).await?;
+        let response = self.immutable_response(path).await?;
         decode(&response.body, format!("GET {path}"))
     }
 

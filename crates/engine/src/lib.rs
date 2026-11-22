@@ -1803,25 +1803,53 @@ mod tests {
         assert_eq!(installation.mise_access(&app, &npm), MiseAccess::Run);
     }
 
+    /// Answers every request with an empty JSON object.
+    struct Empty;
+    impl Transport for Empty {
+        fn send(&self, _: reqwest::Request) -> Exchange<'_> {
+            Box::pin(async {
+                Ok(patchula_http::Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: b"{}".to_vec(),
+                    stale: None,
+                })
+            })
+        }
+    }
+
     /// A token run, the CLI's, paces writes with the operator's
-    /// `github.writeBurst`, as a credentialed run does.
-    #[tokio::test]
+    /// `github.writeBurst`, as a credentialed run does: with a burst of one,
+    /// a second write waits for the budget to refill.
+    #[tokio::test(start_paused = true)]
     async fn a_token_run_honours_the_write_burst() {
-        let mut settings = patchula_config::settings::Settings::default();
-        settings.github.write_burst = 1;
-        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        let engine = Engine::from_settings(
-            &settings,
-            Vec::new(),
-            Auth::Token("t".into()),
-            4,
-            patchula_words::Recheck::NextRun,
-            cache,
-            Arc::new(Never),
-        )
-        .await
-        .unwrap();
-        assert_eq!(engine.github.write_burst(), 1);
+        async fn two_writes(write_burst: usize) -> std::time::Duration {
+            let mut settings = patchula_config::settings::Settings::default();
+            settings.github.write_burst = write_burst;
+            let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+            let engine = Engine::from_settings(
+                &settings,
+                Vec::new(),
+                Auth::Token("t".into()),
+                4,
+                patchula_words::Recheck::NextRun,
+                cache,
+                Arc::new(Empty),
+            )
+            .await
+            .unwrap();
+            let started = tokio::time::Instant::now();
+            for _ in 0..2 {
+                engine
+                    .github
+                    .post::<serde_json::Value>("repos/acme/app/git/trees", serde_json::json!({}))
+                    .await
+                    .unwrap();
+            }
+            started.elapsed()
+        }
+        assert!(two_writes(1).await >= std::time::Duration::from_secs(1));
+        assert!(two_writes(12).await < std::time::Duration::from_secs(1));
     }
 
     /// An extraction one release writes is read by the next: the

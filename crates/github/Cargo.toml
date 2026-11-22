@@ -10,6 +10,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Reads and constructors only tests use.
+testing = []
+
 [dependencies]
 patchula-cache = { path = "../cache" }
 patchula-config = { path = "../config" }
@@ -30,6 +34,7 @@ tracing = "0.1"
 
 [dev-dependencies]
 aws-lc-rs = "1"
+patchula-github = { path = ".", features = ["testing"] }
 patchula-testkit = { path = "../testkit" }
 tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }
