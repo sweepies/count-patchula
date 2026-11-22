@@ -93,11 +93,12 @@ The Count runs mise the way he runs the lockfile tools, and more strictly:
   whose values must not read as numbers, booleans or dates.
 - With options that point mise at any host followed, apart from cloud
   instance-metadata endpoints: a URL whose host is, or resolves to, a
-  link-local address (169.254.0.0/16, fe80::/10), AWS's `fd00:ec2::254`,
-  `metadata.google.internal` or `metadata` is refused, since those hand out
-  the credentials of the machine the Count runs on and the answer would
-  become versions in a pull request. A host that does not resolve is refused
-  too. mise resolves the name again and follows redirects, so a host that
+  link-local address (169.254.0.0/16, fe80::/10) or AWS's `fd00:ec2::254`
+  is refused, since those hand out the credentials of the machine the Count
+  runs on and the answer would become versions in a pull request. A host
+  that does not resolve is refused too, so `metadata.google.internal` is
+  refused everywhere: it resolves to the link-local endpoint on Google Cloud
+  and nowhere else. mise resolves the name again and follows redirects, so a host that
   changes its answer or redirects there is not caught; block the metadata
   endpoint in the network where that matters.
 - With no AWS credentials for mise's s3 backend: no `AWS_*` variable is

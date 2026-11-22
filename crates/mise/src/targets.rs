@@ -8,8 +8,6 @@ use std::net::{IpAddr, Ipv6Addr};
 use toml_edit::Value;
 use url::{Host, Url};
 
-/// Names that reach a metadata endpoint without an address in them.
-const METADATA_NAMES: &[&str] = &["metadata.google.internal", "metadata"];
 /// AWS's IPv6 instance-metadata address.
 const AWS_IPV6_METADATA: Ipv6Addr = Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
 
@@ -69,10 +67,10 @@ pub(crate) async fn check(tool: &str) -> Result<(), Error> {
             Some(Host::Ipv4(v4)) => vec![IpAddr::V4(v4)],
             Some(Host::Ipv6(v6)) => vec![IpAddr::V6(v6)],
             Some(Host::Domain(name)) => {
+                // A metadata name such as `metadata.google.internal` resolves
+                // to a link-local address where it reaches an endpoint, and
+                // does not resolve anywhere else.
                 let name = name.trim_end_matches('.').to_ascii_lowercase();
-                if METADATA_NAMES.contains(&name.as_str()) {
-                    return refuse(WHY.into());
-                }
                 match tokio::net::lookup_host((name.as_str(), port)).await {
                     Ok(found) => found.map(|address| address.ip()).collect(),
                     Err(_) => {
