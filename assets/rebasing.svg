@@ -1,6 +1,163 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-label="rebasing">
-  <!-- Placeholder: two fangs. The animated drawing replaces this file. -->
-  <path d="M8 10h32" stroke="#6b2a8c" stroke-width="4" stroke-linecap="round"/>
-  <path d="M14 12l4 22 4-22z" fill="#f4f1ea" stroke="#6b2a8c" stroke-width="2" stroke-linejoin="round"/>
-  <path d="M26 12l4 22 4-22z" fill="#f4f1ea" stroke="#6b2a8c" stroke-width="2" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 64" width="160" height="64" role="img" aria-label="Count Patchula the bat happily sinking his fangs into commits along a branch while rebasing">
+  <title>The Count rebasing: bat sinking his teeth into commits</title>
+  <defs>
+    <clipPath id="bc"><rect x="6" y="35" width="148" height="29"/></clipPath>
+  </defs>
+  <style>
+    .branch{stroke:#a77bbb;stroke-width:3.5;stroke-linecap:round;fill:none}
+    .n-raw{fill:#fff;stroke:#a77bbb;stroke-width:2.6}
+    .n-done{fill:#e85a4f;stroke:#b9382f;stroke-width:2.5}
+    .dimple{fill:#b9382f}
+    .wing-rim{fill:#2b1b2e;stroke:#a77bbb;stroke-width:3.2;stroke-linejoin:round}
+    .wing-fill{fill:#2b1b2e}
+    .wing-i,.ear-in,.cheek,.bite-o,.sd{fill:#e85a4f}
+    .rib{fill:none;stroke:#2b1b2e;stroke-width:1.7;stroke-linecap:round}
+    .head-rim{fill:#2b1b2e;stroke:#a77bbb;stroke-width:3.2;stroke-linejoin:round}
+    .head-fill{fill:#2b1b2e}
+    .smile{fill:none;stroke:#fff;stroke-width:1.8;stroke-linecap:round}
+    .fang{fill:#fff;stroke:#2b1b2e;stroke-width:1.35;stroke-linejoin:round}
+    .eye-h{fill:none;stroke:#fff;stroke-width:2.4;stroke-linecap:round}
+    .sc{stroke:#e85a4f;stroke-width:2.4;stroke-linecap:round}
+    .sp{stroke:#a77bbb;stroke-width:2.2;stroke-linecap:round}
+
+    .count{transform-origin:80px 35px;animation:chomp 2s ease-in-out infinite}
+    .wl{transform-origin:61px 34px;animation:fl 2s ease-in-out infinite}
+    .wr{transform-origin:99px 34px;animation:fr 2s ease-in-out infinite}
+    .eo{animation:eo 2s linear infinite}
+    .eh,.bite-o{animation:eh 2s linear infinite}
+    .track{animation:slide 2s ease-in-out infinite}
+    .ci{animation:fi 2s linear infinite}
+    .co{animation:fo 2s linear infinite}
+    .ms{transform-origin:80px 60.5px;animation:sq 2s ease-in-out infinite}
+    .mb{animation:tc 2s linear infinite}
+    .sparks{transform-origin:80px 46px;animation:pop 2s ease-out infinite}
+
+    @keyframes chomp{
+      0%,10%{transform:translateY(-9.4px) rotate(-2.5deg)}
+      16%{transform:translateY(-10.4px) scale(.98,1.02) rotate(0deg)}
+      26%{transform:translateY(2px) scale(1.05,.94) rotate(0deg)}
+      34%{transform:translateY(.8px) scale(1,1) rotate(-2deg)}
+      46%{transform:translateY(1px) scale(1.02,.98) rotate(2deg)}
+      56%{transform:translateY(.8px) scale(1,1) rotate(0deg)}
+      72%,100%{transform:translateY(-9.4px) rotate(-2.5deg)}
+    }
+    @keyframes fl{
+      0%,10%{transform:rotate(6deg)}
+      16%{transform:rotate(-8deg)}
+      26%{transform:rotate(17deg)}
+      36%,54%{transform:rotate(12deg)}
+      65%{transform:rotate(-10deg)}
+      76%,100%{transform:rotate(6deg)}
+    }
+    @keyframes fr{
+      0%,10%{transform:rotate(-6deg)}
+      16%{transform:rotate(8deg)}
+      26%{transform:rotate(-17deg)}
+      36%,54%{transform:rotate(-12deg)}
+      65%{transform:rotate(10deg)}
+      76%,100%{transform:rotate(-6deg)}
+    }
+    @keyframes eo{0%,23%{opacity:1}25%,57%{opacity:0}59%,100%{opacity:1}}
+    @keyframes eh{0%,23%{opacity:0}25%,57%{opacity:1}59%,100%{opacity:0}}
+    @keyframes slide{0%,62%{transform:translateX(0)}94%,100%{transform:translateX(44px)}}
+    @keyframes fi{0%,74%{opacity:0}90%,100%{opacity:1}}
+    @keyframes fo{0%,66%{opacity:1}82%,100%{opacity:0}}
+    @keyframes sq{0%,22%{transform:scale(1,1)}27%{transform:scale(1.18,.82)}34%,54%{transform:scale(1.10,.90)}62%,100%{transform:scale(1,1)}}
+    @keyframes tc{0%,24%{opacity:0}27%,100%{opacity:1}}
+    @keyframes pop{0%,23%{opacity:0;transform:scale(.55)}27%{opacity:1;transform:scale(1.05)}46%,100%{opacity:0;transform:scale(1.20)}}
+
+    @media (prefers-reduced-motion:reduce){
+      .count,.wl,.wr,.eo,.eh,.bite-o,.track,.ci,.co,.ms,.mb,.sparks{animation:none}
+      .eo,.ci,.sparks{opacity:0}
+      .eh,.bite-o,.mb,.co{opacity:1}
+      .count{transform:translateY(.8px)}
+      .wl{transform:rotate(12deg)}
+      .wr{transform:rotate(-12deg)}
+      .ms{transform:scale(1.10,.90)}
+    }
+  </style>
+
+  <!-- Branch & sliding commits -->
+  <line class="branch" x1="10" y1="52" x2="150" y2="52"/>
+  <g clip-path="url(#bc)">
+    <g class="track">
+      <circle class="n-raw ci" cx="-8" cy="52" r="8.2"/>
+      <circle class="n-raw" cx="36" cy="52" r="8.2"/>
+      <g class="ms">
+        <circle class="n-raw" cx="80" cy="52" r="8.2"/>
+        <g class="mb">
+          <circle class="n-done" cx="80" cy="52" r="8.2"/>
+          <circle class="dimple" cx="75.4" cy="49" r="1.25"/>
+          <circle class="dimple" cx="84.6" cy="49" r="1.25"/>
+        </g>
+      </g>
+      <g class="co">
+        <circle class="n-done" cx="124" cy="52" r="8.2"/>
+        <circle class="dimple" cx="119.4" cy="49" r="1.25"/>
+        <circle class="dimple" cx="128.6" cy="49" r="1.25"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- Comic bite sparkles (in clear space flanking the bite) -->
+  <g class="sparks">
+    <line class="sc" x1="63.5" y1="45.8" x2="57.5" y2="43.5"/>
+    <line class="sp" x1="62.5" y1="48.5" x2="56.5" y2="48.2"/>
+    <circle class="sd" cx="55.5" cy="45.6" r="1.3"/>
+    <line class="sc" x1="96.5" y1="45.8" x2="102.5" y2="43.5"/>
+    <line class="sp" x1="97.5" y1="48.5" x2="103.5" y2="48.2"/>
+    <circle class="sd" cx="104.5" cy="45.6" r="1.3"/>
+  </g>
+
+  <!-- Count Patchula the bat -->
+  <g class="count">
+    <!-- Left wing: tucked behind body, evenly inset coral membrane with matching concave scallops, and ribs -->
+    <g class="wl">
+      <path class="wing-rim" d="M63 32 C54 25.5, 42.5 24.8, 34 27.8 C29 29.8, 25.5 32.8, 24 36 Q31 34.8, 35.5 40.2 Q42 36.2, 47.5 41.2 Q54.5 37.2, 63 39.8 Z"/>
+      <path class="wing-fill" d="M63 32 C54 25.5, 42.5 24.8, 34 27.8 C29 29.8, 25.5 32.8, 24 36 Q31 34.8, 35.5 40.2 Q42 36.2, 47.5 41.2 Q54.5 37.2, 63 39.8 Z"/>
+      <path class="wing-i" d="M59.8 33.8 C52 28.4, 42.6 27.8, 35.4 30.3 C31.8 31.6, 29.5 33.1, 28 34.9 Q32.5 33.2, 36 37.5 Q42 34.2, 47.2 38.5 Q53.2 35.2, 59.8 37.6 Z"/>
+      <path class="rib" d="M43.5 27.4 Q39 32.8 35.8 39.1 M44.5 27.6 Q46 33.6 47.3 40.1"/>
+    </g>
+    <!-- Right wing (exact mirror around x=80) -->
+    <g class="wr">
+      <path class="wing-rim" d="M97 32 C106 25.5, 117.5 24.8, 126 27.8 C131 29.8, 134.5 32.8, 136 36 Q129 34.8, 124.5 40.2 Q118 36.2, 112.5 41.2 Q105.5 37.2, 97 39.8 Z"/>
+      <path class="wing-fill" d="M97 32 C106 25.5, 117.5 24.8, 126 27.8 C131 29.8, 134.5 32.8, 136 36 Q129 34.8, 124.5 40.2 Q118 36.2, 112.5 41.2 Q105.5 37.2, 97 39.8 Z"/>
+      <path class="wing-i" d="M100.2 33.8 C108 28.4, 117.4 27.8, 124.6 30.3 C128.2 31.6, 130.5 33.1, 132 34.9 Q127.5 33.2, 124 37.5 Q118 34.2, 112.8 38.5 Q106.8 35.2, 100.2 37.6 Z"/>
+      <path class="rib" d="M116.5 27.4 Q121 32.8 124.2 39.1 M115.5 27.6 Q114 33.6 112.7 40.1"/>
+    </g>
+
+    <!-- Unified bat head + perky ears + fur tuft with purple sticker outline -->
+    <path class="head-rim" d="M74.5 19.5 Q77 16.2 79 16.2 Q79.4 18 80 18.5 Q81.5 16.5 83.2 16.8 Q83.2 18.4 85.5 19.5 C89.5 15.5, 99 12.5, 106.5 13.8 C107.5 20.2, 105.5 25.5, 101 28 C103.5 33.5, 101 40.5, 92.5 42.5 C86 44, 74 44, 67.5 42.5 C59 40.5, 56.5 33.5, 59 28 C54.5 25.5, 52.5 20.2, 53.5 13.8 C61 12.5, 70.5 15.5, 74.5 19.5 Z"/>
+    <path class="head-fill" d="M74.5 19.5 Q77 16.2 79 16.2 Q79.4 18 80 18.5 Q81.5 16.5 83.2 16.8 Q83.2 18.4 85.5 19.5 C89.5 15.5, 99 12.5, 106.5 13.8 C107.5 20.2, 105.5 25.5, 101 28 C103.5 33.5, 101 40.5, 92.5 42.5 C86 44, 74 44, 67.5 42.5 C59 40.5, 56.5 33.5, 59 28 C54.5 25.5, 52.5 20.2, 53.5 13.8 C61 12.5, 70.5 15.5, 74.5 19.5 Z"/>
+
+    <!-- Coral inner ears -->
+    <path class="ear-in" d="M56.8 16.4 C62 16, 67.8 18, 70.2 21.2 C66 22.8, 62.5 24.5, 60.5 26 C57.8 23.5, 56.5 19.8, 56.8 16.4 Z"/>
+    <path class="ear-in" d="M103.2 16.4 C98 16, 92.2 18, 89.8 21.2 C94 22.8, 97.5 24.5, 99.5 26 C102.2 23.5, 103.5 19.8, 103.2 16.4 Z"/>
+
+    <!-- Rosy coral cheeks -->
+    <ellipse class="cheek" cx="62.2" cy="34.5" rx="3.7" ry="2.1"/>
+    <ellipse class="cheek" cx="97.8" cy="34.5" rx="3.7" ry="2.1"/>
+
+    <!-- Open eager eyes looking down at the commit -->
+    <g class="eo">
+      <circle cx="70.5" cy="29.5" r="4" fill="#fff"/>
+      <circle cx="71.2" cy="30.6" r="2" fill="#2b1b2e"/>
+      <circle cx="72" cy="29.8" r=".75" fill="#fff"/>
+      <circle cx="89.5" cy="29.5" r="4" fill="#fff"/>
+      <circle cx="88.8" cy="30.6" r="2" fill="#2b1b2e"/>
+      <circle cx="88" cy="29.8" r=".75" fill="#fff"/>
+    </g>
+
+    <!-- Happy squeezed eyes while biting -->
+    <g class="eh">
+      <path class="eye-h" d="M66.2 30.4 Q70.5 25.6 74.8 30.4"/>
+      <path class="eye-h" d="M85.2 30.4 Q89.5 25.6 93.8 30.4"/>
+    </g>
+
+    <!-- Friendly gentle smile, cute happy open mouth while biting, and proportionate gently curved fangs -->
+    <path class="bite-o" d="M77.6 39.2 Q80 39.8 82.4 39.2 Q82.3 42.3 80 42.3 Q77.7 42.3 77.6 39.2 Z"/>
+    <path class="fang" d="M72.4 37.4 Q75.1 38.4 77.6 38.8 Q77.3 43.6 75.4 47.6 Q73.1 43.2 72.4 37.4 Z"/>
+    <path class="fang" d="M82.4 38.8 Q84.9 38.4 87.6 37.4 Q86.9 43.2 84.6 47.6 Q82.7 43.6 82.4 38.8 Z"/>
+    <path class="smile" d="M70.8 36.8 Q80 40.6 89.2 36.8"/>
+  </g>
 </svg>

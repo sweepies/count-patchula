@@ -33,7 +33,7 @@ pub(crate) fn banner(rebuild: Rebuild, base: &str) -> String {
         Rebuild::Lockfiles => format!("rebuilding it on {base} and regenerating its lockfiles"),
     };
     format!(
-        "{}\n> <img src=\"{IMAGE}\" alt=\"🦷 rebasing…\" width=\"24\" height=\"24\"> **The Count is sinking his teeth into this branch:** {doing}…\n{}\n\n",
+        "{}\n> <img src=\"{IMAGE}\" alt=\"🦷 rebasing…\" width=\"80\" height=\"32\"> **The Count is sinking his teeth into this branch:** {doing}…\n{}\n\n",
         markers::REBASING,
         markers::REBASING_END,
     )
@@ -177,7 +177,7 @@ mod tests {
         assert!(lockfiles.contains("rebuilding it on `trunk` and regenerating its lockfiles…"));
         for text in [&recheck, &lockfiles] {
             assert!(text.contains(&format!(
-                "<img src=\"https://raw.githubusercontent.com/sweepies/count-patchula/v{}/assets/rebasing.svg\" alt=\"🦷 rebasing…\" width=\"24\" height=\"24\">",
+                "<img src=\"https://raw.githubusercontent.com/sweepies/count-patchula/v{}/assets/rebasing.svg\" alt=\"🦷 rebasing…\" width=\"80\" height=\"32\">",
                 env!("CARGO_PKG_VERSION")
             )));
             assert!(!text.contains(markers::RECHECK) && !text.contains("- [x]"));
