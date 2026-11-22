@@ -39,57 +39,87 @@ pub(crate) fn banner(rebuild: Rebuild, base: &str) -> String {
     )
 }
 
-/// Whether his section of `body` carries a banner.
+/// Whether his section of `body` carries a banner, or a stray line of one:
+/// a whole line equal to either marker, CRLF or not.
 pub(crate) fn shown(body: &str) -> bool {
-    markers::section(body).is_some_and(|section| section.contains(markers::REBASING))
+    markers::section(body).is_some_and(|section| section.split_inclusive('\n').any(marker_line))
+}
+
+/// Whether `line` is a banner marker on a line of its own.
+fn marker_line(line: &str) -> bool {
+    let line = bare(line);
+    line == markers::REBASING || line == markers::REBASING_END
+}
+
+/// `line` without its line ending.
+fn bare(line: &str) -> &str {
+    line.strip_suffix('\n')
+        .map_or(line, |line| line.strip_suffix('\r').unwrap_or(line))
 }
 
 /// `body` with `banner` at the top of his section, right after the start
-/// marker, and everything else byte for byte as it was. `None` when the
-/// body has no section of his, already shows a banner, or would pass
-/// GitHub's limit with it.
+/// marker's line, and everything else byte for byte as it was. The banner
+/// takes the start line's ending, so a body GitHub keeps with CRLF stays
+/// CRLF. `None` when the body has no section of his, already shows a
+/// banner, or would pass GitHub's limit with it.
 pub(crate) fn with_banner(body: &str, banner: &str) -> Option<String> {
     let (before, section, after) = markers::regions(body)?;
-    if section.contains(markers::REBASING) || body.len() + banner.len() > BANNER_LIMIT {
+    if shown(body) || body.len() + 2 * banner.len() > BANNER_LIMIT {
         return None;
     }
-    let head = section.strip_prefix(markers::START).map_or(0, |rest| {
-        markers::START.len() + usize::from(rest.starts_with('\n'))
-    });
+    let (head, banner) = match section.strip_prefix(markers::START) {
+        Some(rest) if rest.starts_with("\r\n") => (
+            markers::START.len() + 2,
+            Cow::Owned(banner.replace('\n', "\r\n")),
+        ),
+        Some(rest) => (
+            markers::START.len() + usize::from(rest.starts_with('\n')),
+            Cow::Borrowed(banner),
+        ),
+        None => (0, Cow::Borrowed(banner)),
+    };
     let (head, rest) = section.split_at(head);
     Some(format!("{before}{head}{banner}{rest}{after}"))
 }
 
-/// `body` without the banner in his section; unchanged when it has none.
-/// A banner whose closing line was edited away loses its opening line, so
-/// it no longer counts as shown.
+/// `body` without any banner in his section; unchanged when it has none.
+/// Every banner block — its opening line, its one quoted line, its closing
+/// line and the blank line after — comes off whole. A marker line that
+/// bounds no such block, edited or quoted into his section, comes off on
+/// its own: whatever stands between two stray markers is never removed.
 pub(crate) fn without_banner(body: &str) -> Cow<'_, str> {
     let Some((before, section, after)) = markers::regions(body) else {
         return Cow::Borrowed(body);
     };
-    let Some(start) = section.find(markers::REBASING) else {
+    if !shown(body) {
         return Cow::Borrowed(body);
-    };
-    let end = section[start..]
-        .find(markers::REBASING_END)
-        .map(|at| {
-            let end = start + at + markers::REBASING_END.len();
-            let rest = &section[end..];
-            end + if rest.starts_with("\n\n") {
-                2
-            } else {
-                usize::from(rest.starts_with('\n'))
+    }
+    let lines: Vec<&str> = section.split_inclusive('\n').collect();
+    let mut kept = String::with_capacity(section.len());
+    let mut at = 0;
+    while at < lines.len() {
+        let block = bare(lines[at]) == markers::REBASING
+            && lines.get(at + 1).is_some_and(|l| bare(l).starts_with("> "))
+            && lines
+                .get(at + 2)
+                .is_some_and(|l| bare(l) == markers::REBASING_END);
+        if block {
+            at += 3;
+            // The blank line that separates the banner from his text.
+            if lines
+                .get(at)
+                .is_some_and(|l| bare(l).is_empty() && l.ends_with('\n'))
+            {
+                at += 1;
             }
-        })
-        .unwrap_or_else(|| {
-            let end = start + markers::REBASING.len();
-            end + usize::from(section[end..].starts_with('\n'))
-        });
-    Cow::Owned(format!(
-        "{before}{}{}{after}",
-        &section[..start],
-        &section[end..]
-    ))
+            continue;
+        }
+        if !marker_line(lines[at]) {
+            kept.push_str(lines[at]);
+        }
+        at += 1;
+    }
+    Cow::Owned(format!("{before}{kept}{after}"))
 }
 
 /// GitHub's pull request body limit, with room to spare: a banner that
@@ -165,6 +195,64 @@ mod tests {
         let cleared = without_banner(&body);
         assert!(!shown(&cleared));
         assert!(cleared.contains("> edited\n| Package |"));
+    }
+
+    #[test]
+    fn crlf_bodies_take_and_lose_the_banner_without_a_trace() {
+        for section in [
+            format!("{}\r\n| Package |\r\n", markers::START),
+            format!("{}\n| Package |\n", markers::START),
+        ] {
+            let body = format!("A note.\r\n\r\n{}\r\nA footer.", owned(&section));
+            let shown_body = with_banner(&body, &banner(Rebuild::Recheck, "main")).unwrap();
+            let crlf = section.contains('\r');
+            assert!(
+                shown_body.contains(&if crlf {
+                    format!("{}\r\n{}\r\n", markers::START, markers::REBASING)
+                } else {
+                    format!("{}\n{}\n", markers::START, markers::REBASING)
+                }),
+                "{shown_body:?}"
+            );
+            assert!(shown(&shown_body));
+            assert_eq!(without_banner(&shown_body), body);
+        }
+        // GitHub turning an LF banner into CRLF still lets it come off.
+        let body = owned(&format!("{}\n| Package |\n", markers::START));
+        let crlf = with_banner(&body, &banner(Rebuild::Lockfiles, "main"))
+            .unwrap()
+            .replace('\n', "\r\n");
+        assert_eq!(without_banner(&crlf), body.replace('\n', "\r\n"));
+    }
+
+    #[test]
+    fn every_banner_comes_off_and_stray_markers_never_take_text_with_them() {
+        let one = banner(Rebuild::Recheck, "main");
+        let body = owned(&format!("{}\n{one}{one}| Package |\n", markers::START));
+        let cleared = without_banner(&body);
+        assert!(!shown(&cleared), "{cleared}");
+        assert_eq!(
+            cleared,
+            owned(&format!("{}\n| Package |\n", markers::START))
+        );
+        // Markers quoted around his table: only the marker lines go.
+        let quoted = owned(&format!(
+            "{}\n{}\n| Package |\n<!-- patchula-content:x -->\n{}\n",
+            markers::START,
+            markers::REBASING,
+            markers::REBASING_END
+        ));
+        let cleared = without_banner(&quoted);
+        assert!(!shown(&cleared));
+        assert!(cleared.contains("| Package |\n<!-- patchula-content:x -->\n"));
+        // A marker inside a line of prose is no banner at all.
+        let prose = owned(&format!(
+            "{}\nSee `{}` in the docs.\n",
+            markers::START,
+            markers::REBASING
+        ));
+        assert!(!shown(&prose));
+        assert!(matches!(without_banner(&prose), Cow::Borrowed(_)));
     }
 
     #[test]

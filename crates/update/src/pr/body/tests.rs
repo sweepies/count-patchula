@@ -162,6 +162,17 @@ fn closures_keep_the_body_within_its_budget_and_end_with_their_marker() {
             text.len(),
             closure_budget(marker) + "\n\n".len() + marker.len()
         );
+        // A rebasing banner still up does not outlive the closure.
+        let permits = BTreeMap::new();
+        let finished = bodies(&permits)
+            .draft(&update_plan("patchula/a-1.x", vec![change("a")]))
+            .finish();
+        let shown = crate::pr::banner::with_banner(
+            &finished,
+            &crate::pr::banner::banner(crate::pr::banner::Rebuild::Recheck, "main"),
+        )
+        .unwrap();
+        assert_eq!(closure(&shown, why), closure(&finished, why));
     }
 }
 

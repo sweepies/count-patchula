@@ -117,7 +117,11 @@ delivery is queued: the server puts the [rebasing
 banner](/guide/pull-requests/#the-rebasing-banner) at the top of the Count's
 part of the description, through the installation's own client and its write
 pacing, and leaves the box ticked for the batch that does the work. That
-batch's rewrite takes the banner down.
+batch's rewrite takes the banner down. While a batch or remote run already
+holds the repository, the server leaves the banner to the run, or to the
+follow-up batch the tick queued; it never writes the description between a
+run's last read and its last write. Acknowledgements still in flight at
+shutdown get ten seconds to finish before they are abandoned.
 
 ## Webhook handling
 

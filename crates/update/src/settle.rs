@@ -19,6 +19,11 @@ pub struct Settlement {
     /// The dashboard reconcile's failure, if any. The caller fails the
     /// repository after whatever earlier failure it checks first.
     pub dashboard: Result<(), Error>,
+    /// The lifecycle's acknowledgement pass — unticked re-check boxes and
+    /// rebasing banners taken down — when it failed. The caller fails the
+    /// repository, so no quiet-run answer hides a banner left up and the
+    /// server retries the repository.
+    pub acknowledged: Result<(), Error>,
     /// Non-fatal reconcile warnings, already prefixed for the report.
     pub warnings: Vec<String>,
 }
@@ -44,14 +49,13 @@ pub async fn settle(
     let merge_actions =
         crate::automerge::reconcile(client, cache, repo, config, inventory, plans, now).await;
     let mut warnings = Vec::new();
+    let mut acknowledged = Ok(());
     if let Some(state) = lifecycle.as_deref_mut() {
         state.record_merges(plans, merge_actions.clone());
         if let Err(error) = state.close_batched(client, plans).await {
             warnings.push(format!("batched PR closure: {error}"));
         }
-        if let Err(error) = state.acknowledge(client).await {
-            warnings.push(format!("PR checkbox acknowledgement: {error}"));
-        }
+        acknowledged = state.acknowledge(client).await;
     }
     // The one pull-request set the dashboard renders: the lifecycle's fresh
     // REST view after a write, the inventory's on the receipts path.
@@ -76,6 +80,7 @@ pub async fn settle(
     Settlement {
         merge_actions,
         dashboard,
+        acknowledged,
         warnings,
     }
 }

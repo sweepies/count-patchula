@@ -71,9 +71,17 @@ the description alone.
 
 The rewrite that ends the rebuild takes the banner down. If the rebuild fails
 or is held, the banner comes down and the PR keeps its usual description, with
-the reason on the dashboard and in the report. A run that stops partway
-through leaves the banner up only until the next run, which rewrites the
-description even when nothing else in it changed.
+the reason on the dashboard and in the report. If the run fails before it
+rebuilds anything, the banner comes down and a ticked re-check box stays
+ticked for the next run. When the Count closes a PR, as obsolete or moved to
+the batch, the closed description carries no banner, and a PR someone closes
+or merges mid-rebuild loses its banner in one more description write.
+
+A banner the Count could not take down fails the repository's run rather
+than passing as a warning, so the next run, or the server's retry, tries
+again. A run that stops partway through leaves the banner up only until the
+next run, which rewrites that PR's description even when nothing else in it
+changed; the other PRs in the repository still settle from their records.
 
 The image comes from this repository on `raw.githubusercontent.com`, pinned to
 the release that wrote the banner, so old PRs keep showing theirs. Where

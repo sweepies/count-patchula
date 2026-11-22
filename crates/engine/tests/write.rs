@@ -1517,7 +1517,7 @@ async fn dashboard_create_click_bypasses_concurrent_hourly_and_schedule_holds() 
 #[tokio::test(start_paused = true)]
 async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
     let mut keep = Vec::new();
-    for origin in ["recreate", "create", "pr", "retry"] {
+    for origin in ["recreate", "create", "pr", "banner", "retry"] {
         let mut request_counts = Vec::new();
         for dependencies in [3, 6] {
             let mut files = base_files();
@@ -1547,15 +1547,44 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                 }
                 checkbox_run(&engine, &config, now).await;
             }
-            if origin == "pr" {
-                let mut state = fake.state();
-                let pr = state.repo_mut().prs.get_mut(&1).unwrap();
-                pr["body"] = json!(
-                    pr["body"]
-                        .as_str()
+            if origin == "banner" {
+                // An owner-closed PR beside the untouched open ones.
+                for pr in fake
+                    .state()
+                    .repo_mut()
+                    .prs
+                    .values_mut()
+                    .filter(|p| p["number"] != 1)
+                    .take(1)
+                {
+                    pr["state"] = json!("closed");
+                }
+                checkbox_run(&engine, &config, now).await;
+            }
+            if origin == "pr" || origin == "banner" {
+                {
+                    let mut state = fake.state();
+                    let pr = state.repo_mut().prs.get_mut(&1).unwrap();
+                    pr["body"] = json!(
+                        pr["body"]
+                            .as_str()
+                            .unwrap()
+                            .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+                    );
+                }
+                if origin == "banner" {
+                    // The server's acknowledgement got there first.
+                    assert!(
+                        patchula_update::pull_requests::acknowledge_tick(
+                            engine.github(),
+                            "demo/sandbox",
+                            1,
+                            "patchula[bot]",
+                        )
+                        .await
                         .unwrap()
-                        .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
-                );
+                    );
+                }
             } else if origin == "retry" {
                 // An unknown/stale target is consumed without invalidating any write receipt.
                 let mut state = fake.state();
@@ -1573,7 +1602,10 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                 .repo()
                 .prs
                 .values()
-                .filter(|p| origin != "pr" || !p["body"].as_str().unwrap().contains("- [x]"))
+                .filter(|p| {
+                    !matches!(origin, "pr" | "banner")
+                        || !p["body"].as_str().unwrap().contains("- [x]")
+                })
                 .map(|p| {
                     (
                         p["number"].as_u64().unwrap(),
@@ -1584,7 +1616,25 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             fake.clear_log();
             let report = checkbox_run(&engine, &config, now).await;
             assert_unticked(&fake);
+            for pr in fake.state().repo().prs.values() {
+                assert!(
+                    !pr["body"].as_str().unwrap().contains(REBASING),
+                    "{origin}: {pr}"
+                );
+            }
             let requests = fake.log();
+            if origin == "banner" {
+                // No unrelated PR was announced: the only body writes are
+                // the ticked PR's rewrite.
+                assert_eq!(
+                    requests
+                        .iter()
+                        .filter(|(m, p, _)| m == "PATCH" && p.contains("/pulls/"))
+                        .count(),
+                    1,
+                    "{requests:?}"
+                );
+            }
             assert_eq!(
                 requests
                     .iter()
@@ -1657,6 +1707,9 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                 // The ticked PR's rebasing banner adds a fresh read of
                 // the PR and its PATCH.
                 "pr" => 15,
+                // The server's banner is already up: the run neither reads
+                // nor writes it again before its rewrite takes it down.
+                "banner" => 13,
                 // The held-back plan's branch has no open pull: one batched
                 // `ClosedPulls` read checks it before admission.
                 "create" => 16,

@@ -1284,15 +1284,15 @@ pub async fn restore_inventory(
     if !refs.complete {
         return Ok(not_restored(repository, plans, "incomplete-refs"));
     }
-    // A rebasing banner still up belongs to a rebuild that stopped before
-    // its last write; only the full write path takes it down.
-    if inventory
+    // A rebasing banner still up belongs to a rebuild in flight or one
+    // that stopped before its last write. Its own PR's receipt is refused
+    // (`restore_write`), every other receipt still holds, and the run
+    // takes the write path so the lifecycle's acknowledgement pass can
+    // take the banner down wherever it is.
+    let bannered = inventory
         .pull_requests(&repository.repository)
         .iter()
-        .any(|p| crate::pr::banner::shown(crate::pull_requests::body(&p.pr)))
-    {
-        return Ok(not_restored(repository, plans, "rebasing-banner"));
-    }
+        .any(|p| crate::pr::banner::shown(crate::pull_requests::body(&p.pr)));
     // The filtered walk holds only names under the prefix, so a branch the
     // receipts still name being absent means it was renamed out of the
     // prefix or deleted — GitHub's rename keeps its open pull request,
@@ -1355,6 +1355,7 @@ pub async fn restore_inventory(
         }
     }
     let complete = !obsolete
+        && !bannered
         && inventory.refs.complete
         && inventory.closed.complete
         && inventory.unsettled.is_empty()
@@ -1362,7 +1363,7 @@ pub async fn restore_inventory(
             .iter()
             .all(|p| p.action().status != BranchStatus::Planned);
     tracing::debug!(target: "patchula_update::receipts", repo = %repository.repository,
-        restored, complete, obsolete, unsettled = inventory.unsettled.len(), "write receipts restored");
+        restored, complete, obsolete, bannered, unsettled = inventory.unsettled.len(), "write receipts restored");
     Ok(if complete {
         // An unfiltered walk just verified every claim these receipts
         // make against live data. When the walk ran unfiltered because
@@ -1472,6 +1473,9 @@ fn restore_write(
     let pr = crate::pull_requests::tracked_pr(node).ok_or("pr-state-incomplete")?;
     if pr.pr.user.as_ref().map(|u| u.login.as_str()) != Some(actor) {
         return Err("actor-mismatch");
+    }
+    if crate::pr::banner::shown(crate::pull_requests::body(&pr.pr)) {
+        return Err("rebasing-banner");
     }
     if pr.pr.head.sha != receipt.commit || PrState::from_rest(&pr.pr).value() != receipt.pr {
         return Err("pr-state-changed");

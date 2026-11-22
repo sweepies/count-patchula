@@ -182,7 +182,8 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         transport: transport.clone(),
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
-        writers: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: options.recheck,
@@ -425,6 +426,10 @@ type EngineKey = (
 );
 /// An installation's engine and the settings it was built from, once built.
 type Slot = Arc<Mutex<Option<(EngineKey, Engine)>>>;
+/// The per-(installation, repository) run locks.
+type RepositoryLocks = std::sync::Mutex<BTreeMap<(u64, String), Arc<Mutex<()>>>>;
+/// Each installation's engine client, by installation, with its key.
+type Writers = Arc<std::sync::Mutex<BTreeMap<u64, (EngineKey, Client)>>>;
 
 /// Public records running at once. A record reads GitHub and writes the
 /// cache but holds no queue claim, so it waits here instead of in the batch.
@@ -437,10 +442,17 @@ struct Engines {
     /// Each installation's engine, behind its own lock: batches of different
     /// installations run at once, and a remote run waits only for its own.
     engines: Mutex<BTreeMap<u64, Slot>>,
-    /// A clone of each built engine's GitHub client, outside the slot's
-    /// lock: an acknowledgement writes through it while a batch holds the
-    /// engine, paced by the same write budget.
-    writers: Mutex<BTreeMap<u64, Client>>,
+    /// A clone of each built engine's GitHub client and the key it was
+    /// built from, outside the slot's lock: an acknowledgement writes
+    /// through it while a batch holds the engine, paced by the same write
+    /// budget. A discarded slot drops its entry, and a key that no longer
+    /// matches the settings is not used.
+    writers: Writers,
+    /// One lock per (installation, repository), held by a batch or remote
+    /// run for each repository it runs and by an acknowledgement across
+    /// its read and write, so an acknowledgement's read can never be older
+    /// than a run's last write to the same PR.
+    repositories: RepositoryLocks,
     /// Bounds the public records the worker does not await; a batch's
     /// claims finish while its record is still running.
     records: Arc<tokio::sync::Semaphore>,
@@ -590,6 +602,9 @@ impl Batch for Engines {
             }
             let started = Utc::now();
             let result = {
+                // Held before the engine, so an acknowledgement never waits
+                // on the slot while holding a repository a run wants.
+                let _held = self.hold(id, &repositories).await;
                 let mut slot = self.engine(id, settings).await?;
                 let result = slot
                     .engine()
@@ -674,12 +689,7 @@ impl Engines {
     /// the installation's credentials replaces the engine, since its clients
     /// are built from them.
     async fn engine(&self, id: u64, settings: &Settings) -> Result<SlotGuard, Error> {
-        let (credentials, failed) = patchula_engine::settings::credentials(settings, Some(id));
-        for (prefix, reason) in &failed {
-            tracing::error!(target: "patchula_server", installation = id, registry = %prefix, reason = %reason,
-                "registry credentials unavailable; its lookups run without them");
-        }
-        let key = (settings.http.clone(), credentials);
+        let key = engine_key(id, settings);
         let slot = self.engines.lock().await.entry(id).or_default().clone();
         let mut slot = slot.lock_owned().await;
         if slot.as_ref().is_none_or(|(built, _)| *built != key) {
@@ -706,16 +716,21 @@ impl Engines {
                 .advertised(self.derived_url.as_deref())
                 .filter(|_| self.signs_in),
         );
+        let client = engine.github().clone();
+        let built = slot.as_ref().expect("the engine was built above").0.clone();
         self.writers
             .lock()
-            .await
-            .insert(id, engine.github().clone());
-        Ok(SlotGuard::new(slot))
+            .expect("writers lock")
+            .insert(id, (built, client));
+        Ok(SlotGuard::new(slot, self.writers.clone(), id))
     }
-    /// The installation's engine client, building the engine when no batch
-    /// has yet.
+    /// The installation's engine client, when its engine is built from the
+    /// current settings; otherwise the engine is built, or rebuilt, first.
     async fn writer(&self, id: u64, settings: &Settings) -> Result<Client, Error> {
-        if let Some(client) = self.writers.lock().await.get(&id) {
+        let key = engine_key(id, settings);
+        if let Some((built, client)) = self.writers.lock().expect("writers lock").get(&id)
+            && *built == key
+        {
             return Ok(client.clone());
         }
         let mut slot = self.engine(id, settings).await?;
@@ -723,6 +738,59 @@ impl Engines {
         slot.finish();
         Ok(client)
     }
+    /// The lock of `repo` in installation `id`.
+    fn repository(&self, id: u64, repo: &str) -> Arc<Mutex<()>> {
+        self.repositories
+            .lock()
+            .expect("repository locks")
+            .entry((id, repo.to_owned()))
+            .or_default()
+            .clone()
+    }
+    /// The locks of every repository a run writes, taken in sorted order;
+    /// held until the run ends.
+    async fn hold(&self, id: u64, repos: &[String]) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+        let mut sorted: Vec<_> = repos.to_vec();
+        sorted.sort();
+        sorted.dedup();
+        let mut held = Vec::with_capacity(sorted.len());
+        for repo in sorted {
+            held.push(self.repository(id, &repo).lock_owned().await);
+        }
+        held
+    }
+    /// The server's acknowledgement of a ticked re-check box. Skipped while
+    /// a batch or remote run holds the repository: that run, or the
+    /// follow-up batch the tick queued, shows the banner itself. Otherwise
+    /// the repository stays held across the fresh read and the write, so no
+    /// run's write can land between them, and a second tick on the same PR
+    /// waits and then finds the banner up.
+    async fn acknowledge_tick(
+        &self,
+        installation: u64,
+        repo: &str,
+        number: u64,
+        settings: &Settings,
+    ) -> Result<Option<bool>, Error> {
+        let Ok(_held) = self.repository(installation, repo).try_lock_owned() else {
+            return Ok(None);
+        };
+        let client = self.writer(installation, settings).await?;
+        patchula_update::pull_requests::acknowledge_tick(&client, repo, number, &self.bot_login)
+            .await
+            .map(Some)
+            .map_err(Error::cause("re-check acknowledgement failed"))
+    }
+}
+/// The engine key for installation `id` under `settings`: the `http`
+/// settings and the registry credentials read now.
+fn engine_key(id: u64, settings: &Settings) -> EngineKey {
+    let (credentials, failed) = patchula_engine::settings::credentials(settings, Some(id));
+    for (prefix, reason) in &failed {
+        tracing::error!(target: "patchula_server", installation = id, registry = %prefix, reason = %reason,
+            "registry credentials unavailable; its lookups run without them");
+    }
+    (settings.http.clone(), credentials)
 }
 impl crate::webhook::Acknowledge for Engines {
     fn acknowledge<'a>(
@@ -733,30 +801,21 @@ impl crate::webhook::Acknowledge for Engines {
         settings: &'a Settings,
     ) -> BoxFuture<'a, ()> {
         Box::pin(async move {
-            let result = match self.writer(installation, settings).await {
-                Ok(client) => {
-                    patchula_update::pull_requests::acknowledge_tick(
-                        &client,
-                        repo,
-                        number,
-                        &self.bot_login,
-                    )
-                    .await
-                }
-                Err(error) => {
-                    tracing::warn!(target: "patchula_server", installation, repository = repo, pr = number, %error,
-                        "re-check acknowledgement skipped");
-                    return;
-                }
-            };
-            match result {
-                Ok(shown) => {
+            match self
+                .acknowledge_tick(installation, repo, number, settings)
+                .await
+            {
+                Ok(Some(shown)) => {
                     tracing::info!(target: "patchula_server", installation, repository = repo, pr = number, shown,
-                    "re-check tick acknowledged")
+                        "re-check tick acknowledged")
+                }
+                Ok(None) => {
+                    tracing::info!(target: "patchula_server", installation, repository = repo, pr = number,
+                        "re-check tick left to the run holding the repository")
                 }
                 Err(error) => {
                     tracing::warn!(target: "patchula_server", installation, repository = repo, pr = number, %error,
-                    "re-check acknowledgement failed")
+                        "re-check acknowledgement failed")
                 }
             }
         })
@@ -771,10 +830,23 @@ impl crate::webhook::Acknowledge for Engines {
 struct SlotGuard {
     slot: tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>,
     armed: bool,
+    /// Where the engine's client is published, and its installation: a
+    /// discarded engine's client goes with it.
+    writers: Writers,
+    id: u64,
 }
 impl SlotGuard {
-    fn new(slot: tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>) -> Self {
-        Self { slot, armed: true }
+    fn new(
+        slot: tokio::sync::OwnedMutexGuard<Option<(EngineKey, Engine)>>,
+        writers: Writers,
+        id: u64,
+    ) -> Self {
+        Self {
+            slot,
+            armed: true,
+            writers,
+            id,
+        }
     }
     /// Only [`Engines::engine`] builds a guard, and only over a built engine.
     fn engine(&mut self) -> &mut Engine {
@@ -790,6 +862,9 @@ impl Drop for SlotGuard {
     fn drop(&mut self) {
         if self.armed {
             *self.slot = None;
+            if let Ok(mut writers) = self.writers.lock() {
+                writers.remove(&self.id);
+            }
         }
     }
 }
@@ -806,6 +881,7 @@ impl crate::remote::Runner for Engines {
         Box::pin(async move {
             let started = Utc::now();
             let report = {
+                let _held = self.hold(installation, &repositories).await;
                 // The installation's own lock, so a remote run never races its
                 // queued batches.
                 let mut slot = self.engine(installation, settings).await.map_err(|error| {
@@ -1078,6 +1154,9 @@ const LOGGED_REPOSITORIES: usize = 20;
 
 /// The bound on waiting out in-flight public records at shutdown.
 const RECORD_DRAIN: Duration = Duration::from_secs(30);
+/// The bound on waiting out in-flight re-check acknowledgements at
+/// shutdown: one read and one write each.
+const ACKNOWLEDGEMENT_DRAIN: Duration = Duration::from_secs(10);
 
 async fn worker(
     cache: Cache,
@@ -1183,6 +1262,7 @@ async fn run_until(
     ));
     let accepting = webhook.accepting.clone();
     let api = webhook.api.clone();
+    let acknowledgements = webhook.acknowledgements.clone();
     let (http_stop, http_stopped) = tokio::sync::oneshot::channel();
     let mut server = tokio::spawn(async move {
         axum::serve(listener, router(webhook, ready))
@@ -1208,6 +1288,9 @@ async fn run_until(
         if !server.is_finished() {
             let _ = (&mut server).await;
         }
+        // No delivery starts another acknowledgement now; finish or abort
+        // the ones in flight.
+        acknowledgements.drain(ACKNOWLEDGEMENT_DRAIN).await;
         // Remote runs write branches too; let them finish like a batch.
         if let Some(api) = &api {
             api.drain().await;

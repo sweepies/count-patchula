@@ -575,7 +575,8 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
-        writers: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -664,7 +665,8 @@ async fn an_unreadable_installation_listing_fails_the_batch() {
         transport,
         cache,
         engines: Mutex::new(BTreeMap::new()),
-        writers: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -792,7 +794,8 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
         transport: transport.clone(),
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
-        writers: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -1920,7 +1923,8 @@ async fn a_dropped_remote_run_discards_its_engine() {
         transport,
         cache: Cache::open(":memory:", Default::default()).await.unwrap(),
         engines: Mutex::new(BTreeMap::new()),
-        writers: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -1972,7 +1976,8 @@ async fn remote_modes_share_the_engine_slot_and_report_failures() {
         transport,
         cache: Cache::open(":memory:", Default::default()).await.unwrap(),
         engines: Mutex::new(BTreeMap::new()),
-        writers: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2005,6 +2010,90 @@ async fn remote_modes_share_the_engine_slot_and_report_failures() {
         1,
         "only the real run writes a report file"
     );
+    patchula_testkit::transcripts::check(&transcripts());
+}
+
+/// The server's acknowledgement writes through the installation engine's
+/// client, never while a run holds the repository, and never after a
+/// run's write: a run that held the repository and rewrote the PR leaves
+/// a body the acknowledgement reads fresh and leaves alone. A discarded
+/// engine takes its published client with it.
+#[tokio::test]
+async fn acknowledgements_use_the_engine_client_and_never_race_a_run() {
+    let github = Arc::new(FakeGitHub::new("owner/repo"));
+    github.state().repo_mut().prs.insert(1, pr());
+    let transport: Arc<dyn Transport> = github.clone();
+    let runner = Engines {
+        app: lookup_app(transport.clone(), 1),
+        transport,
+        cache: Cache::open(":memory:", Default::default()).await.unwrap(),
+        engines: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
+        records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
+        record_tasks: Mutex::new(JoinSet::new()),
+        recheck: None,
+        bot_login: "patchula[bot]".into(),
+        derived_url: None,
+        signs_in: false,
+    };
+    let settings = settings();
+    let pull_reads = || {
+        github
+            .state()
+            .requests()
+            .iter()
+            .filter(|(_, path)| path == "/repos/owner/repo/pulls/1")
+            .count()
+    };
+    let body = || {
+        github.state().repo().prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    // A run holds the repository: the acknowledgement leaves it to the run
+    // and costs no request.
+    let held = runner.hold(1, &["owner/repo".to_owned()]).await;
+    assert!(
+        runner
+            .acknowledge_tick(1, "owner/repo", 1, &settings)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(pull_reads(), 0);
+    // The run rewrites the PR, unticked and clean, then lets go: the
+    // acknowledgement's fresh read sees the run's body and writes nothing.
+    let clean = body().replace("- [x]", "- [ ]");
+    github.state().repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(clean);
+    drop(held);
+    assert_eq!(
+        runner
+            .acknowledge_tick(1, "owner/repo", 1, &settings)
+            .await
+            .unwrap(),
+        Some(false)
+    );
+    assert_eq!(body(), clean);
+    // Ticked again: the banner goes up once, through the engine's client,
+    // and the box stays ticked for the run.
+    github.state().repo_mut().prs.get_mut(&1).unwrap()["body"] =
+        json!(clean.replace("- [ ]", "- [x]"));
+    for shown in [true, false] {
+        assert_eq!(
+            runner
+                .acknowledge_tick(1, "owner/repo", 1, &settings)
+                .await
+                .unwrap(),
+            Some(shown)
+        );
+    }
+    assert!(body().contains("<!-- patchula-rebasing -->") && body().contains("- [x]"));
+    assert!(runner.writers.lock().unwrap().contains_key(&1));
+    // A run that does not return discards its engine and its client.
+    drop(runner.engine(1, &settings).await.unwrap());
+    assert!(!runner.writers.lock().unwrap().contains_key(&1));
     patchula_testkit::transcripts::check(&transcripts());
 }
 
@@ -2052,7 +2141,8 @@ async fn a_batch_releases_its_claim_before_recording() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
-        writers: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2130,7 +2220,8 @@ async fn a_repository_made_private_is_recorded_private() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
-        writers: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2210,7 +2301,8 @@ async fn a_quiet_repository_skips_the_sweep_and_its_record_stands() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
-        writers: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2340,7 +2432,8 @@ async fn a_sweep_over_quiet_repositories_makes_no_requests() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
-        writers: Mutex::new(BTreeMap::new()),
+        writers: Default::default(),
+        repositories: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,

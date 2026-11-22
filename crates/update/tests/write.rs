@@ -2710,6 +2710,89 @@ async fn a_lockfile_rebuild_shows_the_banner_until_it_ends_either_way() {
     check_transcript();
 }
 
+/// A banner never outlives the run that put it up. A PR someone closes
+/// mid-rebuild loses it in a body-only write and stays closed; a run that
+/// stops before rebuilding withdraws it and leaves the tick for the next
+/// run.
+#[tokio::test(start_paused = true)]
+async fn a_banner_comes_down_when_the_pr_closes_mid_rebuild_or_the_run_stops() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    let own = server.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for case in ["closed", "stopped"] {
+        let body = if case == "stopped" {
+            own.replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+        } else {
+            own.clone()
+        };
+        {
+            let mut s = server.state();
+            let pr = s.repo_mut().prs.get_mut(&1).unwrap();
+            pr["body"] = json!(body);
+            pr["state"] = json!("open");
+        }
+        let (next, _) = make_plan("22.0.0");
+        let mut draft = Draft::from(next).changes(p.changes().to_vec());
+        draft = if case == "closed" {
+            draft.lock_job(patchula_lockfiles::Job::new(
+                patchula_lockfiles::Ecosystem::Node,
+                ".",
+                patchula_lockfiles::Scope::Directory,
+            ))
+        } else {
+            draft.retry(true)
+        };
+        let mut next = draft.build();
+        let mut state = patchula_update::Lifecycle::prepare_with_controls(
+            &github,
+            &repo,
+            std::slice::from_mut(&mut next),
+            &config,
+            chrono::Utc::now(),
+            patchula_words::Recheck::NextRun,
+            &Default::default(),
+            "patchula[bot]",
+        )
+        .await
+        .unwrap();
+        state.announce(&github, std::slice::from_ref(&next)).await;
+        assert!(
+            server.state().repo().prs[&1]["body"]
+                .as_str()
+                .unwrap()
+                .contains(REBASING),
+            "{case}"
+        );
+        if case == "closed" {
+            server.state().repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+            state.acknowledge(&github).await.unwrap();
+        } else {
+            state.withdraw(&github).await.unwrap();
+        }
+        let s = server.state();
+        let pr = &s.repo().prs[&1];
+        assert_eq!(pr["body"].as_str().unwrap(), body, "{case}");
+        assert_eq!(
+            pr["state"],
+            if case == "closed" { "closed" } else { "open" }
+        );
+    }
+    check_transcript();
+}
+
 /// A ticked re-check box: the server's acknowledgement shows the banner
 /// once and keeps the box ticked for the run, which finds the banner up
 /// and writes no second one; its rewrite replaces both. A plain rebuild,
@@ -4620,9 +4703,10 @@ async fn unmarked_and_badly_marked_branch_tips_are_protected() {
     check_transcript();
 }
 
-/// The shared tail turns lifecycle failures into warnings and goes on:
-/// a batched closure and a checkbox acknowledgement that fail are reported,
-/// and a good recheck is still unticked.
+/// The shared tail reports lifecycle failures and goes on: a batched
+/// closure that fails is a warning, an acknowledgement that fails comes
+/// back for the caller to fail the repository on, and a good recheck is
+/// still unticked.
 #[tokio::test(start_paused = true)]
 async fn settle_turns_lifecycle_failures_into_report_warnings() {
     let (mut config, repo) = pr_config();
@@ -4732,14 +4816,7 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
         "{:?}",
         settlement.warnings
     );
-    assert!(
-        settlement
-            .warnings
-            .iter()
-            .any(|w| w.starts_with("PR checkbox acknowledgement: ")),
-        "{:?}",
-        settlement.warnings
-    );
+    assert!(settlement.acknowledged.is_err());
     // The reachable re-check was still unticked.
     let body = server.state().repo().prs[&8]["body"]
         .as_str()

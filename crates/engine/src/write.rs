@@ -290,6 +290,14 @@ impl Write<'_> {
                     let _ = notes.await;
                 }
                 failed(repo, failure);
+                // Nothing is rebuilt now: the banners come down, the ticks
+                // stay for the next run.
+                if let Some(state) = lifecycle.as_mut()
+                    && let Err(error) = state.withdraw(&self.engine.github).await
+                {
+                    repo.warnings
+                        .push(format!("rebasing banner not taken down: {error}"));
+                }
                 return Ok(written);
             }
         }
@@ -317,6 +325,15 @@ impl Write<'_> {
                 .settle(repo, &config, inventory, &mut plans, Some(&mut *state))
                 .await;
             dashboard_failed(repo, &settlement);
+            // A box left ticked or a banner left up must not be hidden by a
+            // quiet-run answer: failing the repository records none, and
+            // the server retries it.
+            if let Err(error) = &settlement.acknowledged {
+                fail(
+                    repo,
+                    format!("PR checkbox or banner acknowledgement: {error}"),
+                );
+            }
             if state.actions.iter().any(|a| {
                 matches!(
                     a.status,

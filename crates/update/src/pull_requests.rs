@@ -547,10 +547,11 @@ pub fn controls_edited(before: &str, after: &str) -> bool {
     let (before, after) = (controls(before), controls(after));
     after.difference(&before).next().is_some()
 }
-/// Whether an edit newly ticked the re-check box: the edit the server
-/// acknowledges with the rebasing banner as it arrives.
-pub fn recheck_ticked(before: &str, after: &str) -> bool {
-    !ticked(before) && ticked(after)
+/// Whether an edit to `pr`, whose body read `before`, is one the server
+/// acknowledges with the rebasing banner as it arrives: it newly ticked
+/// the re-check box of an open PR that shows no banner yet.
+pub fn acknowledgeable(before: &str, pr: &model::PullRequest) -> bool {
+    pr.state == "open" && !ticked(before) && ticked(body(pr)) && !banner::shown(body(pr))
 }
 /// Batched closures and batch PRs never suppress an update.
 pub(crate) fn suppresses(pr: &model::PullRequest) -> bool {
@@ -616,6 +617,9 @@ pub struct Lifecycle {
     /// its own warnings. Obsolete-PR closure and branch cleanup both decide
     /// on this one value, so they never disagree about what is obsolete.
     degraded: bool,
+    /// The PRs this run put a rebasing banner on. The acknowledgement pass
+    /// takes theirs down even when someone closed or merged the PR since.
+    announced: BTreeSet<u64>,
 }
 impl Lifecycle {
     /// Whether the evidence this lifecycle decided obsolescence on was
@@ -710,6 +714,7 @@ impl Lifecycle {
             server: None,
             per_hour_oldest: None,
             degraded: repository.degraded(),
+            announced: BTreeSet::new(),
         };
         let owner = view::Owner { actor, repo };
         // The hourly count only exists when `prs.perHour` is set: the pull
@@ -1060,6 +1065,7 @@ impl Lifecycle {
             .await
             {
                 Ok(Some(shown)) => {
+                    self.announced.insert(number);
                     if let Some(old) = self.prs.iter_mut().find(|p| p.pr.number == number) {
                         *old = Tracked::from(shown);
                     }
@@ -1072,34 +1078,68 @@ impl Lifecycle {
     }
     /// Unticks the re-check box and takes the rebasing banner down on every
     /// open PR of his that still carries either: the PRs this run did not
-    /// rewrite, a failed branch attempt's included. Its diagnostic remains
-    /// in the report and the operator can explicitly request another
-    /// attempt.
+    /// rewrite, a failed or held branch attempt's included. Its diagnostic
+    /// remains in the report and the operator can explicitly request
+    /// another attempt. A PR this run announced that someone closed or
+    /// merged since loses its banner too, in a body-only write. Every PR is
+    /// tried; the first failure is returned after the rest.
     pub async fn acknowledge(&mut self, client: &Client) -> Result<(), Error> {
-        let pending = |pr: &model::PullRequest| checked(pr) || banner::shown(body(pr));
+        self.clear(client, true).await
+    }
+    /// Takes down the rebasing banners and leaves every ticked re-check box
+    /// ticked: for a run that stops after announcing and before its
+    /// rebuilds, whose ticks the next run must still honour.
+    pub async fn withdraw(&mut self, client: &Client) -> Result<(), Error> {
+        self.clear(client, false).await
+    }
+    /// [`Self::acknowledge`], unticking the boxes when `untick` is set.
+    async fn clear(&mut self, client: &Client, untick: bool) -> Result<(), Error> {
+        let pending = |pr: &model::PullRequest| untick && checked(pr) || banner::shown(body(pr));
+        let mut first = None;
         for pr in &mut self.prs {
-            if pr.pr.state != "open"
-                || !owned_pr(&pr.pr, &self.actor, &self.repo)
-                || !pending(&pr.pr)
+            let number = pr.pr.number;
+            let announced = self.announced.contains(&number);
+            // An announced PR this run's own rewrite already cleared needs
+            // no second look; one last seen closed does.
+            if !owned_pr(&pr.pr, &self.actor, &self.repo)
+                || !(pr.pr.state == "open" && pending(&pr.pr) || announced && pr.pr.state != "open")
             {
                 continue;
             }
-            let number = pr.pr.number;
             let path = format!("repos/{}/pulls/{number}", self.repo);
-            let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
-            if fresh.state != "open" || !owned_pr(&fresh, &self.actor, &self.repo) {
-                continue;
+            let result = async {
+                let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
+                if !owned_pr(&fresh, &self.actor, &self.repo) {
+                    return Ok(None);
+                }
+                let text = if fresh.state == "open" && pending(&fresh) {
+                    if untick {
+                        banner::without_banner(&unticked(body(&fresh))).into_owned()
+                    } else {
+                        banner::without_banner(body(&fresh)).into_owned()
+                    }
+                } else if announced && banner::shown(body(&fresh)) {
+                    banner::without_banner(body(&fresh)).into_owned()
+                } else {
+                    return Ok(None);
+                };
+                client
+                    .patch::<model::PullRequest>(&path, json!({"body":text}))
+                    .await
+                    .map(Some)
             }
-            if pending(&fresh) {
-                let text = banner::without_banner(&unticked(body(&fresh))).into_owned();
-                *pr = Tracked::from(
-                    client
-                        .patch::<model::PullRequest>(&path, json!({"body":text}))
-                        .await?,
-                );
+            .await;
+            match result {
+                Ok(Some(written)) => *pr = Tracked::from(written),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(repo = %self.repo, pr = number, %error,
+                        "PR checkbox or banner not acknowledged");
+                    first.get_or_insert(Error::from(error));
+                }
             }
         }
-        Ok(())
+        first.map_or(Ok(()), Err)
     }
     async fn publish_one(
         &mut self,
