@@ -214,7 +214,7 @@ impl Engine {
         // out of the check and runs in full.
         let mut work = Vec::new();
         for (repo, state) in &candidates {
-            if let Some(scanned) = self.quiet_work(repo, state, &discovery.schema_hash).await? {
+            if let Some(scanned) = self.quiet_work(repo, state).await? {
                 work.push(scanned);
             }
         }
@@ -244,17 +244,8 @@ impl Engine {
     /// `scan`'s cached answer for a stored commit: its saved config and
     /// extraction rebuilt into a `Work` without a head check. `None` when a
     /// piece is missing — the repository runs in full.
-    async fn quiet_work(
-        &self,
-        repo: &str,
-        state: &QuietRun,
-        schema_hash: &str,
-    ) -> Result<Option<Work>> {
-        let scope = RepoConfigScope {
-            repository: repo.into(),
-            commit: state.commit.clone(),
-            schema_hash: schema_hash.into(),
-        };
+    async fn quiet_work(&self, repo: &str, state: &QuietRun) -> Result<Option<Work>> {
+        let scope = RepoConfigScope::new(repo, &state.commit);
         let Some(config) = self
             .cache
             .state::<RepoConfig>(&scope)

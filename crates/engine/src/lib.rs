@@ -348,11 +348,24 @@ struct RepoConfigScope {
     commit: String,
     schema_hash: String,
 }
+impl RepoConfigScope {
+    fn new(repository: &str, commit: &str) -> Self {
+        Self {
+            repository: repository.into(),
+            commit: commit.into(),
+            schema_hash: schema_hash(),
+        }
+    }
+}
 #[derive(Serialize)]
 struct ExtractionScope {
     repository: String,
     commit: String,
     config_hash: String,
+}
+/// The config schema's hash, which config-derived state is scoped by.
+fn schema_hash() -> String {
+    patchula_manager::hash(patchula_config::SCHEMA.as_bytes())
 }
 #[derive(Serialize)]
 struct FilesScope {
@@ -1409,11 +1422,7 @@ impl Engine {
         let config = if let Some(config) = override_config {
             Some(config.clone())
         } else {
-            let scope = RepoConfigScope {
-                repository: repo.into(),
-                commit: commit.clone(),
-                schema_hash: patchula_manager::hash(patchula_config::SCHEMA.as_bytes()),
-            };
+            let scope = RepoConfigScope::new(repo, &commit);
             if let Some(saved) = self.cache.state::<RepoConfig>(&scope).await? {
                 saved.0
             } else {
@@ -1521,7 +1530,7 @@ impl Engine {
             files_hash: patchula_manager::hash(&serde_json::to_vec(&(&path, &files))?),
             // CODE_VERSIONED covers the decoding and validation the schema
             // text does not.
-            schema_hash: patchula_manager::hash(patchula_config::SCHEMA.as_bytes()),
+            schema_hash: schema_hash(),
         };
         if let Some(saved) = self.cache.state::<EvaluatedConfig>(&scope).await? {
             return Ok(saved.0);

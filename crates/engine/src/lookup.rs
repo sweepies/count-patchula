@@ -18,14 +18,24 @@ pub(super) struct Discovery {
     overrides: BTreeMap<String, Config>,
     /// Hash of the lookup inputs the hints are scoped by.
     inputs_hash: String,
-    /// Hash of the config schema the hints are scoped by.
-    pub(super) schema_hash: String,
     /// The credential scope the hints are scoped by.
     credential_scope: String,
     hint: LookupHint,
     /// Each repository's stored hint as read, so an unchanged one is not
     /// written again.
     known: BTreeMap<String, LookupHint>,
+}
+
+impl Discovery {
+    /// The scope `repository`'s lookup hint is stored under.
+    fn hint_scope(&self, repository: &str) -> LookupHintScope {
+        LookupHintScope {
+            repository: repository.into(),
+            inputs_hash: self.inputs_hash.clone(),
+            schema_hash: schema_hash(),
+            credential_scope: self.credential_scope.clone(),
+        }
+    }
 }
 
 /// What the scan stage produced.
@@ -147,33 +157,33 @@ impl Engine {
             &overrides,
             self.versions_host_override,
         ))?);
-        let schema_hash = patchula_manager::hash(patchula_config::SCHEMA.as_bytes());
-        let credential_scope = self.github.credential_scope().to_owned();
-        let mut hint = LookupHint::default();
-        let mut known = BTreeMap::new();
-        for repo in &repos {
-            let scope = LookupHintScope {
-                repository: repo.clone(),
-                inputs_hash: inputs_hash.clone(),
-                schema_hash: schema_hash.clone(),
-                credential_scope: credential_scope.clone(),
-            };
-            if let Some(stored) = self.cache.state::<LookupHint>(&scope).await? {
-                hint.catalogs.extend(stored.catalogs.iter().cloned());
-                hint.digests.extend(stored.digests.iter().cloned());
-                hint.tags.extend(stored.tags.iter().cloned());
-                known.insert(repo.clone(), stored);
-            }
-        }
-        Ok(Discovery {
+        let mut discovery = Discovery {
             repos,
             overrides,
             inputs_hash,
-            schema_hash,
-            credential_scope,
-            hint,
-            known,
-        })
+            credential_scope: self.github.credential_scope().to_owned(),
+            hint: LookupHint::default(),
+            known: BTreeMap::new(),
+        };
+        for repo in &discovery.repos {
+            if let Some(stored) = self
+                .cache
+                .state::<LookupHint>(&discovery.hint_scope(repo))
+                .await?
+            {
+                discovery
+                    .hint
+                    .catalogs
+                    .extend(stored.catalogs.iter().cloned());
+                discovery
+                    .hint
+                    .digests
+                    .extend(stored.digests.iter().cloned());
+                discovery.hint.tags.extend(stored.tags.iter().cloned());
+                discovery.known.insert(repo.clone(), stored);
+            }
+        }
+        Ok(discovery)
     }
 
     /// The hinted digest reads a scan overlaps: the refs the last runs
@@ -640,12 +650,7 @@ impl Engine {
                     })
                     .cloned()
                     .collect();
-                let scope = LookupHintScope {
-                    repository: repo.report.repository.clone(),
-                    inputs_hash: discovery.inputs_hash.clone(),
-                    schema_hash: discovery.schema_hash.clone(),
-                    credential_scope: discovery.credential_scope.clone(),
-                };
+                let scope = discovery.hint_scope(&repo.report.repository);
                 let packages = repo
                     .dependencies
                     .iter()
