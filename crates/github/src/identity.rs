@@ -90,16 +90,8 @@ impl Client {
     /// The scope string for this client's reach, before hashing; `None`
     /// keeps the token hash.
     async fn reach_scope(&self) -> Option<String> {
-        if self.0.credentials.is_some() {
-            return None;
-        }
-        let token = self
-            .0
-            .authorization
-            .as_ref()?
-            .to_str()
-            .ok()?
-            .strip_prefix("Bearer ")?;
+        // Refreshable credentials have no fixed token to probe.
+        let token = self.0.auth.token()?;
         if !token.starts_with("ghs_") {
             return None;
         }

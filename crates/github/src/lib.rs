@@ -131,14 +131,36 @@ impl Default for Options {
     }
 }
 
+/// How a client's requests authenticate.
+enum Auth {
+    /// A fixed token's `Bearer` header, set on each request as it is built.
+    Token(HeaderValue),
+    /// Refreshable credentials: `exchange` swaps in a fresh token per
+    /// request, so a path that skipped the swap sends no Authorization at all
+    /// rather than a placeholder.
+    Credentials(Arc<dyn Credentials>),
+}
+
+impl Auth {
+    fn credentials(&self) -> Option<&Arc<dyn Credentials>> {
+        match self {
+            Self::Credentials(credentials) => Some(credentials),
+            Self::Token(_) => None,
+        }
+    }
+    /// The fixed token, without its `Bearer ` prefix.
+    fn token(&self) -> Option<&str> {
+        match self {
+            Self::Token(value) => value.to_str().ok()?.strip_prefix("Bearer "),
+            Self::Credentials(_) => None,
+        }
+    }
+}
+
 struct Inner {
-    credentials: Option<Arc<dyn Credentials>>,
+    auth: Auth,
     transport: Arc<dyn Transport>,
     cache: Cache,
-    /// `None` for refreshable credentials: `exchange` swaps in a fresh token
-    /// per request, so a path that skipped the swap sends no Authorization at
-    /// all rather than a placeholder.
-    authorization: Option<HeaderValue>,
     credential_scope: String,
     options: Options,
     governor: Governor,
@@ -176,12 +198,9 @@ impl Client {
             return Err(Error::Configuration);
         }
         Self::check_options(&options)?;
-        // `exchange` swaps in a fresh token per request, so requests carry no
-        // Authorization until then; a path that skipped the swap gets a 401.
         let credential_scope = hex(&Sha256::digest(credentials.scope().as_bytes()));
         Ok(Self::assemble(
-            Some(credentials),
-            None,
+            Auth::Credentials(credentials),
             credential_scope,
             options,
             cache,
@@ -213,8 +232,7 @@ impl Client {
         authorization.set_sensitive(true);
         let credential_scope = hex(&Sha256::digest(authorization.as_bytes()));
         Ok(Self::assemble(
-            None,
-            Some(authorization),
+            Auth::Token(authorization),
             credential_scope,
             options,
             cache,
@@ -236,8 +254,7 @@ impl Client {
     }
 
     fn assemble(
-        credentials: Option<Arc<dyn Credentials>>,
-        authorization: Option<HeaderValue>,
+        auth: Auth,
         credential_scope: String,
         options: Options,
         cache: Cache,
@@ -251,11 +268,10 @@ impl Client {
             options.write_burst,
         );
         Self(Arc::new(Inner {
-            credentials,
+            auth,
             decoding: Arc::new(tokio::sync::Semaphore::new(4)),
             transport,
             cache,
-            authorization,
             credential_scope,
             options,
             governor,
@@ -285,14 +301,12 @@ impl Client {
     /// The current token, for a tool that makes its own GitHub requests and is
     /// handed it explicitly. Refreshable credentials renew it.
     pub async fn token(&self) -> Result<String> {
-        if let Some(credentials) = &self.0.credentials {
+        if let Some(credentials) = self.0.auth.credentials() {
             return credentials.token().await;
         }
         self.0
-            .authorization
-            .as_ref()
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "))
+            .auth
+            .token()
             .map(str::to_owned)
             .ok_or(Error::Configuration)
     }
@@ -306,22 +320,22 @@ impl Client {
         permissions: Permissions,
     ) -> Option<credentials::Token<'_>> {
         self.0
-            .credentials
-            .as_ref()?
+            .auth
+            .credentials()?
             .scoped_token(repository, permissions)
     }
 
     /// The numeric id of the repository `scoped_token` mints for under
     /// `repository`; `None` when the credentials cannot mint.
     pub fn scoped_repository_id(&self, repository: &str) -> Option<RepositoryId<'_>> {
-        self.0.credentials.as_ref()?.repository_id(repository)
+        self.0.auth.credentials()?.repository_id(repository)
     }
 
     /// Whether `scoped_token` mints, without minting.
     pub fn mints_scoped_tokens(&self) -> bool {
         self.0
-            .credentials
-            .as_ref()
+            .auth
+            .credentials()
             .is_some_and(|credentials| credentials.mints_scoped_tokens())
     }
 
@@ -329,7 +343,7 @@ impl Client {
     /// token nears expiry sends without waiting on a mint. A fixed token has
     /// nothing to renew.
     pub async fn ready(&self) -> Result<()> {
-        if let Some(credentials) = &self.0.credentials {
+        if let Some(credentials) = self.0.auth.credentials() {
             credentials.token().await?;
         }
         Ok(())
@@ -378,7 +392,7 @@ impl Client {
     fn request(&self, method: Method, url: Url) -> Request {
         let mut request = Request::new(method, url);
         let headers = request.headers_mut();
-        if let Some(authorization) = &self.0.authorization {
+        if let Auth::Token(authorization) = &self.0.auth {
             headers.insert(header::AUTHORIZATION, authorization.clone());
         }
         base_headers(headers);
@@ -426,7 +440,7 @@ impl Client {
             self.0.governor.request();
             let mut outgoing = request.try_clone().ok_or(Error::Configuration)?;
             let mut sent_token = None;
-            if let Some(credentials) = &self.0.credentials {
+            if let Some(credentials) = self.0.auth.credentials() {
                 let token = credentials.token().await?;
                 let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
                     .map_err(|_| Error::Configuration)?;
@@ -449,7 +463,7 @@ impl Client {
             self.0.governor.observe(resource, &response).await;
             if response.status == StatusCode::UNAUTHORIZED
                 && !reauthenticated
-                && let Some((credentials, token)) = self.0.credentials.as_ref().zip(sent_token)
+                && let Some((credentials, token)) = self.0.auth.credentials().zip(sent_token)
                 && let Some(invalidation) = credentials.invalidate(&token)
             {
                 invalidation.await;
