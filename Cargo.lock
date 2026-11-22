@@ -2228,6 +2228,7 @@ dependencies = [
  "jsonwebtoken",
  "patchula-cache",
  "patchula-config",
+ "patchula-github",
  "patchula-http",
  "patchula-testkit",
  "reqwest",
