@@ -24,6 +24,22 @@ pub struct Snapshot {
     #[serde(default)]
     pub cargo_cooldowns: BTreeMap<String, patchula_manager::CargoCooldown>,
 }
+/// The repository's evaluator, as lookup built it: its `actions.lock`
+/// workflows and every extracted dependency.
+fn evaluator(
+    config: &Config,
+    snapshot: &Snapshot,
+    dependencies: &[Dependency],
+) -> Result<patchula_lookup::Evaluator, PlanError> {
+    patchula_lookup::Evaluator::new(
+        config,
+        patchula_lookup::Context {
+            locked_workflows: actions_locked_workflows(snapshot),
+            dependencies: dependencies.iter().collect(),
+        },
+    )
+    .map_err(PlanError::Lookup)
+}
 /// The workflow paths the snapshot's `actions.lock` lists, which the
 /// pinning decision reads; none when the file is absent or unreadable.
 pub fn actions_locked_workflows(snapshot: &Snapshot) -> BTreeSet<String> {
@@ -700,8 +716,7 @@ pub fn plan(
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<Plan>, PlanError> {
-    let evaluator = patchula_lookup::Evaluator::new(config, actions_locked_workflows(snapshot))
-        .map_err(PlanError::Lookup)?;
+    let evaluator = evaluator(config, snapshot, dependencies)?;
     let mut package_names = PackageNames::new();
     for dep in dependencies {
         package_names
@@ -1456,8 +1471,7 @@ pub fn batch_plan(
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Option<Plan>, PlanError> {
-    let evaluator = patchula_lookup::Evaluator::new(config, actions_locked_workflows(snapshot))
-        .map_err(PlanError::Lookup)?;
+    let evaluator = evaluator(config, snapshot, dependencies)?;
     let targets: Vec<Change> = items.iter().flat_map(|i| i.targets.clone()).collect();
     let mut pending = Vec::new();
     for target in &targets {

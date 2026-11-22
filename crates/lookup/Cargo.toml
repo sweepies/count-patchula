@@ -20,6 +20,7 @@ regex = "1.13.1"
 patchula-config = { path = "../config" }
 patchula-datasource = { path = "../datasource" }
 patchula-manager = { path = "../manager" }
+patchula-mise = { path = "../mise" }
 patchula-report = { path = "../report" }
 patchula-words = { path = "../words" }
 patchula-versioning = { path = "../versioning" }

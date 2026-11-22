@@ -494,12 +494,11 @@ fn the_repositorys_own_config_keeps_the_schema_policy() {
     let rules = rules.as_array().unwrap();
     assert_eq!(&rules[..built_in.len()], built_in.as_slice());
     // Tools installed outside mise's registry are never looked up there.
-    let [unlisted, hk] = &rules[built_in.len()..] else {
-        panic!("two rules after the built-in ones: {rules:?}");
+    // hk's mise tool and Pkl package share the built-in `jdx/hk` group, so
+    // no rule groups them.
+    let [unlisted] = &rules[built_in.len()..] else {
+        panic!("one rule after the built-in ones: {rules:?}");
     };
-    assert_eq!(hk["select"]["dependencies"], serde_json::json!(["hk"]));
-    assert_eq!(hk["select"]["managers"], serde_json::json!(["mise", "pkl"]));
-    assert_eq!(hk["apply"]["group"], "hk");
     assert_eq!(
         unlisted["select"]["packages"],
         serde_json::json!(["mise", "php", "composer"])

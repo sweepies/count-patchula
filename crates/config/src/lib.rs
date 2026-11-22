@@ -8,7 +8,7 @@ pub use matching::{ConfigRegex, Filter, Pattern, Patterns};
 mod model;
 mod package;
 mod pkl_package;
-pub use pkl_package::{PklPackage, VERSION_PLACEHOLDER, pkl_semver};
+pub use pkl_package::{PklPackage, VERSION_PLACEHOLDER, github_segment, pkl_semver};
 pub mod settings;
 pub use package::{PackageId, Registry, join_package, split_package};
 mod validate;

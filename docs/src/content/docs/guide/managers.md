@@ -336,6 +336,51 @@ Rules select these dependencies by the source `pkl`, not `github-releases` as
 in Renovate, by the package above, or by the dependency name, which is the
 package's own name: `hk`, so `dependencies { "hk" }` selects it.
 
+### Pkl packages move with their repository's other dependencies
+
+A tool often ships a Pkl package from the same repository: hk's `hk` mise tool
+and its `pkg.pkl-lang.org/github.com/jdx/hk/hk` package, or the
+`github.com/apple/pkl-go` Go module and the `pkl.golang` package. When a
+repository declares both a Pkl package and another dependency from the same
+GitHub repository, their updates share the group named after it, `jdx/hk` or
+`apple/pkl-go`, on the branch `patchula/jdx-hk` (`patchula/major-jdx-hk` for
+majors).
+
+The GitHub repository is read from the declarations alone, never from a
+registry:
+
+| Source | Repository |
+|---|---|
+| `pkl` | the repository in the table above |
+| `go` | `github.com/<owner>/<repo>` and paths below it; vanity paths name none |
+| `mise` | a tool without options whose backends in mise's registry name one GitHub repository (`hk`, `github:jdx/hk`), or a `go:github.com/<owner>/<repo>/…` tool such as `pkl-gen-go` |
+| `github-releases`, `github-tags` | the package, `<owner>/<repo>` |
+
+A package from a registry the repository names counts for no repository.
+Packages of one repository without another dependency from it, such as
+`pkl.toml` and `k8s.contrib` from `apple/pkl-pantry`, stay apart, and so do
+dependencies of one repository without a Pkl package among them.
+
+Any group set for a dependency wins, `defaults.group` included, and `""`
+keeps it out:
+
+```pkl
+rules {
+  new Rule {
+    note = "hk's Pkl package gets PRs of its own."
+    select { sources { "pkl" } }
+    apply { group = "" }
+  }
+}
+```
+
+A dependency joins only when, for that kind of update, a dependency from the
+other side (Pkl or not) is active, has no group set and has the same
+`commitPrefix`. So `""` on either side, or on every Pkl package as above,
+separates them all. A group of your own named `jdx/hk` shares the branch,
+which is how to add something else to it. Security fixes still get a PR of
+their own, since `security.apply` sets `group = ""`.
+
 These URIs are skipped:
 
 - a host other than `github.com` and `pkg.pkl-lang.org`, or a path on them

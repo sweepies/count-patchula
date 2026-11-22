@@ -2290,6 +2290,7 @@ dependencies = [
  "patchula-lockfiles",
  "patchula-lookup",
  "patchula-manager",
+ "patchula-mise",
  "patchula-report",
  "patchula-testkit",
  "patchula-versioning",
