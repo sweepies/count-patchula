@@ -459,8 +459,9 @@ pub fn job(
         },
         exact_version: targeted && update.new_value.is_none(),
         publish_age_allow: update.cooldown.is_some(),
-        // The wait the update's policy answered to, floor folded in; a
-        // batched update records no policy, so the planner re-derives it.
+        // The wait the update's policy answered to, floor folded in. Only
+        // Cargo reads it, and the planner derives Cargo's from the rules;
+        // the others still carry it into the plan fingerprint.
         wait_hours: update.policy.as_ref().map_or(0, |policy| policy.wait_hours),
     }))
 }

@@ -893,13 +893,15 @@ fn build(
         }
         match contract::job(dep, update, &snapshot.paths) {
             Ok(Some(mut job)) => {
-                // A batch's rebuilt update records no policy: a Cargo job's
-                // wait for unnamed crates comes from the effective wait the
-                // dependency's rules give the update's own kind, and a
-                // fix's from `security.apply`, so Cargo does not hold a
-                // fresh fix that lookup proposed. A rule error holds the
-                // plan: Cargo never runs with a wait the rules did not give.
-                if update.policy.is_none() && job.ecosystem == contract::Ecosystem::Cargo {
+                // A Cargo job's wait for unnamed crates is the effective
+                // wait the dependency's rules give the update's own kind,
+                // and a fix's comes from `security.apply`, so Cargo does not
+                // hold a fresh fix that lookup proposed. Lookup recorded
+                // the same wait in the update's policy, but a batch's
+                // rebuilt update records none, so it is always derived
+                // here. A rule error holds the plan: Cargo never runs with
+                // a wait the rules did not give.
+                if job.ecosystem == contract::Ecosystem::Cargo {
                     let wait = if update.fixes.is_empty() {
                         evaluator.routine_wait_hours(dep, update.update_type)
                     } else {
