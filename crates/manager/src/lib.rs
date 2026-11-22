@@ -844,6 +844,26 @@ impl Scanner {
             })
             .collect()
     }
+    /// A shared-name file ([`Self::shared_name`]) over
+    /// [`SHARED_NAME_LIMIT`], not read, as a skipped entry saying why.
+    /// Skipped, not warned about, so a pickle leaves branch cleanup and
+    /// automerge on.
+    pub fn oversize(&self, path: &str) -> Skipped {
+        let manager = self
+            .config
+            .managers
+            .iter()
+            .copied()
+            .find(|m| self.selected(*m, path))
+            .unwrap_or(Manager::Pkl);
+        Skipped {
+            manager,
+            file: path.to_owned(),
+            line: None,
+            value: format!("over {} MiB", SHARED_NAME_LIMIT >> 20),
+            reason: "not read: larger than any Pkl module would be; `.pkl` is also the extension of Python pickles".into(),
+        }
+    }
     pub(crate) fn selected(&self, manager: Manager, path: &str) -> bool {
         self.config.managers.contains(&manager)
             && !self.excluded(path)

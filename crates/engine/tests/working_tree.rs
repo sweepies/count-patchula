@@ -325,9 +325,9 @@ async fn a_selected_non_utf8_file_refuses_the_read() {
 }
 
 /// `.pkl` is also Python's pickle extension: a `.pkl` file that is not
-/// text is left out, and one larger than any Pkl module is not read, with
-/// one warning for all of them, rather than refusing the repository. A
-/// real module beside them is still read.
+/// text is left out, and one larger than any Pkl module is skipped unread,
+/// rather than refusing the repository. A real module beside them is still
+/// read.
 #[tokio::test]
 async fn pickles_named_pkl_do_not_refuse_the_read() {
     let dir = tempfile::tempdir().unwrap();
@@ -346,12 +346,10 @@ async fn pickles_named_pkl_do_not_refuse_the_read() {
     );
     assert!(!view.files.contains_key("model.pkl"));
     assert!(!view.files.contains_key("big.pkl"));
-    assert_eq!(
-        view.warnings,
-        [
-            "not read: 1 file(s) over 1 MiB, larger than any Pkl module, such as Python pickles named .pkl"
-        ]
-    );
+    // Skipped, not warned about, so automerge and cleanup stay on.
+    assert!(view.warnings.is_empty(), "{:?}", view.warnings);
+    let skipped: Vec<_> = view.unsupported.iter().map(|s| s.file.as_str()).collect();
+    assert_eq!(skipped, ["big.pkl"]);
 }
 
 /// Only `.pkl` names are shared with pickles: a settings file or any other

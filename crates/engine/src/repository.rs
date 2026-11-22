@@ -68,7 +68,7 @@ pub struct View {
     pub files: Files,
     /// The blobs of the files read, for the snapshot's write-back.
     pub blobs: BTreeMap<String, Blob>,
-    /// The files among `paths` the Count does not maintain.
+    /// The files among `paths` the Count does not maintain or read.
     pub unsupported: Vec<Skipped>,
     pub warnings: Vec<String>,
     /// Why the repository is refused for committed credentials, if it is.
@@ -136,7 +136,7 @@ pub async fn view<S: Source>(
     let mut files = Files::new();
     let mut blobs = BTreeMap::new();
     let mut wanted = Vec::new();
-    let mut oversize = 0;
+    let mut oversize = Vec::new();
     for entry in &entries {
         if !(scanner.needs(&entry.path)
             || tooling::reads(&entry.path)
@@ -147,7 +147,7 @@ pub async fn view<S: Source>(
         if shared_name(scanner, &entry.path)
             && entry.size.is_some_and(|size| size > SHARED_NAME_LIMIT)
         {
-            oversize += 1;
+            oversize.push(scanner.oversize(&entry.path));
             continue;
         }
         if entry.mode == SYMLINK_MODE {
@@ -211,16 +211,11 @@ pub async fn view<S: Source>(
             committed_credentials(path, text.read().ok()?)
                 .map(|kind| credential_reason(path, &kind))
         });
-    let unsupported = scanner.unsupported(paths.iter().map(String::as_str));
+    let mut unsupported = scanner.unsupported(paths.iter().map(String::as_str));
+    unsupported.extend(oversize);
     let mut warnings = Vec::new();
     for path in &deep {
         warnings.push(Unread::TooDeep.reason(path));
-    }
-    if oversize > 0 {
-        warnings.push(format!(
-            "not read: {oversize} file(s) over {} MiB, larger than any Pkl module, such as Python pickles named .pkl",
-            SHARED_NAME_LIMIT >> 20
-        ));
     }
     if delivery && manifests > tooling::MANIFEST_LIMIT {
         warnings.push(format!(

@@ -301,9 +301,9 @@ repository's own `patchula.pkl` is not read: its imports must already be local
 modules.
 
 `.pkl` is also the extension of Python pickles, so a `.pkl` file that is not
-text is left out, and one over 1 MiB is not read, with one warning counting
-them. Neither fails the repository's scan, as an unreadable file other
-managers select does.
+text is left out, and one over 1 MiB is not read and listed as skipped.
+Neither fails the repository's scan, as an unreadable file other managers
+select does, or turns off auto-merge and branch cleanup, as a warning does.
 
 A package is named by its URI without `package://` and the version, and looked
 up in the `pkl` [source](/guide/sources/) under the semver scheme, which Pkl
