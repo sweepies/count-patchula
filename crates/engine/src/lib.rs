@@ -1295,6 +1295,39 @@ impl Engine {
         })
         .await
         .map_err(|e| Error::Invalid(e.to_string()))??;
+        let config_hash = patchula_manager::hash(&serde_json::to_vec(&config)?);
+        let cached = match self.extract_view(repo, scanner, view, config_hash).await? {
+            Ok(cached) => cached,
+            Err(reason) => {
+                return Ok(Work::empty(
+                    repo_report(repo, Status::Error, Some(reason)),
+                    Some(config),
+                ));
+            }
+        };
+        let mut report = repo_report(repo, Status::Complete, None);
+        // Plans are based on a commit; a directory's stands in as a hash of
+        // its selected files, stable until they change.
+        report.commit = Some(patchula_manager::hash(&serde_json::to_vec(
+            &cached
+                .snapshot
+                .files
+                .iter()
+                .map(|(path, blob)| (path, &blob.sha))
+                .collect::<Vec<_>>(),
+        )?));
+        report.default_branch = Some("local".into());
+        Ok(Work::from_extraction(report, config, cached))
+    }
+    /// The extraction of `view` with the snapshot it was read from, or the
+    /// view's refusal.
+    async fn extract_view(
+        &self,
+        repo: &str,
+        scanner: Scanner,
+        view: repository::View,
+        config_hash: String,
+    ) -> Result<std::result::Result<CachedExtraction, String>> {
         let repository::View {
             paths,
             files,
@@ -1304,41 +1337,23 @@ impl Engine {
             refusal,
         } = view;
         if let Some(reason) = refusal {
-            return Ok(Work::empty(
-                repo_report(repo, Status::Error, Some(reason)),
-                Some(config),
-            ));
+            return Ok(Err(reason));
         }
-        let config_hash = patchula_manager::hash(&serde_json::to_vec(&config)?);
         let mut extraction = self
             .extract_files(repo, scanner, files, config_hash)
             .await?;
         extraction.skipped.extend(unsupported);
         extraction.warnings.extend(warnings);
-        let mut report = repo_report(repo, Status::Complete, None);
-        // Plans are based on a commit; a directory's stands in as a hash of
-        // its selected files, stable until they change.
-        report.commit = Some(patchula_manager::hash(&serde_json::to_vec(
-            &blobs
-                .iter()
-                .map(|(path, blob)| (path, &blob.sha))
-                .collect::<Vec<_>>(),
-        )?));
-        report.default_branch = Some("local".into());
         let snapshot = patchula_update::Snapshot {
             paths,
             files: blobs,
             public_only: extraction.public_only.clone(),
             cargo_cooldowns: extraction.cargo_cooldowns.clone(),
         };
-        Ok(Work::from_extraction(
-            report,
-            config,
-            CachedExtraction {
-                extraction,
-                snapshot,
-            },
-        ))
+        Ok(Ok(CachedExtraction {
+            extraction,
+            snapshot,
+        }))
     }
     /// The extraction of `files` under the config `config_hash` names.
     /// Extraction is a function of the config and the files it reads, so a
@@ -1441,34 +1456,13 @@ impl Engine {
                     self.tree(repo, tree_sha).await?
                 };
                 let view = self.repository_view(repo, entries, &config).await?;
-                let repository::View {
-                    paths,
-                    files,
-                    blobs,
-                    unsupported,
-                    warnings,
-                    refusal,
-                } = view;
-                if let Some(reason) = refusal {
-                    report.status = Status::Error;
-                    report.reason = Some(reason);
-                    return Ok(Work::empty(report, Some(config)));
-                }
-                let mut extraction = self
-                    .extract_files(repo, scanner, files, config_hash.clone())
-                    .await?;
-                extraction.skipped.extend(unsupported);
-                extraction.warnings.extend(warnings);
-                let public_only = extraction.public_only.clone();
-                let cargo_cooldowns = extraction.cargo_cooldowns.clone();
-                let cached = CachedExtraction {
-                    extraction,
-                    snapshot: patchula_update::Snapshot {
-                        paths,
-                        files: blobs,
-                        public_only,
-                        cargo_cooldowns,
-                    },
+                let cached = match self.extract_view(repo, scanner, view, config_hash).await? {
+                    Ok(cached) => cached,
+                    Err(reason) => {
+                        report.status = Status::Error;
+                        report.reason = Some(reason);
+                        return Ok(Work::empty(report, Some(config)));
+                    }
                 };
                 self.cache.set_state(&scope, &cached).await?;
                 cached
