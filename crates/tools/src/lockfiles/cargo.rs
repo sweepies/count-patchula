@@ -40,7 +40,7 @@ pub(super) struct CargoDirectory<'a> {
 /// major version, or a different minor (or patch) one below 1.0. Cargo then
 /// keeps both in the lock.
 fn crosses_compatibility(current: &str, target: &str) -> bool {
-    use patchula_versioning::{Ecosystem as Scheme, Versioning};
+    use patchula_versioning::Ecosystem as Scheme;
     use patchula_words::Update;
     match (Scheme::Cargo.parse(current), Scheme::Cargo.parse(target)) {
         (Ok(current), Ok(target)) => Scheme::Cargo.classify(&current, &target) == Update::Major,

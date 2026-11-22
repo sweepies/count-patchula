@@ -1287,7 +1287,6 @@ fn manager_slug(dep: &Dependency) -> String {
     }
 }
 fn proposal_order(dep: &Dependency, a: &Update, b: &Update) -> std::cmp::Ordering {
-    use patchula_versioning::Versioning;
     let value = |u: &Update| {
         u.new_version
             .clone()
@@ -1304,7 +1303,6 @@ fn proposal_order(dep: &Dependency, a: &Update, b: &Update) -> std::cmp::Orderin
 /// whose PR was ticked into the batch after a later batch carried a newer
 /// release. Writing it would go backwards, so it is dropped.
 fn superseded(dep: &Dependency, target: &Change) -> bool {
-    use patchula_versioning::Versioning;
     let Some(version) = target.version.as_deref() else {
         return false;
     };

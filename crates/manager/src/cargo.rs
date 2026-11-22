@@ -1,5 +1,5 @@
 use crate::*;
-use patchula_versioning::{Ecosystem, Versioning};
+use patchula_versioning::Ecosystem;
 use std::collections::BTreeSet;
 use toml_edit::{Document, Item};
 

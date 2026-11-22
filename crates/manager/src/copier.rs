@@ -3,7 +3,7 @@
 //! Newer tags are only reported. Copier regenerates a project from its
 //! template, so bumping `_commit` alone would drop the template's changes.
 use crate::*;
-use patchula_versioning::{Ecosystem, Versioning};
+use patchula_versioning::Ecosystem;
 
 /// `.copier-answers.yml`, `.copier-answers.yaml` and named variants such as
 /// `.copier-answers.backend.yml`.

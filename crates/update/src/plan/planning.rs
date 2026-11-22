@@ -663,7 +663,6 @@ fn an_in_range_release_is_a_lock_only_plan_for_bundler_composer_and_pyproject() 
         let (plan, dependencies) =
             lock_only_plan(manager, source, &files, manifest, package, locked, target);
         {
-            use patchula_versioning::Versioning;
             let dep = &dependencies[0];
             let scheme = patchula_versioning::Ecosystem::of(dep.scheme, dep.source);
             assert!(

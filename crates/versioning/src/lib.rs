@@ -89,41 +89,8 @@ pub struct Parsed(
     pub Option<String>,
 );
 
-pub trait Versioning: Send + Sync {
-    fn parse(&self, value: &str) -> Result<Parsed>;
-    fn order(&self, left: &Parsed, right: &Parsed) -> Ordering;
-    fn matches(&self, range: &str, version: &Parsed) -> Result<bool>;
-    fn classify(&self, current: &Parsed, target: &Parsed) -> Update;
-    fn new_range(&self, current: &str, target: &str, policy: VersionPolicy) -> Result<String>;
-    /// The lowest version the requirement can name, to classify updates
-    /// when the current value is not a version: npm floors its declared
-    /// requirement; the other ranged schemes floor the resolved text's
-    /// first bound — a bracketed interval's first bound, or a range's
-    /// first alternative's first bound — and Cargo falls back to a loose
-    /// version. `declared` is the requirement as written, `current` the
-    /// value the evaluation resolved it to.
-    fn floor(&self, declared: &str, current: &str) -> Option<Parsed>;
-    /// Whether `candidate` is a release on `baseline`'s line: Maven keeps
-    /// the published variant, Docker keeps the tag's suffix and precision.
-    /// `baseline_text` and `candidate_text` are the source texts the parsed
-    /// versions came from.
-    fn same_release_line(
-        &self,
-        baseline: &Parsed,
-        baseline_text: &str,
-        candidate: &Parsed,
-        candidate_text: &str,
-    ) -> bool;
-    /// Whether the release `candidate` (its source text, as the registry
-    /// published it) satisfies `requirement`. A candidate the scheme cannot
-    /// read does not satisfy it. Unlike [`Versioning::matches`], a
-    /// requirement that does not parse is the parser's own error, surfaced
-    /// to the report verbatim.
-    fn satisfies(&self, requirement: &str, candidate: &str) -> Result<bool>;
-}
-
-impl Versioning for Ecosystem {
-    fn parse(&self, value: &str) -> Result<Parsed> {
+impl Ecosystem {
+    pub fn parse(&self, value: &str) -> Result<Parsed> {
         if *self == Self::Maven {
             return maven::parse(value);
         }
@@ -176,7 +143,7 @@ impl Versioning for Ecosystem {
             .map(|v| Parsed(v, None, None))
             .map_err(|_| Error::Invalid(value.into()))
     }
-    fn order(&self, left: &Parsed, right: &Parsed) -> Ordering {
+    pub fn order(&self, left: &Parsed, right: &Parsed) -> Ordering {
         if *self == Self::Maven
             && let (Some(a), Some(b)) = (&left.2, &right.2)
         {
@@ -203,7 +170,7 @@ impl Versioning for Ecosystem {
         // SemVer precedence ignores build metadata, including Go +incompatible.
         left.0.cmp_precedence(&right.0)
     }
-    fn matches(&self, range: &str, version: &Parsed) -> Result<bool> {
+    pub fn matches(&self, range: &str, version: &Parsed) -> Result<bool> {
         match self {
             Self::Npm => {
                 let range =
@@ -227,7 +194,7 @@ impl Versioning for Ecosystem {
                 .map(|v| self.order(&v, version) == Ordering::Equal),
         }
     }
-    fn classify(&self, current: &Parsed, target: &Parsed) -> Update {
+    pub fn classify(&self, current: &Parsed, target: &Parsed) -> Update {
         let (a, b) = (&current.0, &target.0);
         if current
             .1
@@ -246,7 +213,7 @@ impl Versioning for Ecosystem {
             Update::Patch
         }
     }
-    fn new_range(&self, current: &str, target: &str, policy: VersionPolicy) -> Result<String> {
+    pub fn new_range(&self, current: &str, target: &str, policy: VersionPolicy) -> Result<String> {
         if *self == Self::Rubygems {
             return rubygems::new_range(current, target, policy);
         }
@@ -389,7 +356,14 @@ impl Versioning for Ecosystem {
         }
         Ok(out)
     }
-    fn floor(&self, declared: &str, current: &str) -> Option<Parsed> {
+    /// The lowest version the requirement can name, to classify updates
+    /// when the current value is not a version: npm floors its declared
+    /// requirement; the other ranged schemes floor the resolved text's
+    /// first bound — a bracketed interval's first bound, or a range's
+    /// first alternative's first bound — and Cargo falls back to a loose
+    /// version. `declared` is the requirement as written, `current` the
+    /// value the evaluation resolved it to.
+    pub fn floor(&self, declared: &str, current: &str) -> Option<Parsed> {
         if *self == Self::Npm {
             return nodejs_semver::Range::parse(declared)
                 .ok()?
@@ -429,7 +403,11 @@ impl Versioning for Ecosystem {
                 .flatten()
         })
     }
-    fn same_release_line(
+    /// Whether `candidate` is a release on `baseline`'s line: Maven keeps
+    /// the published variant, Docker keeps the tag's suffix and precision.
+    /// `baseline_text` and `candidate_text` are the source texts the parsed
+    /// versions came from.
+    pub fn same_release_line(
         &self,
         baseline: &Parsed,
         baseline_text: &str,
@@ -450,7 +428,12 @@ impl Versioning for Ecosystem {
             _ => true,
         }
     }
-    fn satisfies(&self, requirement: &str, candidate: &str) -> Result<bool> {
+    /// Whether the release `candidate` (its source text, as the registry
+    /// published it) satisfies `requirement`. A candidate the scheme cannot
+    /// read does not satisfy it. Unlike [`Ecosystem::matches`], a
+    /// requirement that does not parse is the parser's own error, surfaced
+    /// to the report verbatim.
+    pub fn satisfies(&self, requirement: &str, candidate: &str) -> Result<bool> {
         if *self == Self::Npm {
             let range = nodejs_semver::Range::parse(requirement).map_err(|_| Error::Semver)?;
             let Ok(version) = nodejs_semver::Version::parse(candidate) else {

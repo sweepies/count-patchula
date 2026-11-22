@@ -17,7 +17,7 @@ pub(super) static DESCRIPTOR: Tool = Tool {
 /// `toolchain` directives. With GOTOOLCHAIN=local, an older Go refuses a
 /// module that requires a newer one, which an update itself may introduce.
 pub(super) fn go_version(cwd: &Path, pinned: &str) -> Result<String, String> {
-    use patchula_versioning::{Ecosystem as Scheme, Versioning};
+    use patchula_versioning::Ecosystem as Scheme;
     let text = std::fs::read_to_string(cwd.join("go.mod")).map_err(|e| e.to_string())?;
     let mut best = pinned.to_string();
     for line in text.lines() {

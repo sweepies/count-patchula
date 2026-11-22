@@ -5,7 +5,6 @@
 //! version and writes the declared constraint back into the lock.
 use super::*;
 use patchula_manager::{Edit, Scanner};
-use patchula_versioning::Versioning;
 
 /// Manifests as they were before a transient pin. Dropping it puts back any
 /// not yet restored, so no exit path, an error included, leaves a pin behind.

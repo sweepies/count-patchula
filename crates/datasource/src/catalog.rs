@@ -3,7 +3,7 @@
 //! digest-addressed derived bodies. `tests/derived-versions.tsv` hashes this
 //! file into every transform whose bytes it feeds.
 use patchula_cache::Release;
-use patchula_versioning::{Ecosystem, Versioning};
+use patchula_versioning::Ecosystem;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
