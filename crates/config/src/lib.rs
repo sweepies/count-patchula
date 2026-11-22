@@ -274,9 +274,98 @@ fn evaluation_problem(path: &Path, source: &str, error: miette::Report) -> miett
     problem(path, source, "", &error.to_string())
 }
 
+/// How the key of a map a deserialization error sits under reads in its
+/// field path: the map's property name, and the bracketed key.
+pub(crate) type KeyedMap<'a> = (&'a str, fn(&str) -> String);
+
+/// A deserialization error's path as the Count writes field paths:
+/// `rules[0].select.packages[1]`, with the key of a map `keyed` names in
+/// brackets (`security.quietImages[nginx*]`) rather than split at its dots.
+/// `.` for the root.
+pub(crate) fn field_path(path: &serde_path_to_error::Path, keyed: &[KeyedMap<'_>]) -> String {
+    use serde_path_to_error::Segment;
+    let mut out = String::new();
+    let mut key: Option<fn(&str) -> String> = None;
+    for segment in path.iter() {
+        let under = key.take();
+        match segment {
+            Segment::Seq { index } => out.push_str(&format!("[{index}]")),
+            Segment::Map { key: name } | Segment::Enum { variant: name } => match under {
+                Some(bracketed) => out.push_str(&bracketed(name)),
+                None => {
+                    if !out.is_empty() {
+                        out.push('.');
+                    }
+                    out.push_str(name);
+                    key = keyed
+                        .iter()
+                        .find(|(map, _)| map == name)
+                        .map(|(_, bracketed)| *bracketed);
+                }
+            },
+            Segment::Unknown => {
+                if !out.is_empty() {
+                    out.push('.');
+                }
+                out.push('?');
+            }
+        }
+    }
+    if out.is_empty() { ".".into() } else { out }
+}
+
+/// The property a field path ends in, for highlighting: the last name that
+/// is not inside a bracketed index or map key, so a key's own dots and
+/// brackets never pick an unrelated property. A quoted key (`["a.b"]`) is
+/// skipped whole; an unquoted one (`[a.b]`) runs to the end of the path.
+fn leaf(field: &str) -> &str {
+    let mut leaf = "";
+    let mut rest = field;
+    loop {
+        let end = rest.find(['.', '[']).unwrap_or(rest.len());
+        if end > 0 {
+            leaf = &rest[..end];
+        }
+        rest = &rest[end..];
+        if let Some(after) = rest.strip_prefix('.') {
+            rest = after;
+            continue;
+        }
+        let Some(inside) = rest.strip_prefix('[') else {
+            break;
+        };
+        if let Some(close) = inside.find(']')
+            && close > 0
+            && inside[..close].bytes().all(|b| b.is_ascii_digit())
+        {
+            rest = &inside[close + 1..];
+        } else if let Some(quoted) = inside.strip_prefix('"') {
+            let mut escaped = false;
+            let Some(close) = quoted.find(|c| {
+                let end = c == '"' && !escaped;
+                escaped = c == '\\' && !escaped;
+                end
+            }) else {
+                break;
+            };
+            match quoted[close + 1..].strip_prefix(']') {
+                Some(after) => rest = after,
+                None => break,
+            }
+        } else {
+            break;
+        }
+    }
+    leaf
+}
+
 fn decode(path: &Path, source: &str, json: serde_json::Value) -> miette::Result<Config> {
     let config: Config = serde_path_to_error::deserialize(json).map_err(|error| {
-        let mut field = error.path().to_string();
+        let bracketed: fn(&str) -> String = |key| format!("[{key}]");
+        let mut field = field_path(
+            error.path(),
+            &[("quietImages", bracketed), ("quiet", bracketed)],
+        );
         let detail = error.inner().to_string();
         if let Some(unknown) = detail
             .strip_prefix("unknown field `")
@@ -314,8 +403,7 @@ struct ConfigProblem {
 pub fn problem(path: &Path, source: &str, field: &str, message: &str) -> miette::Report {
     // Highlight only an unambiguous property assignment in this file. Inherited
     // properties have no source map after evaluation; never invent their location.
-    let leaf = field.rsplit('.').next().unwrap_or(field);
-    let leaf = leaf.split('[').next().unwrap_or(leaf);
+    let leaf = leaf(field);
     // No name, nothing to find: an empty pattern would match at every byte.
     let assignments: Vec<_> = if leaf.is_empty() {
         Vec::new()

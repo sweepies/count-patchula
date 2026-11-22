@@ -302,7 +302,8 @@ impl Settings {
             .wrap_err_with(|| format!("cannot read settings {}", path.display()))?;
         let value = crate::evaluate_local(path, SCHEMA_NAME, SCHEMA)?;
         let settings: Self = serde_path_to_error::deserialize(value).map_err(|error| {
-            crate::problem(path, &source, &error.path().to_string(), &error.to_string())
+            let (field, message) = deserialize_problem(&error);
+            crate::problem(path, &source, &field, &message)
         })?;
         settings
             .validate()
@@ -324,7 +325,7 @@ impl Settings {
         // client's types, so patchula-engine's `settings::check` runs them;
         // `Settings::load` callers that build an engine get both.
         for (key, registry) in &self.registries {
-            let field = |name: &str| format!("registries[{key:?}]{name}");
+            let field = |name: &str| format!("registries[{:?}]{name}", registry_label(key));
             if registry
                 .allowed_installations
                 .iter()
@@ -442,6 +443,81 @@ impl Settings {
     }
 }
 
+/// A deserialization error's field path and message. A registry's key is
+/// shown by [`registry_label`], in brackets, never split at its dots; a
+/// registry shape problem about its `username` or `secret` names that
+/// property, as `registries["https://npm.acme.dev/"].username is …`.
+fn deserialize_problem(error: &serde_path_to_error::Error<serde_json::Error>) -> (String, String) {
+    let field = crate::field_path(
+        error.path(),
+        &[
+            ("registries", |key| format!("[{:?}]", registry_label(key))),
+            ("hostConcurrency", |key| format!("[{key:?}]")),
+        ],
+    );
+    let detail = error.inner().to_string();
+    let segments: Vec<_> = error.path().iter().collect();
+    let at_registry = matches!(
+        segments.as_slice(),
+        [.., serde_path_to_error::Segment::Map { key: map }, serde_path_to_error::Segment::Map { .. }]
+            if map == "registries"
+    );
+    if at_registry {
+        for property in ["username", "secret"] {
+            if let Some(rest) = detail
+                .strip_prefix(property)
+                .and_then(|r| r.strip_prefix(' '))
+            {
+                let field = format!("{field}.{property}");
+                let message = format!("{field} {rest}");
+                return (field, message);
+            }
+        }
+    }
+    let message = format!("{field}: {detail}");
+    (field, message)
+}
+
+/// Whether `value` is an http(s) URL with a host and nothing that can carry
+/// a credential: no user, password, query or fragment. Such a value is shown
+/// as written in a settings diagnostic rather than masked.
+fn shown_url(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|url| {
+        matches!(url.scheme(), "https" | "http")
+            && url.host().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
+}
+
+/// How a registry's key reads in a diagnostic: `scheme://host[:port]/path`
+/// when it parses as an http(s) URL without a user or password, so the
+/// entry can be found; `[redacted]` otherwise, since a key that embeds a
+/// credential must not show it.
+fn registry_label(key: &str) -> String {
+    match url::Url::parse(key) {
+        Ok(url)
+            if matches!(url.scheme(), "https" | "http")
+                && url.username().is_empty()
+                && url.password().is_none() =>
+        {
+            match url.host_str() {
+                Some(host) => {
+                    let port = url
+                        .port()
+                        .map(|port| format!(":{port}"))
+                        .unwrap_or_default();
+                    format!("{}://{host}{port}{}", url.scheme(), url.path())
+                }
+                None => "[redacted]".into(),
+            }
+        }
+        _ => "[redacted]".into(),
+    }
+}
+
 /// The settings file `flag` names, else the one `PATCHULA_SETTINGS` names.
 fn named(flag: Option<&Path>) -> Option<PathBuf> {
     flag.map(Path::to_path_buf)
@@ -494,7 +570,9 @@ fn sanitize_diagnostic(error: miette::Report) -> miette::Report {
         if let Some(begin) = start {
             if byte == b'"' && !escaped {
                 let value = &source[begin..index];
-                if !value.is_empty() {
+                // A URL that can carry no credential stays readable, so a
+                // registry named by its key can be found.
+                if !value.is_empty() && !shown_url(value) {
                     message = message.replace(value, "[redacted]");
                     for label in &mut labels {
                         label
@@ -605,10 +683,10 @@ mod tests {
             )
             .unwrap_err()
             .to_string();
-            // The diagnostic masks quoted values, the registry's key among
-            // them, so only the unquoted parts are checked.
+            // A key that is no URL is redacted; the problem still names
+            // the registries entry.
             assert!(
-                error.contains("registries.") && error.contains(problem),
+                error.contains(r#"registries["[redacted]"]"#) && error.contains(problem),
                 "{body}: {error}"
             );
         }
@@ -624,6 +702,44 @@ mod tests {
                 secret: Secret::File("/t".into()),
             })
         );
+    }
+    /// A registry problem names the registry by its URL key and highlights
+    /// the registries entry, whatever the key's dots spell: a host ending in
+    /// `.tools` never points at another entry's `tools`. A key carrying a
+    /// credential stays redacted.
+    #[test]
+    fn a_registry_problem_names_and_points_at_its_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.pkl");
+        let body = "registries {\n  [\"https://npm.acme.tools\"] {}\n  [\"https://other.dev\"] {\n    auth = \"bearer\"\n    secret { env = \"T\" }\n    tools = true\n  }\n}";
+        let error = load_body(&path, body).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains(
+                r#"registries["https://npm.acme.tools/"]: a registry needs auth or mirrorOf"#
+            ),
+            "{message}"
+        );
+        let source = std::fs::read_to_string(&path).unwrap();
+        let offsets: Vec<_> = error
+            .labels()
+            .into_iter()
+            .flatten()
+            .map(|label| label.offset())
+            .collect();
+        assert_eq!(offsets, [source.find("registries").unwrap()], "{error:?}");
+
+        let error = load_body(
+            &path,
+            "registries { [\"https://ci:hunter2@npm.acme.dev\"] { auth = \"bearer\" } }",
+        )
+        .unwrap_err();
+        let message = format!("{error:?}");
+        assert!(
+            message.contains(r#"registries["[redacted]"].secret is required with auth"#),
+            "{message}"
+        );
+        assert!(!message.contains("hunter2"), "{message}");
     }
     /// An unreadable secret file keeps the io error: not found and permission
     /// denied read differently.

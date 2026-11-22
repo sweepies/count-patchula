@@ -657,3 +657,27 @@ fn compile_errors_name_the_field_path() {
         );
     }
 }
+
+/// A `security.quietImages` key that does not compile is reported as the
+/// map entry it is, and highlights `quietImages`: the key's own dots and
+/// brackets never point at an unrelated property such as `images`.
+#[test]
+fn a_bad_quiet_image_key_points_at_quiet_images() {
+    let (_directory, path) = fixture(
+        "security {\n  images = true\n  quietImages { [\"[unclosed.images\"] = \"noisy\" }\n}",
+    );
+    let error = load(&path).unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("security.quietImages[[unclosed.images]: invalid glob"),
+        "{message}"
+    );
+    let source = std::fs::read_to_string(&path).unwrap();
+    let offsets: Vec<_> = error
+        .labels()
+        .into_iter()
+        .flatten()
+        .map(|label| label.offset())
+        .collect();
+    assert_eq!(offsets, [source.find("quietImages").unwrap()], "{error:?}");
+}
