@@ -8,6 +8,14 @@ use patchula_config::settings::{RegistryAuth, Settings};
 use patchula_github::Options as GithubOptions;
 use patchula_http::{Auth, Credential, Options as HttpOptions};
 
+/// `settings` once [`check`] passes, or the failure pointing into the file
+/// at `path` when one was read.
+pub fn checked(settings: Settings, path: Option<&std::path::Path>) -> miette::Result<Settings> {
+    check(&settings)
+        .map_err(|(field, message)| patchula_config::settings_problem(path, field, message))?;
+    Ok(settings)
+}
+
 /// The settings rules `patchula-config` cannot check without the HTTP
 /// client's types: registry prefixes and their mirrors, the tools-prefix
 /// rules, and `http.hostConcurrency`. An error is the settings field it is

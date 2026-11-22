@@ -28,11 +28,8 @@ impl Reload {
     pub fn refresh(&self, path: &Path) {
         // The engine-side rules (registry prefixes, mirrors, host
         // concurrency) reject a file the same way load's own validation does.
-        let result = Settings::load(path).and_then(|settings| {
-            patchula_engine::settings::check(&settings)
-                .map(|_| settings)
-                .map_err(|(field, message)| miette::miette!("{field}: {message}"))
-        });
+        let result = Settings::load(path)
+            .and_then(|settings| patchula_engine::settings::checked(settings, Some(path)));
         let mut state = self.0.write().expect("settings lock");
         match result {
             Ok(settings) => {

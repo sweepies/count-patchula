@@ -91,10 +91,10 @@ pub struct Options {
 }
 
 pub async fn serve(options: Options) -> miette::Result<()> {
-    let settings = Settings::load(&options.settings)?;
-    patchula_engine::settings::check(&settings).map_err(|(field, message)| {
-        patchula_config::settings_problem(Some(&options.settings), field, message)
-    })?;
+    let settings = patchula_engine::settings::checked(
+        Settings::load(&options.settings)?,
+        Some(&options.settings),
+    )?;
     let settings = Reload::new(settings);
     serve_with_settings(options, settings)
         .await
