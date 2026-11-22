@@ -502,12 +502,7 @@ impl Batch for Engines {
                 let mut listed = Vec::new();
                 let entries = patchula_engine::installation_repositories(&client)
                     .await
-                    .map_err(|error| match error {
-                        patchula_github::Error::Json => {
-                            Error::new("invalid installation repository")
-                        }
-                        error => Error::cause("installation discovery failed")(error),
-                    })?;
+                    .map_err(Error::cause("installation discovery failed"))?;
                 for entry in &entries {
                     let repo = entry.full_name.as_str();
                     if settings.allows(id, repo) {
