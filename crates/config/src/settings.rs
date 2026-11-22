@@ -176,45 +176,19 @@ pub struct Triggers {
     pub checks: bool,
 }
 impl Default for Settings {
-    /// The schema's defaults, for a CLI run without a settings file. A test
-    /// checks them against `PatchulaSettings.pkl`.
+    /// The schema's defaults, for a CLI run without a settings file: the
+    /// bundled `PatchulaSettings.pkl` amended with nothing.
     fn default() -> Self {
-        Self {
-            concurrency: 8,
-            recheck: None,
-            http: Http {
-                default_host_concurrency: 32,
-                host_concurrency: BTreeMap::new(),
-                registry_freshness_secs: 3600,
-                go_freshness_secs: 3600,
-                advisory_freshness_secs: 3600,
-            },
-            github: Github { write_burst: 12 },
-            registries: BTreeMap::new(),
-            lockfiles: Lockfiles { cache_gib: 20 },
-            server: Server {
-                triggers: Triggers {
-                    push: true,
-                    dashboard: true,
-                    pull_request_edited: true,
-                    pull_request_closed: true,
-                    installation: true,
-                    checks: true,
-                },
-                sweep_cron: Some("0 0 * * * *".into()),
-                sweep_timezone: "UTC".into(),
-                batch_size: 32,
-                coalescing_ms: 1000,
-                workers: 4,
-                report_directory: None,
-                reports_kept: 200,
-                allowed_installations: Vec::new(),
-                allowed_repositories: Vec::new(),
-                advertise: true,
-                public_url: None,
-                public_api: true,
-            },
-        }
+        let entry = "/settings.pkl";
+        let value = crate::virtual_files::evaluate(
+            entry,
+            BTreeMap::from([
+                (entry.to_owned(), format!("amends \"{SCHEMA_NAME}\"\n")),
+                (format!("/{SCHEMA_NAME}"), SCHEMA.to_owned()),
+            ]),
+        )
+        .expect("the bundled settings schema evaluates");
+        serde_json::from_value(value).expect("the bundled settings schema's defaults decode")
     }
 }
 impl Settings {
@@ -666,7 +640,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.pkl");
         let load = |body: &str| load_body(&path, body);
-        assert_eq!(load("").unwrap(), Settings::default());
+        let defaults = Settings::default();
+        assert!(defaults.validate().is_ok());
+        assert_eq!(load("").unwrap(), defaults);
         assert_eq!(
             load("lockfiles { cacheGiB = 1 }")
                 .unwrap()
