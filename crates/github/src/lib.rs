@@ -676,8 +676,8 @@ impl Client {
                 .into(),
         );
         let operation = graphql_operation(query);
-        // Only a document that reads as a query skips the write budget; one
-        // that names no operation kind is paced as a write.
+        // Only a document that parses as a query (shorthand `{ … }`
+        // included) skips the write budget; anything else is paced as a write.
         let write = !operation.starts_with("query");
         let response = self.exchange(&request, false, write).await?;
         if !response.status.is_success() {

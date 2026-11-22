@@ -138,8 +138,8 @@ server failure may already have written, so the next run reconciles instead.
 
 Every REST write (POST, PATCH and PUT), and every GraphQL document
 that does not parse as a query (comments and whitespace skipped, so a
-mutation behind a leading comment counts, as does a document naming no
-operation kind), runs one at a time across all clones of a client, paced by a token bucket of
+mutation behind a leading comment counts; shorthand `{ … }` is a query),
+runs one at a time across all clones of a client, paced by a token bucket of
 `github.writeBurst` tokens (12 by default) refilling one a second — the
 first writes of a run go out without a pause, and no minute holds more than
 `writeBurst` + 60 (72 by default, at most 79) — and at most 500 an hour,
