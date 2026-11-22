@@ -434,7 +434,6 @@ impl Cache {
         let touches = Arc::new(Mutex::new(HashSet::new()));
         let writer_touches = touches.clone();
         let readers_valid = Arc::new(AtomicBool::new(true));
-        let writer_readers_valid = readers_valid.clone();
         let (jobs, mut receiver) = mpsc::channel::<Job>(128);
         let (ready, initialized) = oneshot::channel();
         std::thread::Builder::new()
@@ -452,9 +451,6 @@ impl Cache {
                             tracing::warn!(%error, "cache access accounting failed");
                         }
                         job(&mut store);
-                        if !store.conn.path().is_some_and(|path| !path.is_empty()) {
-                            writer_readers_valid.store(false, Ordering::Relaxed);
-                        }
                     }
                     let touched =
                         std::mem::take(&mut *writer_touches.lock().expect("cache touches"));
