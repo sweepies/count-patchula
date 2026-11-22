@@ -618,3 +618,42 @@ fn serialized_configs_keep_their_bytes() {
     ));
     assert_eq!(actual, std::fs::read_to_string(recorded).unwrap());
 }
+
+/// A pattern, filter or regex that does not compile is reported at its
+/// field's path, index included, as the config is read.
+#[test]
+fn compile_errors_name_the_field_path() {
+    for (body, expected) in [
+        (
+            r#"rules = new Listing { new Rule { select { packages = new Listing { "ok"; "regex:[" } } } }"#,
+            "rules[0].select.packages[1]: invalid regex",
+        ),
+        (
+            r#"exclude = new Listing { "glob:" }"#,
+            "exclude[0]: glob must not be empty",
+        ),
+        (
+            r#"rules = new Listing { new Rule {}; new Rule { select { current = "^1" } } }"#,
+            "rules[1].select.current: expected regex:... or semver:...",
+        ),
+        (
+            r#"security { apply { permitted = "regex:(" } }"#,
+            "security.apply.permitted: invalid regex",
+        ),
+        (
+            r#"extractors = new Listing { new Extractor { paths = new Listing { "*.txt" }; patterns = new Listing { "(?<current>.+)"; "(" } } }"#,
+            "extractors[0].patterns[1]: invalid regex",
+        ),
+        (
+            r#"security { quietImages { ["regex:("] = "noisy" } }"#,
+            "invalid regex",
+        ),
+    ] {
+        let (_directory, path) = fixture(&body.replace("; ", "\n"));
+        let message = load(&path).unwrap_err().to_string();
+        assert!(
+            message.contains(expected),
+            "expected {expected:?} in {message}"
+        );
+    }
+}
