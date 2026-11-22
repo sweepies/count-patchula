@@ -1,7 +1,7 @@
 //! GitHub App JWTs and per-installation access tokens. No credentials reach SQLite.
 use crate::{
     Credentials, Error, Invalidation, Permissions, RepositoryId, Response, Result, Token,
-    Transport, base_headers, join_api, pagination::next_link, valid_api_url,
+    Transport, base_headers, join_api, pagination::walk, valid_api_url,
 };
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
@@ -11,10 +11,7 @@ use reqwest::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::{
-    collections::{BTreeMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
 
 /// How far a JWT's issue time is set back, for clock drift with GitHub.
@@ -262,37 +259,31 @@ impl App {
             .ok_or(Error::Json)
     }
     pub async fn installations(&self) -> Result<Vec<u64>> {
-        let mut next = Some(self.url("app/installations?per_page=100")?);
-        let mut visited = HashSet::new();
         let mut ids = Vec::new();
-        for _ in 0..1000 {
-            let Some(url) = next.take() else {
-                return Ok(ids);
-            };
-            if !visited.insert(url.clone()) {
-                return Err(Error::Pagination);
-            }
-            let response = self
-                .request(Method::GET, url.clone(), Utc::now().timestamp())
-                .await?;
-            let value: Value = serde_json::from_slice(&response.body).map_err(|_| Error::Json)?;
-            let entries = value.as_array().ok_or(Error::Json)?;
-            for entry in entries {
-                if !entry["suspended_at"].is_null() {
-                    continue;
+        walk(
+            self.url("app/installations?per_page=100")?,
+            1000,
+            |target| self.url(target),
+            |url| self.request(Method::GET, url, Utc::now().timestamp()),
+            |response| {
+                let value: Value =
+                    serde_json::from_slice(&response.body).map_err(|_| Error::Json)?;
+                for entry in value.as_array().ok_or(Error::Json)? {
+                    if !entry["suspended_at"].is_null() {
+                        continue;
+                    }
+                    ids.push(
+                        entry["id"]
+                            .as_u64()
+                            .filter(|id| valid_id(*id))
+                            .ok_or(Error::Json)?,
+                    );
                 }
-                ids.push(
-                    entry["id"]
-                        .as_u64()
-                        .filter(|id| valid_id(*id))
-                        .ok_or(Error::Json)?,
-                );
-            }
-            next = next_link(&response, &url)?
-                .map(|target| self.url(target.as_str()))
-                .transpose()?;
-        }
-        Err(Error::Pagination)
+                Ok(false)
+            },
+        )
+        .await?;
+        Ok(ids)
     }
     async fn token_at(&self, id: u64, now: i64) -> Result<String> {
         if !valid_id(id) {

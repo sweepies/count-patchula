@@ -318,11 +318,7 @@ pub async fn installation_repositories(
     github
         .rest_pages_envelope(
             "installation/repositories?per_page=100",
-            |body| {
-                serde_json::from_value::<model::InstallationRepositories>(body.clone())
-                    .map(|body| body.repositories)
-                    .map_err(|_| patchula_github::Error::Json)
-            },
+            |body: model::InstallationRepositories| body.repositories,
             |page| page.len() < 100,
         )
         .await

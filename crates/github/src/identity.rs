@@ -22,7 +22,7 @@
 //! token's permissions are the same on every repository it reaches, so the
 //! scope is used only after the token has read a repository's contents in
 //! this run.
-use crate::{Client, Response, decode, hex, next_link};
+use crate::{Client, Error, Response, decode, hex, pagination::walk};
 use reqwest::{Method, Url};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -110,29 +110,32 @@ impl Client {
 
     /// The token's reach as `installation/repositories` reports it.
     async fn installation_reach(&self) -> Option<Reach> {
-        let mut url = self
-            .url(&format!("installation/repositories?per_page={PER_PAGE}"))
-            .ok()?;
         let mut selection: Option<String> = None;
         let mut total = None;
         let mut repositories = Vec::new();
-        for _ in 0..PAGES {
-            let response = self.get_live(url.clone()).await?;
-            let page: Listing =
-                decode(&response.body, "GET installation/repositories".into()).ok()?;
-            let page_selection = page.repository_selection?;
-            if selection.get_or_insert_with(|| page_selection.clone()) != &page_selection
-                || *total.get_or_insert(page.total_count) != page.total_count
-            {
-                return None;
-            }
-            repositories.extend(page.repositories);
-            match next_link(&response, &url).ok()? {
-                Some(next) => url = self.url(next.as_str()).ok()?,
-                None => return reach(&page_selection, page.total_count, repositories),
-            }
-        }
-        None
+        // Any failure, or pages that disagree on the selection or total,
+        // leaves the reach unknown; the error itself is not kept.
+        walk(
+            self.url(&format!("installation/repositories?per_page={PER_PAGE}"))
+                .ok()?,
+            PAGES,
+            |target| self.url(target),
+            |url| async move { self.get_live(url).await.ok_or(Error::Pagination) },
+            |response| {
+                let page: Listing = decode(&response.body, "GET installation/repositories".into())?;
+                let page_selection = page.repository_selection.ok_or(Error::Json)?;
+                if selection.get_or_insert_with(|| page_selection.clone()) != &page_selection
+                    || *total.get_or_insert(page.total_count) != page.total_count
+                {
+                    return Err(Error::Pagination);
+                }
+                repositories.extend(page.repositories);
+                Ok(false)
+            },
+        )
+        .await
+        .ok()?;
+        reach(&selection?, total?, repositories)
     }
 
     /// Whether the token reads `repository`'s contents: listing one commit
