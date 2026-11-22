@@ -6890,24 +6890,6 @@ fn a_held_prune_lock_skips_the_prune() {
     assert!(!stale.exists());
 }
 
-/// Every file type `materialized` puts in a tool's tree has an explicit
-/// credential decision in `patchula_manager::credential_check`: scanned, or
-/// documented as unable to hold credentials. A new type without one fails
-/// here rather than slipping credentials into a tool run.
-#[test]
-fn every_materialized_file_has_a_credential_decision() {
-    for &(path, _, mat, ..) in PINNED_TABLE {
-        if !mat {
-            continue;
-        }
-        assert!(
-            patchula_manager::credential_check(path)
-                != patchula_manager::CredentialCheck::Undecided,
-            "{path} has no credential decision"
-        );
-    }
-}
-
 /// `upward` lists every match root first, and within a directory in `names`
 /// order, so applying the files in order leaves the nearest, last-named one
 /// winning, as mise's own precedence does.

@@ -984,7 +984,7 @@ impl crate::Ecosystem for Descriptor {
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Mise, path).selected
+        crate::roles::named(crate::roles::MISE_SELECTED, path)
     }
     /// A package backend mise runs in the project reads its settings.
     fn registry_file(&self, path: &str) -> bool {

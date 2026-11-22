@@ -15,27 +15,16 @@
 //!
 //! Everything returned names what was found, never the value.
 
-/// Whether a file's text is checked for committed credentials.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CredentialCheck {
-    Scan,
-    /// Its format can hold nothing but names, versions and hashes.
-    Skip,
-    /// Nobody decided, so it is scanned. Every file type the lockfile runner
-    /// materializes must have a decision, which a test in `patchula-update`
-    /// walks the materialized list to enforce.
-    #[default]
-    Undecided,
-}
-
 /// Why `text` committed at `path` refuses the repository, if it does: the
 /// kind of credential found, such as "a `_authToken` in .npmrc" or "a
-/// password in a registry URL". Never the credential itself.
+/// password in a registry URL". Never the credential itself. Only a file
+/// the taxonomy gives a `credential_scan` is checked, with the parser of
+/// its format; an unparseable file is left to the tool.
 pub fn committed_credentials(path: &str, text: &str) -> Option<String> {
-    if crate::roles::credential_check(path) == CredentialCheck::Skip {
-        return None;
-    }
-    keyed(path, text)
+    patchula_words::Manager::ALL
+        .iter()
+        .find_map(|manager| crate::roles::eco_roles(*manager, path).credential_scan)
+        .and_then(|scan| scan.check(path, text))
 }
 
 /// The report reason for a file `committed_credentials` refused.
@@ -47,7 +36,8 @@ pub fn credential_reason(path: &str, kind: &str) -> String {
 
 /// The credential check a file's text gets, which the file-role taxonomy
 /// assigns: `eco_roles` gives a file one exactly when it may hold a
-/// committed credential, so `keyed` cannot drift from the taxonomy.
+/// committed credential, so `committed_credentials` cannot drift from the
+/// taxonomy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CredentialScan {
     /// `.npmrc`: auth keys and registry URLs.
@@ -88,15 +78,6 @@ impl CredentialScan {
             Self::Cargo => cargo(text).or_else(|| cargo_urls(text)),
         }
     }
-}
-
-/// The credential kinds the settings file at `path` can hold, checked with
-/// the parser of its format. An unparseable file is left to the tool.
-fn keyed(path: &str, text: &str) -> Option<String> {
-    patchula_words::Manager::ALL
-        .iter()
-        .find_map(|manager| crate::roles::eco_roles(*manager, path).credential_scan)
-        .and_then(|scan| scan.check(path, text))
 }
 
 /// Whether `url` carries a committed password: a userinfo whose password
