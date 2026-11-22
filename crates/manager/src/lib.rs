@@ -517,6 +517,12 @@ pub(crate) trait Ecosystem {
     fn registry_file(&self, _path: &str) -> bool {
         false
     }
+    /// Whether this ecosystem's file names are shared with another format,
+    /// so a selected file may not be one of its own: `.pkl` is also
+    /// Python's pickle extension. See [`Scanner::shared_name`].
+    fn shared_name(&self) -> bool {
+        false
+    }
     /// The settings a package backend of this ecosystem reads, which mise's
     /// own rule reuses rather than naming files itself.
     fn backend_settings(&self, _path: &str) -> bool {
@@ -746,6 +752,21 @@ impl Scanner {
     }
     pub fn needs(&self, path: &str) -> bool {
         self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
+    }
+    /// Whether only managers whose file names another format shares select
+    /// `path`. Such a file over [`SHARED_NAME_LIMIT`] is not read, and one
+    /// that is not text is left out, rather than refusing the repository as
+    /// any other selected file does: neither can be one of their files.
+    pub fn shared_name(&self, path: &str) -> bool {
+        let mut selecting = self
+            .config
+            .managers
+            .iter()
+            .filter(|m| self.selected(**m, path))
+            .peekable();
+        selecting.peek().is_some()
+            && selecting.all(|m| ecosystem(*m).shared_name())
+            && !self.registry_file(path)
     }
     /// Whether `path` sits under the repository's excluded paths.
     pub fn excluded(&self, path: &str) -> bool {
@@ -1569,3 +1590,8 @@ pub(crate) fn web_host(url: &str) -> Option<String> {
     let host = rest.split(['/', '?', '#']).next()?.to_ascii_lowercase();
     Some(host.strip_suffix(port).unwrap_or(&host).to_owned())
 }
+
+/// The largest file read for managers whose file names another format
+/// shares ([`Scanner::shared_name`]): a Pkl module is source text, while a
+/// pickle beside it may be a model of hundreds of megabytes.
+pub const SHARED_NAME_LIMIT: u64 = 1 << 20;

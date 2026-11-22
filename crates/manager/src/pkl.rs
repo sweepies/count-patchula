@@ -202,6 +202,10 @@ impl crate::Ecosystem for Descriptor {
     fn selected(&self, _config: &Config, path: &str) -> bool {
         path != patchula_config::CONFIG_PATH && crate::roles::leaf(path).ends_with(".pkl")
     }
+    /// Python pickles are `.pkl` files too.
+    fn shared_name(&self) -> bool {
+        true
+    }
     fn prepare<'a>(
         &self,
         _scanner: &'a Scanner,

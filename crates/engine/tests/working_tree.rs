@@ -324,6 +324,36 @@ async fn a_selected_non_utf8_file_refuses_the_read() {
     assert_eq!(error.to_string(), "selected file is not UTF-8");
 }
 
+/// `.pkl` is also Python's pickle extension: a `.pkl` file that is not
+/// text is left out, and one larger than any Pkl module is not read, with
+/// one warning for all of them, rather than refusing the repository. A
+/// real module beside them is still read.
+#[tokio::test]
+async fn pickles_named_pkl_do_not_refuse_the_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    write(root, "config.pkl", "amends \"base.pkl\"\n");
+    std::fs::write(root.join("model.pkl"), b"\x80\x04\x95\x00.").unwrap();
+    write(root, "big.pkl", &"x = 1\n".repeat(200_000));
+    git(root, &["add", "."]);
+    let (config, scanner) = scanner("amends \"PatchulaConfig.pkl\"\n");
+    let view = view(root, &config, &scanner).await;
+    assert!(
+        view.files.contains_key("config.pkl"),
+        "{:?}",
+        view.files.keys()
+    );
+    assert!(!view.files.contains_key("model.pkl"));
+    assert!(!view.files.contains_key("big.pkl"));
+    assert_eq!(
+        view.warnings,
+        [
+            "not read: 1 file(s) over 1 MiB, larger than any Pkl module, such as Python pickles named .pkl"
+        ]
+    );
+}
+
 /// An executable file keeps the mode `git add` would record for it, so a
 /// written branch carries the same mode.
 #[cfg(unix)]

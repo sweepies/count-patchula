@@ -1174,6 +1174,7 @@ impl Engine {
                     path: entry.path,
                     sha: Some(entry.sha),
                     mode: entry.mode,
+                    size: entry.size,
                 })
                 .collect(),
             hidden: Vec::new(),
