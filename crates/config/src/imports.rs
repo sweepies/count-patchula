@@ -392,10 +392,11 @@ mod tests {
 
     #[test]
     fn the_lexer_skips_strings_comments_and_interpolations() {
-        // A nested block comment and interpolations inside every string
-        // form, none of which import anything.
+        // A block comment, which Pkl does not nest (the first `*/` ends
+        // it), and interpolations inside every string form, none of which
+        // import anything.
         let text = concat!(
-            "/* outer /* inner */ tail */ c = 1\n",
+            "/* outer /* inner */ c = 1\n",
             "d = \"x\\(f(\"s\", 1) /* c */ \n g(2))y\"\n",
             "e = \"\"\"\n  x\\(h(3))y\n  \"\"\"\n",
             "f = #\"raw \\(not-code)\"#\n",
