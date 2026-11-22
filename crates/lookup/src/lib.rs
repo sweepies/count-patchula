@@ -1299,7 +1299,7 @@ impl Evaluator {
                 .max_by(|(a, av), (b, bv)| scheme.order(a, b).then_with(|| av.cmp(bv)))
                 .map(|(_, version)| version.trim_start_matches('v').into()));
         }
-        if dep.proposing().resolved_via_listing {
+        if dep.proposing().selector_resolved {
             return self.resolved_tool_version(dep, catalog);
         }
         if dep.proposing().short_tags != ShortTags::Floating {

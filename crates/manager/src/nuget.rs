@@ -768,11 +768,8 @@ pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
-    fn proposing(&self, dep: &Dependency) -> Proposing {
-        Proposing {
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
-            ..Proposing::BASE
-        }
+    fn proposing(&self, _dep: &Dependency) -> Proposing {
+        Proposing::BASE
     }
     fn selected(&self, _config: &patchula_config::Config, path: &str) -> bool {
         selected(path)

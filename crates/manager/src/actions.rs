@@ -636,7 +636,6 @@ impl crate::Ecosystem for Descriptor {
                 ShortTags::Fixed
             },
             selector_resolved: dep.kind == DependencyKind::Tool,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
             pin: Pin {
                 commit: matches!(dep.source, Source::GithubTags | Source::ForgeTags),
                 needs_digest: matches!(

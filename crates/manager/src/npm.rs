@@ -670,7 +670,6 @@ impl crate::Ecosystem for Descriptor {
                 _ => Range::Installed,
             },
             runtime_toolchain: dep.kind == DependencyKind::Toolchain,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
             lock: Lock {
                 reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
                     && dep.resolved.is_some(),

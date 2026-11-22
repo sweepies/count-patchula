@@ -26,9 +26,6 @@ pub struct Proposing {
     /// A selector resolved against the listing: mise's tools, and the setup
     /// tools GitHub Actions runs.
     pub selector_resolved: bool,
-    /// mise entries and every `tool` kind resolve a selector against the
-    /// listing.
-    pub resolved_via_listing: bool,
     /// How a commit pin and digests apply.
     pub pin: Pin,
     /// How the committed lockfile applies.
@@ -54,7 +51,6 @@ impl Proposing {
         },
         short_tags: ShortTags::Fixed,
         selector_resolved: false,
-        resolved_via_listing: false,
         pin: Pin {
             commit: false,
             needs_digest: false,
@@ -262,7 +258,7 @@ mod tests {
             Source::GithubReleases,
         );
         assert_eq!(tool.written, Written::VersionAtPrecision);
-        assert!(tool.selector_resolved && tool.resolved_via_listing);
+        assert!(tool.selector_resolved);
         assert!(!tool.pin.commit && !tool.pin.needs_digest);
         assert_eq!(tool.short_tags, ShortTags::Fixed);
         assert_eq!(tool.advisories, Advisories::BySource);
@@ -332,15 +328,14 @@ mod tests {
         }
     }
 
-    /// mise entries and every tool kind resolve a selector against the
-    /// listing.
+    /// mise entries resolve a selector against the listing; other
+    /// managers' tool kinds do not.
     #[test]
     fn tools_resolve_through_the_listing() {
         let mise = facts(Manager::Mise, DependencyKind::Tool, Source::Mise);
-        assert!(mise.selector_resolved && mise.resolved_via_listing);
+        assert!(mise.selector_resolved);
         for manager in [Manager::Npm, Manager::Nuget, Manager::Devcontainer] {
             let tool = facts(manager, DependencyKind::Tool, Source::GithubReleases);
-            assert!(tool.resolved_via_listing, "{manager}");
             assert!(!tool.selector_resolved, "{manager}");
         }
     }

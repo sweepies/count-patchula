@@ -1010,7 +1010,6 @@ impl crate::Ecosystem for Descriptor {
     fn proposing(&self, _dep: &Dependency) -> Proposing {
         Proposing {
             selector_resolved: true,
-            resolved_via_listing: true,
             ..Proposing::BASE
         }
     }

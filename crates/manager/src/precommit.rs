@@ -69,14 +69,13 @@ pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
-    fn proposing(&self, dep: &Dependency) -> Proposing {
+    fn proposing(&self, _dep: &Dependency) -> Proposing {
         Proposing {
             written: Written::Tag,
             unversioned: Unversioned {
                 looked_up: true,
                 opaque: true,
             },
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
             ..Proposing::BASE
         }
     }
