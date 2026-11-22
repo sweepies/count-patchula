@@ -342,13 +342,10 @@ impl std::fmt::Display for Opened {
             .join(", ");
         match self.origin {
             Origin::Created => {
-                return f
-                    .write_str("cold: there is no cache yet, so every lookup goes to the network");
+                return f.write_str("cold: there is no cache yet");
             }
             Origin::Rebuilt => {
-                return f.write_str(
-                    "cold: the cache was corrupt, so it was moved aside and started empty",
-                );
+                return f.write_str("cold: the cache was corrupt, starting fresh");
             }
             Origin::Memory => {
                 return f.write_str("cold: the cache is in memory only and is not kept");
@@ -359,9 +356,8 @@ impl std::fmt::Display for Opened {
             if dropped > 0 {
                 write!(
                     f,
-                    "cold: this build stores {kinds} differently, so the {} it held {} fetched again",
-                    plural(dropped, "entry", "entries"),
-                    if dropped == 1 { "is" } else { "are" },
+                    "cold: {} dropped ({kinds})",
+                    plural(dropped, "outdated entry", "outdated entries"),
                 )?;
             } else {
                 f.write_str("cold: the cache is empty")?;
@@ -381,14 +377,8 @@ impl std::fmt::Display for Opened {
             if dropped > 0 {
                 write!(
                     f,
-                    "; this build stores {kinds} differently, so {} {} {} fetched again",
-                    if self.superseded.len() == 1 {
-                        "its"
-                    } else {
-                        "their"
-                    },
-                    plural(dropped, "entry", "entries"),
-                    if dropped == 1 { "is" } else { "are" },
+                    "; {} dropped ({kinds})",
+                    plural(dropped, "outdated entry", "outdated entries"),
                 )?;
             }
         }
@@ -396,7 +386,7 @@ impl std::fmt::Display for Opened {
             write!(
                 f,
                 "; {} evicted to fit the size budget",
-                plural(self.evicted, "response was", "responses were"),
+                plural(self.evicted, "response", "responses"),
             )?;
         }
         Ok(())
@@ -1300,9 +1290,8 @@ mod tests {
         };
         assert_eq!(
             partly.to_string(),
-            "partly cold: 1200 responses (3.5 MiB) and 40 stored values; this build stores \
-             extract, tag-catalog differently, so their 31 entries are fetched again; 2 \
-             responses were evicted to fit the size budget"
+            "partly cold: 1200 responses (3.5 MiB) and 40 stored values; 31 outdated entries \
+             dropped (extract, tag-catalog); 2 responses evicted to fit the size budget"
         );
         let emptied = Opened {
             responses: 0,
@@ -1313,16 +1302,13 @@ mod tests {
         };
         assert_eq!(
             emptied.to_string(),
-            "cold: this build stores extract differently, so the 1 entry it held is fetched again"
+            "cold: 1 outdated entry dropped (extract)"
         );
         for (origin, summary) in [
-            (
-                Origin::Created,
-                "cold: there is no cache yet, so every lookup goes to the network",
-            ),
+            (Origin::Created, "cold: there is no cache yet"),
             (
                 Origin::Rebuilt,
-                "cold: the cache was corrupt, so it was moved aside and started empty",
+                "cold: the cache was corrupt, starting fresh",
             ),
             (
                 Origin::Memory,

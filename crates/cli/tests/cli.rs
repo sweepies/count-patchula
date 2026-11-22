@@ -312,7 +312,7 @@ fn server_startup_errors_are_json_and_never_echo_secret_values() {
     assert_eq!(opened["level"], "INFO");
     assert_eq!(
         opened["fields"]["message"],
-        "cache cold: there is no cache yet, so every lookup goes to the network"
+        "cache cold: there is no cache yet"
     );
     assert_eq!(log["level"], "ERROR");
     assert_eq!(
