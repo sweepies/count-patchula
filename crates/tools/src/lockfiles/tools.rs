@@ -458,9 +458,11 @@ impl Runner {
         self.off_runtime(move |runner| runner.seed(&tools)).await
     }
     /// Install the pinned default toolchains, e.g. while building an image,
-    /// holding the store exclusively throughout.
+    /// holding their install locks and the store exclusively throughout,
+    /// in the order `hold_installed` takes them.
     pub async fn prewarm(&self) -> Result<Vec<String>, String> {
         let tools = defaults()?;
+        let _installing = lock_installs(&self.mise_data, &tools).await?;
         let _store = lock_store(&self.mise_data, true).await?;
         self.first_use(&tools).await?;
         let specs: Vec<String> = tools.iter().map(|(t, v)| format!("{t}@{v}")).collect();
@@ -489,14 +491,21 @@ impl Runner {
             for spec in &stale {
                 self.mise(vec!["uninstall".into(), spec.clone()]).await?;
             }
-            let file = lock_file(&self.mise_data, USAGE_LOCK)?;
-            file.lock().map_err(|e| e.to_string())?;
-            let mut usage = read_usage(&self.mise_data);
-            for spec in &stale {
-                usage.remove(spec);
-            }
-            write_usage(&self.mise_data, &usage)?;
-            stale
+            // The usage lock waits off the async runtime, as every store
+            // lock does.
+            let dir = self.mise_data.clone();
+            tokio::task::spawn_blocking(move || {
+                let file = lock_file(&dir, USAGE_LOCK)?;
+                file.lock().map_err(|e| e.to_string())?;
+                let mut usage = read_usage(&dir);
+                for spec in &stale {
+                    usage.remove(spec);
+                }
+                write_usage(&dir, &usage)?;
+                Ok::<_, String>(stale)
+            })
+            .await
+            .map_err(|e| e.to_string())??
         };
         // nix store gc runs as a tool, after the store lock is released, and
         // leaves paths a running nix holds.
