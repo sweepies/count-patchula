@@ -6,7 +6,6 @@ use super::*;
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[Manager::Cargo],
     tools: &["rust"],
-    versions: true,
     install: Install::None,
     proof: Proof::DeclaredAndResolved,
     run: Run::Rustup("rust"),
@@ -18,10 +17,8 @@ pub(super) static DESCRIPTOR: Tool = Tool {
 pub(super) struct CargoAccess<'a> {
     /// The registry environment.
     pub env: &'a [(String, String)],
-    /// The credential scopes the run holds.
-    pub credentials: &'a [String],
-    /// Every secret value a failure must not repeat.
-    pub secrets: &'a [String],
+    /// The registry credentials the run holds.
+    pub held: &'a credentials::Held,
     /// Whether the run may share the `public` cache partition.
     pub public: bool,
 }
@@ -126,8 +123,7 @@ impl Runner {
             .map(|(_, text)| credentials::cargo_registries(text))
             .collect();
         let (env, entries) = self.cargo_env(&registries);
-        let credentials = credentials::scopes(entries.iter().copied());
-        let secrets = credentials::secrets(entries.iter().copied());
+        let held = credentials::Held::of(entries.iter().copied());
         let rust = context::version(versions, "rust")?;
         // A Cargo that predates publish-age reads ignores the keys: lookup's
         // floor still holds the targets it picks, but the crates the run
@@ -155,8 +151,7 @@ impl Runner {
                 },
                 CargoAccess {
                     env: &env,
-                    credentials: &credentials,
-                    secrets: &secrets,
+                    held: &held,
                     public,
                 },
             )
@@ -183,12 +178,7 @@ impl Runner {
             maintenance,
             cooldown,
         } = directory;
-        let CargoAccess {
-            env,
-            credentials,
-            secrets,
-            public,
-        } = access;
+        let CargoAccess { env, held, public } = access;
         // The publish age Cargo holds every crate this job newly locks to:
         // the longer of the directory's committed cooldown — verbatim, in
         // the grammar the repository already gave Cargo — and the wait the
@@ -220,7 +210,7 @@ impl Runner {
                 cwd.join("Cargo.toml").to_string_lossy().into_owned(),
             ];
             all.extend(args);
-            self.held_tool(
+            self.tool(
                 driver,
                 Invocation {
                     descriptor: &DESCRIPTOR,
@@ -228,8 +218,8 @@ impl Runner {
                     bin: caches::Bin::Cargo,
                     cwd: None,
                     env: env.clone(),
-                    credentials: credentials.to_vec(),
-                    secrets: secrets.to_vec(),
+                    held: held.clone(),
+                    refused: None,
                     public,
                     args: all,
                 },

@@ -10,12 +10,11 @@
 //! (`poetry_guard.py`), which stops the process at any entry point that
 //! would build or load a plugin, and only at the Poetry version the
 //! launcher's canary covers.
-use super::{pin::Pinned, *};
+use super::*;
 
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[Manager::Pyproject],
     tools: &["python", "uv", "poetry"],
-    versions: true,
     install: Install::Plain,
     proof: Proof::DeclaredAndResolved,
     run: Run::Direct,
@@ -221,8 +220,7 @@ impl Runner {
             if !cwd.join(leaf).is_file() {
                 continue;
             }
-            type Refused = fn(&patchula_process::Failure) -> Option<&'static str>;
-            let (invocation, refused): (Invocation, Refused) = if leaf == "uv.lock" {
+            let invocation = if leaf == "uv.lock" {
                 uv_builds(root, baseline, directory)?;
                 let mut args = vec![
                     "lock".to_string(),
@@ -245,31 +243,28 @@ impl Runner {
                         },
                     ]);
                 }
-                (
-                    Invocation {
-                        descriptor: &DESCRIPTOR,
-                        tools: vec![
-                            ("uv".into(), context::version(versions, "uv")?),
-                            ("python".into(), python.clone()),
-                        ],
-                        bin: caches::Bin::Uv,
-                        cwd: None,
-                        env: vec![
-                            // Resolve with the mise interpreter; never
-                            // download another, and never one a
-                            // `.python-version` names by path.
-                            ("UV_PYTHON_DOWNLOADS".into(), "never".into()),
-                            ("UV_PYTHON".into(), python.clone()),
-                            ("UV_NO_BUILD".into(), "1".into()),
-                            ("UV_NO_PROGRESS".into(), "1".into()),
-                        ],
-                        credentials: credentials::scopes(netrc_entries.iter().copied()),
-                        secrets: credentials::secrets(netrc_entries.iter().copied()),
-                        public,
-                        args,
-                    },
-                    uv_refused,
-                )
+                Invocation {
+                    descriptor: &DESCRIPTOR,
+                    tools: vec![
+                        ("uv".into(), context::version(versions, "uv")?),
+                        ("python".into(), python.clone()),
+                    ],
+                    bin: caches::Bin::Uv,
+                    cwd: None,
+                    env: vec![
+                        // Resolve with the mise interpreter; never
+                        // download another, and never one a
+                        // `.python-version` names by path.
+                        ("UV_PYTHON_DOWNLOADS".into(), "never".into()),
+                        ("UV_PYTHON".into(), python.clone()),
+                        ("UV_NO_BUILD".into(), "1".into()),
+                        ("UV_NO_PROGRESS".into(), "1".into()),
+                    ],
+                    held: credentials::Held::of(netrc_entries.iter().copied()),
+                    refused: Some(uv_refused),
+                    public,
+                    args,
+                }
             } else {
                 let version = context::version(versions, "poetry")?;
                 if version != default_version("poetry")? {
@@ -299,49 +294,48 @@ impl Runner {
                 if maintenance {
                     args.push("--regenerate".into());
                 }
-                (
-                    Invocation {
-                        descriptor: &DESCRIPTOR,
-                        tools: vec![
-                            ("poetry".into(), version),
-                            ("python".into(), python.clone()),
-                        ],
-                        bin: caches::Bin::Poetry,
-                        cwd: None,
-                        env: [
-                            ("POETRY_VIRTUALENVS_CREATE".into(), "false".into()),
-                            ("POETRY_NO_INTERACTION".into(), "1".into()),
-                        ]
-                        .into_iter()
-                        .chain(poetry.iter().cloned())
-                        .collect(),
-                        credentials: credentials::scopes(
-                            poetry_entries.iter().chain(netrc_entries.iter()).copied(),
-                        ),
-                        secrets: credentials::secrets(
-                            poetry_entries.iter().chain(netrc_entries.iter()).copied(),
-                        ),
-                        public,
-                        args,
-                    },
-                    poetry_refused,
-                )
+                Invocation {
+                    descriptor: &DESCRIPTOR,
+                    tools: vec![
+                        ("poetry".into(), version),
+                        ("python".into(), python.clone()),
+                    ],
+                    bin: caches::Bin::Poetry,
+                    cwd: None,
+                    env: [
+                        ("POETRY_VIRTUALENVS_CREATE".into(), "false".into()),
+                        ("POETRY_NO_INTERACTION".into(), "1".into()),
+                    ]
+                    .into_iter()
+                    .chain(poetry.iter().cloned())
+                    .collect(),
+                    held: credentials::Held::of(
+                        poetry_entries.iter().chain(netrc_entries.iter()).copied(),
+                    ),
+                    refused: Some(poetry_refused),
+                    public,
+                    args,
+                }
             };
-            let refuse = |why: &str| refusal(leaf, directory, why);
+            // The run's refusal, in the Count's own words, names the lock.
+            let refuse = |failure: Failure| match failure {
+                Failure::Refused(why) => refusal(leaf, directory, &why),
+                failure => failure,
+            };
             // Poetry moves a package as far as its constraint allows and cannot be
             // told a version, so a package whose declaration stays as it is has
             // the constraint pinned for one resolution and restored for the next.
             let mut pinned = if leaf == "poetry.lock" {
-                Pinned::apply(root, directory, config, Manager::Pyproject, jobs)?
+                pin::apply(root, directory, config, Manager::Pyproject, jobs)?
             } else {
-                Pinned::none(root)
+                context::Replaced::default()
             };
-            self.refusable_tool(driver, invocation.clone(), refused, refuse)
-                .await?;
+            self.tool(driver, invocation.clone())
+                .await
+                .map_err(refuse)?;
             if !pinned.is_empty() {
                 pinned.restore()?;
-                self.refusable_tool(driver, invocation, refused, refuse)
-                    .await?;
+                self.tool(driver, invocation).await.map_err(refuse)?;
             }
             if !cwd.join(leaf).is_file() {
                 return Err(format!("tool did not produce {leaf}").into());

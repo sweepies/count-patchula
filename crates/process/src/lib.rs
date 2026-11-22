@@ -84,7 +84,7 @@ impl Error for Failure {}
 
 /// `text` with every declared secret replaced; longer secrets first so an
 /// overlapping pair cannot leave half of the longer one behind.
-fn redact(text: &str, secrets: &[String]) -> String {
+pub fn redact(text: &str, secrets: &[String]) -> String {
     let mut secrets: Vec<&str> = secrets
         .iter()
         .map(String::as_str)

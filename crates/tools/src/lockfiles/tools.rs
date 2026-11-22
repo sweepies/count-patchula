@@ -271,6 +271,8 @@ impl Runner {
     /// same version when there is one: hard links make it instant and use no
     /// extra disk. Only relocatable tools, only once per version, and only
     /// when both stores are on one filesystem; otherwise mise installs it.
+    /// Callers hold the store exclusively, which also orders the seeded
+    /// record's writes.
     #[cfg(unix)]
     pub(super) fn seed(&self, tools: &[(String, String)]) {
         let Some(source) = &self.seed else {
@@ -279,10 +281,6 @@ impl Runner {
         if source == &self.mise_data {
             return;
         }
-        let _guard = self
-            .usage
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = self.mise_data.join(SEEDED);
         let mut seeded: BTreeSet<String> = std::fs::read(&path)
             .ok()
@@ -375,10 +373,6 @@ impl Runner {
         }
     }
     pub(super) fn record_use(&self, tools: &[(String, String)]) {
-        let _guard = self
-            .usage
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _file = match lock_file(&self.mise_data, USAGE_LOCK)
             .and_then(|file| file.lock().map(|()| file).map_err(|e| e.to_string()))
         {
@@ -423,13 +417,27 @@ impl Runner {
             .map(|_| ())
             .map_err(|e| format!("mise: {e}"))
     }
+    /// Hold the store shared for a run of `tools`. A first use clears what
+    /// an unfinished install left and seeds from the user's store first,
+    /// under the exclusive lock so no run loses a tool.
+    pub(super) async fn hold_store(
+        &self,
+        tools: &[(String, String)],
+    ) -> Result<std::fs::File, String> {
+        if !self.installed(tools) {
+            let _store = lock_store(&self.mise_data, true).await?;
+            if !self.installed(tools) {
+                self.clear_unproven(tools).await;
+                let tools = tools.to_vec();
+                self.off_runtime(move |runner| runner.seed(&tools)).await?;
+            }
+        }
+        lock_store(&self.mise_data, false).await
+    }
     /// Install the pinned default toolchains, e.g. while building an image.
     pub async fn prewarm(&self) -> Result<Vec<String>, String> {
         let tools = defaults()?;
-        let _store = lock_store(&self.mise_data, true).await?;
-        self.clear_unproven(&tools).await;
-        let seeded = tools.clone();
-        self.off_runtime(move |runner| runner.seed(&seeded)).await?;
+        let _store = self.hold_store(&tools).await?;
         let specs: Vec<String> = tools.iter().map(|(t, v)| format!("{t}@{v}")).collect();
         let mut args = vec!["install".to_string()];
         args.extend(specs.iter().cloned());
@@ -456,10 +464,6 @@ impl Runner {
             for spec in &stale {
                 self.mise(vec!["uninstall".into(), spec.clone()]).await?;
             }
-            let _guard = self
-                .usage
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let file = lock_file(&self.mise_data, USAGE_LOCK)?;
             file.lock().map_err(|e| e.to_string())?;
             let mut usage = read_usage(&self.mise_data);

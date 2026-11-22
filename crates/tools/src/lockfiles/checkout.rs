@@ -220,17 +220,8 @@ impl Runner {
             }
             entries.insert(path.to_owned(), (oid.to_owned(), mode.to_owned()));
         }
-        let paths: Vec<_> = entries.keys().cloned().collect();
-        for chunk in paths.chunks(64) {
-            let mut args = vec![
-                format!("--work-tree={}", root.display()),
-                "checkout".into(),
-                base.to_owned(),
-                "--".into(),
-            ];
-            args.extend_from_slice(chunk);
-            self.git(driver, &clone, args).await?;
-        }
+        self.checkout_paths(driver, &clone, base, root, entries.keys())
+            .await?;
         let files = collect(root)?;
         let mut baseline = BTreeMap::new();
         for (path, content) in files {
@@ -257,6 +248,30 @@ impl Runner {
             .cargo_configs(&clone, base, driver, cargo_configs)
             .await?;
         Ok((baseline, cargo_configs, unread))
+    }
+
+    /// Check `paths` out of `clone` at `base` into `tree`, 64 to a `git`
+    /// call.
+    async fn checkout_paths(
+        &self,
+        driver: &Path,
+        clone: &Path,
+        base: &str,
+        tree: &Path,
+        paths: impl Iterator<Item = &String>,
+    ) -> Result<(), Failure> {
+        let paths: Vec<_> = paths.cloned().collect();
+        for chunk in paths.chunks(64) {
+            let mut args = vec![
+                format!("--work-tree={}", tree.display()),
+                "checkout".into(),
+                base.to_owned(),
+                "--".into(),
+            ];
+            args.extend_from_slice(chunk);
+            self.git(driver, clone, args).await?;
+        }
+        Ok(())
     }
 
     /// Whether `path` is a Cargo configuration at or above a project the
@@ -288,17 +303,8 @@ impl Runner {
         }
         let work = driver.join("cargo-config");
         std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-        let paths: Vec<_> = oids.keys().cloned().collect();
-        for chunk in paths.chunks(64) {
-            let mut args = vec![
-                format!("--work-tree={}", work.display()),
-                "checkout".into(),
-                base.to_owned(),
-                "--".into(),
-            ];
-            args.extend_from_slice(chunk);
-            self.git(driver, clone, args).await?;
-        }
+        self.checkout_paths(driver, clone, base, &work, oids.keys())
+            .await?;
         for (path, oid) in oids {
             let Ok(bytes) = std::fs::read(work.join(&path)) else {
                 continue;

@@ -6,7 +6,6 @@ use super::*;
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[],
     tools: &["apm"],
-    versions: true,
     install: Install::Plain,
     proof: Proof::None,
     run: Run::Direct,
@@ -22,6 +21,7 @@ impl Runner {
             directory,
             versions,
             maintenance,
+            public,
             ..
         } = context;
         let lock = context::join(directory, "apm.lock.yaml");
@@ -38,9 +38,9 @@ impl Runner {
                 cwd: Some(root.join(directory)),
                 // APM clones each package from its own local bare cache.
                 env: vec![("GIT_ALLOW_PROTOCOL".into(), "https:file".into())],
-                credentials: Vec::new(),
-                secrets: Vec::new(),
-                public: false,
+                held: credentials::Held::default(),
+                refused: None,
+                public,
                 args,
             },
         )

@@ -144,8 +144,10 @@ Tools run through `mise exec` with an explicit version. A repository's own pins
 win: `mise.toml` and `.tool-versions` entries for the relevant tool,
 `.python-version`, `.ruby-version`, `packageManager`, and the
 highest of the pin and `go.mod`'s `go`/`toolchain` lines for Go. Repository
-tasks, environment blocks and hooks are never loaded. Otherwise the runner's
-pinned defaults apply:
+tasks, environment blocks and hooks are never loaded. A run reads and checks
+only the pins of the tools it runs, so a malformed pin for another tool fails
+only the lockfiles that tool regenerates. Otherwise the runner's pinned
+defaults apply:
 
 | Tool | Default |
 |---|---|
@@ -443,7 +445,8 @@ with something it should not reach. A run chooses its partition like this:
   public-only: every registry, index or fetch source its manifests,
   settings and lockfiles name is the ecosystem's well-known public
   registry, a well-known public forge, or a local source that fetches
-  nothing. Anything uncertain, unreadable or undecided fails closed.
+  nothing. Anything uncertain, unreadable or undecided fails closed, and
+  so does a run with no such file to decide on.
 - **`installation-<hash>`** — one partition per installation
   (`installation-<sha256 of the GitHub credentials scope>`, or
   `installation-local` for the CLI), for every run that is not provably

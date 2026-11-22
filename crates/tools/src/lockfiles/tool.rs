@@ -18,6 +18,9 @@ pub(super) enum Install {
     Php,
     /// nix installs as a pinned static build, outside mise's registry.
     Nix,
+    /// One tool installs as `name@version` from `defaults.toml`, and no
+    /// repository pin overrides it.
+    Fixed(&'static str),
 }
 
 /// How the pinned tools run the ecosystem's binary once `mise exec` has
@@ -67,13 +70,10 @@ pub(super) struct Tool {
     /// public-only verdict.
     pub steers: &'static [Manager],
     /// The tool versions its runs resolve through `versions`: every
-    /// `defaults.toml` key its invocations ask for. An ecosystem with none
-    /// resolves no versions at all.
+    /// `defaults.toml` key its invocations ask for, which the repository's
+    /// own pins override. Only these pins are read and checked; an
+    /// ecosystem with none resolves no versions at all.
     pub tools: &'static [&'static str],
-    /// Whether a run resolves the repository's tool versions through
-    /// `versions`, which validates their pins even for an ecosystem whose
-    /// tools ask for none.
-    pub versions: bool,
     /// How its pinned tools become mise install specs.
     pub install: Install,
     /// How its binary runs under the pinned tools.
@@ -102,6 +102,10 @@ impl Tool {
                     ))
                 })
                 .collect(),
+            Install::Fixed(tool) => defaults["tools"][tool]
+                .as_str()
+                .map(|version| vec![(tool.to_string(), version.to_string())])
+                .unwrap_or_default(),
             Install::None => Vec::new(),
             Install::Mise => match defaults["tools"]["mise"].as_str() {
                 Some(version) => {

@@ -7,7 +7,6 @@ use patchula_config::PhpBuild;
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[Manager::Composer],
     tools: &["php", "composer"],
-    versions: true,
     install: Install::Php,
     proof: Proof::DeclaredAndResolved,
     run: Run::Direct,
@@ -108,7 +107,7 @@ impl Runner {
         if let Some(auth) = auth {
             env.push(("COMPOSER_AUTH".into(), auth));
         }
-        self.held_tool(
+        self.tool(
             driver,
             Invocation {
                 descriptor: &DESCRIPTOR,
@@ -120,8 +119,8 @@ impl Runner {
                 bin: caches::Bin::Composer,
                 cwd: Some(cwd),
                 env,
-                credentials: credentials::scopes(entries.iter().copied()),
-                secrets: credentials::secrets(entries.iter().copied()),
+                held: credentials::Held::of(entries.iter().copied()),
+                refused: None,
                 public,
                 args,
             },

@@ -274,41 +274,59 @@ fn fold_env<'a, const N: usize>(
     (env, entries)
 }
 
-/// The `Credential::scope()`s of `entries`, sorted and deduplicated: the cache
-/// partition key for a run that receives exactly these entries.
-pub(super) fn scopes<'a>(entries: impl IntoIterator<Item = &'a Credential>) -> Vec<String> {
-    let mut scopes: Vec<String> = entries
-        .into_iter()
-        .map(|entry| entry.scope().to_owned())
-        .collect();
-    scopes.sort_unstable();
-    scopes.dedup();
-    scopes
+/// What a run holds of the operator's registry credentials.
+#[derive(Clone, Default)]
+pub(super) struct Held {
+    /// The `Credential::scope()`s of the entries the run receives, sorted
+    /// and deduplicated: its cache partition key. Any scope makes a failure
+    /// show none of the run's output.
+    scopes: Vec<String>,
+    /// Every value the run was given, in each form a tool could echo back:
+    /// a failure must never repeat one.
+    secrets: Vec<String>,
 }
 
-/// Every value a run holding `entries` was given, in each form a tool could
-/// echo back: the secret itself and the encodings the tools write.
-pub(super) fn secrets<'a>(entries: impl IntoIterator<Item = &'a Credential>) -> Vec<String> {
-    use base64::Engine;
-    let mut secrets = Vec::new();
-    for entry in entries {
-        match &entry.auth {
-            Auth::Bearer { token } => {
-                secrets.push(token.clone());
-                secrets.push(format!("Bearer {token}"));
+impl Held {
+    /// What a run that receives exactly `entries` holds.
+    pub(super) fn of<'a>(entries: impl IntoIterator<Item = &'a Credential>) -> Self {
+        use base64::Engine;
+        let mut held = Self::default();
+        for entry in entries {
+            held.scopes.push(entry.scope().to_owned());
+            match &entry.auth {
+                Auth::Bearer { token } => {
+                    held.secrets.push(token.clone());
+                    held.secrets.push(format!("Bearer {token}"));
+                }
+                Auth::Basic { username, password } => {
+                    held.secrets.push(password.clone());
+                    let userinfo = format!("{username}:{password}");
+                    held.secrets.push(userinfo.clone());
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&userinfo);
+                    held.secrets.push(encoded.clone());
+                    held.secrets.push(format!("Basic {encoded}"));
+                }
+                Auth::Withheld | Auth::Anonymous => {}
             }
-            Auth::Basic { username, password } => {
-                secrets.push(password.clone());
-                let userinfo = format!("{username}:{password}");
-                secrets.push(userinfo.clone());
-                let encoded = base64::engine::general_purpose::STANDARD.encode(&userinfo);
-                secrets.push(encoded.clone());
-                secrets.push(format!("Basic {encoded}"));
-            }
-            Auth::Withheld | Auth::Anonymous => {}
+        }
+        held.scopes.sort_unstable();
+        held.scopes.dedup();
+        held
+    }
+    /// A run that holds no registry credentials but must never repeat
+    /// `secrets`, such as a GitHub token.
+    pub(super) fn masking(secrets: Vec<String>) -> Self {
+        Self {
+            scopes: Vec::new(),
+            secrets,
         }
     }
-    secrets
+    pub(super) fn scopes(&self) -> &[String] {
+        &self.scopes
+    }
+    pub(super) fn secrets(&self) -> &[String] {
+        &self.secrets
+    }
 }
 
 /// Whether `field` is only characters a URL's user part holds unescaped:
@@ -409,7 +427,8 @@ mod tests {
             entry("https://b.example/", basic("user", "pass")),
             entry("https://c.example/", Auth::Anonymous),
         ];
-        let secrets = secrets(&entries);
+        let held = Held::of(&entries);
+        let secrets = held.secrets();
         assert_eq!(
             secrets,
             [

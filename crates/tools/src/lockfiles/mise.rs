@@ -5,7 +5,6 @@ use serde_json::{Value, json};
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[],
     tools: &[],
-    versions: false,
     install: Install::Mise,
     proof: Proof::None,
     run: Run::Mise,
@@ -123,27 +122,6 @@ fn platforms(entries: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-/// The version requests a tool declaration makes, which mise records as the
-/// `specifiers` of the lock entries it resolves.
-fn requests(spec: &toml_edit::Item) -> BTreeSet<String> {
-    fn value(spec: &toml_edit::Value) -> Vec<String> {
-        if let Some(request) = spec.as_str() {
-            vec![request.into()]
-        } else if let Some(requests) = spec.as_array() {
-            requests.iter().flat_map(value).collect()
-        } else {
-            spec.as_inline_table()
-                .and_then(|table| table.get("version"))
-                .map(value)
-                .unwrap_or_default()
-        }
-    }
-    match spec.as_value() {
-        Some(spec) => value(spec).into_iter().collect(),
-        None => spec.get("version").map(requests).unwrap_or_default(),
-    }
-}
-
 /// One version a declaration requests, with the options it asks mise for.
 struct Request {
     version: String,
@@ -151,17 +129,26 @@ struct Request {
 }
 
 /// What a declaration requests, or `None` for a form that is not a version
-/// string, a table with a string `version`, or an array of those.
+/// string, a table whose `version` is a string or an array of strings, or an
+/// array of those.
 fn request_list(spec: &toml_edit::Item) -> Option<Vec<Request>> {
     fn table(table: &dyn toml_edit::TableLike, out: &mut Vec<Request>) -> Option<()> {
-        out.push(Request {
-            version: table.get("version")?.as_str()?.to_owned(),
-            options: table
+        let options: BTreeMap<_, _> = table
+            .iter()
+            .filter(|(key, _)| *key != "version")
+            .map(|(key, value)| Some((key.to_owned(), value.as_value()?.clone())))
+            .collect::<Option<_>>()?;
+        let versions: Vec<&str> = match table.get("version")?.as_value()? {
+            toml_edit::Value::Array(versions) => versions
                 .iter()
-                .filter(|(key, _)| *key != "version")
-                .map(|(key, value)| Some((key.to_owned(), value.as_value()?.clone())))
+                .map(toml_edit::Value::as_str)
                 .collect::<Option<_>>()?,
-        });
+            version => vec![version.as_str()?],
+        };
+        out.extend(versions.into_iter().map(|version| Request {
+            version: version.to_owned(),
+            options: options.clone(),
+        }));
         Some(())
     }
     fn each(value: &toml_edit::Value, out: &mut Vec<Request>) -> Option<()> {
@@ -483,8 +470,8 @@ impl Runner {
                 bin: caches::Bin::Mise,
                 cwd: None,
                 env: Vec::new(),
-                credentials: Vec::new(),
-                secrets: Vec::new(),
+                held: credentials::Held::default(),
+                refused: None,
                 public,
                 args,
             },
@@ -513,7 +500,14 @@ impl Runner {
             // The lock must answer the request the manifest makes: `latest` or
             // `24` for `2.10.0` means a declaration other than the edited one
             // was locked, and `mise` would call the lock out of date.
-            let declared = requests(&doc["tools"][name.as_str()]);
+            // mise records each version a declaration requests as a
+            // specifier. `arguments` admitted the declaration; one this
+            // grammar cannot read names no request to compare.
+            let declared: BTreeSet<String> = request_list(&doc["tools"][name.as_str()])
+                .into_iter()
+                .flatten()
+                .map(|request| request.version)
+                .collect();
             let recorded: BTreeSet<String> = entries
                 .iter()
                 .filter_map(|entry| entry["specifiers"].as_array())

@@ -52,15 +52,19 @@ fn steers(descriptor: &Tool, path: &str) -> bool {
 /// Whether a run for `descriptor`'s ecosystem can fetch only from the
 /// ecosystem's well-known public registries: every materialized file of its
 /// kinds, anywhere in the snapshot, decided public-only. A file with no
-/// verdict is not public. Fail closed.
+/// verdict is not public, and a run with no file that steers it has no
+/// verdict to go on, so it is never public: neither one whose ecosystem
+/// names no such files nor one whose snapshot holds none. Fail closed.
 fn public_only(
     descriptor: &Tool,
     baseline: &BTreeMap<String, BaseFile>,
     verdicts: &BTreeMap<String, bool>,
 ) -> bool {
-    baseline
+    let mut steering = baseline
         .keys()
-        .all(|path| !steers(descriptor, path) || verdicts.get(path) == Some(&true))
+        .filter(|path| steers(descriptor, path))
+        .peekable();
+    steering.peek().is_some() && steering.all(|path| verdicts.get(path) == Some(&true))
 }
 
 fn under(path: &str, root: &str) -> bool {
@@ -96,13 +100,12 @@ pub struct Runner {
     rustup_home: PathBuf,
     /// Fetches the Gradle wrapper checksum; injectable for offline tests.
     http: Arc<dyn patchula_http::Transport>,
-    /// Serialises tool usage records within this process.
-    usage: Arc<std::sync::Mutex<()>>,
     /// The user's mise data directory, whose installs seed the tool store.
     seed: Option<PathBuf>,
-    /// Held by the first nix call while it installs nix, so concurrent
-    /// lookups neither install it twice nor clear each other's install.
-    nix_install: Arc<tokio::sync::Mutex<()>>,
+    /// One lock per `tool@version`, held by the first call that installs
+    /// it, so concurrent calls neither install it twice nor clear each
+    /// other's install.
+    installing: Arc<std::sync::Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// The persistent tool caches' size cap in GiB; 0 turns them off.
     cache_gib: u64,
     /// The `installation-<id>` partition's id for runs that hold no
@@ -183,9 +186,8 @@ impl Runner {
             rustup,
             rustup_home,
             http: Arc::new(NetworkTransport),
-            usage: Default::default(),
             seed: None,
-            nix_install: Default::default(),
+            installing: Default::default(),
             cache_gib: DEFAULT_CACHE_GIB,
             installation: "local".into(),
             runs: Arc::new(tokio::sync::Semaphore::new(lockfile_concurrency())),
@@ -335,11 +337,7 @@ impl Runner {
         let mut relock_failure = None;
         for (ecosystem, directory) in groups {
             let tool = descriptor(ecosystem);
-            let versions = if tool.versions {
-                versions(&baseline, &directory)?
-            } else {
-                BTreeMap::new()
-            };
+            let versions = versions(tool, &baseline, &directory)?;
             let jobs: Vec<_> = work
                 .jobs
                 .iter()
@@ -465,29 +463,25 @@ impl Runner {
         let Some(cache) = call.bin.cache() else {
             return Ok((Vec::new(), None));
         };
-        let mut scopes = call.credentials.clone();
-        scopes.sort_unstable();
-        scopes.dedup();
+        let scopes = call.held.scopes();
         // Credentialed runs partition on their credential set.
         // Uncredentialed runs share `public` only when every file they can
         // read decided public-only; anything else gets the installation's
         // own partition, so a run that might fetch private content never
         // leaves it where other installations could pick it up.
         let partition = if !scopes.is_empty() {
-            caches::Partition::private(&scopes)
+            caches::Partition::private(scopes)
         } else if call.public {
             caches::Partition::Public
         } else {
             caches::Partition::Installation(self.installation.clone())
         };
         let root = self.cache.join(caches::ROOT);
-        let call_env = call.env.clone();
         let bin = call.bin;
-        let (env, hold) = tokio::task::spawn_blocking(move || {
-            caches::acquire(&root, &partition, bin, cache, &call_env)
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+        let (env, hold) =
+            tokio::task::spawn_blocking(move || caches::acquire(&root, &partition, bin, cache))
+                .await
+                .map_err(|e| e.to_string())??;
         Ok((env, Some(hold)))
     }
     /// mise's toolchain environment for a rustup-run tool: the Count's
@@ -530,21 +524,65 @@ impl Runner {
             .await?;
         Ok(())
     }
+    /// Run a tool. A failure the call's `refused` reads as a refusal
+    /// becomes `Failure::Refused`, decided before any output is withheld.
+    /// A run that held registry credentials otherwise fails showing none
+    /// of its output, which may quote what a private registry answered:
+    /// failure reasons reach reports, dashboards and public pages.
     async fn tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Failure> {
-        // A first use clears what an unfinished install left and seeds from
-        // the user's store, under the exclusive lock so no run loses a tool.
-        if !self.installed(&call.tools) {
-            let _store = tools::lock_store(&self.mise_data, true).await?;
+        let bin = call.bin.name();
+        let held = !call.held.scopes().is_empty();
+        let refused = call.refused;
+        let failure = match self.run_tool(driver, call).await {
+            Ok(output) => return Ok(output),
+            Err(failure) => failure,
+        };
+        if let (Some(refused), Failure::Tool { failure: run, .. }) = (refused, &failure)
+            && let Some(why) = refused(run)
+        {
+            return Err(Failure::Refused(why.to_owned()));
+        }
+        Err(if held {
+            held_failure(bin, &failure)
+        } else {
+            failure
+        })
+    }
+    /// Hold the install lock of each of `tools` unless all are installed,
+    /// in order, so two calls that share tools cannot deadlock.
+    async fn installing(
+        &self,
+        tools: &[(String, String)],
+    ) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+        let mut guards = Vec::new();
+        if self.installed(tools) {
+            return guards;
+        }
+        let specs: BTreeSet<String> = tools
+            .iter()
+            .map(|(tool, version)| format!("{tool}@{version}"))
+            .collect();
+        for spec in specs {
+            let lock = self
+                .installing
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry(spec)
+                .or_default()
+                .clone();
+            guards.push(lock.lock_owned().await);
+        }
+        guards
+    }
+    async fn run_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Failure> {
+        let _store = {
+            let _installing = self.installing(&call.tools).await;
+            let store = self.hold_store(&call.tools).await?;
             if !self.installed(&call.tools) {
-                self.clear_unproven(&call.tools).await;
-                let tools = call.tools.clone();
-                self.off_runtime(move |runner| runner.seed(&tools)).await?;
+                self.install(driver, &call).await?;
             }
-        }
-        let _store = tools::lock_store(&self.mise_data, false).await?;
-        if !self.installed(&call.tools) {
-            self.install(driver, &call).await?;
-        }
+            store
+        };
         let mut spec = self.command(driver);
         if let Some(cwd) = &call.cwd {
             spec.cwd.clone_from(cwd);
@@ -608,7 +646,7 @@ impl Runner {
             Run::Shell => spec.args.push("/bin/sh".into()),
         }
         spec.args.extend(call.args);
-        spec.secrets = call.secrets;
+        spec.secrets = call.held.secrets().to_vec();
         let context = call.bin.name().to_owned();
         let output = self
             .executor
@@ -620,42 +658,6 @@ impl Runner {
         self.off_runtime(move |runner| runner.record_use(&tools))
             .await?;
         Ok(output)
-    }
-    /// Run a tool that may hold registry credentials. When it does, a failure
-    /// shows none of its output, which may quote what a private registry
-    /// answered: failure reasons reach reports, dashboards and public pages.
-    async fn held_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Failure> {
-        let bin = call.bin.name();
-        let held = !call.credentials.is_empty();
-        let result = self.tool(driver, call).await;
-        if !held {
-            return result;
-        }
-        result.map_err(|failure| held_failure(bin, &failure))
-    }
-    /// [`held_tool`](Self::held_tool), where a run that `refused` says
-    /// stopped short of running code the repository or a package chose
-    /// becomes `refusal(why)`, decided before any output is withheld. The
-    /// reason is the Count's own text, never the tool's output.
-    async fn refusable_tool(
-        &self,
-        driver: &Path,
-        call: Invocation,
-        refused: fn(&patchula_process::Failure) -> Option<&'static str>,
-        refusal: impl FnOnce(&str) -> Failure,
-    ) -> Result<Vec<u8>, Failure> {
-        let bin = call.bin.name();
-        let held = !call.credentials.is_empty();
-        let result = self.tool(driver, call).await;
-        if let Err(Failure::Tool { failure, .. }) = &result
-            && let Some(why) = refused(failure)
-        {
-            return Err(refusal(why));
-        }
-        match result {
-            Err(failure) if held => Err(held_failure(bin, &failure)),
-            result => result,
-        }
     }
 }
 
@@ -692,6 +694,9 @@ impl Generate for Runner {
     }
 }
 
+/// Reads a refusal out of a failed run; see [`Invocation::refused`].
+type Refused = fn(&patchula_process::Failure) -> Option<&'static str>;
+
 /// One ecosystem tool invocation: the ecosystem's descriptor, the mise
 /// tools it needs, the binary to run and the arguments to pass.
 #[derive(Clone)]
@@ -703,12 +708,14 @@ struct Invocation {
     bin: caches::Bin,
     cwd: Option<PathBuf>,
     env: Vec<(String, String)>,
-    /// The `Credential::scope()`s of the registry entries this run receives.
-    /// They decide its cache partition and whether a failure shows its output.
-    credentials: Vec<String>,
-    /// Every secret value the run was given, in every form: a failure must
-    /// never repeat one.
-    secrets: Vec<String>,
+    /// The registry credentials the run receives and every secret it must
+    /// never repeat. They decide its cache partition and whether a failure
+    /// shows its output.
+    held: credentials::Held,
+    /// Whether a failure says the run stopped short of running code the
+    /// repository or a package chose, and why, in the Count's own words.
+    /// [`Runner::tool`] answers such a failure as `Failure::Refused(why)`.
+    refused: Option<Refused>,
     /// Whether the run can fetch only from its ecosystem's well-known
     /// public registry, which lets it share the `public` cache partition
     /// when it holds no operator credentials.
@@ -731,27 +738,15 @@ fn validate_targets(
         let leaf = target.file.rsplit('/').next().unwrap_or("");
         // A lockfile-only change must have moved the lock to its exact target.
         if lock_names(Manager::Cargo).supported.contains(&leaf) {
-            let lock = files
-                .get(target.file)
-                .and_then(|text| toml_edit::Document::parse(text.as_str()).ok());
-            let moved = lock.as_ref().is_some_and(|lock| {
-                lock.get("package")
-                    .and_then(toml_edit::Item::as_array_of_tables)
-                    .is_some_and(|packages| {
-                        packages.iter().any(|p| {
-                            p.get("name").and_then(toml_edit::Item::as_str) == Some(target.package)
-                                && p.get("source")
-                                    .and_then(toml_edit::Item::as_str)
-                                    .is_some_and(patchula_manager::crates_io)
-                                && p.get("version")
-                                    .and_then(toml_edit::Item::as_str)
-                                    .zip(target.version)
-                                    .is_some_and(|(locked, requested)| {
-                                        same_release(locked, requested)
-                                    })
-                        })
-                    })
-            });
+            let moved =
+                files
+                    .get(target.file)
+                    .zip(target.version)
+                    .is_some_and(|(lock, requested)| {
+                        cargo::crates_io_entries(lock, target.package)
+                            .iter()
+                            .any(|(locked, _)| same_release(locked, requested))
+                    });
             if !moved {
                 return Err(format!(
                     "lockfile did not resolve {} to requested version {}",
@@ -821,16 +816,21 @@ fn validate_targets(
     Ok(())
 }
 
+/// The versions of `descriptor`'s tools for a run in `directory`: the
+/// repository's pins over `defaults.toml`. Only the pins of those tools are
+/// read and checked, so a bad pin for a tool the run does not use holds
+/// nothing back.
 fn versions(
+    descriptor: &Tool,
     baseline: &BTreeMap<String, BaseFile>,
     directory: &str,
 ) -> Result<BTreeMap<String, String>, String> {
     let mut versions: BTreeMap<String, String> = BTreeMap::new();
-    for tool in descriptors()
-        .flat_map(|descriptor| descriptor.tools.iter().copied())
-        .collect::<BTreeSet<_>>()
-    {
-        versions.insert(tool.into(), default_version(tool)?.into());
+    for tool in descriptor.tools {
+        versions.insert((*tool).into(), default_version(tool)?.into());
+    }
+    if versions.is_empty() {
+        return Ok(versions);
     }
     // mise reads `.tool-versions` below `mise.toml` and `.mise.toml` in the
     // same directory, and a deeper file over a shallower one; `upward`

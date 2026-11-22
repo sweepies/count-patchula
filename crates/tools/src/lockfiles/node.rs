@@ -7,7 +7,6 @@ mod sources;
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[Manager::Npm, Manager::Bun],
     tools: &["node", "bun", "aube", "yarn"],
-    versions: true,
     install: Install::Plain,
     proof: Proof::DeclaredAndResolved,
     run: Run::Direct,
@@ -89,34 +88,10 @@ fn exact(version: &str) -> Option<&str> {
     Some(core)
 }
 
-/// Canonical text for a JSON value with sorted object keys.
-pub(super) fn canonical(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut out = String::from("{");
-            for (key, value) in map {
-                out.push_str(&format!("{key:?}:{}", canonical(value)));
-                out.push(',');
-            }
-            out.push('}');
-            out
-        }
-        serde_json::Value::Array(items) => {
-            let mut out = String::from("[");
-            for item in items {
-                out.push_str(&canonical(item));
-                out.push(',');
-            }
-            out.push(']');
-            out
-        }
-        other => other.to_string(),
-    }
-}
-
 /// The dependency declarations a lockfile records. Manifest edits outside this
 /// projection, such as a description or a script, cannot affect a lockfile.
-pub(super) fn dependencies(text: &str) -> Option<String> {
+/// JSON values compare without regard to key order.
+pub(super) fn dependencies(text: &str) -> Option<serde_json::Value> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     let object = value.as_object()?;
     let mut projection = serde_json::Map::new();
@@ -146,7 +121,7 @@ pub(super) fn dependencies(text: &str) -> Option<String> {
             }
         }
     }
-    Some(canonical(&serde_json::Value::Object(projection)))
+    Some(serde_json::Value::Object(projection))
 }
 
 impl Runner {
@@ -280,9 +255,8 @@ impl Runner {
     }
     /// Run an npm-family tool, which holds every tools entry's credentials.
     async fn node_tool(&self, driver: &Path, mut call: Invocation) -> Result<Vec<u8>, Failure> {
-        call.credentials = credentials::scopes(self.registries.iter());
-        call.secrets = credentials::secrets(self.registries.iter());
-        self.held_tool(driver, call).await
+        call.held = credentials::Held::of(self.registries.iter());
+        self.tool(driver, call).await
     }
     async fn bun(
         &self,
@@ -310,8 +284,8 @@ impl Runner {
                 bin: caches::Bin::Bun,
                 cwd: None,
                 env: Vec::new(),
-                credentials: Vec::new(),
-                secrets: Vec::new(),
+                held: credentials::Held::default(),
+                refused: None,
                 public,
                 args: vec![
                     "install".into(),
@@ -358,8 +332,8 @@ impl Runner {
                         format!("--require={}", guard.to_string_lossy()),
                     ),
                 ],
-                credentials: Vec::new(),
-                secrets: Vec::new(),
+                held: credentials::Held::default(),
+                refused: None,
                 public,
                 args,
             },
@@ -411,8 +385,8 @@ impl Runner {
                     "NPM_CONFIG_USERCONFIG".into(),
                     config.to_string_lossy().into_owned(),
                 )],
-                credentials: Vec::new(),
-                secrets: Vec::new(),
+                held: credentials::Held::default(),
+                refused: None,
                 public,
                 args,
             },
@@ -453,8 +427,8 @@ impl Runner {
                 ("YARN_ENABLE_SCRIPTS".into(), "0".into()),
                 ("GIT_ALLOW_PROTOCOL".into(), NO_GIT_TRANSPORT.into()),
             ],
-            credentials: Vec::new(),
-            secrets: Vec::new(),
+            held: credentials::Held::default(),
+            refused: None,
             public,
             args,
         };
