@@ -47,36 +47,137 @@ pub struct Lockfiles {
 }
 /// A private registry entry. It names where its secret lives, never the secret.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(try_from = "RegistryFields", into = "RegistryFields")]
 pub struct Registry {
+    /// How requests authenticate; `None` sends no credentials, for an open
+    /// mirror.
     pub auth: Option<RegistryAuth>,
-    pub username: Option<String>,
-    pub secret: Option<Secret>,
     pub mirror_of: Option<String>,
     pub allowed_installations: Vec<u64>,
     /// Whether lockfile tools get the entry's credentials.
-    #[serde(default)]
     pub tools: bool,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// How an entry authenticates, with where its secret is read from.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RegistryAuth {
+    /// `username` and the secret as a password.
+    Basic { username: String, secret: Secret },
+    /// The secret as a bearer token.
+    Bearer { secret: Secret },
+}
+/// A registry entry as `PatchulaSettings.pkl` writes it.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RegistryFields {
+    auth: Option<AuthKind>,
+    username: Option<String>,
+    secret: Option<Secret>,
+    mirror_of: Option<String>,
+    allowed_installations: Vec<u64>,
+    #[serde(default)]
+    tools: bool,
+}
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum AuthKind {
     Basic,
     Bearer,
 }
+impl TryFrom<RegistryFields> for Registry {
+    type Error = &'static str;
+    fn try_from(fields: RegistryFields) -> Result<Self, Self::Error> {
+        let username = match (fields.auth, fields.username.as_deref()) {
+            (Some(AuthKind::Basic), Some(name)) => !name.is_empty() && !name.contains(':'),
+            (Some(AuthKind::Bearer) | None, None) => true,
+            _ => false,
+        };
+        if !username {
+            return Err(
+                "username is required for basic registries, without a colon, and refused otherwise",
+            );
+        }
+        let auth = match (fields.auth, fields.username, fields.secret) {
+            (Some(AuthKind::Basic), Some(username), Some(secret)) => {
+                Some(RegistryAuth::Basic { username, secret })
+            }
+            (Some(AuthKind::Bearer), _, Some(secret)) => Some(RegistryAuth::Bearer { secret }),
+            (None, _, None) if fields.mirror_of.is_some() => None,
+            (None, _, None) => return Err("a registry needs auth or mirrorOf"),
+            _ => return Err("secret is required with auth, and refused without it"),
+        };
+        Ok(Self {
+            auth,
+            mirror_of: fields.mirror_of,
+            allowed_installations: fields.allowed_installations,
+            tools: fields.tools,
+        })
+    }
+}
+impl From<Registry> for RegistryFields {
+    fn from(registry: Registry) -> Self {
+        let (auth, username, secret) = match registry.auth {
+            Some(RegistryAuth::Basic { username, secret }) => {
+                (Some(AuthKind::Basic), Some(username), Some(secret))
+            }
+            Some(RegistryAuth::Bearer { secret }) => (Some(AuthKind::Bearer), None, Some(secret)),
+            None => (None, None, None),
+        };
+        Self {
+            auth,
+            username,
+            secret,
+            mirror_of: registry.mirror_of,
+            allowed_installations: registry.allowed_installations,
+            tools: registry.tools,
+        }
+    }
+}
+/// Where a secret is read from, never the secret itself.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "SecretFields", into = "SecretFields")]
+pub enum Secret {
+    /// An environment variable holding the secret.
+    Env(String),
+    /// A file holding the secret.
+    File(PathBuf),
+}
+/// A secret as `PatchulaSettings.pkl` writes it.
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Secret {
-    pub env: Option<String>,
-    pub file: Option<PathBuf>,
+struct SecretFields {
+    env: Option<String>,
+    file: Option<PathBuf>,
+}
+impl TryFrom<SecretFields> for Secret {
+    type Error = &'static str;
+    fn try_from(fields: SecretFields) -> Result<Self, Self::Error> {
+        match (fields.env, fields.file) {
+            (Some(name), None) if !name.is_empty() && !name.contains('=') => Ok(Self::Env(name)),
+            (None, Some(path)) if !path.as_os_str().is_empty() => Ok(Self::File(path)),
+            _ => Err("secret needs exactly one of env and file"),
+        }
+    }
+}
+impl From<Secret> for SecretFields {
+    fn from(secret: Secret) -> Self {
+        match secret {
+            Secret::Env(name) => Self {
+                env: Some(name),
+                file: None,
+            },
+            Secret::File(path) => Self {
+                env: None,
+                file: Some(path),
+            },
+        }
+    }
 }
 impl Secret {
     /// Where the secret is read from, for errors: never the value.
     fn source(&self) -> String {
-        match (&self.env, &self.file) {
-            (Some(name), None) => format!("environment variable {name}"),
-            (None, Some(path)) => format!("file {}", path.display()),
-            _ => "secret".to_owned(),
+        match self {
+            Self::Env(name) => format!("environment variable {name}"),
+            Self::File(path) => format!("file {}", path.display()),
         }
     }
     /// The one rule every secret source shares, on bytes: strip trailing
@@ -92,16 +193,15 @@ impl Secret {
         &self,
         var: impl Fn(&str) -> Option<std::ffi::OsString>,
     ) -> Result<Vec<u8>, String> {
-        let value = match (&self.env, &self.file) {
-            (Some(name), None) => {
+        let value = match self {
+            Self::Env(name) => {
                 let value =
                     var(name).ok_or_else(|| format!("environment variable {name} is not set"))?;
                 os_bytes(&value)
                     .ok_or_else(|| format!("environment variable {name} is not valid Unicode"))?
             }
-            (None, Some(path)) => std::fs::read(path)
+            Self::File(path) => std::fs::read(path)
                 .map_err(|error| format!("cannot read {}: {error}", path.display()))?,
-            _ => return Err("secret needs exactly one of env and file".into()),
         };
         let end = value
             .iter()
@@ -225,34 +325,6 @@ impl Settings {
         // `Settings::load` callers that build an engine get both.
         for (key, registry) in &self.registries {
             let field = |name: &str| format!("registries[{key:?}]{name}");
-            match (registry.auth, registry.username.as_deref()) {
-                (Some(RegistryAuth::Basic), Some(name))
-                    if !name.is_empty() && !name.contains(':') => {}
-                (Some(RegistryAuth::Bearer) | None, None) => {}
-                _ => {
-                    return Err(issue(
-                        field(".username"),
-                        "is required for basic registries, without a colon, and refused otherwise",
-                    ));
-                }
-            }
-            match (registry.auth, &registry.secret) {
-                (Some(_), Some(secret)) => match (&secret.env, &secret.file) {
-                    (Some(name), None) if !name.is_empty() && !name.contains('=') => {}
-                    (None, Some(path)) if !path.as_os_str().is_empty() => {}
-                    _ => {
-                        return Err(issue(field(".secret"), "needs exactly one of env and file"));
-                    }
-                },
-                (None, None) if registry.mirror_of.is_some() => {}
-                (None, None) => return Err(issue(field(""), "needs auth or mirrorOf")),
-                _ => {
-                    return Err(issue(
-                        field(".secret"),
-                        "is required with auth, and refused without it",
-                    ));
-                }
-            }
             if registry
                 .allowed_installations
                 .iter()
@@ -499,28 +571,57 @@ mod tests {
         std::fs::write(path, format!("amends \"{SCHEMA_NAME}\"\n{body}\n")).unwrap();
         Settings::load(path)
     }
-    /// A registry problem names the registry's field, so the diagnostic
-    /// points at the entry that is wrong.
+    /// A registry's shape is checked as it is read: the error names the
+    /// registry and what is wrong with it.
     #[test]
-    fn a_registry_problem_names_its_field() {
-        let mut settings = Settings::default();
-        settings.registries.insert(
-            "acme".into(),
-            Registry {
-                auth: Some(RegistryAuth::Basic),
-                username: None,
-                secret: Some(Secret {
-                    env: Some("ACME_TOKEN".into()),
-                    file: None,
-                }),
-                mirror_of: None,
-                allowed_installations: Vec::new(),
-                tools: false,
-            },
+    fn a_registry_shape_problem_names_the_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.pkl");
+        for (body, problem) in [
+            (
+                r#"auth = "basic"; secret { env = "T" }"#,
+                "username is required for basic registries",
+            ),
+            (
+                r#"auth = "bearer"; username = "ci"; secret { env = "T" }"#,
+                "username is required for basic registries",
+            ),
+            (r#"auth = "bearer""#, "secret is required with auth"),
+            (r#"secret { env = "T" }"#, "secret is required with auth"),
+            ("", "needs auth or mirrorOf"),
+            (
+                r#"auth = "bearer"; secret { env = "T"; file = "/t" }"#,
+                "secret needs exactly one of env and file",
+            ),
+            (
+                r#"auth = "bearer"; secret { }"#,
+                "secret needs exactly one of env and file",
+            ),
+        ] {
+            let body = body.replace("; ", "\n");
+            let error = load_body(
+                &path,
+                &format!("registries {{ [\"acme\"] {{\n{body}\n}} }}"),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("registries.acme") && error.contains(problem),
+                "{body}: {error}"
+            );
+        }
+        let read = load_body(
+            &path,
+            "registries { [\"acme\"] {\nauth = \"basic\"\nusername = \"ci\"\nsecret { file = \"/t\" }\n} }",
+        )
+        .unwrap();
+        assert_eq!(
+            read.registries["acme"].auth,
+            Some(RegistryAuth::Basic {
+                username: "ci".into(),
+                secret: Secret::File("/t".into()),
+            })
         );
-        let issue = settings.validate().unwrap_err();
-        assert_eq!(issue.field, r#"registries["acme"].username"#);
-        assert!(issue.message.starts_with(&issue.field), "{}", issue.message);
     }
     /// An unreadable secret file keeps the io error: not found and permission
     /// denied read differently.
@@ -528,12 +629,7 @@ mod tests {
     fn an_unreadable_secret_file_keeps_its_io_error() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing");
-        let error = Secret {
-            env: None,
-            file: Some(missing.clone()),
-        }
-        .read_bytes()
-        .unwrap_err();
+        let error = Secret::File(missing.clone()).read_bytes().unwrap_err();
         let io = std::fs::read(&missing).unwrap_err();
         assert_eq!(error, format!("cannot read {}: {io}", missing.display()));
     }
@@ -663,10 +759,7 @@ mod tests {
         let file = dir.path().join("secret");
         let file_secret = |bytes: &[u8]| {
             std::fs::write(&file, bytes).unwrap();
-            Secret {
-                env: None,
-                file: Some(file.clone()),
-            }
+            Secret::File(file.clone())
         };
         for bytes in [&b"abc\r\n"[..], &b"abc\r\n\r\n"[..], &b"abc"[..]] {
             let secret = file_secret(bytes);
@@ -681,10 +774,7 @@ mod tests {
         assert_eq!(secret.read_bytes().unwrap(), [0xff]);
         assert!(secret.read().is_err());
         // Env values follow the same rule, with the lookup injected.
-        let env_secret = Secret {
-            env: Some("PATCHULA_TEST_SECRET".into()),
-            file: None,
-        };
+        let env_secret = Secret::Env("PATCHULA_TEST_SECRET".into());
         let read =
             |value: Option<std::ffi::OsString>| env_secret.read_bytes_with(|_| value.clone());
         assert_eq!(read(Some("abc\r\n".into())).unwrap(), b"abc");
@@ -700,21 +790,13 @@ mod tests {
     }
     #[test]
     fn a_secret_problem_names_where_it_is_read_from_never_the_value() {
-        // `read` reports a non-UTF-8 value through `source`; both-set and
-        // neither-set secrets are refused before a value is read.
-        let secret = |env: Option<&str>, file: Option<&str>| Secret {
-            env: env.map(str::to_owned),
-            file: file.map(PathBuf::from),
-        };
         assert_eq!(
-            secret(Some("TOKEN"), None).source(),
+            Secret::Env("TOKEN".into()).source(),
             "environment variable TOKEN"
         );
         assert_eq!(
-            secret(None, Some("/run/secrets/token")).source(),
+            Secret::File("/run/secrets/token".into()).source(),
             "file /run/secrets/token"
         );
-        assert_eq!(secret(Some("A"), Some("/x")).source(), "secret");
-        assert_eq!(secret(None, None).source(), "secret");
     }
 }
