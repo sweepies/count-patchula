@@ -1116,57 +1116,66 @@ fn every_trigger_and_switch_and_filters() {
         let work = crate::webhook::classify(event, &typed(&payload), &settings, "patchula[bot]");
         assert_eq!(
             work,
-            vec![Work {
+            Ok(vec![Work {
                 installation: 1,
                 repo: "owner/repo".into(),
                 check_prs: (switch == "checks").then(|| std::collections::BTreeSet::from([1])),
                 priority,
-            }],
+            }]),
             "{event}"
         );
         let mut value = serde_json::to_value(&settings).unwrap();
         value["server"]["triggers"][switch] = json!(false);
         let disabled: Settings = serde_json::from_value(value).unwrap();
-        assert!(
-            crate::webhook::classify(event, &typed(&payload), &disabled, "patchula[bot]")
-                .is_empty(),
+        assert_eq!(
+            crate::webhook::classify(event, &typed(&payload), &disabled, "patchula[bot]"),
+            Err("trigger disabled"),
             "{event} disabled"
         );
         let mut filtered = settings.clone();
         filtered.server.allowed_installations = vec![2];
-        assert!(
-            crate::webhook::classify(event, &typed(&payload), &filtered, "patchula[bot]")
-                .is_empty()
+        assert_eq!(
+            crate::webhook::classify(event, &typed(&payload), &filtered, "patchula[bot]"),
+            Err("not allowlisted")
         );
         filtered.server.allowed_installations.clear();
         filtered.server.allowed_repositories = vec!["other/repo".into()];
-        assert!(
-            crate::webhook::classify(event, &typed(&payload), &filtered, "patchula[bot]")
-                .is_empty()
+        assert_eq!(
+            crate::webhook::classify(event, &typed(&payload), &filtered, "patchula[bot]"),
+            Err("not allowlisted")
         );
         let mut own = payload.clone();
         own["sender"]["login"] = json!("patchula[bot]");
-        assert!(
-            crate::webhook::classify(event, &typed(&own), &settings, "patchula[bot]").is_empty()
+        assert_eq!(
+            crate::webhook::classify(event, &typed(&own), &settings, "patchula[bot]"),
+            Err("own-bot ignored")
         );
     }
     let mut feature = payload();
     feature["ref"] = json!("refs/heads/feature");
-    assert!(
-        crate::webhook::classify("push", &typed(&feature), &settings, "patchula[bot]").is_empty()
+    assert_eq!(
+        crate::webhook::classify("push", &typed(&feature), &settings, "patchula[bot]"),
+        Err("unrelated event or action")
     );
     let mut human_pr = payload();
     human_pr["action"] = json!("closed");
     human_pr["pull_request"] = pr();
     human_pr["pull_request"]["user"]["login"] = json!("human");
-    assert!(
+    assert_eq!(
         crate::webhook::classify(
             "pull_request",
             &typed(&human_pr),
             &settings,
             "patchula[bot]"
-        )
-        .is_empty()
+        ),
+        Err("unrelated event or action")
+    );
+    // The trigger gate comes before the repository allowlist.
+    let mut elsewhere = settings.clone();
+    elsewhere.server.allowed_repositories = vec!["other/repo".into()];
+    assert_eq!(
+        crate::webhook::classify("star", &typed(&payload()), &elsewhere, "patchula[bot]"),
+        Err("unrelated event or action")
     );
 }
 #[tokio::test]
