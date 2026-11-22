@@ -209,6 +209,8 @@ async fn corrupt_file_is_quarantined_and_rebuilt_without_losing_the_batch() {
     let path = directory.path().join("cache.sqlite");
     std::fs::write(&path, b"this is not a SQLite database").unwrap();
     let cache = cache(&directory).await;
+    assert_eq!(cache.opened().origin, patchula_cache::Origin::Rebuilt);
+    assert!(cache.opened().cold());
     assert!(cache.http_get(&key("x")).await.unwrap().is_none());
     cache
         .http_put(&key("x"), &entry(b"fresh".to_vec()))
@@ -685,4 +687,43 @@ async fn migration_counts_requeues_on_new_and_eleven_schema_queues() {
             .unwrap(),
         patchula_cache::SCHEMA as i64
     );
+}
+
+/// Opening says where the cache came from and what it holds: a first open
+/// creates it cold, a later one finds it warm and how long it sat, and a
+/// lowered budget counts what it evicts.
+#[tokio::test]
+async fn opening_reports_how_warm_the_cache_is() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache = cache(&directory).await;
+    assert_eq!(cache.opened().origin, patchula_cache::Origin::Created);
+    assert!(cache.opened().cold());
+    cache
+        .http_put(&key("x"), &entry(b"fresh".to_vec()))
+        .await
+        .unwrap();
+    drop(cache);
+    let path = directory.path().join("cache.sqlite");
+    let cache = Cache::open(&path, Options::default()).await.unwrap();
+    let opened = cache.opened().clone();
+    assert_eq!(opened.origin, patchula_cache::Origin::Existing);
+    assert!(!opened.cold());
+    assert_eq!((opened.responses, opened.evicted), (1, 0));
+    assert!(opened.idle.is_some_and(|idle| idle < 60), "{opened:?}");
+    assert!(
+        opened.to_string().starts_with("warm: 1 response ("),
+        "{opened}"
+    );
+    drop(cache);
+    let cache = Cache::open(
+        &path,
+        Options {
+            http_body_budget: 0,
+        },
+    )
+    .await
+    .unwrap();
+    let opened = cache.opened();
+    assert_eq!((opened.responses, opened.evicted), (0, 1));
+    assert!(opened.cold());
 }

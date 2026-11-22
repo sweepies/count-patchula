@@ -285,6 +285,149 @@ pub struct Cache {
     /// writer's connection sees the live database.
     readers_valid: Arc<AtomicBool>,
     touches: Arc<Mutex<HashSet<String>>>,
+    opened: Arc<Opened>,
+}
+
+/// What opening the cache found: where the cache came from, what opening it
+/// dropped, and what is left. Its `Display` is the one-line summary a run
+/// starts with, so an operator knows early whether to expect a cold run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Opened {
+    pub origin: Origin,
+    /// Each tabled name this build keys differently from the build that
+    /// wrote its entries — a new version or locked dependency — with the
+    /// number of entries dropped under it.
+    pub superseded: BTreeMap<String, u64>,
+    /// HTTP responses evicted to fit the budget, such as after it was lowered.
+    pub evicted: u64,
+    /// HTTP responses kept.
+    pub responses: u64,
+    /// Compressed bytes of the kept HTTP bodies.
+    pub bytes: u64,
+    /// State values and release lists kept.
+    pub values: u64,
+    /// Seconds since the cache was last opened; `None` when it never was
+    /// by a build that records it.
+    pub idle: Option<u64>,
+}
+
+/// Where an opened cache came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// A database file a previous run left.
+    Existing,
+    /// No database file yet: a first run, or a CI cache that was not restored.
+    Created,
+    /// The database was corrupt, moved aside, and started again empty.
+    Rebuilt,
+    /// In memory only: asked for, or the file could not be used at all.
+    Memory,
+}
+
+impl Opened {
+    /// Whether nothing useful was kept: every lookup goes to the network.
+    pub fn cold(&self) -> bool {
+        self.origin != Origin::Existing || self.responses + self.values == 0
+    }
+}
+
+impl std::fmt::Display for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let dropped: u64 = self.superseded.values().sum();
+        let kinds = self
+            .superseded
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        match self.origin {
+            Origin::Created => {
+                return f
+                    .write_str("cold: there is no cache yet, so every lookup goes to the network");
+            }
+            Origin::Rebuilt => {
+                return f.write_str(
+                    "cold: the cache was corrupt, so it was moved aside and started empty",
+                );
+            }
+            Origin::Memory => {
+                return f.write_str("cold: the cache is in memory only and is not kept");
+            }
+            Origin::Existing => {}
+        }
+        if self.cold() {
+            if dropped > 0 {
+                write!(
+                    f,
+                    "cold: this build stores {kinds} differently, so the {} it held {} fetched again",
+                    plural(dropped, "entry", "entries"),
+                    if dropped == 1 { "is" } else { "are" },
+                )?;
+            } else {
+                f.write_str("cold: the cache is empty")?;
+            }
+        } else {
+            write!(
+                f,
+                "{}: {} ({}) and {}",
+                if dropped > 0 { "partly cold" } else { "warm" },
+                plural(self.responses, "response", "responses"),
+                size(self.bytes),
+                plural(self.values, "stored value", "stored values"),
+            )?;
+            if let Some(idle) = self.idle {
+                write!(f, ", last opened {}", ago(idle))?;
+            }
+            if dropped > 0 {
+                write!(
+                    f,
+                    "; this build stores {kinds} differently, so {} {} {} fetched again",
+                    if self.superseded.len() == 1 {
+                        "its"
+                    } else {
+                        "their"
+                    },
+                    plural(dropped, "entry", "entries"),
+                    if dropped == 1 { "is" } else { "are" },
+                )?;
+            }
+        }
+        if self.evicted > 0 {
+            write!(
+                f,
+                "; {} evicted to fit the size budget",
+                plural(self.evicted, "response was", "responses were"),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn plural(count: u64, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// Bytes in the largest binary unit that keeps one or more of them.
+fn size(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    match bytes {
+        GIB.. => format!("{:.1} GiB", bytes as f64 / GIB as f64),
+        MIB.. => format!("{:.1} MiB", bytes as f64 / MIB as f64),
+        KIB.. => format!("{} KiB", bytes / KIB),
+        _ => plural(bytes, "byte", "bytes"),
+    }
+}
+
+/// Seconds as the largest whole unit ago: "just now" under a minute.
+fn ago(seconds: u64) -> String {
+    match seconds {
+        0..60 => "just now".to_owned(),
+        60..3_600 => format!("{} ago", plural(seconds / 60, "minute", "minutes")),
+        3_600..86_400 => format!("{} ago", plural(seconds / 3_600, "hour", "hours")),
+        _ => format!("{} ago", plural(seconds / 86_400, "day", "days")),
+    }
 }
 
 impl Cache {
@@ -308,9 +451,9 @@ impl Cache {
         std::thread::Builder::new()
             .name("patchula-cache".into())
             .spawn(move || match Store::open(path, options) {
-                Ok(mut store) => {
+                Ok((mut store, opened)) => {
                     let persistent = store.conn.path().is_some_and(|path| !path.is_empty());
-                    if ready.send(Ok(persistent)).is_err() {
+                    if ready.send(Ok((persistent, opened))).is_err() {
                         return;
                     }
                     while let Some(job) = receiver.blocking_recv() {
@@ -332,7 +475,7 @@ impl Cache {
                     let _ = ready.send(Err(error));
                 }
             })?;
-        let persistent = initialized.await.map_err(|_| Error::Worker)??;
+        let (persistent, opened) = initialized.await.map_err(|_| Error::Worker)??;
         let mut readers = Vec::new();
         // Read-only WAL connections neither migrate nor quarantine. Errors are
         // retried on the writer, which remains the sole recovery coordinator.
@@ -373,7 +516,13 @@ impl Cache {
             next_reader: Arc::new(AtomicUsize::new(0)),
             readers_valid,
             touches,
+            opened: Arc::new(opened),
         })
+    }
+
+    /// What opening the cache found, for the summary a run starts with.
+    pub fn opened(&self) -> &Opened {
+        &self.opened
     }
 
     /// Opens a cache directory, creating it: `cache.sqlite` with `worktrees/`
@@ -635,9 +784,13 @@ mod tests {
     }
 
     /// Make a current cache look like one at schema `version`, so opening
-    /// it replays the later migrations: 016's counter and triggers and 015's
-    /// column and index go first, since adding them again would fail.
+    /// it replays the later migrations: 017's table, 016's counter and
+    /// triggers and 015's column and index go first, since adding them again
+    /// would fail.
     fn rewind(store: &Store, version: i64) -> Result<()> {
+        if version < 17 {
+            store.conn.execute_batch("DROP TABLE opened;")?;
+        }
         if version < 16 {
             store.conn.execute_batch(
                 "DROP TRIGGER http_bytes_insert; DROP TRIGGER http_bytes_delete; \
@@ -1100,6 +1253,10 @@ mod tests {
             .unwrap();
         drop(cache);
         let cache = Cache::open(&path, Options::default()).await.unwrap();
+        assert_eq!(
+            cache.opened().superseded,
+            BTreeMap::from([("extract".to_owned(), 3), ("npm-catalog-v2".to_owned(), 2)])
+        );
         let mut expected_http = [
             http_key(Some(&npm)),
             http_key(Some("doc@v1")),
@@ -1117,6 +1274,68 @@ mod tests {
                 expected_http.to_vec()
             )
         );
+    }
+
+    /// The summary says cold, partly cold or warm, and why.
+    #[test]
+    fn the_opening_summary_says_how_warm_and_why() {
+        let warm = Opened {
+            origin: Origin::Existing,
+            superseded: BTreeMap::new(),
+            evicted: 0,
+            responses: 1200,
+            bytes: 3 * 1024 * 1024 + 512 * 1024,
+            values: 40,
+            idle: Some(3 * 3_600 + 10),
+        };
+        assert_eq!(
+            warm.to_string(),
+            "warm: 1200 responses (3.5 MiB) and 40 stored values, last opened 3 hours ago"
+        );
+        let partly = Opened {
+            superseded: BTreeMap::from([("extract".to_owned(), 30), ("tag-catalog".to_owned(), 1)]),
+            evicted: 2,
+            idle: None,
+            ..warm.clone()
+        };
+        assert_eq!(
+            partly.to_string(),
+            "partly cold: 1200 responses (3.5 MiB) and 40 stored values; this build stores \
+             extract, tag-catalog differently, so their 31 entries are fetched again; 2 \
+             responses were evicted to fit the size budget"
+        );
+        let emptied = Opened {
+            responses: 0,
+            values: 0,
+            superseded: BTreeMap::from([("extract".to_owned(), 1)]),
+            evicted: 0,
+            ..warm.clone()
+        };
+        assert_eq!(
+            emptied.to_string(),
+            "cold: this build stores extract differently, so the 1 entry it held is fetched again"
+        );
+        for (origin, summary) in [
+            (
+                Origin::Created,
+                "cold: there is no cache yet, so every lookup goes to the network",
+            ),
+            (
+                Origin::Rebuilt,
+                "cold: the cache was corrupt, so it was moved aside and started empty",
+            ),
+            (
+                Origin::Memory,
+                "cold: the cache is in memory only and is not kept",
+            ),
+        ] {
+            let opened = Opened {
+                origin,
+                ..warm.clone()
+            };
+            assert!(opened.cold());
+            assert_eq!(opened.to_string(), summary);
+        }
     }
 
     /// The prune reads each name's keys through an index, never a scan of

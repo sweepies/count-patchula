@@ -120,6 +120,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
     let cache = Cache::open_dir(&options.cache, Default::default())
         .await
         .map_err(Error::cause("cannot open server cache"))?;
+    tracing::info!(cold = cache.opened().cold(), "cache {}", cache.opened());
     cache
         .recover_work(Utc::now().timestamp_millis())
         .await

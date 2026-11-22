@@ -1178,12 +1178,14 @@ async fn report(
             "cannot use the registry credentials for {prefix}: {reason}"
         )));
     }
-    let spinner = progress::Spinner::start(app.color);
     let token = services.token().await.ok_or_else(|| fail(TOKEN_HELP))?;
     let dir = cache_dir(scan.cache.as_deref()).map_err(|e| (FAILED, e))?;
     let cache = patchula_cache::Cache::open_dir(&dir, Default::default())
         .await
         .map_err(|e| fail(format!("cannot open the cache in {}: {e}", dir.display())))?;
+    // Said before the batch starts, so a slow cold run is expected.
+    eprintln!("patchula: cache {}", cache.opened());
+    let spinner = progress::Spinner::start(app.color);
     let transport = services.transport().map_err(fail)?;
     let mut engine = Engine::from_settings(
         &settings,
