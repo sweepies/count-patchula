@@ -1301,6 +1301,18 @@ async fn pr_cycle(
     plans: &mut [Plan],
     snapshot: &Snapshot,
 ) -> Vec<patchula_report::PullRequestAction> {
+    merging_cycle(client, repo, config, plans, snapshot, Default::default()).await
+}
+/// `pr_cycle` with the merge settings the engine hands the lifecycle from
+/// the run's inventory.
+async fn merging_cycle(
+    client: &Client,
+    repo: &Repository,
+    config: &Config,
+    plans: &mut [Plan],
+    snapshot: &Snapshot,
+    settings: patchula_update::automerge::Settings,
+) -> Vec<patchula_report::PullRequestAction> {
     let mut state = patchula_update::Lifecycle::prepare_with_controls(
         client,
         repo,
@@ -1313,6 +1325,7 @@ async fn pr_cycle(
     )
     .await
     .unwrap();
+    state.set_merge_settings(settings);
     patchula_update::apply_all(
         client,
         plans,
@@ -2807,12 +2820,15 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
         repo.merge.squash = true;
     }
     let github = client(server.clone()).await;
-    let actions = pr_cycle(
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let settings = read_inventory(&github, &cache).await.merge_settings;
+    let actions = merging_cycle(
         &github,
         &repo,
         &config,
         std::slice::from_mut(&mut p),
         &snapshot,
+        settings.clone(),
     )
     .await;
     assert_eq!(
@@ -2835,12 +2851,13 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
     let mut draft = Draft::from(next);
     draft.changes_mut()[0].merge = true;
     let mut next = draft.lockfile_pending(true).build();
-    pr_cycle(
+    merging_cycle(
         &github,
         &repo,
         &config,
         std::slice::from_mut(&mut next),
         &snapshot,
+        settings,
     )
     .await;
     let s = server.state();

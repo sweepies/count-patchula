@@ -169,20 +169,6 @@ impl Settings {
             delete_branch: repo.delete_branch_on_merge,
         }
     }
-    pub(crate) fn from_rest(repo: &model::Repository) -> Self {
-        Self {
-            repository_id: repo.node_id.clone(),
-            native: repo.allow_auto_merge == Some(true),
-            method: [
-                (repo.allow_squash_merge, "squash"),
-                (repo.allow_merge_commit, "merge"),
-                (repo.allow_rebase_merge, "rebase"),
-            ]
-            .into_iter()
-            .find_map(|(allowed, method)| (allowed == Some(true)).then(|| method.into())),
-            delete_branch: repo.delete_branch_on_merge == Some(true),
-        }
-    }
 }
 fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
     if repo.degraded() {
