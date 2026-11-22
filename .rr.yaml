@@ -2,8 +2,15 @@ version: 1
 hosts: [boat]
 require: [mise]
 local_fallback: false   # a run that lands on this pod must never count
+lock:
+  timeout: 15m          # the 5 min default gives up behind a cold build
 sync:
-  exclude: [.git, node_modules, .venv, target, docs/node_modules]
+  # Replaces rr's defaults. rr reads only the root .gitignore, so docs/'s own
+  # ignored build output is listed here too.
+  exclude: [.git, .claude, node_modules, .venv, target, docs/node_modules, docs/dist, docs/.astro, docs/.wrangler]
+  # rr's default keeps every `data/` dir from --delete; excluded paths are
+  # never deleted anyway.
+  preserve: []
   # Compare contents, not size and mtime: rsync's quick check otherwise skips a
   # changed file whose size and mtime match the VM's copy, and rr still reports
   # the sync as a success.
