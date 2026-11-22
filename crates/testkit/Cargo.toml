@@ -26,6 +26,7 @@ base64 = "0.23"
 graphql-parser = "0.4"
 regex = "1"
 percent-encoding = "2"
+proc-macro2 = { version = "1", default-features = false }
 sha1 = "0.11"
 sha2 = "0.11.1"
 syn = { version = "3", default-features = false, features = ["full", "parsing", "visit"] }

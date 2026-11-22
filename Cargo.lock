@@ -2430,6 +2430,7 @@ dependencies = [
  "patchula-mise",
  "patchula-process",
  "percent-encoding",
+ "proc-macro2",
  "regex",
  "reqwest",
  "serde",

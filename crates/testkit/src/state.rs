@@ -17,24 +17,6 @@ struct Declared {
     code_versioned: bool,
 }
 
-/// The files a `#[cfg(test)] mod name;` in `file` can resolve to.
-fn module_files(file: &Path, name: &str) -> [PathBuf; 2] {
-    let parent = file.parent().expect("a path inside the workspace");
-    let stem = file
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .expect("a UTF-8 file name");
-    let base = if stem == "lib" || stem == "main" || stem == "mod" {
-        parent.to_path_buf()
-    } else {
-        parent.join(stem)
-    };
-    [
-        base.join(format!("{name}.rs")),
-        base.join(name).join("mod.rs"),
-    ]
-}
-
 /// Whether a `cfg` predicate can only hold in test builds: `test` itself
 /// or an `all(...)` that requires it. `any(...)` and `not(...)` can hold
 /// in production, so their modules stay part of the scan.
@@ -60,13 +42,58 @@ fn test_gated(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
-/// What one source file declares: the names of its `#[cfg(test)] mod name;`
-/// file modules and the `(namespace, code_versioned)` of each `impl State`
-/// outside `#[cfg(test)]` modules, at any depth (inside functions too).
+/// The value of a `#[path = ".."]` among `attrs`.
+fn path_attr(attrs: &[syn::Attribute]) -> Option<String> {
+    attrs.iter().find_map(|attr| match &attr.meta {
+        syn::Meta::NameValue(syn::MetaNameValue {
+            path,
+            value:
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(value),
+                    ..
+                }),
+            ..
+        }) if path.is_ident("path") => Some(value.value()),
+        _ => None,
+    })
+}
+
+/// Whether `tokens`, at any depth, hold `const` followed by `NAMESPACE`:
+/// a `State` impl or its items written inside a macro, which the syntax
+/// tree cannot see into. A bare `T::NAMESPACE` is not a declaration.
+fn declares_namespace(tokens: proc_macro2::TokenStream) -> bool {
+    let mut after_const = false;
+    tokens.into_iter().any(|token| match token {
+        proc_macro2::TokenTree::Group(group) => {
+            after_const = false;
+            declares_namespace(group.stream())
+        }
+        proc_macro2::TokenTree::Ident(ident) => {
+            let found = after_const && ident == "NAMESPACE";
+            after_const = ident == "const";
+            found
+        }
+        _ => {
+            after_const = false;
+            false
+        }
+    })
+}
+
+/// What one source file declares: the files its `#[cfg(test)] mod name;`
+/// modules can resolve to, the `(namespace, code_versioned)` of each
+/// `impl State` outside `#[cfg(test)]` modules, at any depth (inside
+/// functions too), and the declarations it cannot read: a non-literal
+/// `NAMESPACE` or one written inside a macro. Those fail the scan unless the
+/// whole file is test code.
 struct Scan<'a> {
     path: &'a Path,
-    test_files: Vec<String>,
+    /// The inline modules enclosing the item being visited, as directory
+    /// components: each module's name, or its `#[path]`.
+    modules: Vec<String>,
+    test_files: Vec<PathBuf>,
     impls: Vec<(String, bool)>,
+    unreadable: Vec<String>,
 }
 
 /// The value of the `const {name}` among `items`.
@@ -77,15 +104,58 @@ fn constant<'a>(items: &'a [syn::ImplItem], name: &str) -> Option<&'a syn::Expr>
     })
 }
 
+impl Scan<'_> {
+    /// The files `mod {module};` here can resolve to, by the reference's
+    /// rules: relative to this file's directory, under a directory named
+    /// after the file unless it is a `lib.rs`, `main.rs` or `mod.rs`, then
+    /// through the enclosing inline modules. A `#[path]` outside any inline
+    /// module is relative to this file's directory alone.
+    fn module_files(&self, module: &syn::ItemMod) -> Vec<PathBuf> {
+        let mut base = self
+            .path
+            .parent()
+            .expect("a path inside the workspace")
+            .to_path_buf();
+        let stem = self
+            .path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("a UTF-8 file name");
+        let nested = |mut base: PathBuf| {
+            if !matches!(stem, "lib" | "main" | "mod") {
+                base.push(stem);
+            }
+            base.extend(&self.modules);
+            base
+        };
+        if let Some(path) = path_attr(&module.attrs) {
+            if !self.modules.is_empty() {
+                base = nested(base);
+            }
+            return vec![base.join(path)];
+        }
+        let base = nested(base);
+        let name = module.ident.to_string();
+        vec![
+            base.join(format!("{name}.rs")),
+            base.join(&name).join("mod.rs"),
+        ]
+    }
+}
+
 impl<'ast> syn::visit::Visit<'ast> for Scan<'_> {
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
         if test_gated(&module.attrs) {
             if module.content.is_none() {
-                self.test_files.push(module.ident.to_string());
+                let files = self.module_files(module);
+                self.test_files.extend(files);
             }
             return;
         }
+        self.modules
+            .push(path_attr(&module.attrs).unwrap_or_else(|| module.ident.to_string()));
         syn::visit::visit_item_mod(self, module);
+        self.modules.pop();
     }
 
     /// A trait impl counts by what it declares, not how it names the
@@ -96,37 +166,62 @@ impl<'ast> syn::visit::Visit<'ast> for Scan<'_> {
         if block.trait_.is_some()
             && let Some(namespace) = constant(&block.items, "NAMESPACE")
         {
-            let syn::Expr::Lit(syn::ExprLit {
+            if let syn::Expr::Lit(syn::ExprLit {
                 lit: syn::Lit::Str(namespace),
                 ..
             }) = namespace
-            else {
-                panic!(
-                    "{}: impl State without a NAMESPACE literal",
-                    self.path.display()
-                )
-            };
-            let code_versioned = matches!(
-                constant(&block.items, "CODE_VERSIONED"),
-                Some(syn::Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Bool(syn::LitBool { value: true, .. }),
-                    ..
-                }))
-            );
-            self.impls.push((namespace.value(), code_versioned));
+            {
+                let code_versioned = matches!(
+                    constant(&block.items, "CODE_VERSIONED"),
+                    Some(syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Bool(syn::LitBool { value: true, .. }),
+                        ..
+                    }))
+                );
+                self.impls.push((namespace.value(), code_versioned));
+            } else {
+                self.unreadable
+                    .push("impl State without a NAMESPACE literal".into());
+            }
         }
         syn::visit::visit_item_impl(self, block);
+    }
+
+    /// Macro bodies are opaque to the syntax tree: `macro_rules!`
+    /// definitions, item and expression invocations and macros among an
+    /// impl's items all land here, so a `State` declared through one fails
+    /// closed instead of slipping past the guard.
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if declares_namespace(mac.tokens.clone()) {
+            let name = mac
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string())
+                .unwrap_or_default();
+            self.unreadable.push(format!(
+                "`{name}!` declares a NAMESPACE the scan cannot read; write the impl State \
+                 outside the macro"
+            ));
+        }
+        syn::visit::visit_macro(self, mac);
     }
 }
 
 fn scan(path: &Path) -> Scan<'_> {
     let text =
         std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    let file = syn::parse_file(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    scan_text(path, &text)
+}
+
+fn scan_text<'a>(path: &'a Path, text: &str) -> Scan<'a> {
+    let file = syn::parse_file(text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let mut scan = Scan {
         path,
+        modules: Vec::new(),
         test_files: Vec::new(),
         impls: Vec::new(),
+        unreadable: Vec::new(),
     };
     syn::visit::Visit::visit_file(&mut scan, &file);
     scan
@@ -154,16 +249,15 @@ fn declared() -> BTreeMap<String, Declared> {
         // the way the inline modules' contents are skipped.
         let skip: BTreeSet<PathBuf> = scans
             .iter()
-            .flat_map(|scan| {
-                scan.test_files
-                    .iter()
-                    .flat_map(|name| module_files(scan.path, name))
-            })
+            .flat_map(|scan| scan.test_files.iter().cloned())
             .collect();
         for scan in scans {
             let file = scan.path;
             if skip.contains(file) || file.components().any(|part| part.as_os_str() == "tests") {
                 continue;
+            }
+            if let Some(problem) = scan.unreadable.first() {
+                panic!("{}: {problem}", file.display());
             }
             for (namespace, code_versioned) in scan.impls {
                 let previous = declared.insert(
@@ -287,4 +381,91 @@ pub fn check(krate: &str, registered: &std::collections::BTreeMap<&'static str, 
         .collect();
     crate::versions::check("state-versions.tsv", krate, registered, mine);
     coverage(&declared);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_files(path: &str, text: &str) -> Vec<PathBuf> {
+        scan_text(Path::new(path), text).test_files
+    }
+
+    /// A test module's file resolves through the inline modules around it
+    /// and through `#[path]`, so neither skips the production `bar.rs`.
+    #[test]
+    fn test_module_files_follow_inline_modules_and_path() {
+        assert_eq!(
+            test_files("src/lib.rs", "mod inner { #[cfg(test)] mod bar; }"),
+            [
+                PathBuf::from("src/inner/bar.rs"),
+                PathBuf::from("src/inner/bar/mod.rs")
+            ]
+        );
+        assert_eq!(
+            test_files(
+                "src/foo.rs",
+                "mod inner { #[cfg(all(test, unix))] mod bar; }"
+            ),
+            [
+                PathBuf::from("src/foo/inner/bar.rs"),
+                PathBuf::from("src/foo/inner/bar/mod.rs")
+            ]
+        );
+        assert_eq!(
+            test_files(
+                "src/lib.rs",
+                "mod bar;\n#[cfg(test)]\n#[path = \"bar_test.rs\"]\nmod bar_tests;"
+            ),
+            [PathBuf::from("src/bar_test.rs")]
+        );
+        assert_eq!(
+            test_files(
+                "src/foo.rs",
+                "#[path = \"x\"] mod inner { #[cfg(test)] #[path = \"t.rs\"] mod t; }"
+            ),
+            [PathBuf::from("src/foo/x/t.rs")]
+        );
+        assert_eq!(
+            test_files("src/foo.rs", "#[cfg(test)] mod tests;"),
+            [
+                PathBuf::from("src/foo/tests.rs"),
+                PathBuf::from("src/foo/tests/mod.rs")
+            ]
+        );
+    }
+
+    /// A `State` declared through a macro cannot be read from the syntax
+    /// tree, so it is reported; a `T::NAMESPACE` read in a macro is not.
+    #[test]
+    fn a_namespace_inside_a_macro_is_unreadable() {
+        let scan = |text| scan_text(Path::new("src/lib.rs"), text).unreadable.len();
+        assert_eq!(
+            scan(
+                "macro_rules! state { ($name:ident) => { impl State for $name { \
+                 const NAMESPACE: &'static str = \"x\"; const VERSION: u32 = 1; } }; }"
+            ),
+            1
+        );
+        assert_eq!(
+            scan("impl State for X { declare! { const NAMESPACE: &'static str = \"x\"; } }"),
+            1
+        );
+        assert_eq!(
+            scan("fn f() { m!(impl State for X { const NAMESPACE: &str = \"x\"; }); }"),
+            1
+        );
+        assert_eq!(
+            scan("fn f<T: State>() { tracing::debug!(\"{}\", T::NAMESPACE); }"),
+            0
+        );
+        assert_eq!(
+            scan("#[cfg(test)] mod tests { m! { const NAMESPACE: &str = \"x\"; } }"),
+            0
+        );
+        assert_eq!(
+            scan("impl State for X { const NAMESPACE: &'static str = NAME; }"),
+            1
+        );
+    }
 }
