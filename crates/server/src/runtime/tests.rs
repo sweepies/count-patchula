@@ -577,6 +577,7 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -667,6 +668,7 @@ async fn an_unreadable_installation_listing_fails_the_batch() {
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -796,6 +798,7 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -1109,6 +1112,7 @@ async fn a_newly_ticked_recheck_box_is_acknowledged_as_it_arrives() {
     unchanged["changes"]["body"]["from"] = pr()["body"].clone();
     assert_eq!(
         router
+            .clone()
             .oneshot(request(
                 serde_json::to_vec(&unchanged).unwrap(),
                 "pull_request",
@@ -1119,11 +1123,79 @@ async fn a_newly_ticked_recheck_box_is_acknowledged_as_it_arrives() {
             .status(),
         StatusCode::ACCEPTED
     );
+    // A closed PR, or one already showing the banner, costs no task.
+    let mut closed = edited.clone();
+    closed["pull_request"]["state"] = json!("closed");
+    let mut bannered = edited.clone();
+    bannered["pull_request"]["body"] = json!(format!(
+        "<!-- patchula-rebasing -->\n> banner\n<!-- patchula-rebasing-end -->\n\n{}",
+        pr()["body"].as_str().unwrap()
+    ));
+    bannered["changes"]["body"]["from"] = json!(
+        bannered["pull_request"]["body"]
+            .as_str()
+            .unwrap()
+            .replace("[x]", "[ ]")
+    );
+    for (delivery, payload) in [("closed", closed), ("bannered", bannered)] {
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request(
+                    serde_json::to_vec(&payload).unwrap(),
+                    "pull_request",
+                    delivery
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::ACCEPTED
+        );
+    }
     assert!(
         tokio::time::timeout(Duration::from_millis(200), acknowledged.recv())
             .await
             .is_err()
     );
+}
+/// Shutdown waits for acknowledgements in flight up to the bound, then
+/// aborts and joins the rest.
+#[tokio::test(start_paused = true)]
+async fn acknowledgements_drain_within_their_bound() {
+    struct Dropped(Arc<AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let tasks = crate::webhook::Acknowledgements::default();
+    let finished = Arc::new(AtomicBool::new(false));
+    let done = finished.clone();
+    tasks
+        .spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            done.store(true, Ordering::SeqCst);
+        })
+        .await;
+    tasks.drain(Duration::from_secs(10)).await;
+    assert!(finished.load(Ordering::SeqCst));
+    let aborted = Arc::new(AtomicBool::new(false));
+    let guard = Dropped(aborted.clone());
+    tasks
+        .spawn(async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        })
+        .await;
+    let started = tokio::time::Instant::now();
+    tasks.drain(Duration::from_secs(10)).await;
+    assert!(
+        aborted.load(Ordering::SeqCst),
+        "the stuck task was not aborted"
+    );
+    assert_eq!(started.elapsed(), Duration::from_secs(10));
+    // Nothing is left for a later drain.
+    tasks.drain(Duration::ZERO).await;
 }
 #[test]
 fn every_trigger_and_switch_and_filters() {
@@ -1925,6 +1997,7 @@ async fn a_dropped_remote_run_discards_its_engine() {
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -1978,6 +2051,7 @@ async fn remote_modes_share_the_engine_slot_and_report_failures() {
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2030,6 +2104,7 @@ async fn acknowledgements_use_the_engine_client_and_never_race_a_run() {
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2091,6 +2166,60 @@ async fn acknowledgements_use_the_engine_client_and_never_race_a_run() {
     }
     assert!(body().contains("<!-- patchula-rebasing -->") && body().contains("- [x]"));
     assert!(runner.writers.lock().unwrap().contains_key(&1));
+    // Two quick ticks on two PRs of the repository both get their banner;
+    // two on the same PR take turns, and only the first writes.
+    let mut second = pr();
+    second["number"] = json!(2);
+    second["node_id"] = json!("PR_node2");
+    second["head"]["ref"] = json!("custom-deps/other-1.x");
+    github.state().repo_mut().prs.insert(2, second);
+    github.state().repo_mut().prs.insert(3, {
+        let mut third = pr();
+        third["number"] = json!(3);
+        third["node_id"] = json!("PR_node3");
+        third["head"]["ref"] = json!("custom-deps/third-1.x");
+        third
+    });
+    let (two, three) = tokio::join!(
+        runner.acknowledge_tick(1, "owner/repo", 2, &settings),
+        runner.acknowledge_tick(1, "owner/repo", 3, &settings),
+    );
+    assert_eq!((two.unwrap(), three.unwrap()), (Some(true), Some(true)));
+    github.state().repo_mut().prs.insert(4, {
+        let mut fourth = pr();
+        fourth["number"] = json!(4);
+        fourth["node_id"] = json!("PR_node4");
+        fourth["head"]["ref"] = json!("custom-deps/fourth-1.x");
+        fourth
+    });
+    let (first, again) = tokio::join!(
+        runner.acknowledge_tick(1, "owner/repo", 4, &settings),
+        runner.acknowledge_tick(1, "owner/repo", 4, &settings),
+    );
+    let mut outcomes = [first.unwrap(), again.unwrap()];
+    outcomes.sort();
+    assert_eq!(outcomes, [Some(false), Some(true)]);
+    for number in [2, 3, 4] {
+        let body = github.state().repo().prs[&number]["body"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            body.matches("<!-- patchula-rebasing -->").count(),
+            1,
+            "#{number}"
+        );
+    }
+    assert!(runner.pulls.lock().unwrap().is_empty());
+    // New settings that change the engine's key: the published client is
+    // not used, and the engine is rebuilt under the new key.
+    let mut changed = settings.clone();
+    changed.http.registry_freshness_secs += 1;
+    let old_key = runner.writers.lock().unwrap()[&1].0.clone();
+    runner.writer(1, &changed).await.unwrap();
+    let new_key = runner.writers.lock().unwrap()[&1].0.clone();
+    assert_ne!(old_key, new_key);
+    assert_eq!(new_key, engine_key(1, &changed));
     // A run that does not return discards its engine and its client.
     drop(runner.engine(1, &settings).await.unwrap());
     assert!(!runner.writers.lock().unwrap().contains_key(&1));
@@ -2143,6 +2272,7 @@ async fn a_batch_releases_its_claim_before_recording() {
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2222,6 +2352,7 @@ async fn a_repository_made_private_is_recorded_private() {
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2303,6 +2434,7 @@ async fn a_quiet_repository_skips_the_sweep_and_its_record_stands() {
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2434,6 +2566,7 @@ async fn a_sweep_over_quiet_repositories_makes_no_requests() {
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,

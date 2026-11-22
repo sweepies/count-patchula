@@ -72,10 +72,11 @@ pub(crate) fn with_banner(body: &str, banner: &str) -> Option<String> {
             markers::START.len() + 2,
             Cow::Owned(banner.replace('\n', "\r\n")),
         ),
-        Some(rest) => (
-            markers::START.len() + usize::from(rest.starts_with('\n')),
-            Cow::Borrowed(banner),
-        ),
+        Some(rest) if rest.starts_with('\n') => (markers::START.len() + 1, Cow::Borrowed(banner)),
+        // An edit took the line break after the start marker away: the
+        // banner opens on its own line all the same, and the start marker
+        // keeps the line break once the banner comes off.
+        Some(_) => (markers::START.len(), Cow::Owned(format!("\n{banner}"))),
         None => (0, Cow::Borrowed(banner)),
     };
     let (head, rest) = section.split_at(head);
@@ -223,6 +224,26 @@ mod tests {
             .unwrap()
             .replace('\n', "\r\n");
         assert_eq!(without_banner(&crlf), body.replace('\n', "\r\n"));
+    }
+
+    #[test]
+    fn the_banner_opens_its_own_line_even_when_the_start_marker_lost_its_line_break() {
+        let glued = owned(&format!("{}| Package |\n", markers::START));
+        let shown_body = with_banner(&glued, &banner(Rebuild::Recheck, "main")).unwrap();
+        assert!(
+            shown_body.starts_with(&format!("{}\n{}\n", markers::START, markers::REBASING)),
+            "{shown_body}"
+        );
+        assert!(shown(&shown_body));
+        let cleared = without_banner(&shown_body);
+        assert!(!shown(&cleared) && !cleared.contains("sinking his teeth"));
+        assert_eq!(
+            cleared,
+            owned(&format!("{}\n| Package |\n", markers::START))
+        );
+        // Once on its own line, the start marker round-trips exactly.
+        let again = with_banner(&cleared, &banner(Rebuild::Recheck, "main")).unwrap();
+        assert_eq!(without_banner(&again), cleared);
     }
 
     #[test]

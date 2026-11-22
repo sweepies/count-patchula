@@ -4739,7 +4739,20 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
                 &format!("- [x] Add to the batch PR. <!-- patchula-batch-add -->\n- [x] re-check <!-- patchula-recheck -->\n{}", marker(&key)),
             ),
         );
-        // A PR whose re-check box is ticked and can be acknowledged.
+        // PRs whose re-check box is ticked and can be acknowledged: #8 is
+        // read before the unreadable #7, #6 after it, so #6 proves the
+        // pass goes on past a failure.
+        s.repo_mut().prs.insert(
+            6,
+            owned(
+                6,
+                "patchula/another-1.x",
+                &format!(
+                    "- [x] re-check <!-- patchula-recheck -->\n{}",
+                    marker(&"c".repeat(64))
+                ),
+            ),
+        );
         s.repo_mut().prs.insert(
             8,
             owned(
@@ -4817,13 +4830,30 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
         settlement.warnings
     );
     assert!(settlement.acknowledged.is_err());
-    // The reachable re-check was still unticked.
-    let body = server.state().repo().prs[&8]["body"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(body.contains("- [ ]"), "{body}");
-    assert!(!body.contains("- [x]"), "{body}");
+    // The reachable re-checks on both sides of the failure were unticked.
+    for number in [8, 6] {
+        let body = server.state().repo().prs[&number]["body"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(body.contains("- [ ]"), "#{number}: {body}");
+        assert!(!body.contains("- [x]"), "#{number}: {body}");
+    }
+    // The pass reads in the order the listing returned: #7 before #6.
+    let reads: Vec<_> = server
+        .state()
+        .requests()
+        .into_iter()
+        .filter(|(m, p)| {
+            m == "GET" && (p == "/repos/demo/app/pulls/7" || p == "/repos/demo/app/pulls/6")
+        })
+        .map(|(_, p)| p)
+        .collect();
+    assert_eq!(
+        reads.last().map(String::as_str),
+        Some("/repos/demo/app/pulls/6"),
+        "{reads:?}"
+    );
     check_transcript();
 }
 

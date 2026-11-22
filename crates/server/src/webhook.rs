@@ -407,28 +407,34 @@ pub async fn receive(
     {
         // The delivery is answered now; the banner follows on its own
         // task, which shutdown drains.
-        state.acknowledgements.spawn(async move {
-            acknowledger
-                .acknowledge(installation, &repo, number, &settings)
-                .await;
-        });
+        state
+            .acknowledgements
+            .spawn(async move {
+                acknowledger
+                    .acknowledge(installation, &repo, number, &settings)
+                    .await;
+            })
+            .await;
     }
     StatusCode::ACCEPTED.into_response()
 }
 /// The acknowledgement tasks in flight. Finished ones are reaped as new
-/// ones start; shutdown waits a bounded time for the rest, then aborts
-/// them, so none outlives the server.
+/// ones start; shutdown waits a bounded time for the rest, then aborts and
+/// joins them, so none outlives the server. The set stays behind its lock
+/// while it drains, so a drain cut short leaves every task for the next
+/// one to abort.
 #[derive(Clone, Default)]
-pub(crate) struct Acknowledgements(Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>);
+pub(crate) struct Acknowledgements(Arc<tokio::sync::Mutex<tokio::task::JoinSet<()>>>);
 impl Acknowledgements {
-    fn spawn(&self, task: impl std::future::Future<Output = ()> + Send + 'static) {
-        let mut tasks = self.0.lock().expect("acknowledgement tasks");
+    pub(crate) async fn spawn(&self, task: impl std::future::Future<Output = ()> + Send + 'static) {
+        let mut tasks = self.0.lock().await;
         while tasks.try_join_next().is_some() {}
         tasks.spawn(task);
     }
-    /// Waits up to `bound` for the tasks in flight, then aborts the rest.
+    /// Waits up to `bound` for the tasks in flight, then aborts and joins
+    /// the rest.
     pub(crate) async fn drain(&self, bound: std::time::Duration) {
-        let mut tasks = std::mem::take(&mut *self.0.lock().expect("acknowledgement tasks"));
+        let mut tasks = self.0.lock().await;
         let finished =
             tokio::time::timeout(bound, async { while tasks.join_next().await.is_some() {} })
                 .await

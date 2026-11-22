@@ -3037,6 +3037,146 @@ async fn a_recheck_click_revalidates_advisories() {
 /// The rebasing banner's opening marker.
 const REBASING: &str = "<!-- patchula-rebasing -->";
 
+/// A first run that opens PR #1, then a ticked box on it carrying the
+/// server's banner, as the acknowledgement leaves it before the batch.
+async fn server_acknowledged(fake: &Sandbox, engine: &Engine, now: chrono::DateTime<chrono::Utc>) {
+    checkbox_run(engine, &checkbox_config(), now).await;
+    {
+        let mut state = fake.state();
+        let pr = state.repo_mut().prs.get_mut(&1).unwrap();
+        pr["body"] = json!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+        );
+    }
+    assert!(
+        patchula_update::pull_requests::acknowledge_tick(
+            engine.github(),
+            "demo/sandbox",
+            1,
+            "patchula[bot]",
+        )
+        .await
+        .unwrap()
+    );
+}
+
+/// The server's banner is up when someone closes the PR mid-run. The run
+/// leaves the PR closed and takes the banner down; when that write fails,
+/// the repository fails and records no quiet-run answer, so nothing hides
+/// the banner until a run takes it down.
+#[tokio::test(start_paused = true)]
+async fn a_server_banner_comes_down_when_the_pr_closes_mid_run_or_the_repository_fails() {
+    let mut keep = Vec::new();
+    for fails in [false, true] {
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
+        let now = chrono::Utc::now();
+        server_acknowledged(&fake, &engine, now).await;
+        fake.github.close_pulls_on_read();
+        if fails {
+            fake.github
+                .on(github::Matcher::Route {
+                    method: reqwest::Method::PATCH,
+                    path: "/repos/demo/sandbox/pulls/1".into(),
+                })
+                .respond(500, json!({"message":"patch boom"}));
+        }
+        let at = now + chrono::Duration::minutes(1);
+        let report = engine
+            .run_at(
+                Options {
+                    repositories: vec!["demo/sandbox".into()],
+                    config: Some(checkbox_config()),
+                    ..Default::default()
+                },
+                false,
+                false,
+                at,
+            )
+            .await
+            .unwrap();
+        let repo = &report.repositories[0];
+        let pr = fake.state().repo().prs[&1].clone();
+        assert_eq!(pr["state"], "closed");
+        assert_eq!(
+            pr["body"].as_str().unwrap().contains(REBASING),
+            fails,
+            "{pr}"
+        );
+        if fails {
+            assert_eq!(repo.status, Status::Error, "{repo:?}");
+            assert!(
+                repo.reason
+                    .as_deref()
+                    .is_some_and(|r| r.contains("acknowledgement")),
+                "{repo:?}"
+            );
+            let quiet = engine
+                .sweep_quiet(&["demo/sandbox".into()], at + chrono::Duration::minutes(1))
+                .await
+                .unwrap();
+            assert!(quiet.is_empty(), "{quiet:?}");
+        } else {
+            assert_eq!(repo.status, Status::Complete, "{repo:?}");
+        }
+    }
+    check_transcript();
+}
+
+/// A run that fails before rebuilding, here on cleanup's branch listing,
+/// takes the server's banner down and leaves the tick for the next run,
+/// also when someone closed the PR meanwhile.
+#[tokio::test(start_paused = true)]
+async fn a_cleanup_failure_withdraws_the_banner_and_keeps_the_tick() {
+    let mut keep = Vec::new();
+    for closes in [false, true] {
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
+        let now = chrono::Utc::now();
+        server_acknowledged(&fake, &engine, now).await;
+        if closes {
+            fake.github.close_pulls_on_read();
+        }
+        fake.github
+            .on(github::Matcher::Route {
+                method: reqwest::Method::GET,
+                path: "/repos/demo/sandbox/branches".into(),
+            })
+            .respond(500, json!({"message":"branches boom"}));
+        let report = engine
+            .run_at(
+                Options {
+                    repositories: vec!["demo/sandbox".into()],
+                    config: Some(checkbox_config()),
+                    ..Default::default()
+                },
+                false,
+                false,
+                now + chrono::Duration::minutes(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.repositories[0].status, Status::Error, "{report:?}");
+        let pr = fake.state().repo().prs[&1].clone();
+        let body = pr["body"].as_str().unwrap();
+        assert!(!body.contains(REBASING), "{body}");
+        assert!(body.contains("- [x] Tick to re-check"), "{body}");
+        assert_eq!(pr["state"], if closes { "closed" } else { "open" });
+    }
+    check_transcript();
+}
+
 /// A banner left up by a run that stopped mid-rebuild keeps the next run
 /// off the receipts path, and that run takes it down, leaving the body as
 /// it was before; the run after it settles from receipts again.

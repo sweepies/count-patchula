@@ -617,9 +617,13 @@ pub struct Lifecycle {
     /// its own warnings. Obsolete-PR closure and branch cleanup both decide
     /// on this one value, so they never disagree about what is obsolete.
     degraded: bool,
-    /// The PRs this run put a rebasing banner on. The acknowledgement pass
-    /// takes theirs down even when someone closed or merged the PR since.
-    announced: BTreeSet<u64>,
+    /// The open PRs of his showing a rebasing banner: those carrying one
+    /// when the lifecycle was prepared — the server's acknowledgement, or a
+    /// run that stopped — and those this run's announcement wrote. A PR
+    /// leaves the set once a body without a banner is written to it. The
+    /// acknowledgement and withdrawal passes take the banner down even
+    /// when someone closed or merged the PR since.
+    bannered: BTreeSet<u64>,
 }
 impl Lifecycle {
     /// Whether the evidence this lifecycle decided obsolescence on was
@@ -714,7 +718,7 @@ impl Lifecycle {
             server: None,
             per_hour_oldest: None,
             degraded: repository.degraded(),
-            announced: BTreeSet::new(),
+            bannered: BTreeSet::new(),
         };
         let owner = view::Owner { actor, repo };
         // The hourly count only exists when `prs.perHour` is set: the pull
@@ -887,6 +891,16 @@ impl Lifecycle {
                     .insert(plan.action().branch.clone(), suppressor.pr.number);
             }
         }
+        state.bannered = state
+            .prs
+            .iter()
+            .filter(|t| {
+                t.pr.state == "open"
+                    && owned_pr(&t.pr, &state.actor, &state.repo)
+                    && banner::shown(body(&t.pr))
+            })
+            .map(|t| t.pr.number)
+            .collect();
         Ok(state)
     }
 
@@ -1023,6 +1037,8 @@ impl Lifecycle {
                 PullRequestStatus::Closed,
                 Some(reason),
             ));
+            // The closure body carries no banner.
+            self.bannered.remove(&target);
             if let Some(old) = self.prs.iter_mut().find(|p| p.pr.number == target) {
                 *old = Tracked::from(closed);
             }
@@ -1065,7 +1081,7 @@ impl Lifecycle {
             .await
             {
                 Ok(Some(shown)) => {
-                    self.announced.insert(number);
+                    self.bannered.insert(number);
                     if let Some(old) = self.prs.iter_mut().find(|p| p.pr.number == number) {
                         *old = Tracked::from(shown);
                     }
@@ -1080,7 +1096,7 @@ impl Lifecycle {
     /// open PR of his that still carries either: the PRs this run did not
     /// rewrite, a failed or held branch attempt's included. Its diagnostic
     /// remains in the report and the operator can explicitly request
-    /// another attempt. A PR this run announced that someone closed or
+    /// another attempt. A PR still showing a banner that someone closed or
     /// merged since loses its banner too, in a body-only write. Every PR is
     /// tried; the first failure is returned after the rest.
     pub async fn acknowledge(&mut self, client: &Client) -> Result<(), Error> {
@@ -1096,13 +1112,14 @@ impl Lifecycle {
     async fn clear(&mut self, client: &Client, untick: bool) -> Result<(), Error> {
         let pending = |pr: &model::PullRequest| untick && checked(pr) || banner::shown(body(pr));
         let mut first = None;
+        let mut cleared = Vec::new();
         for pr in &mut self.prs {
             let number = pr.pr.number;
-            let announced = self.announced.contains(&number);
-            // An announced PR this run's own rewrite already cleared needs
-            // no second look; one last seen closed does.
+            let bannered = self.bannered.contains(&number);
+            // A bannered PR this run's own rewrite already cleared has left
+            // the set; one last seen closed still needs its banner down.
             if !owned_pr(&pr.pr, &self.actor, &self.repo)
-                || !(pr.pr.state == "open" && pending(&pr.pr) || announced && pr.pr.state != "open")
+                || !(pr.pr.state == "open" && pending(&pr.pr) || bannered && pr.pr.state != "open")
             {
                 continue;
             }
@@ -1118,7 +1135,7 @@ impl Lifecycle {
                     } else {
                         banner::without_banner(body(&fresh)).into_owned()
                     }
-                } else if announced && banner::shown(body(&fresh)) {
+                } else if bannered && banner::shown(body(&fresh)) {
                     banner::without_banner(body(&fresh)).into_owned()
                 } else {
                     return Ok(None);
@@ -1130,7 +1147,12 @@ impl Lifecycle {
             }
             .await;
             match result {
-                Ok(Some(written)) => *pr = Tracked::from(written),
+                Ok(Some(written)) => {
+                    if !banner::shown(body(&written)) {
+                        cleared.push(number);
+                    }
+                    *pr = Tracked::from(written);
+                }
                 Ok(None) => {}
                 Err(error) => {
                     tracing::warn!(repo = %self.repo, pr = number, %error,
@@ -1138,6 +1160,9 @@ impl Lifecycle {
                     first.get_or_insert(Error::from(error));
                 }
             }
+        }
+        for number in cleared {
+            self.bannered.remove(&number);
         }
         first.map_or(Ok(()), Err)
     }
@@ -1299,6 +1324,9 @@ impl Lifecycle {
             None,
         ));
         pr.mark_open();
+        if !banner::shown(body(&pr.pr)) {
+            self.bannered.remove(&number);
+        }
         if let Some(old) = self.prs.iter_mut().find(|p| p.pr.number == number) {
             *old = pr;
         } else {
@@ -1688,5 +1716,46 @@ mod notes_failure_tests {
             &earlier(LookupErrorKind::Other),
             &PackageId::public(Source::Mise, "node")
         ));
+    }
+}
+
+#[cfg(test)]
+mod acknowledgeable_tests {
+    use super::*;
+
+    fn pr(state: &str, body: &str) -> model::PullRequest {
+        serde_json::from_value(json!({
+            "number": 1, "node_id": "PR_node1", "html_url": "https://github.com/o/r/pull/1",
+            "state": state, "title": "Update", "labels": [], "body": body,
+            "user": {"login": "patchula[bot]"},
+            "head": {"ref": "patchula/a-1.x", "sha": "a", "repo": {"full_name": "o/r"}},
+            "base": {"ref": "main", "repo": {"full_name": "o/r"}}
+        }))
+        .unwrap()
+    }
+
+    /// Only a new tick on an open PR showing no banner yet is worth the
+    /// server's read: a closed PR, a box already ticked and a PR whose
+    /// banner is up are not.
+    #[test]
+    fn only_a_new_tick_on_an_open_unbannered_pr_is_acknowledged() {
+        let ownership = format!(
+            "{}{} -->",
+            markers::OWNERSHIP,
+            json!({"version":1,"identity":"a".repeat(64),"update":"b".repeat(64)})
+        );
+        let unticked = format!(
+            "{}\n| Package |\n{ownership}\n- [ ] Tick {}\n",
+            markers::START,
+            markers::RECHECK
+        );
+        let ticked = unticked.replace("- [ ]", "- [x]");
+        assert!(acknowledgeable(&unticked, &pr("open", &ticked)));
+        assert!(!acknowledgeable(&unticked, &pr("closed", &ticked)));
+        assert!(!acknowledgeable(&ticked, &pr("open", &ticked)));
+        assert!(!acknowledgeable(&unticked, &pr("open", &unticked)));
+        let bannered =
+            banner::with_banner(&ticked, &banner::banner(Rebuild::Recheck, "main")).unwrap();
+        assert!(!acknowledgeable(&unticked, &pr("open", &bannered)));
     }
 }

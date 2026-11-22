@@ -75,7 +75,8 @@ the reason on the dashboard and in the report. If the run fails before it
 rebuilds anything, the banner comes down and a ticked re-check box stays
 ticked for the next run. When the Count closes a PR, as obsolete or moved to
 the batch, the closed description carries no banner, and a PR someone closes
-or merges mid-rebuild loses its banner in one more description write.
+or merges mid-rebuild loses its banner in one more description write,
+whether this run put the banner up or the server did.
 
 A banner the Count could not take down fails the repository's run rather
 than passing as a warning, so the next run, or the server's retry, tries

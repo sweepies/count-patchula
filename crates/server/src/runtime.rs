@@ -184,6 +184,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         engines: Mutex::new(BTreeMap::new()),
         writers: Default::default(),
         repositories: Default::default(),
+        pulls: Default::default(),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: options.recheck,
@@ -427,7 +428,9 @@ type EngineKey = (
 /// An installation's engine and the settings it was built from, once built.
 type Slot = Arc<Mutex<Option<(EngineKey, Engine)>>>;
 /// The per-(installation, repository) run locks.
-type RepositoryLocks = std::sync::Mutex<BTreeMap<(u64, String), Arc<Mutex<()>>>>;
+type RepositoryLocks = std::sync::Mutex<BTreeMap<(u64, String), Arc<tokio::sync::RwLock<()>>>>;
+/// The per-(installation, repository, pull request) acknowledgement locks.
+type PullLocks = std::sync::Mutex<BTreeMap<(u64, String, u64), Arc<Mutex<()>>>>;
 /// Each installation's engine client, by installation, with its key.
 type Writers = Arc<std::sync::Mutex<BTreeMap<u64, (EngineKey, Client)>>>;
 
@@ -448,11 +451,16 @@ struct Engines {
     /// budget. A discarded slot drops its entry, and a key that no longer
     /// matches the settings is not used.
     writers: Writers,
-    /// One lock per (installation, repository), held by a batch or remote
-    /// run for each repository it runs and by an acknowledgement across
-    /// its read and write, so an acknowledgement's read can never be older
-    /// than a run's last write to the same PR.
+    /// One lock per (installation, repository): a batch or remote run holds
+    /// it exclusively for each repository it runs, and an acknowledgement
+    /// shares it across its read and write, so an acknowledgement's read
+    /// can never be older than a run's last write to the same PR, while
+    /// acknowledgements of different PRs run side by side.
     repositories: RepositoryLocks,
+    /// One lock per pull request an acknowledgement is writing to, so two
+    /// ticks on the same PR take turns and the second finds the banner up.
+    /// An entry nobody holds is dropped.
+    pulls: PullLocks,
     /// Bounds the public records the worker does not await; a batch's
     /// claims finish while its record is still running.
     records: Arc<tokio::sync::Semaphore>,
@@ -739,7 +747,7 @@ impl Engines {
         Ok(client)
     }
     /// The lock of `repo` in installation `id`.
-    fn repository(&self, id: u64, repo: &str) -> Arc<Mutex<()>> {
+    fn repository(&self, id: u64, repo: &str) -> Arc<tokio::sync::RwLock<()>> {
         self.repositories
             .lock()
             .expect("repository locks")
@@ -747,24 +755,25 @@ impl Engines {
             .or_default()
             .clone()
     }
-    /// The locks of every repository a run writes, taken in sorted order;
-    /// held until the run ends.
-    async fn hold(&self, id: u64, repos: &[String]) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+    /// The locks of every repository a run writes, taken exclusively in
+    /// sorted order; held until the run ends.
+    async fn hold(&self, id: u64, repos: &[String]) -> Vec<tokio::sync::OwnedRwLockWriteGuard<()>> {
         let mut sorted: Vec<_> = repos.to_vec();
         sorted.sort();
         sorted.dedup();
         let mut held = Vec::with_capacity(sorted.len());
         for repo in sorted {
-            held.push(self.repository(id, &repo).lock_owned().await);
+            held.push(self.repository(id, &repo).write_owned().await);
         }
         held
     }
-    /// The server's acknowledgement of a ticked re-check box. Skipped while
-    /// a batch or remote run holds the repository: that run, or the
-    /// follow-up batch the tick queued, shows the banner itself. Otherwise
-    /// the repository stays held across the fresh read and the write, so no
-    /// run's write can land between them, and a second tick on the same PR
-    /// waits and then finds the banner up.
+    /// The server's acknowledgement of a ticked re-check box. A second tick
+    /// on the same PR waits for the first, then finds the banner up.
+    /// Skipped while a batch or remote run holds the repository or waits
+    /// for it: that run, or the follow-up batch the tick queued, shows the
+    /// banner itself. Otherwise the repository stays shared across the
+    /// fresh read and the write, so no run's write can land between them;
+    /// acknowledgements of other PRs in the repository go ahead meanwhile.
     async fn acknowledge_tick(
         &self,
         installation: u64,
@@ -772,14 +781,38 @@ impl Engines {
         number: u64,
         settings: &Settings,
     ) -> Result<Option<bool>, Error> {
-        let Ok(_held) = self.repository(installation, repo).try_lock_owned() else {
-            return Ok(None);
+        let key = (installation, repo.to_owned(), number);
+        let pull = self
+            .pulls
+            .lock()
+            .expect("pull locks")
+            .entry(key)
+            .or_default()
+            .clone();
+        let result = {
+            let _turn = pull.lock().await;
+            match self.repository(installation, repo).try_read_owned() {
+                Err(_) => Ok(None),
+                Ok(_shared) => match self.writer(installation, settings).await {
+                    Ok(client) => patchula_update::pull_requests::acknowledge_tick(
+                        &client,
+                        repo,
+                        number,
+                        &self.bot_login,
+                    )
+                    .await
+                    .map(Some)
+                    .map_err(Error::cause("re-check acknowledgement failed")),
+                    Err(error) => Err(error),
+                },
+            }
         };
-        let client = self.writer(installation, settings).await?;
-        patchula_update::pull_requests::acknowledge_tick(&client, repo, number, &self.bot_login)
-            .await
-            .map(Some)
-            .map_err(Error::cause("re-check acknowledgement failed"))
+        drop(pull);
+        self.pulls
+            .lock()
+            .expect("pull locks")
+            .retain(|_, lock| Arc::strong_count(lock) > 1);
+        result
     }
 }
 /// The engine key for installation `id` under `settings`: the `http`
@@ -1282,15 +1315,23 @@ async fn run_until(
     let _ = http_stop.send(());
     tracing::info!(target: "patchula_server", "shutdown started; finishing current batch");
     let drained = tokio::time::timeout(timeout, async {
-        if !worker.is_finished() {
-            let _ = (&mut worker).await;
-        }
-        if !server.is_finished() {
-            let _ = (&mut server).await;
-        }
-        // No delivery starts another acknowledgement now; finish or abort
-        // the ones in flight.
-        acknowledgements.drain(ACKNOWLEDGEMENT_DRAIN).await;
+        // Once the listener stops, no delivery starts another
+        // acknowledgement: the ones in flight finish or are aborted within
+        // their own bound, beside the worker, so one stuck on GitHub never
+        // keeps a batch waiting on its repository.
+        tokio::join!(
+            async {
+                if !worker.is_finished() {
+                    let _ = (&mut worker).await;
+                }
+            },
+            async {
+                if !server.is_finished() {
+                    let _ = (&mut server).await;
+                }
+                acknowledgements.drain(ACKNOWLEDGEMENT_DRAIN).await;
+            },
+        );
         // Remote runs write branches too; let them finish like a batch.
         if let Some(api) = &api {
             api.drain().await;
@@ -1308,6 +1349,9 @@ async fn run_until(
     .is_ok();
     worker.abort();
     server.abort();
+    // Whatever the deadline cut short, no acknowledgement outlives the
+    // work it could race.
+    acknowledgements.drain(Duration::ZERO).await;
     if !drained {
         tracing::warn!(target: "patchula_server", "shutdown deadline reached; unfinished work remains queued");
     }
