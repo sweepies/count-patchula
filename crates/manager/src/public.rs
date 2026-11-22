@@ -1022,16 +1022,7 @@ pub(crate) fn verdict(path: &str, text: &crate::Text, files: &Files) -> Option<b
 type VerdictRule = fn(&str, &str, &Files) -> Option<bool>;
 
 fn npm_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    // Coverage is the taxonomy's file set; the leaf match only picks the
-    // parser for a covered name, and fails closed on one it does not know.
-    if !(roles::named(roles::NODE_MANIFEST, path)
-        || roles::named(roles::NODE_SETTINGS, path)
-        || roles::named(roles::PNPM_WORKSPACE, path)
-        || roles::named(roles::NPM_LOCKS, path)
-        || roles::named(roles::BUN_LOCK, path))
-    {
-        return None;
-    }
+    // A name with no arm has no verdict, so the run it steers fails closed.
     let leaf = roles::leaf(path);
     let flag = match leaf {
         "package.json" => json_public(text, false, &crate::npm::NPM, package_json_rule),
@@ -1050,9 +1041,6 @@ fn npm_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
 }
 
 fn pypi_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    if !(roles::named(roles::PYTHON_LOCKS, path) || roles::named(roles::PYTHON_SETTINGS, path)) {
-        return None;
-    }
     let leaf = roles::leaf(path);
     let flag = match leaf {
         "pyproject.toml" => toml_public(text, &crate::pypi::PYPI, pyproject_rule),
