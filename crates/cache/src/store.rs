@@ -1,8 +1,8 @@
-use crate::{Error, HttpEntry, Options, Release, ReleaseList, Result};
+use crate::{Error, HttpEntry, Opened, Options, Origin, Release, ReleaseList, Result};
 
 /// Each migration sets `user_version` to its own number; a cache at version
 /// N runs the ones after it.
-pub(crate) const MIGRATIONS: [&str; 16] = [
+pub(crate) const MIGRATIONS: [&str; 17] = [
     include_str!("migrations/001.sql"),
     include_str!("migrations/002.sql"),
     include_str!("migrations/003.sql"),
@@ -19,28 +19,31 @@ pub(crate) const MIGRATIONS: [&str; 16] = [
     include_str!("migrations/014.sql"),
     include_str!("migrations/015.sql"),
     include_str!("migrations/016.sql"),
+    include_str!("migrations/017.sql"),
 ];
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 /// The state rows under a tabled name (`?1`: `[name, current key]` pairs)
-/// whose namespace is not the name's current key.
+/// whose namespace is not the name's current key, returning each deleted
+/// row's key.
 pub(crate) const PRUNE_STATE: &str = "\
 DELETE FROM state WHERE rowid IN (
   SELECT state.rowid FROM json_each(?1) AS row JOIN state
     ON state.namespace >= json_extract(row.value, '$[0]') || '@v'
    AND state.namespace < json_extract(row.value, '$[0]') || '@w'
   WHERE state.namespace <> json_extract(row.value, '$[1]')
-)";
+) RETURNING namespace";
 
 /// The HTTP rows whose derived representation is under a tabled name
-/// (`?1`: `[name, current key]` pairs) but is not its current key.
+/// (`?1`: `[name, current key]` pairs) but is not its current key,
+/// returning each deleted row's representation.
 pub(crate) const PRUNE_HTTP: &str = "\
 DELETE FROM http WHERE rowid IN (
   SELECT http.rowid FROM json_each(?1) AS row JOIN http
     ON http.representation >= json_extract(row.value, '$[0]') || '@v'
    AND http.representation < json_extract(row.value, '$[0]') || '@w'
   WHERE http.representation <> json_extract(row.value, '$[1]')
-)";
+) RETURNING representation";
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -116,29 +119,82 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
-    pub fn open(path: PathBuf, options: Options) -> Result<Self> {
+    /// Open the cache at `path` and report what was found: where it came
+    /// from, what the prune and the budget dropped, what is left, and how
+    /// long since the cache was last opened.
+    pub fn open(path: PathBuf, options: Options) -> Result<(Self, Opened)> {
         if let Some(parent) = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
             std::fs::create_dir_all(parent)?;
         }
+        let mut origin = if path == Path::new(":memory:") {
+            Origin::Memory
+        } else if std::fs::metadata(&path).is_ok_and(|file| file.len() > 0) {
+            Origin::Existing
+        } else {
+            Origin::Created
+        };
         let conn = match Connection::open(&path)
             .map_err(Error::from)
             .and_then(initialize)
         {
             Ok(conn) => conn,
-            Err(error) if is_corrupt(&error) => Self::rebuild(&path)?,
+            Err(error) if is_corrupt(&error) => {
+                origin = Origin::Rebuilt;
+                Self::rebuild(&path)?
+            }
             Err(error) => return Err(error),
         };
+        if !conn.path().is_some_and(|path| !path.is_empty()) {
+            origin = Origin::Memory;
+        }
         let store = Self {
             conn,
             path,
             options,
         };
-        store.prune()?;
-        store.evict()?;
-        Ok(store)
+        let superseded = store.prune()?;
+        let evicted = store.evict()?;
+        let opened = store.survey(origin, superseded, evicted)?;
+        Ok((store, opened))
+    }
+
+    /// What is left after the prune and eviction, and the time since the
+    /// cache was last opened, which this open then records. Every count
+    /// reads an index or a trigger-kept row: the HTTP timestamps sit after
+    /// each body, so reading them would page through every body.
+    fn survey(
+        &self,
+        origin: Origin,
+        superseded: std::collections::BTreeMap<String, u64>,
+        evicted: u64,
+    ) -> Result<Opened> {
+        let count = |sql: &str| -> Result<u64> {
+            let count: i64 = self.conn.query_row(sql, [], |row| row.get(0))?;
+            Ok(u64::try_from(count).unwrap_or(0))
+        };
+        let now = now();
+        let last: Option<i64> = self
+            .conn
+            .query_row("SELECT at FROM opened", [], |row| row.get(0))
+            .optional()?;
+        self.conn.execute(
+            "INSERT INTO opened(id, at) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET at=excluded.at",
+            [now],
+        )?;
+        Ok(Opened {
+            origin,
+            superseded,
+            evicted,
+            responses: count("SELECT COUNT(*) FROM http")?,
+            bytes: count("SELECT total FROM http_bytes")?,
+            values: count(
+                "SELECT (SELECT COUNT(*) FROM state) + (SELECT COUNT(*) FROM release_heads)",
+            )?,
+            idle: last.and_then(|last| u64::try_from(now - last).ok()),
+        })
     }
 
     fn rebuild(path: &Path) -> Result<Connection> {
@@ -209,7 +265,7 @@ impl Store {
         tx.execute("INSERT INTO http(key,status,etag,last_modified,headers,body,fetched_at,expires_at,cache_control,last_access) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,(SELECT value FROM access_clock)) ON CONFLICT(key) DO UPDATE SET status=excluded.status,etag=excluded.etag,last_modified=excluded.last_modified,headers=excluded.headers,body=excluded.body,fetched_at=excluded.fetched_at,expires_at=excluded.expires_at,cache_control=excluded.cache_control,last_access=excluded.last_access",
             params![key, entry.status, entry.etag, entry.last_modified, headers, body, entry.fetched_at, entry.expires_at, entry.cache_control])?;
         tx.commit()?;
-        self.evict()
+        self.evict().map(|_| ())
     }
 
     /// Write a 304's metadata over the entry, leaving its body untouched.
@@ -283,30 +339,38 @@ impl Store {
     /// join per table: each name's keys are the range `name@v..name@w`
     /// (names hold no `@`), found through the state primary key and the
     /// `http_representation` index.
-    fn prune(&self) -> Result<()> {
-        let states = self
-            .conn
-            .execute(PRUNE_STATE, [crate::current_keys(crate::STATE_ROWS)])?;
-        let bodies = self
-            .conn
-            .execute(PRUNE_HTTP, [crate::current_keys(crate::DERIVED_ROWS)])?;
-        if states + bodies > 0 {
-            tracing::debug!(states, bodies, "pruned superseded cache keys");
+    fn prune(&self) -> Result<std::collections::BTreeMap<String, u64>> {
+        let mut superseded = std::collections::BTreeMap::new();
+        for (sql, rows) in [
+            (PRUNE_STATE, crate::STATE_ROWS),
+            (PRUNE_HTTP, crate::DERIVED_ROWS),
+        ] {
+            let mut statement = self.conn.prepare(sql)?;
+            let mut deleted = statement.query([crate::current_keys(rows)])?;
+            while let Some(row) = deleted.next()? {
+                let key: String = row.get(0)?;
+                let name = key.split_once("@v").map_or(key.as_str(), |(name, _)| name);
+                *superseded.entry(name.to_owned()).or_default() += 1;
+            }
         }
-        Ok(())
+        if !superseded.is_empty() {
+            tracing::debug!(?superseded, "pruned superseded cache keys");
+        }
+        Ok(superseded)
     }
 
     /// Evict the least recently used HTTP rows until the bodies fit the
     /// budget. The total is the trigger-kept `http_bytes` row (migration
     /// 016), read again after each delete, so no write scans the table and
     /// a concurrent process's writes count too.
-    fn evict(&self) -> Result<()> {
+    fn evict(&self) -> Result<u64> {
+        let mut evicted = 0;
         loop {
             let total: i64 = self
                 .conn
                 .query_row("SELECT total FROM http_bytes", [], |row| row.get(0))?;
             if u64::try_from(total).unwrap_or(0) <= self.options.http_body_budget {
-                return Ok(());
+                return Ok(evicted);
             }
             let Some(key) = self
                 .conn
@@ -317,9 +381,10 @@ impl Store {
                 )
                 .optional()?
             else {
-                return Ok(());
+                return Ok(evicted);
             };
             self.conn.execute("DELETE FROM http WHERE key=?1", [key])?;
+            evicted += 1;
         }
     }
 
@@ -420,4 +485,13 @@ fn quarantine(path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// UTC Unix seconds.
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok())
+        .unwrap_or(0)
 }

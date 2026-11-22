@@ -302,7 +302,18 @@ fn server_startup_errors_are_json_and_never_echo_secret_values() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(!stderr.contains("must-not-appear"));
-    let log: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    let logs: Vec<serde_json::Value> = stderr
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let [opened, log] = logs.as_slice() else {
+        panic!("expected the cache summary and the error: {stderr}");
+    };
+    assert_eq!(opened["level"], "INFO");
+    assert_eq!(
+        opened["fields"]["message"],
+        "cache cold: there is no cache yet"
+    );
     assert_eq!(log["level"], "ERROR");
     assert_eq!(
         log["fields"]["error"],

@@ -118,6 +118,16 @@ are no longer tabled are not pruned. Two builds that share a cache directory
 and differ in a version or a locked dependency prune each other's entries for
 those names, so each misses once after the other has run.
 
+Opening returns an `Opened` summary, which the CLI prints before a batch and
+the server logs at start: where the database came from (an existing file, a
+new one, a rebuild after corruption, or memory), each tabled name the prune
+dropped entries under and how many, how many HTTP responses eviction
+dropped, and what is left. The counts come from `COUNT(*)` over indexes and
+the `http_bytes` row, never from the HTTP timestamps, which sit after each
+body and would page every body in. Instead the `opened` table (migration
+017) holds the time of the last open, which each open reads and replaces, so
+the summary says how long the cache sat unused.
+
 The default 256 MiB budget counts compressed HTTP body bytes. An access clock
 approximates LRU and evicts whole HTTP rows, validators included, until the
 cache fits, also on open after the budget is lowered. The total lives in the
