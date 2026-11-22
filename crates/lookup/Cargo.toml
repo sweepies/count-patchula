@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# The evaluation shorthands tests call instead of `evaluate_with`.
+testing = []
+
 [lints]
 workspace = true
 
@@ -22,6 +26,7 @@ patchula-versioning = { path = "../versioning" }
 semver = "1.0.28"
 
 [dev-dependencies]
+patchula-lookup = { path = ".", features = ["testing"] }
 patchula-manager = { path = "../manager", features = ["testing"] }
 serde_json.workspace = true
 tempfile = "3"

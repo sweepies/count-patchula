@@ -1264,7 +1264,7 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
             }
         }
         // A stale repository requeues; a failure in the same batch outranks it.
-        let report: Report = serde_json::from_value(json!({"schemaVersion": 8,
+        let report: Report = serde_json::from_value(json!({"schemaVersion": 9,
             "repositories":[{"repository":"owner/repo",
                 "status":if stale {"stale"} else if errors {"error"} else {"complete"},
                 "reason":if stale {"default branch moved since extraction; stale blob refusal, rerun"} else {"synthetic error"},
@@ -1346,7 +1346,7 @@ async fn stale_base_requeues_without_failure_and_real_errors_have_counts() {
 #[tokio::test]
 async fn the_fourth_requeue_in_a_row_is_a_failure_with_backoff() {
     use patchula_cache::queue::{RETRY_MS, retry_delay_ms};
-    let report: Report = serde_json::from_value(json!({"schemaVersion": 8,
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 9,
         "repositories":[{"repository":"owner/repo", "status":"stale",
             "reason":"default branch moved since extraction; stale blob refusal, rerun",
             "packageFiles":[]}],
@@ -1404,7 +1404,7 @@ async fn the_fourth_requeue_in_a_row_is_a_failure_with_backoff() {
 
 #[tokio::test]
 async fn only_the_failing_repository_of_a_batch_is_retried() {
-    let report: Report = serde_json::from_value(json!({"schemaVersion": 8,
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 9,
         "repositories":[
             {"repository":"Owner/Broken", "status":"error", "packageFiles":[]},
             {"repository":"owner/fine", "status":"complete", "packageFiles":[]}

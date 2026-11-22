@@ -3,11 +3,11 @@ title: "JSON report"
 description: "The JSON report printed by patchula lookup --json and patchula run --json: repositories, dependencies, updates and lookup failures."
 ---
 `patchula lookup --json` and `patchula run --json` print one report for the
-whole batch. This page describes schema version 8.
+whole batch. This page describes schema version 9.
 
 ```json
 {
-  "schemaVersion": 8,
+  "schemaVersion": 9,
   "repositories": [{
     "repository": "owner/repo",
     "status": "complete",
@@ -31,7 +31,9 @@ whole batch. This page describes schema version 8.
 ```
 
 Readers should reject any other `schemaVersion`. Unknown fields are rejected
-too, so a new field means a new version. Version 8 added `cooldown` to a
+too, so a new field means a new version. Version 9 removed a `heldBack`
+entry's `count`, which always equalled the length of its `versions`.
+Version 8 added `cooldown` to a
 `heldBack` entry, naming the repository's committed Cargo cooldown (`hours`
 and the config `file` that commits it) when the cooldown rather than
 `waitHours` holds the release, and to an `updates` entry, set only on a

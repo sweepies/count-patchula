@@ -38,6 +38,7 @@ futures-executor = "0.3"
 graphql_client = { version = "0.16", default-features = false, features = ["graphql_query_derive"] }
 base64 = "0.23"
 [dev-dependencies]
+patchula-lookup = { path = "../lookup", features = ["testing"] }
 patchula-update = { path = "../update", features = ["testing"] }
 patchula-manager = { path = "../manager", features = ["testing"] }
 patchula-engine = { path = ".", features = ["testing"] }
