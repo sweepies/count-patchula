@@ -387,7 +387,7 @@ impl Engine {
                 } else {
                     ResolutionKind::FloatingRef
                 }
-            } else if dep.proposing().lock.reported {
+            } else if dep.proposing().lock.reported(&dep.dependency) {
                 ResolutionKind::Lockfile
             } else if resolved.is_some()
                 && (matches!(dep.kind, DependencyKind::Tool)

@@ -727,9 +727,7 @@ impl crate::Ecosystem for Descriptor {
                 movable: dep.source == Source::Crates,
                 transitive_movable: dep.kind == DependencyKind::Transitive
                     && dep.source == Source::Crates,
-                reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                    && dep.resolved.is_some()
-                    && dep.source == Source::Crates,
+                ..Proposing::BASE.lock
             },
             ..Proposing::BASE
         }

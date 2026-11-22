@@ -2,7 +2,7 @@
 //! propose for it. Each ecosystem's descriptor states them through
 //! `Ecosystem::proposing`, as the fields where its declarations differ from
 //! [`Proposing::BASE`].
-use crate::Dependency;
+use crate::{Dependency, DependencyKind};
 
 /// What lookup, the engine and update must know to propose for a
 /// dependency: the proposal facts its ecosystem's descriptor states,
@@ -60,7 +60,7 @@ impl Proposing {
             keeps_ranges: false,
             movable: false,
             transitive_movable: false,
-            reported: false,
+            lock_resolved: false,
         },
         edits: Edits::Manifest,
         advisories: Advisories::BySource,
@@ -140,9 +140,9 @@ pub struct Lock {
     /// A transitive lock entry can be moved to an exact version of the one
     /// package.
     pub transitive_movable: bool,
-    /// The `resolved` version could only have come from a committed
-    /// lockfile.
-    pub reported: bool,
+    /// The ecosystem fills `resolved` only from a committed lockfile it
+    /// does not move: npm's, Bun's and Terraform's.
+    pub lock_resolved: bool,
 }
 
 impl Lock {
@@ -154,6 +154,14 @@ impl Lock {
         (self.keeps_ranges && self.movable)
             .then_some(resolved)
             .flatten()
+    }
+    /// Whether `dep`'s `resolved` version could only have come from a
+    /// committed lockfile: one the Count moves or one that alone fills it,
+    /// for a declaration that is not a tool or toolchain.
+    pub fn reported(&self, dep: &Dependency) -> bool {
+        (self.movable || self.lock_resolved)
+            && !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
+            && dep.resolved.is_some()
     }
 }
 
@@ -352,15 +360,17 @@ mod tests {
             (Manager::Composer, Source::Packagist),
             (Manager::Pyproject, Source::Pypi),
         ] {
-            let lock = facts(manager, Production, source).lock;
+            let declared = dep(manager, Production, source);
+            let lock = declared.proposing().lock;
             assert!(
-                lock.keeps_ranges && lock.movable && lock.reported,
+                lock.keeps_ranges && lock.movable && lock.reported(&declared),
                 "{manager}"
             );
             assert_eq!(lock.locked(Some("1.2.3")), Some("1.2.3"), "{manager}");
         }
-        let python = facts(Manager::Pyproject, Toolchain, Source::Mise).lock;
-        assert!(python.keeps_ranges && !python.movable && !python.reported);
+        let toolchain = dep(Manager::Pyproject, Toolchain, Source::Mise);
+        let python = toolchain.proposing().lock;
+        assert!(python.keeps_ranges && !python.movable && !python.reported(&toolchain));
         assert_eq!(python.locked(Some("3.12.0")), None);
         assert!(
             facts(Manager::Cargo, Transitive, Source::Crates)
@@ -372,8 +382,9 @@ mod tests {
                 .lock
                 .transitive_movable
         );
-        let go = facts(Manager::Go, Production, Source::Go).lock;
-        assert!(go.movable && go.reported && !go.keeps_ranges);
+        let module = dep(Manager::Go, Production, Source::Go);
+        let go = module.proposing().lock;
+        assert!(go.movable && go.reported(&module) && !go.keeps_ranges);
     }
 
     /// npm, Bun and Terraform fill `resolved` only from a committed lock.
@@ -381,9 +392,9 @@ mod tests {
     fn node_and_terraform_report_only_what_a_lock_resolved() {
         for manager in [Manager::Npm, Manager::Bun, Manager::Terraform] {
             let mut declared = dep(manager, DependencyKind::Production, Source::Npm);
-            assert!(declared.proposing().lock.reported, "{manager}");
+            assert!(declared.proposing().lock.reported(&declared), "{manager}");
             declared.resolved = None;
-            assert!(!declared.proposing().lock.reported, "{manager}");
+            assert!(!declared.proposing().lock.reported(&declared), "{manager}");
             let lock = declared.proposing().lock;
             assert!(!lock.keeps_ranges && !lock.movable, "{manager}");
         }

@@ -332,9 +332,6 @@ impl crate::Ecosystem for Descriptor {
             lock: crate::Lock {
                 keeps_ranges: true,
                 movable: dep.source == Source::Packagist,
-                reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                    && dep.resolved.is_some()
-                    && dep.source == Source::Packagist,
                 ..Proposing::BASE.lock
             },
             ..Proposing::BASE

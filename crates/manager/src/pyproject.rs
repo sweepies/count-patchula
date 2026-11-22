@@ -351,9 +351,6 @@ impl crate::Ecosystem for Descriptor {
             lock: Lock {
                 keeps_ranges: true,
                 movable: dep.source == Source::Pypi,
-                reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                    && dep.resolved.is_some()
-                    && dep.source == Source::Pypi,
                 ..Proposing::BASE.lock
             },
             ..Proposing::BASE

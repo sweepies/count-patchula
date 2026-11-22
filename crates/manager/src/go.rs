@@ -373,9 +373,6 @@ impl crate::Ecosystem for Descriptor {
         Proposing {
             lock: Lock {
                 movable: dep.source == Source::Go,
-                reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                    && dep.resolved.is_some()
-                    && dep.source == Source::Go,
                 ..Proposing::BASE.lock
             },
             advisories: if dep.kind == DependencyKind::Toolchain && dep.package == "go" {
