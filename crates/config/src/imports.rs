@@ -110,7 +110,18 @@ pub struct PklImport {
 /// them. Config loading and the `pkl` manager both read imports here. A
 /// module pklr cannot lex is an error, never an empty list.
 pub fn pkl_imports(text: &str) -> Result<Vec<PklImport>, String> {
-    let tokens = pklr::lexer::lex(text).map_err(|e| e.to_string())?;
+    // pklr's message can quote the text it failed on, which may be anything
+    // the module holds; only the line is reported.
+    let tokens = pklr::lexer::lex(text).map_err(|e| {
+        let at = match &e {
+            pklr::Error::Lex { span, .. } => Some(span.offset()),
+            _ => None,
+        };
+        match at.and_then(|at| text.get(..at)) {
+            Some(before) => format!("not valid Pkl at line {}", before.matches('\n').count() + 1),
+            None => "not valid Pkl".to_owned(),
+        }
+    })?;
     let mut imports = Vec::new();
     collect(text, &tokens, &mut imports);
     Ok(imports)
@@ -118,21 +129,39 @@ pub fn pkl_imports(text: &str) -> Result<Vec<PklImport>, String> {
 
 fn collect(text: &str, tokens: &[pklr::lexer::Token], out: &mut Vec<PklImport>) {
     use pklr::lexer::{StringPart, TokenKind};
+    // pklr's parser skips semicolons after every token, so `import; "x"`
+    // and `import(; "x")` are imports too; the walk skips them the same way.
+    let after = |mut i: usize| {
+        i += 1;
+        while tokens
+            .get(i)
+            .is_some_and(|t| t.kind == TokenKind::Semicolon)
+        {
+            i += 1;
+        }
+        i
+    };
     for (i, token) in tokens.iter().enumerate() {
         match &token.kind {
             TokenKind::KwAmends
             | TokenKind::KwExtends
             | TokenKind::KwImport
             | TokenKind::KwImportStar => {
-                let mut next = tokens.get(i + 1);
-                // Only `import` and `import*` take parentheses, as expressions.
-                if matches!(token.kind, TokenKind::KwImport | TokenKind::KwImportStar)
-                    && next.is_some_and(|t| t.kind == TokenKind::LParen)
-                {
-                    next = tokens.get(i + 2);
+                let mut at = after(i);
+                // Only `import` and `import*` take parentheses, as
+                // expressions, and the string must close them.
+                let call = matches!(token.kind, TokenKind::KwImport | TokenKind::KwImportStar)
+                    && tokens.get(at).is_some_and(|t| t.kind == TokenKind::LParen);
+                if call {
+                    at = after(at);
                 }
-                if let Some(literal) = next
+                let closed = !call
+                    || tokens
+                        .get(after(at))
+                        .is_some_and(|t| t.kind == TokenKind::RParen);
+                if let Some(literal) = tokens.get(at)
                     && let TokenKind::StringLit(target) = &literal.kind
+                    && closed
                 {
                     out.push(PklImport {
                         target: target.clone(),
@@ -444,6 +473,26 @@ mod tests {
             "import \"real.pkl\"\n",
         );
         assert_eq!(targets(text), ["real.pkl"]);
+    }
+
+    /// pklr's parser skips semicolons after every token, so these are imports
+    /// it resolves; an `import(…)` whose string does not close it is not.
+    #[test]
+    fn imports_read_as_pklrs_parser_reads_them() {
+        let text = concat!(
+            "amends; \"a.pkl\"\n",
+            "import; \"b.pkl\"\n",
+            "x = import;(; \"c.pkl\";)\n",
+            "y = import(\"not.pkl\" + suffix)\n",
+        );
+        assert_eq!(targets(text), ["a.pkl", "b.pkl", "c.pkl"]);
+    }
+
+    /// A lex error names the line, never the text pklr failed on.
+    #[test]
+    fn lex_errors_quote_no_source() {
+        let error = pkl_imports("a = 1\nx = \"\\u{secretToken123").unwrap_err();
+        assert_eq!(error, "not valid Pkl at line 2");
     }
 
     /// A module pklr cannot lex is an error, not an empty import list, and

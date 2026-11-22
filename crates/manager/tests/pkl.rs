@@ -192,7 +192,7 @@ fn unreadable_package_uris_are_skipped_with_a_reason() {
             (
                 Some(8),
                 "package://pkg.pkl-lang.org/p/x@1.0.0",
-                "package URIs with escapes or interpolation are not supported",
+                "package URIs written with escapes or as a text block are not supported",
             ),
             (
                 Some(9),
@@ -323,5 +323,37 @@ fn an_unlexable_module_is_skipped_with_a_warning() {
         extraction.warnings[0].starts_with("x.pkl: skipped:"),
         "{:?}",
         extraction.warnings
+    );
+}
+
+/// A URI the module only reaches through a decoded string is skipped, and a
+/// decoded value never carries a line break or terminal escape into a report.
+#[test]
+fn decoded_uris_are_skipped_and_shown_safely() {
+    let text = concat!(
+        "import \"package://example.com/a\\nb\\u{1b}[31m/c@1.0.0\"\n",
+        "import \"\"\"\n  package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0\n  \"\"\"\n",
+    );
+    let extraction = extract("x.pkl", text);
+    assert!(extraction.dependencies.is_empty());
+    let skipped: Vec<_> = extraction
+        .skipped
+        .iter()
+        .map(|s| (s.line, s.value.as_str(), s.reason.as_str()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [
+            (
+                Some(1),
+                "<unreadable URL>",
+                "only github.com and pkg.pkl-lang.org package URIs are supported"
+            ),
+            (
+                Some(2),
+                "package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0",
+                "package URIs written with escapes or as a text block are not supported"
+            ),
+        ]
     );
 }

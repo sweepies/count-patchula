@@ -18,7 +18,7 @@ use patchula_config::{PklPackage, VERSION_PLACEHOLDER, pkl_semver};
 const UNSUPPORTED_HOST: &str = "only github.com and pkg.pkl-lang.org package URIs are supported";
 const UNSUPPORTED_PATH: &str = "package URI does not name a GitHub release";
 const CHECKSUM: &str = "package URIs that pin a checksum are not supported yet";
-const ESCAPED: &str = "package URIs with escapes or interpolation are not supported";
+const ESCAPED: &str = "package URIs written with escapes or as a text block are not supported";
 const TAG_VERSION: &str = "release tag does not hold the package version exactly once";
 const VERSION: &str = "package version is not a semantic version";
 
@@ -37,9 +37,6 @@ struct Read {
 fn read(uri: &str) -> Option<Result<Read, &'static str>> {
     let rest = uri.strip_prefix("package://")?;
     Some((|| {
-        if uri.contains('\\') {
-            return Err(ESCAPED);
-        }
         let base = &rest[..rest.find('#').unwrap_or(rest.len())];
         let (host, path) = base.split_once('/').ok_or(UNSUPPORTED_HOST)?;
         if !matches!(host, "github.com" | "pkg.pkl-lang.org") {
@@ -102,13 +99,18 @@ fn read(uri: &str) -> Option<Result<Read, &'static str>> {
 /// always follows (a port is hidden with it), or an `@` before the first
 /// `/`, which ends a user. `name@version` puts an `@` in every package path,
 /// so the generic URL redaction, which reads any `@` as a possible user,
-/// would hide them all.
+/// would hide them all. The URI is decoded, so it may hold anything an
+/// escape can write: anything but printable ASCII hides it too, so no line
+/// break or terminal escape reaches a report.
 fn shown(uri: &str) -> String {
     let rest = uri.strip_prefix("package://").unwrap_or(uri);
     let rest = rest.split(['?', '#']).next().unwrap_or(rest);
     let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
     let path = path.split("::").next().unwrap_or(path);
-    if authority.contains([':', '@']) || path.contains(':') {
+    if authority.contains([':', '@'])
+        || path.contains(':')
+        || !rest.bytes().all(|b| b.is_ascii_graphic())
+    {
         "<unreadable URL>".into()
     } else if rest.contains('/') {
         format!("package://{authority}/{path}")

@@ -330,7 +330,7 @@ These URIs are skipped:
 - a URI that pins a checksum (`@1.0.0::sha256:…`);
 - a release tag that does not hold the package version exactly once;
 - a version that is not a semantic version;
-- a URI written with escapes or interpolation.
+- a URI written with escapes or as a text block.
 
 `PklProject` dependencies are not read yet: updating one also means
 regenerating `PklProject.deps.json`.
