@@ -182,28 +182,8 @@ fn manifest(path: &str, text: &str) -> Result<Manifest, Named> {
             "the merge plugin's files in {path}"
         )));
     }
-    let entries: Vec<(Option<&str>, &serde_json::Value)> = match json.get("repositories") {
-        None => return Ok(out),
-        Some(serde_json::Value::Array(entries)) => entries.iter().map(|e| (None, e)).collect(),
-        Some(serde_json::Value::Object(entries)) => entries
-            .iter()
-            .map(|(key, e)| (Some(key.as_str()), e))
-            .collect(),
-        Some(_) => return Err(unread()),
-    };
-    let packagist = |key: &str| matches!(key, "packagist.org" | "packagist");
-    for (key, entry) in entries {
-        // `"packagist.org": false`, as a keyed entry or an object of its own.
-        let switch = match (key, entry) {
-            (Some(key), serde_json::Value::Bool(on)) if packagist(key) => Some(*on),
-            (_, serde_json::Value::Object(map)) if map.len() == 1 => map
-                .iter()
-                .next()
-                .filter(|(key, _)| packagist(key))
-                .and_then(|(_, on)| on.as_bool()),
-            _ => None,
-        };
-        match switch {
+    for (key, entry) in repositories(&json).ok_or_else(unread)? {
+        match packagist_switch(key, entry) {
             Some(true) => continue,
             Some(false) => {
                 out.configured
@@ -245,6 +225,43 @@ fn manifest(path: &str, text: &str) -> Result<Manifest, Named> {
         }
     }
     Ok(out)
+}
+
+/// A `composer.json`'s `repositories` entries, each with its key when the
+/// field is an object, as the lookup origin, the public verdict and the
+/// credential scan all read them. Empty when the field is absent; `None`
+/// when it is neither a list nor an object.
+pub(crate) fn repositories(
+    json: &serde_json::Value,
+) -> Option<Vec<(Option<&str>, &serde_json::Value)>> {
+    match json.get("repositories") {
+        None => Some(Vec::new()),
+        Some(serde_json::Value::Array(entries)) => {
+            Some(entries.iter().map(|e| (None, e)).collect())
+        }
+        Some(serde_json::Value::Object(entries)) => Some(
+            entries
+                .iter()
+                .map(|(key, e)| (Some(key.as_str()), e))
+                .collect(),
+        ),
+        Some(_) => None,
+    }
+}
+
+/// The Packagist switch a `repositories` entry is, if it is one:
+/// `"packagist.org": false`, as a keyed entry or an object of its own.
+pub(crate) fn packagist_switch(key: Option<&str>, entry: &serde_json::Value) -> Option<bool> {
+    let packagist = |key: &str| matches!(key, "packagist.org" | "packagist");
+    match (key, entry) {
+        (Some(key), serde_json::Value::Bool(on)) if packagist(key) => Some(*on),
+        (_, serde_json::Value::Object(map)) if map.len() == 1 => map
+            .iter()
+            .next()
+            .filter(|(key, _)| packagist(key))
+            .and_then(|(_, on)| on.as_bool()),
+        _ => None,
+    }
 }
 
 /// What `composer.lock` records.

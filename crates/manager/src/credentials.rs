@@ -115,12 +115,8 @@ fn credentialed(urls: &[&str]) -> Option<String> {
 /// value lives in the environment, not the file. `username` and `email`
 /// are contact details, not credentials, and an empty value sets nothing.
 fn npmrc(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with(['#', ';']) {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
+    for line in crate::npm::npmrc_lines(text) {
+        let crate::npm::NpmrcLine::Setting { key, value } = line else {
             continue;
         };
         // The key npm reads is after the last ':', as in `//host/:_authToken`.
@@ -144,20 +140,12 @@ fn npmrc(text: &str) -> Option<String> {
 /// `.npmrc` `registry` and `@scope:registry` values carrying a committed
 /// password.
 fn npmrc_urls(text: &str) -> Option<String> {
-    let urls: Vec<&str> = text
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.starts_with(['#', ';']) {
-                return None;
+    let urls: Vec<&str> = crate::npm::npmrc_lines(text)
+        .filter_map(|line| match line {
+            crate::npm::NpmrcLine::Registry { value, .. } => {
+                Some(value.trim().trim_matches(['"', '\'']))
             }
-            let (key, value) = line.split_once('=')?;
-            let key = key.trim();
-            (key == "registry"
-                || key
-                    .strip_suffix(":registry")
-                    .is_some_and(|scope| scope.starts_with('@') && scope.len() > 1))
-            .then(|| value.trim().trim_matches(['"', '\'']))
+            _ => None,
         })
         .collect();
     credentialed(&urls)
@@ -241,15 +229,9 @@ fn composer(text: &str) -> Option<String> {
 /// `repositories` URLs in `composer.json` carrying a committed password.
 fn composer_urls(text: &str) -> Option<String> {
     let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
-    let repositories = value.get("repositories")?;
-    let entries: Vec<&serde_json::Value> = match repositories {
-        serde_json::Value::Array(entries) => entries.iter().collect(),
-        serde_json::Value::Object(entries) => entries.values().collect(),
-        _ => Vec::new(),
-    };
-    let urls: Vec<&str> = entries
-        .iter()
-        .filter_map(|entry| entry.get("url").and_then(|url| url.as_str()))
+    let urls: Vec<&str> = crate::composer::repositories(&value)?
+        .into_iter()
+        .filter_map(|(_, entry)| entry.get("url").and_then(|url| url.as_str()))
         .collect();
     credentialed(&urls)
 }

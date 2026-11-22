@@ -472,29 +472,63 @@ pub(super) fn env_registry_warnings(files: &crate::Files) -> Vec<String> {
     out
 }
 
+/// One `.npmrc` line, as the lookup origin, the public verdict and the
+/// credential scan all read it, so the three agree on which lines set a
+/// registry.
+pub(crate) enum NpmrcLine<'a> {
+    /// Blank, or a `#` or `;` comment.
+    Ignored,
+    /// `registry=` (no scope) or `@scope:registry=`: the trimmed key and
+    /// the value as written after the first `=`.
+    Registry {
+        key: &'a str,
+        scope: Option<&'a str>,
+        value: &'a str,
+    },
+    /// Any other `key=value` setting, with the same parts.
+    Setting { key: &'a str, value: &'a str },
+    /// A line with no `=`, trimmed.
+    Other(&'a str),
+}
+
+/// The lines of an `.npmrc`.
+pub(crate) fn npmrc_lines(text: &str) -> impl Iterator<Item = NpmrcLine<'_>> {
+    text.lines().map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with(['#', ';']) {
+            return NpmrcLine::Ignored;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return NpmrcLine::Other(line);
+        };
+        let key = key.trim();
+        let scope = key
+            .strip_suffix(":registry")
+            .filter(|scope| scope.starts_with('@') && scope.len() > 1);
+        if key == "registry" || scope.is_some() {
+            NpmrcLine::Registry { key, scope, value }
+        } else {
+            NpmrcLine::Setting { key, value }
+        }
+    })
+}
+
 /// `registry=` and `@scope:registry=` from an `.npmrc`.
 pub(super) fn npmrc(text: &str) -> Npmrc {
     let mut npmrc = Npmrc::default();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with(['#', ';']) {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
+    for line in npmrc_lines(text) {
+        let NpmrcLine::Registry { scope, value, .. } = line else {
             continue;
         };
-        let key = key.trim();
         // An empty value sets nothing.
         if value.trim().trim_matches(['"', '\'']).is_empty() {
             continue;
         }
-        if key == "registry" {
-            npmrc.default = Some(named(value));
-        } else if let Some(scope) = key.strip_suffix(":registry")
-            && scope.starts_with('@')
-            && scope.len() > 1
-        {
-            npmrc.scopes.insert(scope.to_owned(), named(value));
+        match scope {
+            None => npmrc.default = Some(named(value)),
+            Some(scope) => {
+                npmrc.scopes.insert(scope.to_owned(), named(value));
+            }
         }
     }
     npmrc
