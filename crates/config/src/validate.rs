@@ -193,14 +193,13 @@ impl Config {
                     );
                 }
             }
-            if let Some(capture) = &extractor.extract {
-                if !capture
+            if let Some(capture) = &extractor.extract
+                && !capture
                     .capture_names()
                     .flatten()
                     .any(|name| name == "version")
-                {
-                    return fail(&field, "extract regex needs a named `version` capture");
-                }
+            {
+                return fail(&field, "extract regex needs a named `version` capture");
             }
         }
         if self.prs.concurrent == Some(0) || self.prs.per_hour == Some(0) {

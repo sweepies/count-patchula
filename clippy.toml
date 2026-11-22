@@ -1,0 +1,3 @@
+# Pattern compares and orders by its text alone; the regex it holds
+# caches internally but never affects a key.
+ignore-interior-mutability = ["patchula_config::matching::Pattern"]
