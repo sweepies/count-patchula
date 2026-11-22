@@ -137,7 +137,6 @@ async fn cli_run_reopens_disk_receipts_with_bot_authors_and_mixed_pr_inventory()
         {
             let mut state = github.state();
             state.log.clear();
-            state.writes.clear();
         }
         // Exactly the main CLI dispatch: only network I/O and token lookup are
         // substituted. batch opens/closes a fresh disk cache and engine each run.

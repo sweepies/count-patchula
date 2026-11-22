@@ -8,7 +8,7 @@ use patchula_report::{
     BranchStatus, Current, Dependency as ReportDependency, DependencyMetadata, PackageFile,
     Repository, Status, Update,
 };
-use patchula_testkit::github::FakeGitHub;
+use patchula_testkit::github::{FakeGitHub, Matcher};
 use patchula_update::testing::Draft;
 use patchula_update::{Blob, Plan, Snapshot, blob_sha, branch_name, plan};
 use patchula_words::{Manager, Source, Update as UpdateKind};
@@ -213,7 +213,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
         second.action()
     );
     assert_ne!(first.action().commit, second.action().commit);
-    let count = server.state().writes.len();
+    let count = server.state().writes().len();
     let (mut repeat, _) = make_plan("22.1.0");
     patchula_update::apply_all(
         &github,
@@ -231,7 +231,7 @@ async fn create_update_and_repeat_use_one_verified_commit_on_base_and_no_prs() {
         "{:?}",
         repeat.action()
     );
-    assert_eq!(server.state().writes.len(), count);
+    assert_eq!(server.state().writes().len(), count);
     check_transcript();
 }
 
@@ -257,7 +257,7 @@ async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
         // the complete intended tree and base are unchanged.
         .fingerprint("changed-policy-fingerprint")
         .build();
-    server.state().writes.clear();
+    server.state().log.clear();
     patchula_update::apply_all(
         &github,
         std::slice::from_mut(&mut repeat),
@@ -276,7 +276,7 @@ async fn identical_forced_rechecks_never_create_git_objects_or_update_refs() {
     );
     assert_eq!(repeat.action().commit, first.action().commit);
     assert!(
-        server.state().writes.is_empty(),
+        server.state().writes().is_empty(),
         "no tree, commit or ref mutation on forced recheck"
     );
     check_transcript();
@@ -317,7 +317,7 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
                     .find(|entry| entry["path"] == "mise.toml")
                     .unwrap()["mode"] = json!("100755");
             }
-            state.writes.clear();
+            state.log.clear();
         }
         let (repeat, _) = make_plan("22.0.0");
         let mut repeat = Draft::from(repeat).retry(true).build();
@@ -342,7 +342,7 @@ async fn rechecks_repair_leftover_files_and_modes_even_when_planned_blobs_match(
                 .iter()
                 .any(|entry| entry["path"] == "mise.toml" && entry["mode"] == "100644")
         );
-        assert_eq!(state.writes.len(), 3);
+        assert_eq!(state.writes().len(), 3);
     }
     check_transcript();
 }
@@ -376,7 +376,7 @@ async fn dry_run_plans_diffs_and_never_sends_mutations() {
             .diff
             .contains("+node = '22.0.0' # keep")
     );
-    assert!(server.state().writes.is_empty());
+    assert!(server.state().writes().is_empty());
     assert!(server.state().requests().is_empty());
     check_transcript();
 }
@@ -455,7 +455,7 @@ async fn human_commit_is_protected_even_with_copied_patchula_markers() {
         .commits
         .get_mut(first.action().commit.as_ref().unwrap())
         .unwrap()["actor"] = json!("human");
-    let count = server.state().writes.len();
+    let count = server.state().writes().len();
     let (mut next, _) = make_plan("22.1.0");
     patchula_update::apply_all(
         &github,
@@ -473,7 +473,7 @@ async fn human_commit_is_protected_even_with_copied_patchula_markers() {
         "{:?}",
         next.action()
     );
-    assert_eq!(server.state().writes.len(), count);
+    assert_eq!(server.state().writes().len(), count);
     check_transcript();
 }
 
@@ -507,7 +507,7 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
                 state.repo_mut().commits.get_mut(sha).unwrap()["committer_login"] = json!("human");
             }
         }
-        let count = server.state().writes.len();
+        let count = server.state().writes().len();
         let (mut next, _) = make_plan("22.1.0");
         patchula_update::apply_all(
             &github,
@@ -525,7 +525,7 @@ async fn a_human_below_the_bot_head_and_a_foreign_committer_are_protected() {
             "{:?}",
             next.action()
         );
-        assert_eq!(server.state().writes.len(), count);
+        assert_eq!(server.state().writes().len(), count);
     }
     check_transcript();
 }
@@ -621,7 +621,11 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
                 3 => s.settings.unsigned = true,
                 4 => server.update_refs_fail(),
                 5 => s.settings.truncated = true,
-                _ => server.repo_read_malformed(),
+                _ => server
+                    .on(Matcher::RepoRead {
+                        repo: "demo/app".into(),
+                    })
+                    .respond(200, json!({})),
             }
         }
         patchula_update::apply_all(
@@ -652,7 +656,7 @@ async fn stale_blob_content_tree_moved_base_unsigned_and_lease_race_fail_closed(
                 .contains_key(&format!("refs/heads/{}", plan.action().branch))
         );
         if matches!(case, 0..=2 | 5 | 6) {
-            assert!(server.state().writes.is_empty());
+            assert!(server.state().writes().is_empty());
         }
     }
     check_transcript();
@@ -684,7 +688,7 @@ async fn moved_default_base_skips_every_branch_in_a_shared_write_batch() {
             .iter()
             .all(|plan| plan.action().status == BranchStatus::Stale)
     );
-    assert!(server.state().writes.is_empty());
+    assert!(server.state().writes().is_empty());
     check_transcript();
 }
 
@@ -1248,7 +1252,7 @@ async fn shared_base_write_trace_and_request_budget() {
     );
     assert!(
         state
-            .writes
+            .writes()
             .iter()
             .filter(|(p, _)| p.ends_with("/git/trees"))
             .all(|(_, b)| b["tree"][0]["content"] == p.contents()["mise.toml"])
@@ -1286,7 +1290,6 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
     {
         let mut state = server.state();
         state.log.clear();
-        state.writes.clear();
     }
     let mut repeat = plans();
     let started = tokio::time::Instant::now();
@@ -1306,7 +1309,7 @@ async fn forced_batch_recheck_has_no_mutations_and_no_viewer_read() {
             .all(|p| p.action().status == BranchStatus::Unchanged)
     );
     let state = server.state();
-    assert!(state.writes.is_empty());
+    assert!(state.writes().is_empty());
     // The actor comes with the run's inventory, so no viewer query is sent.
     assert_eq!(
         state
@@ -1807,7 +1810,16 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
             let mut s = server.state();
             s.settings.pr_lag_reads = if case == "timeout" { usize::MAX } else { 2 };
             if case == "foreign" {
-                server.override_pull_head("human");
+                // A foreign push: every pull read reports another head.
+                server
+                    .on(Matcher::PullRead {
+                        repo: "demo/app".into(),
+                        number: None,
+                    })
+                    .mutate(|state, hit| {
+                        state.repo_mut().prs.get_mut(&hit.pull.unwrap()).unwrap()["head"]["sha"] =
+                            json!("human");
+                    });
             }
             if case == "closed" {
                 server.close_pulls_on_read();
@@ -1826,7 +1838,16 @@ async fn published_pr_heads_wait_for_our_old_head_but_reject_foreign_commits() {
         assert_eq!(next.action().status, BranchStatus::Rebased);
         server.state().log.clear();
         if case == "closed-while-waiting" {
-            server.close_pulls_after_reads(1);
+            server
+                .on(Matcher::PullRead {
+                    repo: "demo/app".into(),
+                    number: None,
+                })
+                .after(1)
+                .mutate(|state, hit| {
+                    state.repo_mut().prs.get_mut(&hit.pull.unwrap()).unwrap()["state"] =
+                        json!("closed");
+                });
         }
         let started = tokio::time::Instant::now();
         publish(&mut lifecycle, &github, std::slice::from_mut(&mut next)).await;
@@ -2186,7 +2207,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
         assert!(body.contains("<!-- patchula:") && body.contains("<!-- patchula-recheck -->"));
         assert_eq!(pr["labels"][0]["name"], "dependencies");
     }
-    let count = server.state().writes.len();
+    let count = server.state().writes().len();
     let (repeat, _) = make_plan("22.0.0");
     let mut repeat = Draft::from(repeat).changes(p.changes().to_vec()).build();
     let actions = pr_cycle(
@@ -2201,7 +2222,7 @@ async fn pr_create_repeat_update_labels_notes_and_checked_retry() {
         actions[0].status,
         patchula_report::PullRequestStatus::Unchanged
     );
-    assert_eq!(server.state().writes.len(), count);
+    assert_eq!(server.state().writes().len(), count);
     {
         let mut s = server.state();
         let body = s.repo().prs[&1]["body"].as_str().unwrap().replace(
@@ -2284,7 +2305,7 @@ async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_
         s.repo_mut().prs.insert(2, decoy);
         s.settings.pr_page_size = Some(1);
     }
-    let count = server.state().writes.len();
+    let count = server.state().writes().len();
     let (repeat, _) = make_plan("22.0.0");
     let mut row = repeat.changes()[0].clone();
     row.file = "other.toml".into();
@@ -2309,7 +2330,7 @@ async fn manually_closed_update_stays_closed_across_files_and_wording_but_newer_
             .unwrap()
             .contains("manually closed")
     );
-    assert_eq!(server.state().writes.len(), count);
+    assert_eq!(server.state().writes().len(), count);
     let (mut next, _) = make_plan("22.1.0");
     let actions = pr_cycle(
         &github,
@@ -2485,12 +2506,12 @@ async fn obsolete_pr_closes_then_branch_deletes_and_human_history_is_protected()
         );
         if !human && case != "closed-by-owner" {
             let close = s
-                .writes
+                .writes()
                 .iter()
                 .position(|(_, b)| b["state"] == "closed")
                 .unwrap();
             let delete = s
-                .writes
+                .writes()
                 .iter()
                 .rposition(|(_, b)| b["query"] == patchula_update::REF_UPDATE)
                 .unwrap();
@@ -2687,8 +2708,6 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
                 }
                 s.repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(body.replace('\n', "\r\n"));
                 s.log.clear();
-                s.writes.clear();
-                s.release_queries.clear();
             }
             let actions = pr_cycle(
                 &github,
@@ -2700,7 +2719,7 @@ async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
             .await;
             let s = server.state();
             assert_eq!(
-                s.release_queries.len(),
+                s.release_queries().len(),
                 if changed { 2 } else { 1 },
                 "{origin}: recheck validates timestamps and fetches only changed bodies"
             );
@@ -2778,7 +2797,7 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         assert!(
             body.contains("Release details 🦀") && body.contains("Tick to re-check this PR now.")
         );
-        assert_eq!(s.release_queries.len(), 1);
+        assert_eq!(s.release_queries().len(), 1);
     }
     let (repeat, _) = make_plan("22.0.0");
     let mut repeat = Draft::from(repeat).changes(p.changes().to_vec()).build();
@@ -2790,9 +2809,9 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         &snapshot,
     )
     .await;
-    assert_eq!(server.state().release_queries.len(), 2);
+    assert_eq!(server.state().release_queries().len(), 2);
     assert!(
-        !server.state().release_queries[1]["query"]
+        !server.state().release_queries()[1]["query"]
             .as_str()
             .unwrap()
             .contains("body:description")
@@ -2831,13 +2850,13 @@ async fn release_notes_are_bounded_deduplicated_cached_and_policy_controlled() {
         c.body_notes = vec!["huge 🦀 <!-- patchula:fake -->".repeat(5000)];
     });
     let mut repeat = draft.build();
-    let count = server.state().release_queries.len();
+    let count = server.state().release_queries().len();
     publish(&mut lifecycle, &github, std::slice::from_mut(&mut repeat)).await;
     let s = server.state();
     let body = s.repo().prs[&1]["body"].as_str().unwrap();
     assert!(body.len() <= patchula_update::BODY_LIMIT);
     assert_eq!(body.matches("<!-- patchula:").count(), 1);
-    assert_eq!(s.release_queries.len(), count);
+    assert_eq!(s.release_queries().len(), count);
     check_transcript();
 }
 
@@ -2870,7 +2889,7 @@ async fn merge_policy_prefers_native_auto_merge_and_lockfile_pending_disables_it
     );
     {
         let s = server.state();
-        assert!(s.writes.iter().any(|(_, b)| {
+        assert!(s.writes().iter().any(|(_, b)| {
             b["query"]
                 .as_str()
                 .is_some_and(|q| q.contains("enablePullRequestAutoMerge"))
@@ -2902,7 +2921,14 @@ async fn uncertain_pr_creation_is_reconciled_next_run_and_never_blindly_retried(
     let (config, repo) = pr_config();
     let (mut p, snapshot) = make_plan("22.0.0");
     let server = fake(&snapshot);
-    server.pull_create_fails();
+    // The create applies, then answers 500: GitHub never told the client
+    // whether the PR happened.
+    server
+        .on(Matcher::PullCreate {
+            repo: "demo/app".into(),
+        })
+        .times(1)
+        .then_fail(500);
     let github = client(server.clone()).await;
     let actions = pr_cycle(
         &github,
@@ -3255,8 +3281,8 @@ async fn batch_ref_race_keeps_every_prepared_branch_unpublished() {
     let state = server.state();
     assert_eq!(state.repo().refs.len(), 1);
     let mutations: Vec<_> = state
-        .writes
-        .iter()
+        .writes()
+        .into_iter()
         .filter(|(_, b)| b["query"] == patchula_update::REF_UPDATE)
         .collect();
     assert_eq!(mutations.len(), 1);
@@ -3852,7 +3878,7 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
             .any(|f| f["path"] == "mise.toml" && f["sha"] == blob_sha(&p.contents()["mise.toml"]))
     );
     assert_eq!(
-        s.writes
+        s.writes()
             .iter()
             .filter(|(path, _)| path.ends_with("/git/commits"))
             .count(),
@@ -4316,7 +4342,7 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
                 .replace("Patchula-Base: base", "Patchula-Base: unknown")
         );
     }
-    let writes = server.state().writes.len();
+    let writes = server.state().writes().len();
     let (mut second, _) = make_plan("22.1.0");
     patchula_update::apply_all(
         &github,
@@ -4342,7 +4368,7 @@ async fn an_uncomparable_recorded_base_leaves_the_branch_protected() {
             .unwrap()
             .contains("not a commit here")
     );
-    assert_eq!(server.state().writes.len(), writes);
+    assert_eq!(server.state().writes().len(), writes);
     check_transcript();
 }
 
@@ -4476,7 +4502,7 @@ async fn unmarked_and_badly_marked_branch_tips_are_protected() {
             .commits
             .get_mut(first.action().commit.as_ref().unwrap())
             .unwrap()["message"] = message;
-        let count = server.state().writes.len();
+        let count = server.state().writes().len();
         let (mut next, _) = make_plan("22.1.0");
         patchula_update::apply_all(
             &github,
@@ -4502,7 +4528,7 @@ async fn unmarked_and_badly_marked_branch_tips_are_protected() {
             "{expected}: {:?}",
             next.action().reason
         );
-        assert_eq!(server.state().writes.len(), count);
+        assert_eq!(server.state().writes().len(), count);
     }
     check_transcript();
 }
@@ -4554,7 +4580,12 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
                 ),
             ),
         );
-        server.pull_read_fails(7);
+        server
+            .on(Matcher::PullRead {
+                repo: "demo/app".into(),
+                number: Some(7),
+            })
+            .respond(500, json!({}));
     }
     let github = client(server.clone()).await;
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();

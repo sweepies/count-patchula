@@ -84,7 +84,7 @@ async fn a_scoped_mint_posts_repository_ids_and_metadata_read() {
     // scoped mint posted exactly `repository_ids` + `metadata: read`.
     let mints: Vec<Value> = github
         .state()
-        .writes
+        .writes()
         .iter()
         .filter(|(path, _)| path == "/app/installations/10/access_tokens")
         .map(|(_, body)| body.clone())
@@ -131,7 +131,7 @@ async fn a_scoped_mint_posts_repository_ids_and_metadata_read() {
     assert_eq!(
         github
             .state()
-            .writes
+            .writes()
             .iter()
             .filter(|(path, _)| path == "/app/installations/10/access_tokens")
             .count(),
