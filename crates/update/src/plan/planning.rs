@@ -243,11 +243,6 @@ fn lock_jobs_keep_their_serialized_field_layout() {
         serde_json::to_string(&whole).unwrap(),
         r#"{"ecosystem":"Node","directory":"","package":null,"current":null,"target":null,"lock_only":false,"publish_age_allow":false,"wait_hours":0}"#
     );
-    let back: Job = serde_json::from_str(
-        r#"{"ecosystem":"Cargo","directory":"crates/api","package":"serde","current":"1.0.0","target":"1.0.1","lock_only":true,"publish_age_allow":false,"wait_hours":0}"#,
-    )
-    .unwrap();
-    assert_eq!(back, targeted);
 }
 
 /// A chart update beside a committed Chart.lock is held, not published stale.
@@ -1923,21 +1918,6 @@ fn jobs_find_each_managers_lockfile_root() {
     );
 }
 
-/// A job serialized without a package is directory-scoped, as the wire shape
-/// reads it.
-#[test]
-fn a_job_without_a_package_deserializes_as_directory_scoped() {
-    let job: Job = serde_json::from_value(serde_json::json!({
-        "ecosystem": "Node", "directory": "web",
-        "package": null, "current": null, "target": null, "lock_only": false,
-        "publish_age_allow": false, "wait_hours": 0,
-    }))
-    .unwrap();
-    assert_eq!(job.scope, Scope::Directory);
-    assert_eq!(job.package(), None);
-    assert_eq!(job.current(), None);
-}
-
 mod goldens {
     //! Frozen bytes the lockfile split must not move: `Job`'s serde shape and
     //! `BTreeSet` order, the built-plan fingerprint recipe, the maintenance
@@ -1980,11 +1960,6 @@ mod goldens {
                 ),
                 "{name} directory job"
             );
-            assert_eq!(
-                serde_json::from_str::<Job>(&json).unwrap(),
-                directory,
-                "{name} round-trip"
-            );
             let targeted = Job {
                 ecosystem,
                 directory: "web".into(),
@@ -2005,7 +1980,6 @@ mod goldens {
                 ),
                 "{name} package job"
             );
-            assert_eq!(serde_json::from_str::<Job>(&json).unwrap(), targeted);
         }
         // The package scope's optional fields serialize as null, and a
         // directory job honors `exact_version`.
@@ -2068,7 +2042,6 @@ mod goldens {
             ),
         ] {
             assert_eq!(serde_json::to_string(&job).unwrap(), expected);
-            assert_eq!(serde_json::from_str::<Job>(expected).unwrap(), job);
         }
     }
 

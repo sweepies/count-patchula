@@ -129,38 +129,6 @@ impl Serialize for Job {
         state.end()
     }
 }
-impl<'de> Deserialize<'de> for Job {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct Fields {
-            ecosystem: Ecosystem,
-            directory: String,
-            package: Option<String>,
-            current: Option<String>,
-            target: Option<String>,
-            lock_only: bool,
-            publish_age_allow: bool,
-            wait_hours: u32,
-        }
-        let fields = Fields::deserialize(deserializer)?;
-        let scope = match fields.package {
-            Some(package) => Scope::Package {
-                package,
-                current: fields.current,
-                target: fields.target,
-            },
-            None => Scope::Directory,
-        };
-        Ok(Self {
-            ecosystem: fields.ecosystem,
-            directory: fields.directory,
-            scope,
-            exact_version: fields.lock_only,
-            publish_age_allow: fields.publish_age_allow,
-            wait_hours: fields.wait_hours,
-        })
-    }
-}
 
 /// The directory `path` sits in: everything before its last `/`.
 pub fn directory(path: &str) -> &str {
