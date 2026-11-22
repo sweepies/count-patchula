@@ -463,11 +463,11 @@ mod tests {
     use super::*;
 
     /// Every file the tools read credentials from is scanned for committed
-    /// ones, and every other file that can say where packages come from
-    /// names here why it is not. The probes are every name the taxonomy
-    /// lists plus a path for each predicate the unscanned list names, at
-    /// the root and nested, so a settings file added without a
-    /// `credential_scan` fails here until it gets one or a reason.
+    /// ones, and every other file a tool run materializes or that steers
+    /// what it fetches names here why it is not. The probes are every name
+    /// the taxonomy lists plus a path for each predicate, at the root and
+    /// nested, so a file that gains a role without a `credential_scan`, or
+    /// loses its scan, fails here until it gets one or a reason.
     #[test]
     fn credential_bearing_settings_are_scanned() {
         /// Files whose tools read credentials, or credentialed registry
@@ -488,7 +488,7 @@ mod tests {
             ".cargo/config.toml",
             ".cargo/config",
         ];
-        /// Files that can name registries with no scan, and why. Those
+        /// Materialized or steering files with no scan, and why. Those
         /// "not scanned yet" can hold credentials their tools read: gaps
         /// in the hygiene check, not in the `public` partition's boundary.
         const UNSCANNED: &[(&[&str], &str)] = &[
@@ -509,6 +509,18 @@ mod tests {
                     "poetry.lock",
                     "Gemfile.lock",
                     "composer.lock",
+                    "Cargo.lock",
+                    "yarn.lock",
+                    "package-lock.json",
+                    "npm-shrinkwrap.json",
+                    "pnpm-lock.yaml",
+                    "aube-lock.yaml",
+                    "bun.lock",
+                    "packages.lock.json",
+                    "flake.lock",
+                    ".terraform.lock.hcl",
+                    "apm.lock.yaml",
+                    "mise.lock",
                     ACTIONS_LOCK,
                 ],
                 "a lockfile: names, versions, hashes and sources",
@@ -517,7 +529,34 @@ mod tests {
                 &["Cargo.toml"],
                 "Cargo reads registry tokens only from its config",
             ),
-            (&["go.work"], "Go reads credentials from .netrc or GOAUTH"),
+            (
+                &["go.work", "go.mod", "main.go"],
+                "Go reads credentials from .netrc or GOAUTH",
+            ),
+            (
+                &[
+                    "package.json",
+                    "flake.nix",
+                    "apm.yml",
+                    "app.gemspec",
+                    ".tool-versions",
+                    ".python-version",
+                ],
+                "names packages and versions; its tool reads no credential here",
+            ),
+            (&["src/main.rs"], "Rust source, out of the check's scope"),
+            (
+                &["main.tf"],
+                "Terraform reads registry credentials from its CLI config",
+            ),
+            (
+                &["gradle-wrapper.properties"],
+                "not scanned yet: a user and password in distributionUrl",
+            ),
+            (
+                &[".github/workflows/ci.yml", "action.yml"],
+                "CI files, out of the check's scope",
+            ),
             (
                 &["pom.xml", ".mvn/maven.config"],
                 "Maven reads server credentials from settings.xml",
@@ -537,6 +576,11 @@ mod tests {
                     "Directory.Packages.props",
                     "Directory.Build.props",
                     "Directory.Build.targets",
+                    "App.fsproj",
+                    "App.sln",
+                    "Build.props",
+                    "global.json",
+                    "dotnet-tools.json",
                 ],
                 "NuGet reads source credentials only from nuget.config",
             ),
@@ -556,30 +600,62 @@ mod tests {
             ),
         ];
         let unscanned = |probe: &str| UNSCANNED.iter().any(|(names, _)| names.contains(&probe));
+        // Every file a tool run materializes or that steers its fetches.
+        let guarded = |path: &str| {
+            let union = roles(path);
+            union.settings
+                || union.read
+                || union.writable
+                || Manager::ALL.iter().any(|manager| {
+                    let eco = eco_roles(*manager, path);
+                    eco.registry || eco.steers
+                })
+        };
         let mut probes: Vec<&str> = SCANNED.to_vec();
         probes.extend(UNSCANNED.iter().flat_map(|(names, _)| names.iter()));
         probes.extend(NODE_SETTINGS.iter().chain(PNPM_WORKSPACE));
-        probes.extend(PYTHON_SETTINGS.iter().chain(PIP_SETTINGS));
+        probes.extend(
+            PYTHON_SETTINGS
+                .iter()
+                .chain(PIP_SETTINGS)
+                .chain(PYTHON_READ),
+        );
+        probes.extend(GRADLE_WRAPPER.iter().chain(NUGET_WRITABLE));
         probes.extend(MISE_SELECTED);
+        probes.extend([
+            "src/main.rs",
+            "main.go",
+            "main.tf",
+            "app.gemspec",
+            "App.sln",
+            "App.fsproj",
+            "Build.props",
+            ".github/workflows/ci.yml",
+            "action.yml",
+            ACTIONS_LOCK,
+        ]);
         for manager in Manager::ALL {
             let locks = lock_names(*manager);
             probes.extend(manifest_names(*manager));
             probes.extend(locks.supported.iter().chain(locks.unsupported));
         }
+        for (names, why) in UNSCANNED {
+            for name in *names {
+                assert!(
+                    guarded(name),
+                    "{name} is listed unscanned ({why}) but plays no role"
+                );
+            }
+        }
         let mut unlisted = Vec::new();
         for probe in probes {
             for path in [probe.to_owned(), format!("sub/dir/{probe}")] {
-                let names_registries = roles(&path).settings
-                    || Manager::ALL
-                        .iter()
-                        .any(|manager| eco_roles(*manager, &path).registry);
-                if SCANNED.contains(&probe) {
-                    assert!(credential_scope(&path), "{path} is not scanned");
-                } else if names_registries {
-                    assert!(!credential_scope(&path), "{path} is scanned but not listed");
-                    if !unscanned(probe) {
-                        unlisted.push(path);
-                    }
+                if credential_scope(&path) {
+                    assert!(SCANNED.contains(&probe), "{path} is scanned but not listed");
+                } else if SCANNED.contains(&probe) {
+                    panic!("{path} is not scanned");
+                } else if guarded(&path) && !unscanned(probe) {
+                    unlisted.push(path);
                 }
             }
         }
@@ -587,7 +663,7 @@ mod tests {
         unlisted.dedup();
         assert!(
             unlisted.is_empty(),
-            "can name registries but neither scanned nor listed unscanned: {unlisted:?}"
+            "materialized or steering but neither scanned nor listed unscanned: {unlisted:?}"
         );
     }
 
