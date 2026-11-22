@@ -1524,23 +1524,21 @@ pub fn batch_plan(
             .copied()
             .filter(|d| current(d) == target.current)
             .collect();
-        // When the file moved on since the PR, the batch takes the first
-        // declaration with every other copy of its current value: one Pkl
-        // release URI writes its version twice, and moving only one copy
-        // would leave a URI naming no release.
-        let deps = if matching.is_empty() {
-            candidates
-                .first()
-                .map(|first| {
-                    candidates
-                        .iter()
-                        .copied()
-                        .filter(|d| current(d) == current(first))
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
+        // When the file moved on since the PR, the batch can still tell which
+        // declaration to move only when every candidate holds one value: a
+        // single declaration, or the copies of one (a Pkl release URI writes
+        // its version twice, and moving one copy would leave a URI naming no
+        // release). Declarations that disagree are left alone rather than
+        // guessed at, and the target leaves the batch.
+        let deps = if !matching.is_empty() {
             matching
+        } else if candidates
+            .windows(2)
+            .all(|pair| current(pair[0]) == current(pair[1]))
+        {
+            candidates
+        } else {
+            Vec::new()
         };
         for dep in deps {
             if pending.iter().any(

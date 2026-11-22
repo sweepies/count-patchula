@@ -45,6 +45,9 @@ fn read(uri: &str) -> Option<Result<Read, &'static str>> {
         if !matches!(host, "github.com" | "pkg.pkl-lang.org") {
             return Err(UNSUPPORTED_HOST);
         }
+        if path.contains('?') {
+            return Err(UNSUPPORTED_PATH);
+        }
         if path.contains("::") {
             return Err(CHECKSUM);
         }
@@ -107,8 +110,10 @@ fn shown(uri: &str) -> String {
     let path = path.split("::").next().unwrap_or(path);
     if authority.contains([':', '@']) || path.contains(':') {
         "<unreadable URL>".into()
-    } else {
+    } else if rest.contains('/') {
         format!("package://{authority}/{path}")
+    } else {
+        format!("package://{authority}")
     }
 }
 

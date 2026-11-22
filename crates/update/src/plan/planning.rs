@@ -1056,6 +1056,54 @@ fn a_batch_moves_both_copies_of_a_moved_pkl_release_uri() {
     assert_eq!(plan.contents()["hk.pkl"], uri("2.11.1"));
 }
 
+/// When the declarations of a package in a file disagree and none still
+/// holds the value the PR moved, the batch cannot tell which one the PR
+/// meant, so it moves none rather than rewrite another line's declaration.
+#[test]
+fn a_batch_leaves_disagreeing_declarations_alone() {
+    let uri = |v: &str| {
+        format!("import \"package://github.com/jdx/hk/releases/download/v{v}/hk@{v}#/X.pkl\"\n")
+    };
+    let files = BTreeMap::from([("hk.pkl".to_string(), uri("2.8.0") + &uri("2.10.0"))]);
+    let config = config();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies;
+    assert_eq!(dependencies.len(), 4, "{dependencies:?}");
+    let target = crate::plan::Change {
+        registry: None,
+        source: dependencies[0].source,
+        package: dependencies[0].package.clone(),
+        file: "hk.pkl".into(),
+        current: "2.9.0".into(),
+        current_version: None,
+        value: Some("2.11.1".into()),
+        version: Some("2.11.1".into()),
+        digest: None,
+        kind: patchula_words::Update::Minor,
+        merge: false,
+        labels: Vec::new(),
+        release_notes: false,
+        body_notes: Vec::new(),
+        advisories: Vec::new(),
+        image: None,
+    };
+    let plan = crate::plan::batch_plan(
+        &repo(),
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        batched(vec![target]),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap();
+    assert!(plan.is_none(), "{:?}", plan.map(|p| p.contents().clone()));
+}
+
 /// A batch marker keeps the target but not the cooldown: the reported
 /// update that proposed a security fix inside the committed window hands
 /// its marker over, so the rebuilt Cargo job keeps `publish_age_allow`

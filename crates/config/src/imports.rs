@@ -110,18 +110,44 @@ pub fn pkl_imports(text: &str) -> Vec<PklImport> {
         .map(|(at, _)| at)
         .chain(std::iter::once(text.len()))
         .collect();
-    let mut imports = Vec::new();
-    let mut i = 0;
+    let mut found = Vec::new();
+    scan(&chars, 0, false, &mut found);
+    found
+        .into_iter()
+        .map(|range| PklImport {
+            target: chars[range.clone()].iter().collect(),
+            range: offsets[range.start]..offsets[range.end],
+        })
+        .collect()
+}
+
+/// Scan code from `i`, recording the character range of each import
+/// target's contents in `found`. At the top level the scan runs to the end
+/// of the text; `nested` scans an interpolation's expression, whose imports
+/// count too, and returns the index just past its closing `)`.
+fn scan(chars: &[char], mut i: usize, nested: bool, found: &mut Vec<Range<usize>>) -> usize {
+    let mut depth = 1;
     while i < chars.len() {
         i = match chars[i] {
-            '/' if chars.get(i + 1) == Some(&'/') => line_comment(&chars, i),
-            '/' if chars.get(i + 1) == Some(&'*') => block_comment(&chars, i),
-            '#' | '"' => match string(&chars, i) {
+            '(' if nested => {
+                depth += 1;
+                i + 1
+            }
+            ')' if nested => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1;
+                }
+                i + 1
+            }
+            '/' if chars.get(i + 1) == Some(&'/') => line_comment(chars, i),
+            '/' if chars.get(i + 1) == Some(&'*') => block_comment(chars, i),
+            '#' | '"' => match string(chars, i, found) {
                 Some((_, end)) => end,
                 None => i + 1,
             },
             c if c.is_ascii_alphabetic() || c == '_' => {
-                let end = identifier(&chars, i);
+                let end = identifier(chars, i);
                 let word: String = chars[i..end].iter().collect();
                 let clause = match word.as_str() {
                     "amends" | "extends" => Some(end),
@@ -135,16 +161,15 @@ pub fn pkl_imports(text: &str) -> Vec<PklImport> {
                 };
                 match clause {
                     Some(mut j) => {
-                        j = trivia(&chars, j);
+                        j = trivia(chars, j);
                         if chars.get(j) == Some(&'(') {
-                            j = trivia(&chars, j + 1);
+                            // `import(…)` opens a parenthesis its `)` closes.
+                            depth += 1;
+                            j = trivia(chars, j + 1);
                         }
-                        match string(&chars, j) {
+                        match string(chars, j, found) {
                             Some((range, next)) => {
-                                imports.push(PklImport {
-                                    target: chars[range.clone()].iter().collect(),
-                                    range: offsets[range.start]..offsets[range.end],
-                                });
+                                found.push(range);
                                 next
                             }
                             None => end,
@@ -156,7 +181,7 @@ pub fn pkl_imports(text: &str) -> Vec<PklImport> {
             _ => i + 1,
         };
     }
-    imports
+    i
 }
 
 /// The index just past the `//` comment starting at `i`.
@@ -215,11 +240,18 @@ fn identifier(chars: &[char], i: usize) -> usize {
 
 /// The raw contents of the string literal starting at `i`, as a range into
 /// `chars`, and the index just past it; `None` when `i` does not open one.
-/// Pkl's forms are covered: `"…"`, `"""…"""`, and `#"…"#`-style strings
-/// with any run of `#` delimiters, which are raw — no escapes and no
-/// interpolation. In the unescaped forms `\(` interpolates, and the
-/// expression inside is skipped as code.
-fn string(chars: &[char], i: usize) -> Option<(Range<usize>, usize)> {
+/// Pkl's forms are covered: `"…"`, `"""…"""`, and either with a run of `#`
+/// delimiters (`#"…"#`). A custom delimiter changes the escape character
+/// to `\` followed by as many `#`s, so `\#"` escapes a quote and `\#(`
+/// opens an interpolation in `#"…"#`, where a plain `\"` is two literal
+/// characters. An escape always reaches past the character it escapes, so
+/// `\"""` inside a text block is no closing delimiter. An interpolation's
+/// expression is scanned as code, and its imports are recorded in `found`.
+fn string(
+    chars: &[char],
+    i: usize,
+    found: &mut Vec<Range<usize>>,
+) -> Option<(Range<usize>, usize)> {
     let mut hashes = 0;
     while chars.get(i + hashes) == Some(&'#') {
         hashes += 1;
@@ -233,60 +265,31 @@ fn string(chars: &[char], i: usize) -> Option<(Range<usize>, usize)> {
         j += 2;
     }
     let content = j;
-    let raw = hashes > 0;
+    let closes = |at: usize| (0..hashes).all(|k| chars.get(at + k) == Some(&'#'));
     while j < chars.len() {
+        if chars[j] == '\\' && closes(j + 1) {
+            let after = j + 1 + hashes;
+            j = if chars.get(after) == Some(&'(') {
+                scan(chars, after + 1, true, found)
+            } else {
+                after + 1
+            };
+            continue;
+        }
         if block {
             if chars[j] == '"'
                 && chars.get(j + 1) == Some(&'"')
                 && chars.get(j + 2) == Some(&'"')
-                && (0..hashes).all(|k| chars.get(j + 3 + k) == Some(&'#'))
+                && closes(j + 3)
             {
                 return Some((content..j, j + 3 + hashes));
             }
-            if !raw && chars[j] == '\\' && chars.get(j + 1) == Some(&'(') {
-                j = interpolation(chars, j + 2);
-                continue;
-            }
-            j += 1;
-        } else if chars[j] == '"' && (0..hashes).all(|k| chars.get(j + 1 + k) == Some(&'#')) {
+        } else if chars[j] == '"' && closes(j + 1) {
             return Some((content..j, j + 1 + hashes));
-        } else if !raw && chars[j] == '\\' {
-            if chars.get(j + 1) == Some(&'(') {
-                j = interpolation(chars, j + 2);
-            } else {
-                j += 2;
-            }
-        } else {
-            j += 1;
         }
+        j += 1;
     }
     None
-}
-
-/// The index just past the `)` closing the interpolation whose expression
-/// starts at `i`, skipping nested strings and comments as code.
-fn interpolation(chars: &[char], mut i: usize) -> usize {
-    let mut depth = 1;
-    while i < chars.len() && depth > 0 {
-        i = match chars[i] {
-            '(' => {
-                depth += 1;
-                i + 1
-            }
-            ')' => {
-                depth -= 1;
-                i + 1
-            }
-            '/' if chars.get(i + 1) == Some(&'/') => line_comment(chars, i),
-            '/' if chars.get(i + 1) == Some(&'*') => block_comment(chars, i),
-            '#' | '"' => match string(chars, i) {
-                Some((_, end)) => end,
-                None => i + 1,
-            },
-            _ => i + 1,
-        };
-    }
-    i
 }
 
 #[cfg(test)]
@@ -488,6 +491,32 @@ mod tests {
             "import \"real.pkl\"\n",
         );
         assert_eq!(targets(text), ["real.pkl"]);
+    }
+
+    /// Escapes reach past what they escape, and a custom delimiter changes
+    /// the escape: `\"""` does not close a text block, `\#"` does not close a
+    /// `#"…"#` string, and a plain `\(` there is text.
+    #[test]
+    fn escapes_never_end_a_string_early() {
+        let text = concat!(
+            "a = \"\"\"\n  \\\"\"\"\n  import \"inside.pkl\"\n\"\"\"\n",
+            "b = #\"before \\#\"# import \"inside.pkl\" \\(x)\"#\n",
+            "c = \"\\\\\"\n",
+            "import \"real.pkl\"\n",
+        );
+        assert_eq!(targets(text), ["real.pkl"]);
+    }
+
+    /// An import inside an interpolation is code, and an import: plain and
+    /// custom-delimited strings alike.
+    #[test]
+    fn imports_inside_interpolations_count() {
+        let text = concat!(
+            "x = \"\\(import(\"a.pkl\").v)\"\n",
+            "y = #\"\\#(import(\"b.pkl\").v) \\(import(\"not.pkl\"))\"#\n",
+            "z = \"\"\"\n\\((import(\"c.pkl\")).v)\n\"\"\"\n",
+        );
+        assert_eq!(targets(text), ["a.pkl", "b.pkl", "c.pkl"]);
     }
 
     /// A target's range is in bytes, past any multi-byte text before it.

@@ -64,7 +64,9 @@ impl PklPackage {
             ["pkg.pkl-lang.org", "github.com", owner, repo, name] => {
                 (*owner, *repo, format!("{name}@"), String::new())
             }
-            ["pkg.pkl-lang.org", project, name] => {
+            // `github.com` names the hosted form, which needs an owner and a
+            // repository; it is no Apple project.
+            ["pkg.pkl-lang.org", project, name] if *project != "github.com" => {
                 ("apple", *project, format!("{name}@"), String::new())
             }
             ["github.com", owner, repo, "releases", "download", tag, _] => {
@@ -133,6 +135,7 @@ mod tests {
             "github.com/jdx/hk/releases/download/v%version%/",
             "github.com/../hk/releases/download/v%version%/hk",
             "pkg.pkl-lang.org/pkl-pantry",
+            "pkg.pkl-lang.org/github.com/foo",
             "pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0",
             "example.com/a/b",
         ] {

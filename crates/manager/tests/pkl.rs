@@ -149,6 +149,10 @@ fn unreadable_package_uris_are_skipped_with_a_reason() {
         "import \"package://[::1]/a/b@1.0.0#/A.pkl\"\n",
         "import \"package://pkg.pkl-lang.org/pkl-pantry/..@1.0.0#/A.pkl\"\n",
         "import \"package://pkg.pkl-lang.org/pkl-pantry/a|b@1.0.0#/A.pkl\"\n",
+        "import \"package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0?token=x#/toml.pkl\"\n",
+        "import \"package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0?x=::y#/toml.pkl\"\n",
+        "import \"package://pkg.pkl-lang.org/github.com/foo@1.0.0#/X.pkl\"\n",
+        "import \"package://example.com\"\n",
     );
     let extraction = extract("x.pkl", text);
     assert!(extraction.dependencies.is_empty());
@@ -220,6 +224,23 @@ fn unreadable_package_uris_are_skipped_with_a_reason() {
                 "package://pkg.pkl-lang.org/pkl-pantry/a|b@1.0.0",
                 path
             ),
+            // A query is no part of a package URI, whatever it holds.
+            (
+                Some(17),
+                "package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0",
+                path
+            ),
+            (
+                Some(18),
+                "package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0",
+                path
+            ),
+            (
+                Some(19),
+                "package://pkg.pkl-lang.org/github.com/foo@1.0.0",
+                path
+            ),
+            (Some(20), "package://example.com", host),
         ]
     );
 }
