@@ -4,7 +4,7 @@ mod advisories;
 pub use advisories::{advisory_query, affects, fixes, report_advisories};
 pub mod images;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use patchula_config::{Config, Filter, Patterns, Policy, Rule};
+use patchula_config::{Config, Filter, Policy};
 use patchula_datasource::{Catalog, Version};
 use patchula_manager::{Dependency, Range, ShortTags, Written};
 use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy};
@@ -34,24 +34,11 @@ pub struct NotProposed {
     pub version: String,
     pub reason: String,
 }
-struct CompiledRule {
-    rule: Rule,
-    packages: Patterns,
-    dependencies: Patterns,
-    files: Patterns,
-    current: Option<Filter>,
-    permitted: Option<Filter>,
-}
 pub struct Evaluator {
     config: Config,
     /// Workflow paths the repository's `actions.lock` lists, when it has
     /// one: the pinning decision reads them.
     locked_workflows: std::collections::BTreeSet<String>,
-    rules: Vec<CompiledRule>,
-    ignore: Patterns,
-    exclude: Patterns,
-    permitted: Option<Filter>,
-    security_permitted: Option<Filter>,
     /// `dep.extract` patterns, compiled once per distinct pattern.
     extractors: std::sync::Mutex<std::collections::BTreeMap<String, Result<Regex>>>,
 }
@@ -73,7 +60,7 @@ struct Effective<'a> {
     floor: Option<(u32, patchula_manager::Cooldown)>,
 }
 impl<'a> Effective<'a> {
-    fn apply(&mut self, o: &patchula_config::Overrides, permitted: Option<&'a Filter>) {
+    fn apply(&mut self, o: &'a patchula_config::Overrides) {
         let p = &mut self.policy;
         macro_rules! replace {($($field:ident),*)=>{$(if let Some(v)=&o.$field {p.$field=v.clone();})*};}
         replace!(
@@ -94,8 +81,8 @@ impl<'a> Effective<'a> {
         if let Some(digest) = o.digest {
             self.digest = digest;
         }
-        if o.permitted.is_some() {
-            self.permitted = permitted;
+        if let Some(permitted) = &o.permitted {
+            self.permitted = Some(permitted);
         }
     }
 }
@@ -107,10 +94,7 @@ impl Evaluator {
         if let Some((wait, _)) = effective.floor.take() {
             effective.policy.wait_hours = wait;
         }
-        effective.apply(
-            &self.config.security.apply,
-            self.security_permitted.as_ref(),
-        );
+        effective.apply(&self.config.security.apply);
         effective
     }
     /// Shared catalogs use the shortest active update-class wait. A zero-age
@@ -204,55 +188,16 @@ impl Evaluator {
         config: &Config,
         locked_workflows: std::collections::BTreeSet<String>,
     ) -> Result<Self> {
-        let rules = config
-            .rules
-            .iter()
-            .map(|rule| {
-                Ok(CompiledRule {
-                    rule: rule.clone(),
-                    packages: Patterns::compile(&rule.select.packages)?,
-                    dependencies: Patterns::compile(&rule.select.dependencies)?,
-                    files: Patterns::compile(&rule.select.files)?,
-                    current: rule
-                        .select
-                        .current
-                        .as_deref()
-                        .map(Filter::compile)
-                        .transpose()?,
-                    permitted: rule
-                        .apply
-                        .permitted
-                        .as_deref()
-                        .map(Filter::compile)
-                        .transpose()?,
-                })
-            })
-            .collect::<Result<_>>()?;
         Ok(Self {
             config: config.clone(),
             locked_workflows,
-            rules,
-            ignore: Patterns::compile(&config.ignore)?,
-            exclude: Patterns::compile(&config.exclude)?,
-            permitted: config
-                .defaults
-                .permitted
-                .as_deref()
-                .map(Filter::compile)
-                .transpose()?,
-            security_permitted: config
-                .security
-                .apply
-                .permitted
-                .as_deref()
-                .map(Filter::compile)
-                .transpose()?,
             extractors: Default::default(),
         })
     }
     pub fn ignored(&self, dep: &Dependency) -> bool {
-        (!self.config.ignore.is_empty() && self.ignore.matches_any(&dep.name, &dep.package))
-            || (!self.config.exclude.is_empty() && self.exclude.matches(&dep.file))
+        let config = &self.config;
+        (!config.ignore.is_empty() && config.ignore.matches_any(&dep.name, &dep.package))
+            || (!config.exclude.is_empty() && config.exclude.matches(&dep.file))
     }
     pub fn needs_lookup(&self, dep: &Dependency) -> bool {
         if (dep.kind == DependencyKind::Runner && dep.current == "latest")
@@ -310,7 +255,7 @@ impl Evaluator {
             } else {
                 self.config.defaults.action_digests
             },
-            permitted: self.permitted.as_ref(),
+            permitted: self.config.defaults.permitted.as_ref(),
             floor: None,
         };
         // Runtime constraints describe supported versions, rather than an
@@ -321,13 +266,11 @@ impl Evaluator {
         }
         let scheme = Ecosystem::of(dep.scheme, dep.source);
         let current = dep.resolved.as_deref().unwrap_or(&dep.current);
-        for compiled in &self.rules {
-            let s = &compiled.rule.select;
-            if !compiled
-                .packages
-                .matches_any(&dep.package, dep.bare_package())
-                || !compiled.dependencies.matches(&dep.name)
-                || !compiled.files.matches(&dep.file)
+        for rule in &self.config.rules {
+            let s = &rule.select;
+            if !s.packages.matches_any(&dep.package, dep.bare_package())
+                || !s.dependencies.matches(&dep.name)
+                || !s.files.matches(&dep.file)
                 || !any(&s.managers, dep.manager)
                 || !any(&s.sources, dep.source)
                 || !(s.kinds.is_empty() || dep.kinds().iter().any(|kind| s.kinds.contains(kind)))
@@ -335,12 +278,12 @@ impl Evaluator {
             {
                 continue;
             }
-            if let Some(filter) = &compiled.current
+            if let Some(filter) = &s.current
                 && !filter.matches(scheme, current)?
             {
                 continue;
             }
-            effective.apply(&compiled.rule.apply, compiled.permitted.as_ref());
+            effective.apply(&rule.apply);
         }
         // Peers express consumer compatibility, even when installed packages
         // use exact versions. Exact peer declarations still bump in place.

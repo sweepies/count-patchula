@@ -580,11 +580,11 @@ mod tests {
         for (body, problem) in [
             (
                 r#"auth = "basic"; secret { env = "T" }"#,
-                "username is required for basic registries",
+                "username is required",
             ),
             (
                 r#"auth = "bearer"; username = "ci"; secret { env = "T" }"#,
-                "username is required for basic registries",
+                "username is required",
             ),
             (r#"auth = "bearer""#, "secret is required with auth"),
             (r#"secret { env = "T" }"#, "secret is required with auth"),
@@ -605,8 +605,10 @@ mod tests {
             )
             .unwrap_err()
             .to_string();
+            // The diagnostic masks quoted values, the registry's key among
+            // them, so only the unquoted parts are checked.
             assert!(
-                error.contains("registries.acme") && error.contains(problem),
+                error.contains("registries.") && error.contains(problem),
                 "{body}: {error}"
             );
         }

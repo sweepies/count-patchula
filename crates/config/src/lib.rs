@@ -4,7 +4,7 @@
 mod imports;
 pub use imports::{PklImport, import_files, pkl_imports};
 mod matching;
-pub use matching::{Filter, Patterns};
+pub use matching::{ConfigRegex, Filter, Pattern, Patterns};
 mod model;
 mod package;
 mod pkl_package;

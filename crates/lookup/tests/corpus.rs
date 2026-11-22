@@ -491,10 +491,10 @@ fn corpus_proposals_match_their_snapshot() {
     config_exact.rules.push(patchula_config::Rule {
         note: "corpus proposals: exact versions".into(),
         select: patchula_config::Selector {
-            packages: Vec::new(),
-            dependencies: Vec::new(),
+            packages: Default::default(),
+            dependencies: Default::default(),
             managers: Vec::new(),
-            files: Vec::new(),
+            files: Default::default(),
             updates: Vec::new(),
             sources: Vec::new(),
             kinds: Vec::new(),

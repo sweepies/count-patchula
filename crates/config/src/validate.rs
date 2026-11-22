@@ -17,39 +17,6 @@ fn fail<T>(field: &str, message: impl std::fmt::Display) -> Result<T> {
     })
 }
 
-fn regex(field: &str, pattern: &str) -> Result<Regex> {
-    Regex::new(pattern).map_err(|error| Issue {
-        field: field.into(),
-        message: format!("{field}: invalid regex: {error}"),
-    })
-}
-
-fn pattern(field: &str, value: &str) -> Result {
-    Patterns::compile(std::slice::from_ref(&value.to_owned()))
-        .map(|_| ())
-        .map_err(|error| Issue {
-            field: field.into(),
-            message: format!("{field}: {error}"),
-        })
-}
-
-fn patterns(field: &str, values: &[String]) -> Result {
-    for (i, value) in values.iter().enumerate() {
-        pattern(&format!("{field}[{i}]"), value)?;
-    }
-    Ok(())
-}
-
-fn filter(field: &str, value: &Option<String>) -> Result {
-    let Some(value) = value else {
-        return Ok(());
-    };
-    Filter::compile(value).map(|_| ()).map_err(|error| Issue {
-        field: field.into(),
-        message: format!("{field}: {error}"),
-    })
-}
-
 fn windows(field: &str, values: &[Window]) -> Result {
     for (i, window) in values.iter().enumerate() {
         let field = format!("{field}[{i}]");
@@ -72,11 +39,11 @@ fn windows(field: &str, values: &[Window]) -> Result {
     Ok(())
 }
 
-fn required(field: &str, values: &[String]) -> Result {
+fn required(field: &str, values: &Patterns) -> Result {
     if values.is_empty() {
         return fail(field, "must contain at least one entry");
     }
-    patterns(field, values)
+    Ok(())
 }
 
 fn template(field: &str, value: &str, captures: &Regex) -> Result {
@@ -112,23 +79,10 @@ fn template(field: &str, value: &str, captures: &Regex) -> Result {
 
 impl Config {
     pub(crate) fn validate(&self) -> Result {
-        patterns("ignore", &self.ignore)?;
-        patterns("exclude", &self.exclude)?;
-        filter("defaults.permitted", &self.defaults.permitted)?;
         windows("defaults.windows", &self.defaults.windows)?;
         for (i, rule) in self.rules.iter().enumerate() {
-            let field = format!("rules[{i}]");
-            for (name, values) in [
-                ("packages", &rule.select.packages),
-                ("dependencies", &rule.select.dependencies),
-                ("files", &rule.select.files),
-            ] {
-                patterns(&format!("{field}.select.{name}"), values)?;
-            }
-            filter(&format!("{field}.select.current"), &rule.select.current)?;
-            filter(&format!("{field}.apply.permitted"), &rule.apply.permitted)?;
             if let Some(value) = &rule.apply.windows {
-                windows(&format!("{field}.apply.windows"), value)?;
+                windows(&format!("rules[{i}].apply.windows"), value)?;
             }
         }
         let host = &self.gitlab.host;
@@ -153,7 +107,6 @@ impl Config {
                 "must be gitlab.com or have a `gitlab` label, such as gitlab.example.com",
             );
         }
-        filter("security.apply.permitted", &self.security.apply.permitted)?;
         if self.security.images && self.security.image_platforms.is_empty() {
             return fail(
                 "security.imagePlatforms",
@@ -170,8 +123,7 @@ impl Config {
             }
         }
         for (image, reason) in &self.security.quiet_images {
-            let field = format!("security.quietImages[{image}]");
-            pattern(&field, image)?;
+            let field = format!("security.quietImages[{}]", image.as_str());
             if reason.trim().is_empty() {
                 return fail(&field, "give the reason this image's warning is silenced");
             }
@@ -207,8 +159,7 @@ impl Config {
             if extractor.patterns.is_empty() {
                 return fail(&field, "extractor needs at least one regex pattern");
             }
-            for (j, value) in extractor.patterns.iter().enumerate() {
-                let capture = regex(&format!("{field}.patterns[{j}]"), value)?;
+            for capture in &extractor.patterns {
                 if !capture
                     .capture_names()
                     .flatten()
@@ -222,10 +173,10 @@ impl Config {
                     ("package", &extractor.package),
                     ("scheme", &extractor.scheme),
                 ] {
-                    template(&format!("{field}.{name}"), value, &capture)?;
+                    template(&format!("{field}.{name}"), value, capture)?;
                 }
                 if let Some(registry) = &extractor.registry {
-                    template(&format!("{field}.registry"), registry, &capture)?;
+                    template(&format!("{field}.registry"), registry, capture)?;
                     if !extractor.source.contains('{')
                         && !matches!(extractor.source.as_str(), "npm" | "pypi")
                     {
@@ -242,8 +193,7 @@ impl Config {
                     );
                 }
             }
-            if let Some(value) = &extractor.extract {
-                let capture = regex(&format!("{field}.extract"), value)?;
+            if let Some(capture) = &extractor.extract {
                 if !capture
                     .capture_names()
                     .flatten()
