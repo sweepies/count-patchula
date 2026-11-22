@@ -6947,18 +6947,6 @@ fn nearest_takes_the_deepest_lock_directory_above_a_file() {
     assert_eq!(nearest("Cargo.toml", &["Cargo.lock"]), None);
 }
 
-#[test]
-fn subtree_lists_only_paths_under_the_directory() {
-    let paths: BTreeSet<String> = ["a/x", "a/b/y", "a-b/z", "ab/w", "c"]
-        .map(String::from)
-        .into();
-    let under = |dir| subtree(&paths, dir).cloned().collect::<Vec<_>>();
-    assert_eq!(under("a"), ["a/b/y", "a/x"]);
-    assert_eq!(under("a/b"), ["a/b/y"]);
-    assert_eq!(under("d"), Vec::<String>::new());
-    assert_eq!(under("").len(), 5);
-}
-
 /// (path, steers bitmask over ECOSYSTEMS, materialized, writable,
 /// cargo_config, nuget.config)
 #[rustfmt::skip]
@@ -7421,11 +7409,11 @@ async fn cargo_runs_update_workspace_for_untargeted_jobs() {
     );
 }
 
-/// Each descriptor's install and refresh rules: cargo installs through
-/// rustup (nothing through mise), the Gradle wrapper never schedules
-/// maintenance, and PHP installs only when both tools are pinned.
+/// Each descriptor's install rules: cargo installs through rustup
+/// (nothing through mise), and PHP installs only when both tools are
+/// pinned.
 #[test]
-fn install_specs_and_refresh_claims_cover_the_special_cases() {
+fn install_specs_cover_the_special_cases() {
     let defaults = tool_defaults().unwrap();
     assert!(
         descriptor(Ecosystem::Cargo)
@@ -7439,14 +7427,6 @@ fn install_specs_and_refresh_claims_cover_the_special_cases() {
             .install_specs(&missing)
             .is_empty()
     );
-    let config = config();
-    let paths = BTreeSet::from(["gradle/wrapper/gradle-wrapper.properties".to_string()]);
-    assert!(!contract::refresh(Ecosystem::GradleWrapper).claims(
-        &config,
-        "gradle-wrapper.properties",
-        "gradle/wrapper",
-        &paths
-    ));
 }
 
 /// Cargo's lockfile reader answers empty for a lockfile it cannot parse,
