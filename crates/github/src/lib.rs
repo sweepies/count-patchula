@@ -399,28 +399,13 @@ impl Client {
         request
     }
 
-    async fn exchange(&self, request: &Request, cached: bool) -> Result<Response> {
+    /// Send `request` under the governor; a `write` waits for the write
+    /// budget first.
+    async fn exchange(&self, request: &Request, cached: bool, write: bool) -> Result<Response> {
         let resource = if request.url().path().ends_with("/graphql") {
             "graphql"
         } else {
             "core"
-        };
-        let content = if resource == "graphql" {
-            request
-                .body()
-                .and_then(|b| b.as_bytes())
-                .and_then(|b| serde_json::from_slice::<Value>(b).ok())
-                .and_then(|b| {
-                    b["query"]
-                        .as_str()
-                        .map(|q| q.trim_start().starts_with("mutation"))
-                })
-                .unwrap_or(true)
-        } else {
-            !matches!(
-                *request.method(),
-                Method::GET | Method::HEAD | Method::OPTIONS
-            )
         };
         // A 401 to refreshable credentials is retried once with a fresh
         // token: GitHub ran nothing it refused with 401, so even a write is
@@ -431,7 +416,7 @@ impl Client {
             let trace = patchula_http::RequestTrace::new(request.method().as_str(), request.url());
             trace.cache_policy(if cached { "always-revalidate" } else { "cold" }, None);
             let queued = std::time::Instant::now();
-            let content_permit = if content {
+            let content_permit = if write {
                 Some(self.0.governor.content().await?)
             } else {
                 None
@@ -549,7 +534,7 @@ impl Client {
         );
         *request.body_mut() = Some(serde_json::to_vec(&body).map_err(|_| Error::Json)?.into());
         let operation = format!("{method} {path}");
-        let response = self.exchange(&request, false).await?;
+        let response = self.exchange(&request, false, true).await?;
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
         }
@@ -619,7 +604,7 @@ impl Client {
             if let Some(entry) = &cached {
                 conditional::add_validators(&mut request, entry).map_err(|_| Error::Cache)?;
             }
-            let mut response = self.exchange(&request, cached.is_some()).await?;
+            let mut response = self.exchange(&request, cached.is_some(), false).await?;
             if matches!(response.status.as_u16(), 301 | 302 | 303 | 307 | 308) {
                 let location = response
                     .headers
@@ -689,7 +674,10 @@ impl Client {
                 .into(),
         );
         let operation = graphql_operation(query);
-        let response = self.exchange(&request, false).await?;
+        // Only a document that reads as a query skips the write budget; one
+        // that names no operation kind is paced as a write.
+        let write = !operation.starts_with("query");
+        let response = self.exchange(&request, false, write).await?;
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
         }

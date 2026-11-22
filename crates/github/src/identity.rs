@@ -148,7 +148,7 @@ impl Client {
     /// `None` unless GitHub answers 2xx.
     async fn get_live(&self, url: Url) -> Option<Response> {
         let request = self.request(Method::GET, url);
-        let response = self.exchange(&request, false).await.ok()?;
+        let response = self.exchange(&request, false, false).await.ok()?;
         response.status.is_success().then_some(response)
     }
 }
