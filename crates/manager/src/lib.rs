@@ -1097,30 +1097,11 @@ mod tests {
             .iter()
             .copied()
             .filter(|manager| {
-                let dep = super::Dependency {
-                    manager: *manager,
-                    file: "manifest".into(),
-                    location: super::Location {
-                        start: 0,
-                        end: 1,
-                        line: 1,
-                        column: 1,
-                        pointer: String::new(),
-                    },
-                    form: super::EditForm::Scalar(super::Syntax::Bare),
-                    name: "example".into(),
-                    package: "example".into(),
-                    kind: super::DependencyKind::Production,
-                    current: "1.0.0".into(),
-                    resolved: None,
-                    digest: None,
-                    source: super::Source::Npm,
-                    scheme: super::Scheme::Semver,
-                    extract: None,
-                    included_by: None,
-                    registry: None,
-                    cooldown: None,
-                };
+                let dep = super::testing::dependency(
+                    *manager,
+                    super::DependencyKind::Production,
+                    super::Source::Npm,
+                );
                 super::ecosystem(*manager).proposing(&dep).lock.keeps_ranges
             })
             .collect();
