@@ -117,18 +117,13 @@ impl Controls {
             if age_click {
                 self.create.insert(key.clone());
             }
-            if (self.create.contains(&key)
+            let asked = self.create.contains(&key)
                 || self.recreate.contains(&key)
-                || self.branches.contains(&plan.action().branch))
-                && plan.held(&crate::plan::Hold::Window)
-            {
+                || self.branches.contains(&plan.action().branch);
+            if asked && plan.held(&crate::plan::Hold::Window) {
                 plan.lift();
             }
-            if self.recheck
-                || self.branches.contains(&plan.action().branch)
-                || self.create.contains(&key)
-                || self.recreate.contains(&key)
-            {
+            if self.recheck || asked {
                 plan.request_retry();
             }
         }
