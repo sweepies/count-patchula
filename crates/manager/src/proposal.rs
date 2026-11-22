@@ -165,8 +165,9 @@ pub enum Edits {
     /// No manifest edit: the tool relocks, and each lock's inputs move on
     /// their own branch.
     Relock,
-    /// Reported, never edited.
-    ReportOnly,
+    /// Reported, never edited, for the reason given: an edit is refused
+    /// with it.
+    ReportOnly(&'static str),
 }
 
 /// The advisory identity the source does not give.
@@ -225,7 +226,7 @@ mod tests {
             DependencyKind::Template,
             Source::GithubTags,
         );
-        assert_eq!(copier.edits, Edits::ReportOnly);
+        assert!(matches!(copier.edits, Edits::ReportOnly(_)));
         assert_eq!(
             Proposing {
                 edits: Edits::Manifest,

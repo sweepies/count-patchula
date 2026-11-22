@@ -119,15 +119,14 @@ pub(crate) struct Descriptor;
 impl crate::Ecosystem for Descriptor {
     fn proposing(&self, _dep: &Dependency) -> Proposing {
         Proposing {
-            edits: Edits::ReportOnly,
+            edits: Edits::ReportOnly(
+                "a copier template moves only with copier update; a bare _commit bump would drop the template's changes",
+            ),
             ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
         selected(crate::roles::leaf(path))
-    }
-    fn edit_refusal(&self, _dep: &Dependency) -> Option<String> {
-        Some("a copier template moves only with copier update; a bare _commit bump would drop the template's changes".into())
     }
     fn prepare<'a>(
         &self,
