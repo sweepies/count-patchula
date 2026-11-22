@@ -58,6 +58,7 @@ Managers the Count supports, under Renovate's names:
 | `gitlabci-include` | `gitlabci-include` | |
 | `nix` | `nix` | on by default; inputs resolved by nix itself, not `git-refs` |
 | `apm` | `apm` | `apm.lock.yaml` refreshed with `apm lock`; commit pins by default |
+| `pkl` | `pkl` | Renovate's manager is still an open pull request; looked up in a `pkl` source rather than `github-releases`, so packages of one repository stay apart; `PklProject` dependencies are not read |
 | `regex` | `regex` | Pkl extractors |
 
 Renovate managers with no Count equivalent yet:

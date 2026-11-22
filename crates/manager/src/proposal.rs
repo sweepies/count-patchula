@@ -212,6 +212,7 @@ mod tests {
             (Manager::Helm, Chart, Source::Helm),
             (Manager::Regex, Production, Source::Npm),
             (Manager::Woodpecker, Production, Source::Docker),
+            (Manager::Pkl, Production, Source::Pkl),
         ] {
             assert_eq!(
                 facts(manager, kind, source),

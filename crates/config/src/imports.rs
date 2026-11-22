@@ -52,7 +52,8 @@ where
             }
             None => return Err(format!("missing config module {path}")),
         };
-        for relative in import_targets(&text) {
+        for import in pkl_imports(&text) {
+            let relative = import.target;
             if relative.contains(':') || relative.starts_with('/') || relative.contains('\\') {
                 return Err(
                     "config imports must be local modules; remote imports are disabled".into(),
@@ -86,14 +87,30 @@ fn within(root: &Path, path: &Path) -> bool {
     root.as_os_str().is_empty() || path.starts_with(root)
 }
 
+/// One `amends`, `extends`, `import` or `import*` target in a Pkl module:
+/// the raw contents of its string literal, and their byte range in the
+/// module's text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PklImport {
+    pub target: String,
+    pub range: Range<usize>,
+}
+
 /// The targets of the `amends`, `extends`, `import` and `import*` clauses
-/// `text` carries: each the raw contents of the string literal that
-/// follows. Comments and string literals are skipped while scanning, so
-/// import-looking text inside one — a text block, a custom-delimited
-/// string, a comment — is not an import.
-fn import_targets(text: &str) -> Vec<String> {
+/// and `import(…)` expressions `text` carries. Comments and string literals
+/// are skipped while scanning, so import-looking text inside one — a text
+/// block, a custom-delimited string, a comment — is not an import. Config
+/// loading and the `pkl` manager both read imports through this, so the two
+/// cannot disagree on what a module imports.
+pub fn pkl_imports(text: &str) -> Vec<PklImport> {
     let chars: Vec<char> = text.chars().collect();
-    let mut targets = Vec::new();
+    // The byte offset of each character, and of the end of the text.
+    let offsets: Vec<usize> = text
+        .char_indices()
+        .map(|(at, _)| at)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let mut imports = Vec::new();
     let mut i = 0;
     while i < chars.len() {
         i = match chars[i] {
@@ -124,7 +141,10 @@ fn import_targets(text: &str) -> Vec<String> {
                         }
                         match string(&chars, j) {
                             Some((range, next)) => {
-                                targets.push(chars[range].iter().copied().collect());
+                                imports.push(PklImport {
+                                    target: chars[range.clone()].iter().collect(),
+                                    range: offsets[range.start]..offsets[range.end],
+                                });
                                 next
                             }
                             None => end,
@@ -136,7 +156,7 @@ fn import_targets(text: &str) -> Vec<String> {
             _ => i + 1,
         };
     }
-    targets
+    imports
 }
 
 /// The index just past the `//` comment starting at `i`.
@@ -428,8 +448,12 @@ mod tests {
         assert!(modules.contains_key("dir/other.pkl"));
     }
 
+    fn targets(text: &str) -> Vec<String> {
+        pkl_imports(text).into_iter().map(|i| i.target).collect()
+    }
+
     #[test]
-    fn import_targets_reads_every_clause_form() {
+    fn pkl_imports_reads_every_clause_form() {
         for (text, expected) in [
             ("amends \"a.pkl\"", vec!["a.pkl"]),
             ("extends \"b.pkl\"", vec!["b.pkl"]),
@@ -446,7 +470,7 @@ mod tests {
             ("import (compute())", vec![]),
             ("extends", vec![]),
         ] {
-            assert_eq!(import_targets(text), expected, "{text}");
+            assert_eq!(targets(text), expected, "{text}");
         }
     }
 
@@ -463,7 +487,17 @@ mod tests {
             "f = #\"raw \\(not-code)\"#\n",
             "import \"real.pkl\"\n",
         );
-        assert_eq!(import_targets(text), ["real.pkl"]);
+        assert_eq!(targets(text), ["real.pkl"]);
+    }
+
+    /// A target's range is in bytes, past any multi-byte text before it.
+    #[test]
+    fn pkl_imports_ranges_are_byte_offsets() {
+        let text = "// é ü\nimport \"package://x/y@1.0.0#/Z.pkl\"\n";
+        let imports = pkl_imports(text);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(&text[imports[0].range.clone()], imports[0].target);
+        assert_eq!(imports[0].target, "package://x/y@1.0.0#/Z.pkl");
     }
 
     #[test]

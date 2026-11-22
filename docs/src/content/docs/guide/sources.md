@@ -23,6 +23,7 @@ manager, and rules can select by it.
 | `nuget` | package ID | the nuget.org flat container and every registration page, for dates and unlisted and deprecated flags |
 | `rubygems` | gem name | the RubyGems versions API |
 | `packagist` | `vendor/name` | Packagist's p2 metadata |
+| `pkl` | the package URI without `package://` and the version, such as `pkg.pkl-lang.org/pkl-pantry/pkl.toml` | the GitHub releases of the repository that publishes it, only those tagged as this package; each repository is read once per run ([Pkl](/guide/managers/#pkl)) |
 
 ## Fetching less
 

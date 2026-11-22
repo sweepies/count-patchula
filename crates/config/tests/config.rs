@@ -464,8 +464,9 @@ fn the_concurrent_pr_limit_can_be_lifted_with_null() {
 
 /// The Count keeps his own repository on the schema's policy: the dashboard, 10
 /// open PRs and preserved Cargo ranges all come from the schema. His config only
-/// adds the lockfile jobs' default tools to the mise manager's files, and a rule
-/// for them after the built-in rules.
+/// adds the lockfile jobs' default tools to the mise manager's files, a rule
+/// for them after the built-in rules, and a group that moves hk's tool and its
+/// Pkl package together.
 #[test]
 fn the_repositorys_own_config_keeps_the_schema_policy() {
     let (_directory, path) = fixture("");
@@ -488,9 +489,12 @@ fn the_repositorys_own_config_keeps_the_schema_policy() {
     let rules = rules.as_array().unwrap();
     assert_eq!(&rules[..built_in.len()], built_in.as_slice());
     // Tools installed outside mise's registry are never looked up there.
-    let [unlisted] = &rules[built_in.len()..] else {
-        panic!("one rule after the built-in ones: {rules:?}");
+    let [unlisted, hk] = &rules[built_in.len()..] else {
+        panic!("two rules after the built-in ones: {rules:?}");
     };
+    assert_eq!(hk["select"]["dependencies"], serde_json::json!(["hk"]));
+    assert_eq!(hk["select"]["managers"], serde_json::json!(["mise", "pkl"]));
+    assert_eq!(hk["apply"]["group"], "hk");
     assert_eq!(
         unlisted["select"]["packages"],
         serde_json::json!(["mise", "php", "composer"])

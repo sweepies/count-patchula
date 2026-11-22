@@ -38,6 +38,7 @@ pub use nix::{
 };
 mod npm;
 mod nuget;
+mod pkl;
 mod precommit;
 mod proposal;
 pub use proposal::{
@@ -644,6 +645,7 @@ const EXTRACT_ORDER: &[Manager] = &[
     Manager::HelmValues,
     Manager::Gitlabci,
     Manager::GitlabciInclude,
+    Manager::Pkl,
     Manager::Regex,
 ];
 
@@ -719,6 +721,7 @@ pub(crate) fn ecosystem(manager: Manager) -> &'static dyn Ecosystem {
         Manager::GitlabciInclude => &GITLABCI_INCLUDE,
         Manager::Nix => &nix::DESCRIPTOR,
         Manager::Apm => &apm::DESCRIPTOR,
+        Manager::Pkl => &pkl::DESCRIPTOR,
         Manager::Regex => &custom::DESCRIPTOR,
     }
 }

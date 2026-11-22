@@ -44,6 +44,7 @@ becomes `version: "3"`.
 | `gitlabci-include` | `.gitlab-ci.yml`, `*.gitlab-ci.yml` (and `.yaml`) | |
 | `nix` | `flake.lock` beside a `flake.nix` | `flake.lock` |
 | `apm` | `apm.yml`, `apm.yaml` | `apm.lock.yaml` |
+| `pkl` | `*.pkl`, except the root `patchula.pkl` | |
 | `regex` | whatever your [extractors](/guide/configuration/#custom-extractors) select | |
 
 Lockfiles provide the current version where they exist. Their transitive
@@ -290,6 +291,49 @@ Local paths are not dependencies. MCP and LSP servers are not read.
 
 When `apm.lock.yaml` sits beside `apm.yml`, the Count refreshes it with
 `apm lock`; see [lockfiles](/guide/lockfiles/).
+
+## Pkl
+
+`pkl` reads the `package://` URIs in the `amends`, `extends`, `import` and
+`import*` clauses and `import(…)` expressions of [Pkl](https://pkl-lang.org/)
+modules. Comments and imports inside other strings are ignored. The
+repository's own `patchula.pkl` is not read: its imports must already be local
+modules.
+
+A package is named by its URI without `package://` and the version, and looked
+up in the `pkl` [source](/guide/sources/) under the semver scheme, which Pkl
+requires of package versions. Its versions are the GitHub releases of the
+repository that publishes it:
+
+| Package URI | Repository | Release tags |
+|---|---|---|
+| `package://github.com/<owner>/<repo>/releases/download/<tag>/<name>@<version>` | `<owner>/<repo>` | spelled like `<tag>` |
+| `package://pkg.pkl-lang.org/github.com/<owner>/<repo>/<name>@<version>` | `<owner>/<repo>` | `<name>@<version>` |
+| `package://pkg.pkl-lang.org/<project>/<name>@<version>` | `apple/<project>` | `<name>@<version>` |
+
+`pkg.pkl-lang.org` sends every bare project path to an Apple repository, so
+the last form is looked up there. Only a package's own tags count, so the
+packages of one repository, such as `pkl.toml` and `k8s.contrib` in
+`apple/pkl-pantry`, are separate packages with branches of their own.
+
+A release URI writes the version twice, in the tag and after the `@`. Its
+package keeps the tag's spelling with `<version>` in place of the version:
+`package://github.com/jdx/hk/releases/download/v2.9.0/hk@2.9.0` is the package
+`github.com/jdx/hk/releases/download/v<version>/hk` at `2.9.0`, and an update
+writes both copies, to `v2.11.1/hk@2.11.1`. The dependency is named after the
+package, `hk`, so a rule can select it with `dependencies { "hk" }`.
+
+These URIs are skipped:
+
+- a host other than `github.com` and `pkg.pkl-lang.org`, or a path on them
+  that names no release;
+- a URI that pins a checksum (`@1.0.0::sha256:…`);
+- a release tag that does not hold the package version exactly once;
+- a version that is not a semantic version;
+- a URI written with escapes or interpolation.
+
+`PklProject` dependencies are not read yet: updating one also means
+regenerating `PklProject.deps.json`.
 
 ## Containers and Kubernetes
 

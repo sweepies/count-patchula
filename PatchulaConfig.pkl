@@ -32,6 +32,7 @@ typealias Manager =
     | "gitlabci-include"
     | "nix"
     | "apm"
+    | "pkl"
     | "regex"
 typealias Source =
   "npm"
@@ -52,6 +53,7 @@ typealias Source =
     | "rubygems"
     | "packagist"
     | "nix"
+    | "pkl"
 typealias Update = "major" | "minor" | "patch" | "digest" | "pin"
 typealias VersionPolicy = "exact" | "preserve" | "widen"
 typealias ToolingWarning =
@@ -312,6 +314,7 @@ managers: Listing<Manager> = new {
   "gitlabci-include"
   "nix"
   "apm"
+  "pkl"
   "regex"
 }
 defaults: Policy = new {}

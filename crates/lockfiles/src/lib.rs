@@ -478,6 +478,7 @@ pub fn job(
         | Manager::Maven
         | Manager::Gitlabci
         | Manager::GitlabciInclude
+        | Manager::Pkl
         | Manager::Regex => return Ok(None),
     };
     let ecosystem = ecosystem(dep.manager).expect("job's dispatch maps every ecosystem it yields");
@@ -928,6 +929,7 @@ pub fn ecosystem(manager: Manager) -> Option<Ecosystem> {
         | Manager::Maven
         | Manager::Gitlabci
         | Manager::GitlabciInclude
+        | Manager::Pkl
         | Manager::Regex => None,
     }
 }

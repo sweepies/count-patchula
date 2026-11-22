@@ -117,6 +117,7 @@ words!(
     GitlabciInclude => "gitlabci-include",
     Nix => "nix",
     Apm => "apm",
+    Pkl => "pkl",
     Regex => "regex",
 });
 
@@ -141,6 +142,7 @@ words!(
     Rubygems => "rubygems",
     Packagist => "packagist",
     Nix => "nix",
+    Pkl => "pkl",
 });
 
 words!(
