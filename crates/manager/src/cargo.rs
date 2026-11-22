@@ -835,7 +835,7 @@ impl crate::Ecosystem for Descriptor {
                         Some(Err(reason)) => Some(reason.as_str()),
                         _ => replaced.as_deref(),
                     } {
-                        locked.registry = Some(Registry::Unusable(reason.to_owned()));
+                        locked.registry = Some(Registry::Named(reason.to_owned()));
                     }
                     if let Some(Ok(held)) = held {
                         locked.cooldown = Some(held.clone());

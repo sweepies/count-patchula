@@ -143,7 +143,7 @@ async fn pypi_uses_real_metadata_shapes_and_fresh_bodies() {
     let refused = client
         .lookup(&patchula_config::PackageId {
             source: Source::Mise,
-            registry: Some(patchula_config::Registry::Unusable(
+            registry: Some(patchula_config::Registry::Named(
                 "settings in mise.toml may move where mise installs it from".into(),
             )),
             name: "rust".into(),

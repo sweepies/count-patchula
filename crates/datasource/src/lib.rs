@@ -352,7 +352,7 @@ impl Client {
                         indexes.join(", ")
                     )));
                 }
-                Registry::Url(url) | Registry::Unusable(url) => {
+                Registry::Named(url) => {
                     // A value the manager kept as written (`${VAR}`, a
                     // redacted URL, find-links) is no URL to request, though
                     // a URL parser takes it.

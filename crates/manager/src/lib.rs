@@ -1006,13 +1006,19 @@ pub(crate) fn redacted(value: &str) -> String {
         kept.to_owned()
     }
 }
-/// A registry URL a repository names: https, without a user, query or
-/// fragment, and nothing to expand from the environment. Normalised without a
-/// trailing slash or surrounding quotes.
+/// A registry URL a repository names: an `https://` scheme in any case, a
+/// non-empty host, and no user, query, fragment, space or `$` to expand.
+/// Normalised to a lowercase scheme, without a trailing slash or surrounding
+/// quotes.
 pub(crate) fn registry_url(value: &str) -> Option<String> {
     let value = value.trim().trim_matches(['"', '\'']).trim_end_matches('/');
-    // A URL's scheme is case-insensitive.
-    patchula_config::acceptable_registry_url(value).then(|| format!("https://{}", &value[8..]))
+    let rest = value
+        .get(..8)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        .map(|_| &value[8..])?;
+    let host = rest.split('/').next().unwrap_or_default();
+    (!host.is_empty() && !value.contains(['@', '?', '#', ' ', '$']))
+        .then(|| format!("https://{rest}"))
 }
 
 /// A pip requirements file by its name: `requirements.txt`,
