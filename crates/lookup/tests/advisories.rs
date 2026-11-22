@@ -401,7 +401,7 @@ fn the_lowest_release_fixing_the_most_is_proposed_past_permitted_filters() {
     let targets = |permitted: Option<&str>, lowest_fix: bool| {
         let mut config =
             patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
-        config.defaults.permitted = permitted.map(Into::into);
+        config.defaults.permitted = permitted.map(|text| text.parse().unwrap());
         config.security.lowest_fix = lowest_fix;
         let eval = patchula_lookup::Evaluator::new(&config, Default::default()).unwrap();
         eval.evaluate_with(

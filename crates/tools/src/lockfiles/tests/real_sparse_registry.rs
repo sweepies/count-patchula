@@ -1832,7 +1832,10 @@ fn the_count_never_proposes_what_the_owners_cargo_holds_back() {
             .find(|dep| dep.name == "parity-unread")
             .unwrap();
         assert!(
-            matches!(dep.registry, Some(patchula_config::Registry::Unusable(_))),
+            matches!(
+                &dep.registry,
+                Some(patchula_config::Registry::Named(reason)) if !reason.starts_with("https://")
+            ),
             "{extra:?}: {:?}",
             dep.registry
         );

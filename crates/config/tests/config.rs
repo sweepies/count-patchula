@@ -202,7 +202,12 @@ fn migration_preserves_critical_intent() {
         Some("alchemy, effect and sveltekit")
     );
     assert_eq!(
-        config.rules[1].select.dependencies,
+        config.rules[1]
+            .select
+            .dependencies
+            .iter()
+            .map(|pattern| pattern.as_str())
+            .collect::<Vec<_>>(),
         ["acme/shared-workflows"]
     );
     assert_eq!(config.rules[1].apply.digest, Some(false));
@@ -552,4 +557,127 @@ fn an_unreadable_imported_module_is_a_named_error() {
         diagnostic.contains("cannot read config module"),
         "{diagnostic}"
     );
+}
+
+/// A config that sets every field read as a compiled pattern, filter or
+/// regex.
+const COMPILED_FIELDS: &str = r#"
+ignore = new Listing { "left-pad"; "!regex:^@acme/" }
+exclude = new Listing { "vendor/**"; "glob:third_party/*" }
+defaults { permitted = "!regex:-rc\\." }
+rules = new Listing {
+  new Rule {
+    select {
+      packages = new Listing { "react*"; "!react-native" }
+      dependencies = new Listing { "regex:^@types/" }
+      files = new Listing { "apps/**/package.json" }
+      current = "semver:>=1"
+    }
+    apply { permitted = "semver:<3"; waitHours = 2 }
+  }
+}
+files = new Listing { new FileSet { manager = "flux"; paths = new Listing { "clusters/**/*.yaml" } } }
+extractors = new Listing {
+  new Extractor {
+    paths = new Listing { "versions.txt" }
+    patterns = new Listing { "tool=(?<current>\\S+)"; "other: (?<current>.+)" }
+    source = "github-releases"
+    dependency = "acme/tool"
+    package = "acme/tool"
+    extract = "^v(?<version>.+)$"
+  }
+}
+security { apply { permitted = "regex:^1\\." }; quietImages { ["zeta/*"] = "z"; ["alpha/*"] = "a" } }
+"#;
+
+/// The bytes a config serializes to, which the engine hashes to key its
+/// extraction cache, for every example and a config setting each compiled
+/// field. `config-serialized.txt` was recorded from the build that kept
+/// these fields as plain strings, so compiling them as the config is read
+/// leaves every config hash as it was.
+#[test]
+fn serialized_configs_keep_their_bytes() {
+    let mut examples: Vec<_> = std::fs::read_dir(workspace().join("examples"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "pkl"))
+        .collect();
+    examples.sort();
+    let mut actual = String::new();
+    for example in examples {
+        let config = load(&example).unwrap();
+        let name = example.file_name().unwrap().to_string_lossy().into_owned();
+        actual += &format!("{name}\t{}\n", serde_json::to_string(&config).unwrap());
+    }
+    let (_directory, path) = fixture(COMPILED_FIELDS);
+    let config = load(&path).unwrap();
+    actual += &format!("compiled\t{}\n", serde_json::to_string(&config).unwrap());
+    let recorded = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/config-serialized.txt"
+    ));
+    assert_eq!(actual, std::fs::read_to_string(recorded).unwrap());
+}
+
+/// A pattern, filter or regex that does not compile is reported at its
+/// field's path, index included, as the config is read.
+#[test]
+fn compile_errors_name_the_field_path() {
+    for (body, expected) in [
+        (
+            r#"rules = new Listing { new Rule { select { packages = new Listing { "ok"; "regex:[" } } } }"#,
+            "rules[0].select.packages[1]: invalid regex",
+        ),
+        (
+            r#"exclude = new Listing { "glob:" }"#,
+            "exclude[0]: glob must not be empty",
+        ),
+        (
+            r#"rules = new Listing { new Rule {}; new Rule { select { current = "^1" } } }"#,
+            "rules[1].select.current: expected regex:... or semver:...",
+        ),
+        (
+            r#"security { apply { permitted = "regex:(" } }"#,
+            "security.apply.permitted: invalid regex",
+        ),
+        (
+            r#"extractors = new Listing { new Extractor { paths = new Listing { "*.txt" }; patterns = new Listing { "(?<current>.+)"; "(" } } }"#,
+            "extractors[0].patterns[1]: invalid regex",
+        ),
+        (
+            r#"security { quietImages { ["regex:("] = "noisy" } }"#,
+            "invalid regex",
+        ),
+    ] {
+        let (_directory, path) = fixture(&body.replace("; ", "\n"));
+        let message = load(&path).unwrap_err().to_string();
+        assert!(
+            message.contains(expected),
+            "expected {expected:?} in {message}"
+        );
+    }
+}
+
+/// A `security.quietImages` key that does not compile is reported as the
+/// map entry it is, and highlights `quietImages`: the key's own dots and
+/// brackets never point at an unrelated property such as `images`.
+#[test]
+fn a_bad_quiet_image_key_points_at_quiet_images() {
+    let (_directory, path) = fixture(
+        "security {\n  images = true\n  quietImages { [\"[unclosed.images\"] = \"noisy\" }\n}",
+    );
+    let error = load(&path).unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("security.quietImages[[unclosed.images]: invalid glob"),
+        "{message}"
+    );
+    let source = std::fs::read_to_string(&path).unwrap();
+    let offsets: Vec<_> = error
+        .labels()
+        .into_iter()
+        .flatten()
+        .map(|label| label.offset())
+        .collect();
+    assert_eq!(offsets, [source.find("quietImages").unwrap()], "{error:?}");
 }

@@ -122,16 +122,17 @@ pub fn credentials(
             Some(public) => entry.mirroring(public),
             None => Some(entry),
         };
-        let auth = match (registry.auth, &registry.secret) {
-            (None, _) => Ok(Auth::Anonymous),
-            (Some(_), None) => Err("secret is missing".to_owned()),
-            (Some(kind), Some(secret)) => secret.read().map(|secret| match kind {
-                RegistryAuth::Basic => Auth::Basic {
-                    username: registry.username.clone().unwrap_or_default(),
-                    password: secret,
-                },
-                RegistryAuth::Bearer => Auth::Bearer { token: secret },
-            }),
+        let auth = match &registry.auth {
+            None => Ok(Auth::Anonymous),
+            Some(RegistryAuth::Basic { username, secret }) => {
+                secret.read().map(|password| Auth::Basic {
+                    username: username.clone(),
+                    password,
+                })
+            }
+            Some(RegistryAuth::Bearer { secret }) => {
+                secret.read().map(|token| Auth::Bearer { token })
+            }
         };
         match auth.and_then(|auth| {
             Credential::new(prefix, auth)
@@ -286,27 +287,29 @@ mod tests {
         // without it and reports rather than panics.
         let registry = |auth| patchula_config::settings::Registry {
             auth,
-            username: None,
-            secret: None,
             mirror_of: None,
             allowed_installations: Vec::new(),
             tools: false,
         };
+        let unset = || RegistryAuth::Bearer {
+            secret: patchula_config::settings::Secret::Env(
+                "PATCHULA_TEST_UNSET_REGISTRY_SECRET".into(),
+            ),
+        };
         let mut settings = Settings::default();
-        settings.registries.insert(
-            "not-an-https-prefix".into(),
-            registry(Some(RegistryAuth::Bearer)),
-        );
-        settings.registries.insert(
-            "https://reg.example".into(),
-            registry(Some(RegistryAuth::Bearer)),
-        );
+        settings
+            .registries
+            .insert("not-an-https-prefix".into(), registry(Some(unset())));
+        settings
+            .registries
+            .insert("https://reg.example".into(), registry(Some(unset())));
         let (entries, failed) = credentials(&settings, None);
         assert!(failed.iter().any(|(prefix, reason)| {
             prefix == "not-an-https-prefix" && reason == "not an https URL prefix"
         }));
         assert!(failed.iter().any(|(prefix, reason)| {
-            prefix == "https://reg.example" && reason == "secret is missing"
+            prefix == "https://reg.example"
+                && reason == "environment variable PATCHULA_TEST_UNSET_REGISTRY_SECRET is not set"
         }));
         // The bad prefix claims nothing; the missing secret leaves its
         // prefix withheld rather than falling through to a broader entry.

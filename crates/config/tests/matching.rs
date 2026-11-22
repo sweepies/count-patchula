@@ -44,8 +44,8 @@ fn globs_regexes_and_negations_select_packages() {
 #[test]
 fn a_filter_that_is_neither_regex_nor_semver_is_refused() {
     assert_eq!(
-        patchula_config::Filter::compile("^1.2").err().unwrap(),
+        "^1.2".parse::<patchula_config::Filter>().err().unwrap(),
         "expected regex:... or semver:... version filter"
     );
-    assert!(patchula_config::Filter::compile("!").is_err());
+    assert!("!".parse::<patchula_config::Filter>().is_err());
 }

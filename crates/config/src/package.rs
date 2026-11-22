@@ -19,13 +19,15 @@ pub struct PackageId {
 }
 
 /// Where a package is looked up when that is not its source's public
-/// registry, in the form it is recorded: an https URL, the set of registries
-/// it could come from when the Count cannot choose, or a value kept as
-/// written so its lookup fails.
+/// registry, in the form it is recorded: the registry the repository names,
+/// or the set of registries it could come from when the Count cannot choose.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Registry {
-    /// An https URL standing in for the source's public registry.
-    Url(String),
+    /// The registry the repository names: an https URL standing in for the
+    /// source's public registry, or a value the Count cannot read from, kept
+    /// as written (without secrets). The lookup decides which it is and fails
+    /// for anything it cannot request.
+    Named(String),
     /// Any of these registries, which the Count does not choose between.
     Ambiguous {
         /// The recorded form: `ambiguous: ` and the indexes joined by `, `.
@@ -33,30 +35,12 @@ pub enum Registry {
         /// The registries the package could come from, as recorded.
         indexes: Vec<String>,
     },
-    /// A value the Count cannot read from, kept as written (without secrets)
-    /// so its lookup fails.
-    Unusable(String),
 }
 
 /// How a package that could come from several registries records its
 /// registry: its lookup fails rather than guess, since the public one may be
 /// someone else's.
 const AMBIGUOUS: &str = "ambiguous: ";
-
-/// Whether `value` is an https registry URL a repository may name: an
-/// `https://` scheme in any case, a non-empty host, and no user, query,
-/// fragment, space or `$` to expand. `Registry::from_recorded` sorts stored
-/// bytes by it and producers apply it before normalising what they record.
-pub fn acceptable_registry_url(value: &str) -> bool {
-    value
-        .get(..8)
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
-        && {
-            let rest = &value[8..];
-            let host = rest.split('/').next().unwrap_or_default();
-            !host.is_empty() && !value.contains(['@', '?', '#', ' ', '$'])
-        }
-}
 
 impl Registry {
     /// The registry of a package that could come from any of `indexes`.
@@ -67,11 +51,10 @@ impl Registry {
         }
     }
     /// The string the registry is recorded as, which is also how it
-    /// serializes: an https URL, `ambiguous: …`, or the unusable value as
-    /// written.
+    /// serializes: the named registry as written, or `ambiguous: …`.
     pub fn recorded(&self) -> &str {
         match self {
-            Self::Url(value) | Self::Unusable(value) => value,
+            Self::Named(value) => value,
             Self::Ambiguous { recorded, .. } => recorded,
         }
     }
@@ -82,23 +65,15 @@ impl Registry {
             _ => None,
         }
     }
-    /// The registry a recorded string names: `ambiguous: …` indexes, a URL a
-    /// repository could have written as one, or anything else kept as
-    /// written. Producers decide the kind when they record; this is the
-    /// read-back for stored bytes, which were written in the same form.
+    /// The registry a recorded string names: `ambiguous: …` indexes, or the
+    /// named registry as written.
     pub fn from_recorded(value: &str) -> Self {
-        if let Some(rest) = value.strip_prefix(AMBIGUOUS) {
-            return Self::Ambiguous {
+        match value.strip_prefix(AMBIGUOUS) {
+            Some(rest) => Self::Ambiguous {
                 recorded: value.to_owned(),
                 indexes: rest.split(", ").map(str::to_owned).collect(),
-            };
-        }
-        // Recorded bytes were written normalized, so the shared acceptance
-        // check only sorts them back into kinds.
-        if acceptable_registry_url(value) {
-            Self::Url(value.to_owned())
-        } else {
-            Self::Unusable(value.to_owned())
+            },
+            None => Self::Named(value.to_owned()),
         }
     }
 }
@@ -110,18 +85,13 @@ impl PartialOrd for Registry {
 }
 /// Registries order by their recorded string, so changes, PR rows and
 /// markers sort by the text they record. Values that record the same text
-/// are then told apart by kind and contents, so ordering agrees with
-/// equality and ordered collections never merge distinct registries.
+/// are then told apart by their indexes (none for a named registry), so
+/// ordering agrees with equality and ordered collections never merge
+/// distinct registries.
 impl Ord for Registry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let kind = |registry: &Self| match registry {
-            Self::Url(_) => 0,
-            Self::Ambiguous { .. } => 1,
-            Self::Unusable(_) => 2,
-        };
         self.recorded()
             .cmp(other.recorded())
-            .then_with(|| kind(self).cmp(&kind(other)))
             .then_with(|| self.indexes().cmp(&other.indexes()))
     }
 }
@@ -191,11 +161,10 @@ impl PackageId {
 mod tests {
     use super::*;
 
-    /// `from_recorded` sorts stored registry bytes into the same variants
-    /// the producers wrote: `ambiguous: …` indexes, an acceptable https URL,
-    /// or the value kept as written.
+    /// `from_recorded` reads `ambiguous: …` back into its indexes and keeps
+    /// anything else as the named registry, as written.
     #[test]
-    fn recorded_registries_sort_into_their_kinds() {
+    fn recorded_registries_read_back() {
         for (recorded, expected) in [
             (
                 "ambiguous: https://a.dev/, https://b.dev/",
@@ -205,45 +174,14 @@ mod tests {
                 },
             ),
             (
-                "https://npm.acme.dev/",
-                Registry::Url("https://npm.acme.dev/".into()),
-            ),
-            // The scheme check is case-insensitive; the bytes are kept.
-            (
                 "HTTPS://NPM.ACME.DEV/simple",
-                Registry::Url("HTTPS://NPM.ACME.DEV/simple".into()),
-            ),
-            (
-                "http://npm.acme.dev/",
-                Registry::Unusable("http://npm.acme.dev/".into()),
-            ),
-            ("https://", Registry::Unusable("https://".into())),
-            ("https:///path", Registry::Unusable("https:///path".into())),
-            (
-                "https://user@npm.acme.dev/",
-                Registry::Unusable("https://user@npm.acme.dev/".into()),
-            ),
-            (
-                "https://npm.acme.dev/?q=1",
-                Registry::Unusable("https://npm.acme.dev/?q=1".into()),
-            ),
-            (
-                "https://npm.acme.dev/#frag",
-                Registry::Unusable("https://npm.acme.dev/#frag".into()),
-            ),
-            (
-                "https://npm.acme .dev/",
-                Registry::Unusable("https://npm.acme .dev/".into()),
+                Registry::Named("HTTPS://NPM.ACME.DEV/simple".into()),
             ),
             (
                 "https://$REGISTRY/",
-                Registry::Unusable("https://$REGISTRY/".into()),
+                Registry::Named("https://$REGISTRY/".into()),
             ),
-            (
-                "sparse+https://index.crates.io/",
-                Registry::Unusable("sparse+https://index.crates.io/".into()),
-            ),
-            ("not a url", Registry::Unusable("not a url".into())),
+            ("not a url", Registry::Named("not a url".into())),
         ] {
             assert_eq!(Registry::from_recorded(recorded), expected, "{recorded}");
         }
@@ -257,12 +195,11 @@ mod tests {
             ambiguous.indexes(),
             Some(["https://a.dev/".to_owned(), "https://b.dev/".to_owned()].as_slice())
         );
-        assert_eq!(Registry::Url("https://a.dev/".into()).indexes(), None);
-        assert_eq!(Registry::Unusable("x".into()).indexes(), None);
+        assert_eq!(Registry::Named("https://a.dev/".into()).indexes(), None);
         // `From<String>` and `FromStr` read recorded bytes like `from_recorded`.
         assert_eq!(
             Registry::from("https://a.dev/".to_owned()),
-            Registry::Url("https://a.dev/".into())
+            Registry::Named("https://a.dev/".into())
         );
         assert_eq!(
             "ambiguous: https://a.dev/".parse::<Registry>().unwrap(),
@@ -271,12 +208,12 @@ mod tests {
     }
 
     #[test]
-    fn equal_recorded_text_is_told_apart_by_kind_and_indexes() {
+    fn equal_recorded_text_is_told_apart_by_indexes() {
         use std::cmp::Ordering;
         let ambiguous = Registry::ambiguous(&["https://a.dev/".to_owned()]);
-        // Same recorded text: kind decides before the indexes do.
-        let url = Registry::Url(ambiguous.recorded().to_owned());
-        assert_eq!(url.cmp(&ambiguous), Ordering::Less);
+        // Same recorded text: the indexes decide.
+        let named = Registry::Named(ambiguous.recorded().to_owned());
+        assert_eq!(named.cmp(&ambiguous), Ordering::Less);
         let same = Registry::ambiguous(&["https://a.dev/".to_owned()]);
         assert_eq!(ambiguous.cmp(&same), Ordering::Equal);
     }

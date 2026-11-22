@@ -38,9 +38,9 @@ fn secret_with(
             "server requires App private key and webhook secret via env or files",
         ));
     }
-    let secret = patchula_config::settings::Secret {
-        env: path.is_none().then(|| value_env.to_owned()),
-        file: path,
+    let secret = match path {
+        Some(path) => patchula_config::settings::Secret::File(path),
+        None => patchula_config::settings::Secret::Env(value_env.to_owned()),
     };
     secret.read_bytes().map_err(crate::usage)
 }

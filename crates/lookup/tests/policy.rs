@@ -503,7 +503,7 @@ fn rules_replace_lists_in_order_and_windows_are_reported() {
     rule.select=serde_json::from_value(serde_json::json!({"packages":["plain"],"dependencies":[],"managers":[],"files":[],"updates":["minor"],"sources":[],"kinds":[],"current":null})).unwrap();
     rule.apply.group = Some("early".into());
     rule.apply.wait_hours = Some(12);
-    rule.apply.permitted = Some("semver:<2.0.0".into());
+    rule.apply.permitted = Some("semver:<2.0.0".parse().unwrap());
     rule.apply.windows = Some(vec![patchula_config::Window {
         cron: vec!["0 9 * * 1".into()],
         zone: "UTC".into(),
@@ -522,7 +522,7 @@ fn rules_replace_lists_in_order_and_windows_are_reported() {
     assert!(p[0].group.is_none() && policy.labels.is_empty());
     assert_eq!(policy.wait_hours, 12);
     assert_eq!(policy.windows.len(), 1);
-    config.ignore = vec!["plain".into()];
+    config.ignore = patchula_config::Patterns::compile(&["plain".into()]).unwrap();
     assert!(
         Evaluator::new(&config, Default::default())
             .unwrap()
@@ -535,7 +535,7 @@ fn rules_replace_lists_in_order_and_windows_are_reported() {
 #[test]
 fn negated_ignore_exceptions_match_manifest_or_registry_alias() {
     let mut config = config("renovate-migration");
-    config.ignore = vec!["!alias".into()];
+    config.ignore = patchula_config::Patterns::compile(&["!alias".into()]).unwrap();
     let eval = Evaluator::new(&config, Default::default()).unwrap();
     let mut dep = dependency("alias");
     dep.package = "real".into();
@@ -761,7 +761,7 @@ fn missing_dates_all_held_and_rule_overrides_are_explicit() {
         Some("1.0.1")
     );
     let mut rule = cfg.rules[0].clone();
-    rule.select.packages = vec!["plain".into()];
+    rule.select.packages = patchula_config::Patterns::compile(&["plain".into()]).unwrap();
     rule.apply.wait_hours = Some(12);
     cfg.rules = vec![rule];
     assert_eq!(
@@ -1621,7 +1621,7 @@ fn lock_only_updates_keep_the_wait_the_permitted_filter_and_exact_policy() {
     // `permitted` filters a lock-only release like any other: 1.41.0 and 1.42.0
     // are neither proposed nor held back, and 1.40.0 stays.
     let mut filtered = cfg.clone();
-    filtered.defaults.permitted = Some("semver:<1.41.0".into());
+    filtered.defaults.permitted = Some("semver:<1.41.0".parse().unwrap());
     let mut later = releases.clone();
     later.versions.push(patchula_datasource::Version {
         version: "1.42.0".into(),
@@ -2235,7 +2235,7 @@ fn a_rule_error_is_the_wait_error_never_a_wait_of_zero() {
 fn permitted_targets(dep: &Dependency, filter: &str, releases: &[&str]) -> Vec<String> {
     let mut cfg = config("renovate-migration");
     cfg.defaults.wait_hours = 0;
-    cfg.defaults.permitted = Some(filter.into());
+    cfg.defaults.permitted = Some(filter.parse().unwrap());
     let eval = Evaluator::new(&cfg, Default::default()).unwrap();
     let mut targets: Vec<_> = eval
         .propose(dep, &catalog(releases))

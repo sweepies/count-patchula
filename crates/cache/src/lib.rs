@@ -194,14 +194,13 @@ pub trait State: serde::Serialize + serde::de::DeserializeOwned {
 }
 
 /// Whether a name — a `State::NAMESPACE` or a derived representation's name —
-/// is nonempty and leaves `@`, `~` and `+` to the key: `@v` starts the
-/// version, `~` the dependency fingerprint, and `+` marks the retired
-/// per-build keys migration 014 deletes.
+/// is nonempty and leaves `@` and `~` to the key: `@v` starts the version and
+/// `~` the dependency fingerprint.
 pub const fn plain(name: &str) -> bool {
     let bytes = name.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'@' || bytes[i] == b'~' || bytes[i] == b'+' {
+        if bytes[i] == b'@' || bytes[i] == b'~' {
             return false;
         }
         i += 1;
@@ -251,7 +250,7 @@ fn state_namespace<T: State>() -> String {
     const {
         assert!(
             plain(T::NAMESPACE),
-            "a state namespace is nonempty and has no @, ~ or +"
+            "a state namespace is nonempty and has no @ or ~"
         )
     };
     let fingerprint = if T::CODE_VERSIONED {
@@ -266,7 +265,7 @@ fn state_namespace<T: State>() -> String {
 /// `"{name}@v{version}"`, with `~{fingerprint}` when its row in
 /// `tests/derived-versions.tsv` lists locked crates.
 pub fn representation(name: &str, version: u32) -> String {
-    debug_assert!(plain(name), "a representation name has no @, ~ or +");
+    debug_assert!(plain(name), "a representation name has no @ or ~");
     versioned(name, version, fingerprint(DERIVED_ROWS, name))
 }
 
@@ -435,7 +434,6 @@ impl Cache {
         let touches = Arc::new(Mutex::new(HashSet::new()));
         let writer_touches = touches.clone();
         let readers_valid = Arc::new(AtomicBool::new(true));
-        let writer_readers_valid = readers_valid.clone();
         let (jobs, mut receiver) = mpsc::channel::<Job>(128);
         let (ready, initialized) = oneshot::channel();
         std::thread::Builder::new()
@@ -453,9 +451,6 @@ impl Cache {
                             tracing::warn!(%error, "cache access accounting failed");
                         }
                         job(&mut store);
-                        if !store.conn.path().is_some_and(|path| !path.is_empty()) {
-                            writer_readers_valid.store(false, Ordering::Relaxed);
-                        }
                     }
                     let touched =
                         std::mem::take(&mut *writer_touches.lock().expect("cache touches"));

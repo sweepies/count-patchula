@@ -52,7 +52,7 @@ mod woodpecker;
 mod yaml;
 mod yaml_locations;
 
-use patchula_config::{Config, PackageId, Patterns, Registry};
+use patchula_config::{Config, PackageId, Registry};
 use patchula_words::{DependencyKind, Manager, Scheme, Source};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -726,20 +726,11 @@ pub(crate) fn ecosystem(manager: Manager) -> &'static dyn Ecosystem {
 
 pub struct Scanner {
     pub(crate) config: Config,
-    exclude: Patterns,
-    selections: Vec<(Manager, Patterns)>,
 }
 impl Scanner {
     pub fn new(config: &Config) -> Result<Self, String> {
-        let selections = config
-            .files
-            .iter()
-            .map(|f| Ok((f.manager, Patterns::compile(&f.paths)?)))
-            .collect::<Result<_, String>>()?;
         Ok(Self {
             config: config.clone(),
-            exclude: Patterns::compile(&config.exclude)?,
-            selections,
         })
     }
     pub fn needs(&self, path: &str) -> bool {
@@ -763,7 +754,7 @@ impl Scanner {
     }
     /// Whether `path` sits under the repository's excluded paths.
     pub fn excluded(&self, path: &str) -> bool {
-        !self.config.exclude.is_empty() && self.exclude.matches(path)
+        !self.config.exclude.is_empty() && self.config.exclude.matches(path)
     }
     /// Whether `path` is one the committed-credentials scan checks: a
     /// settings file that can hold credentials, which this repository's
@@ -840,8 +831,8 @@ impl Scanner {
     /// Whether `manager`'s file patterns take `path`, before whether the
     /// manager is enabled and whether `exclude` leaves the path out.
     fn selects(&self, manager: Manager, path: &str) -> bool {
-        if let Some((_, p)) = self.selections.iter().find(|(m, _)| *m == manager) {
-            return p.matches(path);
+        if let Some(files) = self.config.files.iter().find(|f| f.manager == manager) {
+            return files.paths.matches(path);
         }
         ecosystem(manager).selected(&self.config, path)
     }
@@ -1006,13 +997,19 @@ pub(crate) fn redacted(value: &str) -> String {
         kept.to_owned()
     }
 }
-/// A registry URL a repository names: https, without a user, query or
-/// fragment, and nothing to expand from the environment. Normalised without a
-/// trailing slash or surrounding quotes.
+/// A registry URL a repository names: an `https://` scheme in any case, a
+/// non-empty host, and no user, query, fragment, space or `$` to expand.
+/// Normalised to a lowercase scheme, without a trailing slash or surrounding
+/// quotes.
 pub(crate) fn registry_url(value: &str) -> Option<String> {
     let value = value.trim().trim_matches(['"', '\'']).trim_end_matches('/');
-    // A URL's scheme is case-insensitive.
-    patchula_config::acceptable_registry_url(value).then(|| format!("https://{}", &value[8..]))
+    let rest = value
+        .get(..8)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        .map(|_| &value[8..])?;
+    let host = rest.split('/').next().unwrap_or_default();
+    (!host.is_empty() && !value.contains(['@', '?', '#', ' ', '$']))
+        .then(|| format!("https://{rest}"))
 }
 
 /// A pip requirements file by its name: `requirements.txt`,

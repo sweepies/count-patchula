@@ -1,6 +1,6 @@
 use crate::*;
 use patchula_config::Extractor;
-use regex::{Captures, Regex};
+use regex::Captures;
 fn template(text: &str, captures: &Captures<'_>) -> Result<String, String> {
     let mut out = String::new();
     let mut remaining = text;
@@ -31,11 +31,10 @@ pub(super) fn extract(
 ) -> Result<Vec<Dependency>, String> {
     let mut out = Vec::new();
     for extractor in extractors {
-        if !Patterns::compile(&extractor.paths)?.matches(path) {
+        if !extractor.paths.matches(path) {
             continue;
         }
-        for pattern in &extractor.patterns {
-            let regex = Regex::new(pattern).map_err(|e| e.to_string())?;
+        for regex in &extractor.patterns {
             for captures in regex.captures_iter(text) {
                 let current = captures.name("current").ok_or("missing current capture")?;
                 let source = serde_json::from_value(serde_json::Value::String(template(
@@ -63,7 +62,7 @@ pub(super) fn extract(
                     digest: None,
                     source,
                     scheme,
-                    extract: extractor.extract.clone(),
+                    extract: extractor.extract.as_ref().map(|r| r.as_str().to_owned()),
                     included_by: None,
                     // An optional capture that did not take part, or is empty,
                     // means the source's public registry — an explicit public
@@ -77,10 +76,9 @@ pub(super) fn extract(
                             Ok(raw) if raw.is_empty() => None,
                             Ok(raw) if source == Source::Npm => npm::extracted_registry(&raw),
                             Ok(raw) if source == Source::Pypi => pypi::named(&raw).registry(),
-                            Ok(raw) => Some(match registry_url(&raw) {
-                                Some(url) => Registry::Url(url),
-                                None => Registry::Unusable(crate::redacted(&raw)),
-                            }),
+                            Ok(raw) => Some(Registry::Named(
+                                registry_url(&raw).unwrap_or_else(|| crate::redacted(&raw)),
+                            )),
                             Err(error) if error.starts_with("unmatched template capture") => None,
                             Err(error) => return Err(error),
                         },
@@ -105,10 +103,7 @@ impl crate::Ecosystem for Descriptor {
         Proposing::BASE
     }
     fn selected(&self, config: &Config, path: &str) -> bool {
-        config
-            .extractors
-            .iter()
-            .any(|e| Patterns::compile(&e.paths).is_ok_and(|p| p.matches(path)))
+        config.extractors.iter().any(|e| e.paths.matches(path))
     }
     fn prepare<'a>(
         &self,

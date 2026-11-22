@@ -2082,7 +2082,7 @@ mod tests {
     #[test]
     fn a_registry_package_gets_its_own_identity_and_branch_prefix() {
         let mut dep = dep();
-        dep.registry = Some(Registry::Url("https://npm.acme.dev".into()));
+        dep.registry = Some(Registry::Named("https://npm.acme.dev".into()));
         let names: PackageNames = BTreeMap::from([(
             package_slug(&dep.package),
             BTreeSet::from([

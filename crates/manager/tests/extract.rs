@@ -1,6 +1,15 @@
 use patchula_manager::{Files, Scanner};
 use patchula_words::{DependencyKind, Manager};
 
+fn pats(values: &[&str]) -> patchula_config::Patterns {
+    let values: Vec<String> = values.iter().map(|value| (*value).to_owned()).collect();
+    patchula_config::Patterns::compile(&values).unwrap()
+}
+
+fn re(text: &str) -> patchula_config::ConfigRegex {
+    text.to_owned().try_into().unwrap()
+}
+
 /// Files from paths and texts the Count read.
 #[allow(dead_code)]
 fn read_files<const N: usize>(entries: [(String, String); N]) -> patchula_manager::Files {
@@ -2237,7 +2246,7 @@ fn mise_task_tools_are_extracted_from_config_and_included_task_files() {
     config.managers = vec![Manager::Mise];
     config.files = vec![patchula_config::FileSet {
         manager: Manager::Mise,
-        paths: vec!["mise.toml".into(), "tasks.toml".into()],
+        paths: pats(&["mise.toml", "tasks.toml"]),
     }];
     let files = read_files([
         (
@@ -2293,7 +2302,7 @@ fn mise_files(paths: &[&str]) -> patchula_config::Config {
     config.managers = vec![Manager::Mise];
     config.files = vec![patchula_config::FileSet {
         manager: Manager::Mise,
-        paths: paths.iter().map(|p| (*p).into()).collect(),
+        paths: pats(paths),
     }];
     config
 }
@@ -2531,10 +2540,10 @@ fn extractors_can_name_a_registry_from_a_capture() {
     let mut config = config();
     config.extractors.push(patchula_config::Extractor {
         note: String::new(),
-        paths: vec!["deploy/versions.txt".into()],
-        patterns: vec![
-            r"(?<dependency>@[\w./-]+)=(?<current>\S+)(?: registry=(?<registry>\S+))?".into(),
-        ],
+        paths: pats(&["deploy/versions.txt"]),
+        patterns: vec![re(
+            r"(?<dependency>@[\w./-]+)=(?<current>\S+)(?: registry=(?<registry>\S+))?",
+        )],
         source: "npm".into(),
         dependency: "{dependency}".into(),
         package: "{dependency}".into(),
@@ -2581,10 +2590,10 @@ fn extractor_registries_that_name_the_public_registry_stay_public() {
     let mut config = config();
     config.extractors.push(patchula_config::Extractor {
         note: String::new(),
-        paths: vec!["deploy/versions.txt".into()],
-        patterns: vec![
-            r"(?<dependency>@[\w./-]+)=(?<current>\S+)(?: registry=(?<registry>\S+))?".into(),
-        ],
+        paths: pats(&["deploy/versions.txt"]),
+        patterns: vec![re(
+            r"(?<dependency>@[\w./-]+)=(?<current>\S+)(?: registry=(?<registry>\S+))?",
+        )],
         source: "npm".into(),
         dependency: "{dependency}".into(),
         package: "{dependency}".into(),
@@ -2631,9 +2640,11 @@ fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
     let mut config = config();
     config.files = vec![patchula_config::FileSet {
         manager: Manager::Npm,
-        paths: vec!["**/package.json".into()],
+        paths: pats(&["**/package.json"]),
     }];
-    config.exclude.push("config/**".into());
+    let mut exclude: Vec<&str> = config.exclude.iter().map(|p| p.as_str()).collect();
+    exclude.push("config/**");
+    config.exclude = pats(&exclude);
     let scanner = Scanner::new(&config).unwrap();
     for path in [".npmrc", "config/.npmrc", "apps/web/.yarnrc.yml"] {
         assert!(scanner.needs(path), "{path}");
@@ -2643,8 +2654,8 @@ fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
     regex_only.managers = vec![Manager::Regex];
     regex_only.extractors.push(patchula_config::Extractor {
         note: String::new(),
-        paths: vec!["deploy/versions.txt".into()],
-        patterns: vec![r"(?<dependency>@[\w./-]+)=(?<current>\S+)".into()],
+        paths: pats(&["deploy/versions.txt"]),
+        patterns: vec![re(r"(?<dependency>@[\w./-]+)=(?<current>\S+)")],
         source: "npm".into(),
         dependency: "{dependency}".into(),
         package: "{dependency}".into(),
@@ -2657,8 +2668,8 @@ fn npm_registry_files_are_read_whatever_files_and_exclude_select() {
     let mut config = self::config();
     config.extractors.push(patchula_config::Extractor {
         note: String::new(),
-        paths: vec!["deploy/versions.txt".into()],
-        patterns: vec![r"(?<dependency>@[\w./-]+)=(?<current>\S+)".into()],
+        paths: pats(&["deploy/versions.txt"]),
+        patterns: vec![re(r"(?<dependency>@[\w./-]+)=(?<current>\S+)")],
         source: "npm".into(),
         dependency: "{dependency}".into(),
         package: "{dependency}".into(),
@@ -2944,7 +2955,7 @@ fn python_index_files_are_read_and_secrets_never_recorded() {
     // Only some manifests are selected; index files are read anyway.
     config.files = vec![patchula_config::FileSet {
         manager: Manager::Pyproject,
-        paths: vec!["services/**/pyproject.toml".into()],
+        paths: pats(&["services/**/pyproject.toml"]),
     }];
     let scanner = Scanner::new(&config).unwrap();
     for path in [
@@ -3044,7 +3055,7 @@ fn a_toml_error_does_not_quote_the_line_it_is_on() {
 fn pip_requirements_files_are_not_maintained_and_the_count_says_why() {
     let mut config = config();
     config.managers = vec![Manager::Pyproject];
-    config.exclude = vec!["vendor/**".into()];
+    config.exclude = pats(&["vendor/**"]);
     let scanner = Scanner::new(&config).unwrap();
     assert!(!scanner.needs("requirements.txt"));
     let paths = [
@@ -4634,7 +4645,8 @@ fn mise_extract(files: &[(&str, &str)]) -> Vec<(String, String, String, Option<S
     config.managers = vec![Manager::Mise];
     config.files = vec![patchula_config::FileSet {
         manager: Manager::Mise,
-        paths: files.keys().cloned().collect(),
+        paths: patchula_config::Patterns::compile(&files.keys().cloned().collect::<Vec<_>>())
+            .unwrap(),
     }];
     Scanner::new(&config)
         .unwrap()

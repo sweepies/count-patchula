@@ -4,6 +4,8 @@ use patchula_words::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::{ConfigRegex, Filter, Pattern, Patterns};
+
 patchula_words::words!(Rebase { Conflicts => "conflicts", Behind => "behind" });
 patchula_words::words!(NpmEngine { Aube => "aube", Npm => "npm" });
 patchula_words::words!(PhpBuild { Static => "static", Compiled => "compiled" });
@@ -16,8 +18,8 @@ pub struct Config {
     pub rules: Vec<Rule>,
     pub files: Vec<FileSet>,
     pub extractors: Vec<Extractor>,
-    pub ignore: Vec<String>,
-    pub exclude: Vec<String>,
+    pub ignore: Patterns,
+    pub exclude: Patterns,
     pub prs: PullRequests,
     pub lockfiles: Lockfiles,
     pub security: Security,
@@ -40,7 +42,7 @@ pub struct Policy {
     pub commit_prefix: String,
     pub release_notes: bool,
     pub body_notes: Vec<String>,
-    pub permitted: Option<String>,
+    pub permitted: Option<Filter>,
     pub wait_hours: u32,
     pub windows: Vec<Window>,
 }
@@ -58,7 +60,7 @@ pub struct Overrides {
     pub commit_prefix: Option<String>,
     pub release_notes: Option<bool>,
     pub body_notes: Option<Vec<String>>,
-    pub permitted: Option<String>,
+    pub permitted: Option<Filter>,
     pub wait_hours: Option<u32>,
     pub windows: Option<Vec<Window>>,
 }
@@ -66,14 +68,14 @@ pub struct Overrides {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Selector {
-    pub packages: Vec<String>,
-    pub dependencies: Vec<String>,
+    pub packages: Patterns,
+    pub dependencies: Patterns,
     pub managers: Vec<Manager>,
-    pub files: Vec<String>,
+    pub files: Patterns,
     pub updates: Vec<Update>,
     pub sources: Vec<Source>,
     pub kinds: Vec<DependencyKind>,
-    pub current: Option<String>,
+    pub current: Option<Filter>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -88,20 +90,20 @@ pub struct Rule {
 #[serde(deny_unknown_fields)]
 pub struct FileSet {
     pub manager: Manager,
-    pub paths: Vec<String>,
+    pub paths: Patterns,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Extractor {
     pub note: String,
-    pub paths: Vec<String>,
-    pub patterns: Vec<String>,
+    pub paths: Patterns,
+    pub patterns: Vec<ConfigRegex>,
     pub source: String,
     pub dependency: String,
     pub package: String,
     pub scheme: String,
-    pub extract: Option<String>,
+    pub extract: Option<ConfigRegex>,
     pub registry: Option<String>,
 }
 
@@ -131,7 +133,7 @@ pub struct Security {
     pub lowest_fix: bool,
     pub images: bool,
     pub image_platforms: Vec<String>,
-    pub quiet_images: std::collections::BTreeMap<String, String>,
+    pub quiet_images: std::collections::BTreeMap<Pattern, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

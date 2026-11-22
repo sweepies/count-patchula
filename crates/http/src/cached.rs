@@ -315,7 +315,7 @@ impl<E> Derived<E> {
     ) -> Self {
         assert!(
             patchula_cache::plain(name),
-            "a derived name is nonempty and has no @, ~ or +"
+            "a derived name is nonempty and has no @ or ~"
         );
         Self {
             name,

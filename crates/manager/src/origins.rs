@@ -69,8 +69,7 @@ impl Named {
     pub(crate) fn registry(&self) -> Option<Registry> {
         match self {
             Self::Public => None,
-            Self::Url(value) => Some(Registry::Url(value.clone())),
-            Self::Unusable(value) => Some(Registry::Unusable(value.clone())),
+            Self::Url(value) | Self::Unusable(value) => Some(Registry::Named(value.clone())),
         }
     }
     fn label(&self, public: &Public) -> String {

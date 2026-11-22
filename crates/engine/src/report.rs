@@ -12,9 +12,9 @@ struct ReportCtx<'a> {
     lookups: &'a Lookups,
     sent: &'a Mutex<BTreeSet<Sent>>,
     now: DateTime<Utc>,
-    /// The repository's `security.quietImages`, compiled once: each image
-    /// pattern and the reason its warnings are silenced.
-    quiet_images: &'a [(patchula_config::Patterns, &'a str)],
+    /// The repository's `security.quietImages`: each image pattern and the
+    /// reason its warnings are silenced.
+    quiet_images: &'a [(&'a patchula_config::Pattern, &'a str)],
 }
 
 impl Engine {
@@ -39,16 +39,11 @@ impl Engine {
         now: DateTime<Utc>,
     ) {
         let mut files: BTreeMap<String, Vec<ReportDependency>> = BTreeMap::new();
-        // Validation compiled every pattern, so none fails here.
         let quiet_images: Vec<_> = repo
             .config
             .iter()
             .flat_map(|config| &config.security.quiet_images)
-            .filter_map(|(pattern, reason)| {
-                patchula_config::Patterns::compile(std::slice::from_ref(pattern))
-                    .ok()
-                    .map(|pattern| (pattern, reason.as_str()))
-            })
+            .map(|(pattern, reason)| (pattern, reason.as_str()))
             .collect();
         let ctx = ReportCtx {
             eval: repo.evaluator.as_ref(),
@@ -209,7 +204,7 @@ impl Engine {
             let before = image_side(&lookups.image_sboms, &dep.package, old, platforms);
             let silenced = quiet_images
                 .iter()
-                .find(|(pattern, _)| pattern.matches_any(&dep.package, &dep.name))
+                .find(|(pattern, _)| pattern.admits_any(&dep.package, &dep.name))
                 .map(|(_, reason)| (*reason).to_owned());
             let silence = |mut check: patchula_report::ImageCheck| {
                 if check.state.warns() {

@@ -5917,7 +5917,7 @@ async fn lock_task_file_tool(
     let mut config = config();
     config.files = vec![patchula_config::FileSet {
         manager: Manager::Mise,
-        paths: vec![config_path.into(), task_file.into()],
+        paths: patchula_config::Patterns::compile(&[config_path.into(), task_file.into()]).unwrap(),
     }];
     let dep = patchula_manager::Scanner::new(&config)
         .unwrap()
