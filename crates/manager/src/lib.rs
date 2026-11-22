@@ -749,9 +749,9 @@ impl Scanner {
     /// `path`. Such a file over [`SHARED_NAME_LIMIT`], or one that is not
     /// text, is left out unread and unreported, rather than refusing the
     /// repository as any other selected file does: neither can be one of
-    /// their files.
-    /// Settings and credential-checked files never are, whatever `files`
-    /// config selects.
+    /// their files. No settings, registry or credential-scanned file, and
+    /// no file the tooling warnings read, has such a name, which a test in
+    /// the engine pins.
     pub fn shared_name(&self, path: &str) -> bool {
         let mut selecting = self
             .config
@@ -759,11 +759,7 @@ impl Scanner {
             .iter()
             .filter(|m| self.selected(**m, path))
             .peekable();
-        selecting.peek().is_some()
-            && selecting.all(|m| ecosystem(*m).shared_name(path))
-            && !self.registry_file(path)
-            && !registry_settings(path)
-            && !credential_scope(path)
+        selecting.peek().is_some() && selecting.all(|m| ecosystem(*m).shared_name(path))
     }
     /// Whether `path` sits under the repository's excluded paths.
     pub fn excluded(&self, path: &str) -> bool {
