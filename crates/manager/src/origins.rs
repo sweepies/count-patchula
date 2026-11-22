@@ -14,12 +14,28 @@
 use crate::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// An ecosystem's public registry: its packages' source, how to tell its
-/// URLs, and how to name it in a report.
+/// An ecosystem's public registry: its packages' source, the web hosts its
+/// URLs are on, and how to name it in a report.
 pub(crate) struct Public {
     pub source: Source,
     pub label: &'static str,
-    pub is_public: fn(&str) -> bool,
+    pub hosts: &'static [&'static str],
+}
+
+impl Public {
+    /// Whether `url` is on one of the registry's hosts, over https or plain
+    /// http; for crates.io, also its git index and `registry+`/`sparse+`
+    /// source forms, which `cargo::crates_io` reads.
+    pub(crate) fn is_public(&self, url: &str) -> bool {
+        if self.source == Source::Crates {
+            return crate::cargo::crates_io(url);
+        }
+        self.on_host(url)
+    }
+    /// Whether `url`'s web host is one of the registry's.
+    pub(crate) fn on_host(&self, url: &str) -> bool {
+        crate::web_host(url).is_some_and(|host| self.hosts.contains(&host.as_str()))
+    }
 }
 
 /// What a registry setting or lockfile entry names.
@@ -36,7 +52,7 @@ pub(crate) enum Named {
 impl Named {
     pub(crate) fn parse(value: &str, public: &Public) -> Self {
         let raw = value.trim().trim_matches(['"', '\'']);
-        if (public.is_public)(raw) {
+        if public.is_public(raw) {
             return Self::Public;
         }
         match crate::registry_url(raw) {

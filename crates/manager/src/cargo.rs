@@ -360,8 +360,7 @@ pub fn crates_io(value: &str) -> bool {
         .or_else(|| value.strip_prefix("sparse+"))
         .unwrap_or(value);
     value.trim_end_matches('/') == "https://github.com/rust-lang/crates.io-index"
-        || crate::web_host(value)
-            .is_some_and(|host| matches!(host.as_str(), "index.crates.io" | "crates.io"))
+        || CRATES.on_host(value)
 }
 
 /// Whether a Cargo configuration could send a bare `cargo install` to a
@@ -707,7 +706,7 @@ pub(crate) fn replaced(files: &Files, parsed: &Parsed, path: &str) -> Option<Str
 pub(crate) const CRATES: crate::origins::Public = crate::origins::Public {
     source: Source::Crates,
     label: "crates.io",
-    is_public: crates_io,
+    hosts: &["index.crates.io", "crates.io"],
 };
 
 /// The parsed manifests, lock docs and configs extraction shares.

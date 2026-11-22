@@ -213,7 +213,7 @@ pub(crate) fn fetch_ok(value: &str, public: &Public) -> bool {
             return fetch_ok(rest, public);
         }
     }
-    if (public.is_public)(value) {
+    if public.is_public(value) {
         return true;
     }
     let Some((scheme, rest)) = value.split_once(':') else {

@@ -182,10 +182,7 @@ pub(super) fn extract(
 pub(crate) const RUBYGEMS: Public = Public {
     source: Source::Rubygems,
     label: "https://rubygems.org",
-    is_public: |url| {
-        crate::web_host(url)
-            .is_some_and(|host| matches!(host.as_str(), "rubygems.org" | "index.rubygems.org"))
-    },
+    hosts: &["rubygems.org", "index.rubygems.org"],
 };
 
 /// What a Gemfile says about where its gems come from, and the gems its
@@ -883,9 +880,6 @@ impl crate::Ecosystem for Descriptor {
             lock: Lock {
                 keeps_ranges: true,
                 movable: dep.source == Source::Rubygems,
-                reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                    && dep.resolved.is_some()
-                    && dep.source == Source::Rubygems,
                 ..Proposing::BASE.lock
             },
             ..Proposing::BASE

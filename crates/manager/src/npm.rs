@@ -408,13 +408,6 @@ pub(super) fn node_version(path: &str, text: &Lines<'_>, manager: Manager) -> Ve
     }]
 }
 
-/// Whether `url` is on npm's or Yarn's public registry host, over https or the
-/// plain http some old `.npmrc` files still name.
-pub(crate) fn public(url: &str) -> bool {
-    crate::web_host(url)
-        .is_some_and(|host| matches!(host.as_str(), "registry.npmjs.org" | "registry.yarnpkg.com"))
-}
-
 /// What a registry setting names, parsed the way every ecosystem's are.
 fn named(value: &str) -> Named {
     Named::parse(value, &NPM)
@@ -681,7 +674,7 @@ pub(super) fn assign_registries(
 pub(crate) const NPM: crate::origins::Public = crate::origins::Public {
     source: Source::Npm,
     label: "npm",
-    is_public: public,
+    hosts: &["registry.npmjs.org", "registry.yarnpkg.com"],
 };
 
 /// The node ecosystem: npm and bun share its files; bun extracts only when

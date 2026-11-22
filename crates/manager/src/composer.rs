@@ -144,10 +144,7 @@ pub(super) fn extract(
 pub(crate) const PACKAGIST: Public = Public {
     source: Source::Packagist,
     label: "https://packagist.org",
-    is_public: |url| {
-        crate::web_host(url)
-            .is_some_and(|host| matches!(host.as_str(), "packagist.org" | "repo.packagist.org"))
-    },
+    hosts: &["packagist.org", "repo.packagist.org"],
 };
 
 /// Why a package not from a Composer registry is skipped.
@@ -299,7 +296,7 @@ fn lock(lock: &str) -> Option<Lock> {
             } else {
                 match package.get("notification-url") {
                     None => Origin::Other,
-                    Some(serde_json::Value::String(url)) if (PACKAGIST.is_public)(url) => {
+                    Some(serde_json::Value::String(url)) if PACKAGIST.is_public(url) => {
                         Origin::Index(Named::Public)
                     }
                     Some(serde_json::Value::String(url)) => Origin::Index(Named::Unusable(

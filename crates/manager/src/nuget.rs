@@ -250,14 +250,7 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
 pub(crate) const NUGET_ORG: Public = Public {
     source: Source::Nuget,
     label: "https://api.nuget.org/v3/index.json",
-    is_public: |url| {
-        crate::web_host(url).is_some_and(|host| {
-            matches!(
-                host.as_str(),
-                "api.nuget.org" | "www.nuget.org" | "nuget.org"
-            )
-        })
-    },
+    hosts: &["api.nuget.org", "www.nuget.org", "nuget.org"],
 };
 
 /// The names NuGet reads a config file under, in each folder.

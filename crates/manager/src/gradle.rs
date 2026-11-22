@@ -303,18 +303,13 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
 pub(crate) const MAVEN_PUBLIC: crate::origins::Public = crate::origins::Public {
     source: Source::Maven,
     label: "https://repo.maven.apache.org/maven2",
-    is_public: |url| {
-        crate::web_host(url).is_some_and(|host| {
-            matches!(
-                host.as_str(),
-                "repo.maven.apache.org"
-                    | "repo1.maven.org"
-                    | "maven.google.com"
-                    | "dl.google.com"
-                    | "plugins.gradle.org"
-            )
-        })
-    },
+    hosts: &[
+        "repo.maven.apache.org",
+        "repo1.maven.org",
+        "maven.google.com",
+        "dl.google.com",
+        "plugins.gradle.org",
+    ],
 };
 
 /// Identifiers that add a repository, or could, in Gradle build logic.

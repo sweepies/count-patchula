@@ -166,7 +166,7 @@ pub(crate) fn npm(
                 continue;
             };
             let from_registry = object.get_string("resolved").is_none_or(|resolved| {
-                crate::npm::public(&resolved.value)
+                crate::npm::NPM.is_public(&resolved.value)
                     || match crate::npm::named_for(path, name, npmrcs) {
                         crate::origins::Named::Public => false,
                         crate::origins::Named::Url(registry) => under(&resolved.value, &registry),
