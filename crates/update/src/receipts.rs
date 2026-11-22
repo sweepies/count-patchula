@@ -33,9 +33,10 @@ mod inventory {
     )]
     pub struct InventoryQuery;
 
-    /// `inventory-next.graphql` — a continuation page carrying every
-    /// connection that still has a page, with the `viewer` and
-    /// default-branch head the per-page checks read.
+    /// `inventory-next.graphql` — a continuation page carrying the
+    /// connections that still have a page (`$refs` and `$issues` include
+    /// each), with the `viewer` and default-branch head the per-page
+    /// checks read.
     #[derive(GraphQLQuery)]
     #[graphql(
         schema_path = "../github/graphql/schema.docs.graphql",
@@ -43,26 +44,6 @@ mod inventory {
         response_derives = "Debug, PartialEq"
     )]
     pub struct InventoryNextQuery;
-
-    /// `inventory-refs.graphql` — a `refs` continuation page, with the
-    /// same checks.
-    #[derive(GraphQLQuery)]
-    #[graphql(
-        schema_path = "../github/graphql/schema.docs.graphql",
-        query_path = "src/inventory-refs.graphql",
-        response_derives = "Debug, PartialEq"
-    )]
-    pub struct InventoryRefsQuery;
-
-    /// `inventory-issues.graphql` — an `issues` continuation page, with
-    /// the same checks.
-    #[derive(GraphQLQuery)]
-    #[graphql(
-        schema_path = "../github/graphql/schema.docs.graphql",
-        query_path = "src/inventory-issues.graphql",
-        response_derives = "Debug, PartialEq"
-    )]
-    pub struct InventoryIssuesQuery;
 
     /// `inventory-last.graphql` — the closing re-read of the fields the
     /// first page answers once: the split walk gathers them from its first
@@ -85,12 +66,9 @@ pub use inventory::inventory_query::{
 /// The first-page inventory document, exported for tests that compare
 /// request bodies.
 pub const INVENTORY_QUERY: &str = inventory::inventory_query::QUERY;
-/// The continuation document for the pages both connections still owe.
+/// The continuation document, carrying the connections that still owe a
+/// page.
 pub const INVENTORY_NEXT_QUERY: &str = inventory::inventory_next_query::QUERY;
-/// The `refs`-only continuation document.
-pub const INVENTORY_REFS_QUERY: &str = inventory::inventory_refs_query::QUERY;
-/// The `issues`-only continuation document.
-pub const INVENTORY_ISSUES_QUERY: &str = inventory::inventory_issues_query::QUERY;
 /// The closing document a paged walk ends on.
 pub const INVENTORY_LAST_QUERY: &str = inventory::inventory_last_query::QUERY;
 
@@ -647,8 +625,9 @@ struct PrStateBase {
     repo: Value,
 }
 impl PrState {
-    /// From the REST view the write lifecycle stores: every scalar the
-    /// receipt compares passes through verbatim.
+    /// From the REST view the write lifecycle stores, or the inventory's
+    /// projection of one: every scalar the receipt compares passes through
+    /// verbatim.
     fn from_rest(pr: &model::PullRequest) -> Self {
         Self {
             number: json!(pr.number),
@@ -674,41 +653,6 @@ impl PrState {
             actor: pr.user.as_ref().map_or(Value::Null, |u| json!(u.login)),
             labels: pr.labels.iter().map(|l| l.name.clone()).collect(),
             merge: pr.auto_merge.is_some(),
-        }
-    }
-    /// From an inventory `PullRequest` — the same fields, read typed.
-    fn from_inventory(pr: &InventoryPr) -> Self {
-        Self {
-            number: json!(pr.number),
-            title: json!(pr.title),
-            body_hash: crate::pr::body::body_hash(&pr.body),
-            head: PrStateHead {
-                r#ref: json!(pr.head_ref_name),
-                sha: json!(pr.head_ref_oid),
-                repo: pr
-                    .head_repository
-                    .as_ref()
-                    .map_or(Value::Null, |r| json!(r.name_with_owner)),
-            },
-            base: PrStateBase {
-                r#ref: json!(pr.base_ref_name),
-                repo: pr
-                    .base_repository
-                    .as_ref()
-                    .map_or(Value::Null, |r| json!(r.name_with_owner)),
-            },
-            actor: pr
-                .author
-                .as_ref()
-                .map_or(Value::Null, |a| json!(actor_login(a))),
-            labels: pr.labels.as_ref().map_or_else(BTreeSet::new, |page| {
-                page.items
-                    .iter()
-                    .flatten()
-                    .map(|l| l.name.clone())
-                    .collect()
-            }),
-            merge: pr.auto_merge_request.is_some(),
         }
     }
     fn value(&self) -> Value {
@@ -962,16 +906,10 @@ impl Inventory {
             if pages > client.max_pages() {
                 return Err(Error::Refused("inventory page budget exceeded".into()).into());
             }
-            let document = if !refs.done && !issues.done {
-                INVENTORY_NEXT_QUERY
-            } else if !refs.done {
-                INVENTORY_REFS_QUERY
-            } else {
-                INVENTORY_ISSUES_QUERY
-            };
-            let data: ContinuationData = client
-                .graphql(document, variables(&refs.next, &issues.next, &filter))
-                .await?;
+            let mut variables = variables(&refs.next, &issues.next, &filter);
+            variables["refs"] = json!(!refs.done);
+            variables["issues"] = json!(!issues.done);
+            let data: ContinuationData = client.graphql(INVENTORY_NEXT_QUERY, variables).await?;
             let repository_data = Self::check(&result, data)?;
             if !refs.done {
                 refs.page(repository_data.refs.as_ref())?;
@@ -1526,7 +1464,7 @@ fn restore_write(
     if pr.pr.user.as_ref().map(|u| u.login.as_str()) != Some(actor) {
         return Err("actor-mismatch");
     }
-    if pr.pr.head.sha != receipt.commit || PrState::from_inventory(node).value() != receipt.pr {
+    if pr.pr.head.sha != receipt.commit || PrState::from_rest(&pr.pr).value() != receipt.pr {
         return Err("pr-state-changed");
     }
     if receipt.base != plan.action().base_commit
@@ -1676,7 +1614,7 @@ mod tests {
             serde_json::to_string(&PrState::from_rest(&pr).value()).unwrap(),
             "{\"actor\":\"patchula[bot]\",\"base\":{\"ref\":\"main\",\"repo\":\"acme/repo\"},\"body_hash\":\"e7a9832c1be74db14193558e3b03bb92d1c607068599b5ebe1aca13225191acf\",\"head\":{\"ref\":\"patchula/serde-1.0.1\",\"repo\":\"acme/repo\",\"sha\":\"abc123\"},\"labels\":[\"automerge\",\"dependencies\"],\"merge\":true,\"number\":17,\"title\":\"chore(deps): bump serde from 1.0.0 to 1.0.1\"}"
         );
-        // The inventory path builds the identical bytes.
+        // The inventory's projection builds the identical bytes.
         let inventory_pr = serde_json::from_value::<InventoryPr>(serde_json::json!({
             "number": 17,
             "id": "PR_node17",
@@ -1695,7 +1633,15 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            serde_json::to_string(&PrState::from_inventory(&inventory_pr).value()).unwrap(),
+            serde_json::to_string(
+                &PrState::from_rest(
+                    &crate::pull_requests::tracked_pr(&inventory_pr)
+                        .expect("complete labels")
+                        .pr
+                )
+                .value()
+            )
+            .unwrap(),
             serde_json::to_string(&PrState::from_rest(&pr).value()).unwrap()
         );
     }

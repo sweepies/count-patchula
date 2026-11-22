@@ -873,13 +873,47 @@ struct Ctx {
     ops: Vec<GqlOp>,
 }
 
+/// Whether `@include` and `@skip` keep a selection, as GitHub evaluates
+/// them against the request's `variables`.
+fn included<'a>(
+    directives: &[graphql_parser::query::Directive<'a, &'a str>],
+    variables: &Value,
+) -> bool {
+    use graphql_parser::query::Value as ArgValue;
+    directives.iter().all(|directive| {
+        let condition = directive
+            .arguments
+            .iter()
+            .find(|(name, _)| *name == "if")
+            .map(|(_, value)| match value {
+                ArgValue::Boolean(value) => *value,
+                ArgValue::Variable(name) => variables[*name] == true,
+                other => panic!("unmodeled directive condition {other}"),
+            });
+        match (directive.name, condition) {
+            ("include", Some(condition)) => condition,
+            ("skip", Some(condition)) => !condition,
+            (name, _) => panic!("the fake does not model the @{name} directive"),
+        }
+    })
+}
+
 /// Distill a selection set to owned [`GqlSelection`]s: fields carry their
 /// response key, arguments and subtree; inline fragments keep their type
-/// condition for [`prune`].
-fn selections<'a>(set: &'a graphql_parser::query::SelectionSet<'a, &'a str>) -> Vec<GqlSelection> {
+/// condition for [`prune`]. Selections `@include` or `@skip` leave out
+/// under `variables` are dropped.
+fn selections<'a>(
+    set: &'a graphql_parser::query::SelectionSet<'a, &'a str>,
+    variables: &Value,
+) -> Vec<GqlSelection> {
     use graphql_parser::query::{Selection, TypeCondition, Value as ArgValue};
     set.items
         .iter()
+        .filter(|selection| match selection {
+            Selection::Field(field) => included(&field.directives, variables),
+            Selection::InlineFragment(fragment) => included(&fragment.directives, variables),
+            Selection::FragmentSpread(_) => true,
+        })
         .map(|selection| match selection {
             Selection::Field(field) => GqlSelection::Field(GqlField {
                 key: field.alias.unwrap_or(field.name).to_owned(),
@@ -897,7 +931,7 @@ fn selections<'a>(set: &'a graphql_parser::query::SelectionSet<'a, &'a str>) -> 
                         )
                     })
                     .collect(),
-                selections: selections(&field.selection_set),
+                selections: selections(&field.selection_set, variables),
             }),
             // `... on Commit` keeps its type condition: resolvers build the
             // whole answer, and the pruner keeps the fragment's fields only
@@ -907,7 +941,7 @@ fn selections<'a>(set: &'a graphql_parser::query::SelectionSet<'a, &'a str>) -> 
                     .type_condition
                     .as_ref()
                     .map(|TypeCondition::On(name)| (*name).to_owned()),
-                selections: selections(&fragment.selection_set),
+                selections: selections(&fragment.selection_set, variables),
             },
             Selection::FragmentSpread(spread) => panic!(
                 "the fake does not model named fragment spreads (`...{}`); inline the fragment",
@@ -962,7 +996,7 @@ impl Ctx {
                     Definition::Operation(OperationDefinition::SelectionSet(set)) => (set, false),
                     _ => panic!("unmodeled GraphQL definition"),
                 };
-                let selections = selections(set);
+                let selections = selections(set, &body["variables"]);
                 mutation |= is_mutation;
                 let mut fields = Vec::new();
                 gather(
@@ -2688,11 +2722,14 @@ mod tests {
     /// The operation's root selections, parsed the way `Ctx::new` does.
     fn select(query: &str) -> Vec<GqlSelection> {
         let doc = parse_query::<&str>(query).unwrap();
-        selections(match &doc.definitions[0] {
-            Definition::Operation(OperationDefinition::Query(op)) => &op.selection_set,
-            Definition::Operation(OperationDefinition::SelectionSet(set)) => set,
-            _ => panic!("test queries only"),
-        })
+        selections(
+            match &doc.definitions[0] {
+                Definition::Operation(OperationDefinition::Query(op)) => &op.selection_set,
+                Definition::Operation(OperationDefinition::SelectionSet(set)) => set,
+                _ => panic!("test queries only"),
+            },
+            &Value::Null,
+        )
     }
 
     /// The subtree of a query's single root field.
@@ -2702,6 +2739,28 @@ mod tests {
             panic!("one root field");
         };
         field.selections
+    }
+
+    /// `@include` and `@skip` drop a field the way GitHub does, by literal
+    /// or by variable.
+    #[test]
+    fn include_and_skip_directives_drop_fields() {
+        let doc = parse_query::<&str>(
+            "query($a: Boolean!, $b: Boolean!) { x @include(if: $a) y @include(if: $b) z @skip(if: true) w }",
+        )
+        .unwrap();
+        let Definition::Operation(OperationDefinition::Query(op)) = &doc.definitions[0] else {
+            panic!("a query");
+        };
+        let kept = selections(&op.selection_set, &json!({"a":true,"b":false}));
+        let names: Vec<_> = kept
+            .iter()
+            .map(|selection| match selection {
+                GqlSelection::Field(field) => field.name.as_str(),
+                GqlSelection::Fragment { .. } => panic!("fields only"),
+            })
+            .collect();
+        assert_eq!(names, ["x", "w"]);
     }
 
     #[test]

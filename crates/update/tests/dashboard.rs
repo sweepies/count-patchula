@@ -349,31 +349,26 @@ impl patchula_http::Transport for InventoryPages {
                 }}}),
             )
         } else if query == patchula_update::INVENTORY_NEXT_QUERY {
-            // Continuations carry every connection that still has a page,
-            // the actor and the default branch's head — nothing else.
+            // Continuations carry the connections `$refs` and `$issues`
+            // include, the actor and the default branch's head — nothing
+            // else. The recorded name says which connections were asked.
+            let variables = &input["variables"];
+            let mut repository = json!({"defaultBranchRef":head});
+            if variables["refs"] == true {
+                repository["refs"] = refs(&input);
+            }
+            if variables["issues"] == true {
+                repository["issues"] = issues(&input);
+            }
+            let name = match (variables["refs"] == true, variables["issues"] == true) {
+                (true, true) => "next",
+                (true, false) => "refs",
+                (false, true) => "issues",
+                (false, false) => panic!("a continuation that asks for nothing"),
+            };
             (
-                "next",
-                json!({"data":{"viewer":{"login":"patchula[bot]"},"repository":{
-                    "defaultBranchRef":head,
-                    "refs":refs(&input),
-                    "issues":issues(&input)
-                }}}),
-            )
-        } else if query == patchula_update::INVENTORY_REFS_QUERY {
-            (
-                "refs",
-                json!({"data":{"viewer":{"login":"patchula[bot]"},"repository":{
-                    "defaultBranchRef":head,
-                    "refs":refs(&input)
-                }}}),
-            )
-        } else if query == patchula_update::INVENTORY_ISSUES_QUERY {
-            (
-                "issues",
-                json!({"data":{"viewer":{"login":"patchula[bot]"},"repository":{
-                    "defaultBranchRef":head,
-                    "issues":issues(&input)
-                }}}),
+                name,
+                json!({"data":{"viewer":{"login":"patchula[bot]"},"repository":repository}}),
             )
         } else if query == patchula_update::INVENTORY_LAST_QUERY {
             // The closing re-read of the first page's constants, sent when
