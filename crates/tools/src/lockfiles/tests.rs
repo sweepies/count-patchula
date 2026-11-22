@@ -23,13 +23,16 @@ fn job(
     contract::job(dep, update, &snapshot.paths)
 }
 
-/// `validate_targets` for a plan's work, as callers held it.
+/// `validate_targets` for a plan's work, as callers held it; it reads no
+/// snapshot verdicts.
 fn validate_targets(
     plan: &Plan,
     config: &Config,
     files: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    super::validate_targets(&plan.lock_work().expect("planned lock work"), config, files)
+    let snapshot = Snapshot::default();
+    let work = plan.lock_work(&snapshot).expect("planned lock work");
+    super::validate_targets(&work, config, files)
 }
 
 mod real_actions_lock;
@@ -927,7 +930,6 @@ async fn plans_regenerate_lockfiles_side_by_side() {
         executor.most.load(std::sync::atomic::Ordering::SeqCst),
         executor.target
     );
-    assert!(snapshot.files.contains_key("go.sum"));
 }
 
 /// A registry credential committed to a file a tool reads stops the run
@@ -1027,7 +1029,6 @@ async fn tool_failure_is_reported_without_api_writes_or_partial_scratch_files() 
         "main",
         "patchula[bot]",
         patchula_config::Rebase::Behind,
-        false,
     )
     .await;
     assert!(p.action().commit.is_none());

@@ -567,7 +567,7 @@ impl Write<'_> {
             repo.warnings.dedup();
         } else {
             for plan in plans.iter_mut() {
-                if plan.lock_work().is_some() {
+                if plan.owes_lockfiles() {
                     plan.error("lockfile generation requires a disk cache or an injected runner");
                 }
             }
@@ -589,7 +589,6 @@ impl Write<'_> {
             repo.default_branch.as_deref().expect("configured branch"),
             plans,
             inventory,
-            self.dry_run,
         )
         .await
         .map_err(StepFailure::from)
@@ -611,7 +610,6 @@ impl Write<'_> {
             default_branch,
             actor,
             rebase,
-            self.dry_run,
         )
         .await;
     }

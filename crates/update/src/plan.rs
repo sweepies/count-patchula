@@ -24,12 +24,9 @@ pub struct Snapshot {
     #[serde(default)]
     pub cargo_cooldowns: BTreeMap<String, patchula_manager::CargoCooldown>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Blob {
-    pub sha: String,
-    pub mode: String,
-    pub content: String,
-}
+/// A repository file as the base commit holds it: the lockfile contract's
+/// own type, so a run's base files and the snapshot's are one shape.
+pub use contract::BaseFile as Blob;
 /// The workflow paths the snapshot's `actions.lock` lists, which the
 /// pinning decision reads; none when the file is absent or unreadable.
 pub fn actions_locked_workflows(snapshot: &Snapshot) -> BTreeSet<String> {
@@ -108,12 +105,6 @@ pub struct Plan {
     contents: BTreeMap<String, String>,
     /// Always the hash of the plan's current data, or the receipt's.
     fingerprint: String,
-    /// The snapshot's public-only verdicts, for the lockfile runs'
-    /// cache-partition choice.
-    public_only: BTreeMap<String, bool>,
-    /// The snapshot's Cargo cooldowns, for the lockfile runs' Cargo
-    /// environment.
-    cargo_cooldowns: BTreeMap<String, patchula_manager::CargoCooldown>,
     /// What the plan's lockfile run warned it could not enforce, for the
     /// repository's report warnings.
     lock_warnings: Vec<String>,
@@ -231,8 +222,6 @@ impl Plan {
             tree: None,
             stage: Stage::Built { jobs: Vec::new() },
             input_fingerprint: String::new(),
-            public_only: BTreeMap::new(),
-            cargo_cooldowns: BTreeMap::new(),
             lock_warnings: Vec::new(),
             moved_refs: Vec::new(),
             tooling: Vec::new(),
@@ -245,8 +234,6 @@ impl Plan {
         action: BranchAction,
         jobs: Vec<contract::Job>,
         fingerprint: String,
-        public_only: BTreeMap<String, bool>,
-        cargo_cooldowns: BTreeMap<String, patchula_manager::CargoCooldown>,
     ) -> Self {
         Self {
             kind: Kind::Maintenance,
@@ -255,8 +242,6 @@ impl Plan {
             // The tools always run for maintenance, even with no jobs.
             stage: Stage::Built { jobs },
             input_fingerprint: fingerprint,
-            public_only,
-            cargo_cooldowns,
             ..Self::new(action)
         }
     }
@@ -459,15 +444,23 @@ impl Plan {
             }
         });
     }
-    /// The lockfile work this plan asks a [`contract::Generate`] run for, or
-    /// `None` when the plan is not planned or its lockfiles already ran.
-    pub fn lock_work(&self) -> Option<contract::Work<'_>> {
-        if self.action.status != BranchStatus::Planned {
-            return None;
+    /// Whether the plan still owes a lockfile run: it is planned and its
+    /// lockfiles have not run yet.
+    pub fn owes_lockfiles(&self) -> bool {
+        self.owed_jobs().is_some()
+    }
+    /// The jobs a planned plan's lockfile run still owes.
+    fn owed_jobs(&self) -> Option<&[contract::Job]> {
+        match &self.stage {
+            Stage::Built { jobs } if self.action.status == BranchStatus::Planned => Some(jobs),
+            _ => None,
         }
-        let Stage::Built { jobs } = &self.stage else {
-            return None;
-        };
+    }
+    /// The lockfile work this plan asks a [`contract::Generate`] run for,
+    /// with `snapshot`'s public-only verdicts and Cargo cooldowns, or `None`
+    /// when the plan does not owe one.
+    pub fn lock_work<'a>(&'a self, snapshot: &'a Snapshot) -> Option<contract::Work<'a>> {
+        let jobs = self.owed_jobs()?;
         Some(contract::Work {
             repository: &self.action.repository,
             base_commit: &self.action.base_commit,
@@ -490,31 +483,25 @@ impl Plan {
                     version: change.version.as_deref(),
                 })
                 .collect(),
-            public_only: &self.public_only,
-            cargo_cooldowns: &self.cargo_cooldowns,
+            public_only: &snapshot.public_only,
+            cargo_cooldowns: &snapshot.cargo_cooldowns,
             maintenance: self.is_maintenance(),
         })
     }
     /// A finished run's files join the plan, or its failure becomes the
-    /// plan's error (a refusal, its hold). Returns the base blobs of the
-    /// files the run changed, the same for every plan, for `lock_all` to
-    /// join into the snapshot.
-    pub fn locked(
-        &mut self,
-        result: Result<contract::Generated, contract::Failure>,
-    ) -> Vec<(String, Blob)> {
+    /// plan's error (a refusal, its hold).
+    pub fn locked(&mut self, result: Result<contract::Generated, contract::Failure>) {
         let generated = match result {
             Ok(generated) => generated,
             Err(error) => {
                 self.lockfiles_failed(error);
-                return Vec::new();
+                return;
             }
         };
         self.lock_warnings.extend(generated.warnings);
         self.moved_refs = generated.moved;
         let mut contents = self.contents.clone();
         let mut deleted = BTreeSet::new();
-        let mut added = Vec::new();
         let mut files = Vec::new();
         for (path, file) in generated.files {
             let old = file.base.as_ref().map_or("", |b| b.content.as_str());
@@ -530,29 +517,13 @@ impl Plan {
             });
             contents.insert(path.clone(), new.into());
             if file.content.is_none() {
-                deleted.insert(path.clone());
+                deleted.insert(path);
             }
-            added.push((
-                path,
-                file.base.map_or_else(
-                    || Blob {
-                        sha: String::new(),
-                        mode: "100644".into(),
-                        content: String::new(),
-                    },
-                    |b| Blob {
-                        sha: b.sha,
-                        mode: b.mode,
-                        content: b.content,
-                    },
-                ),
-            ));
         }
         self.lockfiles_generated(contents, deleted, files);
         if self.action.files.is_empty() {
             self.hold(Hold::LockfilesCurrent);
         }
-        added
     }
     /// GitHub's verdict on the commit's signature.
     pub(crate) fn set_verified(&mut self, verified: Option<bool>) {
@@ -1155,8 +1126,6 @@ fn build(
         changes: changes.into_iter().collect(),
         stage,
         input_fingerprint: fingerprint,
-        public_only: snapshot.public_only.clone(),
-        cargo_cooldowns: snapshot.cargo_cooldowns.clone(),
         hold,
         ..Plan::new(action)
     })
@@ -1221,41 +1190,32 @@ pub fn unified(path: &str, old: &str, new: &str) -> String {
 /// Every plan's lockfiles through `generator`, all at once — the runner's
 /// own semaphore bounds how many generations a run works at once across
 /// every repository — calling `done` as each finishes. Each plan works in
-/// its own scratch tree; the base blobs they add, the same for every plan,
-/// join `snapshot` afterwards.
+/// its own scratch tree.
 pub async fn lock_all(
     generator: &dyn contract::Generate,
     plans: &mut [Plan],
-    snapshot: &mut Snapshot,
+    snapshot: &Snapshot,
     config: &Config,
     done: &(dyn Fn() + Sync),
 ) -> Vec<String> {
-    type Task<'a> =
-        std::pin::Pin<Box<dyn std::future::Future<Output = Vec<(String, Blob)>> + Send + 'a>>;
+    type Task<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
     let tasks: Vec<Task<'_>> = plans
         .iter_mut()
         .map(|plan| -> Task<'_> {
             Box::pin(async move {
-                let added = match plan.lock_work() {
-                    Some(work) => {
-                        let result = generator.generate(&work, config).await;
-                        plan.locked(result)
-                    }
-                    None => Vec::new(),
-                };
+                if let Some(work) = plan.lock_work(snapshot) {
+                    let result = generator.generate(&work, config).await;
+                    plan.locked(result);
+                }
                 done();
-                added
             })
         })
         .collect();
     let width = tasks.len().max(1);
-    let added: Vec<Vec<(String, Blob)>> = futures_util::stream::iter(tasks)
+    futures_util::stream::iter(tasks)
         .buffer_unordered(width)
-        .collect()
+        .collect::<Vec<()>>()
         .await;
-    for (path, blob) in added.into_iter().flatten() {
-        snapshot.files.entry(path).or_insert(blob);
-    }
     plans
         .iter()
         .flat_map(|plan| plan.lock_warnings.iter().cloned())
@@ -2042,8 +2002,6 @@ mod tests {
             },
             Vec::new(),
             "fingerprint".into(),
-            BTreeMap::new(),
-            BTreeMap::new(),
         );
         assert!(!plan.lockfiles_ready());
         let pr = crate::pull_requests::Tracked::from(

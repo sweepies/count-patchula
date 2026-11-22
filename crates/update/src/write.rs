@@ -10,6 +10,7 @@ use patchula_github::{
 use patchula_report::BranchStatus;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 #[allow(dead_code)]
 mod ref_update {
@@ -127,10 +128,12 @@ async fn prepare(
 const PARALLEL_WRITES: usize = 4;
 /// The branch refs one `updateRefs` mutation moves.
 const REFS_PER_UPDATE: usize = 50;
+/// The mode of a file a lockfile run creates.
+const NEW_FILE_MODE: &str = "100644";
 
 /// Shared base validation, bounded independent branch preparation and governed writes.
-/// `actor` is the run's one viewer login, read with the inventory. Dry runs
-/// end at the pure planner and send no GitHub requests here.
+/// `actor` is the run's one viewer login, read with the inventory. A dry
+/// run never gets here: it ends at the pure planner.
 pub async fn apply_all(
     client: &Client,
     plans: &mut [Plan],
@@ -138,12 +141,8 @@ pub async fn apply_all(
     default_branch: &str,
     actor: &str,
     rebase: Rebase,
-    dry_run: bool,
 ) {
-    if dry_run {
-        return;
-    }
-    for plan in plans.iter_mut().filter(|p| p.lock_work().is_some()) {
+    for plan in plans.iter_mut().filter(|p| p.owes_lockfiles()) {
         plan.error("lockfiles must be generated successfully before publication");
     }
     let Some(first) = plans
@@ -264,33 +263,42 @@ async fn apply_inner(
     }
     let tree_sha = &base.tree_sha;
     let entries = &base.entries;
+    // Each written file's mode, read from where its precondition is checked.
+    let mut modes = BTreeMap::new();
     for file in &plan.action().files {
-        let blob = snapshot
-            .files
-            .get(&file.path)
-            .ok_or(Error::Refused("missing extracted blob".into()))?;
+        let entry = entries.iter().find(|e| e.path == file.path);
         if file.blob_sha.is_empty() {
-            if !blob.sha.is_empty() || entries.iter().any(|e| e.path == file.path) {
+            if entry.is_some() {
                 return Err(Error::Refused(
                     format!("{}: expected new file is already present", file.path).into(),
                 ));
             }
+            modes.insert(file.path.as_str(), NEW_FILE_MODE.to_owned());
             continue;
         }
-        if blob.sha != file.blob_sha
-            || blob_sha(&blob.content) != blob.sha
-            || !entries.iter().any(|e| {
-                e.path == file.path && e.sha == blob.sha && e.mode == blob.mode && e.kind == "blob"
-            })
-        {
-            return Err(Error::Refused(
+        let stale = || {
+            Error::Refused(
                 format!(
                     "{}: stale blob SHA or contents; refusing all branch writes",
                     file.path
                 )
                 .into(),
-            ));
+            )
+        };
+        let entry = entry
+            .filter(|e| e.sha == file.blob_sha && e.kind == "blob")
+            .ok_or_else(stale)?;
+        // An extracted file is checked against the blob extraction read; a
+        // file only a lockfile run changed was read by that run from the
+        // base commit, whose tree `entries` is.
+        if let Some(blob) = snapshot.files.get(&file.path)
+            && (blob.sha != file.blob_sha
+                || blob_sha(&blob.content) != blob.sha
+                || blob.mode != entry.mode)
+        {
+            return Err(stale());
         }
+        modes.insert(file.path.as_str(), entry.mode.clone());
     }
     let old = match client
         .get_fresh::<GitRef>(&ref_path(&repo, &plan.action().branch))
@@ -329,20 +337,16 @@ async fn apply_inner(
             );
             return Ok(());
         }
-        let latest = commits
-            .last()
-            .ok_or(Error::Refused("empty branch history".into()))?;
-        if latest.sha != *old {
+        // `all_ours` holds only for a non-empty history.
+        if commits.last().is_none_or(|latest| latest.sha != *old) {
             return Err(Error::Refused(
                 "branch history does not end at the observed head".into(),
             ));
         }
-        let message = latest.commit.message.as_str();
-        let parent =
-            trailers::base(message).ok_or(Error::Refused("missing patchula base marker".into()))?;
-        moved_base = parent != plan.action().base_commit;
+        moved_base = recorded != plan.action().base_commit;
         if !moved_base
-            || rebase == Rebase::Conflicts && trailers::plan(message) == Some(plan.fingerprint())
+            || rebase == Rebase::Conflicts
+                && trailers::plan(tip_message) == Some(plan.fingerprint())
         {
             let existing_tree = existing_tip.tree.sha;
             let existing = client
@@ -361,13 +365,13 @@ async fn apply_inner(
                 existing_entries.iter().any(|e| {
                     e.path == *p
                         && e.sha == blob_sha(c)
-                        && e.mode == snapshot.files[p].mode
+                        && e.mode == modes[p.as_str()]
                         && e.kind == "blob"
                 })
             });
             // On the same base, also reject leftover edits from an older plan.
             // Directory OIDs change with children; compare leaf entries only.
-            let leaves = |entries: &[TreeEntry]| -> std::collections::BTreeMap<String, Value> {
+            let leaves = |entries: &[TreeEntry]| -> BTreeMap<String, Value> {
                 entries
                     .iter()
                     .filter(|e| e.kind != "tree")
@@ -381,7 +385,7 @@ async fn apply_inner(
                 } else {
                     expected.insert(
                         path.clone(),
-                        json!([blob_sha(content), snapshot.files[path].mode, "blob"]),
+                        json!([blob_sha(content), modes[path.as_str()], "blob"]),
                     );
                 }
             }
@@ -391,10 +395,17 @@ async fn apply_inner(
             }
         }
     }
-    let blobs: Vec<_> = plan.contents().iter().map(|(path, content)| {
-        if plan.deleted().contains(path) {json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","sha":null})}
-        else {json!({"path":path,"mode":snapshot.files[path].mode,"type":"blob","content":content})}
-    }).collect();
+    let blobs: Vec<_> = plan
+        .contents()
+        .iter()
+        .map(|(path, content)| {
+            if plan.deleted().contains(path) {
+                json!({"path":path,"mode":modes[path.as_str()],"type":"blob","sha":null})
+            } else {
+                json!({"path":path,"mode":modes[path.as_str()],"type":"blob","content":content})
+            }
+        })
+        .collect();
     let tree = client
         .post::<CreatedTree>(
             &format!("repos/{repo}/git/trees"),

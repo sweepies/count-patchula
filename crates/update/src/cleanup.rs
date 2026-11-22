@@ -134,9 +134,8 @@ enum Probe {
 /// answers heads seen before. The rest are probed eight at a time, while
 /// deletions stay in list order, one at a time, and stop at the first failed
 /// probe, so an error leaves every later branch in place. `inventory.actor` is the
-/// run's one viewer login, read with the inventory. Dry runs deliberately
-/// perform no API requests.
-#[allow(clippy::too_many_arguments)]
+/// run's one viewer login, read with the inventory. A dry run never gets
+/// here.
 pub async fn cleanup(
     client: &Client,
     cache: &Cache,
@@ -145,11 +144,7 @@ pub async fn cleanup(
     default_branch: &str,
     plans: &[Plan],
     inventory: &Inventory,
-    dry_run: bool,
 ) -> Result<Vec<BranchAction>, Error> {
-    if dry_run {
-        return Ok(Vec::new());
-    }
     let actor = inventory.actor.as_str();
     let refs = client
         .rest_pages::<BranchHead>(&format!("repos/{repo}/branches?per_page=100"), |_| false)

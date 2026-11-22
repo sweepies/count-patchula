@@ -956,7 +956,7 @@ pub struct GeneratedFile {
 }
 
 /// A repository file as the base commit holds it.
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BaseFile {
     pub sha: String,
     pub mode: String,
