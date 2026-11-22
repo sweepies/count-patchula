@@ -3,6 +3,7 @@
 use patchula_cache::Cache;
 use patchula_config::{Config, Rebase};
 use patchula_github::Client;
+use patchula_lockfiles::BaseFile;
 use patchula_manager::{Files, Scanner};
 use patchula_report::{
     BranchStatus, Current, Dependency as ReportDependency, DependencyMetadata, PackageFile,
@@ -10,7 +11,7 @@ use patchula_report::{
 };
 use patchula_testkit::github::{FakeGitHub, Matcher};
 use patchula_update::testing::Draft;
-use patchula_update::{Blob, Plan, Snapshot, blob_sha, branch_name, plan};
+use patchula_update::{Plan, Snapshot, blob_sha, branch_name, plan};
 use patchula_words::{Manager, Source, Update as UpdateKind};
 use serde_json::{Value, json};
 use std::{
@@ -66,7 +67,7 @@ fn setup(
         paths: BTreeSet::from(["mise.toml".into()]),
         files: BTreeMap::from([(
             "mise.toml".into(),
-            Blob {
+            BaseFile {
                 sha: blob_sha(text),
                 mode: "100644".into(),
                 content: text.into(),
@@ -679,7 +680,7 @@ fn grouped_files_and_prefixes_are_stable_when_occurrence_order_changes() {
     let text = "node 20.0.0 # preserve\n";
     snapshot.files.insert(
         ".tool-versions".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(text),
             mode: "100644".into(),
             content: text.into(),
@@ -758,7 +759,7 @@ fn unsupported_lockfile_plans_skip_and_opt_in_marks_manifest_only_updates() {
     r.updates[0].new_value = Some("2.0.0".into());
     snapshot.files = BTreeMap::from([(
         "package.json".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(text),
             mode: "100644".into(),
             content: text.into(),
@@ -830,7 +831,7 @@ fn a_zero_x_crates_in_range_release_yields_to_its_next_minor() {
         .map(|(path, content)| {
             (
                 path.clone(),
-                Blob {
+                BaseFile {
                     sha: blob_sha(content),
                     mode: "100644".into(),
                     content: content.to_owned(),
@@ -910,7 +911,7 @@ fn pnpm_and_yarn_locks_are_supported_and_never_pending() {
     r.updates[0].new_value = Some("2.0.0".into());
     snapshot.files = BTreeMap::from([(
         "package.json".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(text),
             mode: "100644".into(),
             content: text.into(),
@@ -1080,7 +1081,7 @@ fn container_occurrences_across_managers_share_target_and_slug_collisions_gain_m
     });
     snapshot.files.insert(
         "Dockerfile".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(text),
             mode: "100644".into(),
             content: text.into(),
@@ -1106,7 +1107,7 @@ fn container_occurrences_across_managers_share_target_and_slug_collisions_gain_m
     let text = "node 20.0.0\n";
     snapshot.files.insert(
         ".tool-versions".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(text),
             mode: "100644".into(),
             content: text.into(),
@@ -3027,7 +3028,7 @@ fn supplied_sandbox_targets_converge_to_sixteen_plans_with_supported_pins() {
             .map(|(p, c)| {
                 (
                     p.clone(),
-                    Blob {
+                    BaseFile {
                         sha: blob_sha(c),
                         mode: "100644".into(),
                         content: c.clone(),
@@ -3708,7 +3709,7 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
     let old = "obsolete checksum\n";
     snapshot.files.insert(
         "go.sum".into(),
-        Blob {
+        BaseFile {
             sha: blob_sha(old),
             mode: "100644".into(),
             content: old.into(),
@@ -3716,7 +3717,7 @@ async fn generated_lockfile_additions_and_deletions_share_the_manifest_commit() 
     );
     snapshot.files.insert(
         "Cargo.lock".into(),
-        Blob {
+        BaseFile {
             sha: String::new(),
             mode: "100644".into(),
             content: String::new(),
@@ -3933,7 +3934,7 @@ fn reference_data_pins_get_their_own_branch() {
             .map(|(p, c)| {
                 (
                     p.clone(),
-                    Blob {
+                    BaseFile {
                         sha: blob_sha(c),
                         mode: "100644".into(),
                         content: c.clone(),

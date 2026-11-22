@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Snapshot {
     /// Includes unselected lockfile paths, for conservative write gating.
     pub paths: BTreeSet<String>,
-    pub files: BTreeMap<String, Blob>,
+    pub files: BTreeMap<String, contract::BaseFile>,
     /// For each file that can steer a lockfile tool's fetches, whether it
     /// can fetch only from the ecosystem's well-known public registry. A
     /// run may share the `public` cache partition only when every file it
@@ -24,9 +24,6 @@ pub struct Snapshot {
     #[serde(default)]
     pub cargo_cooldowns: BTreeMap<String, patchula_manager::CargoCooldown>,
 }
-/// A repository file as the base commit holds it: the lockfile contract's
-/// own type, so a run's base files and the snapshot's are one shape.
-pub use contract::BaseFile as Blob;
 /// The workflow paths the snapshot's `actions.lock` lists, which the
 /// pinning decision reads; none when the file is absent or unreadable.
 pub fn actions_locked_workflows(snapshot: &Snapshot) -> BTreeSet<String> {

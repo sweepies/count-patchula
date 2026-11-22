@@ -53,7 +53,7 @@ fn snapshot(files: &BTreeMap<String, String>) -> Snapshot {
             .map(|(p, c)| {
                 (
                     p.clone(),
-                    Blob {
+                    contract::BaseFile {
                         sha: blob_sha(c),
                         mode: "100644".into(),
                         content: c.clone(),

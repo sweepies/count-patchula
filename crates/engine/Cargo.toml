@@ -24,6 +24,7 @@ patchula-lookup = { path = "../lookup" }
 patchula-report = { path = "../report" }
 patchula-update = { path = "../update" }
 patchula-tools = { path = "../tools" }
+patchula-lockfiles = { path = "../lockfiles" }
 patchula-versioning = { path = "../versioning" }
 patchula-words = { path = "../words" }
 tokio.workspace = true

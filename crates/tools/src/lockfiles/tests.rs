@@ -6,7 +6,7 @@ use patchula_update::maintenance::{
     MaintenanceSuccess, maintenance, record_refresh, refresh_scope,
 };
 use patchula_update::testing::Draft;
-use patchula_update::{Blob, Hold, Plan, Snapshot, blob_sha};
+use patchula_update::{Hold, Plan, Snapshot, blob_sha};
 use std::{future::Future, pin::Pin, sync::Mutex};
 
 /// One plan through the batch entry point, as the engine calls it.
@@ -763,7 +763,7 @@ fn snapshot(files: &BTreeMap<String, String>) -> Snapshot {
             .map(|(p, c)| {
                 (
                     p.clone(),
-                    Blob {
+                    BaseFile {
                         sha: blob_sha(c),
                         mode: "100644".into(),
                         content: c.clone(),
