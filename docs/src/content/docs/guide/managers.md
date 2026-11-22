@@ -317,9 +317,9 @@ packages of one repository, such as `pkl.toml` and `k8s.contrib` in
 `apple/pkl-pantry`, are separate packages with branches of their own.
 
 A release URI writes the version twice, in the tag and after the `@`. Its
-package keeps the tag's spelling with `<version>` in place of the version:
+package keeps the tag's spelling with `%version%` in place of the version:
 `package://github.com/jdx/hk/releases/download/v2.9.0/hk@2.9.0` is the package
-`github.com/jdx/hk/releases/download/v<version>/hk` at `2.9.0`, and an update
+`github.com/jdx/hk/releases/download/v%version%/hk` at `2.9.0`, and an update
 writes both copies, to `v2.11.1/hk@2.11.1`. The dependency is named after the
 package, `hk`, so a rule can select it with `dependencies { "hk" }`.
 

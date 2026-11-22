@@ -1524,8 +1524,21 @@ pub fn batch_plan(
             .copied()
             .filter(|d| current(d) == target.current)
             .collect();
+        // When the file moved on since the PR, the batch takes the first
+        // declaration with every other copy of its current value: one Pkl
+        // release URI writes its version twice, and moving only one copy
+        // would leave a URI naming no release.
         let deps = if matching.is_empty() {
-            candidates.first().copied().into_iter().collect()
+            candidates
+                .first()
+                .map(|first| {
+                    candidates
+                        .iter()
+                        .copied()
+                        .filter(|d| current(d) == current(first))
+                        .collect()
+                })
+                .unwrap_or_default()
         } else {
             matching
         };

@@ -81,8 +81,25 @@ async fn pkl_packages_follow_their_own_release_tags() {
     );
     assert_eq!(
         dependencies["hk"].package,
-        "github.com/jdx/hk/releases/download/v<version>/hk"
+        "github.com/jdx/hk/releases/download/v%version%/hk"
     );
+    let cassette: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    // Every release tag GitHub answered with, from every repository.
+    fn tags(value: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::String(tag)) = map.get("tagName") {
+                    out.insert(tag.clone());
+                }
+                map.values().for_each(|v| tags(v, out));
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|v| tags(v, out)),
+            _ => {}
+        }
+    }
+    let mut released = std::collections::BTreeSet::new();
+    tags(&cassette, &mut released);
     for (name, current) in [
         ("hk", "2.9.0"),
         ("pkl.toml", "1.0.0"),
@@ -91,36 +108,47 @@ async fn pkl_packages_follow_their_own_release_tags() {
         let dep = dependencies[name];
         assert_eq!(dep.current.version.as_deref(), Some(current), "{name}");
         assert!(!dep.updates.is_empty(), "{name} has newer releases");
+        let stream = patchula_config::PklPackage::parse(&dep.package).unwrap();
         for update in &dep.updates {
             let version = update.new_version.as_deref().unwrap();
-            // A bare semantic version on the package's own line of tags: never
-            // a `v` tag, and never another pantry package's release.
-            assert!(patchula_config::pkl_semver(version), "{name}: {version}");
             assert_eq!(update.new_value.as_deref(), Some(version), "{name}");
+            // Each proposal is a release tagged as this very package, never a
+            // monorepo neighbour's version.
+            let tag = format!("{}{version}{}", stream.prefix, stream.suffix);
+            assert!(released.contains(&tag), "{name}: no release {tag}");
         }
     }
     // `pkl.toml` and `k8s.contrib` are tagged in one repository, whose
-    // releases the run walked once for both: the batch's first page names it
-    // once, and no later page is asked for twice.
-    let cassette: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    // releases the run walked once for both: one first page names it, and no
+    // later page is asked for twice.
     let mut first_pages = 0;
     let mut pages = std::collections::BTreeSet::new();
     for interaction in cassette["interactions"].as_array().unwrap() {
-        let variables = &interaction["request"]["body"]["value"]["variables"];
-        let variables = variables.as_object().unwrap();
-        if let Some(cursor) = variables.get("cursor") {
-            let page = (
-                variables["owner"].to_string(),
-                variables["name"].to_string(),
-                cursor.to_string(),
-            );
-            assert!(pages.insert(page), "a release page read twice");
-        } else {
-            first_pages += variables
-                .iter()
-                .filter(|(key, value)| key.starts_with('n') && *value == "pkl-pantry")
-                .count();
+        let variables = interaction["request"]["body"]["value"]["variables"]
+            .as_object()
+            .unwrap();
+        let named = |owner: &str, name: &str| {
+            variables.get(owner).and_then(|v| v.as_str()) == Some("apple")
+                && variables.get(name).and_then(|v| v.as_str()) == Some("pkl-pantry")
+        };
+        match variables.get("cursor").filter(|cursor| !cursor.is_null()) {
+            Some(cursor) => {
+                let page = (
+                    variables["owner"].to_string(),
+                    variables["name"].to_string(),
+                    cursor.to_string(),
+                );
+                assert!(pages.insert(page), "a release page read twice");
+            }
+            None if named("owner", "name") => first_pages += 1,
+            // A batched first page names each repository as `o<i>`/`n<i>`.
+            None => {
+                first_pages += variables
+                    .keys()
+                    .filter_map(|key| key.strip_prefix('o'))
+                    .filter(|i| named(&format!("o{i}"), &format!("n{i}")))
+                    .count();
+            }
         }
     }
     assert_eq!(first_pages, 1, "apple/pkl-pantry's first page read once");

@@ -19,6 +19,7 @@ running package code:
 | Go | the module path; vanity paths through `?go-get=1`; `golang.org/x` through its GitHub mirrors |
 | Docker and OCI images | the image's `org.opencontainers.image.source` label, then a small table for official images, then the same key in the manifest's annotations |
 | Helm charts, from an OCI registry or an `index.yaml` | the chart version's `sources`: the first on a supported host, else the first |
+| Pkl | the repository that publishes the package; only the package's own tags bound its notes |
 | mise | the release URL mise lists for the version; a table for core tools; the npm, PyPI or crates.io metadata when that is the backend mise picks for the tool |
 
 GitHub, GitLab (gitlab.com and hosts with `gitlab` in the name), Codeberg,

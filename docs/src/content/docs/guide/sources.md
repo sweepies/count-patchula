@@ -179,7 +179,8 @@ configuration.
 By default (`useVersionsHost = true`), public GitHub repositories that appear in
 mise's registry are read from the public
 [mise-versions](https://mise-versions.jdx.dev) mirror instead of the GitHub API:
-`releases.json` and `tags.json`, validated by ETag. The mirror dates a tag only
+`releases.json` and `tags.json`, validated by ETag. A `pkl` package's
+repository is read the same way. The mirror dates a tag only
 by its release, so when a `github-tags` lookup finds a tag without one, which
 may be an annotated tag with a tagger date, that repository's tags are read
 from GitHub instead. Repositories outside the

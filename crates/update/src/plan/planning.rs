@@ -1005,6 +1005,57 @@ fn a_batch_moves_every_declaration_of_a_dependency_in_a_file() {
     assert!(!written.contains("@v4.1.0"), "{written}");
 }
 
+/// A Pkl release URI writes its version twice. When the file moved on since
+/// the PR, the batch still moves both copies, or the URI would name no release.
+#[test]
+fn a_batch_moves_both_copies_of_a_moved_pkl_release_uri() {
+    let uri = |v: &str| {
+        format!(
+            "amends \"package://github.com/jdx/hk/releases/download/v{v}/hk@{v}#/Config.pkl\"\n"
+        )
+    };
+    let files = BTreeMap::from([("hk.pkl".to_string(), uri("2.10.0"))]);
+    let config = config();
+    let dependencies = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies;
+    assert_eq!(dependencies.len(), 2, "{dependencies:?}");
+    let target = crate::plan::Change {
+        registry: None,
+        source: dependencies[0].source,
+        package: dependencies[0].package.clone(),
+        file: "hk.pkl".into(),
+        // The PR moved 2.9.0; the base has since reached 2.10.0.
+        current: "2.9.0".into(),
+        current_version: None,
+        value: Some("2.11.1".into()),
+        version: Some("2.11.1".into()),
+        digest: None,
+        kind: patchula_words::Update::Minor,
+        merge: false,
+        labels: Vec::new(),
+        release_notes: false,
+        body_notes: Vec::new(),
+        advisories: Vec::new(),
+        image: None,
+    };
+    let plan = crate::plan::batch_plan(
+        &repo(),
+        &config,
+        &dependencies,
+        &snapshot(&files),
+        batched(vec![target]),
+        false,
+        None,
+        monday(),
+    )
+    .unwrap()
+    .expect("a batch plan");
+    assert_eq!(plan.contents()["hk.pkl"], uri("2.11.1"));
+}
+
 /// A batch marker keeps the target but not the cooldown: the reported
 /// update that proposed a security fix inside the committed window hands
 /// its marker over, so the rebuilt Cargo job keeps `publish_age_allow`

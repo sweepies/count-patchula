@@ -41,15 +41,12 @@ fn read(uri: &str) -> Option<Result<Read, &'static str>> {
             return Err(ESCAPED);
         }
         let base = &rest[..rest.find('#').unwrap_or(rest.len())];
-        if base.contains("::") {
-            return Err(CHECKSUM);
-        }
-        let (host, path) = base.split_once('/').ok_or(UNSUPPORTED_PATH)?;
+        let (host, path) = base.split_once('/').ok_or(UNSUPPORTED_HOST)?;
         if !matches!(host, "github.com" | "pkg.pkl-lang.org") {
             return Err(UNSUPPORTED_HOST);
         }
-        if base.contains(['?', '<', '>']) {
-            return Err(UNSUPPORTED_PATH);
+        if path.contains("::") {
+            return Err(CHECKSUM);
         }
         let (path_base, version) = path.rsplit_once('@').ok_or(UNSUPPORTED_PATH)?;
         if !pkl_semver(version) {
@@ -64,7 +61,12 @@ fn read(uri: &str) -> Option<Result<Read, &'static str>> {
         spans.push(version_at..version_at + version.len());
         let package = match (host, parts.as_slice()) {
             ("github.com", [owner, repo, "releases", "download", tag, _]) => {
-                let mut found = tag.match_indices(version).map(|(at, _)| at);
+                // Every start, overlapping ones included: `1.1.1.1.1` holds
+                // `1.1.1` three times, and no single one is the version.
+                let mut found = tag
+                    .char_indices()
+                    .filter(|(at, _)| tag[*at..].starts_with(version))
+                    .map(|(at, _)| at);
                 let (Some(at), None) = (found.next(), found.next()) else {
                     return Err(TAG_VERSION);
                 };
@@ -92,19 +94,21 @@ fn read(uri: &str) -> Option<Result<Read, &'static str>> {
     })())
 }
 
-/// A skipped package URI as a report shows it: without its fragment, and
-/// hidden when its authority holds a user, which could carry a password.
-/// `name@version` puts an `@` in every package path, so the generic URL
-/// redaction, which reads any `@` as a possible user, would hide them all.
+/// A skipped package URI as a report shows it: without its query, fragment
+/// and checksum, and hidden when what is left holds a `:`, which a password
+/// always follows (a port is hidden with it), or an `@` before the first
+/// `/`, which ends a user. `name@version` puts an `@` in every package path,
+/// so the generic URL redaction, which reads any `@` as a possible user,
+/// would hide them all.
 fn shown(uri: &str) -> String {
-    let base = uri.split('#').next().unwrap_or(uri);
-    let authority = base
-        .strip_prefix("package://")
-        .map_or(base, |rest| rest.split('/').next().unwrap_or(rest));
-    if authority.contains('@') {
+    let rest = uri.strip_prefix("package://").unwrap_or(uri);
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let path = path.split("::").next().unwrap_or(path);
+    if authority.contains([':', '@']) || path.contains(':') {
         "<unreadable URL>".into()
     } else {
-        base.into()
+        format!("package://{authority}/{path}")
     }
 }
 
@@ -163,8 +167,14 @@ pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
+    /// A package URI names one exact version, so an update writes the
+    /// release's version as the catalog lists it, never a range: `widen`
+    /// would otherwise write `2.9.0 || 2.13.0` into the URI.
     fn proposing(&self, _dep: &Dependency) -> Proposing {
-        Proposing::BASE
+        Proposing {
+            written: Written::Tag,
+            ..Proposing::BASE
+        }
     }
     /// Every Pkl module but the repository's own config, whose imports
     /// config loading already refuses unless they are local modules.

@@ -3,31 +3,36 @@
 //! package and how its release tags are spelled.
 //!
 //! - `pkg.pkl-lang.org/<project>/<name>`: `apple/<project>`, tags
-//!   `<name>@<version>`
+//!   `<name>@%version%`
 //! - `pkg.pkl-lang.org/github.com/<owner>/<repo>/<name>`: `<owner>/<repo>`,
-//!   tags `<name>@<version>`
+//!   tags `<name>@%version%`
 //! - `github.com/<owner>/<repo>/releases/download/<tag>/<name>`, the tag
-//!   with its version written `<version>`: `<owner>/<repo>`, tags spelled
+//!   with its version written `%version%`: `<owner>/<repo>`, tags spelled
 //!   like `<tag>`
 //!
 //! The `pkl` manager writes these names and the datasource and release notes
 //! read them, so all three share this one reading.
-use std::sync::LazyLock;
+/// Where a GitHub release URI's package name writes its tag's version. A
+/// tag may not hold `%` (a percent-encoded tag never matches GitHub's own),
+/// so no tag holds it, and it means nothing to Markdown, HTML, globs or
+/// regular expressions, so a package name renders and selects as written.
+pub const VERSION_PLACEHOLDER: &str = "%version%";
 
-/// Where a GitHub release URI's package name writes its tag's version. `<`
-/// and `>` cannot appear unencoded in a URI, so no tag holds it.
-pub const VERSION_PLACEHOLDER: &str = "<version>";
-
-/// A semantic version as Pkl requires a package's version to be.
+/// A semantic version as Pkl requires a package's version to be, read
+/// with the parser the `semver` scheme compares versions with.
 pub fn pkl_semver(version: &str) -> bool {
-    static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(concat!(
-            r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)",
-            r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
-        ))
-        .expect("semver pattern")
-    });
-    RE.is_match(version)
+    semver::Version::parse(version).is_ok()
+}
+
+/// A Pkl package name or release tag: letters, digits and `._+@-`, never `.`
+/// or `..`. Anything else, escapes and percent-encoding included, is not
+/// read, so names reach branch names, reports and PR bodies as plain text.
+pub fn pkl_segment(part: &str) -> bool {
+    !part.is_empty()
+        && !matches!(part, "." | "..")
+        && part
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._+@-".contains(&b))
 }
 
 /// A GitHub owner or repository name.
@@ -62,9 +67,10 @@ impl PklPackage {
             ["pkg.pkl-lang.org", project, name] => {
                 ("apple", *project, format!("{name}@"), String::new())
             }
-            ["github.com", owner, repo, "releases", "download", tag, name] => {
+            ["github.com", owner, repo, "releases", "download", tag, _] => {
                 let (prefix, suffix) = tag.split_once(VERSION_PLACEHOLDER)?;
-                if suffix.contains(VERSION_PLACEHOLDER) || name.is_empty() {
+                let affix = |part: &str| part.is_empty() || pkl_segment(part);
+                if !affix(prefix) || !affix(suffix) {
                     return None;
                 }
                 (*owner, *repo, prefix.to_owned(), suffix.to_owned())
@@ -73,7 +79,7 @@ impl PklPackage {
         };
         let name_ok = parts
             .last()
-            .is_some_and(|name| !name.is_empty() && !name.contains(['@', '<', '>']));
+            .is_some_and(|name| pkl_segment(name) && !name.contains('@'));
         (github_segment(owner) && github_segment(repo) && name_ok).then(|| Self {
             repository: format!("{owner}/{repo}"),
             prefix,
@@ -103,11 +109,14 @@ mod tests {
         assert_eq!(hosted.repository, "jdx/hk");
         assert_eq!(hosted.version("hk@2.0.0-rc.1"), Some("2.0.0-rc.1"));
         let release =
-            PklPackage::parse("github.com/jdx/hk/releases/download/v<version>-final/hk").unwrap();
+            PklPackage::parse("github.com/jdx/hk/releases/download/v%version%-final/hk").unwrap();
         assert_eq!(release.repository, "jdx/hk");
         assert_eq!(release.version("v2.11.1-final"), Some("2.11.1"));
         assert_eq!(release.version("v2.11.1"), None);
         assert_eq!(release.version("v2.11-final"), None);
+        // Versions are read as the semver scheme reads them.
+        assert_eq!(release.version("v1.0.0-01-final"), None);
+        assert_eq!(release.version("v99999999999999999999.0.0-final"), None);
     }
 
     #[test]
@@ -115,9 +124,14 @@ mod tests {
         for package in [
             "jdx/hk",
             "github.com/jdx/hk/releases/download/v2.9.0/hk",
-            "github.com/jdx/hk/releases/download/<version><version>/hk",
-            "github.com/jdx/hk/releases/download/v<version>/",
-            "github.com/../hk/releases/download/v<version>/hk",
+            "github.com/jdx/hk/releases/download/%version%%version%/hk",
+            "github.com/jdx/hk/releases/download/v%version%%2B/hk",
+            "pkg.pkl-lang.org/pkl-pantry/..",
+            "pkg.pkl-lang.org/pkl-pantry/a|b",
+            "pkg.pkl-lang.org/pkl-pantry/a\nb",
+            "pkg.pkl-lang.org/pkl-pantry/a\u{1b}[31m",
+            "github.com/jdx/hk/releases/download/v%version%/",
+            "github.com/../hk/releases/download/v%version%/hk",
             "pkg.pkl-lang.org/pkl-pantry",
             "pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0",
             "example.com/a/b",

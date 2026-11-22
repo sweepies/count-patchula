@@ -107,7 +107,7 @@ fn gitlab_releases(
     })
 }
 pub(crate) const NOTES_GITLAB_RELEASES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-gitlab-releases", 2, gitlab_releases);
+    patchula_http::Derived::new("notes-gitlab-releases", 3, gitlab_releases);
 fn gitea_releases(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
@@ -121,7 +121,7 @@ fn gitea_releases(
     })
 }
 pub(crate) const NOTES_GITEA_RELEASES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-gitea-releases", 2, gitea_releases);
+    patchula_http::Derived::new("notes-gitea-releases", 3, gitea_releases);
 fn names(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(body, |t| {
         Some(Name {
@@ -130,7 +130,7 @@ fn names(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_
     })
 }
 pub(crate) const NOTES_FORGE_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-forge-tags", 2, names);
+    patchula_http::Derived::new("notes-forge-tags", 3, names);
 /// Root files only: `blob` on GitLab, `file` on Gitea.
 fn files(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(body, |f| {
@@ -141,7 +141,7 @@ fn files(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_
     })
 }
 pub(crate) const NOTES_FORGE_FILES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-forge-files", 2, files);
+    patchula_http::Derived::new("notes-forge-files", 3, files);
 fn sections(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
@@ -151,7 +151,7 @@ fn sections(
     serde_json::to_vec(&parse_changelog(&text)).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NOTES_FORGE_CHANGELOG: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-forge-changelog", 2, sections);
+    patchula_http::Derived::new("notes-forge-changelog", 3, sections);
 
 impl Client {
     async fn forge_read<T: serde::de::DeserializeOwned>(
@@ -182,7 +182,7 @@ impl Client {
         forge: &Forge,
         old: &Parsed,
         new: &Parsed,
-        package: &str,
+        package: &crate::Namespace<'_>,
     ) {
         let (releases, derived) = match forge.kind {
             ForgeKind::Gitlab => (api(forge, "releases?per_page=100"), NOTES_GITLAB_RELEASES),

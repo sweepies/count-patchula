@@ -100,6 +100,7 @@ he does not read Renovate presets.
 | `packagist` | `packagist` |
 | `node-version`, `golang-version`, `python-version`, `rust-version` | `mise` |
 | `git-refs`, for Nix flake inputs | `nix`, through `nix flake prefetch` |
+| `github-releases`, for Pkl packages | `pkl`: the publishing repository's releases, only those tagged as the package |
 
 The rest of Renovate's 82 datasources (`git-refs` other than for Nix, `git-tags`, the GitLab and
 Gitea release sources, `artifactory`, `conda`, `hex`, `dart`, `pod`, `cdnjs`,

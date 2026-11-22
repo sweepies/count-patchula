@@ -60,8 +60,8 @@ fn every_uri_form_names_its_package() {
         "import* \"package://pkg.pkl-lang.org/github.com/owner/repo/lib@0.3.1-rc.1#/*.pkl\"\n",
         "local x = import(\"package://github.com/a/b/releases/download/b-1.2.3-final/b@1.2.3#/B.pkl\")\n",
     );
-    let hk = "github.com/jdx/hk/releases/download/v<version>/hk";
-    let b = "github.com/a/b/releases/download/b-<version>-final/b";
+    let hk = "github.com/jdx/hk/releases/download/v%version%/hk";
+    let b = "github.com/a/b/releases/download/b-%version%-final/b";
     assert_eq!(
         read(text),
         [
@@ -142,6 +142,13 @@ fn unreadable_package_uris_are_skipped_with_a_reason() {
         "import \"package://user:secret@example.com/x/y@1.0.0#/Y.pkl\"\n",
         "import \"package://pkg.pkl-lang.org/p/x@\\(v)#/X.pkl\"\n",
         "import \"package://GitHub.com/a/b/releases/download/v1.0.0/b@1.0.0#/B.pkl\"\n",
+        "import \"package://example.com/a/b@1.0.0?token=secret#/A.pkl\"\n",
+        "import \"package://user:pa/ss@example.com/a/b@1.0.0#/A.pkl\"\n",
+        "import \"package://github.com/a/b/releases/download/1.1.1.1.1/b@1.1.1#/B.pkl\"\n",
+        "import \"package://github.com/apple/pkl-pantry/releases/download/pkl.toml%401.0.0/pkl.toml@1.0.0#/toml.pkl\"\n",
+        "import \"package://[::1]/a/b@1.0.0#/A.pkl\"\n",
+        "import \"package://pkg.pkl-lang.org/pkl-pantry/..@1.0.0#/A.pkl\"\n",
+        "import \"package://pkg.pkl-lang.org/pkl-pantry/a|b@1.0.0#/A.pkl\"\n",
     );
     let extraction = extract("x.pkl", text);
     assert!(extraction.dependencies.is_empty());
@@ -159,7 +166,7 @@ fn unreadable_package_uris_are_skipped_with_a_reason() {
             (Some(2), "package://github.com/a/b/archive/b@1.0.0", path),
             (
                 Some(3),
-                "package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0::sha256:abc",
+                "package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0",
                 "package URIs that pin a checksum are not supported yet",
             ),
             (
@@ -187,6 +194,31 @@ fn unreadable_package_uris_are_skipped_with_a_reason() {
                 Some(9),
                 "package://GitHub.com/a/b/releases/download/v1.0.0/b@1.0.0",
                 host
+            ),
+            // The query, which may hold a token, is never shown.
+            (Some(10), "package://example.com/a/b@1.0.0", host),
+            // A password holding `/` ends the host early; it is hidden anyway.
+            (Some(11), "<unreadable URL>", host),
+            (
+                Some(12),
+                "package://github.com/a/b/releases/download/1.1.1.1.1/b@1.1.1",
+                "release tag does not hold the package version exactly once",
+            ),
+            (
+                Some(13),
+                "package://github.com/apple/pkl-pantry/releases/download/pkl.toml%401.0.0/pkl.toml@1.0.0",
+                path,
+            ),
+            (Some(14), "<unreadable URL>", host),
+            (
+                Some(15),
+                "package://pkg.pkl-lang.org/pkl-pantry/..@1.0.0",
+                path
+            ),
+            (
+                Some(16),
+                "package://pkg.pkl-lang.org/pkl-pantry/a|b@1.0.0",
+                path
             ),
         ]
     );

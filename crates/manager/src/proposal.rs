@@ -212,7 +212,6 @@ mod tests {
             (Manager::Helm, Chart, Source::Helm),
             (Manager::Regex, Production, Source::Npm),
             (Manager::Woodpecker, Production, Source::Docker),
-            (Manager::Pkl, Production, Source::Pkl),
         ] {
             assert_eq!(
                 facts(manager, kind, source),
@@ -282,6 +281,14 @@ mod tests {
         assert_eq!(apm.written, Written::Tag);
         assert!(apm.pin.commit && apm.pin.needs_digest && apm.pin.from_catalog);
         assert!(apm.unversioned.looked_up);
+        let package = facts(Manager::Pkl, DependencyKind::Production, Source::Pkl);
+        assert_eq!(
+            package,
+            Proposing {
+                written: Written::Tag,
+                ..Proposing::BASE
+            }
+        );
         let hook = facts(Manager::PreCommit, DependencyKind::Tool, Source::GithubTags);
         assert_eq!(hook.written, Written::Tag);
         assert!(hook.unversioned.looked_up && hook.unversioned.opaque);

@@ -48,11 +48,11 @@ parsed-postgres-sgml	9	crates/notes/src/adapters.rs,crates/notes/src/changelog.r
 parsed-go-history	9	crates/notes/src/adapters.rs,crates/notes/src/changelog.rs,crates/http/src/derive.rs	base64,serde,serde_json	861dfe0d69ffe38a436879248a837a3784005b9be27094e8f5429eed7344da7f
 notes-changelog-directory	2	crates/notes/src/changelog.rs,crates/http/src/derive.rs	serde,serde_json	cfdbcf0b889ca0085086dff4fce9c425bea04ca7048d310529c5419650d06bfb
 parsed-changelog	2	crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	base64,regex,serde,serde_json	33540363ff352bdb20e06527ad2df8ff69c7c82b85dc682647f1545f551da1d3
-notes-gitlab-releases	2	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	2ae8edbf23c93e30b731507b8357a7a1f7bdb76475796a83fb9288e57570439e
-notes-gitea-releases	2	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	2ae8edbf23c93e30b731507b8357a7a1f7bdb76475796a83fb9288e57570439e
-notes-forge-tags	2	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	2ae8edbf23c93e30b731507b8357a7a1f7bdb76475796a83fb9288e57570439e
-notes-forge-files	2	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	2ae8edbf23c93e30b731507b8357a7a1f7bdb76475796a83fb9288e57570439e
-notes-forge-changelog	2	crates/notes/src/forge.rs,crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	regex,serde,serde_json	4146f3b7e7d1833ff77b5438083bf314fc425d1cb886723254002a4a42d41874
+notes-gitlab-releases	3	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	5a0097db95c1eed4fee62a77788365e26e3da7860493157e3db80ad3dea081fe
+notes-gitea-releases	3	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	5a0097db95c1eed4fee62a77788365e26e3da7860493157e3db80ad3dea081fe
+notes-forge-tags	3	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	5a0097db95c1eed4fee62a77788365e26e3da7860493157e3db80ad3dea081fe
+notes-forge-files	3	crates/notes/src/forge.rs,crates/http/src/derive.rs	serde,serde_json	5a0097db95c1eed4fee62a77788365e26e3da7860493157e3db80ad3dea081fe
+notes-forge-changelog	3	crates/notes/src/forge.rs,crates/notes/src/changelog.rs,crates/notes/src/markdown.rs,crates/http/src/derive.rs	regex,serde,serde_json	940f5b30540430565de0ea6e5bdb580635222d072dfd05afe5cfa24993e184df
 notes-source-npm	4	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	be2cd19ef19a3d94067cfb27a63c08509975d44c2f13af226b419ec4c47571cd
 notes-source-crates	4	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	be2cd19ef19a3d94067cfb27a63c08509975d44c2f13af226b419ec4c47571cd
 notes-source-pypi	4	crates/notes/src/source.rs,crates/datasource/src/upstream.rs,crates/http/src/derive.rs	serde,serde_json,url	be2cd19ef19a3d94067cfb27a63c08509975d44c2f13af226b419ec4c47571cd
