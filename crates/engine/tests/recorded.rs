@@ -4,7 +4,7 @@ use patchula_engine::{Engine, Options};
 use patchula_http::Network;
 use patchula_process::{Executor, SystemExecutor};
 use patchula_report::{Report, Status};
-use patchula_testkit::{MiseRecorder, MiseReplay, Options as FixtureOptions, Redactor, Replay};
+use patchula_testkit::{MiseRecorder, MiseReplay, Redactor, Replay};
 use std::{path::Path, sync::Arc};
 fn config() -> patchula_config::Config {
     patchula_config::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/public.pkl")).unwrap()
@@ -21,22 +21,16 @@ async fn public_multi_repo_report_cold_and_warm() {
     };
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/engine/public-batch.json");
-    let fixture_options = FixtureOptions {
-        redactor: Redactor::default().with_literals([token.clone()]),
-        ..Default::default()
-    };
+    let redactor = Redactor::default().with_literals([token.clone()]);
     let replay = if recording {
         None
     } else {
-        Some(Arc::new(
-            Replay::open(&path, fixture_options.clone()).unwrap(),
-        ))
+        Some(Arc::new(Replay::open(&path, redactor.clone()).unwrap()))
     };
     let transport = if let Some(replay) = &replay {
         replay.clone() as Arc<dyn patchula_http::Transport>
     } else {
-        patchula_testkit::from_env(&path, fixture_options, || Ok(Arc::new(Network::new()?)))
-            .unwrap()
+        patchula_testkit::from_env(&path, redactor, || Ok(Arc::new(Network::new()?))).unwrap()
     };
     let dir = tempfile::tempdir().unwrap();
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())

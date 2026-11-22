@@ -1446,12 +1446,9 @@ mod closed_pulls_tests {
             .unwrap();
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/github/closed-pulls.json");
-        let options = patchula_testkit::Options {
-            redactor: patchula_testkit::Redactor::default().with_literals([token.clone()]),
-            ..Default::default()
-        };
+        let redactor = patchula_testkit::Redactor::default().with_literals([token.clone()]);
         let transport =
-            patchula_testkit::from_env(&path, options, || Ok(Arc::new(Network::new()?))).unwrap();
+            patchula_testkit::from_env(&path, redactor, || Ok(Arc::new(Network::new()?))).unwrap();
         let client = Client::with_transport(&token, cache, Default::default(), transport).unwrap();
         let branches = [
             "patchula/uv-0.x".to_owned(),

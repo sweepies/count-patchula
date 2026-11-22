@@ -26,7 +26,7 @@ async fn report_with_mise(
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("spec.json");
     patchula_testkit::save(&path, &cassette, &Redactor::default()).unwrap();
-    let replay = Arc::new(Replay::open(&path, patchula_testkit::Options::default()).unwrap());
+    let replay = Arc::new(Replay::open(&path, patchula_testkit::Redactor::default()).unwrap());
     let cache = Cache::open(
         dir.path().join("cache.sqlite"),
         patchula_cache::Options::default(),

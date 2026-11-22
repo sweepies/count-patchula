@@ -3,7 +3,7 @@
 
 use patchula_cache::{Cache, HttpEntry, HttpKey, Options as CacheOptions};
 use patchula_github::{Client, Options};
-use patchula_testkit::{Options as FixtureOptions, Replay};
+use patchula_testkit::{Redactor, Replay};
 use std::{collections::BTreeMap, hint::black_box, path::Path, sync::Arc};
 
 #[tokio::main(flavor = "current_thread")]
@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cassette =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/github/conditional.json");
     for i in 0..25 {
-        let replay = Arc::new(Replay::open(&cassette, FixtureOptions::default())?);
+        let replay = Arc::new(Replay::open(&cassette, Redactor::default())?);
         // Unique synthetic credential scopes keep the first GET cold per replay,
         // while all clients use the same cache worker and database.
         let client = Client::with_transport(

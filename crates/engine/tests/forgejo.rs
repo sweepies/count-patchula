@@ -111,7 +111,7 @@ async fn engine(dir: &Path, interactions: Vec<Interaction>) -> (Engine, Arc<Repl
         interactions,
     };
     patchula_testkit::save(&path, &cassette, &Redactor::default()).unwrap();
-    let replay = Arc::new(Replay::open(&path, patchula_testkit::Options::default()).unwrap());
+    let replay = Arc::new(Replay::open(&path, patchula_testkit::Redactor::default()).unwrap());
     let cache = Cache::open(dir.join("cache.sqlite"), patchula_cache::Options::default())
         .await
         .unwrap();

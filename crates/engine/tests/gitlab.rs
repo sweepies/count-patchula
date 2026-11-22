@@ -22,10 +22,11 @@ release:
 #[tokio::test]
 async fn gitlab_ci_images_pin_to_digests_and_refs_follow_gitlab_tags() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/engine/gitlab-ci.json");
-    let transport = patchula_testkit::from_env(&path, patchula_testkit::Options::default(), || {
-        Ok(Arc::new(Network::new()?))
-    })
-    .unwrap();
+    let transport =
+        patchula_testkit::from_env(&path, patchula_testkit::Redactor::default(), || {
+            Ok(Arc::new(Network::new()?))
+        })
+        .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let cache = Cache::open(
         dir.path().join("cache.sqlite"),

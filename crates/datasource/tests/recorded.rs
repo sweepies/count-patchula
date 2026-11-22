@@ -3,7 +3,7 @@ use patchula_cache::{Cache, Options as CacheOptions};
 use patchula_datasource::Client;
 use patchula_github::Options as GithubOptions;
 use patchula_http::Network;
-use patchula_testkit::{Options, Redactor};
+use patchula_testkit::Redactor;
 use patchula_words::Source;
 use std::{path::Path, sync::Arc};
 
@@ -24,7 +24,7 @@ async fn refresh_public_npm_metadata() {
         let recorded = dir.path().join("npm.json");
         let recorder = Recorder::new(
             &recorded,
-            Options::default(),
+            Redactor::default(),
             Arc::new(Network::new().unwrap()),
             "Full public npm metadata recorded by patchula".into(),
         );
@@ -73,10 +73,7 @@ async fn public_sources_cold_and_conditional_warm() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/datasource/public-sources.json");
     let transport = patchula_testkit::from_env(
         &path,
-        Options {
-            redactor: Redactor::default().with_literals([token.clone()]),
-            ..Options::default()
-        },
+        Redactor::default().with_literals([token.clone()]),
         || Ok(Arc::new(Network::new()?)),
     )
     .unwrap();
