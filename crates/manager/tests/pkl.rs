@@ -140,7 +140,7 @@ fn unreadable_package_uris_are_skipped_with_a_reason() {
         "import \"package://github.com/a/b/releases/download/1.0.0-1.0.0/b@1.0.0#/B.pkl\"\n",
         "import \"package://pkg.pkl-lang.org/p/x@1.0#/X.pkl\"\n",
         "import \"package://user:secret@example.com/x/y@1.0.0#/Y.pkl\"\n",
-        "import \"package://pkg.pkl-lang.org/p/x@\\(v)#/X.pkl\"\n",
+        "import \"package://pkg.pkl-lang.org/p/x\\u{40}1.0.0#/X.pkl\"\n",
         "import \"package://GitHub.com/a/b/releases/download/v1.0.0/b@1.0.0#/B.pkl\"\n",
         "import \"package://example.com/a/b@1.0.0?token=secret#/A.pkl\"\n",
         "import \"package://user:pa/ss@example.com/a/b@1.0.0#/A.pkl\"\n",
@@ -191,7 +191,7 @@ fn unreadable_package_uris_are_skipped_with_a_reason() {
             (Some(7), "<unreadable URL>", host),
             (
                 Some(8),
-                "package://pkg.pkl-lang.org/p/x@\\(v)",
+                "package://pkg.pkl-lang.org/p/x@1.0.0",
                 "package URIs with escapes or interpolation are not supported",
             ),
             (
@@ -308,4 +308,20 @@ fn every_module_but_the_repository_config_is_read() {
     ] {
         assert_eq!(scanner.needs(path), needed, "{path}");
     }
+}
+
+/// A module pklr cannot lex is skipped with a warning, never read as empty.
+#[test]
+fn an_unlexable_module_is_skipped_with_a_warning() {
+    let extraction = extract(
+        "x.pkl",
+        "x = \"\\(import(\"package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0\"))",
+    );
+    assert!(extraction.dependencies.is_empty());
+    assert_eq!(extraction.warnings.len(), 1, "{:?}", extraction.warnings);
+    assert!(
+        extraction.warnings[0].starts_with("x.pkl: skipped:"),
+        "{:?}",
+        extraction.warnings
+    );
 }

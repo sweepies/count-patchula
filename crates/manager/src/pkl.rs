@@ -118,25 +118,39 @@ fn shown(uri: &str) -> String {
 }
 
 /// The package URIs `text` imports; one this manager cannot read is
-/// recorded in `skipped` with the reason.
-pub(super) fn extract(path: &str, text: &Lines<'_>, skipped: &mut Vec<Skipped>) -> Vec<Dependency> {
+/// recorded in `skipped` with the reason. A module pklr cannot lex is an
+/// error, which skips the file with a warning.
+pub(super) fn extract(
+    path: &str,
+    text: &Lines<'_>,
+    skipped: &mut Vec<Skipped>,
+) -> Result<Vec<Dependency>, String> {
     let mut out = Vec::new();
-    for (index, import) in patchula_config::pkl_imports(text).into_iter().enumerate() {
-        let start = import.range.start;
+    for (index, import) in patchula_config::pkl_imports(text)?.into_iter().enumerate() {
+        let mut skip = |reason: &str| {
+            skipped.push(Skipped {
+                manager: Manager::Pkl,
+                file: path.into(),
+                line: Some(text.line_column(import.at).0),
+                value: shown(&import.target),
+                reason: reason.into(),
+            })
+        };
         let found = match read(&import.target) {
             None => continue,
             Some(Ok(found)) => found,
             Some(Err(reason)) => {
-                skipped.push(Skipped {
-                    manager: Manager::Pkl,
-                    file: path.into(),
-                    line: Some(text.line_column(start).0),
-                    value: shown(&import.target),
-                    reason: reason.into(),
-                });
+                skip(reason);
                 continue;
             }
         };
+        // Contents that decode to the URI through an escape or a text block
+        // have no span that is the URI as written.
+        let Some(range) = &import.range else {
+            skip(ESCAPED);
+            continue;
+        };
+        let start = range.start;
         let occurrences = found.spans.len();
         for (n, span) in found.spans.into_iter().enumerate() {
             let pointer = if occurrences == 1 {
@@ -164,7 +178,7 @@ pub(super) fn extract(path: &str, text: &Lines<'_>, skipped: &mut Vec<Skipped>) 
             });
         }
     }
-    out
+    Ok(out)
 }
 
 pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
@@ -195,7 +209,7 @@ impl crate::Ecosystem for Descriptor {
         Ok(Prepared {
             extract: Some(Box::new(|path, text, out| {
                 let dependencies = extract(path, text, &mut out.skipped);
-                out.dependencies.extend(dependencies);
+                file_result(out, path, dependencies);
                 Ok(())
             })),
             finish: None,

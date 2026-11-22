@@ -1,8 +1,9 @@
 //! The local-module closure of a Pkl config: `amends`, `extends` and
 //! `import` or `import*` targets walked from an entry file. Both the local
 //! evaluator and the engine's repository configs resolve it here, so the
-//! rules cannot drift: a lexer skips comments and every string form before
-//! matching, remote (`:`), absolute and non-POSIX imports are refused, an
+//! rules cannot drift: imports are read from pklr's own tokens, so they are
+//! what the evaluator sees, remote (`:`), absolute and non-POSIX imports are
+//! refused, an
 //! import cannot climb out of the entry's directory, and the walk reads at
 //! most 100 modules.
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,7 +53,9 @@ where
             }
             None => return Err(format!("missing config module {path}")),
         };
-        for import in pkl_imports(&text) {
+        let imports =
+            pkl_imports(&text).map_err(|e| format!("cannot read config module {path}: {e}"))?;
+        for import in imports {
             let relative = import.target;
             if relative.contains(':') || relative.starts_with('/') || relative.contains('\\') {
                 return Err(
@@ -88,208 +91,84 @@ fn within(root: &Path, path: &Path) -> bool {
 }
 
 /// One `amends`, `extends`, `import` or `import*` target in a Pkl module:
-/// the raw contents of its string literal, and their byte range in the
-/// module's text.
+/// the string it names, and the byte range of that string's contents in the
+/// module's text when they are written exactly as they read, with no escape
+/// or line break to decode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PklImport {
     pub target: String,
-    pub range: Range<usize>,
+    /// The byte offset the string literal starts at.
+    pub at: usize,
+    pub range: Option<Range<usize>>,
 }
 
 /// The targets of the `amends`, `extends`, `import` and `import*` clauses
-/// and `import(…)` expressions `text` carries. Comments and string literals
-/// are skipped while scanning, so import-looking text inside one — a text
-/// block, a custom-delimited string, a comment — is not an import. Config
-/// loading and the `pkl` manager both read imports through this, so the two
-/// cannot disagree on what a module imports.
-pub fn pkl_imports(text: &str) -> Vec<PklImport> {
-    let chars: Vec<char> = text.chars().collect();
-    // The byte offset of each character, and of the end of the text.
-    let offsets: Vec<usize> = text
-        .char_indices()
-        .map(|(at, _)| at)
-        .chain(std::iter::once(text.len()))
-        .collect();
-    let mut found = Vec::new();
-    scan(&chars, 0, false, &mut found);
-    found
-        .into_iter()
-        .map(|range| PklImport {
-            target: chars[range.clone()].iter().collect(),
-            range: offsets[range.start]..offsets[range.end],
-        })
-        .collect()
+/// and `import(…)` and `import*(…)` expressions `text` carries, in source
+/// order, interpolations included. They are read from pklr's tokens, the
+/// lexer the evaluator itself uses, so comments, every string form and
+/// escape, quoted identifiers and shebang lines read exactly as Pkl reads
+/// them. Config loading and the `pkl` manager both read imports here. A
+/// module pklr cannot lex is an error, never an empty list.
+pub fn pkl_imports(text: &str) -> Result<Vec<PklImport>, String> {
+    let tokens = pklr::lexer::lex(text).map_err(|e| e.to_string())?;
+    let mut imports = Vec::new();
+    collect(text, &tokens, &mut imports);
+    Ok(imports)
 }
 
-/// Scan code from `i`, recording the character range of each import
-/// target's contents in `found`. At the top level the scan runs to the end
-/// of the text; `nested` scans an interpolation's expression, whose imports
-/// count too, and returns the index just past its closing `)`.
-fn scan(chars: &[char], mut i: usize, nested: bool, found: &mut Vec<Range<usize>>) -> usize {
-    let mut depth = 1;
-    while i < chars.len() {
-        i = match chars[i] {
-            '(' if nested => {
-                depth += 1;
-                i + 1
-            }
-            ')' if nested => {
-                depth -= 1;
-                if depth == 0 {
-                    return i + 1;
+fn collect(text: &str, tokens: &[pklr::lexer::Token], out: &mut Vec<PklImport>) {
+    use pklr::lexer::{StringPart, TokenKind};
+    for (i, token) in tokens.iter().enumerate() {
+        match &token.kind {
+            TokenKind::KwAmends
+            | TokenKind::KwExtends
+            | TokenKind::KwImport
+            | TokenKind::KwImportStar => {
+                let mut next = tokens.get(i + 1);
+                // Only `import` and `import*` take parentheses, as expressions.
+                if matches!(token.kind, TokenKind::KwImport | TokenKind::KwImportStar)
+                    && next.is_some_and(|t| t.kind == TokenKind::LParen)
+                {
+                    next = tokens.get(i + 2);
                 }
-                i + 1
+                if let Some(literal) = next
+                    && let TokenKind::StringLit(target) = &literal.kind
+                {
+                    out.push(PklImport {
+                        target: target.clone(),
+                        at: literal.offset,
+                        range: contents(text, literal.offset..literal.end, target),
+                    });
+                }
             }
-            '/' if chars.get(i + 1) == Some(&'/') => line_comment(chars, i),
-            '/' if chars.get(i + 1) == Some(&'*') => block_comment(chars, i),
-            '#' | '"' => match string(chars, i, found) {
-                Some((_, end)) => end,
-                None => i + 1,
-            },
-            c if c.is_ascii_alphabetic() || c == '_' => {
-                let end = identifier(chars, i);
-                let word: String = chars[i..end].iter().collect();
-                let clause = match word.as_str() {
-                    "amends" | "extends" => Some(end),
-                    // `import*` is the relaxed form; the `*` hugs the word.
-                    "import" => Some(if chars.get(end) == Some(&'*') {
-                        end + 1
-                    } else {
-                        end
-                    }),
-                    _ => None,
-                };
-                match clause {
-                    Some(mut j) => {
-                        j = trivia(chars, j);
-                        if chars.get(j) == Some(&'(') {
-                            // `import(…)` opens a parenthesis its `)` closes.
-                            depth += 1;
-                            j = trivia(chars, j + 1);
-                        }
-                        match string(chars, j, found) {
-                            Some((range, next)) => {
-                                found.push(range);
-                                next
-                            }
-                            None => end,
-                        }
+            TokenKind::InterpolatedString(parts) => {
+                for part in parts {
+                    if let StringPart::Tokens(inner) = part {
+                        collect(text, inner, out);
                     }
-                    None => end,
                 }
             }
-            _ => i + 1,
-        };
-    }
-    i
-}
-
-/// The index just past the `//` comment starting at `i`.
-fn line_comment(chars: &[char], i: usize) -> usize {
-    let mut j = i + 2;
-    while j < chars.len() && chars[j] != '\n' {
-        j += 1;
-    }
-    j
-}
-
-/// The index just past the `/* … */` comment starting at `i`; Pkl block
-/// comments nest.
-fn block_comment(chars: &[char], i: usize) -> usize {
-    let mut j = i + 2;
-    let mut depth = 1;
-    while j < chars.len() && depth > 0 {
-        if chars[j] == '/' && chars.get(j + 1) == Some(&'*') {
-            depth += 1;
-            j += 2;
-        } else if chars[j] == '*' && chars.get(j + 1) == Some(&'/') {
-            depth -= 1;
-            j += 2;
-        } else {
-            j += 1;
+            _ => {}
         }
     }
-    j
 }
 
-/// The index of the first character at or after `i` that is not whitespace
-/// or part of a comment.
-fn trivia(chars: &[char], mut i: usize) -> usize {
-    loop {
-        while chars.get(i).is_some_and(|c| c.is_whitespace()) {
-            i += 1;
-        }
-        i = if chars.get(i) == Some(&'/') && chars.get(i + 1) == Some(&'/') {
-            line_comment(chars, i)
-        } else if chars.get(i) == Some(&'/') && chars.get(i + 1) == Some(&'*') {
-            block_comment(chars, i)
-        } else {
-            return i;
-        };
-    }
-}
-
-/// The index just past the identifier starting at `i`.
-fn identifier(chars: &[char], i: usize) -> usize {
-    let mut j = i + 1;
-    while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
-        j += 1;
-    }
-    j
-}
-
-/// The raw contents of the string literal starting at `i`, as a range into
-/// `chars`, and the index just past it; `None` when `i` does not open one.
-/// Pkl's forms are covered: `"…"`, `"""…"""`, and either with a run of `#`
-/// delimiters (`#"…"#`). A custom delimiter changes the escape character
-/// to `\` followed by as many `#`s, so `\#"` escapes a quote and `\#(`
-/// opens an interpolation in `#"…"#`, where a plain `\"` is two literal
-/// characters. An escape always reaches past the character it escapes, so
-/// `\"""` inside a text block is no closing delimiter. An interpolation's
-/// expression is scanned as code, and its imports are recorded in `found`.
-fn string(
-    chars: &[char],
-    i: usize,
-    found: &mut Vec<Range<usize>>,
-) -> Option<(Range<usize>, usize)> {
-    let mut hashes = 0;
-    while chars.get(i + hashes) == Some(&'#') {
-        hashes += 1;
-    }
-    if chars.get(i + hashes) != Some(&'"') {
-        return None;
-    }
-    let mut j = i + hashes + 1;
-    let block = chars.get(j) == Some(&'"') && chars.get(j + 1) == Some(&'"');
-    if block {
-        j += 2;
-    }
-    let content = j;
-    let closes = |at: usize| (0..hashes).all(|k| chars.get(at + k) == Some(&'#'));
-    while j < chars.len() {
-        if chars[j] == '\\' && closes(j + 1) {
-            let after = j + 1 + hashes;
-            j = if chars.get(after) == Some(&'(') {
-                scan(chars, after + 1, true, found)
-            } else {
-                after + 1
-            };
-            continue;
-        }
-        if block {
-            if chars[j] == '"'
-                && chars.get(j + 1) == Some(&'"')
-                && chars.get(j + 2) == Some(&'"')
-                && closes(j + 3)
-            {
-                return Some((content..j, j + 3 + hashes));
-            }
-        } else if chars[j] == '"' && closes(j + 1) {
-            return Some((content..j, j + 1 + hashes));
-        }
-        j += 1;
-    }
-    None
+/// The byte range of a string literal's contents within `span`, its
+/// delimiters (`#`s, then `"` or `"""`, and their mirror) stripped, when the
+/// raw contents are `decoded` exactly: one line, no escapes.
+fn contents(text: &str, span: Range<usize>, decoded: &str) -> Option<Range<usize>> {
+    let raw = text.get(span.clone())?;
+    let pounds = raw.bytes().take_while(|b| *b == b'#').count();
+    let quotes = if raw[pounds..].starts_with("\"\"\"") {
+        3
+    } else {
+        1
+    };
+    let open = pounds + quotes;
+    let close = raw.len().checked_sub(open)?;
+    let inner = raw.get(open..close)?;
+    (inner == decoded && !inner.contains(['\n', '\r']))
+        .then(|| span.start + open..span.start + close)
 }
 
 #[cfg(test)]
@@ -341,7 +220,8 @@ mod tests {
         ] {
             let files = BTreeMap::from([(
                 "patchula.pkl".to_owned(),
-                format!("amends \"PatchulaConfig.pkl\"\nimport \"{target}\"\n"),
+                // A custom delimiter keeps each backslash a plain character.
+                format!("amends \"PatchulaConfig.pkl\"\nimport #\"{target}\"#\n"),
             )]);
             let error = walk("patchula.pkl", &files).unwrap_err();
             assert_eq!(
@@ -452,7 +332,11 @@ mod tests {
     }
 
     fn targets(text: &str) -> Vec<String> {
-        pkl_imports(text).into_iter().map(|i| i.target).collect()
+        pkl_imports(text)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.target)
+            .collect()
     }
 
     #[test]
@@ -467,7 +351,7 @@ mod tests {
             ("extends // note\n\"g.pkl\"", vec!["g.pkl"]),
             ("import*\n// note\n/* note */\n(\"h.pkl\")", vec!["h.pkl"]),
             ("import ##\"raw-hash.pkl\"##", vec!["raw-hash.pkl"]),
-            ("import \"\"\"i.pkl\"\"\"", vec!["i.pkl"]),
+            ("import \"\"\"\ni.pkl\n\"\"\"", vec!["i.pkl"]),
             // A clause keyword with no string after it is not an import.
             ("import = value", vec![]),
             ("import (compute())", vec![]),
@@ -479,14 +363,12 @@ mod tests {
 
     #[test]
     fn the_lexer_skips_strings_comments_and_interpolations() {
-        // `#` that opens no raw string, an unterminated string, a nested
-        // block comment and interpolations inside every string form.
+        // A nested block comment and interpolations inside every string
+        // form, none of which import anything.
         let text = concat!(
-            "a = ## not a string\n",
-            "b = \"unterminated\n",
             "/* outer /* inner */ tail */ c = 1\n",
-            "d = \"x\\(f(\"s\", 1) /* c */ // note\n g(2))y\"\n",
-            "e = \"\"\"x\\(h(3))y\"\"\"\n",
+            "d = \"x\\(f(\"s\", 1) /* c */ \n g(2))y\"\n",
+            "e = \"\"\"\n  x\\(h(3))y\n  \"\"\"\n",
             "f = #\"raw \\(not-code)\"#\n",
             "import \"real.pkl\"\n",
         );
@@ -523,10 +405,56 @@ mod tests {
     #[test]
     fn pkl_imports_ranges_are_byte_offsets() {
         let text = "// é ü\nimport \"package://x/y@1.0.0#/Z.pkl\"\n";
-        let imports = pkl_imports(text);
+        let imports = pkl_imports(text).unwrap();
         assert_eq!(imports.len(), 1);
-        assert_eq!(&text[imports[0].range.clone()], imports[0].target);
+        assert_eq!(&text[imports[0].range.clone().unwrap()], imports[0].target);
         assert_eq!(imports[0].target, "package://x/y@1.0.0#/Z.pkl");
+        // Contents that decode to something else have no range to edit.
+        for text in [
+            "import \"a\\u{62}c.pkl\"",
+            "import \"\"\"\n  abc.pkl\n  \"\"\"",
+        ] {
+            let imports = pkl_imports(text).unwrap();
+            assert_eq!(imports[0].target, "abc.pkl", "{text}");
+            assert_eq!(imports[0].range, None, "{text}");
+        }
+        // A custom delimiter makes a backslash plain text: the contents are
+        // the target as written.
+        let text = "import #\"a\\b.pkl\"#";
+        let imports = pkl_imports(text).unwrap();
+        assert_eq!(imports[0].target, "a\\b.pkl");
+        assert_eq!(&text[imports[0].range.clone().unwrap()], "a\\b.pkl");
+    }
+
+    /// Quoted identifiers, `$` and Unicode identifiers, shebang lines and
+    /// `import` as a member name read as Pkl reads them: no import is
+    /// invented, and none after them is missed.
+    #[test]
+    fn identifiers_and_shebangs_read_as_pkl_reads_them() {
+        let text = concat!(
+            "#!/usr/bin/env -S pkl eval --allowed-modules=file:/*\n",
+            "routes { `/*` = \"fallback\" }\n",
+            "headers { `x-\"quote` = \"1\" }\n",
+            "`import \"quoted.pkl\"` = 1\n",
+            "local function $import(s: String) = s\n",
+            "x = $import(\"dollar.pkl\")\n",
+            "y = éimport(\"unicode.pkl\")\n",
+            "z = \"\\($import(1))\"\n",
+            "w = \"\\(import(compute()))\"\n",
+            "import \"real.pkl\"\n",
+        );
+        assert_eq!(targets(text), ["real.pkl"]);
+    }
+
+    /// A module pklr cannot lex is an error, not an empty import list, and
+    /// hostile nesting fails fast rather than taking exponential time.
+    #[test]
+    fn unlexable_modules_are_errors() {
+        assert!(pkl_imports("x = \"\\(import(\"a.pkl\"))").is_err());
+        let started = std::time::Instant::now();
+        assert!(pkl_imports(&"\"\\(".repeat(40)).is_err());
+        assert!(pkl_imports(&"\"\\(".repeat(10_000)).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]
