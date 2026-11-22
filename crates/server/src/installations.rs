@@ -3,21 +3,23 @@ use crate::webhook::Payload;
 use patchula_cache::{Cache, installations::Mapping};
 use patchula_config::settings::valid_repo;
 use patchula_github::app::App;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub(crate) const TTL_SECONDS: i64 = 300;
 pub(crate) struct Resolver {
     app: Arc<App>,
     cache: Cache,
-    entries: Mutex<BTreeMap<String, Mapping>>,
+    /// Held from the cache read to the cache write, so concurrent misses
+    /// make one App request.
+    flight: Mutex<()>,
 }
 impl Resolver {
     pub(crate) fn new(app: Arc<App>, cache: Cache) -> Self {
         Self {
             app,
             cache,
-            entries: Mutex::new(BTreeMap::new()),
+            flight: Mutex::new(()),
         }
     }
     pub(crate) async fn resolve(&self, payload: &Payload) -> Result<Option<u64>, &'static str> {
@@ -56,22 +58,15 @@ impl Resolver {
             };
             format!("orgs/{}", org.to_ascii_lowercase())
         };
-        // Single flight prevents concurrent cache misses from flooding App endpoints.
-        let mut entries = self.entries.lock().await;
-        entries.retain(|_, mapping| mapping.expires_at > now);
-        if let Some(mapping) = entries.get(&target) {
-            return Ok(Some(mapping.installation));
-        }
-        if entries.len() >= 4096 {
-            entries.clear();
-        }
+        // Single flight prevents concurrent cache misses from flooding App
+        // endpoints. The cache returns only a mapping that has not expired.
+        let _flight = self.flight.lock().await;
         if let Some(mapping) = self
             .cache
             .installation_get(self.app.id(), target.clone(), now)
             .await
             .map_err(|error| error.kind())?
         {
-            entries.insert(target, mapping);
             return Ok(Some(mapping.installation));
         }
         let installation = if let Some(repo) = target.strip_prefix("repos/") {
@@ -93,9 +88,7 @@ impl Resolver {
                 .installation_put(self.app.id(), target.clone(), mapping, now)
                 .await
                 .map_err(|error| error.kind())?;
-            entries.insert(target, mapping);
         } else {
-            entries.remove(&target);
             self.cache
                 .installation_remove(self.app.id(), target)
                 .await

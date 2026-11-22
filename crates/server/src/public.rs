@@ -12,7 +12,7 @@ use axum::{
     routing::get,
 };
 use chrono::{DateTime, Utc};
-use futures_util::{StreamExt, stream::FuturesUnordered};
+use futures_util::StreamExt;
 use patchula_cache::{
     Cache,
     repositories::{Row, Run},
@@ -197,41 +197,31 @@ struct Summary<'a> {
 pub(crate) type Member =
     dyn Fn(String) -> futures_util::future::BoxFuture<'static, bool> + Send + Sync;
 
-/// A run's report for the public API, and the same without what lookups made
-/// with registry credentials found. A repository that is private when it runs
-/// is stored without them, so it never shows them if it later becomes public;
-/// a public one shows them, as its dependency dashboard does.
-pub(crate) struct Recorded<'a> {
-    pub report: &'a Report,
-    pub withheld: Report,
-}
-
-/// `report` without what lookups made with registry credentials found. Such a
-/// dependency keeps what the repository declares, but loses its updates, the
-/// version its range resolved to, held-back releases, lookup evidence, tag
-/// digests and image checks. Whether
-/// a lookup carried credentials was recorded as its requests were made.
-pub(crate) fn withheld(report: &Report) -> Report {
-    let mut report = report.clone();
-    for repo in &mut report.repositories {
-        // Warnings and lookup failures about a dependency found with
-        // credentials can quote what the registry answered.
-        let names: Vec<String> = repo
-            .package_files
-            .iter()
-            .flat_map(|file| &file.dependencies)
-            .filter(|dep| dep.metadata.as_ref().is_some_and(|meta| meta.credentialed))
-            .flat_map(|dep| [dep.name.clone(), dep.package.clone()])
-            .collect();
-        repo.warnings
-            .retain(|warning| !names.iter().any(|name| warning.contains(name.as_str())));
-        repo.lookup_failures
-            .retain(|failure| !names.contains(&failure.package) && !names.contains(&failure.name));
-    }
-    for dep in report
-        .repositories
+/// `repo` without what lookups made with registry credentials found: how a
+/// repository that is private when it runs is stored, so it never shows them
+/// if it later becomes public. A public one shows them, as its dependency
+/// dashboard does. Such a dependency keeps what the repository declares, but
+/// loses its updates, the version its range resolved to, held-back releases,
+/// lookup evidence, tag digests and image checks. Whether a lookup carried
+/// credentials was recorded in its metadata as its requests were made.
+pub(crate) fn withheld(repo: &patchula_report::Repository) -> patchula_report::Repository {
+    let mut repo = repo.clone();
+    // Warnings and lookup failures about a dependency found with
+    // credentials can quote what the registry answered.
+    let names: Vec<String> = repo
+        .package_files
+        .iter()
+        .flat_map(|file| &file.dependencies)
+        .filter(|dep| dep.metadata.as_ref().is_some_and(|meta| meta.credentialed))
+        .flat_map(|dep| [dep.name.clone(), dep.package.clone()])
+        .collect();
+    repo.warnings
+        .retain(|warning| !names.iter().any(|name| warning.contains(name.as_str())));
+    repo.lookup_failures
+        .retain(|failure| !names.contains(&failure.package) && !names.contains(&failure.name));
+    for dep in repo
+        .package_files
         .iter_mut()
-        .flat_map(|repo| &mut repo.package_files)
         .flat_map(|file| &mut file.dependencies)
     {
         let Some(meta) = dep.metadata.as_mut() else {
@@ -284,7 +274,7 @@ pub(crate) fn withheld(report: &Report) -> Report {
             digest,
         };
     }
-    report
+    repo
 }
 
 /// Most open PRs read for one repository.
@@ -304,30 +294,24 @@ pub(crate) async fn record(
     client: &Client,
     bot: &str,
     installation: u64,
-    recorded: &Recorded<'_>,
+    report: &Report,
     started: DateTime<Utc>,
     member: &Member,
 ) {
-    // `Recorded` borrows the report, so a mapping closure cannot name its
-    // lifetimes; the futures go straight into the set instead.
-    let mut recording = FuturesUnordered::new();
-    for (index, repo) in recorded.report.repositories.iter().enumerate() {
-        while recording.len() == RECORD_FANOUT {
-            recording.next().await;
-        }
-        recording.push(record_repository(
-            cache,
-            client,
-            bot,
-            installation,
-            recorded,
-            index,
-            repo,
-            started,
-            member,
-        ));
-    }
-    while recording.next().await.is_some() {}
+    futures_util::stream::iter(&report.repositories)
+        .for_each_concurrent(RECORD_FANOUT, |repo| {
+            record_repository(
+                cache,
+                client,
+                bot,
+                installation,
+                report.actions.as_ref(),
+                repo,
+                started,
+                member,
+            )
+        })
+        .await;
 }
 
 /// Records one repository of a writing run's report.
@@ -337,14 +321,11 @@ async fn record_repository(
     client: &Client,
     bot: &str,
     installation: u64,
-    recorded: &Recorded<'_>,
-    index: usize,
+    actions: Option<&patchula_report::Actions>,
     repo: &patchula_report::Repository,
     started: DateTime<Utc>,
     member: &Member,
 ) {
-    let report = recorded.report;
-    let actions = report.actions.as_ref();
     let name = repo.repository.as_str();
     let private = match client.get(&format!("repos/{name}")).await {
         Ok(response) => serde_json::from_slice::<RepoVisibility>(&response.body)
@@ -405,8 +386,10 @@ async fn record_repository(
         .collect();
     // A private repository's run is stored without what credentials
     // found, its warnings and lookup failures included.
+    let withheld;
     let shown = if private {
-        &recorded.withheld.repositories[index]
+        withheld = self::withheld(repo);
+        &withheld
     } else {
         repo
     };

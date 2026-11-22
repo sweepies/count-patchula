@@ -20,13 +20,13 @@ pub struct Outcome {
 /// CLI: a hung git cannot stall copier forever. Callers run inside the
 /// binary's Tokio runtime, so the future is blocked on here.
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output =
-        futures_executor::block_on(patchula_process::SystemExecutor.run(crate::git_command(
-            dir.to_owned(),
-            args,
-            std::env::vars_os().collect(),
-            crate::GitOutput::Complete,
-        )))
+    // A whole `git status` listing: up to 16 MiB, never cut.
+    let command = patchula_process::CommandSpec {
+        output_limit: 1 << 24,
+        complete_output: true,
+        ..crate::git_command(dir.to_owned(), args, std::env::vars_os().collect())
+    };
+    let output = futures_executor::block_on(patchula_process::SystemExecutor.run(command))
         .map_err(|failure| match failure {
             patchula_process::Failure::Exited { stderr, .. } => {
                 format!("copier needs a git checkout: {}", stderr.trim())

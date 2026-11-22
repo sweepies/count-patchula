@@ -64,12 +64,17 @@ impl Payload {
             .and_then(|installation| installation.id)
             .filter(|id| settings.installation_allowed(*id))
     }
-}
-/// Whether `event`'s `action` gives the App repositories: a new
-/// installation, or repositories added to one.
-fn adds_repositories(event: &str, action: &str) -> bool {
-    (event == "installation" && action == "created")
-        || (event == "installation_repositories" && action == "added")
+    /// The repositories `event`'s `action` gives the App — a new
+    /// installation's, or those added to one — or `None` when it gives none.
+    /// An addition that lists no repositories gives an empty list.
+    fn added(&self, event: &str, action: &str) -> Option<&[Repository]> {
+        let repos = match (event, action) {
+            ("installation", "created") => &self.repositories,
+            ("installation_repositories", "added") => &self.repositories_added,
+            _ => return None,
+        };
+        Some(repos.as_deref().unwrap_or(&[]))
+    }
 }
 /// A payload's `pull_request`, or `None` when it does not decode.
 fn pull_request<'de, D: serde::Deserializer<'de>>(
@@ -328,19 +333,21 @@ pub async fn receive(
         }
     }
     let settings = state.settings.current();
-    let work = classify(event, &payload, &settings, &state.bot_login);
-    let reason = if work.is_empty() {
-        if resolution == Some("installation-not-found") {
-            "installation-not-found"
-        } else {
-            ignored_reason(event, &payload, &settings, &state.bot_login)
+    let (work, reason) = match classify(event, &payload, &settings, &state.bot_login) {
+        Ok(work) => {
+            let reason = if resolution.is_some() {
+                "installation-resolved"
+            } else if work.iter().any(|w| w.repo.is_empty()) {
+                "installation discovery"
+            } else {
+                "repository trigger"
+            };
+            (work, reason)
         }
-    } else if resolution.is_some() {
-        "installation-resolved"
-    } else if work.iter().any(|w| w.repo.is_empty()) {
-        "installation discovery"
-    } else {
-        "repository trigger"
+        Err(_) if resolution == Some("installation-not-found") => {
+            (Vec::new(), "installation-not-found")
+        }
+        Err(reason) => (Vec::new(), reason),
     };
     if let Err(error) = track(&state.cache, event, &payload, &settings).await {
         return Failure::new(error.kind())
@@ -392,20 +399,11 @@ pub(crate) async fn track(
             .collect()
     };
     let repository = payload.repository.as_ref();
-    match (event, payload.action.as_deref().unwrap_or("")) {
-        ("installation", "created") => {
-            cache
-                .repositories_added(id, listed(payload.repositories.as_deref().unwrap_or(&[])))
-                .await?
-        }
-        ("installation_repositories", "added") => {
-            cache
-                .repositories_added(
-                    id,
-                    listed(payload.repositories_added.as_deref().unwrap_or(&[])),
-                )
-                .await?
-        }
+    let action = payload.action.as_deref().unwrap_or("");
+    if let Some(added) = payload.added(event, action) {
+        cache.repositories_added(id, listed(added)).await?;
+    }
+    match (event, action) {
         ("installation_repositories", "removed") => {
             let removed = payload
                 .repositories_removed
@@ -477,8 +475,8 @@ fn metadata_word(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 /// The configured switch a delivery's event and action answer to.
-/// `classify` and `ignored_reason` share this table, so a trigger added for
-/// one cannot be missing from the other.
+/// `classify` answers every delivery through this table, so the work it
+/// enqueues and the reason it ignores a delivery follow the same switch.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Trigger {
     Push,
@@ -518,85 +516,62 @@ impl Trigger {
     }
 }
 
-pub(crate) fn ignored_reason(
-    event: &str,
-    payload: &Payload,
-    settings: &Settings,
-    bot: &str,
-) -> &'static str {
-    if payload.from(bot) {
-        return "own-bot ignored";
-    }
-    let Some(id) = payload.allowed_installation(settings) else {
-        return "not allowlisted";
-    };
-    let Some(trigger) = Trigger::of(event, payload.action.as_deref().unwrap_or("")) else {
-        return "unrelated event or action";
-    };
-    if !trigger.enabled(&settings.server.triggers) {
-        return "trigger disabled";
-    }
-    if matches!(event, "installation" | "installation_repositories") {
-        return if adds_repositories(event, payload.action.as_deref().unwrap_or("")) {
-            "not allowlisted"
-        } else {
-            "unrelated event or action"
-        };
-    }
-    if !payload
-        .repository
-        .as_ref()
-        .and_then(|repo| repo.full_name.as_deref())
-        .is_some_and(|repo| settings.allows(id, repo))
-    {
-        return "not allowlisted";
-    }
-    "unrelated event or action"
-}
+/// The work a delivery enqueues, never empty, or why it enqueues none.
+/// The gates run in a fixed order — the bot's own delivery, the
+/// installation allowlist, the trigger, the repository allowlist — and the
+/// first that fails names the reason.
 pub(crate) fn classify(
     event: &str,
     payload: &Payload,
     settings: &Settings,
     bot: &str,
-) -> Vec<Work> {
+) -> Result<Vec<Work>, &'static str> {
+    const UNRELATED: &str = "unrelated event or action";
+    const NOT_ALLOWLISTED: &str = "not allowlisted";
     if payload.from(bot) {
-        return Vec::new();
+        return Err("own-bot ignored");
     }
     let Some(id) = payload.allowed_installation(settings) else {
-        return Vec::new();
+        return Err(NOT_ALLOWLISTED);
     };
     let action = payload.action.as_deref().unwrap_or("");
-    if Trigger::of(event, action) == Some(Trigger::Installation)
-        && Trigger::Installation.enabled(&settings.server.triggers)
-        && adds_repositories(event, action)
-    {
-        let repos = if event == "installation" {
-            &payload.repositories
-        } else {
-            &payload.repositories_added
+    let Some(trigger) = Trigger::of(event, action) else {
+        return Err(UNRELATED);
+    };
+    if !trigger.enabled(&settings.server.triggers) {
+        return Err("trigger disabled");
+    }
+    if trigger == Trigger::Installation {
+        let Some(repos) = payload.added(event, action) else {
+            return Err(UNRELATED);
         };
-        if let Some(repos) = repos.as_ref().filter(|r| !r.is_empty()) {
-            return repos
-                .iter()
-                .filter_map(|r| r.full_name.as_deref())
-                .filter(|repo| settings.allows(id, repo))
-                .map(|repo| Work::repository(id, repo.to_ascii_lowercase()))
-                .collect();
+        if repos.is_empty() {
+            // Discovery is durable too; repository enumeration runs in the worker.
+            return Ok(vec![Work::repository(id, String::new())]);
         }
-        // Discovery is durable too; repository enumeration runs in the worker.
-        return vec![Work::repository(id, String::new())];
+        let work: Vec<_> = repos
+            .iter()
+            .filter_map(|r| r.full_name.as_deref())
+            .filter(|repo| settings.allows(id, repo))
+            .map(|repo| Work::repository(id, repo.to_ascii_lowercase()))
+            .collect();
+        return if work.is_empty() {
+            Err(NOT_ALLOWLISTED)
+        } else {
+            Ok(work)
+        };
     }
     let repository = payload.repository.as_ref();
     let Some(repo) = repository
         .and_then(|repo| repo.full_name.as_deref())
         .filter(|repo| settings.allows(id, repo))
     else {
-        return Vec::new();
+        return Err(NOT_ALLOWLISTED);
     };
-    if Trigger::of(event, action) == Some(Trigger::Checks)
-        && Trigger::Checks.enabled(&settings.server.triggers)
-        && action == "completed"
-    {
+    if trigger == Trigger::Checks {
+        if action != "completed" {
+            return Err(UNRELATED);
+        }
         let checks = if event == "check_suite" {
             &payload.check_suite
         } else {
@@ -623,14 +598,14 @@ pub(crate) fn classify(
             .filter_map(|pr| pr.number.filter(|number| *number > 0))
             .collect::<std::collections::BTreeSet<_>>();
         return if checks.is_empty() {
-            Vec::new()
+            Err(UNRELATED)
         } else {
-            vec![Work {
+            Ok(vec![Work {
                 installation: id,
                 repo: repo.to_ascii_lowercase(),
                 check_prs: Some(checks),
                 priority: Priority::Check,
-            }]
+            }])
         };
     }
     let before = payload
@@ -641,45 +616,43 @@ pub(crate) fn classify(
     let issue = payload.issue.as_ref();
     let pr = payload.pull_request.as_ref();
     let owned = pr.is_some_and(|pr| patchula_update::pull_requests::owned_pr(pr, bot, repo));
-    let trigger = match Trigger::of(event, action) {
-        Some(t) if t.enabled(&settings.server.triggers) => match t {
-            Trigger::Push => {
-                let branch = repository.and_then(|repo| repo.default_branch.as_deref());
-                !payload.deleted.unwrap_or(false)
-                    && branch.is_some_and(|b| {
-                        payload.reference.as_deref() == Some(format!("refs/heads/{b}").as_str())
-                    })
-            }
-            Trigger::Dashboard => {
-                let after = issue.and_then(|issue| issue.body.as_deref()).unwrap_or("");
-                action == "edited"
-                    && issue
-                        .and_then(|issue| issue.user.as_ref())
-                        .and_then(|user| user.login.as_deref())
-                        .is_some_and(|login| login.eq_ignore_ascii_case(bot))
-                    && patchula_update::markers::dashboard(after)
-                    && before.is_some_and(|before| {
-                        patchula_update::dashboard::Controls::checkbox_edited(before, after)
-                    })
-            }
-            Trigger::PullRequestClosed => owned && action == "closed",
-            Trigger::PullRequestEdited => {
-                owned
-                    && action == "edited"
-                    && before.is_some_and(|before| {
-                        patchula_update::pull_requests::controls_edited(
-                            before,
-                            pr.and_then(|pr| pr.body.as_deref()).unwrap_or(""),
-                        )
-                    })
-            }
-            _ => false,
-        },
-        _ => false,
+    let fires = match trigger {
+        Trigger::Push => {
+            let branch = repository.and_then(|repo| repo.default_branch.as_deref());
+            !payload.deleted.unwrap_or(false)
+                && branch.is_some_and(|b| {
+                    payload.reference.as_deref() == Some(format!("refs/heads/{b}").as_str())
+                })
+        }
+        Trigger::Dashboard => {
+            let after = issue.and_then(|issue| issue.body.as_deref()).unwrap_or("");
+            action == "edited"
+                && issue
+                    .and_then(|issue| issue.user.as_ref())
+                    .and_then(|user| user.login.as_deref())
+                    .is_some_and(|login| login.eq_ignore_ascii_case(bot))
+                && patchula_update::markers::dashboard(after)
+                && before.is_some_and(|before| {
+                    patchula_update::dashboard::Controls::checkbox_edited(before, after)
+                })
+        }
+        Trigger::PullRequestClosed => owned && action == "closed",
+        Trigger::PullRequestEdited => {
+            owned
+                && action == "edited"
+                && before.is_some_and(|before| {
+                    patchula_update::pull_requests::controls_edited(
+                        before,
+                        pr.and_then(|pr| pr.body.as_deref()).unwrap_or(""),
+                    )
+                })
+        }
+        // Answered above.
+        Trigger::Installation | Trigger::Checks => false,
     };
-    if trigger {
-        vec![Work::person(id, repo.to_ascii_lowercase())]
+    if fires {
+        Ok(vec![Work::person(id, repo.to_ascii_lowercase())])
     } else {
-        Vec::new()
+        Err(UNRELATED)
     }
 }

@@ -25,14 +25,14 @@ pub fn settings_file() -> Option<PathBuf> {
 
 /// A `patchula/<name>` file in the user config directory, when there is one.
 pub fn file(name: &str) -> Option<PathBuf> {
-    config_dir().map(|dir| dir.join("patchula").join(name))
+    file_with(var, name)
+}
+
+fn file_with(var: impl Fn(&str) -> Option<OsString>, name: &str) -> Option<PathBuf> {
+    config_dir_with(var).map(|dir| dir.join("patchula").join(name))
 }
 
 /// The user config directory: an absolute `XDG_CONFIG_HOME`, else `~/.config`.
-pub fn config_dir() -> Option<PathBuf> {
-    config_dir_with(var)
-}
-
 fn config_dir_with(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     var(XDG_CONFIG)
         .map(PathBuf::from)
@@ -118,13 +118,9 @@ mod tests {
         );
         assert_eq!(config_dir_with(vars(&[])), None);
         assert_eq!(
-            settings_file_with(vars(&[("HOME", "/h")])),
+            file_with(vars(&[("HOME", "/h")]), "settings.pkl"),
             Some(PathBuf::from("/h/.config/patchula/settings.pkl"))
         );
-    }
-
-    fn settings_file_with(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-        config_dir_with(var).map(|dir| dir.join("patchula").join("settings.pkl"))
     }
 
     #[test]

@@ -839,23 +839,58 @@ async fn apply_is_always_local_and_validates_its_filters() {
     );
 }
 
+/// Every long flag name a command's spec declares, recursively.
+fn longs<'a>(command: &'a usage_rs::Command<'a>, out: &mut Vec<&'a str>) {
+    out.extend(
+        command
+            .flags
+            .iter()
+            .flat_map(|flag| flag.longs.iter().copied()),
+    );
+    for sub in command.subcommands {
+        longs(sub, out);
+    }
+}
+
 #[test]
-fn remote_flags_cover_every_local_only_policy() {
-    use crate::cli::{Command, REMOTE_POLICY, RemotePolicy};
+fn local_flags_and_remote_applies_partition_every_lookup_run_and_tui_flag() {
+    use crate::cli::Command;
+    // The flags that apply on a --remote server: they travel in the request,
+    // or belong to the server itself.
+    const REMOTE_APPLIES: &[&str] = &[
+        "color", "dry-run", "here", "json", "once", "remote", "verbose",
+    ];
     let words = ["lookup", "--remote", "demo/app"];
     let app = App::parse_from(&words.iter().map(OsStr::new).collect::<Vec<_>>()).unwrap();
     let Some(Command::Lookup(options)) = &app.command else {
         panic!("lookup")
     };
-    let names: Vec<_> = super::remote_flags(&app, options, None)
-        .into_iter()
-        .map(|(name, _)| name)
+    let local = super::local_flags(&app, options, None).map(|(name, _)| name);
+    // Global flags live on the root command; the rest on lookup, run and tui.
+    let root = App::command();
+    let mut applicable: Vec<&str> = root
+        .flags
+        .iter()
+        .flat_map(|flag| flag.longs.iter().copied())
         .collect();
-    for (flag, policy) in REMOTE_POLICY {
-        assert_eq!(
-            names.contains(flag),
-            *policy == RemotePolicy::Local,
-            "--{flag}: remote_flags and REMOTE_POLICY disagree"
+    for wanted in ["lookup", "run", "tui"] {
+        let command = root
+            .subcommands
+            .iter()
+            .find(|sub| sub.name == wanted)
+            .unwrap_or_else(|| panic!("{wanted}"));
+        longs(command, &mut applicable);
+    }
+    for name in local.iter().chain(REMOTE_APPLIES) {
+        assert!(
+            applicable.contains(name),
+            "--{name} is listed but is not a lookup/run/tui or global flag"
+        );
+    }
+    for name in applicable {
+        assert!(
+            local.contains(&name) != REMOTE_APPLIES.contains(&name),
+            "--{name} must be in exactly one of local_flags and REMOTE_APPLIES"
         );
     }
 }
