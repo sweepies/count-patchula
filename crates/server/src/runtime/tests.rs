@@ -474,7 +474,7 @@ async fn repository_and_org_webhooks_resolve_installations_and_ping_does_no_work
 }
 
 #[tokio::test]
-async fn installation_cache_uses_memory_disk_ttl_and_invalidates_on_not_found() {
+async fn installation_cache_uses_disk_ttl_and_invalidates_on_not_found() {
     use crate::installations::{Resolver, TTL_SECONDS};
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cache.sqlite");
@@ -490,10 +490,6 @@ async fn installation_cache_uses_memory_disk_ttl_and_invalidates_on_not_found() 
         resolver.resolve_at(&typed(&value), 100).await.unwrap(),
         Some(1)
     );
-    cache
-        .installation_remove(1, "repos/owner/repo".into())
-        .await
-        .unwrap();
     assert_eq!(
         resolver.resolve_at(&typed(&value), 101).await.unwrap(),
         Some(1)
@@ -519,7 +515,7 @@ async fn installation_cache_uses_memory_disk_ttl_and_invalidates_on_not_found() 
         Some(1)
     );
     assert_eq!(transport.requests.load(Ordering::SeqCst), 2);
-    // TTL is not extended by a disk or memory hit. A 404 removes the SQLite row too.
+    // TTL is not extended by a cache hit. A 404 removes the SQLite row too.
     transport.status.store(404, Ordering::SeqCst);
     assert_eq!(
         resolver
