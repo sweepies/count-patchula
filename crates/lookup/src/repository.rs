@@ -217,9 +217,7 @@ mod tests {
             (Source::GithubReleases, "jdx/hk"),
         ] {
             let mut d = dep(source, package);
-            d.registry = Some(patchula_config::Registry::Url(
-                "https://private.example".into(),
-            ));
+            d.registry = Some("https://private.example".into());
             assert_eq!(declared_repository(&d), None, "{source:?}");
         }
     }

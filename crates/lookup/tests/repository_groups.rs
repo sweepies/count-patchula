@@ -253,7 +253,9 @@ fn an_inactive_or_ignored_partner_leaves_no_group() {
         serde_json::json!({"active": false}),
     ));
     let mut ignored = config();
-    ignored.ignore = vec!["pkg.pkl-lang.org/github.com/jdx/hk/hk".into()];
+    ignored.ignore =
+        patchula_config::Patterns::compile(&["pkg.pkl-lang.org/github.com/jdx/hk/hk".into()])
+            .unwrap();
     for config in [inactive, ignored] {
         let deps = [hk_tool(), hk_package()];
         let eval = evaluator(&config, &deps);
@@ -264,9 +266,7 @@ fn an_inactive_or_ignored_partner_leaves_no_group() {
 #[test]
 fn a_registry_qualified_pkl_package_does_not_join() {
     let mut private = hk_package();
-    private.registry = Some(patchula_config::Registry::Url(
-        "https://pkl.example.com".into(),
-    ));
+    private.registry = Some("https://pkl.example.com".into());
     let deps = [hk_tool(), private];
     let eval = evaluator(&config(), &deps);
     assert_eq!(groups(&eval, &deps), [None, None]);
