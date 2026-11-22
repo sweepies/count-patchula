@@ -382,25 +382,6 @@ impl Cached {
     pub fn advisory_freshness(&self) -> Duration {
         Duration::from_secs(self.inner.options.advisory_freshness_secs)
     }
-    /// A client with default options and `concurrency` requests in flight
-    /// per host.
-    pub fn new(
-        cache: Cache,
-        transport: Arc<dyn Transport>,
-        concurrency: usize,
-    ) -> Result<Self, Error> {
-        if concurrency == 0 {
-            return Err(Error::Configuration);
-        }
-        Self::with_options(
-            cache,
-            transport,
-            Options {
-                default_host_concurrency: concurrency,
-                ..Default::default()
-            },
-        )
-    }
     pub fn with_options(
         cache: Cache,
         transport: Arc<dyn Transport>,
@@ -932,32 +913,26 @@ impl Cached {
                 let pull_limit = pull_request
                     .then(|| self.inner.options.rules.pull_limit(&target, &response))
                     .flatten();
-                let throttle = if let Some(window) = pull_limit {
-                    Throttle::Pulls(window)
+                // Publish even an exhausted/long cooldown before releasing the
+                // permit, so unrelated queued requests to this host respect it.
+                // A spent pull counter holds manifest GETs for its window, a
+                // quota window holds the whole host with no retry, and a busy
+                // host is retried after a short enough delay; a `Retry-After`
+                // that could not be read is not retried.
+                let delay = if let Some(window) = pull_limit {
+                    self.cooldown(&target, window, true)?;
+                    None
                 } else if let Some(window) =
                     self.inner.options.rules.quota_window(&target, &response)
                 {
-                    Throttle::Host(window)
+                    self.cooldown(&target, window, false)?;
+                    None
                 } else {
-                    Throttle::Retry(retry_delay(&response, attempt))
-                };
-                // Publish even an exhausted/long cooldown before releasing the
-                // permit, so unrelated queued requests to this host respect it.
-                let delay = match throttle {
-                    Throttle::Pulls(window) => {
-                        self.cooldown(&target, window, true)?;
-                        None
+                    let delay = retry_delay(&response, attempt);
+                    if let Some(delay) = delay {
+                        self.cooldown(&target, delay, false)?;
                     }
-                    Throttle::Host(window) => {
-                        self.cooldown(&target, window, false)?;
-                        None
-                    }
-                    Throttle::Retry(delay) => {
-                        if let Some(delay) = delay {
-                            self.cooldown(&target, delay, false)?;
-                        }
-                        delay
-                    }
+                    delay
                 };
                 drop(permit.take());
                 if let Some(response) = self
@@ -975,16 +950,9 @@ impl Cached {
                     continue;
                 }
             }
+            // A registry 429 that reaches here found no stale copy above.
             break (response, stream, permit);
         };
-        if registry
-            && response.status == StatusCode::TOO_MANY_REQUESTS
-            && let Some(response) = self
-                .stale_registry(cached.as_ref(), &url, accept, &method, scope)
-                .await?
-        {
-            return Ok(response);
-        }
         let not_modified = response.status == StatusCode::NOT_MODIFIED;
         if not_modified {
             let entry = cached.ok_or(Error::MissingBody)?;
@@ -1068,17 +1036,6 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// What a registry's 429 asks of later requests.
-enum Throttle {
-    /// Docker Hub's pull counter is spent: manifest GETs wait out the window.
-    Pulls(Duration),
-    /// Every request to the host waits out the window, with no retry.
-    Host(Duration),
-    /// The host is busy: wait the delay and retry when it is short. `None`
-    /// is a `Retry-After` that could not be read, so no retry.
-    Retry(Option<Duration>),
-}
-
 fn retry_delay(response: &Response, attempt: u32) -> Option<Duration> {
     if response.headers.contains_key("retry-after") {
         conditional::retry_after(response)
@@ -1129,7 +1086,7 @@ mod tests {
         let url = "https://registry.example/catalog";
         cached_entry(&cache, url, Some("max-age=60"), 0, Some("\"one\"")).await;
         let transport = Arc::new(Revalidate(Default::default()));
-        let client = Cached::new(cache, transport.clone(), 4).unwrap();
+        let client = Cached::with_options(cache, transport.clone(), Options::default()).unwrap();
         client.get(url, "text/plain").await.unwrap();
         assert_eq!(transport.0.load(Ordering::Relaxed), 0);
         let response = client.revalidating().get(url, "text/plain").await.unwrap();

@@ -131,14 +131,36 @@ impl Default for Options {
     }
 }
 
+/// How a client's requests authenticate.
+enum Auth {
+    /// A fixed token's `Bearer` header, set on each request as it is built.
+    Token(HeaderValue),
+    /// Refreshable credentials: `exchange` swaps in a fresh token per
+    /// request, so a path that skipped the swap sends no Authorization at all
+    /// rather than a placeholder.
+    Credentials(Arc<dyn Credentials>),
+}
+
+impl Auth {
+    fn credentials(&self) -> Option<&Arc<dyn Credentials>> {
+        match self {
+            Self::Credentials(credentials) => Some(credentials),
+            Self::Token(_) => None,
+        }
+    }
+    /// The fixed token, without its `Bearer ` prefix.
+    fn token(&self) -> Option<&str> {
+        match self {
+            Self::Token(value) => value.to_str().ok()?.strip_prefix("Bearer "),
+            Self::Credentials(_) => None,
+        }
+    }
+}
+
 struct Inner {
-    credentials: Option<Arc<dyn Credentials>>,
+    auth: Auth,
     transport: Arc<dyn Transport>,
     cache: Cache,
-    /// `None` for refreshable credentials: `exchange` swaps in a fresh token
-    /// per request, so a path that skipped the swap sends no Authorization at
-    /// all rather than a placeholder.
-    authorization: Option<HeaderValue>,
     credential_scope: String,
     options: Options,
     governor: Governor,
@@ -176,12 +198,9 @@ impl Client {
             return Err(Error::Configuration);
         }
         Self::check_options(&options)?;
-        // `exchange` swaps in a fresh token per request, so requests carry no
-        // Authorization until then; a path that skipped the swap gets a 401.
         let credential_scope = hex(&Sha256::digest(credentials.scope().as_bytes()));
         Ok(Self::assemble(
-            Some(credentials),
-            None,
+            Auth::Credentials(credentials),
             credential_scope,
             options,
             cache,
@@ -213,8 +232,7 @@ impl Client {
         authorization.set_sensitive(true);
         let credential_scope = hex(&Sha256::digest(authorization.as_bytes()));
         Ok(Self::assemble(
-            None,
-            Some(authorization),
+            Auth::Token(authorization),
             credential_scope,
             options,
             cache,
@@ -236,8 +254,7 @@ impl Client {
     }
 
     fn assemble(
-        credentials: Option<Arc<dyn Credentials>>,
-        authorization: Option<HeaderValue>,
+        auth: Auth,
         credential_scope: String,
         options: Options,
         cache: Cache,
@@ -251,11 +268,10 @@ impl Client {
             options.write_burst,
         );
         Self(Arc::new(Inner {
-            credentials,
+            auth,
             decoding: Arc::new(tokio::sync::Semaphore::new(4)),
             transport,
             cache,
-            authorization,
             credential_scope,
             options,
             governor,
@@ -270,11 +286,6 @@ impl Client {
         self.0.options.concurrency
     }
 
-    /// The write budget's token count this client paces writes with.
-    pub fn write_burst(&self) -> usize {
-        self.0.options.write_burst
-    }
-
     /// The request cap `graphql_pages` applies to a connection walk, for a
     /// caller that paginates more than one connection in a single document
     /// and so drives the cursor loop itself.
@@ -285,14 +296,12 @@ impl Client {
     /// The current token, for a tool that makes its own GitHub requests and is
     /// handed it explicitly. Refreshable credentials renew it.
     pub async fn token(&self) -> Result<String> {
-        if let Some(credentials) = &self.0.credentials {
+        if let Some(credentials) = self.0.auth.credentials() {
             return credentials.token().await;
         }
         self.0
-            .authorization
-            .as_ref()
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "))
+            .auth
+            .token()
             .map(str::to_owned)
             .ok_or(Error::Configuration)
     }
@@ -306,22 +315,22 @@ impl Client {
         permissions: Permissions,
     ) -> Option<credentials::Token<'_>> {
         self.0
-            .credentials
-            .as_ref()?
+            .auth
+            .credentials()?
             .scoped_token(repository, permissions)
     }
 
     /// The numeric id of the repository `scoped_token` mints for under
     /// `repository`; `None` when the credentials cannot mint.
     pub fn scoped_repository_id(&self, repository: &str) -> Option<RepositoryId<'_>> {
-        self.0.credentials.as_ref()?.repository_id(repository)
+        self.0.auth.credentials()?.repository_id(repository)
     }
 
     /// Whether `scoped_token` mints, without minting.
     pub fn mints_scoped_tokens(&self) -> bool {
         self.0
-            .credentials
-            .as_ref()
+            .auth
+            .credentials()
             .is_some_and(|credentials| credentials.mints_scoped_tokens())
     }
 
@@ -329,16 +338,17 @@ impl Client {
     /// token nears expiry sends without waiting on a mint. A fixed token has
     /// nothing to renew.
     pub async fn ready(&self) -> Result<()> {
-        if let Some(credentials) = &self.0.credentials {
+        if let Some(credentials) = self.0.auth.credentials() {
             credentials.token().await?;
         }
         Ok(())
     }
 
-    /// Public metadata reads share the transport pool but never GitHub auth.
     /// A registry client on this client's cache and transport, following
-    /// `rules`. Its options are the defaults at this client's concurrency,
-    /// which was validated when the client was built.
+    /// `rules`, that never sends GitHub auth. Its options are the defaults at
+    /// this client's concurrency, which was validated when the client was
+    /// built.
+    #[cfg(feature = "testing")]
     pub fn public_http(
         &self,
         rules: std::sync::Arc<dyn patchula_http::RegistryRules>,
@@ -378,35 +388,20 @@ impl Client {
     fn request(&self, method: Method, url: Url) -> Request {
         let mut request = Request::new(method, url);
         let headers = request.headers_mut();
-        if let Some(authorization) = &self.0.authorization {
+        if let Auth::Token(authorization) = &self.0.auth {
             headers.insert(header::AUTHORIZATION, authorization.clone());
         }
         base_headers(headers);
         request
     }
 
-    async fn exchange(&self, request: &Request, cached: bool) -> Result<Response> {
+    /// Send `request` under the governor; a `write` waits for the write
+    /// budget first.
+    async fn exchange(&self, request: &Request, cached: bool, write: bool) -> Result<Response> {
         let resource = if request.url().path().ends_with("/graphql") {
             "graphql"
         } else {
             "core"
-        };
-        let content = if resource == "graphql" {
-            request
-                .body()
-                .and_then(|b| b.as_bytes())
-                .and_then(|b| serde_json::from_slice::<Value>(b).ok())
-                .and_then(|b| {
-                    b["query"]
-                        .as_str()
-                        .map(|q| q.trim_start().starts_with("mutation"))
-                })
-                .unwrap_or(true)
-        } else {
-            !matches!(
-                *request.method(),
-                Method::GET | Method::HEAD | Method::OPTIONS
-            )
         };
         // A 401 to refreshable credentials is retried once with a fresh
         // token: GitHub ran nothing it refused with 401, so even a write is
@@ -417,7 +412,7 @@ impl Client {
             let trace = patchula_http::RequestTrace::new(request.method().as_str(), request.url());
             trace.cache_policy(if cached { "always-revalidate" } else { "cold" }, None);
             let queued = std::time::Instant::now();
-            let content_permit = if content {
+            let content_permit = if write {
                 Some(self.0.governor.content().await?)
             } else {
                 None
@@ -426,7 +421,7 @@ impl Client {
             self.0.governor.request();
             let mut outgoing = request.try_clone().ok_or(Error::Configuration)?;
             let mut sent_token = None;
-            if let Some(credentials) = &self.0.credentials {
+            if let Some(credentials) = self.0.auth.credentials() {
                 let token = credentials.token().await?;
                 let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
                     .map_err(|_| Error::Configuration)?;
@@ -449,7 +444,7 @@ impl Client {
             self.0.governor.observe(resource, &response).await;
             if response.status == StatusCode::UNAUTHORIZED
                 && !reauthenticated
-                && let Some((credentials, token)) = self.0.credentials.as_ref().zip(sent_token)
+                && let Some((credentials, token)) = self.0.auth.credentials().zip(sent_token)
                 && let Some(invalidation) = credentials.invalidate(&token)
             {
                 invalidation.await;
@@ -490,15 +485,21 @@ impl Client {
     /// cached success is returned without asking GitHub again. The cache key
     /// carries the credential scope, so a credential with another reach never
     /// reads it.
-    pub async fn get_immutable_response(&self, path: &str) -> Result<Response> {
+    async fn immutable_response(&self, path: &str) -> Result<Response> {
         self.get_representation(path, None, Read::Immutable)
             .await?
             .ok_or(Error::MissingBody)
     }
 
-    /// `get_immutable_response` decoded, as `get_fresh` decodes `get`.
+    /// The raw answer `get_immutable` decodes.
+    #[cfg(feature = "testing")]
+    pub async fn get_immutable_response(&self, path: &str) -> Result<Response> {
+        self.immutable_response(path).await
+    }
+
+    /// `immutable_response` decoded, as `get_fresh` decodes `get`.
     pub async fn get_immutable<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let response = self.get_immutable_response(path).await?;
+        let response = self.immutable_response(path).await?;
         decode(&response.body, format!("GET {path}"))
     }
 
@@ -535,7 +536,7 @@ impl Client {
         );
         *request.body_mut() = Some(serde_json::to_vec(&body).map_err(|_| Error::Json)?.into());
         let operation = format!("{method} {path}");
-        let response = self.exchange(&request, false).await?;
+        let response = self.exchange(&request, false, true).await?;
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
         }
@@ -605,7 +606,7 @@ impl Client {
             if let Some(entry) = &cached {
                 conditional::add_validators(&mut request, entry).map_err(|_| Error::Cache)?;
             }
-            let mut response = self.exchange(&request, cached.is_some()).await?;
+            let mut response = self.exchange(&request, cached.is_some(), false).await?;
             if matches!(response.status.as_u16(), 301 | 302 | 303 | 307 | 308) {
                 let location = response
                     .headers
@@ -675,7 +676,10 @@ impl Client {
                 .into(),
         );
         let operation = graphql_operation(query);
-        let response = self.exchange(&request, false).await?;
+        // Only a document that parses as a query (shorthand `{ … }`
+        // included) skips the write budget; anything else is paced as a write.
+        let write = !operation.starts_with("query");
+        let response = self.exchange(&request, false, write).await?;
         if !response.status.is_success() {
             return Err(Error::Status(response.status.as_u16()));
         }

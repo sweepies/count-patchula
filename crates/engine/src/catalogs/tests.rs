@@ -73,7 +73,6 @@ async fn read(engine: &Engine, wait: u32, now: DateTime<Utc>, force: bool) -> (C
             } else {
                 BTreeSet::new()
             },
-            &engine.sources,
             &MiseVias::new(),
             now,
         )
@@ -534,7 +533,6 @@ async fn views_are_kept_per_access_and_a_repository_view_by_its_id() {
                     BTreeSet::from([key.clone()]),
                     &BTreeMap::from([(key.clone(), 24)]),
                     &BTreeSet::new(),
-                    &engine.sources,
                     &MiseVias::new(),
                     now(),
                 )

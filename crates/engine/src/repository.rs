@@ -156,12 +156,16 @@ pub async fn view<S: Source>(
     }
     let contents = source.read(&wanted).await?;
     for (entry, content) in wanted.iter().zip(contents) {
-        let primary = if scanner.shared_name(&entry.path) {
-            Primary::SharedName
-        } else {
-            Primary::Selected
-        };
-        place(entry, content, primary, &mut files, &mut blobs)?;
+        // A shared-name file that is not text is another format's, left
+        // out; one that cannot be read still refuses the repository.
+        if scanner.shared_name(&entry.path)
+            && content
+                .as_ref()
+                .is_ok_and(|bytes| std::str::from_utf8(bytes).is_err())
+        {
+            continue;
+        }
+        place(entry, content, true, &mut files, &mut blobs)?;
     }
     for settings in &linked {
         files.insert(settings.clone(), Text::Unread(Unread::Failed));
@@ -187,7 +191,7 @@ pub async fn view<S: Source>(
         }
         let contents = source.read(&wanted).await?;
         for (entry, content) in wanted.iter().zip(contents) {
-            place(entry, content, Primary::Named, &mut files, &mut blobs)?;
+            place(entry, content, false, &mut files, &mut blobs)?;
         }
     }
     // What the chain still names when the rounds run out is unreadable the
@@ -230,31 +234,17 @@ pub async fn view<S: Source>(
     })
 }
 
-/// Why an entry is read.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Primary {
-    /// The first selection.
-    Selected,
-    /// The first selection, by managers whose file names another format
-    /// shares ([`Scanner::shared_name`]).
-    SharedName,
-    /// A later round, from what the files read so far name.
-    Named,
-}
-
-/// One entry's content into `files` and `blobs`. A file of the first
-/// selection that cannot be read refuses the repository, while one named
-/// by a later round is unreadable instead. A settings file that is not text
-/// is unreadable in either, and a shared-name file that is not text is
-/// another format's, left out.
+/// One entry's content into `files` and `blobs`. A file of the `primary`
+/// first selection that cannot be read refuses the repository, while one
+/// named by a later round is unreadable instead. A settings file that is not
+/// text is unreadable in either.
 fn place(
     entry: &Entry,
     content: Content,
-    why: Primary,
+    primary: bool,
     files: &mut Files,
     blobs: &mut BTreeMap<String, Blob>,
 ) -> Result<()> {
-    let primary = why != Primary::Named;
     let bytes = match content {
         Ok(bytes) => bytes,
         // A registry-settings file that cannot be read is unreadable, so
@@ -272,7 +262,6 @@ fn place(
     };
     let text = match String::from_utf8(bytes) {
         Ok(text) => text,
-        Err(_) if why == Primary::SharedName => return Ok(()),
         Err(_) if !primary || registry_settings(&entry.path) => {
             files.insert(entry.path.clone(), Text::Unread(Unread::Failed));
             return Ok(());

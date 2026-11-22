@@ -705,6 +705,16 @@ async fn mutations_share_serial_cooldown_but_graphql_queries_do_not() {
         .await
         .unwrap();
     assert!(started.elapsed() >= Duration::from_secs(1));
+    // A comment before the operation does not hide a mutation.
+    let started = tokio::time::Instant::now();
+    github
+        .graphql::<Value>(
+            "# move the ref\nmutation{updateRefs(input:{}){clientMutationId}}",
+            json!({}),
+        )
+        .await
+        .unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(1));
     let started = tokio::time::Instant::now();
     github
         .graphql::<Value>("query{viewer{login}}", json!({}))

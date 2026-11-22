@@ -70,7 +70,7 @@ impl RequestTrace {
 
     pub fn fresh(&self, response: &Response) {
         self.finish(
-            Some((response.status, Some(response.body.len()))),
+            Some((response.status, response.body.len())),
             "fresh-hit",
             Duration::ZERO,
         );
@@ -91,15 +91,9 @@ impl RequestTrace {
         cached: bool,
     ) -> Result<Response, crate::Error> {
         let result = transport.send(request).instrument(self.span.clone()).await;
-        let outcome = match &result {
-            Ok(response) if response.status == 304 => "304",
-            Ok(_) if !cached => "miss",
-            Ok(response) if response.status == 200 => "200",
-            _ => "miss",
-        };
-        self.finish(
-            result.as_ref().ok().map(|r| (r.status, Some(r.body.len()))),
-            outcome,
+        self.sent(
+            result.as_ref().ok().map(|r| (r.status, r.body.len())),
+            cached,
             queued,
         );
         result
@@ -118,29 +112,25 @@ impl RequestTrace {
             .send_streaming(request)
             .instrument(self.span.clone())
             .await;
-        let outcome = match &result {
-            Ok(response) if response.status == 304 => "304",
-            Ok(_) if !cached => "miss",
-            Ok(response) if response.status == 200 => "200",
-            _ => "miss",
-        };
-        self.finish(
-            result.as_ref().ok().map(|r| (r.status, None)),
-            outcome,
-            queued,
-        );
+        self.sent(result.as_ref().ok().map(|r| (r.status, 0)), cached, queued);
         result
     }
 
-    fn finish(
-        &self,
-        response: Option<(StatusCode, Option<usize>)>,
-        outcome: &str,
-        queued: Duration,
-    ) {
+    /// Log a sent exchange: its status and body size when it was answered,
+    /// and whether a `cached` entry's validators made it a hit.
+    fn sent(&self, response: Option<(StatusCode, usize)>, cached: bool, queued: Duration) {
+        let outcome = match response {
+            Some((status, _)) if status == 304 => "304",
+            Some((status, _)) if cached && status == 200 => "200",
+            _ => "miss",
+        };
+        self.finish(response, outcome, queued);
+    }
+
+    fn finish(&self, response: Option<(StatusCode, usize)>, outcome: &str, queued: Duration) {
         tracing::debug!(parent: &self.span,
             status = response.map_or(0, |(status, _)| status.as_u16()), cache = outcome,
-            bytes = response.and_then(|(_, bytes)| bytes).unwrap_or(0),
+            bytes = response.map_or(0, |(_, bytes)| bytes),
             queued_ms = queued.as_secs_f64() * 1000.0,
             total_ms = self.started.elapsed().as_secs_f64() * 1000.0,
             connection_reuse = "unavailable", connect_tls_ms = "unavailable",

@@ -136,8 +136,9 @@ auto-merge. Writes never enter the cache. Any response other than a 2xx is an
 error, and only documented rate-limit refusals are retried: a transport or
 server failure may already have written, so the next run reconciles instead.
 
-Every REST request other than GET, HEAD and OPTIONS, and every GraphQL
-document whose text starts with `mutation` (or whose body cannot be parsed),
+Every REST write (POST, PATCH and PUT), and every GraphQL document
+that does not parse as a query (comments and whitespace skipped, so a
+mutation behind a leading comment counts; shorthand `{ … }` is a query),
 runs one at a time across all clones of a client, paced by a token bucket of
 `github.writeBurst` tokens (12 by default) refilling one a second — the
 first writes of a run go out without a pause, and no minute holds more than

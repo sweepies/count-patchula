@@ -18,14 +18,24 @@ pub(super) struct Discovery {
     overrides: BTreeMap<String, Config>,
     /// Hash of the lookup inputs the hints are scoped by.
     inputs_hash: String,
-    /// Hash of the config schema the hints are scoped by.
-    pub(super) schema_hash: String,
     /// The credential scope the hints are scoped by.
     credential_scope: String,
     hint: LookupHint,
     /// Each repository's stored hint as read, so an unchanged one is not
     /// written again.
     known: BTreeMap<String, LookupHint>,
+}
+
+impl Discovery {
+    /// The scope `repository`'s lookup hint is stored under.
+    fn hint_scope(&self, repository: &str) -> LookupHintScope {
+        LookupHintScope {
+            repository: repository.into(),
+            inputs_hash: self.inputs_hash.clone(),
+            schema_hash: schema_hash(),
+            credential_scope: self.credential_scope.clone(),
+        }
+    }
 }
 
 /// What the scan stage produced.
@@ -147,33 +157,33 @@ impl Engine {
             &overrides,
             self.versions_host_override,
         ))?);
-        let schema_hash = patchula_manager::hash(patchula_config::SCHEMA.as_bytes());
-        let credential_scope = self.github.credential_scope().to_owned();
-        let mut hint = LookupHint::default();
-        let mut known = BTreeMap::new();
-        for repo in &repos {
-            let scope = LookupHintScope {
-                repository: repo.clone(),
-                inputs_hash: inputs_hash.clone(),
-                schema_hash: schema_hash.clone(),
-                credential_scope: credential_scope.clone(),
-            };
-            if let Some(stored) = self.cache.state::<LookupHint>(&scope).await? {
-                hint.catalogs.extend(stored.catalogs.iter().cloned());
-                hint.digests.extend(stored.digests.iter().cloned());
-                hint.tags.extend(stored.tags.iter().cloned());
-                known.insert(repo.clone(), stored);
-            }
-        }
-        Ok(Discovery {
+        let mut discovery = Discovery {
             repos,
             overrides,
             inputs_hash,
-            schema_hash,
-            credential_scope,
-            hint,
-            known,
-        })
+            credential_scope: self.github.credential_scope().to_owned(),
+            hint: LookupHint::default(),
+            known: BTreeMap::new(),
+        };
+        for repo in &discovery.repos {
+            if let Some(stored) = self
+                .cache
+                .state::<LookupHint>(&discovery.hint_scope(repo))
+                .await?
+            {
+                discovery
+                    .hint
+                    .catalogs
+                    .extend(stored.catalogs.iter().cloned());
+                discovery
+                    .hint
+                    .digests
+                    .extend(stored.digests.iter().cloned());
+                discovery.hint.tags.extend(stored.tags.iter().cloned());
+                discovery.known.insert(repo.clone(), stored);
+            }
+        }
+        Ok(discovery)
     }
 
     /// The hinted digest reads a scan overlaps: the refs the last runs
@@ -640,12 +650,7 @@ impl Engine {
                     })
                     .cloned()
                     .collect();
-                let scope = LookupHintScope {
-                    repository: repo.report.repository.clone(),
-                    inputs_hash: discovery.inputs_hash.clone(),
-                    schema_hash: discovery.schema_hash.clone(),
-                    credential_scope: discovery.credential_scope.clone(),
-                };
+                let scope = discovery.hint_scope(&repo.report.repository);
                 let packages = repo
                     .dependencies
                     .iter()
@@ -737,14 +742,7 @@ impl Engine {
         let fresh_sources = &self.sources.revalidating();
         let vias = mise_vias(work);
         let (remaining, refs, advisories) = tokio::join!(
-            self.age_catalogs(
-                plan.keys.clone(),
-                &plan.waits,
-                &plan.forced,
-                &self.sources,
-                &vias,
-                now
-            ),
+            self.age_catalogs(plan.keys.clone(), &plan.waits, &plan.forced, &vias, now),
             self.digests(current_refs, fresh_sources, true, sent),
             advisories
         );
@@ -831,14 +829,7 @@ impl Engine {
             // Promoted lockfile packages may name keys the first pass had not.
             let vias = mise_vias(work);
             let (fresh, evidence, credentialed) = self
-                .age_catalogs(
-                    vulnerable,
-                    &BTreeMap::new(),
-                    &BTreeSet::new(),
-                    &self.sources,
-                    &vias,
-                    now,
-                )
+                .age_catalogs(vulnerable, &BTreeMap::new(), &BTreeSet::new(), &vias, now)
                 .await?;
             // The fresh reads win over the aged ones they replace.
             lookups.catalogs.extend(fresh);
@@ -1135,24 +1126,19 @@ impl Engine {
         };
         let fresh_sources = &self.sources.revalidating();
         let refs = self.digests(digest_keys, fresh_sources, true, sent);
-        let images = stream::iter(keys.images)
-            .map(|((package, tag), revalidate)| async move {
-                let sources = if revalidate {
-                    fresh_sources
-                } else {
-                    &self.sources
-                };
-                let (result, credentialed) =
-                    patchula_http::tracked(Box::pin(sources.registry_digest(&package, &tag))).await;
-                if credentialed {
-                    mark_sent(sent, Sent::Image(package.clone()));
-                }
-                let result = result.map_err(Failure::from);
-                self.progress.advance(1);
-                ((package, tag), result)
-            })
-            .buffer_unordered(DIGEST_FAN_OUT)
-            .collect::<BTreeMap<_, _>>();
+        let images = self.read_each(
+            keys.images,
+            fresh_sources,
+            DIGEST_FAN_OUT,
+            true,
+            sent,
+            |sources, (package, tag)| {
+                (Sent::Image(package.clone()), async move {
+                    let result = sources.registry_digest(&package, &tag).await;
+                    ((package, tag), result.map_err(Failure::from))
+                })
+            },
+        );
         let (tags, refs, image_digests) = futures_util::future::join3(tags, refs, images).await;
         lookups.digests.extend(tags);
         lookups.digests.extend(refs);
@@ -1226,25 +1212,22 @@ impl Engine {
         }
         let fresh_sources = &self.sources.revalidating();
         let read_sboms = |reads: BTreeMap<(String, String, String), bool>| {
-            stream::iter(reads)
-                .map(|((package, digest, platform), revalidate)| async move {
-                    let sources = if revalidate {
-                        fresh_sources
-                    } else {
-                        &self.sources
-                    };
-                    let (result, credentialed) = patchula_http::tracked(Box::pin(
-                        sources.image_sbom(&package, &digest, &platform),
-                    ))
-                    .await;
-                    if credentialed {
-                        mark_sent(sent, Sent::Image(package.clone()));
-                    }
-                    let result = result.map_err(|e| e.to_string());
-                    ((package, digest, platform), result)
-                })
-                .buffer_unordered(SBOM_FAN_OUT)
-                .collect::<BTreeMap<_, _>>()
+            self.read_each(
+                reads,
+                fresh_sources,
+                SBOM_FAN_OUT,
+                false,
+                sent,
+                |sources, (package, digest, platform)| {
+                    (Sent::Image(package.clone()), async move {
+                        let result = sources.image_sbom(&package, &digest, &platform).await;
+                        (
+                            (package, digest, platform),
+                            result.map_err(|e| e.to_string()),
+                        )
+                    })
+                },
+            )
         };
         let mut image_sboms = read_sboms(image_reads).await;
         // An image with none of the configured platforms is read for the first
@@ -1404,21 +1387,53 @@ impl Engine {
         counted: bool,
         sent: &Mutex<BTreeSet<Sent>>,
     ) -> BTreeMap<DigestKey, std::result::Result<String, Failure>> {
+        self.read_each(
+            keys,
+            fresh,
+            DIGEST_FAN_OUT,
+            counted,
+            sent,
+            |sources, (package, reference)| {
+                (Sent::Git(package.clone()), async move {
+                    let result = sources.digest(&package, &reference).await;
+                    ((package, reference), result.map_err(Failure::from))
+                })
+            },
+        )
+        .await
+    }
+
+    /// `read` for each key, the flagged ones through `fresh`, `fan_out` at a
+    /// time. `read` names the package its key's credentialed read marks in
+    /// `sent`; `counted` advances the current progress stage per key.
+    async fn read_each<'a, K, R, Fut>(
+        &'a self,
+        keys: BTreeMap<K, bool>,
+        fresh: &'a Sources,
+        fan_out: usize,
+        counted: bool,
+        sent: &'a Mutex<BTreeSet<Sent>>,
+        read: impl Fn(&'a Sources, K) -> (Sent, Fut),
+    ) -> BTreeMap<K, R>
+    where
+        K: Ord,
+        Fut: std::future::Future<Output = (K, R)>,
+    {
+        let read = &read;
         stream::iter(keys)
-            .map(|((package, reference), revalidate)| async move {
+            .map(|(key, revalidate)| async move {
                 let sources = if revalidate { fresh } else { &self.sources };
-                let (result, credentialed) =
-                    patchula_http::tracked(Box::pin(sources.digest(&package, &reference))).await;
+                let (package, reading) = read(sources, key);
+                let ((key, result), credentialed) = patchula_http::tracked(Box::pin(reading)).await;
                 if credentialed {
-                    mark_sent(sent, Sent::Git(package.clone()));
+                    mark_sent(sent, package);
                 }
-                let result = result.map_err(Failure::from);
                 if counted {
                     self.progress.advance(1);
                 }
-                ((package, reference), result)
+                (key, result)
             })
-            .buffer_unordered(DIGEST_FAN_OUT)
+            .buffer_unordered(fan_out)
             .collect()
             .await
     }

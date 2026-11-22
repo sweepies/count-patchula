@@ -318,11 +318,7 @@ pub async fn installation_repositories(
     github
         .rest_pages_envelope(
             "installation/repositories?per_page=100",
-            |body| {
-                serde_json::from_value::<model::InstallationRepositories>(body.clone())
-                    .map(|body| body.repositories)
-                    .map_err(|_| patchula_github::Error::Json)
-            },
+            |body: model::InstallationRepositories| body.repositories,
             |page| page.len() < 100,
         )
         .await
@@ -348,11 +344,24 @@ struct RepoConfigScope {
     commit: String,
     schema_hash: String,
 }
+impl RepoConfigScope {
+    fn new(repository: &str, commit: &str) -> Self {
+        Self {
+            repository: repository.into(),
+            commit: commit.into(),
+            schema_hash: schema_hash(),
+        }
+    }
+}
 #[derive(Serialize)]
 struct ExtractionScope {
     repository: String,
     commit: String,
     config_hash: String,
+}
+/// The config schema's hash, which config-derived state is scoped by.
+fn schema_hash() -> String {
+    patchula_manager::hash(patchula_config::SCHEMA.as_bytes())
 }
 #[derive(Serialize)]
 struct FilesScope {
@@ -389,25 +398,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 18;
+    const VERSION: u32 = 19;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 21;
+    const VERSION: u32 = 22;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 21;
+    const VERSION: u32 = 22;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 18;
+    const VERSION: u32 = 19;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -499,28 +508,21 @@ impl Engine {
         http_options: patchula_http::Options,
         github_options: GithubOptions,
     ) -> Result<Self> {
-        let tool_registries = http_options.credentials.clone();
         let github = Github::with_credentials(
             credentials.clone(),
             cache.clone(),
             github_options,
             transport.clone(),
         )?;
-        let lockfiles = cache.workspace_dir().map(|path| {
-            patchula_tools::Runner::new(path.into(), "")
-                .with_credentials(credentials)
-                .with_registries(&tool_registries)
-        });
-        let mut engine = Self::build(
+        Self::assemble(
             github,
+            &Auth::Credentials(credentials),
             cache,
             concurrency,
             transport,
             http_options,
-            lockfiles,
-        )?;
-        engine.installation = true;
-        Ok(engine)
+            patchula_tools::DEFAULT_CACHE_GIB,
+        )
     }
     /// Settings change only between batches; warm clients and receipts stay intact.
     pub fn set_batch_options(&mut self, concurrency: usize, recheck: Recheck) -> Result<()> {
@@ -571,29 +573,41 @@ impl Engine {
             },
             transport.clone(),
         )?;
-        let tool_registries = http_options.credentials.clone();
-        let lockfiles = cache.workspace_dir().map(|path| {
-            patchula_tools::Runner::new(path.into(), token).with_registries(&tool_registries)
-        });
-        Self::build(
+        Self::assemble(
             github,
+            &Auth::Token(token.into()),
             cache,
             concurrency,
             transport,
             http_options,
-            lockfiles,
+            patchula_tools::DEFAULT_CACHE_GIB,
         )
     }
-    fn build(
+    /// Everything every constructor shares once its GitHub client exists:
+    /// the lockfile runner under the same identity as `github`, the cached
+    /// HTTP client and the sources over both.
+    fn assemble(
         github: Github,
+        auth: &Auth,
         cache: Cache,
         concurrency: usize,
         transport: Arc<dyn Transport>,
-        http_options: patchula_http::Options,
-        lockfiles: Option<patchula_tools::Runner>,
+        mut http_options: patchula_http::Options,
+        lockfile_cache_gib: u64,
     ) -> Result<Self> {
         check_concurrency(concurrency)?;
-        let mut http_options = http_options;
+        // Limited before the runner is cloned into `sources` for Nix
+        // lookups, so every copy shares the limit.
+        let lockfiles = cache.workspace_dir().map(|path| {
+            let runner = match auth {
+                Auth::Token(token) => patchula_tools::Runner::new(path.into(), token),
+                Auth::Credentials(credentials) => patchula_tools::Runner::new(path.into(), "")
+                    .with_credentials(credentials.clone()),
+            };
+            runner
+                .with_cache_limit(lockfile_cache_gib)
+                .with_registries(&http_options.credentials)
+        });
         let mut registries: Vec<&str> = http_options
             .credentials
             .iter()
@@ -607,7 +621,7 @@ impl Engine {
         let sources = Sources::new(github.clone(), http.clone(), cache.clone());
         let mut engine = Self {
             lockfiles,
-            lockfile_cache_gib: patchula_tools::DEFAULT_CACHE_GIB,
+            lockfile_cache_gib,
             github,
             http,
             sources,
@@ -617,7 +631,7 @@ impl Engine {
             recheck: Recheck::default(),
             versions_host_override: None,
             advisories: false,
-            installation: false,
+            installation: matches!(auth, Auth::Credentials(_)),
             advertised_server: None,
             progress: Arc::new(()),
             registry_scope,
@@ -680,7 +694,6 @@ impl Engine {
             .map_err(|(_, message)| Error::Configuration(message.to_owned()))?;
         let mut http_options = self::settings::http_options(settings);
         http_options.credentials = credentials;
-        let tool_registries = http_options.credentials.clone();
         let github_options = self::settings::github_options(settings);
         let github = match &auth {
             // A token run is the CLI's: its GitHub concurrency is the HTTP
@@ -709,30 +722,17 @@ impl Engine {
                 transport.clone(),
             )?,
         };
-        let lockfiles = cache.workspace_dir().map(|path| {
-            let runner = match &auth {
-                Auth::Token(token) => patchula_tools::Runner::new(path.into(), token),
-                Auth::Credentials(credentials) => patchula_tools::Runner::new(path.into(), "")
-                    .with_credentials(credentials.clone()),
-            };
-            // Set before `build` clones the runner into `sources` for Nix
-            // lookups, so every copy shares the limit.
-            runner
-                .with_cache_limit(settings.lockfiles.cache_gib)
-                .with_registries(&tool_registries)
-        });
-        let mut engine = Self::build(
+        let mut engine = Self::assemble(
             github,
+            &auth,
             cache,
             concurrency,
             transport,
             http_options,
-            lockfiles,
-        )?;
-        engine.installation = matches!(auth, Auth::Credentials(_));
-        let mut engine = engine.with_recheck(recheck);
+            settings.lockfiles.cache_gib,
+        )?
+        .with_recheck(recheck);
         engine.advisories = true;
-        engine.lockfile_cache_gib = settings.lockfiles.cache_gib;
         Ok(engine)
     }
     /// The repository `repo`'s mise lookups are made for; none for a local
@@ -1017,14 +1017,14 @@ impl Engine {
         // A borrowed repository's fetch stands in for its packages' progress.
         self.progress.advance(packages.len() - borrowed.len());
         for (key, stream) in packages {
-            let result = match &stream {
-                Some((repository, stream)) => match results.get(repository) {
-                    Some(Ok(releases)) => {
-                        Ok(patchula_datasource::pkl_catalog(stream, releases.clone()))
-                    }
-                    Some(Err(failure)) => Err(failure.clone()),
-                    None => Err(Failure::from(patchula_datasource::Error::Invalid)),
-                },
+            let fetched = stream
+                .as_ref()
+                .and_then(|(repository, stream)| Some((results.get(repository)?, stream)));
+            let result = match fetched {
+                Some((Ok(releases), stream)) => {
+                    Ok(patchula_datasource::pkl_catalog(stream, releases.clone()))
+                }
+                Some((Err(failure), _)) => Err(failure.clone()),
                 None => Err(Failure::from(patchula_datasource::Error::Invalid)),
             };
             if stream
@@ -1304,6 +1304,39 @@ impl Engine {
         })
         .await
         .map_err(|e| Error::Invalid(e.to_string()))??;
+        let config_hash = patchula_manager::hash(&serde_json::to_vec(&config)?);
+        let cached = match self.extract_view(repo, scanner, view, config_hash).await? {
+            Ok(cached) => cached,
+            Err(reason) => {
+                return Ok(Work::empty(
+                    repo_report(repo, Status::Error, Some(reason)),
+                    Some(config),
+                ));
+            }
+        };
+        let mut report = repo_report(repo, Status::Complete, None);
+        // Plans are based on a commit; a directory's stands in as a hash of
+        // its selected files, stable until they change.
+        report.commit = Some(patchula_manager::hash(&serde_json::to_vec(
+            &cached
+                .snapshot
+                .files
+                .iter()
+                .map(|(path, blob)| (path, &blob.sha))
+                .collect::<Vec<_>>(),
+        )?));
+        report.default_branch = Some("local".into());
+        Ok(Work::from_extraction(report, config, cached))
+    }
+    /// The extraction of `view` with the snapshot it was read from, or the
+    /// view's refusal.
+    async fn extract_view(
+        &self,
+        repo: &str,
+        scanner: Scanner,
+        view: repository::View,
+        config_hash: String,
+    ) -> Result<std::result::Result<CachedExtraction, String>> {
         let repository::View {
             paths,
             files,
@@ -1313,41 +1346,23 @@ impl Engine {
             refusal,
         } = view;
         if let Some(reason) = refusal {
-            return Ok(Work::empty(
-                repo_report(repo, Status::Error, Some(reason)),
-                Some(config),
-            ));
+            return Ok(Err(reason));
         }
-        let config_hash = patchula_manager::hash(&serde_json::to_vec(&config)?);
         let mut extraction = self
             .extract_files(repo, scanner, files, config_hash)
             .await?;
         extraction.skipped.extend(unsupported);
         extraction.warnings.extend(warnings);
-        let mut report = repo_report(repo, Status::Complete, None);
-        // Plans are based on a commit; a directory's stands in as a hash of
-        // its selected files, stable until they change.
-        report.commit = Some(patchula_manager::hash(&serde_json::to_vec(
-            &blobs
-                .iter()
-                .map(|(path, blob)| (path, &blob.sha))
-                .collect::<Vec<_>>(),
-        )?));
-        report.default_branch = Some("local".into());
         let snapshot = patchula_update::Snapshot {
             paths,
             files: blobs,
             public_only: extraction.public_only.clone(),
             cargo_cooldowns: extraction.cargo_cooldowns.clone(),
         };
-        Ok(Work::from_extraction(
-            report,
-            config,
-            CachedExtraction {
-                extraction,
-                snapshot,
-            },
-        ))
+        Ok(Ok(CachedExtraction {
+            extraction,
+            snapshot,
+        }))
     }
     /// The extraction of `files` under the config `config_hash` names.
     /// Extraction is a function of the config and the files it reads, so a
@@ -1403,11 +1418,7 @@ impl Engine {
         let config = if let Some(config) = override_config {
             Some(config.clone())
         } else {
-            let scope = RepoConfigScope {
-                repository: repo.into(),
-                commit: commit.clone(),
-                schema_hash: patchula_manager::hash(patchula_config::SCHEMA.as_bytes()),
-            };
+            let scope = RepoConfigScope::new(repo, &commit);
             if let Some(saved) = self.cache.state::<RepoConfig>(&scope).await? {
                 saved.0
             } else {
@@ -1450,34 +1461,13 @@ impl Engine {
                     self.tree(repo, tree_sha).await?
                 };
                 let view = self.repository_view(repo, entries, &config).await?;
-                let repository::View {
-                    paths,
-                    files,
-                    blobs,
-                    unsupported,
-                    warnings,
-                    refusal,
-                } = view;
-                if let Some(reason) = refusal {
-                    report.status = Status::Error;
-                    report.reason = Some(reason);
-                    return Ok(Work::empty(report, Some(config)));
-                }
-                let mut extraction = self
-                    .extract_files(repo, scanner, files, config_hash.clone())
-                    .await?;
-                extraction.skipped.extend(unsupported);
-                extraction.warnings.extend(warnings);
-                let public_only = extraction.public_only.clone();
-                let cargo_cooldowns = extraction.cargo_cooldowns.clone();
-                let cached = CachedExtraction {
-                    extraction,
-                    snapshot: patchula_update::Snapshot {
-                        paths,
-                        files: blobs,
-                        public_only,
-                        cargo_cooldowns,
-                    },
+                let cached = match self.extract_view(repo, scanner, view, config_hash).await? {
+                    Ok(cached) => cached,
+                    Err(reason) => {
+                        report.status = Status::Error;
+                        report.reason = Some(reason);
+                        return Ok(Work::empty(report, Some(config)));
+                    }
                 };
                 self.cache.set_state(&scope, &cached).await?;
                 cached
@@ -1536,7 +1526,7 @@ impl Engine {
             files_hash: patchula_manager::hash(&serde_json::to_vec(&(&path, &files))?),
             // CODE_VERSIONED covers the decoding and validation the schema
             // text does not.
-            schema_hash: patchula_manager::hash(patchula_config::SCHEMA.as_bytes()),
+            schema_hash: schema_hash(),
         };
         if let Some(saved) = self.cache.state::<EvaluatedConfig>(&scope).await? {
             return Ok(saved.0);
@@ -1813,25 +1803,53 @@ mod tests {
         assert_eq!(installation.mise_access(&app, &npm), MiseAccess::Run);
     }
 
+    /// Answers every request with an empty JSON object.
+    struct Empty;
+    impl Transport for Empty {
+        fn send(&self, _: reqwest::Request) -> Exchange<'_> {
+            Box::pin(async {
+                Ok(patchula_http::Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: b"{}".to_vec(),
+                    stale: None,
+                })
+            })
+        }
+    }
+
     /// A token run, the CLI's, paces writes with the operator's
-    /// `github.writeBurst`, as a credentialed run does.
-    #[tokio::test]
+    /// `github.writeBurst`, as a credentialed run does: with a burst of one,
+    /// a second write waits for the budget to refill.
+    #[tokio::test(start_paused = true)]
     async fn a_token_run_honours_the_write_burst() {
-        let mut settings = patchula_config::settings::Settings::default();
-        settings.github.write_burst = 1;
-        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
-        let engine = Engine::from_settings(
-            &settings,
-            Vec::new(),
-            Auth::Token("t".into()),
-            4,
-            patchula_words::Recheck::NextRun,
-            cache,
-            Arc::new(Never),
-        )
-        .await
-        .unwrap();
-        assert_eq!(engine.github.write_burst(), 1);
+        async fn two_writes(write_burst: usize) -> std::time::Duration {
+            let mut settings = patchula_config::settings::Settings::default();
+            settings.github.write_burst = write_burst;
+            let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+            let engine = Engine::from_settings(
+                &settings,
+                Vec::new(),
+                Auth::Token("t".into()),
+                4,
+                patchula_words::Recheck::NextRun,
+                cache,
+                Arc::new(Empty),
+            )
+            .await
+            .unwrap();
+            let started = tokio::time::Instant::now();
+            for _ in 0..2 {
+                engine
+                    .github
+                    .post::<serde_json::Value>("repos/acme/app/git/trees", serde_json::json!({}))
+                    .await
+                    .unwrap();
+            }
+            started.elapsed()
+        }
+        assert!(two_writes(1).await >= std::time::Duration::from_secs(1));
+        assert!(two_writes(12).await < std::time::Duration::from_secs(1));
     }
 
     /// An extraction one release writes is read by the next: the

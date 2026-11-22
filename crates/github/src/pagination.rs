@@ -27,18 +27,17 @@ impl Client {
         .await
     }
 
-    /// `rest_pages` for an endpoint whose page wraps its array in an object,
-    /// such as `installation/repositories`' `{"repositories": [...]}`:
-    /// `entries` pulls one page's items out of the decoded body.
-    pub async fn rest_pages_envelope<T>(
+    /// `rest_pages` for an endpoint whose page wraps its array in an object
+    /// `E`, such as `installation/repositories`' `{"repositories": [...]}`:
+    /// `entries` takes one page's items out of it.
+    pub async fn rest_pages_envelope<E: DeserializeOwned, T>(
         &self,
         path: &str,
-        mut entries: impl FnMut(&Value) -> Result<Vec<T>>,
+        mut entries: impl FnMut(E) -> Vec<T>,
         mut stop: impl FnMut(&[T]) -> bool,
     ) -> Result<Vec<T>> {
         self.rest_pages_with(path, |response| {
-            let body: Value = decode(&response.body, format!("GET {path}"))?;
-            let page = entries(&body)?;
+            let page = entries(decode(&response.body, format!("GET {path}"))?);
             let done = stop(&page);
             Ok((page, done))
         })
@@ -52,30 +51,20 @@ impl Client {
         path: &str,
         mut page: impl FnMut(&Response) -> Result<(Vec<T>, bool)>,
     ) -> Result<Vec<T>> {
-        let mut next = Some(self.url(path)?);
-        let mut visited = HashSet::new();
         let mut result = Vec::new();
-        for _ in 0..self.0.options.max_pages {
-            let Some(url) = next.take() else {
-                return Ok(result);
-            };
-            if !visited.insert(url.clone()) {
-                return Err(Error::Pagination);
-            }
-            let response = self.get(url.as_str()).await?;
-            let (entries, done) = page(&response)?;
-            result.extend(entries);
-            if done {
-                return Ok(result);
-            }
-            if let Some(target) = next_link(&response, &url)? {
-                next = Some(self.url(target.as_str())?);
-            }
-            if next.is_none() {
-                return Ok(result);
-            }
-        }
-        Err(Error::Pagination)
+        walk(
+            self.url(path)?,
+            self.0.options.max_pages,
+            |target| self.url(target),
+            |url| async move { self.get(url.as_str()).await },
+            |response| {
+                let (entries, done) = page(response)?;
+                result.extend(entries);
+                Ok(done)
+            },
+        )
+        .await?;
+        Ok(result)
     }
 
     /// The query must accept $cursor; caller supplies the connection extractor
@@ -138,6 +127,38 @@ impl<T: DeserializeOwned> GraphqlPage<T> {
             end_cursor: info.end_cursor,
         })
     }
+}
+
+/// Follow a REST listing's `rel="next"` links from `first`: `fetch` reads
+/// each page, `resolve` turns a link into a request URL, and `page` takes
+/// each page and says whether to stop early. A page seen twice or a walk
+/// longer than `max_pages` is `Error::Pagination`.
+pub(crate) async fn walk<Fut>(
+    first: Url,
+    max_pages: usize,
+    resolve: impl Fn(&str) -> Result<Url>,
+    mut fetch: impl FnMut(Url) -> Fut,
+    mut page: impl FnMut(&Response) -> Result<bool>,
+) -> Result<()>
+where
+    Fut: std::future::Future<Output = Result<Response>>,
+{
+    let mut url = first;
+    let mut visited = HashSet::new();
+    for _ in 0..max_pages {
+        if !visited.insert(url.clone()) {
+            return Err(Error::Pagination);
+        }
+        let response = fetch(url.clone()).await?;
+        if page(&response)? {
+            return Ok(());
+        }
+        match next_link(&response, &url)? {
+            Some(target) => url = resolve(target.as_str())?,
+            None => return Ok(()),
+        }
+    }
+    Err(Error::Pagination)
 }
 
 /// The `rel="next"` target of a REST page's Link headers, resolved against

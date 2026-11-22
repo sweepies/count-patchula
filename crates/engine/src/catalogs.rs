@@ -36,7 +36,7 @@ enum CatalogAccess {
 }
 impl State for Saved<'_> {
     const NAMESPACE: &'static str = "catalog";
-    const VERSION: u32 = 22;
+    const VERSION: u32 = 23;
     // Code-versioned: the view is datasource output decoded into `Catalog`;
     // a stale-but-decodable view from a release whose transforms moved is
     // worse than a miss.
@@ -77,7 +77,6 @@ impl Engine {
         keys: BTreeSet<LookupKey>,
         waits: &BTreeMap<LookupKey, u32>,
         force: &BTreeSet<LookupKey>,
-        sources: &Sources,
         vias: &MiseVias,
         now: DateTime<Utc>,
     ) -> Result<(Catalogs, Evidence, BTreeSet<LookupKey>)> {
@@ -125,9 +124,9 @@ impl Engine {
                 ordinary.insert(key);
             }
         }
-        let fresh = sources.revalidating();
+        let fresh = self.sources.revalidating();
         let ((mut fetched, sent), (forced, sent_forced)) = tokio::join!(
-            self.catalogs(ordinary, sources, vias),
+            self.catalogs(ordinary, &self.sources, vias),
             self.catalogs(forced, &fresh, vias)
         );
         fetched.extend(forced);
@@ -139,7 +138,7 @@ impl Engine {
                 // Quota fallbacks may expose an older registry snapshot. Never
                 // reset its age by promoting it into a newly fetched view.
                 if matches!(key.1.source, Source::Docker | Source::Oci)
-                    && !sources.registry_stale(&key.1.name).await.is_empty()
+                    && !self.sources.registry_stale(&key.1.name).await.is_empty()
                 {
                     continue;
                 }
@@ -177,7 +176,7 @@ pub(crate) struct Controls {
 }
 impl State for Controls {
     const NAMESPACE: &'static str = "catalog-controls";
-    const VERSION: u32 = 22;
+    const VERSION: u32 = 23;
     // Code-versioned: the stored keys come from `identity` and `plan`
     // code, and a key written by older code that no longer matches its
     // dependency quietly un-retries a ticked box.

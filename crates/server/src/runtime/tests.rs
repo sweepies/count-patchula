@@ -680,7 +680,10 @@ async fn an_unreadable_installation_listing_fails_the_batch() {
         .err()
         .unwrap();
     // A skipped element would drop a repository the sweep owes a run.
-    assert_eq!(error.to_string(), "invalid installation repository");
+    assert_eq!(
+        error.to_string(),
+        "installation discovery failed: GitHub response for GET installation/repositories?per_page=100 did not decode at repositories.1.private"
+    );
     patchula_testkit::transcripts::check(&transcripts());
 }
 
