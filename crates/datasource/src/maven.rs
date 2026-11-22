@@ -59,7 +59,7 @@ fn versions(
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const MAVEN_METADATA: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("maven-metadata", 2, versions);
+    patchula_http::Derived::new("maven-metadata", 3, versions);
 
 /// The directory holding an artifact's `maven-metadata.xml`.
 fn base(package: &str) -> Result<String> {

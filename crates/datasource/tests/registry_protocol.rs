@@ -213,7 +213,7 @@ async fn rate_limited_catalogs_and_digests_reuse_cache_without_refreshing_it() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_cache::representation("oci-tags", 1));
+    .representation(&patchula_cache::representation("oci-tags", 2));
     let fetched = cache.http_get(&key).await.unwrap().unwrap().fetched_at;
     assert_eq!(
         sources
@@ -466,7 +466,7 @@ async fn validator_free_tags_are_compact_and_survive_a_new_client() {
         std::collections::BTreeMap::from([("accept".into(), "application/json".into())]),
     )
     .unwrap()
-    .representation(&patchula_cache::representation("oci-tags", 1));
+    .representation(&patchula_cache::representation("oci-tags", 2));
     let entry = cache.http_get(&key).await.unwrap().unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&entry.body).unwrap(),
@@ -752,7 +752,7 @@ async fn dockerhub_login_is_realm_scoped_and_authenticated_tokens_are_not_persis
     .unwrap()
     .representation(&patchula_cache::representation(
         "anonymous-registry-pull-token",
-        1,
+        2,
     ));
     assert!(cache.http_get(&key).await.unwrap().is_none());
     assert!(steps.0.lock().unwrap().is_empty());
@@ -1726,5 +1726,45 @@ async fn a_charts_source_falls_back_to_the_manifest_annotation() {
     assert_eq!(repository.github.as_deref(), Some("spec/chart"));
     assert_eq!(repository.url, "https://github.com/spec/chart");
     assert!(repository.chart_sources);
+    assert!(steps.0.lock().unwrap().is_empty());
+}
+/// A Link header that cycles back to the first page fails the walk rather
+/// than reading page 1 again.
+#[tokio::test]
+async fn pagination_back_to_the_first_page_is_a_cycle() {
+    let a = "https://ghcr.io/v2/spec/image/tags/list?n=1000";
+    let b = "https://ghcr.io/v2/spec/image/tags/list?n=1000&last=1.0";
+    // Only one answer per page: a second read of either panics.
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            a.into(),
+            response(
+                200,
+                r#"{"tags":["1.0"]}"#,
+                &[(
+                    "link",
+                    "</v2/spec/image/tags/list?n=1000&last=1.0>; rel=\"next\"",
+                )],
+            ),
+        ),
+        (
+            b.into(),
+            response(
+                200,
+                r#"{"tags":["2.0"]}"#,
+                &[("link", "</v2/spec/image/tags/list?n=1000>; rel=\"next\"")],
+            ),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let error = client(steps.clone(), dir.path())
+        .await
+        .lookup(&patchula_config::PackageId::public(
+            Source::Docker,
+            "ghcr.io/spec/image",
+        ))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("invalid package"), "{error}");
     assert!(steps.0.lock().unwrap().is_empty());
 }

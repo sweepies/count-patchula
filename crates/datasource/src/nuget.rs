@@ -27,7 +27,7 @@ fn listing(
     serde_json::to_vec(&index.versions).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NUGET_FLAT: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("nuget-flat", 2, listing);
+    patchula_http::Derived::new("nuget-flat", 3, listing);
 fn entries(items: &serde_json::Value) -> Vec<Entry> {
     items
         .as_array()
@@ -69,7 +69,7 @@ fn registration(
     serde_json::to_vec(&pages).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NUGET_REGISTRATION: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("nuget-registration", 2, registration);
+    patchula_http::Derived::new("nuget-registration", 3, registration);
 fn page(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     let page: serde_json::Value = patchula_http::conditional::json_document(body)
         .map_err(|_| patchula_http::CacheError::Document)?;
@@ -77,7 +77,7 @@ fn page(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_h
         .map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NUGET_REGISTRATION_PAGE: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("nuget-registration-page", 2, page);
+    patchula_http::Derived::new("nuget-registration-page", 3, page);
 
 /// How a version is matched between the flat container and the
 /// registration: case-insensitive and without build metadata, which the

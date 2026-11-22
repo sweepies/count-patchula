@@ -107,7 +107,6 @@ impl Filter {
     /// A `semver:` filter on an ecosystem without range support is a
     /// configuration error, not a non-match.
     pub fn matches(&self, scheme: Ecosystem, text: &str) -> Result<bool, String> {
-        use patchula_versioning::Versioning;
         let yes = match &self.kind {
             FilterKind::Regex(regex) => regex.is_match(text),
             FilterKind::Semver(range) => {
@@ -155,7 +154,6 @@ impl Filter {
 }
 /// Whether a range's text names a prerelease version in `scheme`'s syntax.
 fn names_prerelease(scheme: Ecosystem, range: &str) -> bool {
-    use patchula_versioning::Versioning;
     range
         .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+')))
         .filter(|token| !token.is_empty())

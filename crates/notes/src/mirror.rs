@@ -10,4 +10,4 @@ fn compact_mirror(
     serde_json::to_vec(&list).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NOTES_MISE_VERSIONS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-mise-versions", 1, compact_mirror);
+    patchula_http::Derived::new("notes-mise-versions", 2, compact_mirror);

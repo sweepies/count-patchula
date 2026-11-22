@@ -632,7 +632,6 @@ fn held_back_summarizes_newest_but_keeps_earliest_eligibility() {
         .unwrap();
     let held = &result.held_back[0];
     assert_eq!(held.version, "1.0.4");
-    assert_eq!(held.count, 3);
     assert_eq!(held.versions, ["1.0.2", "1.0.3", "1.0.4"]);
     assert_eq!(held.eligible_at, "2026-10-15T13:00:00Z");
     assert_eq!(
@@ -751,7 +750,7 @@ fn missing_dates_all_held_and_rule_overrides_are_explicit() {
         .unwrap();
     assert!(result.updates.is_empty());
     assert_eq!(result.held_back.len(), 1);
-    assert_eq!(result.held_back[0].count, 2);
+    assert_eq!(result.held_back[0].versions.len(), 2);
     versions.versions[0].published_at = None;
     assert_eq!(
         eval.evaluate_at(&dependency("plain"), &versions, now)

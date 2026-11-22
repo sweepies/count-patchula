@@ -14,43 +14,6 @@ struct Name {
     name: String,
 }
 
-/// One percent-encoded path segment, `/` included, as GitLab's project and
-/// file IDs require.
-fn encoded(path: &str) -> String {
-    path.bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
-                (b as char).to_string()
-            } else {
-                format!("%{b:02X}")
-            }
-        })
-        .collect()
-}
-pub(super) fn observe(
-    tag: &str,
-    version: &Parsed,
-    old: &Parsed,
-    new: &Parsed,
-    tags: &mut (Option<String>, Option<String>),
-) {
-    if Ecosystem::Loose.order(version, old).is_eq() {
-        tags.0 = Some(tag.to_owned());
-    }
-    if Ecosystem::Loose.order(version, new).is_eq() {
-        tags.1 = Some(tag.to_owned());
-    }
-}
-fn api(forge: &Forge, route: &str) -> String {
-    match forge.kind {
-        ForgeKind::Gitlab => format!(
-            "https://{}/api/v4/projects/{}/{route}",
-            forge.host,
-            encoded(&forge.path)
-        ),
-        ForgeKind::Gitea => format!("https://{}/api/v1/repos/{}/{route}", forge.host, forge.path),
-    }
-}
 pub(super) fn releases_url(forge: &Forge) -> String {
     match forge.kind {
         ForgeKind::Gitlab => format!("{}/-/releases", forge.web()),
@@ -107,7 +70,7 @@ fn gitlab_releases(
     })
 }
 pub(crate) const NOTES_GITLAB_RELEASES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-gitlab-releases", 3, gitlab_releases);
+    patchula_http::Derived::new("notes-gitlab-releases", 4, gitlab_releases);
 fn gitea_releases(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
@@ -121,7 +84,7 @@ fn gitea_releases(
     })
 }
 pub(crate) const NOTES_GITEA_RELEASES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-gitea-releases", 3, gitea_releases);
+    patchula_http::Derived::new("notes-gitea-releases", 4, gitea_releases);
 fn names(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(body, |t| {
         Some(Name {
@@ -130,7 +93,7 @@ fn names(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_
     })
 }
 pub(crate) const NOTES_FORGE_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-forge-tags", 3, names);
+    patchula_http::Derived::new("notes-forge-tags", 4, names);
 /// Root files only: `blob` on GitLab, `file` on Gitea.
 fn files(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
     compact(body, |f| {
@@ -141,7 +104,7 @@ fn files(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_
     })
 }
 pub(crate) const NOTES_FORGE_FILES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-forge-files", 3, files);
+    patchula_http::Derived::new("notes-forge-files", 4, files);
 fn sections(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
@@ -151,7 +114,7 @@ fn sections(
     serde_json::to_vec(&parse_changelog(&text)).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NOTES_FORGE_CHANGELOG: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("notes-forge-changelog", 3, sections);
+    patchula_http::Derived::new("notes-forge-changelog", 4, sections);
 
 impl Client {
     async fn forge_read<T: serde::de::DeserializeOwned>(
@@ -185,11 +148,10 @@ impl Client {
         package: &crate::Namespace<'_>,
     ) {
         let (releases, derived) = match forge.kind {
-            ForgeKind::Gitlab => (api(forge, "releases?per_page=100"), NOTES_GITLAB_RELEASES),
-            ForgeKind::Gitea => (api(forge, "releases?limit=50"), NOTES_GITEA_RELEASES),
+            ForgeKind::Gitlab => (forge.api("releases?per_page=100"), NOTES_GITLAB_RELEASES),
+            ForgeKind::Gitea => (forge.api("releases?limit=50"), NOTES_GITEA_RELEASES),
         };
-        let mut tags = (None, None);
-        let mut template = None;
+        let mut observed = Observed::default();
         let mut versions = BTreeSet::new();
         match self
             .forge_read::<Vec<Release>>(&releases, "application/json", derived)
@@ -203,8 +165,7 @@ impl Client {
                     else {
                         continue;
                     };
-                    template.get_or_insert_with(|| release.tag.clone());
-                    observe(&release.tag, &version, old, new, &mut tags);
+                    observed.see(&release.tag, &version, old, new);
                     if hidden_prerelease(release.prerelease, new) || !in_range(&version, old, new) {
                         continue;
                     }
@@ -224,21 +185,20 @@ impl Client {
             }
             Err(_) => notes.incomplete = true,
         }
-        if tags.0.is_none() || tags.1.is_none() {
+        if !observed.bounded() {
             let route = match forge.kind {
                 ForgeKind::Gitlab => "repository/tags?per_page=100",
                 ForgeKind::Gitea => "tags?limit=50",
             };
             if let Ok(listed) = self
-                .forge_read::<Vec<Name>>(&api(forge, route), "application/json", NOTES_FORGE_TAGS)
+                .forge_read::<Vec<Name>>(&forge.api(route), "application/json", NOTES_FORGE_TAGS)
                 .await
             {
                 for tag in listed {
                     if let Some(version) =
                         tag_version(&tag.name, package, repository).and_then(parsed)
                     {
-                        template.get_or_insert_with(|| tag.name.clone());
-                        observe(&tag.name, &version, old, new, &mut tags);
+                        observed.see(&tag.name, &version, old, new);
                     }
                 }
             }
@@ -249,39 +209,29 @@ impl Client {
                 ForgeKind::Gitea => "contents",
             };
             match self
-                .forge_read::<Vec<Name>>(&api(forge, route), "application/json", NOTES_FORGE_FILES)
+                .forge_read::<Vec<Name>>(&forge.api(route), "application/json", NOTES_FORGE_FILES)
                 .await
             {
                 Ok(root) => {
                     if let Some(file) = root.iter().find(|f| changelog::is_changelog(&f.name)) {
                         let raw = match forge.kind {
-                            ForgeKind::Gitlab => api(
-                                forge,
-                                &format!("repository/files/{}/raw?ref=HEAD", encoded(&file.name)),
-                            ),
-                            ForgeKind::Gitea => api(forge, &format!("raw/{}", file.name)),
+                            ForgeKind::Gitlab => forge.api(&format!(
+                                "repository/files/{}/raw?ref=HEAD",
+                                patchula_datasource::upstream::percent_encoded(&file.name)
+                            )),
+                            ForgeKind::Gitea => forge.api(&format!("raw/{}", file.name)),
                         };
                         match self
                             .forge_read::<Vec<Section>>(&raw, "text/plain", NOTES_FORGE_CHANGELOG)
                             .await
                         {
-                            Ok(parsed_sections) => {
-                                for section in parsed_sections {
-                                    let Some(version) = parsed(&section.version) else {
-                                        continue;
-                                    };
-                                    if !in_range(&version, old, new)
-                                        || !versions.insert(version_id(&version))
-                                    {
-                                        continue;
-                                    }
-                                    notes.sections.push(Section {
-                                        version: version_id(&version),
-                                        link: file_link(forge, &file.name, &section.link),
-                                        body: section.body,
-                                    });
-                                }
-                            }
+                            Ok(sections) => merge_changelog(
+                                notes,
+                                &mut versions,
+                                &sections,
+                                (old, new),
+                                |anchor| file_link(forge, &file.name, anchor),
+                            ),
                             Err(_) => notes.incomplete = true,
                         }
                     }
@@ -295,7 +245,7 @@ impl Client {
             old,
             new,
         };
-        finish(notes, tags, template, &ends, |old, new| {
+        finish(notes, observed, &ends, |old, new| {
             compare_link(forge, old, new)
         });
     }

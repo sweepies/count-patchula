@@ -55,7 +55,7 @@ fn compact_release_head(
     >(body)?)
 }
 pub(crate) const GITHUB_RELEASE_HEAD: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("github-release-head", 9, compact_release_head);
+    patchula_http::Derived::new("github-release-head", 10, compact_release_head);
 
 /// The newest release's identity on a release source; a change refetches
 /// history. `None` records a source with no releases.
@@ -68,7 +68,7 @@ pub(crate) struct SourceHeadScope {
 }
 impl State for SourceHead {
     const NAMESPACE: &'static str = "source-head";
-    const VERSION: u32 = 9;
+    const VERSION: u32 = 10;
     // Code-versioned: the stored fingerprint holds the newest release's
     // fields as this build picks them, an entry built by code that picked
     // differently must not compare equal.
@@ -85,7 +85,7 @@ pub(crate) struct TagCatalogScope {
 }
 impl State for TagCatalog {
     const NAMESPACE: &'static str = "tag-catalog";
-    const VERSION: u32 = 9;
+    const VERSION: u32 = 10;
     // Code-versioned: the fingerprint in the key names the refs, not the
     // catalog this build's peel-and-map code derived from them.
     const CODE_VERSIONED: bool = true;
@@ -101,21 +101,13 @@ pub(crate) struct TagObjectScope {
 }
 impl State for TagObject {
     const NAMESPACE: &'static str = "tag-object";
-    const VERSION: u32 = 9;
+    const VERSION: u32 = 10;
     // Code-versioned: the stored version is this build's decode of the
     // object the scope's sha names.
     const CODE_VERSIONED: bool = true;
     type Scope = TagObjectScope;
 }
 
-/// The parts of a batched release-catalog read.
-pub(super) struct ReleaseParts {
-    /// The cold batch's catalogs, or its error and the packages it asked
-    /// for.
-    pub(super) cold: std::result::Result<BTreeMap<String, Result<Catalog>>, (Error, Vec<String>)>,
-    /// The warm heads' catalogs, each with its own outcome.
-    pub(super) warm: BTreeMap<String, Result<Catalog>>,
-}
 impl Client {
     pub(super) async fn github_versions(&self, source: Source, package: &str) -> Result<Catalog> {
         if source == Source::GithubTags {
@@ -143,95 +135,121 @@ impl Client {
     }
     /// Batch cold release pages; revalidate warm REST heads concurrently.
     /// Only semantic release fields affect the refresh fingerprint, so asset
-    /// download counters cannot cause history refetches.
+    /// download counters cannot cause history refetches. When the cold batch
+    /// fails as a whole, each of its packages is asked on its own, so one bad
+    /// package cannot fail the others.
     pub(super) async fn api_release_catalogs(
         &self,
         packages: &[String],
     ) -> Result<BTreeMap<String, Result<Catalog>>> {
-        let parts = self.api_release_parts(packages).await?;
-        let mut result = parts.cold.map_err(|(error, _)| error)?;
-        result.extend(parts.warm);
-        Ok(result)
-    }
-    /// `api_release_catalogs` with the cold batch's outcome kept apart from
-    /// the warm heads' answers, so a caller can keep those when the batch
-    /// fails as a whole.
-    pub(super) async fn api_release_parts(&self, packages: &[String]) -> Result<ReleaseParts> {
-        if packages.is_empty() {
-            return Ok(ReleaseParts {
-                cold: Ok(BTreeMap::new()),
-                warm: BTreeMap::new(),
-            });
-        }
-        let mut variables = serde_json::Map::new();
-        let mut declarations = Vec::new();
-        let mut fields = Vec::new();
-        let mut pending = Vec::new();
+        let mut result = BTreeMap::new();
+        let mut cold = Vec::new();
         let mut warm = Vec::new();
         for package in packages {
-            let (owner, name) = package
+            if !package
                 .split_once('/')
-                .filter(|(o, n)| !o.is_empty() && !n.is_empty() && !n.contains('/'))
-                .ok_or(Error::Invalid)?;
+                .is_some_and(|(o, n)| !o.is_empty() && !n.is_empty() && !n.contains('/'))
+            {
+                result.insert(package.clone(), Err(Error::Invalid));
+                continue;
+            }
             let scope = SourceHeadScope {
                 source: "github-releases".into(),
                 package: package.clone(),
             };
-            let previous = self.cache.state::<SourceHead>(&scope).await?;
-            if previous.is_some() {
-                warm.push((package.clone(), scope, previous));
-                continue;
+            match self.cache.state::<SourceHead>(&scope).await? {
+                Some(previous) => warm.push((package.clone(), scope, previous)),
+                None => cold.push((package.clone(), scope)),
             }
-            let i = pending.len();
-            declarations.push(format!("$o{i}:String!,$n{i}:String!"));
-            variables.insert(format!("o{i}"), json!(owner));
-            variables.insert(format!("n{i}"), json!(name));
-            fields.push(format!("r{i}:repository(owner:$o{i},name:$n{i}){{releases(first:100,orderBy:{{field:CREATED_AT,direction:DESC}}){{nodes{{tagName publishedAt isDraft isPrerelease}}pageInfo{{hasNextPage endCursor}}}}}}"));
-            pending.push((package.clone(), scope, previous));
         }
-        let cold_packages: Vec<String> = pending.iter().map(|(p, _, _)| p.clone()).collect();
         let cold = async {
-            if pending.is_empty() {
-                return Ok::<BTreeMap<String, Result<Catalog>>, Error>(BTreeMap::new());
+            let packages: Vec<String> = cold.iter().map(|(package, _)| package.clone()).collect();
+            match self.cold_release_catalogs(cold).await {
+                Ok(catalogs) => catalogs,
+                Err(error) if packages.len() == 1 => {
+                    BTreeMap::from([(packages[0].clone(), Err(error))])
+                }
+                Err(_) => {
+                    stream::iter(packages)
+                        .map(|package| async move {
+                            let scope = SourceHeadScope {
+                                source: "github-releases".into(),
+                                package: package.clone(),
+                            };
+                            match self
+                                .cold_release_catalogs(vec![(package.clone(), scope)])
+                                .await
+                            {
+                                Ok(mut answered) => {
+                                    let result =
+                                        answered.remove(&package).unwrap_or(Err(Error::Invalid));
+                                    (package, result)
+                                }
+                                Err(error) => (package, Err(error)),
+                            }
+                        })
+                        .buffer_unordered(self.github.concurrency())
+                        .collect()
+                        .await
+                }
             }
-            let query = format!("query({}){{{}}}", declarations.join(","), fields.join(" "));
-            let data = self
-                .github
-                .graphql::<Value>(&query, Value::Object(variables))
-                .await?;
-            Ok(stream::iter(pending.into_iter().enumerate())
-                .map(|(i, (package, scope, previous))| {
-                    let data = &data;
-                    async move {
-                        let result = self
-                            .release_catalog(
-                                &package,
-                                scope,
-                                previous,
-                                Head::Page(&data[format!("r{i}")]["releases"]),
-                            )
-                            .await;
-                        (package, result)
-                    }
-                })
-                .buffer_unordered(self.github.concurrency())
-                .collect()
-                .await)
         };
         let warm = stream::iter(warm).map(|(package, scope, previous)| async move {
             let result = async {
                 let response = self.github.get_derived(&format!("repos/{package}/releases?per_page=1"), &GITHUB_RELEASE_HEAD).await?;
                 let nodes: Vec<Value> = serde_json::from_slice(&response.body)?;
                 let nodes: Vec<_> = nodes.iter().map(|node| json!({"tagName":node["tag_name"],"publishedAt":node["published_at"],"isDraft":node["draft"],"isPrerelease":node["prerelease"]})).collect();
-                self.release_catalog(&package, scope, previous, Head::Newest(json!({"nodes":nodes,"pageInfo":{"hasNextPage":true,"endCursor":null}}))).await
+                self.release_catalog(&package, scope, Some(previous), Head::Newest(json!({"nodes":nodes,"pageInfo":{"hasNextPage":true,"endCursor":null}}))).await
             }.await;
             (package, result)
         }).buffer_unordered(self.github.concurrency()).collect::<BTreeMap<_,_>>();
         let (cold, warm) = tokio::join!(cold, warm);
-        Ok(ReleaseParts {
-            cold: cold.map_err(|error| (error, cold_packages)),
-            warm,
-        })
+        result.extend(cold);
+        result.extend(warm);
+        Ok(result)
+    }
+    /// The release catalogs of packages with no saved head, from one batched
+    /// query of their first pages. An error is the whole batch's.
+    async fn cold_release_catalogs(
+        &self,
+        packages: Vec<(String, SourceHeadScope)>,
+    ) -> Result<BTreeMap<String, Result<Catalog>>> {
+        if packages.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut variables = serde_json::Map::new();
+        let mut declarations = Vec::new();
+        let mut fields = Vec::new();
+        for (i, (package, _)) in packages.iter().enumerate() {
+            let (owner, name) = package.split_once('/').ok_or(Error::Invalid)?;
+            declarations.push(format!("$o{i}:String!,$n{i}:String!"));
+            variables.insert(format!("o{i}"), json!(owner));
+            variables.insert(format!("n{i}"), json!(name));
+            fields.push(format!("r{i}:repository(owner:$o{i},name:$n{i}){{releases(first:100,orderBy:{{field:CREATED_AT,direction:DESC}}){{nodes{{tagName publishedAt isDraft isPrerelease}}pageInfo{{hasNextPage endCursor}}}}}}"));
+        }
+        let query = format!("query({}){{{}}}", declarations.join(","), fields.join(" "));
+        let data = self
+            .github
+            .graphql::<Value>(&query, Value::Object(variables))
+            .await?;
+        Ok(stream::iter(packages.into_iter().enumerate())
+            .map(|(i, (package, scope))| {
+                let data = &data;
+                async move {
+                    let result = self
+                        .release_catalog(
+                            &package,
+                            scope,
+                            None,
+                            Head::Page(&data[format!("r{i}")]["releases"]),
+                        )
+                        .await;
+                    (package, result)
+                }
+            })
+            .buffer_unordered(self.github.concurrency())
+            .collect()
+            .await)
     }
 
     async fn release_catalog(
@@ -259,9 +277,8 @@ impl Client {
             let mut variables = json!({"owner":owner,"name":name,"cursor":null});
             let mut first_page = reusable.then_some(first);
             let mut after = None;
-            let mut visited = std::collections::HashSet::new();
-            let mut complete = false;
-            for _ in 0..1000 {
+            let mut pages = Pages::new(1000);
+            loop {
                 let page = if let Some(first) = first_page.take() {
                     first
                 } else {
@@ -292,7 +309,6 @@ impl Client {
                     .merge_release_page("github-releases", package, &releases, after.as_deref())
                     .await?;
                 if stopped || !page.has_next_page {
-                    complete = true;
                     break;
                 }
                 after = releases.last().map(|r| r.version.clone()).or(after);
@@ -300,13 +316,8 @@ impl Client {
                     .end_cursor
                     .filter(|c| !c.is_empty())
                     .ok_or(Error::Invalid)?;
-                if !visited.insert(cursor.clone()) {
-                    return Err(Error::Invalid);
-                }
+                pages.follow(&cursor)?;
                 variables["cursor"] = Value::String(cursor);
-            }
-            if !complete {
-                return Err(Error::Invalid);
             }
             self.cache.set_state(&scope, &fingerprint).await?;
         }
@@ -849,6 +860,78 @@ mod tests {
                 Some("a".repeat(40).as_str())
             );
         }
+    }
+
+    /// A cold release batch that fails as a whole asks each package on its
+    /// own, so one bad package fails alone; a name that is not `owner/repo`
+    /// fails alone without failing the batch.
+    #[tokio::test]
+    async fn one_bad_package_fails_alone_in_a_release_batch() {
+        use patchula_http::{Exchange, Response, Transport};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Releases {
+            queries: AtomicUsize,
+        }
+        impl Transport for Releases {
+            fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+                Box::pin(async move {
+                    let body: Value =
+                        serde_json::from_slice(request.body().unwrap().as_bytes().unwrap())
+                            .unwrap();
+                    self.queries.fetch_add(1, Ordering::SeqCst);
+                    let variables = &body["variables"];
+                    let body = if variables.get("o1").is_some() || variables["n0"] == "bad" {
+                        json!({"data":null,"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository with the name 'example/bad'."}]})
+                    } else {
+                        json!({"data":{"r0":{"releases":{"nodes":[{"tagName":"v1.0.0","publishedAt":"2026-01-01T00:00:00Z","isDraft":false,"isPrerelease":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}})
+                    };
+                    Ok(Response {
+                        status: reqwest::StatusCode::OK,
+                        headers: Default::default(),
+                        body: serde_json::to_vec(&body).unwrap(),
+                        stale: None,
+                    })
+                })
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+            .await
+            .unwrap();
+        let transport = Arc::new(Releases {
+            queries: AtomicUsize::new(0),
+        });
+        let github = patchula_github::Client::with_transport(
+            "offline",
+            cache.clone(),
+            Default::default(),
+            transport.clone(),
+        )
+        .unwrap();
+        let client = Client::new(
+            github,
+            crate::cached(cache.clone(), transport.clone(), 2).unwrap(),
+            cache,
+        )
+        .with_versions_host(false);
+        let mut catalogs = client
+            .release_catalogs(&[
+                "example/good".into(),
+                "example/bad".into(),
+                "not-a-repository".into(),
+            ])
+            .await
+            .unwrap();
+        let good = catalogs.remove("example/good").unwrap().unwrap();
+        assert_eq!(good.versions[0].version, "v1.0.0");
+        assert!(catalogs.remove("example/bad").unwrap().is_err());
+        assert!(matches!(
+            catalogs.remove("not-a-repository"),
+            Some(Err(Error::Invalid))
+        ));
+        assert!(catalogs.is_empty());
+        // The failed batch of two, then each package on its own.
+        assert_eq!(transport.queries.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]

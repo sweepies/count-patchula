@@ -33,7 +33,7 @@ use patchula_cache::{Cache, Release, State};
 use patchula_config::{PackageId, Registry};
 use patchula_github::Error as GithubError;
 use patchula_http::Cached;
-use patchula_versioning::{Ecosystem, Versioning};
+use patchula_versioning::Ecosystem;
 use patchula_words::{LookupErrorKind, Source};
 pub use rules::{cached, http_options, registry_rules};
 use serde::{Deserialize, Serialize};
@@ -59,6 +59,11 @@ pub enum Error {
     NoNix,
     #[error("nix failed: {0}")]
     Nix(String),
+    /// A Pkl package's catalog is its repository's release catalog narrowed
+    /// to its tags, which the engine derives with [`pkl_catalog`] from the
+    /// release batches; the client never looks one up on its own.
+    #[error("Pkl package catalogs are derived by the engine from their repository's releases")]
+    PklDerived,
     #[error("invalid package identity or upstream payload")]
     Invalid,
     #[error("{0}")]
@@ -115,9 +120,47 @@ impl Error {
             | Error::NoMise
             | Error::NoNix
             | Error::Nix(_)
+            | Error::PklDerived
             | Error::Invalid
             | Error::Registry(_) => LookupErrorKind::Other,
         }
+    }
+}
+/// The guard on a paginated walk: a repeated cursor, or a cursor past the
+/// page limit, fails the walk rather than paging forever.
+pub(crate) struct Pages {
+    /// The first page's own cursor, when it has one, so a cursor back to it
+    /// is a cycle too.
+    first: Option<String>,
+    followed: std::collections::HashSet<String>,
+    limit: usize,
+}
+impl Pages {
+    /// A walk of at most `limit` pages, its first already read without a
+    /// cursor.
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            first: None,
+            followed: Default::default(),
+            limit,
+        }
+    }
+    /// A walk of at most `limit` pages whose first page `first` names.
+    pub(crate) fn starting_at(limit: usize, first: &str) -> Self {
+        Self {
+            first: Some(first.to_owned()),
+            ..Self::new(limit)
+        }
+    }
+    /// Read the page `cursor` names next.
+    pub(crate) fn follow(&mut self, cursor: &str) -> Result<()> {
+        if self.followed.len() + 1 >= self.limit
+            || self.first.as_deref() == Some(cursor)
+            || !self.followed.insert(cursor.to_owned())
+        {
+            return Err(Error::Invalid);
+        }
+        Ok(())
     }
 }
 fn status_kind(status: u16) -> LookupErrorKind {
@@ -357,7 +400,7 @@ impl Client {
             Source::Rubygems => self.rubygems(package).await,
             Source::Packagist => self.packagist(package).await,
             Source::Nix => self.nix(package).await,
-            Source::Pkl => self.pkl(package).await,
+            Source::Pkl => Err(Error::PklDerived),
         }
     }
     async fn npm(&self, registry: Option<&str>, package: &str) -> Result<Catalog> {
@@ -472,12 +515,6 @@ impl Client {
         })
     }
     async fn pypi(&self, package: &str) -> Result<Catalog> {
-        if !package
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-        {
-            return Err(Error::Invalid);
-        }
         let package = registries::normalize_python(package)?;
         let response = self
             .http

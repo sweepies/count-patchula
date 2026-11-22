@@ -24,7 +24,7 @@ use patchula_datasource::upstream::{
     ChartNotes, MirrorList, directory, mapped, mirror_url, truncate,
 };
 pub use patchula_datasource::upstream::{Forge, ForgeKind, Repository};
-use patchula_versioning::{Ecosystem, Parsed, Versioning};
+use patchula_versioning::{Ecosystem, Parsed};
 use patchula_words::Source;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -89,39 +89,29 @@ impl Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 type SharedSections = Arc<tokio::sync::Mutex<Option<Arc<Vec<Section>>>>>;
-/// Parsed upstream blobs memoised per batch. Changelog files and adapter
-/// sections share the map; the key type keeps their formats distinct.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum MemoKey {
-    Changelog {
-        repo: String,
-        path: String,
-        sha: String,
-    },
-    Adapter {
-        repo: String,
-        path: String,
-        sha: String,
-    },
-}
-type ChangelogCache = Arc<tokio::sync::Mutex<BTreeMap<MemoKey, SharedSections>>>;
+/// Parsed upstream blobs memoised per batch, keyed like their stored state.
+type ChangelogCache = Arc<tokio::sync::Mutex<BTreeMap<BlobScope, SharedSections>>>;
 type SharedRead = Arc<tokio::sync::Mutex<Option<std::result::Result<Vec<u8>, Failure>>>>;
 type ReadCache = Arc<tokio::sync::Mutex<BTreeMap<String, SharedRead>>>;
 
-/// The parsed sections of one immutable changelog blob.
+/// The parsed sections of one immutable upstream blob: a changelog file or
+/// an adapter's notes document.
 #[derive(Serialize, Deserialize)]
-struct ParsedChangelog(Vec<Section>);
-#[derive(Serialize)]
-struct ChangelogScope {
+struct BlobSections(Vec<Section>);
+/// One blob read through one parser: the representation names the parser,
+/// so one blob read two ways is two entries.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+struct BlobScope {
     repository: String,
     path: String,
     blob_sha: String,
+    representation: String,
 }
-impl State for ParsedChangelog {
+impl State for BlobSections {
     const NAMESPACE: &'static str = "changelog";
-    const VERSION: u32 = 9;
+    const VERSION: u32 = 10;
     const CODE_VERSIONED: bool = true;
-    type Scope = ChangelogScope;
+    type Scope = BlobScope;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -185,24 +175,25 @@ fn hidden_prerelease(upstream_prerelease: bool, target: &Parsed) -> bool {
 const NOTES_BYTES: usize = 12_000;
 /// ... and at most this many version sections.
 const NOTES_SECTIONS: usize = 32;
-/// What a package's tags are namespaced by: its name, a Helm chart's name
-/// rather than its repository's URL, and for a Pkl package the exact
-/// spelling of its own tags, which no name heuristic may widen.
-pub(crate) struct Namespace<'a> {
-    name: &'a str,
-    pkl: Option<patchula_config::PklPackage>,
+/// What a package's tags are namespaced by.
+pub(crate) enum Namespace<'a> {
+    /// Its name, or a Helm chart's name rather than its repository's URL,
+    /// which name heuristics read tags by.
+    Name(&'a str),
+    /// A Pkl package's exact spelling of its own tags, which no name
+    /// heuristic may widen.
+    Pkl(patchula_config::PklPackage),
 }
-fn tag_name(id: &PackageId) -> Namespace<'_> {
-    let name = match id.source {
-        Source::Helm => split_package(&id.name).map_or(id.name.as_str(), |(_, chart)| chart),
-        _ => id.name.as_str(),
-    };
-    Namespace {
-        name,
-        pkl: (id.source == Source::Pkl)
-            .then(|| patchula_config::PklPackage::parse(&id.name))
-            .flatten(),
-    }
+/// `id`'s tag namespace. A Pkl package whose name does not parse has none,
+/// so it finds no notes rather than falling back to name heuristics.
+fn tag_name(id: &PackageId) -> Option<Namespace<'_>> {
+    Some(match id.source {
+        Source::Pkl => Namespace::Pkl(patchula_config::PklPackage::parse(&id.name)?),
+        Source::Helm => {
+            Namespace::Name(split_package(&id.name).map_or(id.name.as_str(), |(_, chart)| chart))
+        }
+        _ => Namespace::Name(&id.name),
+    })
 }
 fn tag_version<'a>(
     tag: &'a str,
@@ -211,10 +202,10 @@ fn tag_version<'a>(
 ) -> Option<&'a str> {
     // A Pkl package's tags are spelled one way; a monorepo's other packages
     // and its plain `v` tags are not this package's releases.
-    if let Some(pkl) = &package.pkl {
-        return pkl.version(tag);
-    }
-    let package = package.name;
+    let package = match package {
+        Namespace::Pkl(pkl) => return pkl.version(tag),
+        Namespace::Name(name) => *name,
+    };
     if parsed(tag).is_some() {
         return Some(tag);
     }
@@ -292,7 +283,7 @@ fn inferred_tag(
     version: &Parsed,
 ) -> Option<String> {
     let raw = tag_version(template, package, repository)?;
-    if let Some(pkl) = &package.pkl {
+    if let Namespace::Pkl(pkl) = package {
         return Some(format!(
             "{}{}{}",
             pkl.prefix,
@@ -515,47 +506,45 @@ impl Client {
             .retain(|file| matches!(file.kind.as_str(), "blob" | "file"));
         Ok(root)
     }
-    async fn changelog_sections(
+    /// The sections `derived` parses from one immutable blob, memoised per
+    /// batch and stored by blob SHA.
+    async fn blob_sections(
         &self,
         repo: &str,
-        file: &changelog::File,
+        path: &str,
+        sha: &str,
+        derived: patchula_http::Derived<serde_json::Error>,
     ) -> Result<Arc<Vec<Section>>> {
-        let scope = ChangelogScope {
+        let scope = BlobScope {
             repository: repo.into(),
-            path: file.path.clone(),
-            blob_sha: file.sha.clone(),
+            path: path.into(),
+            blob_sha: sha.into(),
+            representation: derived.representation(),
         };
         let shared = self
             .changelogs
             .lock()
             .await
-            .entry(MemoKey::Changelog {
-                repo: repo.into(),
-                path: file.path.clone(),
-                sha: file.sha.clone(),
-            })
+            .entry(scope.clone())
             .or_default()
             .clone();
         let mut saved = shared.lock().await;
         if let Some(sections) = &*saved {
             return Ok(sections.clone());
         }
-        let sections =
-            if let Some(entry) = self.sources.cache.state::<ParsedChangelog>(&scope).await? {
-                entry.0
-            } else {
-                let response = self
-                    .sources
-                    .github
-                    .get_derived(
-                        &format!("repos/{repo}/git/blobs/{}", file.sha),
-                        &changelog::PARSED_CHANGELOG,
-                    )
-                    .await?;
-                let entry = ParsedChangelog(serde_json::from_slice(&response.body)?);
-                self.sources.cache.set_state(&scope, &entry).await?;
-                entry.0
-            };
+        let sections = if let Some(entry) = self.sources.cache.state::<BlobSections>(&scope).await?
+        {
+            entry.0
+        } else {
+            let response = self
+                .sources
+                .github
+                .get_derived(&format!("repos/{repo}/git/blobs/{sha}"), &derived)
+                .await?;
+            let entry = BlobSections(serde_json::from_slice(&response.body)?);
+            self.sources.cache.set_state(&scope, &entry).await?;
+            entry.0
+        };
         let sections = Arc::new(sections);
         *saved = Some(sections.clone());
         Ok(sections)
@@ -580,7 +569,8 @@ impl Client {
         current: &str,
         target: &str,
     ) -> Result<Notes> {
-        let (source, package) = (id.source, &tag_name(id));
+        let source = id.source;
+        let package = &tag_name(id).ok_or(Error::Upstream("no tag namespace"))?;
         let mut notes = Notes {
             from: current.into(),
             to: target.into(),
@@ -633,8 +623,7 @@ impl Client {
         new: Parsed,
         package: &Namespace<'_>,
     ) -> Result<()> {
-        let mut bounds = (None, None);
-        let mut template = None;
+        let mut observed = Observed::default();
         // The mirror contract does not permit API list fallback, including on
         // errors, empty responses, 404s or truncated lists. Bodies are fetched
         // from GitHub only for releases explicitly present in this listing.
@@ -650,8 +639,7 @@ impl Client {
                     else {
                         continue;
                     };
-                    template.get_or_insert_with(|| release.tag.clone());
-                    forge::observe(&release.tag, &version, &old, &new, &mut bounds);
+                    observed.see(&release.tag, &version, &old, &new);
                     if hidden_prerelease(release.prerelease, &new) {
                         continue;
                     }
@@ -692,7 +680,7 @@ impl Client {
             }
             Err(_) => notes.incomplete = true,
         }
-        if (bounds.0.is_none() || bounds.1.is_none())
+        if !observed.bounded()
             && let Ok(tags) = self.notes_list(repo, "tags").await
         {
             notes.incomplete |= tags.truncated;
@@ -701,8 +689,7 @@ impl Client {
                 else {
                     continue;
                 };
-                template.get_or_insert_with(|| tag.tag.clone());
-                forge::observe(&tag.tag, &version, &old, &new, &mut bounds);
+                observed.see(&tag.tag, &version, &old, &new);
             }
         }
         // Changelogs fill versions with missing/empty releases. Discover once;
@@ -741,30 +728,30 @@ impl Client {
                 files.retain(local);
             }
             for file in files {
-                let Ok(sections) = self.changelog_sections(repo, &file).await else {
+                let Ok(sections) = self
+                    .blob_sections(repo, &file.path, &file.sha, changelog::PARSED_CHANGELOG)
+                    .await
+                else {
                     notes.incomplete = true;
                     continue;
                 };
-                for section in sections.iter() {
-                    let Some(version) = parsed(&section.version) else {
-                        continue;
-                    };
-                    if !in_range(&version, &old, &new) || !versions.insert(version_id(&version)) {
-                        continue;
-                    }
-                    let mut section = section.clone();
-                    let mut link =
-                        reqwest::Url::parse(&format!("https://github.com/{repo}/blob/HEAD/"))
-                            .expect("upstream URL");
-                    link.path_segments_mut()
-                        .expect("HTTP URL")
-                        .pop_if_empty()
-                        .extend(file.path.split('/'));
-                    link.set_fragment(Some(&section.link));
-                    section.link = link.into();
-                    section.version = version_id(&version);
-                    notes.sections.push(section);
-                }
+                merge_changelog(
+                    notes,
+                    &mut versions,
+                    sections.iter(),
+                    (&old, &new),
+                    |anchor| {
+                        let mut link =
+                            reqwest::Url::parse(&format!("https://github.com/{repo}/blob/HEAD/"))
+                                .expect("upstream URL");
+                        link.path_segments_mut()
+                            .expect("HTTP URL")
+                            .pop_if_empty()
+                            .extend(file.path.split('/'));
+                        link.set_fragment(Some(anchor));
+                        link.into()
+                    },
+                );
             }
         } else if notes.sections.is_empty() {
             notes.incomplete = true;
@@ -790,15 +777,59 @@ impl Client {
             old: &old,
             new: &new,
         };
-        finish(notes, bounds, template, &ends, |old, new| {
-            compare(repo, old, new)
-        });
+        finish(notes, observed, &ends, |old, new| compare(repo, old, new));
         Ok(())
     }
 }
 
-/// The compare tags of the current and the target version, as observed.
-type Bounds = (Option<String>, Option<String>);
+/// The tags an upstream's listings showed: the compare tags of the current
+/// and the target version, and the first tag seen, which spells the ones
+/// not seen.
+#[derive(Default)]
+struct Observed {
+    bounds: (Option<String>, Option<String>),
+    template: Option<String>,
+}
+impl Observed {
+    /// Record `tag`, which names `version`.
+    fn see(&mut self, tag: &str, version: &Parsed, old: &Parsed, new: &Parsed) {
+        self.template.get_or_insert_with(|| tag.to_owned());
+        if Ecosystem::Loose.order(version, old).is_eq() {
+            self.bounds.0 = Some(tag.to_owned());
+        }
+        if Ecosystem::Loose.order(version, new).is_eq() {
+            self.bounds.1 = Some(tag.to_owned());
+        }
+    }
+    /// Whether both compare tags were seen.
+    fn bounded(&self) -> bool {
+        self.bounds.0.is_some() && self.bounds.1.is_some()
+    }
+}
+
+/// Changelog sections for the in-range versions no release body covered,
+/// each linked by `link` from its anchor in the file.
+fn merge_changelog<'s>(
+    notes: &mut Notes,
+    versions: &mut BTreeSet<String>,
+    sections: impl IntoIterator<Item = &'s Section>,
+    (old, new): (&Parsed, &Parsed),
+    link: impl Fn(&str) -> String,
+) {
+    for section in sections {
+        let Some(version) = parsed(&section.version) else {
+            continue;
+        };
+        if !in_range(&version, old, new) || !versions.insert(version_id(&version)) {
+            continue;
+        }
+        notes.sections.push(Section {
+            version: version_id(&version),
+            link: link(&section.link),
+            body: section.body.clone(),
+        });
+    }
+}
 
 /// What one release in the budget contributes.
 enum ReleaseText {
@@ -863,8 +894,7 @@ struct Ends<'a> {
 /// incomplete.
 fn finish(
     notes: &mut Notes,
-    mut bounds: Bounds,
-    template: Option<String>,
+    observed: Observed,
     ends: &Ends<'_>,
     compare_link: impl FnOnce(&str, &str) -> String,
 ) {
@@ -875,7 +905,12 @@ fn finish(
         .collect();
     newest_first(&mut sections);
     notes.sections.extend(sections.into_iter().map(|(_, s)| s));
-    if bounds.0.is_none() || bounds.1.is_none() {
+    let bounded = observed.bounded();
+    let Observed {
+        mut bounds,
+        template,
+    } = observed;
+    if !bounded {
         notes.compare_inferred = true;
         notes.incomplete = true;
         if let Some(template) = template {
@@ -1165,8 +1200,8 @@ mod tests {
         let repository = Repository::from_url("https://github.com/example/charts")
             .unwrap()
             .chart_sourced();
-        let package = &tag_name(&id);
-        assert_eq!(package.name, "app");
+        let package = &tag_name(&id).unwrap();
+        assert!(matches!(package, Namespace::Name("app")));
         assert_eq!(
             tag_version("app-1.2.3", package, &repository),
             Some("1.2.3")
@@ -1181,7 +1216,7 @@ mod tests {
         // Only a chart's tags take a bare `-`.
         let plain = Repository::from_url("https://github.com/example/foo").unwrap();
         let foo_id = PackageId::public(Source::GithubReleases, "foo");
-        let foo = &tag_name(&foo_id);
+        let foo = &tag_name(&foo_id).unwrap();
         assert_eq!(tag_version("foo-2", foo, &plain), None);
         assert_eq!(tag_version("foo-v2", foo, &plain), Some("2"));
     }
@@ -1193,7 +1228,7 @@ mod tests {
     fn pkl_packages_read_only_their_own_tags() {
         let pantry = Repository::from_url("https://github.com/apple/pkl-pantry").unwrap();
         let toml_id = PackageId::public(Source::Pkl, "pkg.pkl-lang.org/pkl-pantry/pkl.toml");
-        let toml = &tag_name(&toml_id);
+        let toml = &tag_name(&toml_id).unwrap();
         assert_eq!(tag_version("pkl.toml@1.0.3", toml, &pantry), Some("1.0.3"));
         assert_eq!(tag_version("v1.0.4", toml, &pantry), None);
         assert_eq!(tag_version("pkl.toml.contrib@1.0.3", toml, &pantry), None);
@@ -1202,7 +1237,7 @@ mod tests {
             Source::Pkl,
             "github.com/a/b/releases/download/b-%version%-final/b",
         );
-        let suffixed = &tag_name(&suffixed_id);
+        let suffixed = &tag_name(&suffixed_id).unwrap();
         assert_eq!(tag_version("b-1.3.0-final", suffixed, &b), Some("1.3.0"));
         assert_eq!(tag_version("v1.3.0-final", suffixed, &b), None);
         let version = parsed("1.4.0").unwrap();
@@ -1210,5 +1245,8 @@ mod tests {
             inferred_tag("b-1.3.0-final", suffixed, &b, &version).as_deref(),
             Some("b-1.4.0-final")
         );
+        // A Pkl id whose name does not parse has no namespace, so no name
+        // heuristic reads its repository's tags.
+        assert!(tag_name(&PackageId::public(Source::Pkl, "pkl.toml")).is_none());
     }
 }

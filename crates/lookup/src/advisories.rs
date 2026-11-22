@@ -2,7 +2,7 @@
 use patchula_config::split_package;
 use patchula_datasource::{Advisory, AdvisoryQuery, Event};
 use patchula_manager::Dependency;
-use patchula_versioning::{Ecosystem, Parsed, Versioning};
+use patchula_versioning::{Ecosystem, Parsed};
 use patchula_words::Source;
 use std::cmp::Ordering;
 
@@ -195,14 +195,10 @@ fn in_range(events: &[Event], scheme: Ecosystem, version: &Parsed) -> Option<boo
 
 fn same_package(affected: &patchula_datasource::Affected, query: &AdvisoryQuery) -> bool {
     let normalize = |name: &str| {
-        let name = name.to_ascii_lowercase();
         if query.ecosystem == "PyPI" {
-            name.split(['-', '_', '.'])
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join("-")
+            patchula_words::pep503(name)
         } else {
-            name
+            name.to_ascii_lowercase()
         }
     };
     affected.ecosystem == query.ecosystem

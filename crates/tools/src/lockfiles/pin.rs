@@ -5,7 +5,6 @@
 //! version and writes the declared constraint back into the lock.
 use super::*;
 use patchula_manager::{Edit, Scanner};
-use patchula_versioning::Versioning;
 
 /// Pin every exact-version job's package to its target in the `manager`
 /// manifests under `directory`, answering the guard that puts them back.

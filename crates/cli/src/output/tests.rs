@@ -71,7 +71,7 @@ fn check(name: &str, actual: &str) {
 #[test]
 fn a_lookup_reads_plain_with_counts_first() {
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 8,
+        "schemaVersion": 9,
         "repositories": [repository("local/web-chat")]
     }))
     .unwrap();
@@ -108,7 +108,7 @@ fn a_run_lists_branches_and_pull_requests_per_repository() {
         broken[key] = json!([]);
     }
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 8,
+        "schemaVersion": 9,
         "repositories": [broken, repository("acme/web")],
         "actions": {
             "schemaVersion": 3,
@@ -157,7 +157,7 @@ fn a_stale_repository_warns_with_the_race_and_keeps_the_headline() {
         raced[key] = json!([]);
     }
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 8,
+        "schemaVersion": 9,
         "repositories": [raced, repository("acme/web")],
         "actions": {
             "schemaVersion": 3,
@@ -185,7 +185,7 @@ fn a_stale_repository_warns_with_the_race_and_keeps_the_headline() {
 #[test]
 fn a_terminal_fits_rows_to_its_width_but_leaves_links_whole() {
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 8,
+        "schemaVersion": 9,
         "repositories": [repository("local/web-chat")]
     }))
     .unwrap();
@@ -233,7 +233,7 @@ fn a_long_skipped_value_never_cuts_its_reason() {
     let reason = "mise's http backend takes its version from the URL, which the Count can't rewrite without guessing";
     repo["skipped"] = json!([{"manager": "mise", "path": "mise.toml", "line": 12, "value": value, "reason": reason}]);
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 8,
+        "schemaVersion": 9,
         "repositories": [repo]
     }))
     .unwrap();
@@ -278,7 +278,7 @@ fn one_advisory_on_one_version_in_two_manifests_is_one_vulnerability() {
         dep
     };
     let report: Report = serde_json::from_value(json!({
-        "schemaVersion": 8,
+        "schemaVersion": 9,
         "repositories": [{
             "repository": "acme/bat", "status": "complete", "reason": null,
             "packageFiles": [

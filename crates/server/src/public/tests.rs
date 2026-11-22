@@ -150,7 +150,7 @@ fn report() -> Report {
         dependency("tokio", json!([])),
     ]}]);
     serde_json::from_value(json!({
-        "schemaVersion": 8,
+        "schemaVersion": 9,
         "repositories": [app, repository("acme/secret"), repository("acme/broken"),
             repository("acme/late"), repository("acme/stranger")],
         "actions": {"schemaVersion": 3, "dryRun": false,
@@ -352,7 +352,7 @@ fn credentialed_lookups_leave_only_the_declared_dependency_in_public() {
                     "publishedAt": "2026-11-01T00:00:00Z", "eligibleAt": "2026-11-02T00:00:00Z"}]}})
     };
     let private = "https://acme.jfrog.io/artifactory/api/helm/charts|app";
-    let report: Report = serde_json::from_value(json!({"schemaVersion": 8, "repositories": [{
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 9, "repositories": [{
         "repository": "acme/app", "status": "complete", "reason": null,
         "defaultBranch": "main", "commit": "c".repeat(40),
         "warnings": [format!("digest of {private}:2.0.0: not found"), "a config warning".to_owned()],
@@ -389,7 +389,7 @@ fn withheld_classifies_every_metadata_field() {
             "lookup": {"evaluatedAt": "2026-10-01T00:00:00Z", "disabledUpdates": [], "rejected": []},
             "resolution": {"kind": "lockfile", "version": "1.0.0"},
             "advisories": [{"id": "GHSA-aaaa-bbbb-cccc", "url": "https://osv.dev/vulnerability/GHSA-aaaa-bbbb-cccc"}]}});
-    let report: Report = serde_json::from_value(json!({"schemaVersion": 8, "repositories": [{
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 9, "repositories": [{
         "repository": "acme/app", "status": "complete", "reason": null,
         "packageFiles": [{"path": "package.json", "dependencies": [dependency]}]}]}))
     .unwrap();
@@ -439,7 +439,7 @@ async fn only_a_private_repository_is_stored_without_what_credentials_found() {
                     "updateType": "minor", "group": null}],
                 "metadata": {"source": "helm", "kinds": [], "locations": [], "credentialed": true}}]}]})
     };
-    let report: Report = serde_json::from_value(json!({"schemaVersion": 8,
+    let report: Report = serde_json::from_value(json!({"schemaVersion": 9,
         "repositories": [repository("acme/app"), repository("acme/secret")]}))
     .unwrap();
     let cache = Cache::open(":memory:", CacheOptions::default())

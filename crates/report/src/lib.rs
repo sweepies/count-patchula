@@ -8,7 +8,7 @@ use patchula_words::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 /// The `actions` object's own version: 3 added `stale` pull request actions
 /// for publish races a rerun retries; 2 gave branches and pull requests
 /// their own statuses, with `stale` for branches.
@@ -399,8 +399,6 @@ pub struct HeldBack {
     /// All blocked releases in this class, including the summary version.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub versions: Vec<String>,
-    #[serde(default = "one")]
-    pub count: usize,
     pub update_type: UpdateKind,
     pub published_at: String,
     pub eligible_at: String,
@@ -412,9 +410,6 @@ pub struct HeldBack {
     /// override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown: Option<Cooldown>,
-}
-fn one() -> usize {
-    1
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -954,8 +949,11 @@ mod tests {
     #[test]
     fn the_version_error_names_the_supported_schema() {
         assert_eq!(
-            Error::Version(9).to_string(),
-            format!("unsupported report schemaVersion 9; expected {SCHEMA_VERSION}")
+            Error::Version(SCHEMA_VERSION + 1).to_string(),
+            format!(
+                "unsupported report schemaVersion {}; expected {SCHEMA_VERSION}",
+                SCHEMA_VERSION + 1
+            )
         );
     }
 
@@ -1003,7 +1001,7 @@ mod tests {
                         "metadata": {
                             "source": "crates", "kinds": [], "locations": [],
                             "heldBack": [{
-                                "version": "1.0.2", "updateType": "patch", "count": 1,
+                                "version": "1.0.2", "updateType": "patch",
                                 "publishedAt": "2026-10-13T12:00:00Z",
                                 "eligibleAt": "2026-10-27T12:00:00Z",
                                 "cooldown": {"hours": 336, "file": ".cargo/config.toml"}
@@ -1031,6 +1029,44 @@ mod tests {
             Report::from_json(&serde_json::to_vec(&seven).unwrap()),
             Err(Error::Version(7))
         ));
+    }
+
+    /// Version 9 dropped a held release's `count`, which always equalled the
+    /// length of its `versions`: a reader rejects it as an unknown field.
+    #[test]
+    fn a_held_release_has_no_count_from_version_9() {
+        let report = |held: serde_json::Value| {
+            serde_json::json!({
+                "schemaVersion": SCHEMA_VERSION,
+                "repositories": [{
+                    "repository": "demo/app",
+                    "status": "complete",
+                    "reason": null,
+                    "packageFiles": [{
+                        "path": "Cargo.toml",
+                        "dependencies": [{
+                            "manager": "cargo",
+                            "name": "serde",
+                            "package": "serde",
+                            "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
+                            "updates": [],
+                            "metadata": {
+                                "source": "crates", "kinds": [], "locations": [],
+                                "heldBack": [held]
+                            }
+                        }]
+                    }]
+                }]
+            })
+        };
+        let held = serde_json::json!({
+            "version": "1.0.2", "versions": ["1.0.1", "1.0.2"], "updateType": "patch",
+            "publishedAt": "2026-10-13T12:00:00Z", "eligibleAt": "2026-10-27T12:00:00Z"
+        });
+        assert!(Report::from_json(&serde_json::to_vec(&report(held.clone())).unwrap()).is_ok());
+        let mut counted = held;
+        counted["count"] = serde_json::json!(2);
+        assert!(Report::from_json(&serde_json::to_vec(&report(counted)).unwrap()).is_err());
     }
 
     #[test]
@@ -1147,7 +1183,6 @@ ordered_by!(LookupFailure, |f| (
 ordered_by!(HeldBack, |h| (
     &h.version,
     &h.versions,
-    h.count,
     h.update_type.as_str(),
     &h.published_at,
     &h.eligible_at,

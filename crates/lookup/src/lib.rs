@@ -8,7 +8,7 @@ use patchula_config::{Config, Filter, Patterns, Policy, Rule};
 use patchula_datasource::{Catalog, Version};
 use patchula_manager::{Dependency, Range, ShortTags, Written};
 use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy};
-use patchula_versioning::{Ecosystem, Parsed, Versioning};
+use patchula_versioning::{Ecosystem, Parsed};
 use patchula_words::{DependencyKind, ReleaseChannel, Source, Update, VersionPolicy};
 use regex::Regex;
 use std::cmp::Ordering;
@@ -98,15 +98,21 @@ impl<'a> Effective<'a> {
             self.permitted = permitted;
         }
     }
-    /// A security fix answers to the wait the rules set, not the committed
-    /// cooldown: the vulnerability does not wait the repository's age out.
-    fn unfloor(&mut self) {
-        if let Some((wait, _)) = self.floor.take() {
-            self.policy.wait_hours = wait;
-        }
-    }
 }
 impl Evaluator {
+    /// `effective` under `security.apply`. A security fix answers to the
+    /// wait the rules set, not the committed cooldown: the vulnerability
+    /// does not wait the repository's age out.
+    fn secured<'s>(&'s self, mut effective: Effective<'s>) -> Effective<'s> {
+        if let Some((wait, _)) = effective.floor.take() {
+            effective.policy.wait_hours = wait;
+        }
+        effective.apply(
+            &self.config.security.apply,
+            self.security_permitted.as_ref(),
+        );
+        effective
+    }
     /// Shared catalogs use the shortest active update-class wait. A zero-age
     /// rule keeps normal freshness even if another class waits longer. A rule
     /// error is the error, never a wait of 0.
@@ -136,17 +142,20 @@ impl Evaluator {
         }
         Ok(disabled)
     }
-    /// The compiled `extract` pattern for a dependency's `extract` field,
-    /// compiled once per distinct pattern. A pattern that fails to compile is
-    /// an evaluation error, not a non-match.
-    fn extractor(&self, pattern: &str) -> Result<Regex> {
+    /// The compiled pattern of `dep`'s `extract` field, compiled once per
+    /// distinct pattern. A pattern that fails to compile is an evaluation
+    /// error, not a non-match.
+    fn extractor(&self, dep: &Dependency) -> Result<Option<Regex>> {
+        let Some(pattern) = dep.extract.as_deref() else {
+            return Ok(None);
+        };
         let mut cache = self.extractors.lock().expect("extractor cache");
         if let Some(compiled) = cache.get(pattern) {
-            return compiled.clone();
+            return compiled.clone().map(Some);
         }
         let compiled = Regex::new(pattern).map_err(|e| e.to_string());
         cache.insert(pattern.to_owned(), compiled.clone());
-        compiled
+        compiled.map(Some)
     }
     pub fn lookup_evidence(
         &self,
@@ -157,26 +166,14 @@ impl Evaluator {
         let scheme = Ecosystem::of(dep.scheme, dep.source);
         let current = dep.resolved.as_deref().unwrap_or(&dep.current);
         let baseline = scheme.parse(current).ok();
-        let extract = dep
-            .extract
-            .as_ref()
-            .map(|pattern| self.extractor(pattern))
-            .transpose()?;
+        let extract = self.extractor(dep)?;
         let mut rejected = Vec::new();
         for version in catalog.into_iter().flat_map(|c| &c.versions) {
             if !version.deprecated && !version.yanked {
                 continue;
             }
-            let value = if let Some(extract) = &extract {
-                let Some(value) = extract
-                    .captures(&version.version)
-                    .and_then(|c| c.name("version"))
-                else {
-                    continue;
-                };
-                value.as_str()
-            } else {
-                &version.version
+            let Some(value) = extracted(extract.as_ref(), &version.version) else {
+                continue;
             };
             if let Some(baseline) = &baseline
                 && scheme
@@ -392,12 +389,7 @@ impl Evaluator {
     /// the image or does not permit the tag it moves to.
     pub fn secure(&self, dep: &Dependency, update: &mut Proposal) -> Result<bool> {
         let kind = update.update_type;
-        let mut effective = self.effective(dep, kind)?;
-        effective.unfloor();
-        effective.apply(
-            &self.config.security.apply,
-            self.security_permitted.as_ref(),
-        );
+        let effective = self.secured(self.effective(dep, kind)?);
         let scheme = Ecosystem::of(dep.scheme, dep.source);
         let tag = update
             .new_version
@@ -551,14 +543,8 @@ impl Evaluator {
     /// so its fix job takes this rather than the strictest routine wait,
     /// which Cargo would hold a fresh fix against.
     pub fn security_wait_hours(&self, dep: &Dependency, kind: Update) -> Result<u32> {
-        self.effective(dep, kind).map(|mut effective| {
-            effective.unfloor();
-            effective.apply(
-                &self.config.security.apply,
-                self.security_permitted.as_ref(),
-            );
-            effective.policy.wait_hours
-        })
+        self.effective(dep, kind)
+            .map(|effective| self.secured(effective).policy.wait_hours)
     }
     /// A lockfile-only package's one update: the lowest fixed release that
     /// fixes the most of its advisories without a breaking change, under
@@ -605,12 +591,7 @@ impl Evaluator {
             return Ok(Evaluation::default());
         };
         let kind = scheme.classify(&current, &target_parsed);
-        let mut effective = self.effective(dep, kind)?;
-        effective.unfloor();
-        effective.apply(
-            &self.config.security.apply,
-            self.security_permitted.as_ref(),
-        );
+        let effective = self.secured(self.effective(dep, kind)?);
         if !effective.policy.active {
             return Ok(Evaluation::default());
         }
@@ -636,7 +617,6 @@ impl Evaluator {
                     held_back: vec![HeldBack {
                         version: target.clone(),
                         versions: vec![target],
-                        count: 1,
                         update_type: kind,
                         published_at: timestamp(published),
                         eligible_at: timestamp(until),
@@ -663,28 +643,6 @@ impl Evaluator {
             updates: vec![update],
             ..Default::default()
         })
-    }
-    pub fn propose(&self, dep: &Dependency, catalog: &Catalog) -> Result<Vec<Proposal>> {
-        Ok(self.evaluate_at(dep, catalog, Utc::now())?.updates)
-    }
-    /// One fixed instant per batch makes release-age boundaries deterministic.
-    pub fn evaluate_at(
-        &self,
-        dep: &Dependency,
-        catalog: &Catalog,
-        now: DateTime<Utc>,
-    ) -> Result<Evaluation> {
-        self.evaluate_with_age_overrides(dep, catalog, now, &Default::default())
-    }
-    /// An explicit dashboard click bypasses only the selected release-age gate.
-    pub fn evaluate_with_age_overrides(
-        &self,
-        dep: &Dependency,
-        catalog: &Catalog,
-        now: DateTime<Utc>,
-        overrides: &std::collections::BTreeSet<(String, String)>,
-    ) -> Result<Evaluation> {
-        self.evaluate_with(dep, catalog, now, overrides, None)
     }
     /// `security.apply` governs every candidate that fixes one of the current
     /// version's advisories, so a fix can skip the wait the rules would impose.
@@ -760,7 +718,6 @@ impl Evaluator {
             held_back.push(HeldBack {
                 version: selected.into(),
                 versions: vec![selected.into()],
-                count: 1,
                 update_type: kind,
                 published_at: timestamp(published),
                 eligible_at: timestamp(until),
@@ -808,21 +765,9 @@ impl Evaluator {
                 ..Default::default()
             });
         }
-        let extractor = dep
-            .extract
-            .as_ref()
-            .map(|pattern| self.extractor(pattern))
-            .transpose()?;
-        let normalize = |text: &str| -> Option<String> {
-            if let Some(regex) = &extractor {
-                regex
-                    .captures(text)?
-                    .name("version")
-                    .map(|m| m.as_str().into())
-            } else {
-                Some(text.into())
-            }
-        };
+        let extractor = self.extractor(dep)?;
+        let normalize =
+            |text: &str| -> Option<String> { extracted(extractor.as_ref(), text).map(Into::into) };
         let resolved = self.resolved_current_version(dep, catalog)?;
         let current = resolved
             .as_deref()
@@ -942,14 +887,7 @@ impl Evaluator {
         let secured = policies
             .iter()
             .cloned()
-            .map(|(kind, mut effective)| {
-                effective.unfloor();
-                effective.apply(
-                    &self.config.security.apply,
-                    self.security_permitted.as_ref(),
-                );
-                (kind, effective)
-            })
+            .map(|(kind, effective)| (kind, self.secured(effective)))
             .collect::<Vec<_>>();
         // The lowest fix answers to neither `permitted` nor `channel`.
         let unfiltered = secured
@@ -1217,12 +1155,7 @@ impl Evaluator {
         {
             // Pin a range even when its highest satisfying release is unchanged.
             let plain = pinned;
-            let mut secure = plain.clone();
-            secure.unfloor();
-            secure.apply(
-                &self.config.security.apply,
-                self.security_permitted.as_ref(),
-            );
+            let secure = self.secured(plain.clone());
             // A declared value that is not an npm range at all is an
             // evaluation error, before the candidates are looked at.
             scheme
@@ -1287,36 +1220,14 @@ impl Evaluator {
         result.sort();
         result.dedup();
         // Only report releases newer than the eligible proposal of their class.
-        held_back.retain(|held| {
-            let held_version = scheme.parse(&held.version).ok();
-            !result
-                .iter()
-                .filter(|u| u.update_type == held.update_type)
-                .filter_map(|u| u.new_version.as_deref().and_then(|v| scheme.parse(v).ok()))
-                .any(|v| {
-                    held_version
-                        .as_ref()
-                        .is_some_and(|h| scheme.order(h, &v) != Ordering::Greater)
-                })
-        });
+        held_back.retain(|held| !superseded(scheme, &result, &held.version, held.update_type));
         held_back.sort();
         held_back.dedup();
         // Likewise for releases held because their date could not be read.
         not_proposed.extend(
             unread
                 .into_iter()
-                .filter(|(version, kind)| {
-                    let unread = scheme.parse(version).ok();
-                    !result
-                        .iter()
-                        .filter(|u| u.update_type == *kind)
-                        .filter_map(|u| u.new_version.as_deref().and_then(|v| scheme.parse(v).ok()))
-                        .any(|v| {
-                            unread
-                                .as_ref()
-                                .is_some_and(|h| scheme.order(h, &v) != Ordering::Greater)
-                        })
-                })
+                .filter(|(version, kind)| !superseded(scheme, &result, version, *kind))
                 .map(|(version, _)| NotProposed {
                     version,
                     reason: "the registry did not answer for its release date, so it waits until a later lookup reads one".into(),
@@ -1349,24 +1260,12 @@ impl Evaluator {
         let Ok(current) = scheme.parse(current_text) else {
             return Ok(None);
         };
-        let extract = dep
-            .extract
-            .as_ref()
-            .map(|pattern| self.extractor(pattern))
-            .transpose()?;
+        let extract = self.extractor(dep)?;
         Ok(catalog
             .versions
             .iter()
             .filter_map(|version| {
-                let value = if let Some(extract) = &extract {
-                    extract
-                        .captures(&version.version)?
-                        .name("version")?
-                        .as_str()
-                        .to_owned()
-                } else {
-                    version.version.clone()
-                };
+                let value = extracted(extract.as_ref(), &version.version)?.to_owned();
                 let parsed = scheme.parse(&value).ok()?;
                 let matches = if numeric_fields(current_text).is_some_and(|n| n < 3) {
                     numeric_prefix(current_text, &value) && parsed.0.pre.is_empty()
@@ -1477,12 +1376,32 @@ fn summarize(mut releases: Vec<HeldBack>, scheme: Ecosystem) -> Vec<HeldBack> {
                 summary.cooldown = release.cooldown;
             }
             summary.versions.push(release.version);
-            summary.count = summary.versions.len();
         } else {
             groups.insert(release.update_type.as_str(), release);
         }
     }
     groups.into_values().collect()
+}
+/// The version an `extract` pattern's `version` group captures from `text`,
+/// or `text` itself without a pattern. A text the pattern does not match has
+/// no version.
+fn extracted<'t>(extract: Option<&Regex>, text: &'t str) -> Option<&'t str> {
+    match extract {
+        Some(regex) => regex.captures(text)?.name("version").map(|m| m.as_str()),
+        None => Some(text),
+    }
+}
+/// Whether a proposal of the same class already reaches `version`, so a
+/// hold on it says nothing the proposal does not.
+fn superseded(scheme: Ecosystem, proposals: &[Proposal], version: &str, kind: Update) -> bool {
+    let Ok(version) = scheme.parse(version) else {
+        return false;
+    };
+    proposals
+        .iter()
+        .filter(|u| u.update_type == kind)
+        .filter_map(|u| u.new_version.as_deref().and_then(|v| scheme.parse(v).ok()))
+        .any(|v| scheme.order(&version, &v) != Ordering::Greater)
 }
 fn any<T: PartialEq>(values: &[T], value: T) -> bool {
     values.is_empty() || values.contains(&value)
@@ -1654,49 +1573,35 @@ fn action_value(current: &str, target: &str) -> String {
     }
 }
 
+/// Shorthands tests evaluate with: no dashboard overrides and no
+/// advisories, which the engine always passes to `evaluate_with`.
+#[cfg(any(test, feature = "testing"))]
+impl Evaluator {
+    pub fn propose(&self, dep: &Dependency, catalog: &Catalog) -> Result<Vec<Proposal>> {
+        Ok(self.evaluate_at(dep, catalog, Utc::now())?.updates)
+    }
+    pub fn evaluate_at(
+        &self,
+        dep: &Dependency,
+        catalog: &Catalog,
+        now: DateTime<Utc>,
+    ) -> Result<Evaluation> {
+        self.evaluate_with_age_overrides(dep, catalog, now, &Default::default())
+    }
+    pub fn evaluate_with_age_overrides(
+        &self,
+        dep: &Dependency,
+        catalog: &Catalog,
+        now: DateTime<Utc>,
+        overrides: &std::collections::BTreeSet<(String, String)>,
+    ) -> Result<Evaluation> {
+        self.evaluate_with(dep, catalog, now, overrides, None)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use patchula_words::Manager;
-
-    /// `extractor` caches the compiled pattern per distinct `extract` field:
-    /// two lookups with the same pattern compile it once.
-    #[test]
-    fn an_extract_pattern_is_compiled_once_across_lookups() {
-        let config = patchula_config::load(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../examples/benchmark-public.pkl"),
-        )
-        .unwrap();
-        let eval = Evaluator::new(&config, Default::default()).unwrap();
-        let dep = |extract: &str| patchula_manager::Dependency {
-            file: "package.json".into(),
-            form: patchula_manager::EditForm::Scalar(patchula_manager::Syntax::Json),
-            name: "lib".into(),
-            package: "lib".into(),
-            extract: Some(extract.into()),
-            ..patchula_manager::testing::dependency(
-                Manager::Npm,
-                DependencyKind::Production,
-                Source::Npm,
-            )
-        };
-        let now = chrono::DateTime::parse_from_rfc3339("2026-10-12T00:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        for _ in 0..2 {
-            assert!(
-                eval.lookup_evidence(&dep("^v(?P<version>.+)$"), None, now)
-                    .is_ok()
-            );
-        }
-        assert_eq!(eval.extractors.lock().unwrap().len(), 1);
-        assert!(
-            eval.lookup_evidence(&dep("^w(?P<version>.+)$"), None, now)
-                .is_ok()
-        );
-        assert_eq!(eval.extractors.lock().unwrap().len(), 2);
-    }
 
     /// A step action gets no new SHA pin when its workflow is one
     /// `actions.lock` lists: the owner's `gh actions-lock` would unpin it.

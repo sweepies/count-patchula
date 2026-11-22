@@ -421,9 +421,7 @@ impl Engine {
                     .or_else(|| {
                         let scheme = patchula_versioning::Ecosystem::of(dep.scheme, dep.source);
                         (dep.kind != patchula_words::DependencyKind::Runner)
-                            .then(|| {
-                                patchula_versioning::Versioning::parse(&scheme, &dep.current).ok()
-                            })
+                            .then(|| scheme.parse(&dep.current).ok())
                             .flatten()
                             .map(|v| v.0.to_string())
                     }),

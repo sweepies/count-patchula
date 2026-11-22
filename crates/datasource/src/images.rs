@@ -2,10 +2,9 @@
 //! list become OSV queries under their source package names. Image layers are
 //! never read.
 use super::*;
-use crate::docker::{MANIFEST, identity, validate_digest};
+use crate::docker::{Read, identity, validate_digest};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use patchula_words::SbomSource;
-use reqwest::Method;
 use std::collections::BTreeSet;
 
 const SPDX: &str = "https://spdx.dev/Document";
@@ -133,7 +132,7 @@ fn compact_platform(
     .map_err(|_| Document)
 }
 pub(crate) const IMAGE_PLATFORM: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("image-platform", 4, compact_platform);
+    patchula_http::Derived::new("image-platform", 5, compact_platform);
 
 fn platform_name(os: &str, architecture: &str, variant: Option<&str>) -> String {
     match variant {
@@ -304,7 +303,7 @@ fn compact_sbom(
     serde_json::to_vec(&compact).map_err(|_| Document)
 }
 pub(crate) const SBOM_OS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("sbom-os", 4, compact_sbom);
+    patchula_http::Derived::new("sbom-os", 5, compact_sbom);
 
 /// OSV's ecosystem name for an OS release, when OSV covers it.
 fn ecosystem(kind: &str, namespace: &str, distro: Option<&(String, String)>) -> Option<String> {
@@ -361,7 +360,7 @@ impl Client {
     ) -> Result<ImageSbom> {
         let url = |reference: &str| format!("https://{host}/v2/{path}/manifests/{reference}");
         let index = match self
-            .registry_with(host, path, &url(digest), MANIFEST, Method::GET, None)
+            .registry(host, path, &url(digest), Read::Manifest)
             .await
         {
             Ok(response) => verified(&response.body, digest)?,
@@ -401,7 +400,7 @@ impl Client {
                 let reference = attestation["digest"].as_str().ok_or(Error::Invalid)?;
                 validate_digest(reference)?;
                 let response = self
-                    .registry_with(host, path, &url(reference), MANIFEST, Method::GET, None)
+                    .registry(host, path, &url(reference), Read::Manifest)
                     .await?;
                 let manifest = verified(&response.body, reference)?;
                 for layer in manifest["layers"].as_array().into_iter().flatten() {
@@ -436,10 +435,7 @@ impl Client {
         for (suffix, source) in kinds {
             for candidate in &candidates {
                 let tag = format!("{}{suffix}", candidate.replace(':', "-"));
-                let head = match self
-                    .registry_with(host, path, &url(&tag), MANIFEST, Method::HEAD, None)
-                    .await
-                {
+                let head = match self.registry(host, path, &url(&tag), Read::Head).await {
                     Ok(head) => head,
                     Err(Error::Http(patchula_http::CacheError::Status(404))) => continue,
                     Err(error) => return Err(error),
@@ -458,13 +454,13 @@ impl Client {
                 let manifest = match digest_of(&head.headers) {
                     Some(named) => {
                         let response = self
-                            .registry_with(host, path, &url(&named), MANIFEST, Method::GET, None)
+                            .registry(host, path, &url(&named), Read::Manifest)
                             .await?;
                         verified(&response.body, &named)?
                     }
                     None => {
                         let response = self
-                            .registry_with(host, path, &url(&tag), MANIFEST, Method::GET, None)
+                            .registry(host, path, &url(&tag), Read::Manifest)
                             .await?;
                         let Some(named) = digest_of(&response.headers) else {
                             continue;
@@ -502,7 +498,15 @@ impl Client {
     async fn image_platform(&self, host: &str, path: &str, digest: &str) -> Result<Platform> {
         let url = format!("https://{host}/v2/{path}/blobs/{digest}");
         let response = self
-            .registry_with(host, path, &url, BLOB, Method::GET, Some(IMAGE_PLATFORM))
+            .registry(
+                host,
+                path,
+                &url,
+                Read::Blob {
+                    accept: BLOB,
+                    derived: IMAGE_PLATFORM,
+                },
+            )
             .await?;
         let platform: Platform = serde_json::from_slice(&response.body)?;
         if format!("sha256:{}", platform.sha256) != digest {
@@ -516,7 +520,15 @@ impl Client {
         validate_digest(digest)?;
         let url = format!("https://{host}/v2/{path}/blobs/{digest}");
         let response = match self
-            .registry_with(host, path, &url, BLOB, Method::GET, Some(SBOM_OS))
+            .registry(
+                host,
+                path,
+                &url,
+                Read::Blob {
+                    accept: BLOB,
+                    derived: SBOM_OS,
+                },
+            )
             .await
         {
             Ok(response) => response,

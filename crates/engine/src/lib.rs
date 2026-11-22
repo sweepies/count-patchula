@@ -389,25 +389,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 16;
+    const VERSION: u32 = 17;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 19;
+    const VERSION: u32 = 20;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 19;
+    const VERSION: u32 = 20;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 16;
+    const VERSION: u32 = 17;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -990,6 +990,9 @@ impl Engine {
     ) -> (Catalogs, BTreeSet<LookupKey>) {
         let (pkl, mut keys): (BTreeSet<_>, BTreeSet<_>) = keys
             .into_iter()
+            // A Pkl key with a registry (a templated extractor can attach
+            // one) is no public repository's: it goes to the client, which
+            // refuses it, and is never read from public GitHub.
             .partition(|(_, id, _)| id.source == Source::Pkl && id.is_public());
         // Repository keys only Pkl packages asked for, dropped from the answer.
         let mut borrowed = BTreeSet::new();

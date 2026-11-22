@@ -1699,7 +1699,7 @@ mod tests {
             })
             .collect();
         serde_json::from_value(serde_json::json!({
-            "schemaVersion": 8,
+            "schemaVersion": 9,
             "repositories": [{"repository": "local/app", "status": "complete",
                 "packageFiles": [{"path": "package.json", "dependencies": dependencies}]}]
         }))

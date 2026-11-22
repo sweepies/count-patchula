@@ -25,7 +25,7 @@ fn versions(
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const PACKAGIST_P2: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("packagist-p2", 2, versions);
+    patchula_http::Derived::new("packagist-p2", 3, versions);
 
 impl Client {
     pub(crate) async fn packagist(&self, package: &str) -> Result<Catalog> {

@@ -106,10 +106,7 @@ pub fn redact(text: &str, secrets: &[String]) -> String {
 /// begins a secret is dropped too, so no fragment of one survives the cut.
 fn failure_stream(captured: &[u8], cut_short: bool, secrets: &[String]) -> String {
     let mut text = redact(&String::from_utf8_lossy(captured), secrets);
-    let mut end = text.len().min(FAILURE_STREAM_LIMIT);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = text.floor_char_boundary(FAILURE_STREAM_LIMIT);
     let cut = end < text.len() || cut_short;
     text.truncate(end);
     if cut {

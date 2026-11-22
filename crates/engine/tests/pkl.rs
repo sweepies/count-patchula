@@ -150,3 +150,91 @@ async fn pkl_packages_follow_their_own_release_tags() {
     }
     assert_eq!(first_pages, 1, "apple/pkl-pantry's first page read once");
 }
+
+/// A Pkl dependency a templated extractor gives a registry is refused, never
+/// looked up as its public repository's releases: the threat model forbids
+/// falling back to the public package when the declared source fails.
+#[tokio::test]
+async fn a_pkl_package_with_a_registry_is_refused_not_read_publicly() {
+    use patchula_http::{Exchange, Response, Transport};
+    #[derive(Default)]
+    struct Recorded(std::sync::Mutex<Vec<String>>);
+    impl Transport for Recorded {
+        fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+            self.0.lock().unwrap().push(request.url().to_string());
+            Box::pin(async {
+                Ok(Response {
+                    status: reqwest::StatusCode::NOT_FOUND,
+                    headers: Default::default(),
+                    body: Vec::new(),
+                    stale: None,
+                })
+            })
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
+        .await
+        .unwrap();
+    let checkout = dir.path().join("checkout");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(
+        checkout.join("deps.txt"),
+        "pkl pkg.pkl-lang.org/pkl-pantry/pkl.toml 1.0.0 https://pkl.example.com\n",
+    )
+    .unwrap();
+    let config = patchula_config::load_files(
+        "/repo/patchula.pkl",
+        BTreeMap::from([(
+            "/repo/patchula.pkl".into(),
+            concat!(
+                "amends \"PatchulaConfig.pkl\"\n",
+                "managers = new Listing { \"regex\" }\n",
+                "defaults { waitHours = 0 }\n",
+                "security { advisories = false }\n",
+                "extractors { new {\n",
+                "  note = \"a templated registry\"\n",
+                "  source = \"{source}\"\n",
+                "  dependency = \"{dependency}\"\n",
+                "  package = \"{dependency}\"\n",
+                "  scheme = \"semver\"\n",
+                "  paths { \"deps.txt\" }\n",
+                "  patterns { #\"(?<source>\\w+) (?<dependency>\\S+) (?<current>\\S+) (?<registry>\\S+)\"# }\n",
+                "  registry = \"{registry}\"\n",
+                "} }\n",
+            )
+            .into(),
+        )]),
+    )
+    .unwrap();
+    let transport = Arc::new(Recorded::default());
+    let engine = Engine::with_transport("offline-pkl", cache, 4, transport.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let report = engine
+        .lookup(Options {
+            config: Some(config),
+            local: Some(checkout),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let repo = &report.repositories[0];
+    let failure = repo
+        .lookup_failures
+        .iter()
+        .find(|failure| failure.package == "pkg.pkl-lang.org/pkl-pantry/pkl.toml")
+        .unwrap_or_else(|| panic!("no lookup failure: {:?}", repo.lookup_failures));
+    assert!(
+        failure
+            .message
+            .contains("where the repository says it comes from"),
+        "{}",
+        failure.message
+    );
+    let requests = transport.0.lock().unwrap();
+    assert!(
+        !requests.iter().any(|url| url.contains("github.com")),
+        "{requests:?}"
+    );
+}
