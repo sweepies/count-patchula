@@ -1728,3 +1728,43 @@ async fn a_charts_source_falls_back_to_the_manifest_annotation() {
     assert!(repository.chart_sources);
     assert!(steps.0.lock().unwrap().is_empty());
 }
+/// A Link header that cycles back to the first page fails the walk rather
+/// than reading page 1 again.
+#[tokio::test]
+async fn pagination_back_to_the_first_page_is_a_cycle() {
+    let a = "https://ghcr.io/v2/spec/image/tags/list?n=1000";
+    let b = "https://ghcr.io/v2/spec/image/tags/list?n=1000&last=1.0";
+    // Only one answer per page: a second read of either panics.
+    let steps = Arc::new(Steps(Mutex::new(VecDeque::from([
+        (
+            a.into(),
+            response(
+                200,
+                r#"{"tags":["1.0"]}"#,
+                &[(
+                    "link",
+                    "</v2/spec/image/tags/list?n=1000&last=1.0>; rel=\"next\"",
+                )],
+            ),
+        ),
+        (
+            b.into(),
+            response(
+                200,
+                r#"{"tags":["2.0"]}"#,
+                &[("link", "</v2/spec/image/tags/list?n=1000>; rel=\"next\"")],
+            ),
+        ),
+    ]))));
+    let dir = tempfile::tempdir().unwrap();
+    let error = client(steps.clone(), dir.path())
+        .await
+        .lookup(&patchula_config::PackageId::public(
+            Source::Docker,
+            "ghcr.io/spec/image",
+        ))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("invalid package"), "{error}");
+    assert!(steps.0.lock().unwrap().is_empty());
+}

@@ -594,7 +594,7 @@ impl Client {
         let mut url = Url::parse(&format!("https://{host}/v2/{path}/tags/list?n=1000"))
             .map_err(|_| Error::Invalid)?;
         let origin = url.origin();
-        let mut pages = Pages::new(10000);
+        let mut pages = Pages::starting_at(10000, url.as_str());
         let mut tags = std::collections::BTreeSet::new();
         let mut stale_at: Option<i64> = None;
         loop {

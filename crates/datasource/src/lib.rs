@@ -129,20 +129,35 @@ impl Error {
 /// The guard on a paginated walk: a repeated cursor, or a cursor past the
 /// page limit, fails the walk rather than paging forever.
 pub(crate) struct Pages {
+    /// The first page's own cursor, when it has one, so a cursor back to it
+    /// is a cycle too.
+    first: Option<String>,
     followed: std::collections::HashSet<String>,
     limit: usize,
 }
 impl Pages {
-    /// A walk of at most `limit` pages, its first already read.
+    /// A walk of at most `limit` pages, its first already read without a
+    /// cursor.
     pub(crate) fn new(limit: usize) -> Self {
         Self {
+            first: None,
             followed: Default::default(),
             limit,
         }
     }
+    /// A walk of at most `limit` pages whose first page `first` names.
+    pub(crate) fn starting_at(limit: usize, first: &str) -> Self {
+        Self {
+            first: Some(first.to_owned()),
+            ..Self::new(limit)
+        }
+    }
     /// Read the page `cursor` names next.
     pub(crate) fn follow(&mut self, cursor: &str) -> Result<()> {
-        if self.followed.len() + 1 >= self.limit || !self.followed.insert(cursor.to_owned()) {
+        if self.followed.len() + 1 >= self.limit
+            || self.first.as_deref() == Some(cursor)
+            || !self.followed.insert(cursor.to_owned())
+        {
             return Err(Error::Invalid);
         }
         Ok(())

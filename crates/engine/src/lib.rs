@@ -990,7 +990,10 @@ impl Engine {
     ) -> (Catalogs, BTreeSet<LookupKey>) {
         let (pkl, mut keys): (BTreeSet<_>, BTreeSet<_>) = keys
             .into_iter()
-            .partition(|(_, id, _)| id.source == Source::Pkl);
+            // A Pkl key with a registry (a templated extractor can attach
+            // one) is no public repository's: it goes to the client, which
+            // refuses it, and is never read from public GitHub.
+            .partition(|(_, id, _)| id.source == Source::Pkl && id.is_public());
         // Repository keys only Pkl packages asked for, dropped from the answer.
         let mut borrowed = BTreeSet::new();
         let packages: Vec<_> = pkl
