@@ -300,10 +300,14 @@ modules. Comments and imports inside other strings are ignored. The
 repository's own `patchula.pkl` is not read: its imports must already be local
 modules.
 
-`.pkl` is also the extension of Python pickles, so a `.pkl` file that is not
-text is left out, and one over 1 MiB is not read and listed as skipped.
-Neither fails the repository's scan, as an unreadable file other managers
-select does, or turns off auto-merge and branch cleanup, as a warning does.
+`.pkl` is also the extension of Python pickles and of the Git LFS pointers
+that stand for large ones. A `.pkl` file that is not text is left out, one
+over 1 MiB is not read and is listed as skipped, and a Git LFS pointer or a
+file that is not valid Pkl and ends with the `.` every pickle ends with
+imports nothing. None of these fails the repository's scan, as an unreadable
+file other managers select does, or turns off auto-merge and branch cleanup,
+as a warning does. Any other `.pkl` file that is not valid Pkl is skipped with
+a warning.
 
 A package is named by its URI without `package://` and the version, and looked
 up in the `pkl` [source](/guide/sources/) under the semver scheme, which Pkl

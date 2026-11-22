@@ -326,6 +326,33 @@ fn an_unlexable_module_is_skipped_with_a_warning() {
     );
 }
 
+/// Text `.pkl` files that are no Pkl modules import nothing and warn
+/// nothing, so they leave auto-merge and cleanup on: Git LFS pointers, and
+/// pickles of protocols 0 and 1, which can be valid UTF-8 and always end
+/// with `.`. A module that lexes is read whatever it ends with.
+#[test]
+fn lfs_pointers_and_text_pickles_are_not_modules() {
+    for text in [
+        "version https://git-lfs.github.com/spec/v1\noid sha256:4ef92c37e5c5c0d5a4e6b9c8f1d2e3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0\nsize 52428800\n",
+        "}q\u{0}U\u{1}aq\u{1}K\u{1}s.",
+        "(dp0\nS'key'\np1\nI42\ns.",
+        "Vsay \"hi\np0\n.",
+    ] {
+        let extraction = extract("model.pkl", text);
+        assert!(extraction.dependencies.is_empty(), "{text:?}");
+        assert!(
+            extraction.warnings.is_empty(),
+            "{text:?}: {:?}",
+            extraction.warnings
+        );
+    }
+    let extraction = extract(
+        "x.pkl",
+        "import \"package://pkg.pkl-lang.org/pkl-pantry/pkl.toml@1.0.0\"\n// the end.",
+    );
+    assert_eq!(extraction.dependencies.len(), 1);
+}
+
 /// A URI the module only reaches through a decoded string is skipped, and a
 /// decoded value never carries a line break or terminal escape into a report.
 #[test]
