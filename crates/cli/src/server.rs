@@ -3,14 +3,11 @@ use crate::cli::{App, Serve};
 use std::{path::PathBuf, time::Duration};
 
 type Result<T> = std::result::Result<T, (u8, miette::Report)>;
-fn invalid(message: &str) -> (u8, miette::Report) {
-    (2, miette::miette!("{message}"))
-}
 fn env(name: &str) -> Result<Option<String>> {
     match std::env::var(name) {
         Ok(value) => Ok(Some(value)),
         Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(_) => Err(invalid("server environment value is not valid UTF-8")),
+        Err(_) => Err(crate::usage("server environment value is not valid UTF-8")),
     }
 }
 /// A secret from a file (`--flag` or the file's env var) or an env var holding
@@ -32,12 +29,12 @@ fn secret_with(
     let path = path.cloned().or_else(|| env(file_env).map(PathBuf::from));
     let value = env(value_env).is_some();
     if path.is_some() && value {
-        return Err(invalid(
+        return Err(crate::usage(
             "choose either a secret file or a secret environment value",
         ));
     }
     if path.is_none() && !value {
-        return Err(invalid(
+        return Err(crate::usage(
             "server requires App private key and webhook secret via env or files",
         ));
     }
@@ -45,31 +42,31 @@ fn secret_with(
         env: path.is_none().then(|| value_env.to_owned()),
         file: path,
     };
-    secret.read_bytes().map_err(|message| invalid(&message))
+    secret.read_bytes().map_err(crate::usage)
 }
 pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
     let settings = patchula_config::settings::Settings::for_server(serve.settings.as_deref())
-        .map_err(|e| (2, e))?;
+        .map_err(|e| (crate::USAGE, e))?;
     let listen = serve.listen.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_LISTEN")?
             .unwrap_or_else(|| "127.0.0.1:8080".into())
             .parse()
-            .map_err(|_| invalid("invalid server listen address"))
+            .map_err(|_| crate::usage("invalid server listen address"))
     })?;
     let app_id = serve.app_id.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_APP_ID")?
-            .ok_or_else(|| invalid("server requires --app-id or PATCHULA_APP_ID"))?
+            .ok_or_else(|| crate::usage("server requires --app-id or PATCHULA_APP_ID"))?
             .parse()
-            .map_err(|_| invalid("invalid App ID"))
+            .map_err(|_| crate::usage("invalid App ID"))
     })?;
     let timeout = serve.shutdown_timeout_secs.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_SHUTDOWN_TIMEOUT_SECS")?
             .unwrap_or_else(|| "60".into())
             .parse::<u64>()
-            .map_err(|_| invalid("invalid shutdown timeout"))
+            .map_err(|_| crate::usage("invalid shutdown timeout"))
     })?;
     if timeout == 0 || timeout > 3600 {
-        return Err(invalid("shutdown timeout must be 1..3600 seconds"));
+        return Err(crate::usage("shutdown timeout must be 1..3600 seconds"));
     }
     let recheck = match app.recheck {
         Some(recheck) => Some(recheck),
@@ -85,7 +82,7 @@ pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
             .or(env("PATCHULA_SERVER_CACHE")?.map(PathBuf::from))
             .map(|dir| crate::cache_dir(Some(&dir)))
             .unwrap_or_else(|| crate::cache_dir(None).map(|dir| dir.join("server")))
-            .map_err(|e| (2, e))?,
+            .map_err(|e| (crate::USAGE, e))?,
         listen,
         app_id,
         private_key: secret(
@@ -103,7 +100,7 @@ pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
     })
     .await
     .map(|()| 0)
-    .map_err(|e| (1, e))
+    .map_err(|e| (crate::FAILED, e))
 }
 
 #[cfg(test)]
@@ -164,6 +161,6 @@ mod tests {
             panic!("serve")
         };
         let result = run(&app, serve).await;
-        assert!(matches!(result, Err((2, _))), "{result:?}");
+        assert!(matches!(result, Err((crate::USAGE, _))), "{result:?}");
     }
 }

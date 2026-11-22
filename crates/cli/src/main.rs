@@ -33,9 +33,9 @@ const LOG_VAR: &str = "PATCHULA_LOG";
 /// A lookup or apply finished, but some dependencies' lookups failed.
 const LOOKUP_FAILED: u8 = 4;
 /// The command failed.
-const FAILED: u8 = 1;
+pub(crate) const FAILED: u8 = 1;
 /// The command line or its environment is not usable.
-const USAGE: u8 = 2;
+pub(crate) const USAGE: u8 = 2;
 /// A run finished, but a repository changed under it; a rerun retries it.
 const STALE: u8 = 5;
 const RECHECK_VAR: &str = "PATCHULA_RECHECK";
@@ -314,14 +314,11 @@ fn config_command(app: &App, config: &cli::Config) -> Result<u8, (u8, miette::Re
                 .map_err(fail)
         }
         ConfigCommand::CheckSettings(check) => {
-            let settings =
-                patchula_config::settings::Settings::load(&check.path).map_err(|e| (USAGE, e))?;
-            patchula_engine::settings::check(&settings).map_err(|(field, message)| {
-                (
-                    2,
-                    patchula_config::settings_problem(Some(&check.path), field, message),
-                )
-            })?;
+            patchula_config::settings::Settings::load(&check.path)
+                .and_then(|settings| {
+                    patchula_engine::settings::checked(settings, Some(&check.path))
+                })
+                .map_err(|e| (USAGE, e))?;
             writeln!(
                 io::stdout().lock(),
                 "{}",
@@ -568,7 +565,7 @@ fn exit_code(report: &patchula_report::Report, run: Option<&cli::Run>) -> u8 {
         .iter()
         .any(|repo| !repo.lookup_failures.is_empty());
     if any(Status::Error) {
-        1
+        FAILED
     } else if any(Status::Stale) {
         STALE
     } else if failures && run.is_none() {
@@ -599,18 +596,9 @@ async fn remote_report(
 /// the schema's defaults. The full check runs here, before tokens, secrets
 /// or the cache are touched, and a failure points into the file.
 fn settings(scan: &cli::Scan) -> Result<patchula_config::settings::Settings, (u8, miette::Report)> {
-    let (path, settings) = patchula_config::settings::Settings::for_cli(
-        scan.settings.as_deref(),
-        user::settings_file(),
-    )
-    .map_err(|e| (USAGE, e))?;
-    patchula_engine::settings::check(&settings).map_err(|(field, message)| {
-        (
-            2,
-            patchula_config::settings_problem(path.as_deref(), field, message),
-        )
-    })?;
-    Ok(settings)
+    patchula_config::settings::Settings::for_cli(scan.settings.as_deref(), user::settings_file())
+        .and_then(|(path, settings)| patchula_engine::settings::checked(settings, path.as_deref()))
+        .map_err(|e| (USAGE, e))
 }
 
 /// `PATCHULA_RECHECK`'s value: `now` or `next-run`.
@@ -676,14 +664,17 @@ fn repositories(options: &cli::Lookup) -> Result<Vec<String>, miette::Report> {
     Ok(options.repositories.clone())
 }
 
-/// Every flag `lookup`, `run` and `tui` take that can be local-only, with
-/// whether this invocation set it. `cli::REMOTE_POLICY` decides which are;
-/// a test proves the two lists agree.
-fn remote_flags(
+/// Every flag `lookup`, `run` and `tui` take — globals included — that only
+/// works on this machine, with whether this invocation set it; `--remote`
+/// refuses them. Every other flag of those commands travels in the request
+/// or belongs to the server. A test walks the command spec and fails on a
+/// flag that is neither, so a new flag cannot be silently ignored or
+/// silently refused remotely.
+fn local_flags(
     app: &App,
     options: &cli::Lookup,
     run: Option<&cli::Run>,
-) -> Vec<(&'static str, bool)> {
+) -> [(&'static str, bool); 9] {
     [
         ("all-repos", options.all_repos),
         (
@@ -699,9 +690,6 @@ fn remote_flags(
         ("recheck", app.recheck.is_some()),
         ("settings", options.scan.settings.is_some()),
     ]
-    .into_iter()
-    .filter(|(flag, _)| cli::remote_policy(flag) == Some(cli::RemotePolicy::Local))
-    .collect()
 }
 
 /// Where a lookup, run or tui batch reads from.
@@ -730,7 +718,7 @@ async fn source(
 ) -> Result<Source, (u8, miette::Report)> {
     let named = !options.repositories.is_empty() || options.all_repos;
     let writes = run.is_some_and(|run| !run.dry_run);
-    let local_flag = remote_flags(app, options, run)
+    let local_flag = local_flags(app, options, run)
         .into_iter()
         .find(|(_, set)| *set)
         .map(|(flag, _)| flag);
@@ -1000,38 +988,21 @@ async fn git(args: &[&str]) -> Option<String> {
         }
     }
     let output = patchula_process::SystemExecutor
-        .run(git_command(
-            std::env::current_dir().ok()?,
-            args,
-            env,
-            GitOutput::Short,
-        ))
+        .run(git_command(std::env::current_dir().ok()?, args, env))
         .await
         .ok()?;
     Some(String::from_utf8_lossy(&output).trim().to_owned())
 }
 
-/// How much of git's output a caller reads.
-#[derive(Clone, Copy)]
-enum GitOutput {
-    /// A line or two, such as a remote's name: 64 KiB, cut beyond.
-    Short,
-    /// A whole listing, such as `git status`: up to 16 MiB, never cut.
-    Complete,
-}
-
 /// The one way the CLI runs git: `args` in `dir`, seeing exactly `env`,
-/// under the shared timeout.
+/// under the shared timeout. It reads a line or two, such as a remote's
+/// name: 64 KiB, cut beyond. A caller reading a whole listing raises the
+/// limit and asks for complete output.
 fn git_command(
     dir: std::path::PathBuf,
     args: &[&str],
     env: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
-    output: GitOutput,
 ) -> patchula_process::CommandSpec {
-    let (output_limit, complete_output) = match output {
-        GitOutput::Short => (1 << 16, false),
-        GitOutput::Complete => (1 << 24, true),
-    };
     patchula_process::CommandSpec {
         program: "git".into(),
         args: args.iter().map(|arg| (*arg).to_owned()).collect(),
@@ -1039,8 +1010,8 @@ fn git_command(
         env,
         secrets: Vec::new(),
         timeout: GIT_TIMEOUT,
-        output_limit,
-        complete_output,
+        output_limit: 1 << 16,
+        complete_output: false,
     }
 }
 

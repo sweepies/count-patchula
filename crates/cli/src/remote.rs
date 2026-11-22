@@ -398,18 +398,23 @@ async fn app_client_id(
 /// What the server says about its App: the bot it writes as and its client ID.
 async fn auth_info(services: &Services, server: &str) -> Option<AuthInfo> {
     let transport = services.remote_transport().ok()?;
+    fetch_auth_info(&*transport, server).await.ok()
+}
+/// `GET /api/v1/auth` on `server`.
+async fn fetch_auth_info(transport: &dyn Transport, server: &str) -> Result<AuthInfo> {
     let (status, value) = send(
-        &*transport,
+        transport,
         Method::GET,
         &format!("{server}/api/v1/auth"),
         None,
         None,
     )
-    .await
-    .ok()?;
-    (status == 200)
-        .then(|| serde_json::from_value::<AuthInfo>(value).ok())
-        .flatten()
+    .await?;
+    if status != 200 {
+        return Err(rejected(server, status, &value));
+    }
+    serde_json::from_value::<AuthInfo>(value)
+        .map_err(|_| fail(format!("{server} did not name its GitHub App")))
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -538,20 +543,7 @@ fn store(services: &Services, server: &str, login: Login) -> Result<()> {
 /// discovered server must still name the App that advertised it.
 async fn client_id(transport: &dyn Transport, target: &Server) -> Result<String> {
     let server = target.url.as_str();
-    let (status, value) = send(
-        transport,
-        Method::GET,
-        &format!("{server}/api/v1/auth"),
-        None,
-        None,
-    )
-    .await?;
-    if status != 200 {
-        return Err(rejected(server, status, &value));
-    }
-    let client_id = serde_json::from_value::<AuthInfo>(value)
-        .map(|info| info.client_id)
-        .map_err(|_| fail(format!("{server} did not name its GitHub App")))?;
+    let client_id = fetch_auth_info(transport, server).await?.client_id;
     match &target.app {
         Some(app) if *app != client_id => Err(fail(format!(
             "{server} now names a different GitHub App than the one that advertised it; patchula auth logout --server {server} forgets it"

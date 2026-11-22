@@ -65,14 +65,27 @@ pub enum Tab {
     Warnings,
     Stats,
 }
-const TABS: [(Tab, &str); 6] = [
-    (Tab::Updates, "Updates"),
-    (Tab::Held, "Held back"),
-    (Tab::Dependencies, "Dependencies"),
-    (Tab::Templates, "Templates"),
-    (Tab::Warnings, "Warnings"),
-    (Tab::Stats, "Stats"),
-];
+impl Tab {
+    /// Every tab in display order; a tab's place here is `tab as usize`.
+    const ALL: [Tab; 6] = [
+        Tab::Updates,
+        Tab::Held,
+        Tab::Dependencies,
+        Tab::Templates,
+        Tab::Warnings,
+        Tab::Stats,
+    ];
+    fn name(self) -> &'static str {
+        match self {
+            Tab::Updates => "Updates",
+            Tab::Held => "Held back",
+            Tab::Dependencies => "Dependencies",
+            Tab::Templates => "Templates",
+            Tab::Warnings => "Warnings",
+            Tab::Stats => "Stats",
+        }
+    }
+}
 
 /// Which update classes the Updates tab shows; `t` cycles through them.
 /// `None` is every class; `Some` cycles through [`UpdateKind::RANKED`].
@@ -376,7 +389,7 @@ pub struct Model {
     pub cursor: usize,
     pub scroll: usize,
     /// Each tab's cursor and scroll while another tab is shown.
-    places: [(usize, usize); TABS.len()],
+    places: [(usize, usize); Tab::ALL.len()],
     pub message: Option<String>,
     pub origin: Origin,
     /// The working tree has uncommitted changes, so copier would refuse.
@@ -487,7 +500,7 @@ impl Model {
             search: String::new(),
             cursor: 0,
             scroll: 0,
-            places: [(0, 0); TABS.len()],
+            places: [(0, 0); Tab::ALL.len()],
             mode: Mode::Browse,
             message: None,
             uncommitted: match &origin {
@@ -694,13 +707,13 @@ impl Model {
             Action::Quit => self.quit = true,
             Action::Help => self.mode = Mode::Help,
             Action::NextTab => self.switch(1),
-            Action::PreviousTab => self.switch(TABS.len() - 1),
+            Action::PreviousTab => self.switch(Tab::ALL.len() - 1),
             Action::JumpTab => {
                 if let KeyCode::Char(c) = key.code
                     && let Some(index) = c
                         .to_digit(10)
                         .map(|digit| digit as usize)
-                        .filter(|digit| (1..=TABS.len()).contains(digit))
+                        .filter(|digit| (1..=Tab::ALL.len()).contains(digit))
                 {
                     self.show(index - 1);
                 }
@@ -768,16 +781,16 @@ impl Model {
         }
     }
     fn switch(&mut self, step: usize) {
-        self.show((self.index() + step) % TABS.len());
+        self.show((self.index() + step) % Tab::ALL.len());
     }
     fn index(&self) -> usize {
-        TABS.iter().position(|(t, _)| *t == self.tab).unwrap_or(0)
+        self.tab as usize
     }
     /// Show a tab where it was left: its cursor and scroll are kept while
     /// another tab is shown.
     fn show(&mut self, index: usize) {
         self.places[self.index()] = (self.cursor, self.scroll);
-        self.tab = TABS[index].0;
+        self.tab = Tab::ALL[index];
         (self.cursor, self.scroll) = self.places[index];
     }
 
@@ -939,14 +952,14 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
         ])),
         header,
     );
-    let index = TABS.iter().position(|(t, _)| *t == model.tab).unwrap_or(0);
     frame.render_widget(
         Tabs::new(
-            TABS.iter()
+            Tab::ALL
+                .iter()
                 .enumerate()
-                .map(|(i, (_, name))| format!("{} {name}", i + 1)),
+                .map(|(i, tab)| format!("{} {}", i + 1, tab.name())),
         )
-        .select(index)
+        .select(model.tab as usize)
         .highlight_style(Style::new().fg(palette::ACCENT.tui()).bold())
         .style(Style::new().fg(palette::MUTED.tui())),
         tabs,
@@ -1560,7 +1573,7 @@ fn draw_help(frame: &mut Frame) {
                     Style::new().fg(palette::WARNING.tui()),
                 ),
                 Span::raw(match b.tab {
-                    Some(tab) => format!("{} ({})", b.help, tab_name(tab)),
+                    Some(tab) => format!("{} ({})", b.help, tab.name()),
                     None => b.help.to_owned(),
                 }),
             ])
@@ -1591,12 +1604,6 @@ fn draw_help(frame: &mut Frame) {
         popup,
     );
 }
-fn tab_name(tab: Tab) -> &'static str {
-    TABS.iter()
-        .find(|(t, _)| *t == tab)
-        .map_or("", |(_, name)| name)
-}
-
 /// A plain-text snapshot of the updates, for pipes and CI logs.
 pub fn snapshot(model: &Model) -> String {
     let mut out = format!(
@@ -1954,12 +1961,19 @@ mod tests {
         text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
+    #[test]
+    fn a_tab_sits_at_its_own_place() {
+        for (index, tab) in Tab::ALL.into_iter().enumerate() {
+            assert_eq!(tab as usize, index, "{tab:?}");
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn every_key_in_the_table_does_what_the_bar_and_help_say() {
         for binding in KEYS {
             let tabs: Vec<Tab> = match binding.tab {
                 Some(tab) => vec![tab],
-                None => TABS.iter().map(|(t, _)| *t).collect(),
+                None => Tab::ALL.to_vec(),
             };
             for tab in tabs {
                 for key in binding.keys {
@@ -2002,7 +2016,7 @@ mod tests {
                 assert!(help.contains(binding.help), "{help}");
             }
             press(&mut model, KeyCode::Char('x'));
-            for (tab, _) in TABS {
+            for tab in Tab::ALL {
                 model.tab = tab;
                 let bar = flat(&sized(&mut model, width, height));
                 for binding in KEYS.iter().filter(|b| b.bar.is_some()) {
