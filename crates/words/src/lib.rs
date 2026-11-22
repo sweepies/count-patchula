@@ -383,6 +383,23 @@ impl Update {
     }
 }
 
+/// A Python project name in PEP 503 normal form: lowercase, with every run
+/// of `-`, `_` and `.` one `-`. Two spellings name the same project exactly
+/// when their normal forms are equal.
+pub fn pep503(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if matches!(c, '-' | '_' | '.') {
+            if !out.ends_with('-') {
+                out.push('-');
+            }
+        } else {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

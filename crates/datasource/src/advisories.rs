@@ -1,7 +1,7 @@
 //! Known vulnerabilities from OSV.dev: batched queries, answered from stored
 //! listings inside their freshness window, and advisory records kept in the
 //! cache until OSV reports them modified.
-use crate::{Client, Error, FetchedAt, Result};
+use crate::{Client, Error, FetchedAt, Pages, Result};
 use futures_util::{StreamExt, stream};
 use patchula_cache::State;
 use patchula_words::Severity;
@@ -269,7 +269,7 @@ pub(crate) struct AdvisoryScope {
 }
 impl State for Stored {
     const NAMESPACE: &'static str = "osv-advisory";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
     // Code-versioned: the stored advisory is this build's `Record`-to-
     // `Advisory` mapping of the record the scope's id names.
     const CODE_VERSIONED: bool = true;
@@ -340,9 +340,8 @@ impl Client {
             }
         }
         let mut listed = BTreeMap::<&AdvisoryQuery, Vec<Listed>>::new();
-        // Every page token a query has been given: a repeat or too many pages
-        // fails the listing rather than paging forever.
-        let mut tokens = BTreeMap::<&AdvisoryQuery, BTreeSet<String>>::new();
+        // Every page token a query has been given.
+        let mut tokens = BTreeMap::<&AdvisoryQuery, Pages>::new();
         while !pending.is_empty() {
             let mut next = Vec::new();
             for chunk in pending.chunks(BATCH) {
@@ -374,10 +373,10 @@ impl Client {
                 for ((query, _), result) in chunk.iter().zip(batch.results) {
                     listed.entry(query).or_default().extend(result.vulns);
                     if let Some(token) = result.next_page_token {
-                        let seen = tokens.entry(query).or_default();
-                        if seen.len() + 1 >= MAX_PAGES || !seen.insert(token.clone()) {
-                            return Err(Error::Invalid);
-                        }
+                        tokens
+                            .entry(query)
+                            .or_insert_with(|| Pages::new(MAX_PAGES))
+                            .follow(&token)?;
                         next.push((*query, Some(token)));
                     }
                 }

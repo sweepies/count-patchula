@@ -27,21 +27,3 @@ fn public(url: &str) -> bool {
         )
     })
 }
-
-/// PEP 503 normalised project name.
-pub(crate) fn normalise(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut separator = false;
-    for c in name.chars() {
-        if matches!(c, '-' | '_' | '.') {
-            separator = true;
-            continue;
-        }
-        if separator && !out.is_empty() {
-            out.push('-');
-        }
-        separator = false;
-        out.push(c.to_ascii_lowercase());
-    }
-    out
-}

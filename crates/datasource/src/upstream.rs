@@ -64,14 +64,7 @@ impl Forge {
         if let Some(last) = parts.last_mut() {
             *last = last.trim_end_matches(".git");
         }
-        let valid = |p: &&str| {
-            !p.is_empty()
-                && p.len() <= 100
-                && !matches!(*p, "." | "..")
-                && p.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-        };
-        (parts.len() >= 2 && parts.iter().all(valid)).then(|| Self {
+        (parts.len() >= 2 && parts.iter().all(|p| segment_ok(p))).then(|| Self {
             kind,
             host: host.to_ascii_lowercase(),
             path: parts.join("/"),
@@ -80,6 +73,41 @@ impl Forge {
     pub fn web(&self) -> String {
         format!("https://{}/{}", self.host, self.path)
     }
+    /// The URL of an API `route` under this repository. GitLab names the
+    /// project by its percent-encoded path.
+    pub fn api(&self, route: &str) -> String {
+        match self.kind {
+            ForgeKind::Gitlab => format!(
+                "https://{}/api/v4/projects/{}/{route}",
+                self.host,
+                percent_encoded(&self.path)
+            ),
+            ForgeKind::Gitea => format!("https://{}/api/v1/repos/{}/{route}", self.host, self.path),
+        }
+    }
+}
+/// `text` as one percent-encoded path segment, `/` included, as GitLab's
+/// project and file IDs require.
+pub fn percent_encoded(text: &str) -> String {
+    text.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+/// Whether `segment` is a safe owner, group or repository name: short,
+/// not a dot segment, and only letters, digits, `-`, `_` and `.`.
+fn segment_ok(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment.len() <= 100
+        && !matches!(segment, "." | "..")
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
 }
 
 impl Repository {
@@ -125,14 +153,7 @@ impl Repository {
                     .get(1)
                     .map_or("", |name| name.trim_end_matches(".git")),
             ];
-            if normalized.iter().any(|p| {
-                p.is_empty()
-                    || p.len() > 100
-                    || !p
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-                    || matches!(*p, "." | "..")
-            }) {
+            if !normalized.iter().all(|p| segment_ok(p)) {
                 return None;
             }
             let repo = format!("{}/{}", normalized[0], normalized[1]);
@@ -269,11 +290,7 @@ pub struct MirrorEntry {
 /// The longest prefix of `text` within `limit` bytes that ends on a char
 /// boundary.
 pub fn truncate(text: &str, limit: usize) -> &str {
-    let mut end = text.len().min(limit);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
+    &text[..text.floor_char_boundary(limit)]
 }
 
 #[cfg(test)]

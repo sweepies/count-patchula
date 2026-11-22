@@ -676,7 +676,7 @@ fn uv_settings(settings: &UvSettings, file: &str, origins: &mut Origins) {
                     || source.workspace.is_some())
         });
         if outside {
-            origins.outside.insert(super::normalise(package));
+            origins.outside.insert(patchula_words::pep503(package));
         } else {
             origins
                 .configured
@@ -771,7 +771,7 @@ fn locked(text: &str, poetry: bool) -> Option<BTreeMap<String, Origin>> {
             continue;
         };
         origins
-            .entry(super::normalise(name))
+            .entry(patchula_words::pep503(name))
             .or_default()
             .push(lock_entry(entry, poetry));
     }
@@ -896,7 +896,7 @@ pub(crate) fn direct_reference(requirement: &str) -> Option<String> {
         Some(extras) => extras.split_once(']')?.1.trim_start(),
         None => rest,
     };
-    (!name.is_empty() && rest.starts_with('@')).then(|| super::normalise(&name))
+    (!name.is_empty() && rest.starts_with('@')).then(|| patchula_words::pep503(&name))
 }
 
 fn uv_index(index: &UvIndex) -> Named {

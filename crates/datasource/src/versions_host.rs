@@ -131,39 +131,9 @@ impl Client {
                 }
             }
         }
-        // The mirror's misses go to GitHub in one batched call. When the
-        // cold batch fails as a whole, the warm heads it read are kept and
-        // each cold miss is asked on its own, so one bad package cannot fail
-        // the others.
-        let (mut answered, retry) = match self.api_release_parts(&misses).await {
-            Ok(parts) => match parts.cold {
-                Ok(mut cold) => {
-                    cold.extend(parts.warm);
-                    (cold, Vec::new())
-                }
-                Err((_, cold)) => (parts.warm, cold),
-            },
-            Err(_) => (BTreeMap::new(), misses.clone()),
-        };
-        let retried: Vec<(String, Result<Catalog>)> = stream::iter(retry)
-            .map(|package: String| async move {
-                let result = match self
-                    .api_release_catalogs(std::slice::from_ref(&package))
-                    .await
-                {
-                    Ok(mut answered) => answered.remove(&package).unwrap_or(Err(Error::Invalid)),
-                    Err(error) => Err(error),
-                };
-                (package, result)
-            })
-            .buffer_unordered(MIRROR_FAN_OUT)
-            .collect()
-            .await;
-        answered.extend(retried);
-        for package in misses {
-            let result = answered.remove(&package).unwrap_or(Err(Error::Invalid));
-            catalogs.insert(package, result);
-        }
+        // The mirror's misses go to GitHub in one batched call, which
+        // answers each of them.
+        catalogs.extend(self.api_release_catalogs(&misses).await?);
         Ok(catalogs)
     }
 }

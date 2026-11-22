@@ -1,17 +1,9 @@
 //! Pkl packages: the releases of the GitHub repository that publishes each
-//! package, narrowed to that package's own tags and read as versions.
+//! package, narrowed to that package's own tags and read as versions. The
+//! engine reads each repository once in its release batches and derives
+//! every package's catalog from it here.
 use super::*;
 use patchula_config::PklPackage;
-
-impl Client {
-    pub(super) async fn pkl(&self, package: &str) -> Result<Catalog> {
-        let stream = PklPackage::parse(package).ok_or(Error::Invalid)?;
-        let releases = self
-            .github_versions(Source::GithubReleases, &stream.repository)
-            .await?;
-        Ok(pkl_catalog(&stream, releases))
-    }
-}
 
 /// `package`'s catalog from its repository's release catalog: only the
 /// releases tagged as this package, each under its version. A monorepo such

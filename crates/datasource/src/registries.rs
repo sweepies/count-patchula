@@ -38,7 +38,7 @@ fn terraform(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, Cache
     encode(&catalog)
 }
 pub(crate) const TERRAFORM_CATALOG: Derived<CacheError> =
-    Derived::new("terraform-catalog", 4, terraform);
+    Derived::new("terraform-catalog", 5, terraform);
 
 /// One chart from a Helm repository index: its versions, and what release
 /// notes read from each version's metadata.
@@ -130,6 +130,8 @@ impl Client {
         Ok(serde_json::from_slice(&response.body)?)
     }
 }
+/// A Python project name in its PEP 503 normal form, refusing anything that
+/// is not a project name before it reaches a URL.
 pub(super) fn normalize_python(package: &str) -> Result<String> {
     if package.is_empty()
         || !package
@@ -138,17 +140,7 @@ pub(super) fn normalize_python(package: &str) -> Result<String> {
     {
         return Err(Error::Invalid);
     }
-    let mut out = String::new();
-    for c in package.chars() {
-        if matches!(c, '-' | '_' | '.') {
-            if !out.ends_with('-') {
-                out.push('-');
-            }
-        } else {
-            out.push(c.to_ascii_lowercase());
-        }
-    }
-    Ok(out)
+    Ok(patchula_words::pep503(package))
 }
 /// `text` with the character references a PEP 503 page uses decoded.
 fn unescape(text: &str) -> String {
@@ -306,11 +298,7 @@ impl Anchors {
                 // The first `</a>` past the tag. A closer found straddling an
                 // earlier search's end is not missed: the search resumes a
                 // `</a>`'s width before it, shifted to a character's start.
-                let mut from = probe.saturating_sub(3);
-                while !self.text.is_char_boundary(from) {
-                    from -= 1;
-                }
-                let from = end.max(from);
+                let from = end.max(self.text.floor_char_boundary(probe.saturating_sub(3)));
                 if let Some(found) = self.text[from..].to_ascii_lowercase().find("</a>") {
                     let close = from + found;
                     let name = unescape(self.text[end + 1..close].trim());
@@ -436,13 +424,13 @@ fn simple_any(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, Cach
     serde_json::to_vec(&catalogs).map_err(|_| CacheError::Document)
 }
 pub(crate) const PYPI_INDEX_CATALOG: Derived<CacheError> =
-    Derived::new("pypi-index-catalog", 4, simple_any);
+    Derived::new("pypi-index-catalog", 5, simple_any);
 
 fn simple(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, CacheError> {
     encode(&catalog_of(&simple_files(body)?))
 }
 pub(crate) const PYPI_SIMPLE_CATALOG: Derived<CacheError> =
-    Derived::new("pypi-simple-catalog", 4, simple);
+    Derived::new("pypi-simple-catalog", 5, simple);
 
 #[derive(Deserialize)]
 struct SimpleFile {
@@ -484,17 +472,7 @@ fn file_release(filename: &str) -> Option<(String, &str)> {
             .rsplit_once('-')?
     };
     Ecosystem::Pep440.parse(version).ok()?;
-    let mut normalised = String::new();
-    for c in project.chars() {
-        if matches!(c, '-' | '_' | '.') {
-            if !normalised.ends_with('-') {
-                normalised.push('-');
-            }
-        } else {
-            normalised.push(c.to_ascii_lowercase());
-        }
-    }
-    Some((normalised, version))
+    Some((patchula_words::pep503(project), version))
 }
 
 fn catalog_of(files: &[SimpleFile]) -> Catalog {

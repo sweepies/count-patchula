@@ -1,6 +1,5 @@
 //! `pyproject.toml` (PEP 621, PEP 735 groups, uv and Poetry tables) and
 //! `.python-version`. `uv.lock` and `poetry.lock` resolve direct declarations.
-use crate::pypi::normalise;
 use crate::*;
 use toml_edit::{Document, Item, Value};
 
@@ -46,7 +45,7 @@ fn resolved(lock: Option<&Document<&str>>, package: &str) -> Option<String> {
         .find(|p| {
             p.get("name")
                 .and_then(Item::as_str)
-                .map(normalise)
+                .map(patchula_words::pep503)
                 .as_deref()
                 == Some(package)
         })?
@@ -106,7 +105,7 @@ impl Scan<'_, '_> {
             };
             let offset = span.start + 1;
             let current = &requirement[start..end];
-            let package = normalise(name);
+            let package = patchula_words::pep503(name);
             self.out.push(Dependency {
                 cooldown: None,
                 manager: Manager::Pyproject,
@@ -164,7 +163,7 @@ impl Scan<'_, '_> {
             if current.trim() == "*" {
                 continue;
             }
-            let package = normalise(name);
+            let package = patchula_words::pep503(name);
             self.out.push(Dependency {
                 cooldown: None,
                 manager: Manager::Pyproject,

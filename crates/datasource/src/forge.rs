@@ -35,9 +35,9 @@ fn tags(
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const FORGE_GITLAB_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("forge-gitlab-tags", 2, gitlab);
+    patchula_http::Derived::new("forge-gitlab-tags", 3, gitlab);
 pub(crate) const FORGE_GITEA_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("forge-gitea-tags", 2, gitea);
+    patchula_http::Derived::new("forge-gitea-tags", 3, gitea);
 
 fn forge(package: &str) -> Result<Forge> {
     Repository::from_url(&format!("https://{package}"))
@@ -47,17 +47,10 @@ fn forge(package: &str) -> Result<Forge> {
 
 /// The URL of one page of tags.
 fn page_url(forge: &Forge, page: u32) -> String {
-    match forge.kind {
-        ForgeKind::Gitlab => format!(
-            "https://{}/api/v4/projects/{}/repository/tags?per_page=100&page={page}",
-            forge.host,
-            forge.path.replace('/', "%2F")
-        ),
-        ForgeKind::Gitea => format!(
-            "https://{}/api/v1/repos/{}/tags?limit=50&page={page}",
-            forge.host, forge.path
-        ),
-    }
+    forge.api(&match forge.kind {
+        ForgeKind::Gitlab => format!("repository/tags?per_page=100&page={page}"),
+        ForgeKind::Gitea => format!("tags?limit=50&page={page}"),
+    })
 }
 
 impl Client {

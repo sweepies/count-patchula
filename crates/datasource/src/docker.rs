@@ -1,9 +1,8 @@
 use super::*;
 use patchula_cache::{HttpEntry, HttpKey};
 use patchula_http::conditional;
-use reqwest::{Method, Url};
+use reqwest::Url;
 use std::{
-    collections::HashSet,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -22,7 +21,7 @@ fn live(slot: &Option<Pull>) -> Option<&str> {
         .map(|pull| pull.bearer.as_str())
 }
 pub(super) type Tokens = Arc<Mutex<BTreeMap<String, Token>>>;
-pub(crate) const MANIFEST: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json";
+const MANIFEST: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json";
 
 pub(crate) fn validate_digest(digest: &str) -> Result<()> {
     if digest
@@ -63,7 +62,7 @@ fn compact_config(
     .map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const OCI_CONFIG_NOTES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("oci-config-notes", 1, compact_config);
+    patchula_http::Derived::new("oci-config-notes", 2, compact_config);
 
 /// The config of one image or chart version, as release notes read it.
 struct ImageConfig {
@@ -145,7 +144,7 @@ fn oci_catalog(tags: Vec<String>) -> Catalog {
 /// The persisted anonymous pull token: the code that picks and expires the
 /// bearer out of a token answer is its compaction, so it carries its own
 /// version like a `Derived` and `tests/derived-versions.tsv` guards it.
-pub(crate) const PULL_TOKEN_REPRESENTATION: (&str, u32) = ("anonymous-registry-pull-token", 1);
+pub(crate) const PULL_TOKEN_REPRESENTATION: (&str, u32) = ("anonymous-registry-pull-token", 2);
 fn token_key(host: &str, path: &str) -> Result<HttpKey> {
     Ok(HttpKey::new(
         "GET",
@@ -169,7 +168,7 @@ fn compact_tags(
     serde_json::to_vec(&page).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const OCI_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("oci-tags", 1, compact_tags);
+    patchula_http::Derived::new("oci-tags", 2, compact_tags);
 
 pub(crate) fn identity(package: &str) -> Result<(String, String)> {
     let package = package.strip_prefix("oci://").unwrap_or(package);
@@ -212,29 +211,39 @@ pub(crate) fn identity(package: &str) -> Result<(String, String)> {
     Ok((host, path))
 }
 
-impl Client {
-    async fn registry(
-        &self,
-        host: &str,
-        path: &str,
-        url: &str,
-        accept: &str,
-        method: Method,
-    ) -> Result<patchula_http::Response> {
-        self.registry_with(host, path, url, accept, method, None)
-            .await
+/// What a registry request reads, which decides its method, its Accept
+/// header and how its body is kept.
+#[derive(Clone, Copy)]
+pub(crate) enum Read {
+    /// A manifest's headers, for its digest.
+    Head,
+    /// A manifest or index, kept whole.
+    Manifest,
+    /// One page of `tags/list`.
+    Tags,
+    /// A blob, kept as `derived` makes of it.
+    Blob {
+        accept: &'static str,
+        derived: patchula_http::Derived<patchula_http::CacheError>,
+    },
+}
+impl Read {
+    fn accept(self) -> &'static str {
+        match self {
+            Self::Head | Self::Manifest => MANIFEST,
+            Self::Tags => "application/json",
+            Self::Blob { accept, .. } => accept,
+        }
     }
+}
 
-    /// A registry read whose blob body is derived by "derived" instead of
-    /// the default config compaction release notes read.
-    pub(crate) async fn registry_with(
+impl Client {
+    pub(crate) async fn registry(
         &self,
         host: &str,
         path: &str,
         url: &str,
-        accept: &str,
-        method: Method,
-        derived: Option<patchula_http::Derived<patchula_http::CacheError>>,
+        read: Read,
     ) -> Result<patchula_http::Response> {
         // An operator entry covering the registry makes every token an account's:
         // kept in memory only, never in the shared cache, and per entry.
@@ -277,14 +286,7 @@ impl Client {
         let bearer = live(&saved).map(str::to_owned);
         drop(saved);
         let mut response = self
-            .registry_read(
-                url,
-                accept,
-                bearer.as_deref(),
-                account,
-                method.clone(),
-                derived,
-            )
+            .registry_read(url, read, bearer.as_deref(), account)
             .await?;
         if response.status == 401 {
             let mut saved_token = token.lock().await;
@@ -404,9 +406,7 @@ impl Client {
                 bearer
             };
             drop(saved_token);
-            response = self
-                .registry_read(url, accept, Some(&next), account, method, derived)
-                .await?;
+            response = self.registry_read(url, read, Some(&next), account).await?;
             if response.status == 401 {
                 *token.lock().await = None;
                 if let Some(key) = &persisted {
@@ -427,11 +427,11 @@ impl Client {
         if !response.status.is_success() {
             return Err(patchula_http::CacheError::Status(response.status.as_u16()).into());
         }
-        let key = if let Some((_, tag)) = url.split_once("/manifests/") {
-            StaleKey::digest(tag)
-        } else {
+        let (Read::Head | Read::Manifest) = read else {
             return Ok(response);
         };
+        let (_, reference) = url.split_once("/manifests/").ok_or(Error::Invalid)?;
+        let key = StaleKey::digest(reference);
         let mut stale = self.stale_registry.lock().await;
         let entries = stale.entry(format!("{host}/{path}")).or_default();
         if let Some(provenance) = response.stale {
@@ -445,39 +445,26 @@ impl Client {
     async fn registry_read(
         &self,
         url: &str,
-        accept: &str,
+        read: Read,
         token: Option<&str>,
         account: bool,
-        method: Method,
-        derived: Option<patchula_http::Derived<patchula_http::CacheError>>,
     ) -> Result<patchula_http::Response> {
         let token = token.map(|token| patchula_http::Bearer { token, account });
-        if method == Method::HEAD {
-            return Ok(self.http.registry_head(url, accept, token).await?);
-        }
-        if let Some(derived) = derived {
-            return Ok(self
-                .http
-                .registry_get_derived(url, accept, token, &derived)
-                .await?);
-        }
-        if Url::parse(url)
-            .map_err(|_| Error::Invalid)?
-            .path()
-            .ends_with("/tags/list")
-        {
-            Ok(self
-                .http
-                .registry_get_derived(url, accept, token, &OCI_TAGS)
-                .await?)
-        } else if url.contains("/blobs/") {
-            Ok(self
-                .http
-                .registry_get_derived(url, accept, token, &OCI_CONFIG_NOTES)
-                .await?)
-        } else {
-            Ok(self.http.registry_get(url, accept, token).await?)
-        }
+        let accept = read.accept();
+        Ok(match read {
+            Read::Head => self.http.registry_head(url, accept, token).await?,
+            Read::Manifest => self.http.registry_get(url, accept, token).await?,
+            Read::Tags => {
+                self.http
+                    .registry_get_derived(url, accept, token, &OCI_TAGS)
+                    .await?
+            }
+            Read::Blob { derived, .. } => {
+                self.http
+                    .registry_get_derived(url, accept, token, &derived)
+                    .await?
+            }
+        })
     }
 
     pub async fn image_source(
@@ -555,8 +542,7 @@ impl Client {
                     host,
                     path,
                     &format!("https://{host}/v2/{path}/manifests/{reference}"),
-                    MANIFEST,
-                    Method::GET,
+                    Read::Manifest,
                 )
                 .await?;
             let manifest: Value = serde_json::from_slice(&response.body)?;
@@ -572,8 +558,10 @@ impl Client {
                         host,
                         path,
                         &format!("https://{host}/v2/{path}/blobs/{digest}"),
-                        "application/json",
-                        Method::GET,
+                        Read::Blob {
+                            accept: "application/json",
+                            derived: OCI_CONFIG_NOTES,
+                        },
                     )
                     .await?;
                 return Ok(ImageConfig {
@@ -606,15 +594,12 @@ impl Client {
         let mut url = Url::parse(&format!("https://{host}/v2/{path}/tags/list?n=1000"))
             .map_err(|_| Error::Invalid)?;
         let origin = url.origin();
-        let mut seen = HashSet::new();
+        let mut pages = Pages::new(10000);
         let mut tags = std::collections::BTreeSet::new();
         let mut stale_at: Option<i64> = None;
         loop {
-            if !seen.insert(url.to_string()) || seen.len() > 10000 {
-                return Err(Error::Invalid);
-            }
             let response = self
-                .registry(&host, &path, url.as_str(), "application/json", Method::GET)
+                .registry(&host, &path, url.as_str(), Read::Tags)
                 .await?;
             if let Some(provenance) = response.stale {
                 stale_at = Some(
@@ -644,6 +629,7 @@ impl Client {
             {
                 return Err(Error::Invalid);
             }
+            pages.follow(next.as_str())?;
             url = next;
         }
         // Lexical pages cannot stop at a known tag: new tags may appear anywhere.
@@ -673,14 +659,10 @@ impl Client {
         let tag = oci_tag(tag);
         let (host, path) = identity(package)?;
         let url = format!("https://{host}/v2/{path}/manifests/{tag}");
-        let response = match self
-            .registry(&host, &path, &url, MANIFEST, Method::HEAD)
-            .await
-        {
+        let response = match self.registry(&host, &path, &url, Read::Head).await {
             Ok(response) if response.headers.contains_key("docker-content-digest") => response,
             Ok(_) | Err(Error::Http(patchula_http::CacheError::Status(405 | 501))) => {
-                self.registry(&host, &path, &url, MANIFEST, Method::GET)
-                    .await?
+                self.registry(&host, &path, &url, Read::Manifest).await?
             }
             Err(error) => return Err(error),
         };
