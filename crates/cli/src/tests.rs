@@ -866,29 +866,32 @@ fn local_flags_and_remote_applies_partition_every_lookup_run_and_tui_flag() {
         panic!("lookup")
     };
     let local = super::local_flags(&app, options, None).map(|(name, _)| name);
-    let mut declared = Vec::new();
-    longs(App::command(), &mut declared);
-    for name in local.iter().chain(REMOTE_APPLIES) {
-        assert!(
-            declared.contains(name),
-            "--{name} is listed but no such flag"
-        );
-    }
+    // Global flags live on the root command; the rest on lookup, run and tui.
     let root = App::command();
+    let mut applicable: Vec<&str> = root
+        .flags
+        .iter()
+        .flat_map(|flag| flag.longs.iter().copied())
+        .collect();
     for wanted in ["lookup", "run", "tui"] {
         let command = root
             .subcommands
             .iter()
             .find(|sub| sub.name == wanted)
             .unwrap_or_else(|| panic!("{wanted}"));
-        let mut names = Vec::new();
-        longs(command, &mut names);
-        for name in names {
-            assert!(
-                local.contains(&name) != REMOTE_APPLIES.contains(&name),
-                "--{name} on {wanted} must be in exactly one of local_flags and REMOTE_APPLIES"
-            );
-        }
+        longs(command, &mut applicable);
+    }
+    for name in local.iter().chain(REMOTE_APPLIES) {
+        assert!(
+            applicable.contains(name),
+            "--{name} is listed but is not a lookup/run/tui or global flag"
+        );
+    }
+    for name in applicable {
+        assert!(
+            local.contains(&name) != REMOTE_APPLIES.contains(&name),
+            "--{name} must be in exactly one of local_flags and REMOTE_APPLIES"
+        );
     }
 }
 
