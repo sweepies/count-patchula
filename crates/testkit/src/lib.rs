@@ -170,11 +170,7 @@ impl Replay {
             ))
         })?;
         redactor.check(&bytes)?;
-        let cassette: Cassette =
-            serde_json::from_slice(&bytes).map_err(|_| failure("invalid cassette JSON"))?;
-        if cassette.schema_version != 1 {
-            return Err(failure("unsupported cassette schema version"));
-        }
+        let cassette = Cassette::parse(&bytes)?;
         // A malformed recorded response fails here, not mid-replay.
         for interaction in &cassette.interactions {
             respond(&interaction.response)?;
@@ -361,23 +357,40 @@ pub fn from_env(
 }
 
 pub fn save(path: &Path, cassette: &Cassette, redactor: &Redactor) -> Result<(), Error> {
-    let bytes =
-        serde_json::to_vec_pretty(cassette).map_err(|_| failure("cannot serialize cassette"))?;
+    write_fixture(path, cassette, redactor)
+}
+
+/// Write `fixture` to `path` as pretty JSON once `redactor` finds no secret
+/// in it: a temporary file in the same directory, renamed over the
+/// fixture, so a stopped recording never leaves half a file.
+fn write_fixture(path: &Path, fixture: &impl Serialize, redactor: &Redactor) -> Result<(), Error> {
+    let mut bytes =
+        serde_json::to_vec_pretty(fixture).map_err(|_| failure("cannot serialize fixture"))?;
     redactor.check(&bytes)?;
+    bytes.push(b'\n');
     let parent = path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent).map_err(|_| failure("cannot create cassette directory"))?;
+    std::fs::create_dir_all(parent).map_err(|_| failure("cannot create fixture directory"))?;
     let mut file = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|_| failure("cannot create cassette temporary file"))?;
+        .map_err(|_| failure("cannot create fixture temporary file"))?;
     file.write_all(&bytes)
-        .map_err(|_| failure("cannot write cassette"))?;
-    file.write_all(b"\n")
-        .map_err(|_| failure("cannot write cassette newline"))?;
+        .map_err(|_| failure("cannot write fixture"))?;
     file.persist(path)
-        .map_err(|_| failure("cannot persist cassette"))?;
+        .map_err(|_| failure("cannot persist fixture"))?;
     Ok(())
+}
+
+impl Cassette {
+    fn parse(bytes: &[u8]) -> Result<Self, Error> {
+        let cassette: Self =
+            serde_json::from_slice(bytes).map_err(|_| failure("invalid cassette JSON"))?;
+        if cassette.schema_version != 1 {
+            return Err(failure("unsupported cassette schema version"));
+        }
+        Ok(cassette)
+    }
 }
 
 /// Recursively check every JSON cassette; errors report paths, never secret values.
@@ -399,20 +412,16 @@ pub fn check_directory(path: &Path, redactor: &Redactor) -> Result<usize, Error>
             redactor
                 .check(&bytes)
                 .map_err(|_| failure(format!("possible secret in cassette {}", path.display())))?;
-            if path
+            let parsed = if path
                 .parent()
                 .and_then(Path::file_name)
                 .is_some_and(|dir| dir == "mise")
             {
-                mise::parse(&bytes)
-                    .map_err(|_| failure(format!("invalid mise fixture {}", path.display())))?;
+                mise::parse(&bytes).map(drop)
             } else {
-                let cassette: Cassette = serde_json::from_slice(&bytes)
-                    .map_err(|_| failure(format!("invalid cassette {}", path.display())))?;
-                if cassette.schema_version != 1 {
-                    return Err(failure("unsupported cassette schema version"));
-                }
-            }
+                Cassette::parse(&bytes).map(drop)
+            };
+            parsed.map_err(|error| failure(format!("{}: {error}", path.display())))?;
             count += 1;
         }
     }
