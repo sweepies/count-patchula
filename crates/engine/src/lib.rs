@@ -499,28 +499,21 @@ impl Engine {
         http_options: patchula_http::Options,
         github_options: GithubOptions,
     ) -> Result<Self> {
-        let tool_registries = http_options.credentials.clone();
         let github = Github::with_credentials(
             credentials.clone(),
             cache.clone(),
             github_options,
             transport.clone(),
         )?;
-        let lockfiles = cache.workspace_dir().map(|path| {
-            patchula_tools::Runner::new(path.into(), "")
-                .with_credentials(credentials)
-                .with_registries(&tool_registries)
-        });
-        let mut engine = Self::build(
+        Self::assemble(
             github,
+            &Auth::Credentials(credentials),
             cache,
             concurrency,
             transport,
             http_options,
-            lockfiles,
-        )?;
-        engine.installation = true;
-        Ok(engine)
+            patchula_tools::DEFAULT_CACHE_GIB,
+        )
     }
     /// Settings change only between batches; warm clients and receipts stay intact.
     pub fn set_batch_options(&mut self, concurrency: usize, recheck: Recheck) -> Result<()> {
@@ -571,29 +564,41 @@ impl Engine {
             },
             transport.clone(),
         )?;
-        let tool_registries = http_options.credentials.clone();
-        let lockfiles = cache.workspace_dir().map(|path| {
-            patchula_tools::Runner::new(path.into(), token).with_registries(&tool_registries)
-        });
-        Self::build(
+        Self::assemble(
             github,
+            &Auth::Token(token.into()),
             cache,
             concurrency,
             transport,
             http_options,
-            lockfiles,
+            patchula_tools::DEFAULT_CACHE_GIB,
         )
     }
-    fn build(
+    /// Everything every constructor shares once its GitHub client exists:
+    /// the lockfile runner under the same identity as `github`, the cached
+    /// HTTP client and the sources over both.
+    fn assemble(
         github: Github,
+        auth: &Auth,
         cache: Cache,
         concurrency: usize,
         transport: Arc<dyn Transport>,
-        http_options: patchula_http::Options,
-        lockfiles: Option<patchula_tools::Runner>,
+        mut http_options: patchula_http::Options,
+        lockfile_cache_gib: u64,
     ) -> Result<Self> {
         check_concurrency(concurrency)?;
-        let mut http_options = http_options;
+        // Limited before the runner is cloned into `sources` for Nix
+        // lookups, so every copy shares the limit.
+        let lockfiles = cache.workspace_dir().map(|path| {
+            let runner = match auth {
+                Auth::Token(token) => patchula_tools::Runner::new(path.into(), token),
+                Auth::Credentials(credentials) => patchula_tools::Runner::new(path.into(), "")
+                    .with_credentials(credentials.clone()),
+            };
+            runner
+                .with_cache_limit(lockfile_cache_gib)
+                .with_registries(&http_options.credentials)
+        });
         let mut registries: Vec<&str> = http_options
             .credentials
             .iter()
@@ -607,7 +612,7 @@ impl Engine {
         let sources = Sources::new(github.clone(), http.clone(), cache.clone());
         let mut engine = Self {
             lockfiles,
-            lockfile_cache_gib: patchula_tools::DEFAULT_CACHE_GIB,
+            lockfile_cache_gib,
             github,
             http,
             sources,
@@ -617,7 +622,7 @@ impl Engine {
             recheck: Recheck::default(),
             versions_host_override: None,
             advisories: false,
-            installation: false,
+            installation: matches!(auth, Auth::Credentials(_)),
             advertised_server: None,
             progress: Arc::new(()),
             registry_scope,
@@ -680,7 +685,6 @@ impl Engine {
             .map_err(|(_, message)| Error::Configuration(message.to_owned()))?;
         let mut http_options = self::settings::http_options(settings);
         http_options.credentials = credentials;
-        let tool_registries = http_options.credentials.clone();
         let github_options = self::settings::github_options(settings);
         let github = match &auth {
             // A token run is the CLI's: its GitHub concurrency is the HTTP
@@ -709,30 +713,17 @@ impl Engine {
                 transport.clone(),
             )?,
         };
-        let lockfiles = cache.workspace_dir().map(|path| {
-            let runner = match &auth {
-                Auth::Token(token) => patchula_tools::Runner::new(path.into(), token),
-                Auth::Credentials(credentials) => patchula_tools::Runner::new(path.into(), "")
-                    .with_credentials(credentials.clone()),
-            };
-            // Set before `build` clones the runner into `sources` for Nix
-            // lookups, so every copy shares the limit.
-            runner
-                .with_cache_limit(settings.lockfiles.cache_gib)
-                .with_registries(&tool_registries)
-        });
-        let mut engine = Self::build(
+        let mut engine = Self::assemble(
             github,
+            &auth,
             cache,
             concurrency,
             transport,
             http_options,
-            lockfiles,
-        )?;
-        engine.installation = matches!(auth, Auth::Credentials(_));
-        let mut engine = engine.with_recheck(recheck);
+            settings.lockfiles.cache_gib,
+        )?
+        .with_recheck(recheck);
         engine.advisories = true;
-        engine.lockfile_cache_gib = settings.lockfiles.cache_gib;
         Ok(engine)
     }
     /// The repository `repo`'s mise lookups are made for; none for a local
