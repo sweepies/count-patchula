@@ -755,9 +755,10 @@ impl Scanner {
         self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
     }
     /// Whether only managers whose file names another format shares select
-    /// `path`. Such a file over [`SHARED_NAME_LIMIT`] is not read, and one
-    /// that is not text is left out, rather than refusing the repository as
-    /// any other selected file does: neither can be one of their files.
+    /// `path`. Such a file over [`SHARED_NAME_LIMIT`], or one that is not
+    /// text, is left out unread and unreported, rather than refusing the
+    /// repository as any other selected file does: neither can be one of
+    /// their files.
     /// Settings and credential-checked files never are, whatever `files`
     /// config selects.
     pub fn shared_name(&self, path: &str) -> bool {
@@ -843,26 +844,6 @@ impl Scanner {
                 reason: "pip requirements files are not maintained: pip takes each package from whatever index its options, included files and environment name, which the Count cannot settle for certain, and a guess could propose someone else's package of the same name. Move the project to uv (`uv init --bare`, then `uv add -r requirements.txt`) and the Count keeps `pyproject.toml` and `uv.lock` current".into(),
             })
             .collect()
-    }
-    /// A shared-name file ([`Self::shared_name`]) over
-    /// [`SHARED_NAME_LIMIT`], not read, as a skipped entry saying why.
-    /// Skipped, not warned about, so a pickle leaves branch cleanup and
-    /// automerge on.
-    pub fn oversize(&self, path: &str) -> Skipped {
-        let manager = self
-            .config
-            .managers
-            .iter()
-            .copied()
-            .find(|m| self.selected(*m, path))
-            .unwrap_or(Manager::Pkl);
-        Skipped {
-            manager,
-            file: path.to_owned(),
-            line: None,
-            value: format!("over {} MiB", SHARED_NAME_LIMIT >> 20),
-            reason: "not read: larger than any Pkl module would be; `.pkl` is also the extension of Python pickles".into(),
-        }
     }
     pub(crate) fn selected(&self, manager: Manager, path: &str) -> bool {
         self.config.managers.contains(&manager)

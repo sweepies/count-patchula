@@ -301,13 +301,12 @@ repository's own `patchula.pkl` is not read: its imports must already be local
 modules.
 
 `.pkl` is also the extension of Python pickles and of the Git LFS pointers
-that stand for large ones. A `.pkl` file that is not text is left out, one
-over 1 MiB is not read and is listed as skipped, and a Git LFS pointer or a
-file that is not valid Pkl and ends with the `.` every pickle ends with
-imports nothing. None of these fails the repository's scan, as an unreadable
-file other managers select does, or turns off auto-merge and branch cleanup,
-as a warning does. Any other `.pkl` file that is not valid Pkl is skipped with
-a warning.
+that stand for large ones. A `.pkl` file that is not text or is over 1 MiB is
+left out unread, and one that never writes `package:` imports nothing and is
+not parsed. None of these fails the repository's scan, as an unreadable file
+other managers select does, or turns off auto-merge and branch cleanup, as a
+warning does. A `.pkl` file that writes `package:` but is not valid Pkl is
+skipped with a warning.
 
 A package is named by its URI without `package://` and the version, and looked
 up in the `pkl` [source](/guide/sources/) under the semver scheme, which Pkl
@@ -329,8 +328,13 @@ A release URI writes the version twice, in the tag and after the `@`. Its
 package keeps the tag's spelling with `%version%` in place of the version:
 `package://github.com/jdx/hk/releases/download/v2.9.0/hk@2.9.0` is the package
 `github.com/jdx/hk/releases/download/v%version%/hk` at `2.9.0`, and an update
-writes both copies, to `v2.11.1/hk@2.11.1`. The dependency is named after the
-package, `hk`, so a rule can select it with `dependencies { "hk" }`.
+writes both copies, to `v2.11.1/hk@2.11.1`. Any other tag of that spelling
+counts as a release, so a tag such as `v2.12.0-final` reads as the prerelease
+`2.12.0-final`, which a stable version is not updated to.
+
+Rules select these dependencies by the source `pkl`, not `github-releases` as
+in Renovate, by the package above, or by the dependency name, which is the
+package's own name: `hk`, so `dependencies { "hk" }` selects it.
 
 These URIs are skipped:
 

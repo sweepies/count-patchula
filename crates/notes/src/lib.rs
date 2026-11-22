@@ -192,17 +192,6 @@ pub(crate) struct Namespace<'a> {
     name: &'a str,
     pkl: Option<patchula_config::PklPackage>,
 }
-impl std::ops::Deref for Namespace<'_> {
-    type Target = str;
-    fn deref(&self) -> &str {
-        self.name
-    }
-}
-impl std::fmt::Display for Namespace<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.name)
-    }
-}
 fn tag_name(id: &PackageId) -> Namespace<'_> {
     let name = match id.source {
         Source::Helm => split_package(&id.name).map_or(id.name.as_str(), |(_, chart)| chart),
@@ -1177,7 +1166,7 @@ mod tests {
             .unwrap()
             .chart_sourced();
         let package = &tag_name(&id);
-        assert_eq!(&**package, "app");
+        assert_eq!(package.name, "app");
         assert_eq!(
             tag_version("app-1.2.3", package, &repository),
             Some("1.2.3")

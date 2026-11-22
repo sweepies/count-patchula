@@ -119,31 +119,23 @@ fn shown(uri: &str) -> String {
     }
 }
 
-/// The first line of a Git LFS pointer file, whose contents are elsewhere.
-const LFS_POINTER: &str = "version https://git-lfs.github.com/spec/v1";
-
 /// The package URIs `text` imports; one this manager cannot read is
 /// recorded in `skipped` with the reason. A module pklr cannot lex is an
 /// error, which skips the file with a warning.
 ///
-/// `.pkl` is also the extension of Python pickles and of the Git LFS
-/// pointers that stand for large ones, and a warning turns off auto-merge
-/// and cleanup for the whole repository. So a Git LFS pointer, and a file
-/// pklr cannot lex that ends with the `.` every pickle ends with, are no
-/// Pkl modules and import nothing. A file that lexes is always read.
+/// A file that never writes `package:` imports no package and is not
+/// lexed: `.pkl` is also the extension of Python pickles and of the Git LFS
+/// pointers that stand for large ones, and a warning about one would turn
+/// off auto-merge and cleanup for the whole repository.
 pub(super) fn extract(
     path: &str,
     text: &Lines<'_>,
     skipped: &mut Vec<Skipped>,
 ) -> Result<Vec<Dependency>, String> {
-    if text.lines().next() == Some(LFS_POINTER) {
+    if !text.contains("package:") {
         return Ok(Vec::new());
     }
-    let imports = match patchula_config::pkl_imports(text) {
-        Ok(imports) => imports,
-        Err(_) if text.ends_with('.') => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    };
+    let imports = patchula_config::pkl_imports(text)?;
     let mut out = Vec::new();
     for (index, import) in imports.into_iter().enumerate() {
         let mut skip = |reason: &str| {
