@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use patchula_http::{Exchange, Response, Transport};
-use patchula_testkit::{Options, Recorder, Redactor, Replay, check_directory};
+use patchula_testkit::{Recorder, Redactor, Replay, check_directory};
 use reqwest::{Method, Request, header::HeaderValue};
 use std::{
     path::{Path, PathBuf},
@@ -37,19 +37,19 @@ async fn replay_matches_body_headers_method_and_url_without_a_network_client() {
             }
             _ => *request.body_mut() = Some("{}".into()),
         }
-        let replay = Replay::open(&path, Options::default()).unwrap();
+        let replay = Replay::open(&path, Redactor::default()).unwrap();
         assert!(
             replay.send(request).await.is_err(),
             "change {change} matched"
         );
     }
-    let replay = Arc::new(Replay::open(&path, Options::default()).unwrap());
+    let replay = Arc::new(Replay::open(&path, Redactor::default()).unwrap());
     assert!(replay.assert_finished().is_err());
     assert_eq!(replay.send(request()).await.unwrap().status, 200);
     replay.assert_finished().unwrap();
     assert!(replay.send(request()).await.is_err());
     if !patchula_testkit::recording() {
-        let transport = patchula_testkit::from_env(&path, Options::default(), || {
+        let transport = patchula_testkit::from_env(&path, Redactor::default(), || {
             panic!("replay must never construct a network client")
         })
         .unwrap();
@@ -77,17 +77,10 @@ impl Transport for Echo {
 async fn recording_redacts_before_atomic_write_and_replays_with_other_credentials() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("secrets.json");
-    let redactor = Redactor::default()
-        .with_literals(["custom-private-value".into()])
-        .with_pattern("orgkey_[a-z]+")
-        .unwrap();
-    let options = Options {
-        redactor: redactor.clone(),
-        ..Options::default()
-    };
+    let redactor = Redactor::default().with_literals(["custom-private-value".into()]);
     let recorder = Recorder::new(
         &path,
-        options.clone(),
+        redactor.clone(),
         Arc::new(Echo),
         "Simulated redaction test".into(),
     );
@@ -101,7 +94,7 @@ async fn recording_redacts_before_atomic_write_and_replays_with_other_credential
     request
         .headers_mut()
         .insert("cookie", HeaderValue::from_static("private-cookie"));
-    *request.body_mut() = Some(r#"{"authorization":"private-json","nested":["ghp_abc123","ghs_123_eyJhbGci.payload-signature.last","gho_abc123","github_pat_abc123","v1.0123456789abcdef0123456789abcdef01234567","custom-private-value","orgkey_secret"],"url":"https://example.com/?token=private-link"}"#.into());
+    *request.body_mut() = Some(r#"{"authorization":"private-json","nested":["ghp_abc123","ghs_123_eyJhbGci.payload-signature.last","gho_abc123","github_pat_abc123","v1.0123456789abcdef0123456789abcdef01234567","custom-private-value"],"url":"https://example.com/?token=private-link"}"#.into());
     recorder.send(request.try_clone().unwrap()).await.unwrap();
     let stored = std::fs::read_to_string(&path).unwrap();
     for private in [
@@ -112,7 +105,6 @@ async fn recording_redacts_before_atomic_write_and_replays_with_other_credential
         "private-link",
         "session=private",
         "custom-private-value",
-        "orgkey_secret",
         "ghp_abc123",
         "ghs_123_eyJhbGci",
         "payload-signature",
@@ -126,7 +118,7 @@ async fn recording_redacts_before_atomic_write_and_replays_with_other_credential
     assert!(stored.contains("REDACTED"));
     redactor.check(stored.as_bytes()).unwrap();
     assert_eq!(check_directory(directory.path(), &redactor).unwrap(), 1);
-    let replay = Replay::open(&path, options).unwrap();
+    let replay = Replay::open(&path, redactor).unwrap();
     request.headers_mut().insert(
         "authorization",
         HeaderValue::from_static("Bearer other-auth"),

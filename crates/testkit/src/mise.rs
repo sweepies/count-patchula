@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     future::Future,
-    io::Write,
     path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex},
@@ -202,25 +201,7 @@ impl Executor for MiseRecorder {
                 args,
                 result: outcome,
             });
-            let bytes =
-                serde_json::to_vec_pretty(&*fixture).map_err(|e| Failure::Io(e.to_string()))?;
-            Redactor::default()
-                .check(&bytes)
-                .map_err(|e| Failure::Io(e.to_string()))?;
-            // A temporary file in the same directory, renamed over the fixture, so a
-            // stopped recording never leaves half a file.
-            let parent = self
-                .path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or_else(|| Path::new("."));
-            std::fs::create_dir_all(parent).map_err(|e| Failure::Io(e.to_string()))?;
-            let mut file =
-                tempfile::NamedTempFile::new_in(parent).map_err(|e| Failure::Io(e.to_string()))?;
-            file.write_all(&bytes)
-                .and_then(|()| file.write_all(b"\n"))
-                .map_err(|e| Failure::Io(e.to_string()))?;
-            file.persist(&self.path)
+            crate::write_fixture(&self.path, &*fixture, &Redactor::default())
                 .map_err(|e| Failure::Io(e.to_string()))?;
             result
         })

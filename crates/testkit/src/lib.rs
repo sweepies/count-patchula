@@ -83,28 +83,15 @@ pub struct Cassette {
     pub interactions: Vec<Interaction>,
 }
 
-#[derive(Clone)]
-pub struct Options {
-    pub match_headers: Vec<String>,
-    pub redactor: Redactor,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            match_headers: [
-                "accept",
-                "content-type",
-                "if-none-match",
-                "if-modified-since",
-                "x-github-api-version",
-            ]
-            .map(str::to_owned)
-            .to_vec(),
-            redactor: Redactor::default(),
-        }
-    }
-}
+/// The request headers a replayed request must match; every other header,
+/// credentials included, is free to differ from the recording.
+const MATCH_HEADERS: [&str; 5] = [
+    "accept",
+    "content-type",
+    "if-none-match",
+    "if-modified-since",
+    "x-github-api-version",
+];
 
 /// A cassette or fixture failure: unreadable, invalid or secret-bearing
 /// fixture data. Test setup APIs return it; an unmatched replay request
@@ -142,7 +129,7 @@ fn headers(headers: &HeaderMap, redactor: &Redactor) -> Headers {
         .collect()
 }
 
-fn request_key(request: &Request, options: &Options) -> Result<RecordedRequest, Error> {
+fn request_key(request: &Request, redactor: &Redactor) -> Result<RecordedRequest, Error> {
     let body = match request.body() {
         None => &[][..],
         Some(body) => body
@@ -150,19 +137,18 @@ fn request_key(request: &Request, options: &Options) -> Result<RecordedRequest, 
             .ok_or_else(|| failure("streaming request bodies cannot be matched"))?,
     };
     let mut body = Body::read(body)?;
-    options.redactor.body(&mut body);
-    let selected = headers(request.headers(), &options.redactor)
+    redactor.body(&mut body);
+    let selected = headers(request.headers(), redactor)
         .into_iter()
         .filter(|(name, _)| {
-            options
-                .match_headers
+            MATCH_HEADERS
                 .iter()
                 .any(|selected| name.eq_ignore_ascii_case(selected))
         })
         .collect();
     Ok(RecordedRequest {
         method: request.method().to_string(),
-        url: options.redactor.url(request.url()),
+        url: redactor.url(request.url()),
         headers: selected,
         body,
     })
@@ -172,23 +158,19 @@ fn request_key(request: &Request, options: &Options) -> Result<RecordedRequest, 
 pub struct Replay {
     cassette: Cassette,
     used: Mutex<Vec<bool>>,
-    options: Options,
+    redactor: Redactor,
 }
 
 impl Replay {
-    pub fn open(path: &Path, options: Options) -> Result<Self, Error> {
+    pub fn open(path: &Path, redactor: Redactor) -> Result<Self, Error> {
         let bytes = std::fs::read(path).map_err(|_| {
             failure(format!(
                 "cannot read cassette {} (record explicitly with mise run fixtures:record)",
                 path.display()
             ))
         })?;
-        options.redactor.check(&bytes)?;
-        let cassette: Cassette =
-            serde_json::from_slice(&bytes).map_err(|_| failure("invalid cassette JSON"))?;
-        if cassette.schema_version != 1 {
-            return Err(failure("unsupported cassette schema version"));
-        }
+        redactor.check(&bytes)?;
+        let cassette = Cassette::parse(&bytes)?;
         // A malformed recorded response fails here, not mid-replay.
         for interaction in &cassette.interactions {
             respond(&interaction.response)?;
@@ -196,7 +178,7 @@ impl Replay {
         Ok(Self {
             used: Mutex::new(vec![false; cassette.interactions.len()]),
             cassette,
-            options,
+            redactor,
         })
     }
 
@@ -242,7 +224,7 @@ impl Transport for Replay {
     fn send(&self, request: Request) -> Exchange<'_> {
         Box::pin(async move {
             let key =
-                request_key(&request, &self.options).unwrap_or_else(|error| panic!("{error}"));
+                request_key(&request, &self.redactor).unwrap_or_else(|error| panic!("{error}"));
             let mut used = self
                 .used
                 .lock()
@@ -272,14 +254,14 @@ pub struct Recorder {
     path: PathBuf,
     network: Arc<dyn Transport>,
     cassette: Mutex<Cassette>,
-    options: Options,
+    redactor: Redactor,
     addressed: Mutex<std::collections::BTreeSet<String>>,
 }
 
 impl Recorder {
     pub fn new(
         path: &Path,
-        options: Options,
+        redactor: Redactor,
         network: Arc<dyn Transport>,
         provenance: String,
     ) -> Self {
@@ -291,7 +273,7 @@ impl Recorder {
                 provenance,
                 interactions: Vec::new(),
             }),
-            options,
+            redactor,
             addressed: Mutex::default(),
         }
     }
@@ -301,7 +283,7 @@ impl Transport for Recorder {
     fn send(&self, request: Request) -> Exchange<'_> {
         Box::pin(async move {
             let key =
-                request_key(&request, &self.options).unwrap_or_else(|error| panic!("{error}"));
+                request_key(&request, &self.redactor).unwrap_or_else(|error| panic!("{error}"));
             let response = self.network.send(request).await?;
             // A registry body is checked against the digest it was requested
             // by, even after a redirect, so it is kept byte for byte rather
@@ -324,12 +306,12 @@ impl Transport for Recorder {
                 Ok(text) if verbatim => Body::Text(text),
                 _ => Body::read(&response.body).unwrap_or_else(|error| panic!("{error}")),
             };
-            self.options.redactor.body(&mut body);
+            self.redactor.body(&mut body);
             let interaction = Interaction {
                 request: key,
                 response: RecordedResponse {
                     status: response.status.as_u16(),
-                    headers: headers(&response.headers, &self.options.redactor),
+                    headers: headers(&response.headers, &self.redactor),
                     body,
                 },
             };
@@ -338,8 +320,7 @@ impl Transport for Recorder {
                 .lock()
                 .unwrap_or_else(|_| panic!("recorder lock poisoned"));
             cassette.interactions.push(interaction);
-            save(&self.path, &cassette, &self.options.redactor)
-                .unwrap_or_else(|error| panic!("{error}"));
+            save(&self.path, &cassette, &self.redactor).unwrap_or_else(|error| panic!("{error}"));
             Ok(response)
         })
     }
@@ -359,40 +340,57 @@ pub fn recording() -> bool {
 /// Lazy factory proves no network client is constructed in default replay mode.
 pub fn from_env(
     path: &Path,
-    options: Options,
+    redactor: Redactor,
     network: impl FnOnce() -> Result<Arc<dyn Transport>, patchula_http::Error>,
 ) -> Result<Arc<dyn Transport>, Error> {
     if recording() {
         let network = network().map_err(|error| failure(error.to_string()))?;
         Ok(Arc::new(Recorder::new(
             path,
-            options,
+            redactor,
             network,
             "Recorded by patchula from the request URLs; never imported from other bots".into(),
         )))
     } else {
-        Ok(Arc::new(Replay::open(path, options)?))
+        Ok(Arc::new(Replay::open(path, redactor)?))
     }
 }
 
 pub fn save(path: &Path, cassette: &Cassette, redactor: &Redactor) -> Result<(), Error> {
-    let bytes =
-        serde_json::to_vec_pretty(cassette).map_err(|_| failure("cannot serialize cassette"))?;
+    write_fixture(path, cassette, redactor)
+}
+
+/// Write `fixture` to `path` as pretty JSON once `redactor` finds no secret
+/// in it: a temporary file in the same directory, renamed over the
+/// fixture, so a stopped recording never leaves half a file.
+fn write_fixture(path: &Path, fixture: &impl Serialize, redactor: &Redactor) -> Result<(), Error> {
+    let mut bytes =
+        serde_json::to_vec_pretty(fixture).map_err(|_| failure("cannot serialize fixture"))?;
     redactor.check(&bytes)?;
+    bytes.push(b'\n');
     let parent = path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent).map_err(|_| failure("cannot create cassette directory"))?;
+    std::fs::create_dir_all(parent).map_err(|_| failure("cannot create fixture directory"))?;
     let mut file = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|_| failure("cannot create cassette temporary file"))?;
+        .map_err(|_| failure("cannot create fixture temporary file"))?;
     file.write_all(&bytes)
-        .map_err(|_| failure("cannot write cassette"))?;
-    file.write_all(b"\n")
-        .map_err(|_| failure("cannot write cassette newline"))?;
+        .map_err(|_| failure("cannot write fixture"))?;
     file.persist(path)
-        .map_err(|_| failure("cannot persist cassette"))?;
+        .map_err(|_| failure("cannot persist fixture"))?;
     Ok(())
+}
+
+impl Cassette {
+    fn parse(bytes: &[u8]) -> Result<Self, Error> {
+        let cassette: Self =
+            serde_json::from_slice(bytes).map_err(|_| failure("invalid cassette JSON"))?;
+        if cassette.schema_version != 1 {
+            return Err(failure("unsupported cassette schema version"));
+        }
+        Ok(cassette)
+    }
 }
 
 /// Recursively check every JSON cassette; errors report paths, never secret values.
@@ -414,20 +412,16 @@ pub fn check_directory(path: &Path, redactor: &Redactor) -> Result<usize, Error>
             redactor
                 .check(&bytes)
                 .map_err(|_| failure(format!("possible secret in cassette {}", path.display())))?;
-            if path
+            let parsed = if path
                 .parent()
                 .and_then(Path::file_name)
                 .is_some_and(|dir| dir == "mise")
             {
-                mise::parse(&bytes)
-                    .map_err(|_| failure(format!("invalid mise fixture {}", path.display())))?;
+                mise::parse(&bytes).map(drop)
             } else {
-                let cassette: Cassette = serde_json::from_slice(&bytes)
-                    .map_err(|_| failure(format!("invalid cassette {}", path.display())))?;
-                if cassette.schema_version != 1 {
-                    return Err(failure("unsupported cassette schema version"));
-                }
-            }
+                Cassette::parse(&bytes).map(drop)
+            };
+            parsed.map_err(|error| failure(format!("{}: {error}", path.display())))?;
             count += 1;
         }
     }

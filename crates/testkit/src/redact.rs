@@ -43,12 +43,6 @@ impl Redactor {
         self
     }
 
-    pub fn with_pattern(mut self, pattern: &str) -> Result<Self, Error> {
-        self.patterns
-            .push(Regex::new(pattern).map_err(|_| failure("invalid redaction pattern"))?);
-        Ok(self)
-    }
-
     fn sensitive(name: &str) -> bool {
         let name = name.to_ascii_lowercase().replace('-', "_");
         matches!(

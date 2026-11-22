@@ -201,13 +201,13 @@ async fn installation_and_caller_token_batches_match_and_token_rotation_keeps_re
     cli_report.stats = None;
     server_report.stats = None;
     assert_eq!(cli_report, server_report);
-    server_fake.state().writes.clear();
+    server_fake.state().log.clear();
     let repeated = server.run_at(options(), false, false, now).await.unwrap();
     assert_eq!(
         repeated.actions.unwrap().branches[0].status,
         BranchStatus::Unchanged
     );
-    assert!(server_fake.state().writes.is_empty());
+    assert!(server_fake.state().writes().is_empty());
     assert!(credentials.0.load(std::sync::atomic::Ordering::Relaxed) > 2);
     check_transcript();
 }
@@ -315,7 +315,7 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
             .unwrap()
             .with_versions_host(false);
         fake.clear_log();
-        fake.state().writes.clear();
+        fake.state().log.clear();
         let started = tokio::time::Instant::now();
         let report = engine
             .run(
@@ -330,7 +330,7 @@ async fn steady_runs_only_lookup_and_one_inventory_with_open_or_closed_updates()
             .unwrap();
         assert_eq!(report.repositories[0].status, Status::Complete);
         assert!(
-            fake.state().writes.is_empty(),
+            fake.state().writes().is_empty(),
             "steady dashboard must not mutate"
         );
         assert_eq!(
@@ -489,9 +489,9 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
     };
     run(None).await.unwrap();
     fake.state().repo_mut().issues.get_mut(&100).unwrap()["title"] = json!("Owner dashboard title");
-    fake.state().writes.clear();
+    fake.state().log.clear();
     run(None).await.unwrap();
-    assert!(fake.state().writes.is_empty());
+    assert!(fake.state().writes().is_empty());
     assert_eq!(
         fake.state().repo().issues[&100]["title"],
         "Owner dashboard title"
@@ -507,7 +507,7 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
     }
     run(None).await.unwrap();
     {
-        let writes = fake.state().writes.clone();
+        let writes = fake.state().writes().clone();
         assert_eq!(
             writes.len(),
             1,
@@ -515,10 +515,10 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
         );
         assert!(writes[0].0.contains("/issues/"));
     }
-    fake.state().writes.clear();
+    fake.state().log.clear();
     run(None).await.unwrap();
     assert!(
-        fake.state().writes.is_empty(),
+        fake.state().writes().is_empty(),
         "unchanged content hash must converge after one patch"
     );
     let mut config =
@@ -537,13 +537,13 @@ async fn dashboard_renames_are_preserved_and_disabling_closes_only_the_owned_iss
         None,
         "a closed dashboard is forgotten"
     );
-    fake.state().writes.clear();
+    fake.state().log.clear();
     let mut config =
         patchula_config::load(std::path::Path::new("../../PatchulaConfig.pkl")).unwrap();
     config.prs.dashboard = false;
     config.defaults.wait_hours = 0;
     run(Some(config)).await.unwrap();
-    assert!(fake.state().writes.is_empty());
+    assert!(fake.state().writes().is_empty());
     check_transcript();
 }
 
@@ -639,11 +639,11 @@ async fn token_only_run_uses_repository_config_cold_and_cached_and_reports_actio
                     .contains("+  \"dependencies\": {\"fixture\": \"2.0.0\"}")
             );
             if dry_run {
-                assert!(fake.state().writes.is_empty());
+                assert!(fake.state().writes().is_empty());
             } else if lock && !allow {
                 assert!(
                     fake.state()
-                        .writes
+                        .writes()
                         .iter()
                         .all(|(p, _)| p.contains("/issues"))
                 );
@@ -669,7 +669,7 @@ async fn an_advertised_server_is_hidden_in_the_pr_and_the_dashboard() {
     };
     // Turning it on later still reaches the PR the first run wrote.
     for server in [None, Some("https://patchula.acme.dev")] {
-        fake.state().writes.clear();
+        fake.state().log.clear();
         engine.set_advertised_server(server.map(str::to_owned));
         let report = engine.run(options(), false, false).await.unwrap();
         assert_eq!(
@@ -678,7 +678,7 @@ async fn an_advertised_server_is_hidden_in_the_pr_and_the_dashboard() {
             "{report:?}"
         );
     }
-    let writes = fake.state().writes.clone();
+    let writes = fake.state().writes().clone();
     for kind in ["/pulls", "/issues"] {
         let body = writes
             .iter()
@@ -716,8 +716,15 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
         let fake = sandbox(base_files(), None, vec![]);
         keep.push(fake.clone());
         fake.state().repo_mut().merge.auto_merge = true;
+        // GitHub answers UNPROCESSABLE for a PR it finds mergeable already.
         fake.github
-            .auto_merge_refused(&format!("Pull request Pull request is in {refusal} status"));
+            .on(github::Matcher::Graphql("enablePullRequestAutoMerge"))
+            .respond(
+                200,
+                json!({"data":{"enablePullRequestAutoMerge":null},
+                       "errors":[{"type":"UNPROCESSABLE",
+                                  "message":format!("Pull request Pull request is in {refusal} status")}]}),
+            );
         match checks {
             "none" => fake.state().repo_mut().checks.clear(),
             "fail" => fake.state().repo_mut().checks[0]["conclusion"] = json!("FAILURE"),
@@ -763,7 +770,7 @@ async fn a_pr_github_finds_mergeable_now_is_merged_by_the_count_only_when_clean_
         );
         let enables = fake
             .state()
-            .writes
+            .writes()
             .iter()
             .filter(|(_, b)| {
                 b["query"]
@@ -886,10 +893,25 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
             "draft" => fake.state().repo_mut().prs.get_mut(&1).unwrap()["draft"] = json!(true),
             "conflict" => fake.state().repo_mut().prs.get_mut(&1).unwrap()["mergeable"] = json!(false),
             "protected" | "behind" | "unknown" => fake.state().repo_mut().prs.get_mut(&1).unwrap()["mergeable_state"] = json!(if case == "protected" {"blocked"} else {case}),
-            "head-race" => fake.github.checks_move_head("human-commit"),
+            // A human push lands between the pull read and the checks read.
+            "head-race" => fake
+                .github
+                .on(github::Matcher::Graphql("statusCheckRollup"))
+                .times(1)
+                .mutate(|state, _| {
+                    state.repo_mut().prs.values_mut().next().unwrap()["head"]["sha"] =
+                        json!("human-commit");
+                }),
             "human-head" => fake.state().repo_mut().prs.get_mut(&1).unwrap()["head"]["sha"] = json!("human-commit"),
             "human-owner" => fake.state().repo_mut().prs.get_mut(&1).unwrap()["user"]["login"] = json!("human"),
-            "api-refusal" => fake.github.pull_merge_refused(),
+            // GitHub declines the merge without saying why.
+            "api-refusal" => fake
+                .github
+                .on(github::Matcher::PullMerge {
+                    repo: "demo/sandbox".into(),
+                    number: None,
+                })
+                .respond(200, json!({"merged":false,"sha":"merged-base"})),
             "delete-race" => fake.github.ref_delete_fails("head changed"),
             _ => {}
         }
@@ -897,7 +919,7 @@ async fn fallback_auto_merge_requires_a_prior_receipt_and_every_current_head_che
         // recorded PR head when the branch ref is deleted).
         let head = fake.state().repo().prs[&1]["head"]["sha"].clone();
         fake.clear_log();
-        fake.state().writes.clear();
+        fake.state().log.clear();
         let report = engine
             .run_at(
                 Options {
@@ -1392,9 +1414,9 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
             .contains("catalog")
     );
     fake.clear_log();
-    fake.state().writes.clear();
+    fake.state().log.clear();
     checkbox_run(&engine, &config, now).await;
-    assert!(fake.state().writes.is_empty());
+    assert!(fake.state().writes().is_empty());
     assert!(
         !fake.log().iter().any(|(_, p, _)| p.ends_with("/pulls")),
         "empty steady repo must use inventory only"
@@ -1425,13 +1447,13 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
             .any(|u| u.new_version.as_deref() == Some("2.0.0"))
     );
     assert_eq!(fake.state().repo().prs.len(), 1);
-    fake.state().writes.clear();
+    fake.state().log.clear();
     let steady = checkbox_run(&engine, &config, now).await;
     assert_eq!(
         steady.actions.unwrap().branches[0].status,
         BranchStatus::Unchanged
     );
-    assert!(fake.state().writes.is_empty());
+    assert!(fake.state().writes().is_empty());
     check_transcript();
 }
 
@@ -1613,10 +1635,10 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                 "targeted {origin}, dependencies={dependencies}: {write_requests} repository requests"
             );
             request_counts.push(write_requests);
-            fake.state().writes.clear();
+            fake.state().log.clear();
             checkbox_run(&engine, &config, now).await;
             assert!(
-                fake.state().writes.is_empty(),
+                fake.state().writes().is_empty(),
                 "{origin}: next run must converge"
             );
         }
@@ -1693,13 +1715,13 @@ async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkb
                     .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
             );
         }
-        fake.state().writes.clear();
+        fake.state().log.clear();
         fake.clear_log();
         checkbox_run(&engine, &config, now).await;
         // The click is consumed (its checkbox is patched back) and the branch
         // is re-evaluated: an up-to-date branch needs no new commit.
         assert!(
-            !fake.state().writes.is_empty(),
+            !fake.state().writes().is_empty(),
             "{origin}: the click must produce the untick write"
         );
         assert!(
@@ -1715,9 +1737,9 @@ async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkb
                 .contains("- [x]")
         );
         assert_unticked(&fake);
-        fake.state().writes.clear();
+        fake.state().log.clear();
         checkbox_run(&engine, &config, now).await;
-        assert!(fake.state().writes.is_empty());
+        assert!(fake.state().writes().is_empty());
         // A stale branch still forces real work on a recheck: a head that
         // is marked but carries the old manifest must be rewritten, not
         // merely re-read.
@@ -1748,11 +1770,11 @@ async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkb
                     .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
             );
         }
-        fake.state().writes.clear();
+        fake.state().log.clear();
         checkbox_run(&engine, &config, now).await;
         assert!(
             fake.state()
-                .writes
+                .writes()
                 .iter()
                 .any(|(p, _)| p.ends_with("/git/commits")),
             "{origin}: a stale branch must be rewritten on re-check"
@@ -1804,12 +1826,12 @@ async fn human_authored_dashboard_checkboxes_never_request_branch_work() {
     tick_dashboard(&fake, "recheck");
     fake.state().repo_mut().issues.get_mut(&100).unwrap()["author"] =
         json!({"__typename":"User","login":"human"});
-    fake.state().writes.clear();
+    fake.state().log.clear();
     checkbox_run(&engine, &config, now).await;
     assert!(
         !fake
             .state()
-            .writes
+            .writes()
             .iter()
             .any(|(p, _)| p.ends_with("/git/commits"))
     );
@@ -1874,7 +1896,7 @@ async fn lockfile_failure_is_a_branch_error_and_publishes_no_manifest_only_branc
     );
     assert!(
         fake.state()
-            .writes
+            .writes()
             .clone()
             .iter()
             .all(|(p, _)| p.contains("/issues"))
@@ -2264,7 +2286,7 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
             .unwrap()
             .contains("patchula-closed:batched")
     );
-    assert!(fake.state().writes.iter().any(|(p, b)| {
+    assert!(fake.state().writes().iter().any(|(p, b)| {
         p.ends_with(&format!("/issues/{number}/comments"))
             && b["body"].as_str().unwrap().contains(&format!("#{batch}"))
     }));
@@ -2355,7 +2377,7 @@ async fn tooling_warnings_reach_the_pr_and_dashboard_and_clear_with_the_conditio
     let now = chrono::Utc::now();
     let latest = |kind: &str| {
         fake.state()
-            .writes
+            .writes()
             .clone()
             .iter()
             .rev()
@@ -2442,7 +2464,7 @@ async fn a_repository_that_commits_credentials_is_refused() {
         "{:?}",
         fake.log()
     );
-    assert!(fake.state().writes.is_empty());
+    assert!(fake.state().writes().is_empty());
     check_transcript();
 }
 
@@ -2566,7 +2588,7 @@ async fn inventory_and_controls_failures_fail_the_repository_before_writes() {
             let mut dupe = fake.state().repo().issues[&100].clone();
             dupe["number"] = json!(999);
             fake.state().repo_mut().issues.insert(999, dupe);
-            fake.state().writes.clear();
+            fake.state().log.clear();
         }
         let report = engine.run_at(options(), false, false, now).await.unwrap();
         let repo = &report.repositories[0];
@@ -2578,7 +2600,7 @@ async fn inventory_and_controls_failures_fail_the_repository_before_writes() {
                 "{reason}"
             );
         }
-        assert!(fake.state().writes.is_empty(), "{failure}");
+        assert!(fake.state().writes().is_empty(), "{failure}");
     }
     check_transcript();
 }
@@ -2616,7 +2638,7 @@ async fn an_invalid_branch_prefix_fails_the_repository() {
             .contains("prs.branch produces an invalid Git branch name"),
         "{repo:?}"
     );
-    assert!(fake.state().writes.is_empty());
+    assert!(fake.state().writes().is_empty());
     check_transcript();
 }
 
@@ -2671,7 +2693,7 @@ async fn an_undecodable_write_receipt_is_a_miss_and_rewritten() {
     assert_eq!(repo.status, Status::Complete, "{repo:?}");
     assert!(
         fake.state()
-            .writes
+            .writes()
             .clone()
             .iter()
             .any(|(p, _)| p.ends_with("/git/commits")),
@@ -2689,7 +2711,12 @@ async fn a_pulls_listing_failure_fails_the_repository() {
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
         .with_versions_host(false);
-    fake.github.pulls_list_fails();
+    fake.github
+        .on(github::Matcher::Route {
+            method: reqwest::Method::GET,
+            path: "/repos/demo/sandbox/pulls".into(),
+        })
+        .respond(500, json!({"message":"pulls boom"}));
     let report = engine
         .run_at(
             Options {
@@ -2782,7 +2809,7 @@ async fn a_failed_branch_deletion_fails_the_repository() {
     let repo = &report.repositories[0];
     assert_eq!(repo.status, Status::Error, "{repo:?}");
     assert!(
-        fake.state().writes.iter().any(|(_, body)| {
+        fake.state().writes().iter().any(|(_, body)| {
             body["variables"]["input"]["refUpdates"]
                 .as_array()
                 .is_some_and(|refs| {
@@ -2791,7 +2818,7 @@ async fn a_failed_branch_deletion_fails_the_repository() {
                 })
         }),
         "a deletion refUpdate must have been attempted: {:?}",
-        fake.state().writes.clone()
+        fake.state().writes().clone()
     );
     assert!(
         repo.reason.as_deref().unwrap().contains("update refused"),
@@ -2809,7 +2836,19 @@ async fn a_dashboard_write_failure_fails_the_repository() {
     let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
         .unwrap()
         .with_versions_host(false);
-    fake.github.issue_writes_fail();
+    // Dashboard issue writes, create and patch, answer 422.
+    fake.github
+        .on(github::Matcher::Route {
+            method: reqwest::Method::POST,
+            path: "/repos/demo/sandbox/issues".into(),
+        })
+        .respond(422, json!({"message":"issue boom"}));
+    fake.github
+        .on(github::Matcher::IssuePatch {
+            repo: "demo/sandbox".into(),
+            number: None,
+        })
+        .respond(422, json!({"message":"issue boom"}));
     let report = engine
         .run_at(
             Options {
@@ -2950,16 +2989,16 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
     let config = checkbox_config();
     let now = chrono::Utc::now();
     checkbox_run(&engine, &config, now).await;
-    fake.state().writes.clear();
+    fake.state().log.clear();
     checkbox_run(&engine, &config, now + chrono::Duration::minutes(1)).await;
     assert!(
         !fake
             .state()
-            .writes
+            .writes()
             .iter()
             .any(|(p, _)| p.ends_with("/git/commits")),
         "an unticked run on a warm cache writes nothing: {:?}",
-        fake.state().writes.clone()
+        fake.state().writes().clone()
     );
     let body = fake.state().repo_mut().prs[&1]["body"]
         .as_str()
@@ -2971,11 +3010,11 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
     );
     fake.state().repo_mut().prs.get_mut(&1).unwrap()["body"] =
         json!(body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check"));
-    fake.state().writes.clear();
+    fake.state().log.clear();
     fake.clear_log();
     checkbox_run(&engine, &config, now + chrono::Duration::minutes(2)).await;
     assert!(
-        !fake.state().writes.is_empty(),
+        !fake.state().writes().is_empty(),
         "the tick must be consumed and written back"
     );
     assert!(
@@ -3008,11 +3047,11 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
         .to_owned();
     fake.state().repo_mut().prs.get_mut(&1).unwrap()["body"] =
         json!(body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check"));
-    fake.state().writes.clear();
+    fake.state().log.clear();
     checkbox_run(&engine, &config, now + chrono::Duration::minutes(3)).await;
     assert!(
         fake.state()
-            .writes
+            .writes()
             .iter()
             .any(|(p, _)| p.ends_with("/git/commits")),
         "a stale branch must be rewritten"
@@ -3705,7 +3744,7 @@ async fn depth_pin_noop_run() {
         first.actions.as_ref().unwrap().branches[0].status,
         BranchStatus::Created
     );
-    fake.state().writes.clear();
+    fake.state().log.clear();
     // The write's catalog was too fresh to leave the mutable-tag prefetch
     // hint: one more run reaches the steady state the pin measures.
     engine.run(options(), false, false).await.unwrap();
@@ -3717,9 +3756,9 @@ async fn depth_pin_noop_run() {
         samples.push(started.elapsed());
         assert_eq!(report.repositories[0].status, Status::Complete);
         assert!(
-            fake.state().writes.is_empty(),
+            fake.state().writes().is_empty(),
             "the no-op run wrote: {:?}",
-            fake.state().writes
+            fake.state().writes()
         );
     }
     check_depth(DEPTH_LATENCY, samples);

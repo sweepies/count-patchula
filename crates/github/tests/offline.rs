@@ -3,7 +3,7 @@
 use patchula_cache::{Cache, Options as CacheOptions};
 use patchula_github::{Client, Error, GraphqlPage, Options, blob_sha, model};
 use patchula_http::{Exchange, Response, Transport};
-use patchula_testkit::{Options as FixtureOptions, Replay};
+use patchula_testkit::{Redactor, Replay};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -28,7 +28,7 @@ async fn client(name: &str, options: Options) -> (tempfile::TempDir, Client, Arc
     .unwrap();
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../fixtures/github/{name}.json"));
-    let replay = Arc::new(Replay::open(&path, FixtureOptions::default()).unwrap());
+    let replay = Arc::new(Replay::open(&path, Redactor::default()).unwrap());
     let client = Client::with_transport(TOKEN, cache, options, replay.clone()).unwrap();
     (directory, client, replay)
 }

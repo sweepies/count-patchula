@@ -397,10 +397,6 @@ pub struct State {
     pub installations: Vec<u64>,
     /// Minted installation-token counter for `access_tokens`.
     minted: usize,
-    /// `(path, body)` of every mutation request, in arrival order.
-    pub writes: Vec<(String, Value)>,
-    /// ReleaseNotes operation bodies, in arrival order.
-    pub release_queries: Vec<Value>,
     /// Per route — `"GET /repos/{repo}/pulls?state=all"` — how many
     /// requests the server answered and how many body bytes it served,
     /// since the state was made or the map last cleared.
@@ -419,6 +415,33 @@ impl State {
         self.log
             .iter()
             .map(|(method, path, _)| (method.clone(), path.clone()))
+            .collect()
+    }
+    /// The log's requests with their parsed route facts.
+    fn parsed(&self) -> impl Iterator<Item = (Ctx, &Value)> {
+        self.log.iter().map(|(method, path, body)| {
+            let method = Method::from_bytes(method.as_bytes()).expect("a logged method");
+            (Ctx::new(method, path, body), body)
+        })
+    }
+    /// `(path, body)` of every mutation request, in arrival order: GraphQL
+    /// mutations and every non-GET REST request.
+    pub fn writes(&self) -> Vec<(String, Value)> {
+        self.parsed()
+            .filter(|(ctx, _)| ctx.is_write())
+            .map(|(ctx, body)| (ctx.path, body.clone()))
+            .collect()
+    }
+    /// The bodies of GraphQL queries that read a release (the ReleaseNotes
+    /// operation), in arrival order.
+    pub fn release_queries(&self) -> Vec<Value> {
+        self.parsed()
+            .filter(|(ctx, _)| {
+                ctx.ops
+                    .iter()
+                    .any(|op| !op.mutation && selects(&op.selections, "release"))
+            })
+            .map(|(_, body)| body.clone())
             .collect()
     }
     fn new() -> Self {
@@ -452,8 +475,6 @@ impl State {
             actor: "patchula[bot]".into(),
             installations: vec![10],
             minted: 0,
-            writes: Vec::new(),
-            release_queries: Vec::new(),
             traffic: BTreeMap::new(),
             settings: Settings::default(),
             log: Vec::new(),
@@ -667,6 +688,15 @@ impl GqlSelection {
             }
         }
     }
+}
+
+/// Whether `selections` ask for a field named `name` at any depth, aliased
+/// or not.
+fn selects(selections: &[GqlSelection], name: &str) -> bool {
+    selections.iter().any(|selection| match selection {
+        GqlSelection::Field(field) => field.name == name || selects(&field.selections, name),
+        GqlSelection::Fragment { selections, .. } => selects(selections, name),
+    })
 }
 
 /// The fields `selections` asks for on `typename`: direct fields plus the
@@ -888,9 +918,8 @@ fn selections<'a>(set: &'a graphql_parser::query::SelectionSet<'a, &'a str>) -> 
 }
 
 impl Ctx {
-    fn new(request: &Request, path: &str, body: &Value) -> Self {
+    fn new(method: Method, path: &str, body: &Value) -> Self {
         use graphql_parser::query::{Definition, OperationDefinition, parse_query};
-        let method = request.method().clone();
         let mut repo = None;
         let mut pull = None;
         let mut pull_read = false;
@@ -1181,7 +1210,7 @@ impl FakeGitHub {
     }
     /// `(path, body)` for every mutation request, in arrival order.
     pub fn writes(&self) -> Vec<(String, Value)> {
-        self.state().writes.clone()
+        self.state().writes()
     }
     /// `(method, path, body)` for every request, in arrival order.
     pub fn log(&self) -> Vec<(String, String, Value)> {
@@ -1189,7 +1218,7 @@ impl FakeGitHub {
     }
     /// ReleaseNotes operation bodies, in arrival order.
     pub fn release_queries(&self) -> Vec<Value> {
-        self.state().release_queries.clone()
+        self.state().release_queries()
     }
     /// Requests answered and response bytes served, keyed by
     /// `"METHOD path?query"` — the route counts a listing measurement
@@ -1207,40 +1236,6 @@ impl FakeGitHub {
             times: None,
         }
     }
-    /// The next `POST .../pulls` applies, then answers 500 — GitHub never
-    /// told the client whether the PR happened.
-    pub fn pull_create_fails(&self) {
-        self.on(Matcher::PullCreate {
-            repo: self.repo.clone(),
-        })
-        .times(1)
-        .then_fail(500);
-    }
-    /// `GET .../pulls/{number}` answers 500 without touching state.
-    pub fn pull_read_fails(&self, number: u64) {
-        self.on(Matcher::PullRead {
-            repo: self.repo.clone(),
-            number: Some(number),
-        })
-        .respond(500, json!({}));
-    }
-    /// `GET .../pulls` answers 500 — the lifecycle listing is down.
-    pub fn pulls_list_fails(&self) {
-        self.on(Matcher::Route {
-            method: Method::GET,
-            path: format!("/repos/{}/pulls", self.repo),
-        })
-        .respond(500, json!({"message":"pulls boom"}));
-    }
-    /// `PUT .../pulls/{n}/merge` answers `{"merged":false}` — GitHub
-    /// declines the merge without telling the client why.
-    pub fn pull_merge_refused(&self) {
-        self.on(Matcher::PullMerge {
-            repo: self.repo.clone(),
-            number: None,
-        })
-        .respond(200, json!({"merged":false,"sha":"merged-base"}));
-    }
     /// `updateRefs` never satisfies the lease: GraphQL errors, refs
     /// unchanged.
     pub fn update_refs_fail(&self) {
@@ -1253,40 +1248,10 @@ impl FakeGitHub {
         self.on(Matcher::RefDelete)
             .respond(200, json!({"errors":[{"message":message}]}));
     }
-    /// `enablePullRequestAutoMerge` answers `UNPROCESSABLE` with `message`,
-    /// as GitHub does for a PR it finds mergeable already.
-    pub fn auto_merge_refused(&self, message: &str) {
-        self.on(Matcher::Graphql("enablePullRequestAutoMerge"))
-            .respond(
-                200,
-                json!({"data":{"enablePullRequestAutoMerge":null},
-                       "errors":[{"type":"UNPROCESSABLE","message":message}]}),
-            );
-    }
     /// The write inventory answers 500 — the scan's one big read is down.
     pub fn inventory_fails(&self) {
         self.on(Matcher::Graphql("associatedPullRequests"))
             .respond(500, json!({"message":"inventory boom"}));
-    }
-    /// Dashboard issue writes — create and patch — answer 422.
-    pub fn issue_writes_fail(&self) {
-        self.on(Matcher::Route {
-            method: Method::POST,
-            path: format!("/repos/{}/issues", self.repo),
-        })
-        .respond(422, json!({"message":"issue boom"}));
-        self.on(Matcher::IssuePatch {
-            repo: self.repo.clone(),
-            number: None,
-        })
-        .respond(422, json!({"message":"issue boom"}));
-    }
-    /// `GET /repos/{repo}` answers 200 with an empty object.
-    pub fn repo_read_malformed(&self) {
-        self.on(Matcher::RepoRead {
-            repo: self.repo.clone(),
-        })
-        .respond(200, json!({}));
     }
     /// Every pull read finds it closed — its owner closed it mid-run.
     pub fn close_pulls_on_read(&self) {
@@ -1303,54 +1268,6 @@ impl FakeGitHub {
                 .get_mut(&hit.pull.unwrap())
                 .unwrap()["state"] = json!("closed");
         });
-    }
-    /// Pulls read open for `reads` reads, then read back closed.
-    pub fn close_pulls_after_reads(&self, reads: usize) {
-        self.on(Matcher::PullRead {
-            repo: self.repo.clone(),
-            number: None,
-        })
-        .after(reads)
-        .mutate(|state, hit| {
-            state
-                .repositories
-                .get_mut(hit.repo.as_deref().unwrap())
-                .unwrap()
-                .prs
-                .get_mut(&hit.pull.unwrap())
-                .unwrap()["state"] = json!("closed");
-        });
-    }
-    /// Every pull read reports `sha` as its head — a foreign push.
-    pub fn override_pull_head(&self, sha: impl Into<String>) {
-        let sha = sha.into();
-        self.on(Matcher::PullRead {
-            repo: self.repo.clone(),
-            number: None,
-        })
-        .mutate(move |state, hit| {
-            state
-                .repositories
-                .get_mut(hit.repo.as_deref().unwrap())
-                .unwrap()
-                .prs
-                .get_mut(&hit.pull.unwrap())
-                .unwrap()["head"]["sha"] = json!(sha);
-        });
-    }
-    /// The checks read finds `sha` on the first pull's head — a human push
-    /// landed between the pull read and the checks read.
-    pub fn checks_move_head(&self, sha: &str) {
-        let sha = sha.to_owned();
-        self.on(Matcher::Graphql("statusCheckRollup"))
-            .times(1)
-            .mutate(move |state, hit| {
-                let repo = state
-                    .repositories
-                    .get_mut(hit.repo.as_deref().unwrap())
-                    .unwrap();
-                repo.prs.values_mut().next().unwrap()["head"]["sha"] = json!(sha);
-            });
     }
     /// Fire `mutate` rules that match `ctx`. Pull reads call this after read
     /// lag, at the point the request sees state; every other route calls it
@@ -1461,7 +1378,6 @@ impl FakeGitHub {
         let repo = &state.repositories[&name];
         let mut answer = Map::new();
         answer.insert("__typename".into(), json!("Repository"));
-        let mut release_logged = false;
         for child in field.fields("Repository") {
             let key = child.key.clone();
             let value = match child.name.as_str() {
@@ -1498,10 +1414,6 @@ impl FakeGitHub {
                 "refs" => self.refs_connection(child, repo, body, state),
                 "pullRequests" => self.pull_requests(child, repo, body, state),
                 "release" => {
-                    if !release_logged {
-                        state.release_queries.push(body.clone());
-                        release_logged = true;
-                    }
                     let text = repo
                         .release_note_body
                         .clone()
@@ -2592,10 +2504,7 @@ impl Transport for FakeGitHub {
             .log
             .push((request.method().to_string(), path.clone(), body.clone()));
         transcripts::record(&request, &body);
-        let ctx = Ctx::new(&request, &path, &body);
-        if ctx.is_write() {
-            state.writes.push((path.clone(), body.clone()));
-        }
+        let ctx = Ctx::new(request.method().clone(), &path, &body);
         // `respond` answers before the handler — the request never happened.
         // `then_fail` arms now and swaps the status after it.
         let mut answer = None;

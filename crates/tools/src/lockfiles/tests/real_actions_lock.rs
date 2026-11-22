@@ -14,7 +14,7 @@
 //! the job's own flags a SHA pin, moved or recorded, is kept, and a
 //! local `./` composite is never locked.
 use super::*;
-use patchula_testkit::{Options as FixtureOptions, Recorder, Redactor, Replay};
+use patchula_testkit::{Recorder, Redactor, Replay};
 use reqwest::header::{HeaderName, HeaderValue};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -56,16 +56,13 @@ impl GitHubProxy {
         };
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../../fixtures/tools/{cassette}.json"));
-        let options = FixtureOptions {
-            redactor: Redactor::default().with_literals([token.clone()]),
-            ..FixtureOptions::default()
-        };
+        let redactor = Redactor::default().with_literals([token.clone()]);
         let (transport, replay): (Arc<dyn Transport>, Option<Arc<Replay>>) =
             if patchula_testkit::recording() {
                 (
                     Arc::new(Recorder::new(
                         &path,
-                        options,
+                        redactor,
                         Arc::new(patchula_http::Network::new().unwrap()),
                         "Recorded by patchula from the request URLs; never imported from other bots"
                             .into(),
@@ -73,7 +70,7 @@ impl GitHubProxy {
                     None,
                 )
             } else {
-                let replay = Arc::new(Replay::open(&path, options).unwrap());
+                let replay = Arc::new(Replay::open(&path, redactor).unwrap());
                 (replay.clone(), Some(replay))
             };
         // A CA the run trusts through SSL_CERT_FILE, and a leaf for

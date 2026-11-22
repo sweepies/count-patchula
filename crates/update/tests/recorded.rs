@@ -6,7 +6,7 @@
 use patchula_cache::{Cache, Options as CacheOptions};
 use patchula_github::{Client, Network, Options};
 use patchula_report::Repository;
-use patchula_testkit::{Options as FixtureOptions, Redactor};
+use patchula_testkit::Redactor;
 use patchula_update::Inventory;
 use serde_json::json;
 use std::{path::Path, sync::Arc};
@@ -29,12 +29,9 @@ async fn client(name: &str) -> (tempfile::TempDir, Cache, Client) {
     .unwrap();
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../fixtures/update/{name}.json"));
-    let options = FixtureOptions {
-        redactor: Redactor::default().with_literals([token.clone()]),
-        ..FixtureOptions::default()
-    };
+    let redactor = Redactor::default().with_literals([token.clone()]);
     let transport =
-        patchula_testkit::from_env(&path, options, || Ok(Arc::new(Network::new()?))).unwrap();
+        patchula_testkit::from_env(&path, redactor, || Ok(Arc::new(Network::new()?))).unwrap();
     (
         directory,
         cache.clone(),

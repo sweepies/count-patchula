@@ -17,336 +17,214 @@ struct Declared {
     code_versioned: bool,
 }
 
-/// The end of the nested block comment opening at `i` (`/*`).
-fn block_end(bytes: &[u8], i: usize) -> usize {
-    let mut depth = 1;
-    let mut j = i + 2;
-    while j + 1 < bytes.len() && depth > 0 {
-        match (bytes[j], bytes[j + 1]) {
-            (b'/', b'*') => {
-                depth += 1;
-                j += 2;
-            }
-            (b'*', b'/') => {
-                depth -= 1;
-                j += 2;
-            }
-            _ => j += 1,
-        }
-    }
-    j.min(bytes.len())
-}
-
-/// The end of the literal opened at `at` and closed by `quote`,
-/// escape-aware. A char literal bails on a newline — an unterminated `'`
-/// was a lifetime — while a string runs to its closing quote.
-fn quoted(bytes: &[u8], at: usize, quote: u8) -> usize {
-    let mut j = at + 1;
-    while j < bytes.len() {
-        match bytes[j] {
-            b'\\' => j += 2,
-            b if b == quote => return j + 1,
-            b'\n' if quote == b'\'' => return j,
-            _ => j += 1,
-        }
-    }
-    bytes.len()
-}
-
-/// The end of the raw string opening at `i` (`r"..."`, `r#"..."#`,
-/// `br"..."`, `br#"..."#`), or `None` when `i` does not open one.
-fn raw_end(bytes: &[u8], i: usize) -> Option<usize> {
-    let mut j = i + 1;
-    if bytes[i] == b'b' {
-        if bytes.get(j) != Some(&b'r') {
-            return None;
-        }
-        j += 1;
-    }
-    let hashes = {
-        let start = j;
-        while bytes.get(j) == Some(&b'#') {
-            j += 1;
-        }
-        j - start
-    };
-    if bytes.get(j) != Some(&b'"') {
-        return None;
-    }
-    j += 1;
-    while j < bytes.len() {
-        if bytes[j] == b'"'
-            && j + 1 + hashes <= bytes.len()
-            && bytes[j + 1..j + 1 + hashes].iter().all(|b| *b == b'#')
-        {
-            return Some(j + 1 + hashes);
-        }
-        j += 1;
-    }
-    Some(bytes.len())
-}
-
-/// `text` with the inside of comments and string and char literals
-/// replaced by spaces (newlines kept, length unchanged): braces and
-/// `#[cfg(test)]` inside them cannot fool the scans below.
-fn skeleton(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = bytes.to_vec();
-    let mut i = 0;
-    while i < bytes.len() {
-        let end = match bytes[i] {
-            b'/' if bytes.get(i + 1) == Some(&b'/') => bytes[i..]
-                .iter()
-                .position(|b| *b == b'\n')
-                .map(|offset| i + offset)
-                .unwrap_or(bytes.len()),
-            b'/' if bytes.get(i + 1) == Some(&b'*') => block_end(bytes, i),
-            b'"' => quoted(bytes, i, b'"'),
-            b'b' if bytes.get(i + 1) == Some(&b'"') => quoted(bytes, i + 1, b'"'),
-            b'\'' if bytes.get(i + 1) == Some(&b'\\') => quoted(bytes, i, b'\''),
-            b'\'' if bytes.get(i + 2) == Some(&b'\'') => i + 3,
-            b'r' | b'b' => match raw_end(bytes, i) {
-                Some(end) => end,
-                None => {
-                    i += 1;
-                    continue;
-                }
-            },
-            _ => {
-                i += 1;
-                continue;
-            }
-        };
-        for byte in &mut out[i..end] {
-            if *byte != b'\n' {
-                *byte = b' ';
-            }
-        }
-        i = end;
-    }
-    String::from_utf8(out).expect("blanking keeps UTF-8")
-}
-
 /// Whether a `cfg` predicate can only hold in test builds: `test` itself
 /// or an `all(...)` that requires it. `any(...)` and `not(...)` can hold
 /// in production, so their modules stay part of the scan.
-fn test_only(predicate: &str) -> bool {
-    let predicate = predicate.trim();
-    if predicate == "test" {
-        return true;
+fn test_only(predicate: &syn::Meta) -> bool {
+    match predicate {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|args| args.iter().any(test_only)),
+        _ => false,
     }
-    let Some(inner) = predicate
-        .strip_prefix("all")
-        .map(str::trim_start)
-        .filter(|inner| inner.starts_with('('))
-    else {
-        return false;
-    };
-    let mut depth = 0;
-    let mut arg = String::new();
-    let mut args = Vec::new();
-    for ch in inner.chars() {
-        match ch {
-            '(' => {
-                depth += 1;
-                if depth > 1 {
-                    arg.push(ch);
-                }
+}
+
+/// Whether `attrs` hold a `#[cfg(..)]` that only test builds satisfy.
+fn test_gated(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Meta>()
+                .is_ok_and(|predicate| test_only(&predicate))
+    })
+}
+
+/// The value of a `#[path = ".."]` among `attrs`.
+fn path_attr(attrs: &[syn::Attribute]) -> Option<String> {
+    attrs.iter().find_map(|attr| match &attr.meta {
+        syn::Meta::NameValue(syn::MetaNameValue {
+            path,
+            value:
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(value),
+                    ..
+                }),
+            ..
+        }) if path.is_ident("path") => Some(value.value()),
+        _ => None,
+    })
+}
+
+/// Whether `tokens`, at any depth, hold `const` followed by `NAMESPACE`:
+/// a `State` impl or its items written inside a macro, which the syntax
+/// tree cannot see into. A bare `T::NAMESPACE` is not a declaration.
+fn declares_namespace(tokens: proc_macro2::TokenStream) -> bool {
+    let mut after_const = false;
+    tokens.into_iter().any(|token| match token {
+        proc_macro2::TokenTree::Group(group) => {
+            after_const = false;
+            declares_namespace(group.stream())
+        }
+        proc_macro2::TokenTree::Ident(ident) => {
+            let found = after_const && ident == "NAMESPACE";
+            after_const = ident == "const";
+            found
+        }
+        _ => {
+            after_const = false;
+            false
+        }
+    })
+}
+
+/// What one source file declares: the files its `#[cfg(test)] mod name;`
+/// modules can resolve to, the `(namespace, code_versioned)` of each
+/// `impl State` outside `#[cfg(test)]` modules, at any depth (inside
+/// functions too), and the declarations it cannot read: a non-literal
+/// `NAMESPACE` or one written inside a macro. Those fail the scan unless the
+/// whole file is test code.
+struct Scan<'a> {
+    path: &'a Path,
+    /// The inline modules enclosing the item being visited, as directory
+    /// components: each module's name, or its `#[path]`.
+    modules: Vec<String>,
+    test_files: Vec<PathBuf>,
+    impls: Vec<(String, bool)>,
+    unreadable: Vec<String>,
+}
+
+/// The value of the `const {name}` among `items`.
+fn constant<'a>(items: &'a [syn::ImplItem], name: &str) -> Option<&'a syn::Expr> {
+    items.iter().find_map(|item| match item {
+        syn::ImplItem::Const(constant) if constant.ident == name => Some(&constant.expr),
+        _ => None,
+    })
+}
+
+impl Scan<'_> {
+    /// The files `mod {module};` here can resolve to, by the reference's
+    /// rules: relative to this file's directory, under a directory named
+    /// after the file unless it is a `lib.rs`, `main.rs` or `mod.rs`, then
+    /// through the enclosing inline modules. A `#[path]` outside any inline
+    /// module is relative to this file's directory alone.
+    fn module_files(&self, module: &syn::ItemMod) -> Vec<PathBuf> {
+        let mut base = self
+            .path
+            .parent()
+            .expect("a path inside the workspace")
+            .to_path_buf();
+        let stem = self
+            .path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("a UTF-8 file name");
+        let nested = |mut base: PathBuf| {
+            if !matches!(stem, "lib" | "main" | "mod") {
+                base.push(stem);
             }
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    args.push(std::mem::take(&mut arg));
-                    break;
-                }
-                arg.push(ch);
-            }
-            ',' if depth == 1 => args.push(std::mem::take(&mut arg)),
-            _ => arg.push(ch),
-        }
-    }
-    args.iter().any(|arg| test_only(arg))
-}
-
-fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
-    while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
-        i += 1;
-    }
-    i
-}
-
-/// Whether `bytes` at `i` starts with `word` on a word boundary.
-fn keyword(bytes: &[u8], i: usize, word: &[u8]) -> bool {
-    bytes[i..].starts_with(word)
-        && !bytes
-            .get(i + word.len())
-            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
-}
-
-/// The end of the `(`-, `[`- or `{`-opened group that starts at `i`.
-fn group(bytes: &[u8], i: usize) -> usize {
-    let open = bytes[i];
-    let close = match open {
-        b'(' => b')',
-        b'[' => b']',
-        _ => b'}',
-    };
-    let mut depth = 1;
-    let mut j = i + 1;
-    while j < bytes.len() && depth > 0 {
-        if bytes[j] == open {
-            depth += 1;
-        } else if bytes[j] == close {
-            depth -= 1;
-        }
-        j += 1;
-    }
-    j
-}
-
-/// The `#[cfg(test)]`-gated modules one source file's skeleton declares:
-/// `(start, end)` ranges an inline `mod name { .. }` occupies, and the
-/// names of `mod name;` file modules.
-fn test_modules(skel: &str) -> (Vec<(usize, usize)>, Vec<String>) {
-    let bytes = skel.as_bytes();
-    let attr = regex::Regex::new(r"#\[\s*cfg\s*\(").unwrap();
-    let mut ranges = Vec::new();
-    let mut names = Vec::new();
-    for found in attr.find_iter(skel) {
-        let mut j = group(bytes, found.end() - 1);
-        let predicate = &skel[found.end()..j - 1];
-        j = skip_ws(bytes, j);
-        if bytes.get(j) != Some(&b']') || !test_only(predicate) {
-            continue;
-        }
-        j += 1;
-        // Attributes between the cfg and the `mod` still belong to it.
-        loop {
-            j = skip_ws(bytes, j);
-            if bytes.get(j) == Some(&b'#') && bytes.get(j + 1) == Some(&b'[') {
-                j = group(bytes, j + 1);
-            } else {
-                break;
-            }
-        }
-        if keyword(bytes, j, b"pub") {
-            j = skip_ws(bytes, j + 3);
-            if bytes.get(j) == Some(&b'(') {
-                j = skip_ws(bytes, group(bytes, j));
-            }
-        }
-        if !keyword(bytes, j, b"mod") {
-            continue;
-        }
-        let name_start = skip_ws(bytes, j + 3);
-        let mut name_end = name_start;
-        while bytes
-            .get(name_end)
-            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
-        {
-            name_end += 1;
-        }
-        if name_end == name_start {
-            continue;
-        }
-        j = skip_ws(bytes, name_end);
-        match bytes.get(j) {
-            Some(&b'{') => ranges.push((found.start(), group(bytes, j))),
-            Some(&b';') => names.push(skel[name_start..name_end].to_owned()),
-            _ => {}
-        }
-    }
-    (ranges, names)
-}
-
-/// The files a `#[cfg(test)] mod name;` in `file` can resolve to.
-fn module_files(file: &Path, name: &str) -> [PathBuf; 2] {
-    let parent = file.parent().expect("a path inside the workspace");
-    let stem = file
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .expect("a UTF-8 file name");
-    let base = if stem == "lib" || stem == "main" || stem == "mod" {
-        parent.to_path_buf()
-    } else {
-        parent.join(stem)
-    };
-    [
-        base.join(format!("{name}.rs")),
-        base.join(name).join("mod.rs"),
-    ]
-}
-
-/// `text` with `#[cfg(test)]` module bodies blanked out, so impls inside
-/// them — the cache crate's `release!` `test-derived` states and the
-/// test-only scope doubles — are never declared.
-fn without_test_modules(text: &str) -> String {
-    let mut effective = text.as_bytes().to_vec();
-    for (start, end) in test_modules(&skeleton(text)).0 {
-        for byte in &mut effective[start..end] {
-            if *byte != b'\n' {
-                *byte = b' ';
-            }
-        }
-    }
-    String::from_utf8(effective).expect("blanking keeps UTF-8")
-}
-
-/// The `(namespace, code_versioned)` of each `impl State` in `text`. An
-/// impl counts by what it declares, not how it names the trait: any
-/// `impl … for …` block whose own items include `const NAMESPACE` — the
-/// one trait in the workspace that declares it is `State` — so a renamed
-/// import (`use patchula_cache::State as S`), a qualified path, generics
-/// or an impl that does not start its line are all seen.
-fn impls_in(text: &str, path: &Path) -> Vec<(String, bool)> {
-    // Scan the skeleton so a comment or string cannot pose as an impl
-    // block or hide the brace that ends one, then read the consts from
-    // the real text, at the block's own depth only.
-    let skel = skeleton(text);
-    let header = regex::Regex::new(r"\bimpl\b").unwrap();
-    let declares = regex::Regex::new(r"\bconst\s+NAMESPACE\b").unwrap();
-    let namespace = regex::Regex::new(r#"NAMESPACE\s*:\s*&'static str\s*=\s*"([^"]+)""#).unwrap();
-    let versioned = regex::Regex::new(r"CODE_VERSIONED\s*:\s*bool\s*=\s*true").unwrap();
-    let bytes = skel.as_bytes();
-    let mut found = Vec::new();
-    for m in header.find_iter(&skel) {
-        let mut j = m.end();
-        while j < bytes.len() && bytes[j] != b'{' && bytes[j] != b';' {
-            j += 1;
-        }
-        if bytes.get(j) != Some(&b'{') || !skel[m.end()..j].contains(" for ") {
-            continue;
-        }
-        let end = group(bytes, j);
-        // The block's own items: nested groups blanked, so an impl inside
-        // a fn of this block is counted once, as itself. The skeleton
-        // decides whether it declares NAMESPACE; the text gives the values.
-        let mut own = text.as_bytes()[j + 1..end - 1].to_vec();
-        let mut own_skel = bytes[j + 1..end - 1].to_vec();
-        let mut k = j + 1;
-        while k < end - 1 {
-            if bytes[k] == b'{' {
-                let close = group(bytes, k).min(end - 1);
-                for i in k - j - 1..close - j - 1 {
-                    own[i] = b' ';
-                    own_skel[i] = b' ';
-                }
-                k = close;
-            } else {
-                k += 1;
-            }
-        }
-        if !declares.is_match(&String::from_utf8_lossy(&own_skel)) {
-            continue;
-        }
-        let own = String::from_utf8_lossy(&own);
-        let code_versioned = versioned.is_match(&own);
-        let Some(name) = namespace.captures(&own) else {
-            panic!("{}: impl State without a NAMESPACE literal", path.display())
+            base.extend(&self.modules);
+            base
         };
-        found.push((name[1].to_owned(), code_versioned));
+        if let Some(path) = path_attr(&module.attrs) {
+            if !self.modules.is_empty() {
+                base = nested(base);
+            }
+            return vec![base.join(path)];
+        }
+        let base = nested(base);
+        let name = module.ident.to_string();
+        vec![
+            base.join(format!("{name}.rs")),
+            base.join(&name).join("mod.rs"),
+        ]
     }
-    found
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Scan<'_> {
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if test_gated(&module.attrs) {
+            if module.content.is_none() {
+                let files = self.module_files(module);
+                self.test_files.extend(files);
+            }
+            return;
+        }
+        self.modules
+            .push(path_attr(&module.attrs).unwrap_or_else(|| module.ident.to_string()));
+        syn::visit::visit_item_mod(self, module);
+        self.modules.pop();
+    }
+
+    /// A trait impl counts by what it declares, not how it names the
+    /// trait: the one trait in the workspace with a `NAMESPACE` const is
+    /// `State`, so a renamed import, a qualified path or generics are all
+    /// seen.
+    fn visit_item_impl(&mut self, block: &'ast syn::ItemImpl) {
+        if block.trait_.is_some()
+            && let Some(namespace) = constant(&block.items, "NAMESPACE")
+        {
+            if let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(namespace),
+                ..
+            }) = namespace
+            {
+                let code_versioned = matches!(
+                    constant(&block.items, "CODE_VERSIONED"),
+                    Some(syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Bool(syn::LitBool { value: true, .. }),
+                        ..
+                    }))
+                );
+                self.impls.push((namespace.value(), code_versioned));
+            } else {
+                self.unreadable
+                    .push("impl State without a NAMESPACE literal".into());
+            }
+        }
+        syn::visit::visit_item_impl(self, block);
+    }
+
+    /// Macro bodies are opaque to the syntax tree: `macro_rules!`
+    /// definitions, item and expression invocations and macros among an
+    /// impl's items all land here, so a `State` declared through one fails
+    /// closed instead of slipping past the guard.
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if declares_namespace(mac.tokens.clone()) {
+            let name = mac
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string())
+                .unwrap_or_default();
+            self.unreadable.push(format!(
+                "`{name}!` declares a NAMESPACE the scan cannot read; write the impl State \
+                 outside the macro"
+            ));
+        }
+        syn::visit::visit_macro(self, mac);
+    }
+}
+
+fn scan(path: &Path) -> Scan<'_> {
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    scan_text(path, &text)
+}
+
+fn scan_text<'a>(path: &'a Path, text: &str) -> Scan<'a> {
+    let file = syn::parse_file(text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let mut scan = Scan {
+        path,
+        modules: Vec::new(),
+        test_files: Vec::new(),
+        impls: Vec::new(),
+        unreadable: Vec::new(),
+    };
+    syn::visit::Visit::visit_file(&mut scan, &file);
+    scan
 }
 
 /// Every `impl State` in non-test source across the workspace, keyed by
@@ -366,32 +244,27 @@ fn declared() -> BTreeMap<String, Declared> {
             .into_iter()
             .filter(|path| path.extension().is_some_and(|e| e == "rs"))
             .collect();
+        let scans: Vec<Scan> = files.iter().map(|file| scan(file)).collect();
         // A `#[cfg(test)] mod name;` resolves to a file; skip those files
-        // the way the inline modules' contents are skipped below.
-        let mut skip = BTreeSet::new();
-        for file in &files {
-            let text = std::fs::read_to_string(file)
-                .unwrap_or_else(|error| panic!("{}: {error}", file.display()));
-            for name in test_modules(&skeleton(&text)).1 {
-                for candidate in module_files(file, &name) {
-                    if candidate.is_file() {
-                        skip.insert(candidate);
-                    }
-                }
-            }
-        }
-        for file in files {
-            if skip.contains(&file) || file.components().any(|part| part.as_os_str() == "tests") {
+        // the way the inline modules' contents are skipped.
+        let skip: BTreeSet<PathBuf> = scans
+            .iter()
+            .flat_map(|scan| scan.test_files.iter().cloned())
+            .collect();
+        for scan in scans {
+            let file = scan.path;
+            if skip.contains(file) || file.components().any(|part| part.as_os_str() == "tests") {
                 continue;
             }
-            let text = std::fs::read_to_string(&file)
-                .unwrap_or_else(|error| panic!("{}: {error}", file.display()));
-            for (namespace, code_versioned) in impls_in(&without_test_modules(&text), &file) {
+            if let Some(problem) = scan.unreadable.first() {
+                panic!("{}: {problem}", file.display());
+            }
+            for (namespace, code_versioned) in scan.impls {
                 let previous = declared.insert(
                     namespace.clone(),
                     Declared {
                         krate: krate.clone(),
-                        path: file.clone(),
+                        path: file.to_owned(),
                         code_versioned,
                     },
                 );
@@ -508,4 +381,91 @@ pub fn check(krate: &str, registered: &std::collections::BTreeMap<&'static str, 
         .collect();
     crate::versions::check("state-versions.tsv", krate, registered, mine);
     coverage(&declared);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_files(path: &str, text: &str) -> Vec<PathBuf> {
+        scan_text(Path::new(path), text).test_files
+    }
+
+    /// A test module's file resolves through the inline modules around it
+    /// and through `#[path]`, so neither skips the production `bar.rs`.
+    #[test]
+    fn test_module_files_follow_inline_modules_and_path() {
+        assert_eq!(
+            test_files("src/lib.rs", "mod inner { #[cfg(test)] mod bar; }"),
+            [
+                PathBuf::from("src/inner/bar.rs"),
+                PathBuf::from("src/inner/bar/mod.rs")
+            ]
+        );
+        assert_eq!(
+            test_files(
+                "src/foo.rs",
+                "mod inner { #[cfg(all(test, unix))] mod bar; }"
+            ),
+            [
+                PathBuf::from("src/foo/inner/bar.rs"),
+                PathBuf::from("src/foo/inner/bar/mod.rs")
+            ]
+        );
+        assert_eq!(
+            test_files(
+                "src/lib.rs",
+                "mod bar;\n#[cfg(test)]\n#[path = \"bar_test.rs\"]\nmod bar_tests;"
+            ),
+            [PathBuf::from("src/bar_test.rs")]
+        );
+        assert_eq!(
+            test_files(
+                "src/foo.rs",
+                "#[path = \"x\"] mod inner { #[cfg(test)] #[path = \"t.rs\"] mod t; }"
+            ),
+            [PathBuf::from("src/foo/x/t.rs")]
+        );
+        assert_eq!(
+            test_files("src/foo.rs", "#[cfg(test)] mod tests;"),
+            [
+                PathBuf::from("src/foo/tests.rs"),
+                PathBuf::from("src/foo/tests/mod.rs")
+            ]
+        );
+    }
+
+    /// A `State` declared through a macro cannot be read from the syntax
+    /// tree, so it is reported; a `T::NAMESPACE` read in a macro is not.
+    #[test]
+    fn a_namespace_inside_a_macro_is_unreadable() {
+        let scan = |text| scan_text(Path::new("src/lib.rs"), text).unreadable.len();
+        assert_eq!(
+            scan(
+                "macro_rules! state { ($name:ident) => { impl State for $name { \
+                 const NAMESPACE: &'static str = \"x\"; const VERSION: u32 = 1; } }; }"
+            ),
+            1
+        );
+        assert_eq!(
+            scan("impl State for X { declare! { const NAMESPACE: &'static str = \"x\"; } }"),
+            1
+        );
+        assert_eq!(
+            scan("fn f() { m!(impl State for X { const NAMESPACE: &str = \"x\"; }); }"),
+            1
+        );
+        assert_eq!(
+            scan("fn f<T: State>() { tracing::debug!(\"{}\", T::NAMESPACE); }"),
+            0
+        );
+        assert_eq!(
+            scan("#[cfg(test)] mod tests { m! { const NAMESPACE: &str = \"x\"; } }"),
+            0
+        );
+        assert_eq!(
+            scan("impl State for X { const NAMESPACE: &'static str = NAME; }"),
+            1
+        );
+    }
 }

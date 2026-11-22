@@ -5,7 +5,7 @@ description: "How Count Patchula's tests replay recorded HTTP cassettes offline,
 Production code accepts a `patchula_http::Transport`, which takes a reqwest
 `Request` built with `Request::new`, so building a request needs no client.
 `patchula-testkit` belongs only in dev-dependencies. Replay holds only the
-cassette data, match options and a consumption cursor, with no reqwest client
+cassette data, the redactor and a consumption cursor, with no reqwest client
 and no fallback transport. An unmatched request fails as an ordinary transport
 error, and `assert_finished` catches interactions no request consumed. A test
 passes a panicking network factory and an unresolvable `.invalid` host to
@@ -17,9 +17,9 @@ JSON cassettes live under `fixtures/`, one per scenario, with a schema version,
 provenance, requests and responses. Bodies are parsed JSON, so they diff well
 and ignore key order, or UTF-8 text; binary and streaming bodies fail.
 Requests match on the method, sanitised URL, selected headers and the complete
-body, including GraphQL query and variables. The default headers are `Accept`,
-`Content-Type`, `If-None-Match`, `If-Modified-Since` and
-`X-GitHub-Api-Version`, and callers can replace the list. Repeated identical
+body, including GraphQL query and variables. The matched headers are
+`Accept`, `Content-Type`, `If-None-Match`, `If-Modified-Since` and
+`X-GitHub-Api-Version`. Repeated identical
 requests consume successive interactions, and `Replay::assert_finished`
 catches unused ones.
 
@@ -54,8 +54,8 @@ Redaction happens before anything is written:
   tokens](https://github.blog/changelog/2026-04-24-notice-about-upcoming-new-format-for-github-app-installation-tokens/);
 - legacy `v1.` tokens, which need at least 20 characters after the prefix so
   version tags such as `v1.24.0` survive;
-- the recording token itself, as a literal, and any literals or patterns a
-  caller adds through `Redactor`.
+- the recording token itself, as a literal, and any literals a caller adds
+  through `Redactor::with_literals`.
 
 The in-memory response a recording test sees is not redacted. The scanner
 (`mise run fixtures:check`, also part of `mise run ci`) checks raw and parsed

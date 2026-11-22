@@ -11,10 +11,11 @@ const MANIFEST: &str = "name: demo\nversion: 1.0.0\ndependencies:\n  apm:\n    -
 #[tokio::test]
 async fn apm_tags_pin_to_commits_and_update_to_exact_tags() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/engine/apm.json");
-    let transport = patchula_testkit::from_env(&path, patchula_testkit::Options::default(), || {
-        Ok(Arc::new(Network::new()?))
-    })
-    .unwrap();
+    let transport =
+        patchula_testkit::from_env(&path, patchula_testkit::Redactor::default(), || {
+            Ok(Arc::new(Network::new()?))
+        })
+        .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let cache = Cache::open(
         dir.path().join("cache.sqlite"),

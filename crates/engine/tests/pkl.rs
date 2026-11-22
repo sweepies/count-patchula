@@ -5,7 +5,7 @@
 use patchula_cache::Cache;
 use patchula_engine::{Engine, Options};
 use patchula_http::Network;
-use patchula_testkit::{Options as FixtureOptions, Redactor};
+use patchula_testkit::Redactor;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 const HK: &str = concat!(
@@ -28,12 +28,9 @@ async fn pkl_packages_follow_their_own_release_tags() {
         "offline-pkl".into()
     };
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/engine/pkl.json");
-    let options = FixtureOptions {
-        redactor: Redactor::default().with_literals([token.clone()]),
-        ..Default::default()
-    };
+    let redactor = Redactor::default().with_literals([token.clone()]);
     let transport =
-        patchula_testkit::from_env(&path, options, || Ok(Arc::new(Network::new()?))).unwrap();
+        patchula_testkit::from_env(&path, redactor, || Ok(Arc::new(Network::new()?))).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let cache = Cache::open(dir.path().join("cache.sqlite"), Default::default())
         .await

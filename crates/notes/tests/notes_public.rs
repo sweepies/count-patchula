@@ -3,7 +3,7 @@
 use patchula_cache::Cache;
 use patchula_datasource::Client;
 use patchula_http::Network;
-use patchula_testkit::{Options, Redactor};
+use patchula_testkit::Redactor;
 use patchula_words::Source;
 use std::{path::Path, sync::Arc};
 
@@ -18,10 +18,7 @@ async fn public_note_sources_and_release_range() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/notes/public-notes.json");
     let transport = patchula_testkit::from_env(
         &path,
-        Options {
-            redactor: Redactor::default().with_literals([token.clone()]),
-            ..Options::default()
-        },
+        Redactor::default().with_literals([token.clone()]),
         || Ok(Arc::new(Network::new()?)),
     )
     .unwrap();
@@ -178,10 +175,7 @@ async fn public_sandbox_note_ranges() {
         let path = root.join(format!("notes-{fixture}.json"));
         let transport = patchula_testkit::from_env(
             &path,
-            Options {
-                redactor: Redactor::default().with_literals([token.clone()]),
-                ..Options::default()
-            },
+            Redactor::default().with_literals([token.clone()]),
             || Ok(Arc::new(Network::new()?)),
         )
         .unwrap();
