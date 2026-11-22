@@ -316,7 +316,10 @@ impl Engine {
                 Some(missed.reason),
             ));
         }
-        if dep.proposing().edits == patchula_manager::Edits::ReportOnly {
+        if matches!(
+            dep.proposing().edits,
+            patchula_manager::Edits::ReportOnly(_)
+        ) {
             // Only copier update applies a template: report the
             // newest eligible tag and propose nothing to edit.
             let rank = |kind: UpdateKind| match kind {
@@ -384,7 +387,7 @@ impl Engine {
                 } else {
                     ResolutionKind::FloatingRef
                 }
-            } else if dep.proposing().lock.reported {
+            } else if dep.proposing().lock.reported(&dep.dependency) {
                 ResolutionKind::Lockfile
             } else if resolved.is_some()
                 && (matches!(dep.kind, DependencyKind::Tool)

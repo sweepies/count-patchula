@@ -1397,6 +1397,36 @@ fn apm_short_tags_are_fixed_tags_not_floating_aliases() {
     assert_eq!(minor.new_value.as_deref(), Some("v1.1"));
 }
 
+/// A Pkl package URI names one exact version: under `widen`, which would
+/// write a range for a plain declaration, every update still writes the
+/// release's version alone.
+#[test]
+fn pkl_package_updates_write_an_exact_version_under_widen() {
+    let mut cfg = config("renovate-migration");
+    cfg.defaults.wait_hours = 0;
+    cfg.defaults.versions = VersionPolicy::Widen;
+    let eval = Evaluator::new(&cfg, Default::default()).unwrap();
+    let mut dep = dependency("pkg.pkl-lang.org/pkl-pantry/pkl.toml");
+    dep.manager = Manager::Pkl;
+    dep.file = "config.pkl".into();
+    dep.form = EditForm::Scalar(Syntax::InnerToken);
+    dep.source = Source::Pkl;
+    dep.current = "2.9.0".into();
+    dep.resolved = Some("2.9.0".into());
+    let updates = eval
+        .evaluate_at(
+            &dep,
+            &catalog(&["2.9.0", "2.9.1", "2.13.0", "3.0.0"]),
+            "2026-10-22T00:00:00Z".parse().unwrap(),
+        )
+        .unwrap()
+        .updates;
+    assert!(!updates.is_empty());
+    for update in &updates {
+        assert_eq!(update.new_value, update.new_version, "{update:?}");
+    }
+}
+
 fn image(digest: &str) -> Dependency {
     Dependency {
         manager: Manager::Dockerfile,

@@ -15,6 +15,12 @@ pub fn edits(
     value: &str,
     digest: Option<&str>,
 ) -> Result<Vec<Edit>, String> {
+    match dep.proposing().edits {
+        Edits::ReportOnly(reason) => return Err(reason.into()),
+        // A locked input is never declared: the tool rewrites the lock.
+        Edits::Relock => return Ok(Vec::new()),
+        Edits::Manifest => {}
+    }
     let descriptor = ecosystem(dep.manager);
     if let Some(reason) = descriptor.edit_refusal(dep) {
         return Err(reason);

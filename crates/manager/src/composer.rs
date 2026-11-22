@@ -144,10 +144,7 @@ pub(super) fn extract(
 pub(crate) const PACKAGIST: Public = Public {
     source: Source::Packagist,
     label: "https://packagist.org",
-    is_public: |url| {
-        crate::web_host(url)
-            .is_some_and(|host| matches!(host.as_str(), "packagist.org" | "repo.packagist.org"))
-    },
+    hosts: &["packagist.org", "repo.packagist.org"],
 };
 
 /// Why a package not from a Composer registry is skipped.
@@ -182,28 +179,8 @@ fn manifest(path: &str, text: &str) -> Result<Manifest, Named> {
             "the merge plugin's files in {path}"
         )));
     }
-    let entries: Vec<(Option<&str>, &serde_json::Value)> = match json.get("repositories") {
-        None => return Ok(out),
-        Some(serde_json::Value::Array(entries)) => entries.iter().map(|e| (None, e)).collect(),
-        Some(serde_json::Value::Object(entries)) => entries
-            .iter()
-            .map(|(key, e)| (Some(key.as_str()), e))
-            .collect(),
-        Some(_) => return Err(unread()),
-    };
-    let packagist = |key: &str| matches!(key, "packagist.org" | "packagist");
-    for (key, entry) in entries {
-        // `"packagist.org": false`, as a keyed entry or an object of its own.
-        let switch = match (key, entry) {
-            (Some(key), serde_json::Value::Bool(on)) if packagist(key) => Some(*on),
-            (_, serde_json::Value::Object(map)) if map.len() == 1 => map
-                .iter()
-                .next()
-                .filter(|(key, _)| packagist(key))
-                .and_then(|(_, on)| on.as_bool()),
-            _ => None,
-        };
-        match switch {
+    for (key, entry) in repositories(&json).ok_or_else(unread)? {
+        match packagist_switch(key, entry) {
             Some(true) => continue,
             Some(false) => {
                 out.configured
@@ -247,6 +224,43 @@ fn manifest(path: &str, text: &str) -> Result<Manifest, Named> {
     Ok(out)
 }
 
+/// A `composer.json`'s `repositories` entries, each with its key when the
+/// field is an object, as the lookup origin, the public verdict and the
+/// credential scan all read them. Empty when the field is absent; `None`
+/// when it is neither a list nor an object.
+pub(crate) fn repositories(
+    json: &serde_json::Value,
+) -> Option<Vec<(Option<&str>, &serde_json::Value)>> {
+    match json.get("repositories") {
+        None => Some(Vec::new()),
+        Some(serde_json::Value::Array(entries)) => {
+            Some(entries.iter().map(|e| (None, e)).collect())
+        }
+        Some(serde_json::Value::Object(entries)) => Some(
+            entries
+                .iter()
+                .map(|(key, e)| (Some(key.as_str()), e))
+                .collect(),
+        ),
+        Some(_) => None,
+    }
+}
+
+/// The Packagist switch a `repositories` entry is, if it is one:
+/// `"packagist.org": false`, as a keyed entry or an object of its own.
+pub(crate) fn packagist_switch(key: Option<&str>, entry: &serde_json::Value) -> Option<bool> {
+    let packagist = |key: &str| matches!(key, "packagist.org" | "packagist");
+    match (key, entry) {
+        (Some(key), serde_json::Value::Bool(on)) if packagist(key) => Some(*on),
+        (_, serde_json::Value::Object(map)) if map.len() == 1 => map
+            .iter()
+            .next()
+            .filter(|(key, _)| packagist(key))
+            .and_then(|(_, on)| on.as_bool()),
+        _ => None,
+    }
+}
+
 /// What `composer.lock` records.
 struct Lock {
     recorded: BTreeMap<String, Origin>,
@@ -282,7 +296,7 @@ fn lock(lock: &str) -> Option<Lock> {
             } else {
                 match package.get("notification-url") {
                     None => Origin::Other,
-                    Some(serde_json::Value::String(url)) if (PACKAGIST.is_public)(url) => {
+                    Some(serde_json::Value::String(url)) if PACKAGIST.is_public(url) => {
                         Origin::Index(Named::Public)
                     }
                     Some(serde_json::Value::String(url)) => Origin::Index(Named::Unusable(
@@ -318,9 +332,6 @@ impl crate::Ecosystem for Descriptor {
             lock: crate::Lock {
                 keeps_ranges: true,
                 movable: dep.source == Source::Packagist,
-                reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                    && dep.resolved.is_some()
-                    && dep.source == Source::Packagist,
                 ..Proposing::BASE.lock
             },
             ..Proposing::BASE
@@ -328,9 +339,6 @@ impl crate::Ecosystem for Descriptor {
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
         matches!(crate::roles::leaf(path), "composer.json" | "composer.lock")
-    }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Composer, path).registry
     }
     fn prepare<'a>(
         &self,

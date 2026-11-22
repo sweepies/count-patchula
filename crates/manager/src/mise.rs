@@ -400,37 +400,65 @@ struct Backend {
     names: &'static [&'static str],
     /// `[env]` key prefixes that can redirect it.
     env: &'static [&'static str],
-    /// The project files `project_redirect` checks for it. `None` states
-    /// that no project file redirects the backend — `gem` and `go`
-    /// included, whose installs read no per-project registry settings.
-    project: Option<ProjectCheck>,
+    /// The project files that can redirect it. `None` states that none
+    /// does — `gem` and `go` included, whose installs read no per-project
+    /// registry settings.
+    project: Option<Project>,
     /// A package backend installs from a registry project settings can
     /// redirect, so the variables an `[env]` `_` directive loads could
     /// reach it.
     package: bool,
 }
 
-/// The project files a backend's settings live in, returning why a
-/// lookup there fails.
-type ProjectCheck = fn(&str, &str, &Files, &crate::nuget::Feeds) -> Option<String>;
+/// The project files a backend's registry settings live in.
+struct Project {
+    /// Whether a path is one of them, which the Count reads whatever
+    /// `files` and `exclude` select: mise's `registry_file` role.
+    settings: fn(&str) -> bool,
+    /// Why a lookup for a tool in a folder fails, given those files.
+    check: fn(&str, &str, &Files, &crate::nuget::Feeds) -> Option<String>,
+}
+
+/// Whether `path` holds registry settings a package backend mise runs
+/// reads.
+pub(crate) fn backend_settings(path: &str) -> bool {
+    BACKENDS
+        .iter()
+        .filter_map(|backend| backend.project.as_ref())
+        .any(|project| (project.settings)(path))
+}
 
 const BACKENDS: &[Backend] = &[
     Backend {
         names: &["npm"],
         env: &["NPM_CONFIG_", "YARN_", "COREPACK_"],
-        project: Some(npm_project),
+        project: Some(Project {
+            settings: |path| crate::roles::named(crate::roles::NODE_SETTINGS, path),
+            check: npm_project,
+        }),
         package: true,
     },
     Backend {
         names: &["pypi", "pipx"],
         env: &["PIP_", "UV_", "PIPX_"],
-        project: Some(python_project),
+        project: Some(Project {
+            settings: |path| {
+                matches!(
+                    leaf(path),
+                    "pyproject.toml" | "uv.toml" | "pip.conf" | "pip.ini"
+                )
+            },
+            check: python_project,
+        }),
         package: true,
     },
     Backend {
         names: &["cargo"],
         env: &["CARGO_"],
-        project: Some(cargo_project),
+        project: Some(Project {
+            settings: crate::cargo::config_file,
+            check: cargo_project,
+        }),
         package: true,
     },
     Backend {
@@ -442,7 +470,10 @@ const BACKENDS: &[Backend] = &[
     Backend {
         names: &["dotnet"],
         env: &["NUGET_", "DOTNET_"],
-        project: Some(dotnet_project),
+        project: Some(Project {
+            settings: crate::nuget::config_file,
+            check: dotnet_project,
+        }),
         package: true,
     },
     Backend {
@@ -867,8 +898,8 @@ fn project_redirect(
     BACKENDS
         .iter()
         .find(|backend| backend.names.contains(&kind))
-        .and_then(|backend| backend.project)
-        .and_then(|check| check(dir, tool, files, feeds))
+        .and_then(|backend| backend.project.as_ref())
+        .and_then(|project| (project.check)(dir, tool, files, feeds))
 }
 
 /// Why the lookup of the mise tool `dep` cannot be taken to list what mise
@@ -979,16 +1010,11 @@ impl crate::Ecosystem for Descriptor {
     fn proposing(&self, _dep: &Dependency) -> Proposing {
         Proposing {
             selector_resolved: true,
-            resolved_via_listing: true,
             ..Proposing::BASE
         }
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Mise, path).selected
-    }
-    /// A package backend mise runs in the project reads its settings.
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Mise, path).registry
+        crate::roles::named(crate::roles::MISE_SELECTED, path)
     }
     fn declared_form(
         &self,

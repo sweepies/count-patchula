@@ -85,7 +85,6 @@ pub(crate) struct Descriptor;
 impl crate::Ecosystem for Descriptor {
     fn proposing(&self, dep: &Dependency) -> Proposing {
         Proposing {
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
             pin: Pin {
                 needs_digest: matches!(dep.source, Source::Docker | Source::Oci)
                     && dep.kind == DependencyKind::ContainerImage,

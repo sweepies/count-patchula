@@ -2,7 +2,7 @@
 //! propose for it. Each ecosystem's descriptor states them through
 //! `Ecosystem::proposing`, as the fields where its declarations differ from
 //! [`Proposing::BASE`].
-use crate::Dependency;
+use crate::{Dependency, DependencyKind};
 
 /// What lookup, the engine and update must know to propose for a
 /// dependency: the proposal facts its ecosystem's descriptor states,
@@ -26,9 +26,6 @@ pub struct Proposing {
     /// A selector resolved against the listing: mise's tools, and the setup
     /// tools GitHub Actions runs.
     pub selector_resolved: bool,
-    /// mise entries and every `tool` kind resolve a selector against the
-    /// listing.
-    pub resolved_via_listing: bool,
     /// How a commit pin and digests apply.
     pub pin: Pin,
     /// How the committed lockfile applies.
@@ -54,7 +51,6 @@ impl Proposing {
         },
         short_tags: ShortTags::Fixed,
         selector_resolved: false,
-        resolved_via_listing: false,
         pin: Pin {
             commit: false,
             needs_digest: false,
@@ -64,7 +60,7 @@ impl Proposing {
             keeps_ranges: false,
             movable: false,
             transitive_movable: false,
-            reported: false,
+            lock_resolved: false,
         },
         edits: Edits::Manifest,
         advisories: Advisories::BySource,
@@ -144,9 +140,9 @@ pub struct Lock {
     /// A transitive lock entry can be moved to an exact version of the one
     /// package.
     pub transitive_movable: bool,
-    /// The `resolved` version could only have come from a committed
-    /// lockfile.
-    pub reported: bool,
+    /// The ecosystem fills `resolved` only from a committed lockfile it
+    /// does not move: npm's, Bun's and Terraform's.
+    pub lock_resolved: bool,
 }
 
 impl Lock {
@@ -159,6 +155,14 @@ impl Lock {
             .then_some(resolved)
             .flatten()
     }
+    /// Whether `dep`'s `resolved` version could only have come from a
+    /// committed lockfile: one the Count moves or one that alone fills it,
+    /// for a declaration that is not a tool or toolchain.
+    pub fn reported(&self, dep: &Dependency) -> bool {
+        (self.movable || self.lock_resolved)
+            && !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
+            && dep.resolved.is_some()
+    }
 }
 
 /// What an update edits.
@@ -169,8 +173,9 @@ pub enum Edits {
     /// No manifest edit: the tool relocks, and each lock's inputs move on
     /// their own branch.
     Relock,
-    /// Reported, never edited.
-    ReportOnly,
+    /// Reported, never edited, for the reason given: an edit is refused
+    /// with it.
+    ReportOnly(&'static str),
 }
 
 /// The advisory identity the source does not give.
@@ -229,7 +234,7 @@ mod tests {
             DependencyKind::Template,
             Source::GithubTags,
         );
-        assert_eq!(copier.edits, Edits::ReportOnly);
+        assert!(matches!(copier.edits, Edits::ReportOnly(_)));
         assert_eq!(
             Proposing {
                 edits: Edits::Manifest,
@@ -262,7 +267,7 @@ mod tests {
             Source::GithubReleases,
         );
         assert_eq!(tool.written, Written::VersionAtPrecision);
-        assert!(tool.selector_resolved && tool.resolved_via_listing);
+        assert!(tool.selector_resolved);
         assert!(!tool.pin.commit && !tool.pin.needs_digest);
         assert_eq!(tool.short_tags, ShortTags::Fixed);
         assert_eq!(tool.advisories, Advisories::BySource);
@@ -281,14 +286,6 @@ mod tests {
         assert_eq!(apm.written, Written::Tag);
         assert!(apm.pin.commit && apm.pin.needs_digest && apm.pin.from_catalog);
         assert!(apm.unversioned.looked_up);
-        let package = facts(Manager::Pkl, DependencyKind::Production, Source::Pkl);
-        assert_eq!(
-            package,
-            Proposing {
-                written: Written::Tag,
-                ..Proposing::BASE
-            }
-        );
         let hook = facts(Manager::PreCommit, DependencyKind::Tool, Source::GithubTags);
         assert_eq!(hook.written, Written::Tag);
         assert!(hook.unversioned.looked_up && hook.unversioned.opaque);
@@ -332,15 +329,14 @@ mod tests {
         }
     }
 
-    /// mise entries and every tool kind resolve a selector against the
-    /// listing.
+    /// mise entries resolve a selector against the listing; other
+    /// managers' tool kinds do not.
     #[test]
     fn tools_resolve_through_the_listing() {
         let mise = facts(Manager::Mise, DependencyKind::Tool, Source::Mise);
-        assert!(mise.selector_resolved && mise.resolved_via_listing);
+        assert!(mise.selector_resolved);
         for manager in [Manager::Npm, Manager::Nuget, Manager::Devcontainer] {
             let tool = facts(manager, DependencyKind::Tool, Source::GithubReleases);
-            assert!(tool.resolved_via_listing, "{manager}");
             assert!(!tool.selector_resolved, "{manager}");
         }
     }
@@ -356,15 +352,17 @@ mod tests {
             (Manager::Composer, Source::Packagist),
             (Manager::Pyproject, Source::Pypi),
         ] {
-            let lock = facts(manager, Production, source).lock;
+            let declared = dep(manager, Production, source);
+            let lock = declared.proposing().lock;
             assert!(
-                lock.keeps_ranges && lock.movable && lock.reported,
+                lock.keeps_ranges && lock.movable && lock.reported(&declared),
                 "{manager}"
             );
             assert_eq!(lock.locked(Some("1.2.3")), Some("1.2.3"), "{manager}");
         }
-        let python = facts(Manager::Pyproject, Toolchain, Source::Mise).lock;
-        assert!(python.keeps_ranges && !python.movable && !python.reported);
+        let toolchain = dep(Manager::Pyproject, Toolchain, Source::Mise);
+        let python = toolchain.proposing().lock;
+        assert!(python.keeps_ranges && !python.movable && !python.reported(&toolchain));
         assert_eq!(python.locked(Some("3.12.0")), None);
         assert!(
             facts(Manager::Cargo, Transitive, Source::Crates)
@@ -376,8 +374,9 @@ mod tests {
                 .lock
                 .transitive_movable
         );
-        let go = facts(Manager::Go, Production, Source::Go).lock;
-        assert!(go.movable && go.reported && !go.keeps_ranges);
+        let module = dep(Manager::Go, Production, Source::Go);
+        let go = module.proposing().lock;
+        assert!(go.movable && go.reported(&module) && !go.keeps_ranges);
     }
 
     /// npm, Bun and Terraform fill `resolved` only from a committed lock.
@@ -385,9 +384,9 @@ mod tests {
     fn node_and_terraform_report_only_what_a_lock_resolved() {
         for manager in [Manager::Npm, Manager::Bun, Manager::Terraform] {
             let mut declared = dep(manager, DependencyKind::Production, Source::Npm);
-            assert!(declared.proposing().lock.reported, "{manager}");
+            assert!(declared.proposing().lock.reported(&declared), "{manager}");
             declared.resolved = None;
-            assert!(!declared.proposing().lock.reported, "{manager}");
+            assert!(!declared.proposing().lock.reported(&declared), "{manager}");
             let lock = declared.proposing().lock;
             assert!(!lock.keeps_ranges && !lock.movable, "{manager}");
         }

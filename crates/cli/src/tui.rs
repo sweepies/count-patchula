@@ -88,7 +88,7 @@ impl Tab {
 }
 
 /// Which update classes the Updates tab shows; `t` cycles through them.
-/// `None` is every class; `Some` cycles through [`UpdateKind::RANKED`].
+/// `None` is every class; `Some` cycles through [`UpdateKind::ALL`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Filter(pub Option<UpdateKind>);
 impl Filter {
@@ -96,10 +96,8 @@ impl Filter {
     pub const ALL: Self = Self(None);
     fn next(self) -> Self {
         Self(match self.0 {
-            None => UpdateKind::RANKED.first().copied(),
-            Some(kind) => UpdateKind::RANKED
-                .get(usize::from(kind.rank()) + 1)
-                .copied(),
+            None => UpdateKind::ALL.first().copied(),
+            Some(kind) => UpdateKind::ALL.get(kind as usize + 1).copied(),
         })
     }
     fn label(self) -> &'static str {

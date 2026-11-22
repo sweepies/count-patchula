@@ -143,7 +143,7 @@ pub async fn view<S: Source>(
         {
             continue;
         }
-        if shared_name(scanner, &entry.path)
+        if scanner.shared_name(&entry.path)
             && entry.size.is_some_and(|size| size > SHARED_NAME_LIMIT)
         {
             continue;
@@ -156,7 +156,7 @@ pub async fn view<S: Source>(
     }
     let contents = source.read(&wanted).await?;
     for (entry, content) in wanted.iter().zip(contents) {
-        let primary = if shared_name(scanner, &entry.path) {
+        let primary = if scanner.shared_name(&entry.path) {
             Primary::SharedName
         } else {
             Primary::Selected
@@ -228,12 +228,6 @@ pub async fn view<S: Source>(
         warnings,
         refusal,
     })
-}
-
-/// Whether only managers whose file names another format shares read
-/// `path`, so it may be no manager's file at all.
-fn shared_name(scanner: &Scanner, path: &str) -> bool {
-    scanner.shared_name(path) && !tooling::reads(path) && !tooling::manifest(path)
 }
 
 /// Why an entry is read.
@@ -481,6 +475,65 @@ fn walk(dir: &Path) -> std::io::Result<Vec<String>> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    /// A `.pkl` file, the one name another format shares, plays no other
+    /// role: no ecosystem reads it as settings or registry settings, the
+    /// credential scan never checks it, and the tooling warnings never read
+    /// it, so [`Scanner::shared_name`] needs no exclusions for them. The
+    /// probes are each taxonomy name with `.pkl` appended and `.pkl` files
+    /// in the folders the role predicates look in.
+    #[test]
+    fn no_role_names_a_pkl_file() {
+        use patchula_words::Manager;
+        let mut probes: Vec<String> = Manager::ALL
+            .iter()
+            .flat_map(|manager| {
+                let locks = patchula_manager::roles::lock_names(*manager);
+                patchula_manager::roles::manifest_names(*manager)
+                    .iter()
+                    .chain(locks.supported)
+                    .chain(locks.unsupported)
+                    .map(|name| format!("{name}.pkl"))
+            })
+            .collect();
+        probes.extend(
+            [
+                "settings.pkl",
+                "build.pkl",
+                ".npmrc.pkl",
+                "nuget.config.pkl",
+                "settings.xml.pkl",
+                ".bundle/config.pkl",
+                ".cargo/config.pkl",
+                ".mvn/maven.pkl",
+                "buildSrc/src/main/kotlin/Conventions.pkl",
+                ".config/mise/config.pkl",
+                ".config/mise/conf.d/tools.pkl",
+                ".github/workflows/ci.pkl",
+                ".woodpecker/ci.pkl",
+            ]
+            .map(String::from),
+        );
+        for probe in probes {
+            for path in [probe.clone(), format!("sub/dir/{probe}")] {
+                assert!(!registry_settings(&path), "{path}: registry settings");
+                assert!(
+                    !patchula_manager::credential_scope(&path),
+                    "{path}: credential scan"
+                );
+                assert!(
+                    !tooling::reads(&path) && !tooling::manifest(&path),
+                    "{path}: tooling"
+                );
+                for manager in Manager::ALL {
+                    assert!(
+                        !patchula_manager::roles::eco_roles(*manager, &path).registry,
+                        "{path}: {manager} registry"
+                    );
+                }
+            }
+        }
+    }
 
     /// A source that answers every asked entry with fixed bytes.
     struct Fixed(BTreeMap<String, Vec<u8>>);

@@ -408,13 +408,6 @@ pub(super) fn node_version(path: &str, text: &Lines<'_>, manager: Manager) -> Ve
     }]
 }
 
-/// Whether `url` is on npm's or Yarn's public registry host, over https or the
-/// plain http some old `.npmrc` files still name.
-pub(crate) fn public(url: &str) -> bool {
-    crate::web_host(url)
-        .is_some_and(|host| matches!(host.as_str(), "registry.npmjs.org" | "registry.yarnpkg.com"))
-}
-
 /// What a registry setting names, parsed the way every ecosystem's are.
 fn named(value: &str) -> Named {
     Named::parse(value, &NPM)
@@ -472,29 +465,63 @@ pub(super) fn env_registry_warnings(files: &crate::Files) -> Vec<String> {
     out
 }
 
+/// One `.npmrc` line, as the lookup origin, the public verdict and the
+/// credential scan all read it, so the three agree on which lines set a
+/// registry.
+pub(crate) enum NpmrcLine<'a> {
+    /// Blank, or a `#` or `;` comment.
+    Ignored,
+    /// `registry=` (no scope) or `@scope:registry=`: the trimmed key and
+    /// the value as written after the first `=`.
+    Registry {
+        key: &'a str,
+        scope: Option<&'a str>,
+        value: &'a str,
+    },
+    /// Any other `key=value` setting, with the same parts.
+    Setting { key: &'a str, value: &'a str },
+    /// A line with no `=`, trimmed.
+    Other(&'a str),
+}
+
+/// The lines of an `.npmrc`.
+pub(crate) fn npmrc_lines(text: &str) -> impl Iterator<Item = NpmrcLine<'_>> {
+    text.lines().map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with(['#', ';']) {
+            return NpmrcLine::Ignored;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return NpmrcLine::Other(line);
+        };
+        let key = key.trim();
+        let scope = key
+            .strip_suffix(":registry")
+            .filter(|scope| scope.starts_with('@') && scope.len() > 1);
+        if key == "registry" || scope.is_some() {
+            NpmrcLine::Registry { key, scope, value }
+        } else {
+            NpmrcLine::Setting { key, value }
+        }
+    })
+}
+
 /// `registry=` and `@scope:registry=` from an `.npmrc`.
 pub(super) fn npmrc(text: &str) -> Npmrc {
     let mut npmrc = Npmrc::default();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with(['#', ';']) {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
+    for line in npmrc_lines(text) {
+        let NpmrcLine::Registry { scope, value, .. } = line else {
             continue;
         };
-        let key = key.trim();
         // An empty value sets nothing.
         if value.trim().trim_matches(['"', '\'']).is_empty() {
             continue;
         }
-        if key == "registry" {
-            npmrc.default = Some(named(value));
-        } else if let Some(scope) = key.strip_suffix(":registry")
-            && scope.starts_with('@')
-            && scope.len() > 1
-        {
-            npmrc.scopes.insert(scope.to_owned(), named(value));
+        match scope {
+            None => npmrc.default = Some(named(value)),
+            Some(scope) => {
+                npmrc.scopes.insert(scope.to_owned(), named(value));
+            }
         }
     }
     npmrc
@@ -647,7 +674,7 @@ pub(super) fn assign_registries(
 pub(crate) const NPM: crate::origins::Public = crate::origins::Public {
     source: Source::Npm,
     label: "npm",
-    is_public: public,
+    hosts: &["registry.npmjs.org", "registry.yarnpkg.com"],
 };
 
 /// The node ecosystem: npm and bun share its files; bun extracts only when
@@ -670,10 +697,8 @@ impl crate::Ecosystem for Descriptor {
                 _ => Range::Installed,
             },
             runtime_toolchain: dep.kind == DependencyKind::Toolchain,
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
             lock: Lock {
-                reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                    && dep.resolved.is_some(),
+                lock_resolved: true,
                 ..Proposing::BASE.lock
             },
             ..Proposing::BASE
@@ -693,12 +718,6 @@ impl crate::Ecosystem for Descriptor {
                 | ".node-version"
                 | ".npmrc"
         )
-    }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(self.manager, path).registry
-    }
-    fn backend_settings(&self, path: &str) -> bool {
-        self.registry_file(path)
     }
     fn locked_source(&self) -> Option<Source> {
         Some(Source::Npm)

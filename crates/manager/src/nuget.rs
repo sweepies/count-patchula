@@ -250,14 +250,7 @@ pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, S
 pub(crate) const NUGET_ORG: Public = Public {
     source: Source::Nuget,
     label: "https://api.nuget.org/v3/index.json",
-    is_public: |url| {
-        crate::web_host(url).is_some_and(|host| {
-            matches!(
-                host.as_str(),
-                "api.nuget.org" | "www.nuget.org" | "nuget.org"
-            )
-        })
-    },
+    hosts: &["api.nuget.org", "www.nuget.org", "nuget.org"],
 };
 
 /// The names NuGet reads a config file under, in each folder.
@@ -768,20 +761,11 @@ pub(crate) static DESCRIPTOR: Descriptor = Descriptor;
 pub(crate) struct Descriptor;
 
 impl crate::Ecosystem for Descriptor {
-    fn proposing(&self, dep: &Dependency) -> Proposing {
-        Proposing {
-            resolved_via_listing: dep.kind == DependencyKind::Tool,
-            ..Proposing::BASE
-        }
+    fn proposing(&self, _dep: &Dependency) -> Proposing {
+        Proposing::BASE
     }
     fn selected(&self, _config: &patchula_config::Config, path: &str) -> bool {
         selected(path)
-    }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Nuget, path).registry
-    }
-    fn backend_settings(&self, path: &str) -> bool {
-        config_file(path)
     }
     fn prepare<'a>(
         &self,

@@ -77,9 +77,8 @@ fn read(uri: &str) -> Option<Result<Read, &'static str>> {
                     "github.com/{owner}/{repo}/releases/download/{prefix}{VERSION_PLACEHOLDER}{suffix}/{name}"
                 )
             }
-            ("pkg.pkl-lang.org", ["github.com", _, _, _] | [_, _]) => {
-                format!("pkg.pkl-lang.org/{path_base}")
-            }
+            // `PklPackage::parse` below owns which shapes are packages.
+            ("pkg.pkl-lang.org", _) => format!("pkg.pkl-lang.org/{path_base}"),
             _ => return Err(UNSUPPORTED_PATH),
         };
         if PklPackage::parse(&package).is_none() {
@@ -95,13 +94,9 @@ fn read(uri: &str) -> Option<Result<Read, &'static str>> {
 }
 
 /// A skipped package URI as a report shows it: without its query, fragment
-/// and checksum, and hidden when what is left holds a `:`, which a password
-/// always follows (a port is hidden with it), or an `@` before the first
-/// `/`, which ends a user. `name@version` puts an `@` in every package path,
-/// so the generic URL redaction, which reads any `@` as a possible user,
-/// would hide them all. The URI is decoded, so it may hold anything an
-/// escape can write: anything but printable ASCII hides it too, so no line
-/// break or terminal escape reaches a report.
+/// and checksum, and hidden when it could hold a credential (a `:` anywhere
+/// or an `@` in the authority; every package path has an `@`) or anything
+/// but printable ASCII.
 fn shown(uri: &str) -> String {
     let rest = uri.strip_prefix("package://").unwrap_or(uri);
     let rest = rest.split(['?', '#']).next().unwrap_or(rest);

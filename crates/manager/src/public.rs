@@ -213,7 +213,7 @@ pub(crate) fn fetch_ok(value: &str, public: &Public) -> bool {
             return fetch_ok(rest, public);
         }
     }
-    if (public.is_public)(value) {
+    if public.is_public(value) {
         return true;
     }
     let Some((scheme, rest)) = value.split_once(':') else {
@@ -835,35 +835,16 @@ pub(crate) fn lines_public(text: &str, public: &Public) -> bool {
 /// values must name the public registry itself — a `${VAR}` placeholder
 /// could resolve to anything at run time.
 fn npmrc_public(text: &str) -> bool {
+    use crate::npm::NpmrcLine;
     let public = &crate::npm::NPM;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with(['#', ';']) {
-            continue;
+    crate::npm::npmrc_lines(text).all(|line| match line {
+        NpmrcLine::Ignored => true,
+        NpmrcLine::Registry { key, value, .. } => {
+            string_ok(key, public) && matches!(Named::parse(value, public), Named::Public)
         }
-        match line.split_once('=') {
-            Some((key, value)) => {
-                let key = key.trim();
-                if !string_ok(key, public) {
-                    return false;
-                }
-                let registry = key == "registry"
-                    || key
-                        .strip_suffix(":registry")
-                        .is_some_and(|scope| scope.starts_with('@') && scope.len() > 1);
-                if registry {
-                    if !matches!(Named::parse(value, public), Named::Public) {
-                        return false;
-                    }
-                } else if !string_ok(value, public) {
-                    return false;
-                }
-            }
-            None if !string_ok(line, public) => return false,
-            None => {}
-        }
-    }
-    true
+        NpmrcLine::Setting { key, value } => string_ok(key, public) && string_ok(value, public),
+        NpmrcLine::Other(line) => string_ok(line, public),
+    })
 }
 
 /// A `composer.json`: its `repositories` entries, its other strings, and
@@ -885,33 +866,16 @@ fn composer_json_public(text: &str) -> bool {
 /// rule on, such as a scheme-less URL Composer would prepend a scheme to,
 /// is not.
 fn composer_repositories_public(json: &serde_json::Value) -> bool {
-    let Some(repositories) = json.get("repositories") else {
-        return true;
+    let Some(entries) = crate::composer::repositories(json) else {
+        return false;
     };
-    let entries: Vec<(Option<&str>, &serde_json::Value)> = match repositories {
-        serde_json::Value::Array(entries) => entries.iter().map(|e| (None, e)).collect(),
-        serde_json::Value::Object(entries) => entries
-            .iter()
-            .map(|(key, entry)| (Some(key.as_str()), entry))
-            .collect(),
-        _ => return false,
-    };
-    let packagist = |key: &str| matches!(key, "packagist.org" | "packagist");
     for (key, entry) in entries {
         if let Some(key) = key
             && !string_ok(key, &crate::composer::PACKAGIST)
         {
             return false;
         }
-        let toggle = match (key, entry) {
-            (Some(key), serde_json::Value::Bool(_)) if packagist(key) => true,
-            (_, serde_json::Value::Object(map)) if map.len() == 1 => map
-                .iter()
-                .next()
-                .is_some_and(|(key, on)| packagist(key) && on.is_boolean()),
-            _ => false,
-        };
-        if toggle {
+        if crate::composer::packagist_switch(key, entry).is_some() {
             continue;
         }
         let Some(map) = entry.as_object() else {
@@ -1022,16 +986,7 @@ pub(crate) fn verdict(path: &str, text: &crate::Text, files: &Files) -> Option<b
 type VerdictRule = fn(&str, &str, &Files) -> Option<bool>;
 
 fn npm_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    // Coverage is the taxonomy's file set; the leaf match only picks the
-    // parser for a covered name, and fails closed on one it does not know.
-    if !(roles::named(roles::NODE_MANIFEST, path)
-        || roles::named(roles::NODE_SETTINGS, path)
-        || roles::named(roles::PNPM_WORKSPACE, path)
-        || roles::named(roles::NPM_LOCKS, path)
-        || roles::named(roles::BUN_LOCK, path))
-    {
-        return None;
-    }
+    // A name with no arm has no verdict, so the run it steers fails closed.
     let leaf = roles::leaf(path);
     let flag = match leaf {
         "package.json" => json_public(text, false, &crate::npm::NPM, package_json_rule),
@@ -1050,9 +1005,6 @@ fn npm_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
 }
 
 fn pypi_verdict(path: &str, text: &str, _files: &Files) -> Option<bool> {
-    if !(roles::named(roles::PYTHON_LOCKS, path) || roles::named(roles::PYTHON_SETTINGS, path)) {
-        return None;
-    }
     let leaf = roles::leaf(path);
     let flag = match leaf {
         "pyproject.toml" => toml_public(text, &crate::pypi::PYPI, pyproject_rule),

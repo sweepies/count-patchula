@@ -8,7 +8,10 @@ use std::net::{IpAddr, Ipv6Addr};
 use toml_edit::Value;
 use url::{Host, Url};
 
-/// Names that reach a metadata endpoint without an address in them.
+/// Names that reach a metadata endpoint without an address in them,
+/// refused before any lookup: a resolver with search domains can answer
+/// them with another address, while the name mise fetches reaches the
+/// endpoint.
 const METADATA_NAMES: &[&str] = &["metadata.google.internal", "metadata"];
 /// AWS's IPv6 instance-metadata address.
 const AWS_IPV6_METADATA: Ipv6Addr = Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
@@ -69,11 +72,14 @@ pub(crate) async fn check(tool: &str) -> Result<(), Error> {
             Some(Host::Ipv4(v4)) => vec![IpAddr::V4(v4)],
             Some(Host::Ipv6(v6)) => vec![IpAddr::V6(v6)],
             Some(Host::Domain(name)) => {
-                let name = name.trim_end_matches('.').to_ascii_lowercase();
-                if METADATA_NAMES.contains(&name.as_str()) {
+                let bare = name.trim_end_matches('.').to_ascii_lowercase();
+                if METADATA_NAMES.contains(&bare.as_str()) {
                     return refuse(WHY.into());
                 }
-                match tokio::net::lookup_host((name.as_str(), port)).await {
+                // The name exactly as mise requests it: a trailing dot makes
+                // it absolute, and stripping it would let search domains
+                // answer for a name mise resolves without them.
+                match tokio::net::lookup_host((name, port)).await {
                     Ok(found) => found.map(|address| address.ip()).collect(),
                     Err(_) => {
                         return refuse(format!(
@@ -132,10 +138,12 @@ mod tests {
             r#"s3:t[endpoint="http://169.254.170.2/v2/credentials"]"#,
             r#"github:o/r[api_url="http://Metadata.Google.Internal./computeMetadata/v1"]"#,
             r#"http:t[platforms={linux-x64={version_list_url="http://metadata/"}}]"#,
+            r#"http:t[version_list_url="http://metadata.google.internal./computeMetadata/v1"]"#,
+            r#"http:t[version_list_url="http://metadata./"]"#,
         ] {
             let error = check(tool).await.unwrap_err().to_string();
             assert!(
-                error.contains("instance-metadata endpoint"),
+                error.contains("points mise at a cloud instance-metadata endpoint"),
                 "{tool}: {error}"
             );
         }

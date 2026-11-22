@@ -2,10 +2,10 @@
 //! ecosystem, stated once here and next to the predicates each ecosystem
 //! module owns, and read by every classifier that needs a file's role.
 //! Everything fails closed: a name no ecosystem claims
-//! has no role, so it is never materialized for a tool run, never public,
-//! and credential-checked whenever it could hold one.
+//! has no role, so it is never materialized for a tool run and never public.
+//! A file that may hold a committed credential gets a `credential_scan`.
 
-use crate::credentials::{CredentialCheck, CredentialScan};
+use crate::credentials::CredentialScan;
 use patchula_words::Manager;
 
 /// The lockfile names one manager's ecosystem recognizes: `supported` are
@@ -23,25 +23,20 @@ pub struct LockNames {
 /// The roles one file name can have for one manager's ecosystem.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EcoRoles {
-    /// A settings file read whatever `files`/`exclude` select: the
-    /// ecosystem's `registry_file` answer.
+    /// A settings file read whatever `files`/`exclude` select.
     pub registry: bool,
     /// Can say where packages come from.
     pub settings: bool,
     /// The credential check this name's text gets, `Some` exactly when the
-    /// file may hold a committed credential: `credentials::keyed` runs it,
+    /// file may hold a committed credential: `committed_credentials` runs it,
     /// so a credential-bearing file cannot lack a check.
     pub(crate) credential_scan: Option<CredentialScan>,
-    /// This ecosystem's credential-check decision for the name.
-    pub check: CredentialCheck,
     /// A lockfile tool may modify it.
     pub writable: bool,
     /// A lockfile tool reads it but never modifies it.
     pub read: bool,
     /// It can steer what this ecosystem's tools fetch.
     pub steers: bool,
-    /// The Count's extractor selects the file for this ecosystem.
-    pub selected: bool,
 }
 
 /// The roles a file name has across every ecosystem: the union, since a
@@ -52,8 +47,6 @@ pub struct Roles {
     pub settings: bool,
     /// May hold a committed credential.
     pub credentials: bool,
-    /// Whether its text is checked for committed credentials.
-    pub check: CredentialCheck,
     /// A lockfile tool may modify it.
     pub writable: bool,
     /// A lockfile tool reads it but never modifies it.
@@ -108,9 +101,6 @@ pub(crate) const PYTHON_SETTINGS: &[&str] = &[
 /// pip's own configuration, which `settings` covers but no index lookup
 /// reads.
 const PIP_SETTINGS: &[&str] = &["pip.conf", "pip.ini"];
-/// The `PYTHON_SETTINGS` files the Count parses for credentials and
-/// indexes; the rest only name an index or nothing the Count reads.
-const PYTHON_SCANNED: &[&str] = &["pyproject.toml", "uv.toml", "poetry.toml"];
 /// The Python files a tool run reads but never modifies.
 const PYTHON_READ: &[&str] = &[".python-version", "uv.toml", "poetry.toml"];
 /// The NuGet JSON manifests that are not MSBuild files.
@@ -152,78 +142,11 @@ const NUGET_WRITABLE: &[&str] = &[
     "global.json",
 ];
 
-/// mise's leaf-named files and the roles each plays. `mise::config_file`
-/// also covers the other names mise reads configuration by
-/// (`mise/config.toml`, `.config/mise/conf.d/*.toml`, environment
-/// variants); those get `settings` and `registry` only. Its names are `manifest_names(Mise)`'s plus `mise.lock`.
-struct MiseFile {
-    name: &'static str,
-    /// `Descriptor::selected`: the Count parses the file for tools.
-    selected: bool,
-    /// `check`'s decision for the file's text.
-    check: CredentialCheck,
-    /// A lockfile tool reads it but never modifies it.
-    read: bool,
-    /// A lockfile tool may modify it.
-    writable: bool,
-}
-
-const MISE_FILES: &[MiseFile] = &[
-    MiseFile {
-        name: "mise.toml",
-        selected: true,
-        check: CredentialCheck::Scan,
-        read: true,
-        writable: false,
-    },
-    MiseFile {
-        name: ".mise.toml",
-        selected: true,
-        check: CredentialCheck::Scan,
-        read: true,
-        writable: false,
-    },
-    MiseFile {
-        name: "mise.local.toml",
-        selected: false,
-        check: CredentialCheck::Undecided,
-        read: false,
-        writable: false,
-    },
-    MiseFile {
-        name: ".miserc.toml",
-        selected: false,
-        check: CredentialCheck::Undecided,
-        read: false,
-        writable: false,
-    },
-    MiseFile {
-        name: ".miserc.local.toml",
-        selected: false,
-        check: CredentialCheck::Undecided,
-        read: false,
-        writable: false,
-    },
-    MiseFile {
-        name: ".tool-versions",
-        selected: true,
-        check: CredentialCheck::Skip,
-        read: true,
-        writable: false,
-    },
-    MiseFile {
-        name: "mise.lock",
-        selected: false,
-        check: CredentialCheck::Scan,
-        read: false,
-        writable: true,
-    },
-];
-
-/// The mise leaf file `path` names, if the taxonomy lists it.
-fn mise_file(path: &str) -> Option<&'static MiseFile> {
-    MISE_FILES.iter().find(|file| named(&[file.name], path))
-}
+/// The mise files the Count parses for tools, which a tool run reads but
+/// never modifies. `mise::config_file` also covers the other names mise
+/// reads configuration by (`mise/config.toml`, `.config/mise/conf.d/*.toml`,
+/// environment variants); those get `settings` and `registry` only.
+pub(crate) const MISE_SELECTED: &[&str] = &["mise.toml", ".mise.toml", ".tool-versions"];
 
 pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
     let mut roles = EcoRoles::default();
@@ -232,16 +155,6 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             roles.registry = named(NODE_SETTINGS, path);
             roles.settings = roles.registry;
             roles.credential_scan = scanned(path, NPM_CREDENTIAL_SCANS);
-            roles.check = if named(NODE_MANIFEST, path)
-                || named(NPM_LOCKS, path)
-                || named(BUN_LOCK, path)
-                || named(NODE_SETTINGS, path)
-                || named(PNPM_WORKSPACE, path)
-            {
-                CredentialCheck::Scan
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable = named(NPM_LOCKS, path) || named(NODE_MANIFEST, path);
             roles.read = named(NODE_SETTINGS, path) || named(PNPM_WORKSPACE, path);
             roles.steers = named(NODE_MANIFEST, path)
@@ -253,11 +166,6 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             roles.registry = named(NODE_SETTINGS, path);
             roles.settings = roles.registry;
             roles.credential_scan = scanned(path, BUN_CREDENTIAL_SCANS);
-            roles.check = if named(BUN_LOCK, path) || named(NODE_SETTINGS, path) {
-                CredentialCheck::Scan
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable = named(BUN_LOCK, path);
             roles.read = named(NODE_SETTINGS, path);
             roles.steers =
@@ -267,13 +175,6 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             roles.registry = named(PYTHON_SETTINGS, path) || named(PYTHON_LOCKS, path);
             roles.settings = named(PYTHON_SETTINGS, path) || named(PIP_SETTINGS, path);
             roles.credential_scan = scanned(path, PYTHON_CREDENTIAL_SCANS);
-            roles.check = if named(PYTHON_SCANNED, path) || named(PYTHON_LOCKS, path) {
-                CredentialCheck::Scan
-            } else if named(&[".python-version"], path) {
-                CredentialCheck::Skip
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable =
                 named(manifest_names(Manager::Pyproject), path) || named(PYTHON_LOCKS, path);
             roles.read = named(PYTHON_READ, path);
@@ -285,14 +186,6 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             roles.settings = crate::bundle_config(path);
             roles.credential_scan =
                 named(manifest_names(Manager::Bundler), path).then_some(CredentialScan::Gemfile);
-            roles.check = if named(manifest_names(Manager::Bundler), path)
-                || named(lock_names(Manager::Bundler).supported, path)
-                || path.ends_with(".gemspec")
-            {
-                CredentialCheck::Scan
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable = named(manifest_names(Manager::Bundler), path)
                 || named(lock_names(Manager::Bundler).supported, path);
             roles.read = path.ends_with(".gemspec");
@@ -302,13 +195,6 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             roles.registry = named(lock_names(Manager::Composer).supported, path);
             roles.credential_scan =
                 named(manifest_names(Manager::Composer), path).then_some(CredentialScan::Composer);
-            roles.check = if named(manifest_names(Manager::Composer), path)
-                || named(lock_names(Manager::Composer).supported, path)
-            {
-                CredentialCheck::Scan
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable = named(manifest_names(Manager::Composer), path)
                 || named(lock_names(Manager::Composer).supported, path);
             roles.steers = roles.writable;
@@ -319,15 +205,6 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
                 crate::cargo::config_file(path) || named(manifest_names(Manager::Cargo), path);
             roles.credential_scan =
                 crate::cargo::config_file(path).then_some(CredentialScan::Cargo);
-            roles.check = if named(manifest_names(Manager::Cargo), path)
-                || named(lock_names(Manager::Cargo).supported, path)
-                || crate::cargo::config_file(path)
-                || path.ends_with(".rs")
-            {
-                CredentialCheck::Scan
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable = named(manifest_names(Manager::Cargo), path)
                 || named(lock_names(Manager::Cargo).supported, path);
             roles.read = path.ends_with(".rs");
@@ -336,27 +213,10 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
         Manager::Go => {
             roles.registry = crate::go::work_file(path);
             roles.settings = roles.registry;
-            roles.check = if named(manifest_names(Manager::Go), path)
-                || named(&["go.work"], path)
-                || path.ends_with(".go")
-            {
-                CredentialCheck::Scan
-            } else if named(&["go.sum", "go.work.sum"], path) {
-                CredentialCheck::Skip
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable = named(manifest_names(Manager::Go), path) || named(&["go.sum"], path);
             roles.read = named(&["go.work", "go.work.sum"], path) || path.ends_with(".go");
         }
         Manager::Terraform => {
-            roles.check = if path.ends_with(".tf") {
-                CredentialCheck::Scan
-            } else if named(lock_names(Manager::Terraform).supported, path) {
-                CredentialCheck::Skip
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable =
                 path.ends_with(".tf") || named(lock_names(Manager::Terraform).supported, path);
         }
@@ -365,16 +225,6 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             roles.settings = roles.registry;
             roles.credential_scan =
                 crate::nuget::config_file(path).then_some(CredentialScan::Nuget);
-            roles.check = if crate::nuget::config_file(path)
-                || named(manifest_names(Manager::Nuget), path)
-                || suffixed(NUGET_SUFFIXES, path)
-            {
-                CredentialCheck::Scan
-            } else if named(lock_names(Manager::Nuget).supported, path) {
-                CredentialCheck::Skip
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable = named(NUGET_WRITABLE, path);
             roles.read = crate::nuget::config_file(path)
                 || named(NUGET_BUILD_TARGETS, path)
@@ -392,50 +242,20 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
         Manager::Gradle => {
             roles.registry = crate::gradle::build_logic(path);
             roles.settings = roles.registry;
-            roles.check = if named(GRADLE_WRAPPER, path) {
-                CredentialCheck::Scan
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable = named(GRADLE_WRAPPER, path);
         }
         Manager::Mise => {
-            roles.registry = crate::mise::config_file(path)
-                || [
-                    Manager::Npm,
-                    Manager::Pyproject,
-                    Manager::Cargo,
-                    Manager::Nuget,
-                ]
-                .iter()
-                .any(|m| crate::ecosystem(*m).backend_settings(path));
+            // A package backend mise runs in the project reads its settings.
+            roles.registry = crate::mise::config_file(path) || crate::mise::backend_settings(path);
             roles.settings = crate::mise::config_file(path);
-            if let Some(file) = mise_file(path) {
-                roles.selected = file.selected;
-                roles.check = file.check;
-                roles.read = file.read;
-                roles.writable = file.writable;
-            }
+            roles.read = named(MISE_SELECTED, path);
+            roles.writable = named(lock_names(Manager::Mise).supported, path);
         }
         Manager::Nix => {
-            roles.check = if named(manifest_names(Manager::Nix), path)
-                || named(lock_names(Manager::Nix).supported, path)
-            {
-                CredentialCheck::Scan
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable = named(lock_names(Manager::Nix).supported, path);
             roles.read = named(manifest_names(Manager::Nix), path);
         }
         Manager::Apm => {
-            roles.check = if named(manifest_names(Manager::Apm), path)
-                || named(lock_names(Manager::Apm).supported, path)
-            {
-                CredentialCheck::Scan
-            } else {
-                CredentialCheck::Undecided
-            };
             roles.writable = named(lock_names(Manager::Apm).supported, path);
             roles.read = named(manifest_names(Manager::Apm), path);
         }
@@ -445,6 +265,10 @@ pub fn eco_roles(manager: Manager, path: &str) -> EcoRoles {
             // work holds an Actions job (checkout.rs), so nothing here
             // is `read` and `.github/dependabot.yml` stays out.
             roles.writable = path == ACTIONS_LOCK;
+            // The lockfile is read into the snapshot without being
+            // extracted from: which workflows it lists is the pinning
+            // fact, and its `uses:` entries are the tool's.
+            roles.registry = roles.writable;
             // A workflow or action file can steer the run's fetches: it
             // names the repositories the tool resolves.
             roles.steers = github_workflow(path) || action_file(path) || roles.writable;
@@ -462,14 +286,6 @@ pub fn roles(path: &str) -> Roles {
         roles.credentials |= eco.credential_scan.is_some();
         roles.writable |= eco.writable;
         roles.read |= eco.read;
-        let rank = |check: CredentialCheck| match check {
-            CredentialCheck::Scan => 2,
-            CredentialCheck::Skip => 1,
-            CredentialCheck::Undecided => 0,
-        };
-        if rank(eco.check) > rank(roles.check) {
-            roles.check = eco.check;
-        }
     }
     roles
 }
@@ -482,10 +298,6 @@ pub fn roles(path: &str) -> Roles {
 /// out would make its packages the public registry's.
 pub fn registry_settings(path: &str) -> bool {
     roles(path).settings
-}
-
-pub fn credential_check(path: &str) -> CredentialCheck {
-    roles(path).check
 }
 
 pub fn credential_scope(path: &str) -> bool {
@@ -650,18 +462,209 @@ pub fn linked_settings(path: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// `MISE_FILES` is the one list of mise's leaf-named files:
-    /// `manifest_names(Mise)` cannot return a filtered slice, so it names
-    /// the same files minus `mise.lock`, which `lock_names` covers; this
-    /// pins the two views together.
+    /// Every file the tools read credentials from is scanned for committed
+    /// ones, and every other file a tool run materializes or that steers
+    /// what it fetches names here why it is not. The probes are every name
+    /// the taxonomy lists plus a path for each predicate, at the root and
+    /// nested, so a file that gains a role without a `credential_scan`, or
+    /// loses its scan, fails here until it gets one or a reason.
     #[test]
-    fn mise_files_are_manifests_and_locks() {
-        let mut expected: Vec<_> = manifest_names(Manager::Mise).to_vec();
-        expected.extend(lock_names(Manager::Mise).supported);
-        expected.sort_unstable();
-        let mut actual: Vec<_> = MISE_FILES.iter().map(|file| file.name).collect();
-        actual.sort_unstable();
-        assert_eq!(actual, expected);
+    fn credential_bearing_settings_are_scanned() {
+        /// Files whose tools read credentials, or credentialed registry
+        /// URLs, from them.
+        const SCANNED: &[&str] = &[
+            ".npmrc",
+            ".yarnrc.yml",
+            "pnpm-workspace.yaml",
+            "composer.json",
+            "pyproject.toml",
+            "uv.toml",
+            "poetry.toml",
+            "pip.conf",
+            "pip.ini",
+            "Gemfile",
+            "nuget.config",
+            "NuGet.Config",
+            ".cargo/config.toml",
+            ".cargo/config",
+        ];
+        /// Materialized or steering files with no scan, and why. Those
+        /// "not scanned yet" can hold credentials their tools read: gaps
+        /// in the hygiene check, not in the `public` partition's boundary.
+        const UNSCANNED: &[(&[&str], &str)] = &[
+            (&["pdm.toml"], "not scanned yet: PDM repository passwords"),
+            (
+                &[".bundle/config"],
+                "not scanned yet: BUNDLE_<HOST> credentials",
+            ),
+            (&["settings.xml"], "not scanned yet: Maven server passwords"),
+            (&["pixi.toml"], "names channels and indexes only"),
+            (
+                &["hatch.toml"],
+                "Hatch reads publish credentials from user config",
+            ),
+            (
+                &[
+                    "uv.lock",
+                    "poetry.lock",
+                    "Gemfile.lock",
+                    "composer.lock",
+                    "Cargo.lock",
+                    "yarn.lock",
+                    "package-lock.json",
+                    "npm-shrinkwrap.json",
+                    "pnpm-lock.yaml",
+                    "aube-lock.yaml",
+                    "bun.lock",
+                    "packages.lock.json",
+                    "flake.lock",
+                    ".terraform.lock.hcl",
+                    "apm.lock.yaml",
+                    "mise.lock",
+                    ACTIONS_LOCK,
+                ],
+                "a lockfile: names, versions, hashes and sources",
+            ),
+            (
+                &["Cargo.toml"],
+                "Cargo reads registry tokens only from its config",
+            ),
+            (
+                &["go.work", "go.mod", "main.go"],
+                "Go reads credentials from .netrc or GOAUTH",
+            ),
+            (
+                &[
+                    "package.json",
+                    "flake.nix",
+                    "apm.yml",
+                    "app.gemspec",
+                    ".tool-versions",
+                    ".python-version",
+                ],
+                "names packages and versions; its tool reads no credential here",
+            ),
+            (&["src/main.rs"], "Rust source, out of the check's scope"),
+            (
+                &["main.tf"],
+                "Terraform reads registry credentials from its CLI config",
+            ),
+            (
+                &["gradle-wrapper.properties"],
+                "not scanned yet: a user and password in distributionUrl",
+            ),
+            (
+                &[".github/workflows/ci.yml", "action.yml"],
+                "CI files, out of the check's scope",
+            ),
+            (
+                &["pom.xml", ".mvn/maven.config"],
+                "Maven reads server credentials from settings.xml",
+            ),
+            (
+                &[
+                    "build.gradle",
+                    "settings.gradle.kts",
+                    "buildSrc/src/main/kotlin/Conventions.kt",
+                ],
+                "build logic, out of the check's scope",
+            ),
+            (
+                &[
+                    "App.csproj",
+                    "Build.targets",
+                    "Directory.Packages.props",
+                    "Directory.Build.props",
+                    "Directory.Build.targets",
+                    "App.fsproj",
+                    "App.sln",
+                    "Build.props",
+                    "global.json",
+                    "dotnet-tools.json",
+                ],
+                "NuGet reads source credentials only from nuget.config",
+            ),
+            (
+                &[
+                    "mise.toml",
+                    ".mise.toml",
+                    "mise.local.toml",
+                    ".miserc.toml",
+                    ".miserc.local.toml",
+                    "mise.production.toml",
+                    "mise/config.toml",
+                    ".config/mise/config.toml",
+                    ".config/mise/conf.d/tools.toml",
+                ],
+                "environment values, out of the check's scope",
+            ),
+        ];
+        let unscanned = |probe: &str| UNSCANNED.iter().any(|(names, _)| names.contains(&probe));
+        // Every file a tool run materializes or that steers its fetches.
+        let guarded = |path: &str| {
+            let union = roles(path);
+            union.settings
+                || union.read
+                || union.writable
+                || Manager::ALL.iter().any(|manager| {
+                    let eco = eco_roles(*manager, path);
+                    eco.registry || eco.steers
+                })
+        };
+        let mut probes: Vec<&str> = SCANNED.to_vec();
+        probes.extend(UNSCANNED.iter().flat_map(|(names, _)| names.iter()));
+        probes.extend(NODE_SETTINGS.iter().chain(PNPM_WORKSPACE));
+        probes.extend(
+            PYTHON_SETTINGS
+                .iter()
+                .chain(PIP_SETTINGS)
+                .chain(PYTHON_READ),
+        );
+        probes.extend(GRADLE_WRAPPER.iter().chain(NUGET_WRITABLE));
+        probes.extend(MISE_SELECTED);
+        probes.extend([
+            "src/main.rs",
+            "main.go",
+            "main.tf",
+            "app.gemspec",
+            "App.sln",
+            "App.fsproj",
+            "Build.props",
+            ".github/workflows/ci.yml",
+            "action.yml",
+            ACTIONS_LOCK,
+        ]);
+        for manager in Manager::ALL {
+            let locks = lock_names(*manager);
+            probes.extend(manifest_names(*manager));
+            probes.extend(locks.supported.iter().chain(locks.unsupported));
+        }
+        for (names, why) in UNSCANNED {
+            for name in *names {
+                assert!(
+                    guarded(name),
+                    "{name} is listed unscanned ({why}) but plays no role"
+                );
+            }
+        }
+        let mut unlisted = Vec::new();
+        for probe in probes {
+            for path in [probe.to_owned(), format!("sub/dir/{probe}")] {
+                if credential_scope(&path) {
+                    assert!(SCANNED.contains(&probe), "{path} is scanned but not listed");
+                } else if SCANNED.contains(&probe) {
+                    panic!("{path} is not scanned");
+                } else if guarded(&path) && !unscanned(probe) {
+                    unlisted.push(path);
+                }
+            }
+        }
+        unlisted.sort();
+        unlisted.dedup();
+        assert!(
+            unlisted.is_empty(),
+            "materialized or steering but neither scanned nor listed unscanned: {unlisted:?}"
+        );
     }
 
     /// Managers the Count only reads through other files name no lockfile

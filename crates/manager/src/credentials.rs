@@ -15,27 +15,16 @@
 //!
 //! Everything returned names what was found, never the value.
 
-/// Whether a file's text is checked for committed credentials.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CredentialCheck {
-    Scan,
-    /// Its format can hold nothing but names, versions and hashes.
-    Skip,
-    /// Nobody decided, so it is scanned. Every file type the lockfile runner
-    /// materializes must have a decision, which a test in `patchula-update`
-    /// walks the materialized list to enforce.
-    #[default]
-    Undecided,
-}
-
 /// Why `text` committed at `path` refuses the repository, if it does: the
 /// kind of credential found, such as "a `_authToken` in .npmrc" or "a
-/// password in a registry URL". Never the credential itself.
+/// password in a registry URL". Never the credential itself. Only a file
+/// the taxonomy gives a `credential_scan` is checked, with the parser of
+/// its format; an unparseable file is left to the tool.
 pub fn committed_credentials(path: &str, text: &str) -> Option<String> {
-    if crate::roles::credential_check(path) == CredentialCheck::Skip {
-        return None;
-    }
-    keyed(path, text)
+    patchula_words::Manager::ALL
+        .iter()
+        .find_map(|manager| crate::roles::eco_roles(*manager, path).credential_scan)
+        .and_then(|scan| scan.check(path, text))
 }
 
 /// The report reason for a file `committed_credentials` refused.
@@ -47,7 +36,8 @@ pub fn credential_reason(path: &str, kind: &str) -> String {
 
 /// The credential check a file's text gets, which the file-role taxonomy
 /// assigns: `eco_roles` gives a file one exactly when it may hold a
-/// committed credential, so `keyed` cannot drift from the taxonomy.
+/// committed credential, so `committed_credentials` cannot drift from the
+/// taxonomy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CredentialScan {
     /// `.npmrc`: auth keys and registry URLs.
@@ -90,15 +80,6 @@ impl CredentialScan {
     }
 }
 
-/// The credential kinds the settings file at `path` can hold, checked with
-/// the parser of its format. An unparseable file is left to the tool.
-fn keyed(path: &str, text: &str) -> Option<String> {
-    patchula_words::Manager::ALL
-        .iter()
-        .find_map(|manager| crate::roles::eco_roles(*manager, path).credential_scan)
-        .and_then(|scan| scan.check(path, text))
-}
-
 /// Whether `url` carries a committed password: a userinfo whose password
 /// is neither empty nor a `$VAR`, `${VAR}`, `${{ expression }}` or
 /// `%VAR%` reference, which the environment or CI resolves at run time.
@@ -134,12 +115,8 @@ fn credentialed(urls: &[&str]) -> Option<String> {
 /// value lives in the environment, not the file. `username` and `email`
 /// are contact details, not credentials, and an empty value sets nothing.
 fn npmrc(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with(['#', ';']) {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
+    for line in crate::npm::npmrc_lines(text) {
+        let crate::npm::NpmrcLine::Setting { key, value } = line else {
             continue;
         };
         // The key npm reads is after the last ':', as in `//host/:_authToken`.
@@ -163,20 +140,12 @@ fn npmrc(text: &str) -> Option<String> {
 /// `.npmrc` `registry` and `@scope:registry` values carrying a committed
 /// password.
 fn npmrc_urls(text: &str) -> Option<String> {
-    let urls: Vec<&str> = text
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.starts_with(['#', ';']) {
-                return None;
+    let urls: Vec<&str> = crate::npm::npmrc_lines(text)
+        .filter_map(|line| match line {
+            crate::npm::NpmrcLine::Registry { value, .. } => {
+                Some(value.trim().trim_matches(['"', '\'']))
             }
-            let (key, value) = line.split_once('=')?;
-            let key = key.trim();
-            (key == "registry"
-                || key
-                    .strip_suffix(":registry")
-                    .is_some_and(|scope| scope.starts_with('@') && scope.len() > 1))
-            .then(|| value.trim().trim_matches(['"', '\'']))
+            _ => None,
         })
         .collect();
     credentialed(&urls)
@@ -260,15 +229,9 @@ fn composer(text: &str) -> Option<String> {
 /// `repositories` URLs in `composer.json` carrying a committed password.
 fn composer_urls(text: &str) -> Option<String> {
     let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
-    let repositories = value.get("repositories")?;
-    let entries: Vec<&serde_json::Value> = match repositories {
-        serde_json::Value::Array(entries) => entries.iter().collect(),
-        serde_json::Value::Object(entries) => entries.values().collect(),
-        _ => Vec::new(),
-    };
-    let urls: Vec<&str> = entries
-        .iter()
-        .filter_map(|entry| entry.get("url").and_then(|url| url.as_str()))
+    let urls: Vec<&str> = crate::composer::repositories(&value)?
+        .into_iter()
+        .filter_map(|(_, entry)| entry.get("url").and_then(|url| url.as_str()))
         .collect();
     credentialed(&urls)
 }

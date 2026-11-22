@@ -373,9 +373,6 @@ impl crate::Ecosystem for Descriptor {
         Proposing {
             lock: Lock {
                 movable: dep.source == Source::Go,
-                reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                    && dep.resolved.is_some()
-                    && dep.source == Source::Go,
                 ..Proposing::BASE.lock
             },
             advisories: if dep.kind == DependencyKind::Toolchain && dep.package == "go" {
@@ -388,9 +385,6 @@ impl crate::Ecosystem for Descriptor {
     }
     fn selected(&self, _config: &Config, path: &str) -> bool {
         crate::roles::leaf(path) == "go.mod"
-    }
-    fn registry_file(&self, path: &str) -> bool {
-        crate::roles::eco_roles(Manager::Go, path).registry
     }
     fn declared_form(
         &self,

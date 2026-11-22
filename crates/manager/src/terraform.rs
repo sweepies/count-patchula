@@ -202,8 +202,7 @@ impl crate::Ecosystem for Descriptor {
             runtime_toolchain: dep.kind == DependencyKind::Toolchain,
             keeps_satisfied: dep.kind == DependencyKind::Provider,
             lock: Lock {
-                reported: !matches!(dep.kind, DependencyKind::Toolchain | DependencyKind::Tool)
-                    && dep.resolved.is_some(),
+                lock_resolved: true,
                 ..Proposing::BASE.lock
             },
             ..Proposing::BASE
