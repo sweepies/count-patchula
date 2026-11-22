@@ -50,6 +50,36 @@ still applies cleanly. `"behind"` rebases whenever the base moves. Branches with
 regenerated lockfiles are rebuilt whenever the base changes, since a moved base
 can change what the tool resolves.
 
+### The rebasing banner
+
+While a rebuild takes long enough to notice, the PR description says so. A
+banner at the top of the Count's part of the description reads "The Count is
+sinking his teeth into this branch", with a small animated image and what he
+is doing:
+
+- re-checking the PR against its base, once its re-check box is ticked;
+- rebuilding the branch on its base and regenerating its lockfiles, when a
+  rebuild runs the lockfile tools.
+
+GitHub's "edited" note on the description says how long ago it went up. A
+plain rebuild without either of those writes no banner: the description is
+written once, at the end, as before. The banner is a write like any other and
+counts against the Count's [write pacing](/internals/github-client/#writes),
+so a slow rebuild costs one extra description write when its result
+rewrites the description anyway, and two when it would otherwise have left
+the description alone.
+
+The rewrite that ends the rebuild takes the banner down. If the rebuild fails
+or is held, the banner comes down and the PR keeps its usual description, with
+the reason on the dashboard and in the report. A run that stops partway
+through leaves the banner up only until the next run, which rewrites the
+description even when nothing else in it changed.
+
+The image comes from this repository on `raw.githubusercontent.com`, pinned to
+the release that wrote the banner, so old PRs keep showing theirs. Where
+GitHub can't load it, such as on GitHub Enterprise Server without access to
+github.com or offline, the alt text "🦷 rebasing…" stands in for it.
+
 ## The PR
 
 The title and commit message are
@@ -69,7 +99,10 @@ dependency (see [release notes](/guide/release-notes/#how-notes-are-rendered)),
 any `bodyNotes` you configured, and two checkboxes:
 
 - re-check, which forces the branch through verification and regeneration on
-  the next run, or straight away under the [server](/guide/server/);
+  the next run, or straight away under the [server](/guide/server/). Either
+  way the [rebasing banner](#the-rebasing-banner) shows while it runs: the
+  server puts it up as soon as the tick arrives, and a CLI or GitHub Action
+  run puts it up when it reaches the PR;
 - add to the batch, which moves the update into the [batch PR](/guide/batch/).
 
 The Count reads hidden markers, not visible text, so editing the wording does
@@ -84,7 +117,8 @@ person's note above it, or a block that a summary or linking tool added or
 rewrote in place, before or after. Whenever he writes the body he keeps that
 text exactly as it is on GitHub at that moment. When nothing he renders has
 changed he doesn't write the body at all, whatever else it holds, so repeated
-runs leave it as it is.
+runs leave it as it is. The one exception is a [rebasing
+banner](#the-rebasing-banner) still up, which always counts as a change.
 
 If someone or something edits text *inside* his part, his next rewrite wins for
 that part. Descriptions written before the start marker existed are his from

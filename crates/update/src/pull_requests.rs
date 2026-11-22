@@ -1,6 +1,7 @@
 use crate::Plan;
 use crate::error::Error;
 use crate::markers;
+use crate::pr::banner::{self, Rebuild};
 use crate::pr::body::{
     Bodies, Closure, body_hash, closure, notes_key, same_owner, title, unticked, with_foreign,
 };
@@ -546,6 +547,11 @@ pub fn controls_edited(before: &str, after: &str) -> bool {
     let (before, after) = (controls(before), controls(after));
     after.difference(&before).next().is_some()
 }
+/// Whether an edit newly ticked the re-check box: the edit the server
+/// acknowledges with the rebasing banner as it arrives.
+pub fn recheck_ticked(before: &str, after: &str) -> bool {
+    !ticked(before) && ticked(after)
+}
 /// Batched closures and batch PRs never suppress an update.
 pub(crate) fn suppresses(pr: &model::PullRequest) -> bool {
     let body = body(pr);
@@ -555,8 +561,12 @@ pub(crate) fn suppresses(pr: &model::PullRequest) -> bool {
             .is_none()
 }
 pub fn checked(pr: &model::PullRequest) -> bool {
-    body(pr).matches(markers::RECHECK).count() == 1
-        && markers::ticked_lines(body(pr))
+    ticked(body(pr))
+}
+/// Whether `text`'s one re-check box is ticked.
+fn ticked(text: &str) -> bool {
+    text.matches(markers::RECHECK).count() == 1
+        && markers::ticked_lines(text)
             .iter()
             .any(|line| line.ends_with(markers::RECHECK))
 }
@@ -1014,13 +1024,63 @@ impl Lifecycle {
         }
         Ok(())
     }
-    /// A failed branch attempt is acknowledged too; its diagnostic remains in
-    /// the report and the operator can explicitly request another attempt.
-    pub async fn acknowledge_rechecks(&mut self, client: &Client) -> Result<(), Error> {
+    /// Shows the rebasing banner on the open PR of each plan this run
+    /// rebuilds where the wait is real: one whose lockfiles are
+    /// regenerated, or one whose re-check box is ticked. A PR already
+    /// showing one, from the server's acknowledgement or a run that
+    /// stopped mid-rebuild, is left as it is. The banner is a courtesy:
+    /// a failed write is logged and the rebuild goes on.
+    pub async fn announce(&mut self, client: &Client, plans: &[Plan]) {
+        for plan in plans
+            .iter()
+            .filter(|p| p.restored_pr().is_none() && p.action().status == BranchStatus::Planned)
+        {
+            let Some(open) = self.open_pr(plan).filter(|t| {
+                owned_pr(&t.pr, &self.actor, &self.repo) && !banner::shown(body(&t.pr))
+            }) else {
+                continue;
+            };
+            let rebuild = if plan.owes_lockfiles() {
+                Rebuild::Lockfiles
+            } else if plan.retry() && checked(&open.pr) {
+                Rebuild::Recheck
+            } else {
+                continue;
+            };
+            let number = open.pr.number;
+            let expected = body(&open.pr).to_owned();
+            match show_banner(
+                client,
+                &self.repo,
+                number,
+                &self.actor,
+                Some(&expected),
+                rebuild,
+            )
+            .await
+            {
+                Ok(Some(shown)) => {
+                    if let Some(old) = self.prs.iter_mut().find(|p| p.pr.number == number) {
+                        *old = Tracked::from(shown);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!(repo = %self.repo, pr = number, %error,
+                    "rebasing banner not shown"),
+            }
+        }
+    }
+    /// Unticks the re-check box and takes the rebasing banner down on every
+    /// open PR of his that still carries either: the PRs this run did not
+    /// rewrite, a failed branch attempt's included. Its diagnostic remains
+    /// in the report and the operator can explicitly request another
+    /// attempt.
+    pub async fn acknowledge(&mut self, client: &Client) -> Result<(), Error> {
+        let pending = |pr: &model::PullRequest| checked(pr) || banner::shown(body(pr));
         for pr in &mut self.prs {
             if pr.pr.state != "open"
                 || !owned_pr(&pr.pr, &self.actor, &self.repo)
-                || !checked(&pr.pr)
+                || !pending(&pr.pr)
             {
                 continue;
             }
@@ -1030,10 +1090,11 @@ impl Lifecycle {
             if fresh.state != "open" || !owned_pr(&fresh, &self.actor, &self.repo) {
                 continue;
             }
-            if checked(&fresh) {
+            if pending(&fresh) {
+                let text = banner::without_banner(&unticked(body(&fresh))).into_owned();
                 *pr = Tracked::from(
                     client
-                        .patch::<model::PullRequest>(&path, json!({"body":unticked(body(&fresh))}))
+                        .patch::<model::PullRequest>(&path, json!({"body":text}))
                         .await?,
                 );
             }
@@ -1242,8 +1303,9 @@ impl Lifecycle {
         let (_, marker) = bodies.intent(plan);
         if let Some(pr) = existing.filter(|_| bodies.reusable(plan, existing, &marker)) {
             // Rebases, label reconciliation and receipt repair do not change
-            // body inputs. Reuse their notes without metadata or network reads.
-            return body(pr).into();
+            // body inputs. Reuse their notes without metadata or network reads,
+            // less any banner, which only the rebuild in progress needed.
+            return banner::without_banner(body(pr)).into_owned();
         }
         let mut draft = bodies.draft(plan);
         while let Some(key) = draft.next() {
@@ -1296,6 +1358,54 @@ impl Lifecycle {
     pub(crate) fn unsettled(&self, plan: &Plan) -> bool {
         self.unsettled.contains(&plan.action().branch)
     }
+}
+/// Shows the rebasing banner for `rebuild` on PR `number`, read fresh so
+/// what others wrote meanwhile is kept: only an open PR of his, whose
+/// ownership marker still matches `expected`'s when given, and which shows
+/// no banner yet. `None` when it took none.
+async fn show_banner(
+    client: &Client,
+    repo: &str,
+    number: u64,
+    actor: &str,
+    expected: Option<&str>,
+    rebuild: Rebuild,
+) -> Result<Option<model::PullRequest>, Error> {
+    let path = format!("repos/{repo}/pulls/{number}");
+    let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
+    if fresh.state != "open"
+        || !owned_pr(&fresh, actor, repo)
+        || expected.is_some_and(|expected| !same_owner(body(&fresh), expected))
+        || (rebuild == Rebuild::Recheck && !checked(&fresh))
+    {
+        return Ok(None);
+    }
+    let Some(text) =
+        banner::with_banner(body(&fresh), &banner::banner(rebuild, &fresh.base.branch))
+    else {
+        return Ok(None);
+    };
+    Ok(Some(
+        client
+            .patch::<model::PullRequest>(&path, json!({"body":text}))
+            .await?,
+    ))
+}
+/// The server's acknowledgement of a ticked re-check box: the rebasing
+/// banner on PR `number`, written as the tick arrives rather than when the
+/// queued run reaches the repository. The box stays ticked for that run to
+/// pick up. Whether a banner was written.
+pub async fn acknowledge_tick(
+    client: &Client,
+    repo: &str,
+    number: u64,
+    actor: &str,
+) -> Result<bool, Error> {
+    Ok(
+        show_banner(client, repo, number, actor, None, Rebuild::Recheck)
+            .await?
+            .is_some(),
+    )
 }
 
 /// Whether a release-notes fetch for `id` that failed with `error` would

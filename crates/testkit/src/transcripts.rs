@@ -93,11 +93,18 @@ pub fn record(request: &reqwest::Request, body: &Value) {
 /// `tree-N`) are masked too: branches are written concurrently, so which
 /// branch's commit takes which number depends on scheduling. Tests that
 /// care which commit a branch points at assert it themselves.
+///
+/// The rebasing banner's image URL names the release tag of the build, so
+/// it is masked to `v<version>`: a release bump must not move a snapshot.
 fn normalize(line: &str) -> String {
+    let line = line.replace(
+        concat!("/count-patchula/v", env!("CARGO_PKG_VERSION"), "/assets/"),
+        "/count-patchula/v<version>/assets/",
+    );
     static COUNTER_ID: OnceLock<regex::Regex> = OnceLock::new();
     let line = COUNTER_ID
         .get_or_init(|| regex::Regex::new(r"\b(commit|tree)-\d+\b").expect("static id regex"))
-        .replace_all(line, "$1-<n>");
+        .replace_all(&line, "$1-<n>");
     static TIMESTAMP: OnceLock<regex::Regex> = OnceLock::new();
     TIMESTAMP
         .get_or_init(|| {

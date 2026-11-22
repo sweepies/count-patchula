@@ -16,6 +16,11 @@ pub(crate) const OWNERSHIP: &str = "<!-- patchula:";
 pub(crate) const START: &str = "<!-- patchula-begin -->";
 /// `<!-- patchula-recheck -->`, ending the tick box that asks for a re-check.
 pub(crate) const RECHECK: &str = "<!-- patchula-recheck -->";
+/// `<!-- patchula-rebasing -->`, the line opening the banner he shows at
+/// the top of his section while he rebuilds the branch.
+pub(crate) const REBASING: &str = "<!-- patchula-rebasing -->";
+/// `<!-- patchula-rebasing-end -->`, the line closing that banner.
+pub(crate) const REBASING_END: &str = "<!-- patchula-rebasing-end -->";
 /// `<!-- patchula-closed:obsolete -->`, the last line of a body he closed
 /// because the update was superseded.
 pub(crate) const OBSOLETE: &str = "<!-- patchula-closed:obsolete -->";

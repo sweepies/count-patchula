@@ -1284,6 +1284,15 @@ pub async fn restore_inventory(
     if !refs.complete {
         return Ok(not_restored(repository, plans, "incomplete-refs"));
     }
+    // A rebasing banner still up belongs to a rebuild that stopped before
+    // its last write; only the full write path takes it down.
+    if inventory
+        .pull_requests(&repository.repository)
+        .iter()
+        .any(|p| crate::pr::banner::shown(crate::pull_requests::body(&p.pr)))
+    {
+        return Ok(not_restored(repository, plans, "rebasing-banner"));
+    }
     // The filtered walk holds only names under the prefix, so a branch the
     // receipts still name being absent means it was renamed out of the
     // prefix or deleted — GitHub's rename keeps its open pull request,

@@ -182,6 +182,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         transport: transport.clone(),
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
+        writers: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: options.recheck,
@@ -206,7 +207,7 @@ async fn serve_with_settings(options: Options, settings: Reload) -> Result<(), E
         accepting: webhook.accepting.clone(),
         runner: runner.clone(),
     });
-    let webhook = webhook.with_api(api);
+    let webhook = webhook.with_api(api).with_acknowledger(runner.clone());
     let ready = Arc::new(AtomicBool::new(false));
     let listener = TcpListener::bind(options.listen)
         .await
@@ -436,6 +437,10 @@ struct Engines {
     /// Each installation's engine, behind its own lock: batches of different
     /// installations run at once, and a remote run waits only for its own.
     engines: Mutex<BTreeMap<u64, Slot>>,
+    /// A clone of each built engine's GitHub client, outside the slot's
+    /// lock: an acknowledgement writes through it while a batch holds the
+    /// engine, paced by the same write budget.
+    writers: Mutex<BTreeMap<u64, Client>>,
     /// Bounds the public records the worker does not await; a batch's
     /// claims finish while its record is still running.
     records: Arc<tokio::sync::Semaphore>,
@@ -701,7 +706,60 @@ impl Engines {
                 .advertised(self.derived_url.as_deref())
                 .filter(|_| self.signs_in),
         );
+        self.writers
+            .lock()
+            .await
+            .insert(id, engine.github().clone());
         Ok(SlotGuard::new(slot))
+    }
+    /// The installation's engine client, building the engine when no batch
+    /// has yet.
+    async fn writer(&self, id: u64, settings: &Settings) -> Result<Client, Error> {
+        if let Some(client) = self.writers.lock().await.get(&id) {
+            return Ok(client.clone());
+        }
+        let mut slot = self.engine(id, settings).await?;
+        let client = slot.engine().github().clone();
+        slot.finish();
+        Ok(client)
+    }
+}
+impl crate::webhook::Acknowledge for Engines {
+    fn acknowledge<'a>(
+        &'a self,
+        installation: u64,
+        repo: &'a str,
+        number: u64,
+        settings: &'a Settings,
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            let result = match self.writer(installation, settings).await {
+                Ok(client) => {
+                    patchula_update::pull_requests::acknowledge_tick(
+                        &client,
+                        repo,
+                        number,
+                        &self.bot_login,
+                    )
+                    .await
+                }
+                Err(error) => {
+                    tracing::warn!(target: "patchula_server", installation, repository = repo, pr = number, %error,
+                        "re-check acknowledgement skipped");
+                    return;
+                }
+            };
+            match result {
+                Ok(shown) => {
+                    tracing::info!(target: "patchula_server", installation, repository = repo, pr = number, shown,
+                    "re-check tick acknowledged")
+                }
+                Err(error) => {
+                    tracing::warn!(target: "patchula_server", installation, repository = repo, pr = number, %error,
+                    "re-check acknowledgement failed")
+                }
+            }
+        })
     }
 }
 /// The installation's engine slot while a batch or a remote run holds it.

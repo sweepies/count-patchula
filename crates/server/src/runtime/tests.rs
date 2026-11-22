@@ -575,6 +575,7 @@ async fn discovery_skip_is_explicit_and_each_repository_report_gets_a_file() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
+        writers: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -663,6 +664,7 @@ async fn an_unreadable_installation_listing_fails_the_batch() {
         transport,
         cache,
         engines: Mutex::new(BTreeMap::new()),
+        writers: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -790,6 +792,7 @@ async fn concurrent_deliveries_during_startup_token_mint_and_database_contention
         transport: transport.clone(),
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
+        writers: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -1054,6 +1057,70 @@ async fn signature_precedes_json_parse_and_duplicate_delivery_never_enqueues_twi
         StatusCode::ACCEPTED
     );
     assert_eq!(state.cache.queue_len().await.unwrap(), 0);
+}
+/// Records each acknowledgement the webhook asks for.
+struct Acknowledged(tokio::sync::mpsc::UnboundedSender<(u64, String, u64)>);
+impl crate::webhook::Acknowledge for Acknowledged {
+    fn acknowledge<'a>(
+        &'a self,
+        installation: u64,
+        repo: &'a str,
+        number: u64,
+        _: &'a Settings,
+    ) -> BoxFuture<'a, ()> {
+        let _ = self.0.send((installation, repo.to_owned(), number));
+        Box::pin(async {})
+    }
+}
+#[tokio::test]
+async fn a_newly_ticked_recheck_box_is_acknowledged_as_it_arrives() {
+    let (sender, mut acknowledged) = tokio::sync::mpsc::unbounded_channel();
+    let state = state()
+        .await
+        .with_acknowledger(Arc::new(Acknowledged(sender)));
+    let router = router(state.clone(), Arc::new(AtomicBool::new(true)));
+    let mut edited = payload();
+    edited["action"] = json!("edited");
+    edited["pull_request"] = pr();
+    edited["changes"] =
+        json!({"body":{"from":pr()["body"].as_str().unwrap().replace("[x]", "[ ]")}});
+    let body = serde_json::to_vec(&edited).unwrap();
+    for delivery in ["tick", "tick"] {
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request(body.clone(), "pull_request", delivery))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::ACCEPTED
+        );
+    }
+    let got = tokio::time::timeout(Duration::from_secs(5), acknowledged.recv())
+        .await
+        .unwrap();
+    assert_eq!(got, Some((1, "owner/repo".to_owned(), 1)));
+    // The duplicate delivery enqueued nothing and is not acknowledged again;
+    // nor is an edit that leaves an already ticked box ticked.
+    let mut unchanged = edited.clone();
+    unchanged["changes"]["body"]["from"] = pr()["body"].clone();
+    assert_eq!(
+        router
+            .oneshot(request(
+                serde_json::to_vec(&unchanged).unwrap(),
+                "pull_request",
+                "still-ticked"
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), acknowledged.recv())
+            .await
+            .is_err()
+    );
 }
 #[test]
 fn every_trigger_and_switch_and_filters() {
@@ -1853,6 +1920,7 @@ async fn a_dropped_remote_run_discards_its_engine() {
         transport,
         cache: Cache::open(":memory:", Default::default()).await.unwrap(),
         engines: Mutex::new(BTreeMap::new()),
+        writers: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -1904,6 +1972,7 @@ async fn remote_modes_share_the_engine_slot_and_report_failures() {
         transport,
         cache: Cache::open(":memory:", Default::default()).await.unwrap(),
         engines: Mutex::new(BTreeMap::new()),
+        writers: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -1983,6 +2052,7 @@ async fn a_batch_releases_its_claim_before_recording() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
+        writers: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2060,6 +2130,7 @@ async fn a_repository_made_private_is_recorded_private() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
+        writers: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2139,6 +2210,7 @@ async fn a_quiet_repository_skips_the_sweep_and_its_record_stands() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
+        writers: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,
@@ -2268,6 +2340,7 @@ async fn a_sweep_over_quiet_repositories_makes_no_requests() {
         transport,
         cache: cache.clone(),
         engines: Mutex::new(BTreeMap::new()),
+        writers: Mutex::new(BTreeMap::new()),
         records: Arc::new(tokio::sync::Semaphore::new(RECORD_PERMITS as usize)),
         record_tasks: Mutex::new(JoinSet::new()),
         recheck: None,

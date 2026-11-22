@@ -1654,7 +1654,9 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             request_counts[0],
             match origin {
                 "retry" => 5,
-                "pr" => 13,
+                // The ticked PR's rebasing banner adds a fresh read of
+                // the PR and its PATCH.
+                "pr" => 15,
                 // The held-back plan's branch has no open pull: one batched
                 // `ClosedPulls` read checks it before admission.
                 "create" => 16,
@@ -2979,6 +2981,48 @@ async fn a_recheck_click_revalidates_advisories() {
 /// A PR recheck box ticked against saved controls retries the branch it
 /// names: on a warm cache an unticked run writes nothing, so the commit a
 /// ticked run writes can only be the tick driving the revalidation.
+/// The rebasing banner's opening marker.
+const REBASING: &str = "<!-- patchula-rebasing -->";
+
+/// A banner left up by a run that stopped mid-rebuild keeps the next run
+/// off the receipts path, and that run takes it down, leaving the body as
+/// it was before; the run after it settles from receipts again.
+#[tokio::test(start_paused = true)]
+async fn a_banner_left_by_a_stopped_run_is_taken_down_by_the_next() {
+    let fake = sandbox(base_files(), None, vec![]);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let config = checkbox_config();
+    let now = chrono::Utc::now();
+    checkbox_run(&engine, &config, now).await;
+    let body = fake.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stale = body.replacen(
+        "<!-- patchula-begin -->\n",
+        &format!(
+            "<!-- patchula-begin -->\n{REBASING}\n> **The Count is sinking his teeth into this branch:** re-checking it against `main`…\n<!-- patchula-rebasing-end -->\n\n"
+        ),
+        1,
+    );
+    assert_ne!(stale, body);
+    fake.state().repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(stale);
+    fake.state().log.clear();
+    checkbox_run(&engine, &config, now + chrono::Duration::minutes(1)).await;
+    assert_eq!(fake.state().repo().prs[&1]["body"].as_str().unwrap(), body);
+    fake.state().log.clear();
+    checkbox_run(&engine, &config, now + chrono::Duration::minutes(2)).await;
+    assert!(
+        fake.state().writes().is_empty(),
+        "{:?}",
+        fake.state().writes().clone()
+    );
+    check_transcript();
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_ticked_pr_retries_the_branch_it_names() {
     let fake = sandbox(base_files(), None, vec![]);
@@ -3016,6 +3060,28 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
     assert!(
         !fake.state().writes().is_empty(),
         "the tick must be consumed and written back"
+    );
+    // The run said so on the PR before rebuilding, and its rewrite took
+    // the banner down with the tick.
+    let patches: Vec<_> = fake
+        .log()
+        .into_iter()
+        .filter(|(m, p, _)| m == "PATCH" && p == "/repos/demo/sandbox/pulls/1")
+        .map(|(_, _, body)| body["body"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert!(
+        patches[0].contains(REBASING)
+            && patches[0].contains("re-checking it against `main`…")
+            && patches[0].contains("- [x] Tick to re-check"),
+        "{patches:?}"
+    );
+    let body = fake.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !body.contains(REBASING) && !body.contains("- [x]"),
+        "{body}"
     );
     assert!(
         fake.log()

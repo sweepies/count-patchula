@@ -49,7 +49,7 @@ pub async fn settle(
         if let Err(error) = state.close_batched(client, plans).await {
             warnings.push(format!("batched PR closure: {error}"));
         }
-        if let Err(error) = state.acknowledge_rechecks(client).await {
+        if let Err(error) = state.acknowledge(client).await {
             warnings.push(format!("PR checkbox acknowledgement: {error}"));
         }
     }

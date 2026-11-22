@@ -76,6 +76,15 @@ fn dashboard_failed(repo: &mut Repository, settlement: &Settlement) {
     }
 }
 
+impl Engine {
+    /// The engine's GitHub client. Clones share its write pacing, so a
+    /// server's writes between runs, such as a re-check acknowledgement,
+    /// count against the same budget as the runs' own.
+    pub fn github(&self) -> &patchula_github::Client {
+        &self.github
+    }
+}
+
 impl Write<'_> {
     pub(super) fn new(
         engine: &Engine,
@@ -256,6 +265,10 @@ impl Write<'_> {
             tokio::spawn(async move { sources.prepare_release_notes(&ranges).await })
         });
         if inventory.is_some() {
+            // The rebuilds with a real wait say so on their PRs first.
+            if let Some(state) = lifecycle.as_mut() {
+                state.announce(&self.engine.github, &plans).await;
+            }
             self.lockfiles(repo, &mut plans, &mut snapshot, &config)
                 .await;
         }
