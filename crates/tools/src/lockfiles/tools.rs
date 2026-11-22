@@ -13,6 +13,10 @@ const SEEDED: &str = "patchula-seeded.json";
 const STORE_LOCK: &str = "patchula-store.lock";
 /// Held exclusive while the usage record is rewritten.
 const USAGE_LOCK: &str = "patchula-usage.lock";
+/// One lock file per `tool@version`, held exclusive by whoever clears and
+/// installs it, in every process using the store, so no two runs install
+/// one version at once or clear each other's install.
+const INSTALL_LOCKS: &str = "patchula-install-locks";
 /// Tools whose mise installs are relocatable, so a hard-linked copy works from
 /// the Count's store. Python, Ruby and PHP builds embed their install path,
 /// .NET versions share one SDK root, and Rust goes through rustup.
@@ -190,6 +194,34 @@ pub(super) async fn lock_store(dir: &Path, exclusive: bool) -> Result<std::fs::F
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| format!("cannot lock the tool store: {e}"))
+}
+
+/// Lock each of `tools` for installing, in sorted spec order so two calls
+/// that share tools cannot deadlock, waiting off the async runtime. Taken
+/// before the store lock, never while holding it.
+pub(super) async fn lock_installs(
+    dir: &Path,
+    tools: &[(String, String)],
+) -> Result<Vec<std::fs::File>, String> {
+    let specs: BTreeSet<String> = tools
+        .iter()
+        .map(|(tool, version)| format!("{tool}@{version}"))
+        .collect();
+    let dir = dir.join(INSTALL_LOCKS);
+    tokio::task::spawn_blocking(move || {
+        specs
+            .iter()
+            .map(|spec| {
+                // A spec holds `/` and `:`; its hash is a plain file name.
+                let file = lock_file(&dir, &format!("{}.lock", hash(spec.as_bytes())))?;
+                file.lock()
+                    .map_err(|e| format!("cannot lock {spec} for installing: {e}"))?;
+                Ok(file)
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The usage record, empty when there is none. A record that cannot be
@@ -417,27 +449,20 @@ impl Runner {
             .map(|_| ())
             .map_err(|e| format!("mise: {e}"))
     }
-    /// Hold the store shared for a run of `tools`. A first use clears what
-    /// an unfinished install left and seeds from the user's store first,
-    /// under the exclusive lock so no run loses a tool.
-    pub(super) async fn hold_store(
-        &self,
-        tools: &[(String, String)],
-    ) -> Result<std::fs::File, String> {
-        if !self.installed(tools) {
-            let _store = lock_store(&self.mise_data, true).await?;
-            if !self.installed(tools) {
-                self.clear_unproven(tools).await;
-                let tools = tools.to_vec();
-                self.off_runtime(move |runner| runner.seed(&tools)).await?;
-            }
-        }
-        lock_store(&self.mise_data, false).await
+    /// Ready `tools` for a first use: clear what an unfinished install left
+    /// and seed from the user's store. The caller holds the store
+    /// exclusively, so no run loses a tool.
+    pub(super) async fn first_use(&self, tools: &[(String, String)]) -> Result<(), String> {
+        self.clear_unproven(tools).await;
+        let tools = tools.to_vec();
+        self.off_runtime(move |runner| runner.seed(&tools)).await
     }
-    /// Install the pinned default toolchains, e.g. while building an image.
+    /// Install the pinned default toolchains, e.g. while building an image,
+    /// holding the store exclusively throughout.
     pub async fn prewarm(&self) -> Result<Vec<String>, String> {
         let tools = defaults()?;
-        let _store = self.hold_store(&tools).await?;
+        let _store = lock_store(&self.mise_data, true).await?;
+        self.first_use(&tools).await?;
         let specs: Vec<String> = tools.iter().map(|(t, v)| format!("{t}@{v}")).collect();
         let mut args = vec!["install".to_string()];
         args.extend(specs.iter().cloned());

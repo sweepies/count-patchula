@@ -64,7 +64,10 @@ impl Runner {
         let credentials = credentials::Held::of(entries.iter().copied());
         let held = !hosts.is_empty();
         let mut _netrc = context::Private::default();
-        let mut env = Vec::new();
+        // Go writes its module cache read-only by default, which a plain
+        // `rm -rf` or a scratch directory's cleanup then cannot remove;
+        // `-modcacherw` keeps it writable, cached or not.
+        let mut env = vec![("GOFLAGS".to_string(), "-modcacherw".to_string())];
         if held {
             let home = driver.join("home");
             std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;

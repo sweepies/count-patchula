@@ -102,10 +102,6 @@ pub struct Runner {
     http: Arc<dyn patchula_http::Transport>,
     /// The user's mise data directory, whose installs seed the tool store.
     seed: Option<PathBuf>,
-    /// One lock per `tool@version`, held by the first call that installs
-    /// it, so concurrent calls neither install it twice nor clear each
-    /// other's install.
-    installing: Arc<std::sync::Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// The persistent tool caches' size cap in GiB; 0 turns them off.
     cache_gib: u64,
     /// The `installation-<id>` partition's id for runs that hold no
@@ -187,7 +183,6 @@ impl Runner {
             rustup_home,
             http: Arc::new(NetworkTransport),
             seed: None,
-            installing: Default::default(),
             cache_gib: DEFAULT_CACHE_GIB,
             installation: "local".into(),
             runs: Arc::new(tokio::sync::Semaphore::new(lockfile_concurrency())),
@@ -548,41 +543,35 @@ impl Runner {
             failure
         })
     }
-    /// Hold the install lock of each of `tools` unless all are installed,
-    /// in order, so two calls that share tools cannot deadlock.
-    async fn installing(
+    /// Hold the store shared with every one of the call's tools installed.
+    /// Installing takes each tool's install lock first, then the store
+    /// exclusively for a first use and shared for `mise install`, so it
+    /// never runs unguarded, even after a `prune` between the checks.
+    async fn hold_installed(
         &self,
-        tools: &[(String, String)],
-    ) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
-        let mut guards = Vec::new();
-        if self.installed(tools) {
-            return guards;
+        driver: &Path,
+        call: &Invocation,
+    ) -> Result<std::fs::File, Failure> {
+        let store = tools::lock_store(&self.mise_data, false).await?;
+        if self.installed(&call.tools) {
+            return Ok(store);
         }
-        let specs: BTreeSet<String> = tools
-            .iter()
-            .map(|(tool, version)| format!("{tool}@{version}"))
-            .collect();
-        for spec in specs {
-            let lock = self
-                .installing
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .entry(spec)
-                .or_default()
-                .clone();
-            guards.push(lock.lock_owned().await);
+        drop(store);
+        let _installing = tools::lock_installs(&self.mise_data, &call.tools).await?;
+        if !self.installed(&call.tools) {
+            let _store = tools::lock_store(&self.mise_data, true).await?;
+            if !self.installed(&call.tools) {
+                self.first_use(&call.tools).await?;
+            }
         }
-        guards
+        let store = tools::lock_store(&self.mise_data, false).await?;
+        if !self.installed(&call.tools) {
+            self.install(driver, call).await?;
+        }
+        Ok(store)
     }
     async fn run_tool(&self, driver: &Path, call: Invocation) -> Result<Vec<u8>, Failure> {
-        let _store = {
-            let _installing = self.installing(&call.tools).await;
-            let store = self.hold_store(&call.tools).await?;
-            if !self.installed(&call.tools) {
-                self.install(driver, &call).await?;
-            }
-            store
-        };
+        let _store = self.hold_installed(driver, &call).await?;
         let mut spec = self.command(driver);
         if let Some(cwd) = &call.cwd {
             spec.cwd.clone_from(cwd);

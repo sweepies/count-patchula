@@ -551,3 +551,89 @@ impl Runner {
         write(root, &lock_path, &generated).map_err(Failure::from)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(text: &str) -> toml_edit::Item {
+        toml_edit::Document::parse(format!("tool = {text}"))
+            .unwrap()
+            .into_mut()["tool"]
+            .clone()
+    }
+    fn versions(text: &str) -> Option<Vec<String>> {
+        request_list(&spec(text)).map(|requests| {
+            requests
+                .into_iter()
+                .map(|request| request.version)
+                .collect()
+        })
+    }
+
+    /// A table whose `version` is an array requests each version with the
+    /// table's options, as an array of tables would.
+    #[test]
+    fn an_array_version_requests_each_version() {
+        assert_eq!(
+            versions("{ version = ['1.2', '1.3'], os = ['linux'] }").unwrap(),
+            ["1.2", "1.3"]
+        );
+        let requests = request_list(&spec("{ version = ['1.2', '1.3'], os = 'linux' }")).unwrap();
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.options.contains_key("os"))
+        );
+        let table = toml_edit::Document::parse("[tool]\nversion = ['1', '2']\n")
+            .unwrap()
+            .into_mut()["tool"]
+            .clone();
+        assert_eq!(request_list(&table).unwrap().len(), 2);
+        assert_eq!(
+            versions("['1', { version = ['2', '3'] }]").unwrap(),
+            ["1", "2", "3"]
+        );
+        // A version that is not a string, or an array holding one, is not
+        // read.
+        assert!(versions("{ version = [1] }").is_none());
+        assert!(versions("{ version = 1 }").is_none());
+        assert!(versions("{ os = 'linux' }").is_none());
+    }
+
+    /// A task's tool merges into a declaration with an array `version`,
+    /// written back as one table per version.
+    #[test]
+    fn a_task_merges_into_an_array_version() {
+        let merged = merged(
+            "tool",
+            &spec("{ version = ['1', '2'], os = 'linux' }"),
+            &spec("{ version = '3', os = 'linux' }"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            merged.to_string().trim(),
+            r#"[{ version = "1", os = 'linux' }, { version = "2", os = 'linux' }, { version = "3", os = 'linux' }]"#
+        );
+        // A version already requested adds nothing.
+        assert!(
+            merged_none("{ version = ['1', '2'] }", "'2'"),
+            "nothing to add"
+        );
+        // Options must still agree.
+        assert!(
+            super::merged(
+                "tool",
+                &spec("{ version = ['1', '2'], os = 'linux' }"),
+                &spec("'3'"),
+            )
+            .is_err()
+        );
+    }
+    fn merged_none(declared: &str, task: &str) -> bool {
+        super::merged("tool", &spec(declared), &spec(task))
+            .unwrap()
+            .is_none()
+    }
+}
