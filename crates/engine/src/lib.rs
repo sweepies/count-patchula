@@ -1017,14 +1017,14 @@ impl Engine {
         // A borrowed repository's fetch stands in for its packages' progress.
         self.progress.advance(packages.len() - borrowed.len());
         for (key, stream) in packages {
-            let result = match &stream {
-                Some((repository, stream)) => match results.get(repository) {
-                    Some(Ok(releases)) => {
-                        Ok(patchula_datasource::pkl_catalog(stream, releases.clone()))
-                    }
-                    Some(Err(failure)) => Err(failure.clone()),
-                    None => Err(Failure::from(patchula_datasource::Error::Invalid)),
-                },
+            let fetched = stream
+                .as_ref()
+                .and_then(|(repository, stream)| Some((results.get(repository)?, stream)));
+            let result = match fetched {
+                Some((Ok(releases), stream)) => {
+                    Ok(patchula_datasource::pkl_catalog(stream, releases.clone()))
+                }
+                Some((Err(failure), _)) => Err(failure.clone()),
                 None => Err(Failure::from(patchula_datasource::Error::Invalid)),
             };
             if stream
