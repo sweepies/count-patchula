@@ -1742,8 +1742,8 @@ async fn real_aube_regenerates_a_stale_aube_lock_that_aube_ci_accepts() {
                 bin: caches::Bin::Aube,
                 cwd: None,
                 env: Vec::new(),
-                credentials: Vec::new(),
-                secrets: Vec::new(),
+                held: credentials::Held::default(),
+                refused: None,
                 public: false,
                 args: vec![
                     "-C".into(),
@@ -2193,8 +2193,7 @@ async fn cargo_jobs_address_the_lock_as_it_stands() {
                 },
                 cargo::CargoAccess {
                     env: &[],
-                    credentials: &[],
-                    secrets: &[],
+                    held: &credentials::Held::default(),
                     public: false,
                 },
             )
@@ -3196,16 +3195,175 @@ fn tool_versions_pin_the_versions_a_run_resolves() {
             )
         })
         .collect();
-    let sub_versions = versions(&baseline, "sub").unwrap();
-    assert_eq!(sub_versions["node"], "22.0.0");
-    assert_eq!(sub_versions["go"], "1.24.0");
-    assert_eq!(sub_versions["python"], "3.13.0");
-    assert_eq!(sub_versions["rust"], default_version("rust"));
+    let pinned = |ecosystem, directory, tool: &str| {
+        versions(descriptor(ecosystem), &baseline, directory).unwrap()[tool].clone()
+    };
+    assert_eq!(pinned(Ecosystem::Node, "sub", "node"), "22.0.0");
+    assert_eq!(pinned(Ecosystem::Go, "sub", "go"), "1.24.0");
+    assert_eq!(pinned(Ecosystem::Python, "sub", "python"), "3.13.0");
+    assert_eq!(
+        pinned(Ecosystem::Cargo, "sub", "rust"),
+        default_version("rust")
+    );
+    // A run resolves only its own ecosystem's tools.
+    assert!(
+        !versions(descriptor(Ecosystem::Node), &baseline, "sub")
+            .unwrap()
+            .contains_key("go")
+    );
     // At the root `mise.toml` beats `.tool-versions`, `.mise.toml` beats
     // `mise.toml` (python), and the deeper file does not reach it.
-    let root_versions = versions(&baseline, "").unwrap();
-    assert_eq!(root_versions["node"], "21.0.0");
-    assert_eq!(root_versions["python"], "3.13.0");
+    assert_eq!(pinned(Ecosystem::Node, "", "node"), "21.0.0");
+    assert_eq!(pinned(Ecosystem::Python, "", "python"), "3.13.0");
+}
+
+/// A run reads and checks only its own tools' pins: a bad pin fails the
+/// ecosystem whose tool it names and no other, and an ecosystem with no
+/// pinnable tools reads no pins at all.
+#[test]
+fn a_bad_pin_holds_only_the_ecosystem_it_names() {
+    let base = |files: &[(&str, &str)]| -> BTreeMap<String, BaseFile> {
+        files
+            .iter()
+            .map(|(path, content)| {
+                (
+                    (*path).to_owned(),
+                    BaseFile {
+                        sha: blob_sha(content),
+                        mode: "100644".into(),
+                        content: (*content).to_owned(),
+                    },
+                )
+            })
+            .collect()
+    };
+    let bad = base(&[("mise.toml", "[tools]\ngo = 'not a version!'\n")]);
+    assert!(versions(descriptor(Ecosystem::Go), &bad, "").is_err());
+    assert_eq!(
+        versions(descriptor(Ecosystem::Node), &bad, "").unwrap()["node"],
+        default_version("node")
+    );
+    // A configuration mise cannot parse holds only ecosystems with pins.
+    let broken = base(&[("mise.toml", "[tools\n")]);
+    assert!(versions(descriptor(Ecosystem::Node), &broken, "").is_err());
+    for ecosystem in [
+        Ecosystem::GradleWrapper,
+        Ecosystem::Actions,
+        Ecosystem::Mise,
+        Ecosystem::Nix,
+        Ecosystem::Dotnet,
+    ] {
+        assert!(
+            versions(descriptor(ecosystem), &broken, "")
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+/// gh-actions-lock installs at its `defaults.toml` pin, and a repository's
+/// pin of it is never read.
+#[test]
+fn the_actions_lock_tool_is_not_pinnable() {
+    let pin = format!("[tools]\n\"{}\" = '0.0.1'\n", actions::ACTIONS_LOCK_SPEC);
+    let baseline = BTreeMap::from([(
+        "mise.toml".to_string(),
+        BaseFile {
+            sha: blob_sha(&pin),
+            mode: "100644".into(),
+            content: pin.clone(),
+        },
+    )]);
+    assert!(
+        versions(descriptor(Ecosystem::Actions), &baseline, "")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !descriptors().any(|tool| tool.tools.contains(&actions::ACTIONS_LOCK_SPEC)),
+        "no descriptor lists gh-actions-lock among its pinnable tools"
+    );
+    let defaults = tool_defaults().unwrap();
+    assert_eq!(
+        descriptor(Ecosystem::Actions).install_specs(defaults),
+        [(
+            actions::ACTIONS_LOCK_SPEC.to_owned(),
+            default_version(actions::ACTIONS_LOCK_SPEC).to_owned()
+        )]
+    );
+    assert!(
+        tools::defaults()
+            .unwrap()
+            .iter()
+            .any(|(tool, _)| tool == actions::ACTIONS_LOCK_SPEC),
+        "prewarm still installs it"
+    );
+}
+
+/// A repository's bad pin for a tool another ecosystem uses does not hold a
+/// Go run.
+#[tokio::test]
+async fn a_bad_pin_for_another_tool_does_not_hold_a_go_run() {
+    let files = BTreeMap::from([
+        ("go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into()),
+        ("go.sum".into(), "\n".into()),
+        (
+            "mise.toml".into(),
+            "[tools]\nnode = 'not a version!'\n".into(),
+        ),
+    ]);
+    let executor = fixture(files.clone(), false, false);
+    let temp = tempfile::tempdir().unwrap();
+    let runner = Runner::new(temp.path().join("cache"), "x").with_executor(executor.clone());
+    let mut first = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &first, &[], None, monday())
+        .unwrap()
+        .unwrap();
+    prepare_one(&runner, &mut p, &mut first, &config).await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+}
+
+/// Go keeps its module cache writable whether or not the run is cached, so
+/// a scratch directory's cleanup and a plain `rm -rf` can remove it.
+#[tokio::test]
+async fn go_keeps_its_module_cache_writable() {
+    let files = BTreeMap::from([
+        ("go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into()),
+        ("go.sum".into(), "\n".into()),
+    ]);
+    for cache_gib in [DEFAULT_CACHE_GIB, 0] {
+        let executor = fixture(files.clone(), false, false);
+        let temp = tempfile::tempdir().unwrap();
+        let runner = Runner::new(temp.path().join("cache"), "x")
+            .with_executor(executor.clone())
+            .with_cache_limit(cache_gib);
+        let mut first = snapshot(&files);
+        let config = config();
+        let mut p = maintenance(&repo(), &config, &first, &[], None, monday())
+            .unwrap()
+            .unwrap();
+        prepare_one(&runner, &mut p, &mut first, &config).await;
+        let calls = executor.calls.lock().unwrap();
+        let envs = executor.envs.lock().unwrap();
+        let go: Vec<_> = calls
+            .iter()
+            .zip(envs.iter())
+            .filter(|(args, _)| {
+                invocation(args)
+                    .is_some_and(|(_, command)| command.first().is_some_and(|bin| bin == "go"))
+            })
+            .map(|(_, env)| env)
+            .collect();
+        assert!(!go.is_empty(), "cache {cache_gib}");
+        for env in go {
+            assert_eq!(
+                env[std::ffi::OsStr::new("GOFLAGS")],
+                std::ffi::OsString::from("-modcacherw"),
+                "cache {cache_gib}: {env:?}"
+            );
+        }
+    }
 }
 
 /// Yarn never runs a committed release, plugins or credential interpolations.
@@ -4171,8 +4329,8 @@ async fn first_tool_use_installs_apart_from_the_run() {
             bin: caches::Bin::Uv,
             cwd: None,
             env: Vec::new(),
-            credentials: Vec::new(),
-            secrets: Vec::new(),
+            held: credentials::Held::default(),
+            refused: None,
             public: false,
             args: vec!["lock".into()],
         };
@@ -4212,8 +4370,8 @@ async fn a_rust_install_uses_the_runs_toolchain_homes() {
                 bin: caches::Bin::Cargo,
                 cwd: None,
                 env: Vec::new(),
-                credentials: Vec::new(),
-                secrets: Vec::new(),
+                held: credentials::Held::default(),
+                refused: None,
                 public: false,
                 args: vec!["generate-lockfile".into()],
             },
@@ -4531,8 +4689,7 @@ async fn cargo_jobs_move_only_the_crates_io_entry_of_their_package() {
                 },
                 cargo::CargoAccess {
                     env: &[],
-                    credentials: &[],
-                    secrets: &[],
+                    held: &credentials::Held::default(),
                     public: false,
                 },
             )
@@ -5200,6 +5357,71 @@ async fn concurrent_bootstraps_install_mise_once() {
     );
     assert_eq!(first.unwrap(), second.unwrap());
     assert_eq!(packslip.calls.lock().unwrap().len(), 1);
+}
+
+/// The first use of a tool installs it slowly, recording every store
+/// command and tool run.
+struct SlowInstall {
+    runs: Mutex<Vec<String>>,
+}
+impl Executor for SlowInstall {
+    fn run(
+        &self,
+        spec: CommandSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Failure>> + Send + '_>> {
+        Box::pin(async move {
+            let kind = if spec.args.iter().any(|a| a == "exec") {
+                "exec".to_string()
+            } else {
+                spec.args[1..].join(" ")
+            };
+            let install = kind.starts_with("install");
+            self.runs.lock().unwrap().push(kind);
+            if install {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }
+            Ok(Vec::new())
+        })
+    }
+}
+
+/// Two runners sharing a tool store, as the server's per-installation
+/// runners and separate processes do, install a tool version once: the
+/// install locks are files in the store, not runner memory.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_runners_install_a_tool_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let executor = Arc::new(SlowInstall {
+        runs: Mutex::new(Vec::new()),
+    });
+    let first = Runner::new(temp.path().join("cache"), "x").with_executor(executor.clone());
+    let second = Runner::new(temp.path().join("cache"), "y").with_executor(executor.clone());
+    assert_eq!(first.tools(), second.tools());
+    let driver = temp.path().join("driver");
+    std::fs::create_dir_all(&driver).unwrap();
+    let call = || Invocation {
+        descriptor: &python::DESCRIPTOR,
+        tools: vec![("uv".into(), "0.13.1".into())],
+        bin: caches::Bin::Uv,
+        cwd: None,
+        env: Vec::new(),
+        held: credentials::Held::default(),
+        refused: None,
+        public: false,
+        args: vec!["lock".into()],
+    };
+    let (a, b) = tokio::join!(first.tool(&driver, call()), second.tool(&driver, call()));
+    a.unwrap();
+    b.unwrap();
+    let runs = executor.runs.lock().unwrap();
+    assert_eq!(
+        runs.iter()
+            .filter(|kind| kind.starts_with("install"))
+            .count(),
+        1,
+        "{runs:?}"
+    );
+    assert_eq!(runs.iter().filter(|kind| *kind == "exec").count(), 2);
 }
 
 /// A failed download names packslip, mise's version and packslip's error.
@@ -6044,34 +6266,34 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         .with_executor(executor.clone());
     let driver = temp.path().join("driver");
     std::fs::create_dir_all(&driver).unwrap();
-    let call = |bin: caches::Bin, credentials: Vec<String>, public: bool| Invocation {
+    let call = |bin: caches::Bin, held: credentials::Held, public: bool| Invocation {
         descriptor: &go::DESCRIPTOR,
         tools: vec![(bin.name().into(), "1.0".into())],
         bin,
         cwd: None,
         env: Vec::new(),
-        credentials,
-        secrets: Vec::new(),
+        held,
+        refused: None,
         public,
         args: vec!["x".into()],
     };
     // The npm-only entry never reaches Go's `.netrc`, so Go stays public.
     let (env, _) = runner
-        .use_caches(&call(caches::Bin::Go, Vec::new(), true))
+        .use_caches(&call(caches::Bin::Go, credentials::Held::default(), true))
         .await
         .unwrap();
     assert_eq!(
         env,
-        [
-            (
-                "GOMODCACHE".into(),
-                root.join("public/gomod").to_string_lossy().into_owned()
-            ),
-            ("GOFLAGS".into(), "-modcacherw".into()),
-        ]
+        [(
+            "GOMODCACHE".into(),
+            root.join("public/gomod").to_string_lossy().into_owned()
+        ),]
     );
     runner
-        .tool(&driver, call(caches::Bin::Go, Vec::new(), true))
+        .tool(
+            &driver,
+            call(caches::Bin::Go, credentials::Held::default(), true),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -6085,7 +6307,7 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     let (env, _) = runner
         .use_caches(&call(
             caches::Bin::Npm,
-            credentials::scopes([npm.clone()].iter()),
+            credentials::Held::of([npm.clone()].iter()),
             false,
         ))
         .await
@@ -6117,13 +6339,16 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
         (caches::Bin::Bundle, "BUNDLE_USER_CACHE"),
     ] {
         let (env, hold) = runner
-            .use_caches(&call(bin, credentials::scopes([npm.clone()].iter()), false))
+            .use_caches(&call(
+                bin,
+                credentials::Held::of([npm.clone()].iter()),
+                false,
+            ))
             .await
             .unwrap();
         assert!(env.iter().any(|(k, _)| k == key), "{}", bin.name());
         assert!(
-            env.iter()
-                .all(|(k, v)| v.starts_with(&partition) || k == "GOFLAGS"),
+            env.iter().all(|(_, v)| v.starts_with(&partition)),
             "{}: {env:?}",
             bin.name()
         );
@@ -6132,7 +6357,7 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     let (go, _) = runner
         .use_caches(&call(
             caches::Bin::Go,
-            credentials::scopes([npm.clone()].iter()),
+            credentials::Held::of([npm.clone()].iter()),
             false,
         ))
         .await
@@ -6140,23 +6365,6 @@ async fn tool_caches_partition_by_the_credentials_a_run_gets() {
     assert!(
         !go.iter().any(|(k, _)| k == "GOPROXY"),
         "no read-only file:// proxy: {go:?}"
-    );
-    // `-modcacherw` keeps the module cache removable, merged with any
-    // GOFLAGS the call already had.
-    assert_eq!(
-        go.iter().find(|(k, _)| k == "GOFLAGS").unwrap().1,
-        "-modcacherw"
-    );
-    let mut flagged = call(
-        caches::Bin::Go,
-        credentials::scopes([npm.clone()].iter()),
-        false,
-    );
-    flagged.env = vec![("GOFLAGS".into(), "-mod=mod".into())];
-    let (go, _) = runner.use_caches(&flagged).await.unwrap();
-    assert_eq!(
-        go.iter().find(|(k, _)| k == "GOFLAGS").unwrap().1,
-        "-mod=mod -modcacherw"
     );
     // Credential files stay in the per-run HOME: nothing a run writes under a
     // partition names a credential file.
@@ -6210,8 +6418,8 @@ async fn tool_caches_partition_by_installation_when_not_public() {
         bin: caches::Bin::Go,
         cwd: None,
         env: Vec::new(),
-        credentials: Vec::new(),
-        secrets: Vec::new(),
+        held: credentials::Held::default(),
+        refused: None,
         public,
         args: vec!["x".into()],
     };
@@ -6368,20 +6576,21 @@ fn a_run_is_public_only_when_every_file_it_reads_is() {
         &baseline(&files),
         &verdicts(&unseen)
     ));
-    // Files of another ecosystem steer nothing for a Node run.
+    // Files of another ecosystem steer nothing for a Node run, which then
+    // has no verdict to go on: fail closed.
     let python = BTreeMap::from([(
         "app/pyproject.toml".into(),
         "[project]\ndependencies = [\"requests\"]\n".into(),
     )]);
-    assert!(public_only(
+    assert!(!public_only(
         descriptor(Ecosystem::Node),
         &baseline(&python),
         &verdicts(&python)
     ));
-    // Go fetches anonymously only without operator credentials: always
-    // public.
+    // An ecosystem with no files that steer it, such as Go, is never
+    // public by verdict; Go picks its partition from GOPROXY itself.
     let go = BTreeMap::from([("app/go.mod".into(), "module acme.dev/x\n\ngo 1.21\n".into())]);
-    assert!(public_only(
+    assert!(!public_only(
         descriptor(Ecosystem::Go),
         &baseline(&go),
         &verdicts(&go)

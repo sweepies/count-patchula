@@ -7,12 +7,11 @@
 //! else, and only `Gemfile.lock` comes back. A Gemfile that needs a form the
 //! Count does not render, or a lock that records a gem from git, a path or
 //! a plugin source, is refused.
-use super::{pin::Pinned, *};
+use super::*;
 
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[Manager::Bundler],
     tools: &["ruby"],
-    versions: true,
     install: Install::Plain,
     proof: Proof::DeclaredAndResolved,
     run: Run::Direct,
@@ -124,8 +123,7 @@ impl Runner {
             .map_err(|e| e.to_string())?;
         let ruby = ruby_version(&cwd, &context::version(versions, "ruby")?);
         let (credentials, entries) = self.bundler_env();
-        let scopes = credentials::scopes(entries.iter().copied());
-        let secrets = credentials::secrets(entries.iter().copied());
+        let held = credentials::Held::of(entries.iter().copied());
         let invocation = |args| Invocation {
             descriptor: &DESCRIPTOR,
             tools: vec![("ruby".into(), ruby.clone())],
@@ -151,8 +149,8 @@ impl Runner {
             .into_iter()
             .chain(credentials.iter().cloned())
             .collect(),
-            credentials: scopes.clone(),
-            secrets: secrets.clone(),
+            held: held.clone(),
+            refused: None,
             public,
             args,
         };
@@ -162,13 +160,13 @@ impl Runner {
         // Bundler moves a gem as far as its requirement allows and cannot be
         // told a version, so a package whose declaration stays as it is has
         // the requirement pinned for one resolution and restored for the next.
-        let mut pinned = Pinned::apply(root, directory, config, Manager::Bundler, jobs)?;
+        let mut pinned = pin::apply(root, directory, config, Manager::Bundler, jobs)?;
         render(&cwd, scratch.path(), directory)?;
-        self.held_tool(driver, invocation(args)).await?;
+        self.tool(driver, invocation(args)).await?;
         if !pinned.is_empty() {
             pinned.restore()?;
             render(&cwd, scratch.path(), directory)?;
-            self.held_tool(driver, invocation(vec!["lock".to_string()]))
+            self.tool(driver, invocation(vec!["lock".to_string()]))
                 .await?;
         }
         let after = std::fs::read_to_string(scratch.path().join("Gemfile.lock"))

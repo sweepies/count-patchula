@@ -12,7 +12,6 @@ use super::*;
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[Manager::Nuget],
     tools: &[],
-    versions: false,
     install: Install::Plain,
     proof: Proof::None,
     run: Run::Direct,

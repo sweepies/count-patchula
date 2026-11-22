@@ -5,7 +5,6 @@ use super::*;
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[],
     tools: &["terraform"],
-    versions: true,
     install: Install::Plain,
     proof: Proof::None,
     run: Run::Direct,
@@ -23,6 +22,7 @@ impl Runner {
             root,
             directory,
             versions,
+            public,
             ..
         } = context;
         let cwd = root.join(directory);
@@ -30,7 +30,7 @@ impl Runner {
             std::fs::remove_file(cwd.join(".terraform.lock.hcl")).map_err(|e| e.to_string())?;
         }
         let (env, entries) = self.terraform_env();
-        self.held_tool(
+        self.tool(
             driver,
             Invocation {
                 descriptor: &DESCRIPTOR,
@@ -38,9 +38,9 @@ impl Runner {
                 bin: caches::Bin::Terraform,
                 cwd: None,
                 env,
-                credentials: credentials::scopes(entries.iter().copied()),
-                secrets: credentials::secrets(entries.iter().copied()),
-                public: false,
+                held: credentials::Held::of(entries.iter().copied()),
+                refused: None,
+                public,
                 args: vec![
                     format!("-chdir={}", cwd.display()),
                     "providers".into(),

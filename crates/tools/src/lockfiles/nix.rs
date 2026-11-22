@@ -8,7 +8,6 @@ use serde_json::Value;
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[],
     tools: &[],
-    versions: false,
     install: Install::Nix,
     proof: Proof::None,
     run: Run::Direct,
@@ -124,6 +123,7 @@ impl Runner {
         cwd: Option<PathBuf>,
         args: Vec<String>,
         token: Option<&str>,
+        public: bool,
     ) -> Result<Vec<u8>, Failure> {
         let conf = driver.join("nix-conf");
         std::fs::create_dir_all(&conf).map_err(|e| e.to_string())?;
@@ -143,11 +143,6 @@ impl Runner {
         ];
         call.extend(args);
         let tools = tools()?;
-        let _installing = if self.installed(&tools) {
-            None
-        } else {
-            Some(self.nix_install.lock().await)
-        };
         self.tool(
             driver,
             Invocation {
@@ -162,13 +157,15 @@ impl Runner {
                     ("XDG_CACHE_HOME".into(), path(&store.join("cache"))),
                     ("NIX_CONFIG".into(), config),
                 ],
-                credentials: Vec::new(),
-                secrets: token
-                    .filter(|token| !token.is_empty())
-                    .map(str::to_owned)
-                    .into_iter()
-                    .collect(),
-                public: false,
+                held: credentials::Held::masking(
+                    token
+                        .filter(|token| !token.is_empty())
+                        .map(str::to_owned)
+                        .into_iter()
+                        .collect(),
+                ),
+                refused: None,
+                public,
                 args: call,
             },
         )
@@ -189,6 +186,7 @@ impl Runner {
             baseline,
             directory,
             maintenance,
+            public,
             ..
         } = context;
         let lock = context::join(directory, "flake.lock");
@@ -249,6 +247,7 @@ impl Runner {
                     "let f = v: if builtins.isPath v then \"path:\" + toString v else if builtins.isAttrs v then builtins.mapAttrs (_: f) v else v; in f ((import <flake/flake.nix>).inputs or { })".into(),
                 ],
                 None,
+                public,
             )
             .await?;
         let declared: Value = serde_json::from_slice(&declared)
@@ -288,7 +287,7 @@ impl Runner {
             args.extend(requested.iter().map(|name| name.to_string()));
         }
         let token = self.github_token().await?;
-        self.nix(driver, Some(flake.clone()), args, Some(&token))
+        self.nix(driver, Some(flake.clone()), args, Some(&token), public)
             .await?;
         let after: Value = serde_json::from_str(
             &std::fs::read_to_string(root.join(&lock)).map_err(|e| format!("{lock}: {e}"))?,
@@ -348,9 +347,16 @@ impl Runner {
             && self.installed(&tools)
         {
             let driver = tempfile::tempdir().map_err(|e| e.to_string())?;
-            self.nix(driver.path(), None, vec!["store".into(), "gc".into()], None)
-                .await
-                .map_err(|error| error.to_string())?;
+            // Outside any repository's run, nothing makes it public.
+            self.nix(
+                driver.path(),
+                None,
+                vec!["store".into(), "gc".into()],
+                None,
+                false,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
         }
         match std::fs::remove_dir_all(dir.join("cache")) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
@@ -389,6 +395,7 @@ impl Runner {
                 reference.into(),
             ],
             token,
+            false,
         )
         .await
         .map_err(|error| error.to_string())

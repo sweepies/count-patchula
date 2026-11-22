@@ -13,6 +13,10 @@ const SEEDED: &str = "patchula-seeded.json";
 const STORE_LOCK: &str = "patchula-store.lock";
 /// Held exclusive while the usage record is rewritten.
 const USAGE_LOCK: &str = "patchula-usage.lock";
+/// One lock file per `tool@version`, held exclusive by whoever clears and
+/// installs it, in every process using the store, so no two runs install
+/// one version at once or clear each other's install.
+const INSTALL_LOCKS: &str = "patchula-install-locks";
 /// Tools whose mise installs are relocatable, so a hard-linked copy works from
 /// the Count's store. Python, Ruby and PHP builds embed their install path,
 /// .NET versions share one SDK root, and Rust goes through rustup.
@@ -192,6 +196,34 @@ pub(super) async fn lock_store(dir: &Path, exclusive: bool) -> Result<std::fs::F
     .map_err(|e| format!("cannot lock the tool store: {e}"))
 }
 
+/// Lock each of `tools` for installing, in sorted spec order so two calls
+/// that share tools cannot deadlock, waiting off the async runtime. Taken
+/// before the store lock, never while holding it.
+pub(super) async fn lock_installs(
+    dir: &Path,
+    tools: &[(String, String)],
+) -> Result<Vec<std::fs::File>, String> {
+    let specs: BTreeSet<String> = tools
+        .iter()
+        .map(|(tool, version)| format!("{tool}@{version}"))
+        .collect();
+    let dir = dir.join(INSTALL_LOCKS);
+    tokio::task::spawn_blocking(move || {
+        specs
+            .iter()
+            .map(|spec| {
+                // A spec holds `/` and `:`; its hash is a plain file name.
+                let file = lock_file(&dir, &format!("{}.lock", hash(spec.as_bytes())))?;
+                file.lock()
+                    .map_err(|e| format!("cannot lock {spec} for installing: {e}"))?;
+                Ok(file)
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The usage record, empty when there is none. A record that cannot be
 /// read or parsed also reads as empty, which makes every tool unproven, so
 /// it is logged.
@@ -271,6 +303,8 @@ impl Runner {
     /// same version when there is one: hard links make it instant and use no
     /// extra disk. Only relocatable tools, only once per version, and only
     /// when both stores are on one filesystem; otherwise mise installs it.
+    /// Callers hold the store exclusively, which also orders the seeded
+    /// record's writes.
     #[cfg(unix)]
     pub(super) fn seed(&self, tools: &[(String, String)]) {
         let Some(source) = &self.seed else {
@@ -279,10 +313,6 @@ impl Runner {
         if source == &self.mise_data {
             return;
         }
-        let _guard = self
-            .usage
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = self.mise_data.join(SEEDED);
         let mut seeded: BTreeSet<String> = std::fs::read(&path)
             .ok()
@@ -375,10 +405,6 @@ impl Runner {
         }
     }
     pub(super) fn record_use(&self, tools: &[(String, String)]) {
-        let _guard = self
-            .usage
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _file = match lock_file(&self.mise_data, USAGE_LOCK)
             .and_then(|file| file.lock().map(|()| file).map_err(|e| e.to_string()))
         {
@@ -423,13 +449,22 @@ impl Runner {
             .map(|_| ())
             .map_err(|e| format!("mise: {e}"))
     }
-    /// Install the pinned default toolchains, e.g. while building an image.
+    /// Ready `tools` for a first use: clear what an unfinished install left
+    /// and seed from the user's store. The caller holds the store
+    /// exclusively, so no run loses a tool.
+    pub(super) async fn first_use(&self, tools: &[(String, String)]) -> Result<(), String> {
+        self.clear_unproven(tools).await;
+        let tools = tools.to_vec();
+        self.off_runtime(move |runner| runner.seed(&tools)).await
+    }
+    /// Install the pinned default toolchains, e.g. while building an image,
+    /// holding their install locks and the store exclusively throughout,
+    /// in the order `hold_installed` takes them.
     pub async fn prewarm(&self) -> Result<Vec<String>, String> {
         let tools = defaults()?;
+        let _installing = lock_installs(&self.mise_data, &tools).await?;
         let _store = lock_store(&self.mise_data, true).await?;
-        self.clear_unproven(&tools).await;
-        let seeded = tools.clone();
-        self.off_runtime(move |runner| runner.seed(&seeded)).await?;
+        self.first_use(&tools).await?;
         let specs: Vec<String> = tools.iter().map(|(t, v)| format!("{t}@{v}")).collect();
         let mut args = vec!["install".to_string()];
         args.extend(specs.iter().cloned());
@@ -456,18 +491,21 @@ impl Runner {
             for spec in &stale {
                 self.mise(vec!["uninstall".into(), spec.clone()]).await?;
             }
-            let _guard = self
-                .usage
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let file = lock_file(&self.mise_data, USAGE_LOCK)?;
-            file.lock().map_err(|e| e.to_string())?;
-            let mut usage = read_usage(&self.mise_data);
-            for spec in &stale {
-                usage.remove(spec);
-            }
-            write_usage(&self.mise_data, &usage)?;
-            stale
+            // The usage lock waits off the async runtime, as every store
+            // lock does.
+            let dir = self.mise_data.clone();
+            tokio::task::spawn_blocking(move || {
+                let file = lock_file(&dir, USAGE_LOCK)?;
+                file.lock().map_err(|e| e.to_string())?;
+                let mut usage = read_usage(&dir);
+                for spec in &stale {
+                    usage.remove(spec);
+                }
+                write_usage(&dir, &usage)?;
+                Ok::<_, String>(stale)
+            })
+            .await
+            .map_err(|e| e.to_string())??
         };
         // nix store gc runs as a tool, after the store lock is released, and
         // leaves paths a running nix holds.

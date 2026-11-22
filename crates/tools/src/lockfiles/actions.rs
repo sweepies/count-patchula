@@ -25,10 +25,9 @@ pub(super) static DESCRIPTOR: Tool = Tool {
     // A workflow can name private repositories, so its verdict is never
     // public-only and the run keeps the installation's own partition.
     steers: &[Manager::GithubActions],
-    tools: &[ACTIONS_LOCK_SPEC],
+    tools: &[],
     // The repository does not pin gh-actions-lock; `defaults.toml` does.
-    versions: false,
-    install: Install::Plain,
+    install: Install::Fixed(ACTIONS_LOCK_SPEC),
     // Workflows have no manifest names `validate_targets` can key on; the
     // run proves the lock with `--verify-local` and its own read-back.
     proof: Proof::None,
@@ -113,14 +112,6 @@ fn corrupt() -> Failure {
     Failure::Text(
         "actions.lock: a corrupt or newer lockfile; regenerate it with `gh actions-lock`".into(),
     )
-}
-
-/// Every secret form `secrets` holds removed from `text`, the masking a
-/// tool failure would give it.
-fn redact(secrets: &[String], text: &str) -> String {
-    secrets.iter().fold(text.to_owned(), |text, secret| {
-        text.replace(secret.as_str(), "***")
-    })
 }
 
 /// A held run's reason: the first line names the hold, the rest is the
@@ -218,6 +209,8 @@ struct Session {
     env: Vec<(String, String)>,
     secrets: Vec<String>,
     scratch: PathBuf,
+    /// Whether the run may share the `public` cache partition.
+    public: bool,
 }
 
 impl Session {
@@ -248,16 +241,16 @@ impl Session {
                     bin: caches::Bin::ActionsLock,
                     cwd: Some(root.to_path_buf()),
                     env: self.env.clone(),
-                    credentials: Vec::new(),
-                    secrets: self.secrets.clone(),
-                    public: false,
+                    held: credentials::Held::masking(self.secrets.clone()),
+                    refused: None,
+                    public: self.public,
                     args,
                 },
             )
             .await?;
         let read = |name: &str| {
             std::fs::read_to_string(self.scratch.join(name))
-                .map(|text| redact(&self.secrets, &text))
+                .map(|text| patchula_process::redact(&text, &self.secrets))
                 .map_err(|e| Failure::Text(e.to_string()))
         };
         let code = read("status")?
@@ -281,6 +274,7 @@ impl Runner {
         driver: &Path,
         root: &Path,
         repository: &str,
+        public: bool,
     ) -> Result<Session, Failure> {
         let version = default_version(ACTIONS_LOCK_SPEC)?.to_owned();
         // The scratch directory the shell writes the run's streams and
@@ -321,6 +315,7 @@ impl Runner {
             env,
             secrets,
             scratch,
+            public,
         })
     }
 
@@ -339,6 +334,7 @@ impl Runner {
             root,
             baseline,
             config,
+            public,
             ..
         } = context;
         let (_, listed) = listed(baseline)?;
@@ -383,7 +379,9 @@ impl Runner {
         if scope.is_empty() {
             return Ok(());
         }
-        let session = self.actions_session(driver, root, work.repository).await?;
+        let session = self
+            .actions_session(driver, root, work.repository, public)
+            .await?;
         let fix = session
             .invoke(self, driver, root, Session::args(&fix_flags(false), &scope))
             .await?;
@@ -415,6 +413,7 @@ impl Runner {
             driver,
             root,
             baseline,
+            public,
             ..
         } = context;
         let (base, listed) = listed(baseline)?;
@@ -435,7 +434,9 @@ impl Runner {
                     && (before.contains_key(path) || unread.contains(path))
             })
             .collect();
-        let session = self.actions_session(driver, root, work.repository).await?;
+        let session = self
+            .actions_session(driver, root, work.repository, public)
+            .await?;
         // No paths: only a whole-directory run prunes deleted workflows.
         let fix = session
             .invoke(self, driver, root, Session::args(&fix_flags(true), &[]))

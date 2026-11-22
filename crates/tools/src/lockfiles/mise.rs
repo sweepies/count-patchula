@@ -5,7 +5,6 @@ use serde_json::{Value, json};
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[],
     tools: &[],
-    versions: false,
     install: Install::Mise,
     proof: Proof::None,
     run: Run::Mise,
@@ -123,27 +122,6 @@ fn platforms(entries: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-/// The version requests a tool declaration makes, which mise records as the
-/// `specifiers` of the lock entries it resolves.
-fn requests(spec: &toml_edit::Item) -> BTreeSet<String> {
-    fn value(spec: &toml_edit::Value) -> Vec<String> {
-        if let Some(request) = spec.as_str() {
-            vec![request.into()]
-        } else if let Some(requests) = spec.as_array() {
-            requests.iter().flat_map(value).collect()
-        } else {
-            spec.as_inline_table()
-                .and_then(|table| table.get("version"))
-                .map(value)
-                .unwrap_or_default()
-        }
-    }
-    match spec.as_value() {
-        Some(spec) => value(spec).into_iter().collect(),
-        None => spec.get("version").map(requests).unwrap_or_default(),
-    }
-}
-
 /// One version a declaration requests, with the options it asks mise for.
 struct Request {
     version: String,
@@ -151,17 +129,26 @@ struct Request {
 }
 
 /// What a declaration requests, or `None` for a form that is not a version
-/// string, a table with a string `version`, or an array of those.
+/// string, a table whose `version` is a string or an array of strings, or an
+/// array of those.
 fn request_list(spec: &toml_edit::Item) -> Option<Vec<Request>> {
     fn table(table: &dyn toml_edit::TableLike, out: &mut Vec<Request>) -> Option<()> {
-        out.push(Request {
-            version: table.get("version")?.as_str()?.to_owned(),
-            options: table
+        let options: BTreeMap<_, _> = table
+            .iter()
+            .filter(|(key, _)| *key != "version")
+            .map(|(key, value)| Some((key.to_owned(), value.as_value()?.clone())))
+            .collect::<Option<_>>()?;
+        let versions: Vec<&str> = match table.get("version")?.as_value()? {
+            toml_edit::Value::Array(versions) => versions
                 .iter()
-                .filter(|(key, _)| *key != "version")
-                .map(|(key, value)| Some((key.to_owned(), value.as_value()?.clone())))
+                .map(toml_edit::Value::as_str)
                 .collect::<Option<_>>()?,
-        });
+            version => vec![version.as_str()?],
+        };
+        out.extend(versions.into_iter().map(|version| Request {
+            version: version.to_owned(),
+            options: options.clone(),
+        }));
         Some(())
     }
     fn each(value: &toml_edit::Value, out: &mut Vec<Request>) -> Option<()> {
@@ -483,8 +470,8 @@ impl Runner {
                 bin: caches::Bin::Mise,
                 cwd: None,
                 env: Vec::new(),
-                credentials: Vec::new(),
-                secrets: Vec::new(),
+                held: credentials::Held::default(),
+                refused: None,
                 public,
                 args,
             },
@@ -513,7 +500,14 @@ impl Runner {
             // The lock must answer the request the manifest makes: `latest` or
             // `24` for `2.10.0` means a declaration other than the edited one
             // was locked, and `mise` would call the lock out of date.
-            let declared = requests(&doc["tools"][name.as_str()]);
+            // mise records each version a declaration requests as a
+            // specifier. `arguments` admitted the declaration; one this
+            // grammar cannot read names no request to compare.
+            let declared: BTreeSet<String> = request_list(&doc["tools"][name.as_str()])
+                .into_iter()
+                .flatten()
+                .map(|request| request.version)
+                .collect();
             let recorded: BTreeSet<String> = entries
                 .iter()
                 .filter_map(|entry| entry["specifiers"].as_array())
@@ -555,5 +549,91 @@ impl Runner {
             return Err("mise lock produced unsupported sidecar files".into());
         }
         write(root, &lock_path, &generated).map_err(Failure::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(text: &str) -> toml_edit::Item {
+        toml_edit::Document::parse(format!("tool = {text}"))
+            .unwrap()
+            .into_mut()["tool"]
+            .clone()
+    }
+    fn versions(text: &str) -> Option<Vec<String>> {
+        request_list(&spec(text)).map(|requests| {
+            requests
+                .into_iter()
+                .map(|request| request.version)
+                .collect()
+        })
+    }
+
+    /// A table whose `version` is an array requests each version with the
+    /// table's options, as an array of tables would.
+    #[test]
+    fn an_array_version_requests_each_version() {
+        assert_eq!(
+            versions("{ version = ['1.2', '1.3'], os = ['linux'] }").unwrap(),
+            ["1.2", "1.3"]
+        );
+        let requests = request_list(&spec("{ version = ['1.2', '1.3'], os = 'linux' }")).unwrap();
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.options.contains_key("os"))
+        );
+        let table = toml_edit::Document::parse("[tool]\nversion = ['1', '2']\n")
+            .unwrap()
+            .into_mut()["tool"]
+            .clone();
+        assert_eq!(request_list(&table).unwrap().len(), 2);
+        assert_eq!(
+            versions("['1', { version = ['2', '3'] }]").unwrap(),
+            ["1", "2", "3"]
+        );
+        // A version that is not a string, or an array holding one, is not
+        // read.
+        assert!(versions("{ version = [1] }").is_none());
+        assert!(versions("{ version = 1 }").is_none());
+        assert!(versions("{ os = 'linux' }").is_none());
+    }
+
+    /// A task's tool merges into a declaration with an array `version`,
+    /// written back as one table per version.
+    #[test]
+    fn a_task_merges_into_an_array_version() {
+        let merged = merged(
+            "tool",
+            &spec("{ version = ['1', '2'], os = 'linux' }"),
+            &spec("{ version = '3', os = 'linux' }"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            merged.to_string().trim(),
+            r#"[{ version = "1", os = 'linux' }, { version = "2", os = 'linux' }, { version = "3", os = 'linux' }]"#
+        );
+        // A version already requested adds nothing.
+        assert!(
+            merged_none("{ version = ['1', '2'] }", "'2'"),
+            "nothing to add"
+        );
+        // Options must still agree.
+        assert!(
+            super::merged(
+                "tool",
+                &spec("{ version = ['1', '2'], os = 'linux' }"),
+                &spec("'3'"),
+            )
+            .is_err()
+        );
+    }
+    fn merged_none(declared: &str, task: &str) -> bool {
+        super::merged("tool", &spec(declared), &spec(task))
+            .unwrap()
+            .is_none()
     }
 }

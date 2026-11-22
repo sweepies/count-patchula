@@ -6,7 +6,6 @@ use super::*;
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[],
     tools: &["go"],
-    versions: true,
     install: Install::Plain,
     proof: Proof::Declared,
     run: Run::Direct,
@@ -62,11 +61,13 @@ impl Runner {
         // Credentials for Go and Git in `~/.netrc`, gone when Go
         // finishes, and their hosts private to Go.
         let (netrc, hosts, entries) = self.netrc();
-        let credentials = credentials::scopes(entries.iter().copied());
-        let secrets = credentials::secrets(entries.iter().copied());
+        let credentials = credentials::Held::of(entries.iter().copied());
         let held = !hosts.is_empty();
         let mut _netrc = context::Private::default();
-        let mut env = Vec::new();
+        // Go writes its module cache read-only by default, which a plain
+        // `rm -rf` or a scratch directory's cleanup then cannot remove;
+        // `-modcacherw` keeps it writable, cached or not.
+        let mut env = vec![("GOFLAGS".to_string(), "-modcacherw".to_string())];
         if held {
             let home = driver.join("home");
             std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
@@ -108,7 +109,7 @@ impl Runner {
         // working. A credentialed run goes straight to its
         // credential partition with that environment.
         let mut attempts = vec![(false, Vec::new())];
-        if credentials.is_empty() {
+        if credentials.scopes().is_empty() {
             attempts.insert(
                 0,
                 (
@@ -123,7 +124,7 @@ impl Runner {
                 let mut run_env = env.clone();
                 run_env.extend(extra.iter().cloned());
                 let result = self
-                    .held_tool(
+                    .tool(
                         driver,
                         Invocation {
                             descriptor: &DESCRIPTOR,
@@ -131,8 +132,8 @@ impl Runner {
                             bin: caches::Bin::Go,
                             cwd: None,
                             env: run_env,
-                            credentials: credentials.clone(),
-                            secrets: secrets.clone(),
+                            held: credentials.clone(),
+                            refused: None,
                             public,
                             args: args.clone(),
                         },

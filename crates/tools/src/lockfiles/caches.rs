@@ -67,8 +67,6 @@ pub(super) struct Cache {
     env: &'static [(&'static str, &'static str)],
     /// Take the partition's `<bin>.lock` exclusively while it runs.
     serial: bool,
-    /// Merge the call's own `GOFLAGS` with `-modcacherw`.
-    goflags: bool,
 }
 
 impl Bin {
@@ -103,11 +101,7 @@ impl Bin {
     /// How the binary's cache is wired, keyed by the binary itself rather
     /// than a string a call site could rename.
     pub(super) fn cache(self) -> Option<Cache> {
-        let cache = |env, serial| Cache {
-            env,
-            serial,
-            goflags: false,
-        };
+        let cache = |env, serial| Cache { env, serial };
         Some(match self {
             // Documented concurrent-safe caches, shared freely within a
             // partition: Cargo locks its package cache itself, the Go module
@@ -115,11 +109,7 @@ impl Bin {
             // and uv's cache. Cargo keeps credentials out of CARGO_HOME;
             // tokens are env vars.
             Self::Cargo => cache(&[("CARGO_HOME", "cargo")], false),
-            Self::Go => Cache {
-                env: &[("GOMODCACHE", "gomod")],
-                serial: false,
-                goflags: true,
-            },
+            Self::Go => cache(&[("GOMODCACHE", "gomod")], false),
             Self::Npm => cache(&[("NPM_CONFIG_CACHE", "npm")], false),
             Self::Uv => cache(&[("UV_CACHE_DIR", "uv")], false),
             // No documented concurrency guarantee: one run at a time per
@@ -247,31 +237,14 @@ fn touch(partition: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// The `GOFLAGS` a cached Go run gets: the call's own flags ahead of
-/// `-modcacherw`, which keeps the module cache writable so eviction can
-/// remove it.
-fn goflags(call: &[(String, String)]) -> (String, String) {
-    let own = call
-        .iter()
-        .find(|(key, _)| key == "GOFLAGS")
-        .map(|(_, value)| value.as_str())
-        .filter(|flags| !flags.is_empty());
-    let flags = match own {
-        Some(flags) => format!("{flags} -modcacherw"),
-        None => "-modcacherw".into(),
-    };
-    ("GOFLAGS".into(), flags)
-}
-
 /// Hold `partition`'s directory for one `bin` run, and return its
-/// environment merged with the call's own `GOFLAGS`. Blocking, so callers
-/// run it off the async runtime.
+/// environment. Blocking, so callers run it off the async runtime. A Go
+/// module cache is written read-only; eviction makes it writable again.
 pub(super) fn acquire(
     root: &Path,
     partition: &Partition,
     bin: Bin,
     cache: Cache,
-    call: &[(String, String)],
 ) -> Result<(Vec<(String, String)>, Hold), String> {
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let name = partition.to_string();
@@ -279,7 +252,7 @@ pub(super) fn acquire(
     let dir = root.join(&name);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     touch(&dir)?;
-    let mut env: Vec<(String, String)> = cache
+    let env: Vec<(String, String)> = cache
         .env
         .iter()
         .map(|(key, path)| {
@@ -291,9 +264,6 @@ pub(super) fn acquire(
         .collect();
     for (_, value) in &env {
         std::fs::create_dir_all(value).map_err(|e| e.to_string())?;
-    }
-    if cache.goflags {
-        env.push(goflags(call));
     }
     let serial = cache
         .serial
@@ -338,7 +308,7 @@ fn size(dir: &Path) -> u64 {
 }
 
 /// Restore the owner's write permission on `path`, where a tool wrote it
-/// read-only, as a Go module cache does without `-modcacherw`. A symlink
+/// read-only, as a Go module cache does. A symlink
 /// is never followed: its mode is its target's concern, not the
 /// partition's, and removing the link is enough.
 fn unreadonly(path: &Path) {
@@ -369,7 +339,7 @@ fn unreadonly(path: &Path) {
 }
 
 /// Restore write permission everywhere under `dir`, so a partition written
-/// by a tool whose cache is read-only (an older Go module cache) can still
+/// by a tool whose cache is read-only (a Go module cache) can still
 /// be removed.
 fn make_writable(dir: &Path) {
     unreadonly(dir);

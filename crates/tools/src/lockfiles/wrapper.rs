@@ -6,7 +6,6 @@ use super::*;
 pub(super) static DESCRIPTOR: Tool = Tool {
     steers: &[],
     tools: &[],
-    versions: true,
     install: Install::Plain,
     proof: Proof::None,
     run: Run::Direct,
