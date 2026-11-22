@@ -22,6 +22,8 @@ mod nix;
 pub use nix::Flakes;
 mod nuget;
 mod packagist;
+mod pkl;
+pub use pkl::pkl_catalog;
 mod registries;
 pub mod upstream;
 pub use registries::HelmChart;
@@ -355,6 +357,7 @@ impl Client {
             Source::Rubygems => self.rubygems(package).await,
             Source::Packagist => self.packagist(package).await,
             Source::Nix => self.nix(package).await,
+            Source::Pkl => self.pkl(package).await,
         }
     }
     async fn npm(&self, registry: Option<&str>, package: &str) -> Result<Catalog> {

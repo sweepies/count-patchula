@@ -63,7 +63,7 @@ token or toolchain of your own.
 - Managers for JavaScript, GitHub Actions, mise, Rust, Go, Docker, Compose,
   Kubernetes, Kustomize, Flux, Helm, Terraform, Python, Maven, Gradle, .NET,
   Ruby, PHP, pre-commit, devcontainers, Woodpecker CI, GitLab CI, Nix flakes, APM,
-  and your own regexes, plus notices for new Copier template versions.
+  Pkl packages and your own regexes, plus notices for new Copier template versions.
 - Typed configuration in [Pkl](https://pkl-lang.org). A typo is an error with a
   line number, not a silently ignored key.
 - Careful defaults: exact pins or locked ranges, digest-pinned actions and

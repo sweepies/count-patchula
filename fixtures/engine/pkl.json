@@ -1,0 +1,3025 @@
+{
+  "schema_version": 1,
+  "provenance": "Recorded by patchula from the request URLs; never imported from other bots",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($o0:String!,$n0:String!,$o1:String!,$n1:String!){r0:repository(owner:$o0,name:$n0){releases(first:100,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}} r1:repository(owner:$o1,name:$n1){releases(first:100,orderBy:{field:CREATED_AT,direction:DESC}){nodes{tagName publishedAt isDraft isPrerelease}pageInfo{hasNextPage endCursor}}}}",
+            "variables": {
+              "n0": "pkl-pantry",
+              "n1": "hk",
+              "o0": "apple",
+              "o1": "jdx"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sun, 22 Nov 2026 02:00:32 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v4; format=json"
+          ],
+          "x-github-request-id": [
+            "C37C:2F58A2:CBD6058:1332BCE0:6B024CC0"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4968"
+          ],
+          "x-ratelimit-reset": [
+            "1795314786"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "32"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "r0": {
+                "releases": {
+                  "nodes": [
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-30T21:42:24Z",
+                      "tagName": "org.openapis.v3@2.2.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-30T21:42:21Z",
+                      "tagName": "org.openapis.v3.contrib@1.1.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-29T00:01:04Z",
+                      "tagName": "pkl.experimental.syntax@1.2.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-29T00:01:01Z",
+                      "tagName": "org.json_schema.contrib@1.2.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-29T00:00:57Z",
+                      "tagName": "k8s.contrib.crd@4.2.8"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-29T00:00:54Z",
+                      "tagName": "com.github.actions.contrib@1.0.20"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-20T21:27:32Z",
+                      "tagName": "org.json_schema.contrib@1.2.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-20T21:27:29Z",
+                      "tagName": "k8s.contrib.crd@4.2.7"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-10T16:06:05Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.13"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-10T16:06:03Z",
+                      "tagName": "com.github.dependabot@1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-31T17:52:46Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.12"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-31T17:52:44Z",
+                      "tagName": "com.github.actions@1.9.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-31T17:52:42Z",
+                      "tagName": "com.github.actions.contrib@1.0.19"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-28T15:36:18Z",
+                      "tagName": "org.json_schema.contrib@1.2.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-28T15:36:16Z",
+                      "tagName": "k8s.contrib.crd@4.2.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-28T15:36:14Z",
+                      "tagName": "inflect@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-28T06:01:28Z",
+                      "tagName": "org.json_schema.contrib@1.2.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-28T06:01:26Z",
+                      "tagName": "k8s.contrib.crd@4.2.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-28T06:01:24Z",
+                      "tagName": "inflect@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T22:16:18Z",
+                      "tagName": "pkl.pipe@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T22:16:16Z",
+                      "tagName": "k8s.contrib@2.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:18:23Z",
+                      "tagName": "pkl.toml@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:18:21Z",
+                      "tagName": "pkl.table@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:18:18Z",
+                      "tagName": "pkl.pipe@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:18:16Z",
+                      "tagName": "pkl.lua@1.1.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:18:13Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.11"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:18:11Z",
+                      "tagName": "pkl.experimental.uri@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:18:08Z",
+                      "tagName": "pkl.experimental.syntax@1.2.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:18:05Z",
+                      "tagName": "pkl.experimental.structuredRead@1.0.7"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:18:03Z",
+                      "tagName": "pkl.experimental.net@1.3.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:18:00Z",
+                      "tagName": "pkl.csv@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:58Z",
+                      "tagName": "org.openapis.v3@2.2.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:55Z",
+                      "tagName": "org.openapis.v3.contrib@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:53Z",
+                      "tagName": "org.json_schema@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:50Z",
+                      "tagName": "org.json_schema.contrib@1.2.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:48Z",
+                      "tagName": "org.apache.spark@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:45Z",
+                      "tagName": "k8s.contrib@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:43Z",
+                      "tagName": "k8s.contrib.crd@4.2.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:41Z",
+                      "tagName": "k8s.contrib.appEnvCluster@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:38Z",
+                      "tagName": "io.prometheus@1.4.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:36Z",
+                      "tagName": "icalendar@0.1.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:33Z",
+                      "tagName": "com.influxdata.telegraf@1.8.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:31Z",
+                      "tagName": "com.github.actions@1.9.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:28Z",
+                      "tagName": "com.github.actions.contrib@1.0.18"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T20:17:26Z",
+                      "tagName": "com.circleci.v2@1.7.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-21T16:12:04Z",
+                      "tagName": "pkl.experimental.syntax@1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-21T16:12:02Z",
+                      "tagName": "org.json_schema.contrib@1.2.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-21T16:12:00Z",
+                      "tagName": "k8s.contrib.crd@4.2.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-21T16:11:58Z",
+                      "tagName": "com.github.actions.contrib@1.0.17"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-12T20:21:46Z",
+                      "tagName": "pkl.experimental.net@1.3.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-09T22:06:46Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.10"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-09T22:06:44Z",
+                      "tagName": "com.github.dependabot@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-02T22:43:10Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.9"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-02T22:43:08Z",
+                      "tagName": "pkl.experimental.structuredRead@1.0.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-02T22:43:06Z",
+                      "tagName": "pkl.experimental.deepToTyped@1.2.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-02T22:43:03Z",
+                      "tagName": "k8s.contrib.crd@4.2.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-02T22:43:01Z",
+                      "tagName": "com.github.actions.contrib@1.0.16"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-06-29T16:24:22Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.8"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-06-29T16:24:20Z",
+                      "tagName": "com.github.actions@1.9.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-06-29T16:24:17Z",
+                      "tagName": "com.github.actions.contrib@1.0.15"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-06-08T22:35:11Z",
+                      "tagName": "com.influxdata.telegraf@1.8.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-05-29T23:19:14Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.7"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-05-29T23:19:11Z",
+                      "tagName": "com.github.actions@1.8.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-05-29T23:19:09Z",
+                      "tagName": "com.github.actions.contrib@1.0.14"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-05-27T16:02:13Z",
+                      "tagName": "com.influxdata.telegraf@1.7.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-05-16T22:25:28Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-05-16T22:25:26Z",
+                      "tagName": "com.github.actions@1.7.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-05-16T22:25:24Z",
+                      "tagName": "com.github.actions.contrib@1.0.13"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-22T18:08:27Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-22T18:08:25Z",
+                      "tagName": "com.github.dependabot@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-22T03:44:30Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-22T03:44:27Z",
+                      "tagName": "com.github.actions@1.6.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-22T03:44:25Z",
+                      "tagName": "com.github.actions.contrib@1.0.12"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-21T18:26:11Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-21T18:26:09Z",
+                      "tagName": "com.github.actions@1.5.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-21T18:26:07Z",
+                      "tagName": "com.github.actions.contrib@1.0.11"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-21T15:45:32Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-21T15:45:29Z",
+                      "tagName": "com.github.dependabot@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-20T20:09:48Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-20T20:09:46Z",
+                      "tagName": "com.github.dependabot@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-14T23:57:54Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-14T04:26:04Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.0.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-14T04:26:01Z",
+                      "tagName": "com.github.actions@1.4.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-14T04:25:59Z",
+                      "tagName": "com.github.actions.contrib@1.0.10"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-03-13T18:08:45Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-03-13T18:08:43Z",
+                      "tagName": "com.github.dependabot@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-03-13T18:08:41Z",
+                      "tagName": "com.github.actions@1.3.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-03-13T18:08:39Z",
+                      "tagName": "com.github.actions.contrib@1.0.9"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-02-04T17:24:25Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-19T21:40:32Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-19T21:40:29Z",
+                      "tagName": "pkl.experimental.structuredRead@1.0.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-19T21:40:27Z",
+                      "tagName": "pkl.experimental.deepToTyped@1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-19T21:40:25Z",
+                      "tagName": "k8s.contrib.crd@4.2.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-19T21:40:23Z",
+                      "tagName": "com.github.actions.contrib@1.0.8"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-15T21:26:22Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-15T21:26:20Z",
+                      "tagName": "com.github.actions@1.3.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-15T21:26:18Z",
+                      "tagName": "com.github.actions.contrib@1.0.7"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-09T17:01:11Z",
+                      "tagName": "pkl.github.dependabotManagedActions@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-09T11:43:40Z",
+                      "tagName": "k8s.networking.gateway@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-22T17:41:45Z",
+                      "tagName": "com.github.actions.contrib@1.0.6"
+                    }
+                  ],
+                  "pageInfo": {
+                    "endCursor": "Y3Vyc29yOnYyOpK0MjAyNS0xMi0yMlQxNzo0MDoyM1rOEDqYsg==",
+                    "hasNextPage": true
+                  }
+                }
+              },
+              "r1": {
+                "releases": {
+                  "nodes": [
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-11-16T20:18:08Z",
+                      "tagName": "v2.13.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-11-09T20:45:24Z",
+                      "tagName": "v2.12.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-11-03T17:58:31Z",
+                      "tagName": "v2.11.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-11-01T10:29:40Z",
+                      "tagName": "v2.11.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-29T10:26:48Z",
+                      "tagName": "v2.10.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-26T21:11:43Z",
+                      "tagName": "v2.9.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-26T21:03:01Z",
+                      "tagName": "v2.8.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-23T10:33:10Z",
+                      "tagName": "v2.8.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-20T19:23:14Z",
+                      "tagName": "v2.8.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-19T10:38:28Z",
+                      "tagName": "v2.7.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-16T10:31:21Z",
+                      "tagName": "v2.7.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-12T10:39:34Z",
+                      "tagName": "v2.6.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-10-04T12:09:50Z",
+                      "tagName": "v2.5.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-28T02:55:18Z",
+                      "tagName": "v2.4.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-27T14:39:08Z",
+                      "tagName": "v2.3.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-26T20:00:28Z",
+                      "tagName": "v2.3.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-25T00:37:04Z",
+                      "tagName": "v2.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-23T10:31:36Z",
+                      "tagName": "v2.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-15T19:00:44Z",
+                      "tagName": "v2.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-13T06:59:17Z",
+                      "tagName": "v2.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-05T19:46:14Z",
+                      "tagName": "v1.58.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-09-12T12:22:13Z",
+                      "tagName": "v1.58.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-30T23:48:55Z",
+                      "tagName": "v1.57.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-23T01:01:37Z",
+                      "tagName": "v1.56.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-19T10:22:28Z",
+                      "tagName": "v1.56.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-11T22:37:18Z",
+                      "tagName": "v1.55.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-08-07T10:33:34Z",
+                      "tagName": "v1.54.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-31T00:24:01Z",
+                      "tagName": "v1.54.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-23T17:08:09Z",
+                      "tagName": "v1.53.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-21T10:57:30Z",
+                      "tagName": "v1.52.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-14T10:48:40Z",
+                      "tagName": "v1.51.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-06T21:29:47Z",
+                      "tagName": "v1.50.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-07-01T22:53:16Z",
+                      "tagName": "v1.49.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-06-11T20:45:23Z",
+                      "tagName": "v1.48.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-06-09T08:10:42Z",
+                      "tagName": "v1.47.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-05-27T20:46:26Z",
+                      "tagName": "v1.46.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-05-05T13:26:24Z",
+                      "tagName": "v1.45.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-30T16:12:47Z",
+                      "tagName": "v1.44.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-26T22:56:49Z",
+                      "tagName": "v1.44.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-24T13:35:08Z",
+                      "tagName": "v1.44.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-23T17:21:30Z",
+                      "tagName": "v1.44.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-16T17:13:30Z",
+                      "tagName": "v1.43.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-12T13:39:51Z",
+                      "tagName": "v1.42.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-10T01:03:57Z",
+                      "tagName": "v1.41.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-05T17:35:43Z",
+                      "tagName": "v1.41.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-04-01T16:35:03Z",
+                      "tagName": "v1.40.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-03-22T19:51:09Z",
+                      "tagName": "v1.39.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-03-07T01:22:20Z",
+                      "tagName": "v1.38.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-03-03T15:31:51Z",
+                      "tagName": "v1.37.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-02-09T03:33:14Z",
+                      "tagName": "v1.36.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-02-01T11:13:08Z",
+                      "tagName": "v1.35.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-27T14:42:12Z",
+                      "tagName": "v1.34.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-19T16:21:23Z",
+                      "tagName": "v1.32.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-19T05:40:06Z",
+                      "tagName": "v1.31.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2026-01-06T19:13:20Z",
+                      "tagName": "v1.29.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-18T04:33:20Z",
+                      "tagName": "v1.28.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-12T16:43:38Z",
+                      "tagName": "v1.27.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-04T15:14:27Z",
+                      "tagName": "v1.26.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-11-25T17:26:52Z",
+                      "tagName": "v1.25.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-11-22T00:36:15Z",
+                      "tagName": "v1.24.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-11-21T23:18:16Z",
+                      "tagName": "v1.24.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-11-21T15:07:37Z",
+                      "tagName": "v1.23.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-11-19T21:40:13Z",
+                      "tagName": "v1.22.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-11-19T17:32:58Z",
+                      "tagName": "v1.21.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-11-15T02:21:32Z",
+                      "tagName": "v1.21.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-10-29T23:22:25Z",
+                      "tagName": "v1.20.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-10-15T15:59:47Z",
+                      "tagName": "v1.19.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-10-08T00:12:35Z",
+                      "tagName": "v1.18.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-10-07T00:02:11Z",
+                      "tagName": "v1.18.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-10-05T20:10:43Z",
+                      "tagName": "v1.18.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-10-05T18:32:21Z",
+                      "tagName": "v1.18.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-10-02T17:06:01Z",
+                      "tagName": "v1.16.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-29T00:43:41Z",
+                      "tagName": "v1.15.7"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-25T16:09:23Z",
+                      "tagName": "v1.15.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-22T23:53:28Z",
+                      "tagName": "v1.15.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-22T21:44:51Z",
+                      "tagName": "v1.15.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-21T16:57:09Z",
+                      "tagName": "v1.15.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-20T01:07:42Z",
+                      "tagName": "v1.15.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-19T17:07:42Z",
+                      "tagName": "v1.15.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-19T15:27:08Z",
+                      "tagName": "v1.15.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-18T13:39:43Z",
+                      "tagName": "v1.14.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-17T12:46:19Z",
+                      "tagName": "v1.13.7"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-17T12:30:11Z",
+                      "tagName": "v1.13.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-17T04:43:53Z",
+                      "tagName": "v1.13.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-17T04:18:36Z",
+                      "tagName": "v1.13.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-17T04:09:38Z",
+                      "tagName": "v1.13.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-17T03:59:09Z",
+                      "tagName": "v1.13.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-17T03:46:23Z",
+                      "tagName": "v1.13.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-13T15:58:11Z",
+                      "tagName": "v1.12.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-07T20:34:53Z",
+                      "tagName": "v1.12.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-07T00:35:08Z",
+                      "tagName": "v1.11.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-07T00:07:23Z",
+                      "tagName": "v1.11.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-06T23:33:54Z",
+                      "tagName": "v1.11.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-27T20:55:20Z",
+                      "tagName": "v1.10.7"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-26T14:28:51Z",
+                      "tagName": "v1.10.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-26T13:48:16Z",
+                      "tagName": "v1.10.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-24T16:33:33Z",
+                      "tagName": "v1.10.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-24T14:53:08Z",
+                      "tagName": "v1.10.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-22T19:09:06Z",
+                      "tagName": "v1.10.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-22T17:28:34Z",
+                      "tagName": "v1.10.1"
+                    }
+                  ],
+                  "pageInfo": {
+                    "endCursor": "Y3Vyc29yOnYyOpK0MjAyNS0wOC0yMlQxNzoxOTowNVrODmsoRA==",
+                    "hasNextPage": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query ReleasesQuery($owner: String!, $name: String!, $cursor: String) {\n    repository(owner: $owner, name: $name) {\n        releases(first: 100, after: $cursor, orderBy: { field: CREATED_AT, direction: DESC }) {\n            nodes {\n                tagName\n                publishedAt\n                isDraft\n                isPrerelease\n            }\n            pageInfo {\n                hasNextPage\n                endCursor\n            }\n        }\n    }\n}\n",
+            "variables": {
+              "cursor": "Y3Vyc29yOnYyOpK0MjAyNS0xMi0yMlQxNzo0MDoyM1rOEDqYsg==",
+              "name": "pkl-pantry",
+              "owner": "apple"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sun, 22 Nov 2026 02:00:33 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v4; format=json"
+          ],
+          "x-github-request-id": [
+            "C37C:2F58A2:CBD64BE:1332C3C2:6B024CC0"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4967"
+          ],
+          "x-ratelimit-reset": [
+            "1795314786"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "33"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "repository": {
+                "releases": {
+                  "nodes": [
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-22T17:40:08Z",
+                      "tagName": "com.github.actions.contrib@1.0.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-17T18:28:07Z",
+                      "tagName": "com.github.actions.contrib@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-11T05:11:11Z",
+                      "tagName": "com.github.actions@1.3.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-11T05:11:09Z",
+                      "tagName": "com.github.actions.contrib@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-10T22:16:27Z",
+                      "tagName": "com.github.dependabot@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-09T22:44:17Z",
+                      "tagName": "com.github.actions@1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-09T22:44:15Z",
+                      "tagName": "com.github.actions.contrib@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-08T23:15:12Z",
+                      "tagName": "com.github.actions@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-08T23:15:09Z",
+                      "tagName": "com.github.actions.contrib@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-08T19:43:29Z",
+                      "tagName": "io.github.typesafegithub@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-08T19:43:26Z",
+                      "tagName": "com.github.actions@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-08T19:43:24Z",
+                      "tagName": "com.github.actions.contrib@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-12-05T18:12:09Z",
+                      "tagName": "pkl.tar@0.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-11-19T22:25:19Z",
+                      "tagName": "org.json_schema.contrib@1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-11-19T22:25:17Z",
+                      "tagName": "k8s.contrib.crd@4.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-11-10T17:01:04Z",
+                      "tagName": "com.influxdata.telegraf@1.6.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-10-16T21:02:24Z",
+                      "tagName": "com.circleci.v2@1.7.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-04T15:57:11Z",
+                      "tagName": "com.circleci.v2@1.6.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-09-03T17:17:56Z",
+                      "tagName": "com.circleci.v2@1.6.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-30T05:12:00Z",
+                      "tagName": "k8s.contrib.crd@4.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-07-07T18:13:57Z",
+                      "tagName": "k8s.contrib.crd@4.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-07-07T18:12:04Z",
+                      "tagName": "io.prometheus@1.4.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-07-01T12:35:28Z",
+                      "tagName": "pkl.csv@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-06-10T21:06:50Z",
+                      "tagName": "org.json_schema@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-06-10T21:06:48Z",
+                      "tagName": "org.json_schema.contrib@1.1.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-06-10T21:06:46Z",
+                      "tagName": "k8s.contrib.crd@3.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-05-23T04:58:31Z",
+                      "tagName": "org.openapis.v3@2.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-05-23T04:58:29Z",
+                      "tagName": "org.openapis.v3.contrib@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-05-14T21:42:10Z",
+                      "tagName": "pkl.experimental.structuredRead@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-05-14T21:42:08Z",
+                      "tagName": "pkl.experimental.deepToTyped@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-05-14T21:42:06Z",
+                      "tagName": "k8s.contrib.crd@3.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-10T16:58:02Z",
+                      "tagName": "com.influxdata.telegraf@1.5.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-02T21:43:20Z",
+                      "tagName": "io.prometheus@1.3.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-25T00:51:55Z",
+                      "tagName": "icalendar@0.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-24T23:11:14Z",
+                      "tagName": "icalendar@0.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-19T14:42:55Z",
+                      "tagName": "k8s.contrib.crd@3.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-07T17:15:12Z",
+                      "tagName": "com.circleci.v2@1.5.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-05T21:40:50Z",
+                      "tagName": "pkl.experimental.syntax@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-05T21:40:49Z",
+                      "tagName": "org.json_schema.contrib@1.1.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-05T21:40:47Z",
+                      "tagName": "k8s.contrib.crd@2.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-27T17:40:12Z",
+                      "tagName": "org.json_schema.contrib@1.1.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-27T17:40:11Z",
+                      "tagName": "k8s.contrib.crd@2.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-17T15:34:47Z",
+                      "tagName": "org.json_schema.contrib@1.1.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-17T15:34:46Z",
+                      "tagName": "k8s.contrib.crd@2.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-01-15T14:05:45Z",
+                      "tagName": "org.openapis.v3@2.1.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-01-15T14:05:44Z",
+                      "tagName": "org.openapis.v3.contrib@1.0.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-12-13T20:11:27Z",
+                      "tagName": "pkl.experimental.structuredRead@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-12-13T20:11:26Z",
+                      "tagName": "pkl.experimental.deepToTyped@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-12-13T20:11:24Z",
+                      "tagName": "k8s.contrib.crd@1.0.14"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-12-13T16:40:27Z",
+                      "tagName": "com.influxdata.telegraf@1.4.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-12-10T01:08:06Z",
+                      "tagName": "com.circleci.v2@1.4.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-12-09T18:51:11Z",
+                      "tagName": "com.circleci.v2@1.3.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-11-01T03:48:14Z",
+                      "tagName": "com.circleci.v2@1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-11-01T01:13:55Z",
+                      "tagName": "com.circleci.v2@1.1.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-11-01T00:53:46Z",
+                      "tagName": "com.circleci.v2@1.1.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-10-24T14:54:15Z",
+                      "tagName": "org.json_schema@1.0.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-10-24T14:54:13Z",
+                      "tagName": "org.json_schema.contrib@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-10-24T14:54:12Z",
+                      "tagName": "k8s.contrib.crd@1.0.13"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-10-08T23:04:19Z",
+                      "tagName": "com.influxdata.telegraf@1.3.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-15T22:53:36Z",
+                      "tagName": "io.prometheus@1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-15T17:58:55Z",
+                      "tagName": "pkl.experimental.structuredRead@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-15T17:58:53Z",
+                      "tagName": "pkl.experimental.deepToTyped@1.0.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-15T17:58:52Z",
+                      "tagName": "k8s.contrib.crd@1.0.12"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-15T17:07:13Z",
+                      "tagName": "pkl.experimental.structuredRead@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-15T17:07:11Z",
+                      "tagName": "pkl.experimental.deepToTyped@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-15T17:07:09Z",
+                      "tagName": "k8s.contrib.crd@1.0.11"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-15T10:03:35Z",
+                      "tagName": "pkl.experimental.structuredRead@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-15T10:03:34Z",
+                      "tagName": "pkl.experimental.deepToTyped@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-15T10:03:32Z",
+                      "tagName": "k8s.contrib.crd@1.0.10"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-11T22:43:39Z",
+                      "tagName": "org.json_schema.contrib@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-11T22:43:38Z",
+                      "tagName": "k8s.contrib.crd@1.0.9"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-10T22:25:04Z",
+                      "tagName": "pkl.toml@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-10T22:25:02Z",
+                      "tagName": "com.influxdata.telegraf@1.2.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-01T15:10:47Z",
+                      "tagName": "pkl.experimental.syntax@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-01T15:10:45Z",
+                      "tagName": "org.json_schema.contrib@1.0.9"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-07-01T15:10:44Z",
+                      "tagName": "k8s.contrib.crd@1.0.8"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-28T21:04:31Z",
+                      "tagName": "pkl.table@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-27T17:40:45Z",
+                      "tagName": "com.influxdata.telegraf@1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T19:41:19Z",
+                      "tagName": "pkl.pipe@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T19:41:18Z",
+                      "tagName": "org.json_schema.contrib@1.0.8"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T19:41:16Z",
+                      "tagName": "k8s.contrib@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T19:41:14Z",
+                      "tagName": "k8s.contrib.crd@1.0.7"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:41Z",
+                      "tagName": "pkl.toml@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:40Z",
+                      "tagName": "pkl.table@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:38Z",
+                      "tagName": "pkl.pipe@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:37Z",
+                      "tagName": "pkl.lua@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:36Z",
+                      "tagName": "pkl.experimental.uri@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:34Z",
+                      "tagName": "pkl.experimental.syntax@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:33Z",
+                      "tagName": "pkl.experimental.net@1.2.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:31Z",
+                      "tagName": "pkl.experimental.deepToTyped@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:30Z",
+                      "tagName": "pkl.csv@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:28Z",
+                      "tagName": "org.openapis.v3@2.1.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:27Z",
+                      "tagName": "org.openapis.v3.contrib@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:25Z",
+                      "tagName": "org.json_schema@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:24Z",
+                      "tagName": "org.json_schema.contrib@1.0.7"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:22Z",
+                      "tagName": "org.apache.spark@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:21Z",
+                      "tagName": "k8s.contrib@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:19Z",
+                      "tagName": "k8s.contrib.crd@1.0.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:18Z",
+                      "tagName": "k8s.contrib.appEnvCluster@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:16Z",
+                      "tagName": "io.prometheus@1.1.3"
+                    }
+                  ],
+                  "pageInfo": {
+                    "endCursor": "Y3Vyc29yOnYyOpK0MjAyNC0wNi0xN1QxODo1MjoxM1rOCZeCpA==",
+                    "hasNextPage": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query ReleasesQuery($owner: String!, $name: String!, $cursor: String) {\n    repository(owner: $owner, name: $name) {\n        releases(first: 100, after: $cursor, orderBy: { field: CREATED_AT, direction: DESC }) {\n            nodes {\n                tagName\n                publishedAt\n                isDraft\n                isPrerelease\n            }\n            pageInfo {\n                hasNextPage\n                endCursor\n            }\n        }\n    }\n}\n",
+            "variables": {
+              "cursor": "Y3Vyc29yOnYyOpK0MjAyNS0wOC0yMlQxNzoxOTowNVrODmsoRA==",
+              "name": "hk",
+              "owner": "jdx"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sun, 22 Nov 2026 02:00:33 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v4; format=json"
+          ],
+          "x-github-request-id": [
+            "C37C:2F58A2:CBD64C0:1332C3C8:6B024CC0"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4993"
+          ],
+          "x-ratelimit-reset": [
+            "1795315465"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "7"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "repository": {
+                "releases": {
+                  "nodes": [
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-22T17:18:47Z",
+                      "tagName": "v1.10.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-19T20:11:30Z",
+                      "tagName": "v1.9.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-19T19:13:15Z",
+                      "tagName": "v1.9.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-19T17:32:05Z",
+                      "tagName": "v1.9.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-18T20:13:21Z",
+                      "tagName": "v1.8.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-18T16:32:27Z",
+                      "tagName": "v1.7.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-17T00:16:25Z",
+                      "tagName": "v1.7.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-16T23:47:42Z",
+                      "tagName": "v1.6.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-14T01:28:21Z",
+                      "tagName": "v1.5.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-12T17:50:25Z",
+                      "tagName": "v1.4.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-08-12T13:53:58Z",
+                      "tagName": "v1.3.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-07-21T18:08:56Z",
+                      "tagName": "v1.2.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-07-09T14:06:21Z",
+                      "tagName": "v1.2.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-06-13T17:20:05Z",
+                      "tagName": "v1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-05-25T15:55:05Z",
+                      "tagName": "v1.1.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-05-16T17:14:08Z",
+                      "tagName": "v1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-05-14T20:03:01Z",
+                      "tagName": "v1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-26T16:12:18Z",
+                      "tagName": "v1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-23T16:55:28Z",
+                      "tagName": "v0.8.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-23T16:37:34Z",
+                      "tagName": "v0.8.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-22T17:57:31Z",
+                      "tagName": "v0.8.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-18T00:41:43Z",
+                      "tagName": "v0.8.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-18T00:35:15Z",
+                      "tagName": "v0.8.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-17T23:42:23Z",
+                      "tagName": "v0.8.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-11T16:53:28Z",
+                      "tagName": "v0.7.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-11T15:42:19Z",
+                      "tagName": "v0.7.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-10T18:19:45Z",
+                      "tagName": "v0.7.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-10T16:25:21Z",
+                      "tagName": "v0.7.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-09T23:58:20Z",
+                      "tagName": "v0.7.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-04-04T14:40:53Z",
+                      "tagName": "v0.7.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-30T17:18:48Z",
+                      "tagName": "v0.6.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-29T20:48:56Z",
+                      "tagName": "v0.6.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-29T19:06:08Z",
+                      "tagName": "v0.6.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-24T22:05:44Z",
+                      "tagName": "v0.6.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-22T13:38:00Z",
+                      "tagName": "v0.6.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-21T14:26:26Z",
+                      "tagName": "v0.6.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-03-20T15:30:03Z",
+                      "tagName": "v0.5.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-25T01:36:01Z",
+                      "tagName": "v0.5.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-24T14:57:00Z",
+                      "tagName": "v0.4.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-23T19:45:18Z",
+                      "tagName": "v0.4.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-22T14:09:32Z",
+                      "tagName": "v0.4.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-21T15:51:05Z",
+                      "tagName": "v0.4.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-21T02:01:18Z",
+                      "tagName": "v0.4.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-20T01:17:13Z",
+                      "tagName": "v0.4.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-20T01:00:26Z",
+                      "tagName": "v0.4.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-19T16:19:59Z",
+                      "tagName": "v0.3.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-19T15:58:41Z",
+                      "tagName": "v0.3.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-19T15:53:25Z",
+                      "tagName": "v0.3.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-19T15:38:34Z",
+                      "tagName": "v0.3.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-18T14:31:31Z",
+                      "tagName": "v0.2.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-17T22:34:14Z",
+                      "tagName": "v0.2.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-17T19:00:34Z",
+                      "tagName": "v0.2.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-17T18:36:30Z",
+                      "tagName": "v0.2.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-17T15:40:03Z",
+                      "tagName": "v0.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-17T13:41:24Z",
+                      "tagName": "v0.1.9"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-16T23:23:49Z",
+                      "tagName": "v0.1.8"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-16T22:49:37Z",
+                      "tagName": "v0.1.7"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-16T21:29:45Z",
+                      "tagName": "v0.1.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-16T21:15:12Z",
+                      "tagName": "v0.1.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-16T00:58:17Z",
+                      "tagName": "v0.1.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-16T00:51:06Z",
+                      "tagName": "v0.1.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-16T00:43:09Z",
+                      "tagName": "v0.1.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2025-02-16T00:40:15Z",
+                      "tagName": "v0.1.1"
+                    }
+                  ],
+                  "pageInfo": {
+                    "endCursor": "Y3Vyc29yOnYyOpK0MjAyNS0wMi0xNlQwMDo0MDowMVrOC_Qgdw==",
+                    "hasNextPage": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github+json"
+          ],
+          "content-type": [
+            "application/json"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query ReleasesQuery($owner: String!, $name: String!, $cursor: String) {\n    repository(owner: $owner, name: $name) {\n        releases(first: 100, after: $cursor, orderBy: { field: CREATED_AT, direction: DESC }) {\n            nodes {\n                tagName\n                publishedAt\n                isDraft\n                isPrerelease\n            }\n            pageInfo {\n                hasNextPage\n                endCursor\n            }\n        }\n    }\n}\n",
+            "variables": {
+              "cursor": "Y3Vyc29yOnYyOpK0MjAyNC0wNi0xN1QxODo1MjoxM1rOCZeCpA==",
+              "name": "pkl-pantry",
+              "owner": "apple"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Sun, 22 Nov 2026 02:00:33 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "fra"
+          ],
+          "x-github-media-type": [
+            "github.v4; format=json"
+          ],
+          "x-github-request-id": [
+            "C37C:2F58A2:CBD6803:1332C860:6B024CC1"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4966"
+          ],
+          "x-ratelimit-reset": [
+            "1795314786"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "34"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "repository": {
+                "releases": {
+                  "nodes": [
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:15Z",
+                      "tagName": "com.influxdata.telegraf@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:54:13Z",
+                      "tagName": "com.circleci.v2@1.1.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:07:21Z",
+                      "tagName": "pkl.experimental.uri@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:07:19Z",
+                      "tagName": "org.json_schema@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:07:18Z",
+                      "tagName": "org.json_schema.contrib@1.0.6"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-17T18:07:16Z",
+                      "tagName": "k8s.contrib.crd@1.0.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-06-04T18:58:29Z",
+                      "tagName": "pkl.lua@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-05-28T16:45:09Z",
+                      "tagName": "io.prometheus@1.1.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-05-14T14:39:27Z",
+                      "tagName": "com.circleci.v2@1.1.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-05-06T07:34:54Z",
+                      "tagName": "pkl.lua@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-30T23:12:58Z",
+                      "tagName": "pkl.experimental.net@1.2.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-24T23:17:27Z",
+                      "tagName": "org.openapis.v3@2.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-24T23:17:26Z",
+                      "tagName": "org.openapis.v3.contrib@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-24T23:16:38Z",
+                      "tagName": "pkl.experimental.uri@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-24T23:16:37Z",
+                      "tagName": "org.json_schema@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-24T23:16:36Z",
+                      "tagName": "org.json_schema.contrib@1.0.5"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-24T23:16:34Z",
+                      "tagName": "k8s.contrib.crd@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-17T23:15:00Z",
+                      "tagName": "pkl.lua@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-12T17:09:01Z",
+                      "tagName": "org.openapis.v3.contrib@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-10T15:34:48Z",
+                      "tagName": "org.json_schema.contrib@1.0.4"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-10T15:34:46Z",
+                      "tagName": "k8s.contrib.crd@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-03T23:50:31Z",
+                      "tagName": "pkl.experimental.net@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-04-02T15:52:32Z",
+                      "tagName": "io.prometheus@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-25T22:08:29Z",
+                      "tagName": "io.prometheus@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-19T23:55:19Z",
+                      "tagName": "org.openapis.v3@2.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-19T23:55:17Z",
+                      "tagName": "org.openapis.v3.contrib@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-07T17:02:10Z",
+                      "tagName": "org.openapis.v3@2.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-07T17:02:09Z",
+                      "tagName": "org.openapis.v3.contrib@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-07T17:02:07Z",
+                      "tagName": "org.json_schema@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-07T17:02:06Z",
+                      "tagName": "org.json_schema.contrib@1.0.3"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-07T17:02:05Z",
+                      "tagName": "k8s.contrib.crd@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-07T16:49:01Z",
+                      "tagName": "com.circleci.v2@1.1.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-06T19:40:39Z",
+                      "tagName": "com.circleci.v2@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-05T03:52:23Z",
+                      "tagName": "com.influxdata.telegraf@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-04T23:13:09Z",
+                      "tagName": "pkl.experimental.syntax@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-04T23:13:08Z",
+                      "tagName": "pkl.experimental.deepToTyped@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-04T23:13:06Z",
+                      "tagName": "org.json_schema.contrib@1.0.2"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-03-04T23:13:05Z",
+                      "tagName": "k8s.contrib.crd@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-22T02:19:27Z",
+                      "tagName": "k8s.contrib.crd@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-21T11:38:23Z",
+                      "tagName": "org.json_schema.contrib@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-09T05:44:56Z",
+                      "tagName": "org.json_schema@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-09T05:44:55Z",
+                      "tagName": "org.json_schema.contrib@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-08T13:58:56Z",
+                      "tagName": "pkl.pipe@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-08T13:56:39Z",
+                      "tagName": "k8s.contrib.appEnvCluster@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-06T13:42:03Z",
+                      "tagName": "k8s.contrib@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-03T00:25:02Z",
+                      "tagName": "pkl.experimental.net@1.1.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T20:12:10Z",
+                      "tagName": "com.influxdata.telegraf@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T18:55:47Z",
+                      "tagName": "k8s.contrib@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T18:55:45Z",
+                      "tagName": "k8s.contrib.appEnvCluster@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:15Z",
+                      "tagName": "pkl.toml@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:14Z",
+                      "tagName": "pkl.table@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:13Z",
+                      "tagName": "pkl.experimental.uri@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:11Z",
+                      "tagName": "pkl.experimental.syntax@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:10Z",
+                      "tagName": "pkl.experimental.net@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:08Z",
+                      "tagName": "pkl.experimental.deepToTyped@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:07Z",
+                      "tagName": "pkl.csv@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:05Z",
+                      "tagName": "org.openapis.v3@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:04Z",
+                      "tagName": "org.apache.spark@1.0.1"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:02Z",
+                      "tagName": "io.prometheus@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:01Z",
+                      "tagName": "com.influxdata.telegraf@1.0.0"
+                    },
+                    {
+                      "isDraft": false,
+                      "isPrerelease": false,
+                      "publishedAt": "2024-02-02T15:51:00Z",
+                      "tagName": "com.circleci.v2@1.0.0"
+                    }
+                  ],
+                  "pageInfo": {
+                    "endCursor": "Y3Vyc29yOnYyOpK0MjAyNC0wMi0wMlQxNTo0NzozNVrOCFOL0g==",
+                    "hasNextPage": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

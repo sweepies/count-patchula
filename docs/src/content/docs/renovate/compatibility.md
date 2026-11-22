@@ -58,6 +58,7 @@ Managers the Count supports, under Renovate's names:
 | `gitlabci-include` | `gitlabci-include` | |
 | `nix` | `nix` | on by default; inputs resolved by nix itself, not `git-refs` |
 | `apm` | `apm` | `apm.lock.yaml` refreshed with `apm lock`; commit pins by default |
+| `pkl` | `pkl` | Renovate's manager is still an open pull request; looked up in a `pkl` source rather than `github-releases`, so packages of one repository stay apart; `PklProject` dependencies are not read |
 | `regex` | `regex` | Pkl extractors |
 
 Renovate managers with no Count equivalent yet:
@@ -99,6 +100,7 @@ he does not read Renovate presets.
 | `packagist` | `packagist` |
 | `node-version`, `golang-version`, `python-version`, `rust-version` | `mise` |
 | `git-refs`, for Nix flake inputs | `nix`, through `nix flake prefetch` |
+| `github-releases`, for Pkl packages | `pkl`: the publishing repository's releases, only those tagged as the package |
 
 The rest of Renovate's 82 datasources (`git-refs` other than for Nix, `git-tags`, the GitLab and
 Gitea release sources, `artifactory`, `conda`, `hex`, `dart`, `pod`, `cdnjs`,

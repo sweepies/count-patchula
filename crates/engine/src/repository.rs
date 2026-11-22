@@ -9,8 +9,8 @@
 use crate::{Error, Result};
 use patchula_config::Config;
 use patchula_manager::{
-    Files, MORE_ROUNDS, Scanner, Skipped, Text, Unread, committed_credentials, credential_reason,
-    linked_settings, registry_settings,
+    Files, MORE_ROUNDS, SHARED_NAME_LIMIT, Scanner, Skipped, Text, Unread, committed_credentials,
+    credential_reason, linked_settings, registry_settings,
 };
 use patchula_update::{Blob, tooling};
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,6 +31,8 @@ pub struct Entry {
     /// The mode a push would record: `100644`, `100755`, or `120000` for a
     /// symlink, which is never read.
     pub mode: String,
+    /// The size in bytes, when the listing gives it.
+    pub size: Option<u64>,
 }
 
 /// A path the listing saw that is not a file the tree carries.
@@ -141,6 +143,11 @@ pub async fn view<S: Source>(
         {
             continue;
         }
+        if shared_name(scanner, &entry.path)
+            && entry.size.is_some_and(|size| size > SHARED_NAME_LIMIT)
+        {
+            continue;
+        }
         if entry.mode == SYMLINK_MODE {
             files.insert(entry.path.clone(), Text::Unread(Unread::Failed));
         } else {
@@ -149,7 +156,12 @@ pub async fn view<S: Source>(
     }
     let contents = source.read(&wanted).await?;
     for (entry, content) in wanted.iter().zip(contents) {
-        place(entry, content, true, &mut files, &mut blobs)?;
+        let primary = if shared_name(scanner, &entry.path) {
+            Primary::SharedName
+        } else {
+            Primary::Selected
+        };
+        place(entry, content, primary, &mut files, &mut blobs)?;
     }
     for settings in &linked {
         files.insert(settings.clone(), Text::Unread(Unread::Failed));
@@ -175,7 +187,7 @@ pub async fn view<S: Source>(
         }
         let contents = source.read(&wanted).await?;
         for (entry, content) in wanted.iter().zip(contents) {
-            place(entry, content, false, &mut files, &mut blobs)?;
+            place(entry, content, Primary::Named, &mut files, &mut blobs)?;
         }
     }
     // What the chain still names when the rounds run out is unreadable the
@@ -218,17 +230,37 @@ pub async fn view<S: Source>(
     })
 }
 
-/// One entry's content into `files` and `blobs`. `primary` is the first
-/// selection: a file that cannot be read there refuses the repository,
-/// while one named by a later round is unreadable instead. A settings
-/// file that is not text is unreadable in either.
+/// Whether only managers whose file names another format shares read
+/// `path`, so it may be no manager's file at all.
+fn shared_name(scanner: &Scanner, path: &str) -> bool {
+    scanner.shared_name(path) && !tooling::reads(path) && !tooling::manifest(path)
+}
+
+/// Why an entry is read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Primary {
+    /// The first selection.
+    Selected,
+    /// The first selection, by managers whose file names another format
+    /// shares ([`Scanner::shared_name`]).
+    SharedName,
+    /// A later round, from what the files read so far name.
+    Named,
+}
+
+/// One entry's content into `files` and `blobs`. A file of the first
+/// selection that cannot be read refuses the repository, while one named
+/// by a later round is unreadable instead. A settings file that is not text
+/// is unreadable in either, and a shared-name file that is not text is
+/// another format's, left out.
 fn place(
     entry: &Entry,
     content: Content,
-    primary: bool,
+    why: Primary,
     files: &mut Files,
     blobs: &mut BTreeMap<String, Blob>,
 ) -> Result<()> {
+    let primary = why != Primary::Named;
     let bytes = match content {
         Ok(bytes) => bytes,
         // A registry-settings file that cannot be read is unreadable, so
@@ -246,6 +278,7 @@ fn place(
     };
     let text = match String::from_utf8(bytes) {
         Ok(text) => text,
+        Err(_) if why == Primary::SharedName => return Ok(()),
         Err(_) if !primary || registry_settings(&entry.path) => {
             files.insert(entry.path.clone(), Text::Unread(Unread::Failed));
             return Ok(());
@@ -307,11 +340,13 @@ pub fn list_local(dir: &Path) -> Result<Listing> {
                 path: relative,
                 sha: None,
                 mode: SYMLINK_MODE.into(),
+                size: None,
             }),
             Ok(meta) if meta.is_file() => entries.push(Entry {
                 path: relative,
                 sha: None,
                 mode: local_mode(&meta),
+                size: Some(meta.len()),
             }),
             _ => {
                 let resolves = std::fs::metadata(dir.join(&relative)).is_ok();
@@ -467,6 +502,7 @@ mod tests {
             path: path.into(),
             sha: Some(path.into()),
             mode: FILE_MODE.into(),
+            size: None,
         }
     }
     fn config(pkl: &str) -> Config {

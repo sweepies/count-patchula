@@ -17,7 +17,10 @@ in GraphQL batches (see [the GitHub client](/internals/github-client/#conditiona
 A truncated tree is an error for that repository, as is a selected file
 whose blob cannot be fetched or whose contents are not text — a
 registry-settings file excepted, which stays unreadable so its packages
-fail their lookups rather than using a public registry. A symlink is never
+fail their lookups rather than using a public registry. A file only managers
+whose file names another format shares select (`pkl`: `.pkl` is also
+Python's pickle extension) is left out unread and unreported when it is not
+text or is over 1 MiB. A symlink is never
 read through: the entry stays in the extraction as unreadable rather than
 absent, and a symlinked settings file fails its packages' lookups the same
 way. Files the include chain names in later rounds that cannot be read are

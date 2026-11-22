@@ -38,6 +38,7 @@ pub use nix::{
 };
 mod npm;
 mod nuget;
+mod pkl;
 mod precommit;
 mod proposal;
 pub use proposal::{
@@ -516,6 +517,13 @@ pub(crate) trait Ecosystem {
     fn registry_file(&self, _path: &str) -> bool {
         false
     }
+    /// Whether another format shares `path`'s name with this ecosystem's
+    /// files, so a selected file of that name may not be one of its own:
+    /// `.pkl` is also Python's pickle extension. See
+    /// [`Scanner::shared_name`].
+    fn shared_name(&self, _path: &str) -> bool {
+        false
+    }
     /// The settings a package backend of this ecosystem reads, which mise's
     /// own rule reuses rather than naming files itself.
     fn backend_settings(&self, _path: &str) -> bool {
@@ -644,6 +652,7 @@ const EXTRACT_ORDER: &[Manager] = &[
     Manager::HelmValues,
     Manager::Gitlabci,
     Manager::GitlabciInclude,
+    Manager::Pkl,
     Manager::Regex,
 ];
 
@@ -719,6 +728,7 @@ pub(crate) fn ecosystem(manager: Manager) -> &'static dyn Ecosystem {
         Manager::GitlabciInclude => &GITLABCI_INCLUDE,
         Manager::Nix => &nix::DESCRIPTOR,
         Manager::Apm => &apm::DESCRIPTOR,
+        Manager::Pkl => &pkl::DESCRIPTOR,
         Manager::Regex => &custom::DESCRIPTOR,
     }
 }
@@ -743,6 +753,26 @@ impl Scanner {
     }
     pub fn needs(&self, path: &str) -> bool {
         self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
+    }
+    /// Whether only managers whose file names another format shares select
+    /// `path`. Such a file over [`SHARED_NAME_LIMIT`], or one that is not
+    /// text, is left out unread and unreported, rather than refusing the
+    /// repository as any other selected file does: neither can be one of
+    /// their files.
+    /// Settings and credential-checked files never are, whatever `files`
+    /// config selects.
+    pub fn shared_name(&self, path: &str) -> bool {
+        let mut selecting = self
+            .config
+            .managers
+            .iter()
+            .filter(|m| self.selected(**m, path))
+            .peekable();
+        selecting.peek().is_some()
+            && selecting.all(|m| ecosystem(*m).shared_name(path))
+            && !self.registry_file(path)
+            && !registry_settings(path)
+            && !credential_scope(path)
     }
     /// Whether `path` sits under the repository's excluded paths.
     pub fn excluded(&self, path: &str) -> bool {
@@ -1566,3 +1596,8 @@ pub(crate) fn web_host(url: &str) -> Option<String> {
     let host = rest.split(['/', '?', '#']).next()?.to_ascii_lowercase();
     Some(host.strip_suffix(port).unwrap_or(&host).to_owned())
 }
+
+/// The largest file read for managers whose file names another format
+/// shares ([`Scanner::shared_name`]): a Pkl module is source text, while a
+/// pickle beside it may be a model of hundreds of megabytes.
+pub const SHARED_NAME_LIMIT: u64 = 1 << 20;

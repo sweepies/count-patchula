@@ -147,6 +147,9 @@ pub struct TreeEntry {
     pub kind: String,
     /// `sha` — required.
     pub sha: String,
+    /// `size` — optional; a blob's size in bytes.
+    #[serde(default)]
+    pub size: Option<u64>,
 }
 
 /// A branch's name and head — one `GET /repos/{owner}/{repo}/branches`

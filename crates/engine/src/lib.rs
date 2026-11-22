@@ -389,25 +389,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 15;
+    const VERSION: u32 = 16;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 18;
+    const VERSION: u32 = 19;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 18;
+    const VERSION: u32 = 19;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 15;
+    const VERSION: u32 = 16;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -978,8 +978,69 @@ impl Engine {
     }
 
     /// The catalogs for `keys`, and the keys whose lookups carried
-    /// credentials.
+    /// credentials. A Pkl package's catalog is its repository's release
+    /// catalog narrowed to its own tags, so each repository is fetched once,
+    /// in the release batches, however many of its packages the run holds:
+    /// `apple/pkl-pantry` publishes dozens.
     async fn catalogs(
+        &self,
+        keys: BTreeSet<LookupKey>,
+        sources: &Sources,
+        vias: &MiseVias,
+    ) -> (Catalogs, BTreeSet<LookupKey>) {
+        let (pkl, mut keys): (BTreeSet<_>, BTreeSet<_>) = keys
+            .into_iter()
+            .partition(|(_, id, _)| id.source == Source::Pkl && id.is_public());
+        // Repository keys only Pkl packages asked for, dropped from the answer.
+        let mut borrowed = BTreeSet::new();
+        let packages: Vec<_> = pkl
+            .into_iter()
+            .map(|key| {
+                let stream = patchula_config::PklPackage::parse(&key.1.name).map(|stream| {
+                    let repository = (
+                        key.0,
+                        PackageId::public(Source::GithubReleases, &stream.repository),
+                        MiseAccess::Run,
+                    );
+                    if keys.insert(repository.clone()) {
+                        borrowed.insert(repository.clone());
+                    }
+                    (repository, stream)
+                });
+                (key, stream)
+            })
+            .collect();
+        let (mut results, mut credentialed) = self.fetch_catalogs(keys, sources, vias).await;
+        // A borrowed repository's fetch stands in for its packages' progress.
+        self.progress.advance(packages.len() - borrowed.len());
+        for (key, stream) in packages {
+            let result = match &stream {
+                Some((repository, stream)) => match results.get(repository) {
+                    Some(Ok(releases)) => {
+                        Ok(patchula_datasource::pkl_catalog(stream, releases.clone()))
+                    }
+                    Some(Err(failure)) => Err(failure.clone()),
+                    None => Err(Failure::from(patchula_datasource::Error::Invalid)),
+                },
+                None => Err(Failure::from(patchula_datasource::Error::Invalid)),
+            };
+            if stream
+                .as_ref()
+                .is_some_and(|(repository, _)| credentialed.contains(repository))
+            {
+                credentialed.insert(key.clone());
+            }
+            results.insert(key, result);
+        }
+        for repository in &borrowed {
+            results.remove(repository);
+            credentialed.remove(repository);
+        }
+        (results, credentialed)
+    }
+    /// The catalogs for `keys` as their sources answer, and the keys whose
+    /// lookups carried credentials.
+    async fn fetch_catalogs(
         &self,
         keys: BTreeSet<LookupKey>,
         sources: &Sources,
@@ -1113,6 +1174,7 @@ impl Engine {
                     path: entry.path,
                     sha: Some(entry.sha),
                     mode: entry.mode,
+                    size: entry.size,
                 })
                 .collect(),
             hidden: Vec::new(),

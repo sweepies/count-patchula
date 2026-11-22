@@ -119,7 +119,7 @@ struct ChangelogScope {
 }
 impl State for ParsedChangelog {
     const NAMESPACE: &'static str = "changelog";
-    const VERSION: u32 = 8;
+    const VERSION: u32 = 9;
     const CODE_VERSIONED: bool = true;
     type Scope = ChangelogScope;
 }
@@ -185,15 +185,36 @@ fn hidden_prerelease(upstream_prerelease: bool, target: &Parsed) -> bool {
 const NOTES_BYTES: usize = 12_000;
 /// ... and at most this many version sections.
 const NOTES_SECTIONS: usize = 32;
-/// The name a package's tags are namespaced by: a Helm chart's name rather
-/// than its repository's URL.
-fn tag_name(id: &PackageId) -> &str {
-    match id.source {
+/// What a package's tags are namespaced by: its name, a Helm chart's name
+/// rather than its repository's URL, and for a Pkl package the exact
+/// spelling of its own tags, which no name heuristic may widen.
+pub(crate) struct Namespace<'a> {
+    name: &'a str,
+    pkl: Option<patchula_config::PklPackage>,
+}
+fn tag_name(id: &PackageId) -> Namespace<'_> {
+    let name = match id.source {
         Source::Helm => split_package(&id.name).map_or(id.name.as_str(), |(_, chart)| chart),
         _ => id.name.as_str(),
+    };
+    Namespace {
+        name,
+        pkl: (id.source == Source::Pkl)
+            .then(|| patchula_config::PklPackage::parse(&id.name))
+            .flatten(),
     }
 }
-fn tag_version<'a>(tag: &'a str, package: &str, repository: &Repository) -> Option<&'a str> {
+fn tag_version<'a>(
+    tag: &'a str,
+    package: &Namespace<'_>,
+    repository: &Repository,
+) -> Option<&'a str> {
+    // A Pkl package's tags are spelled one way; a monorepo's other packages
+    // and its plain `v` tags are not this package's releases.
+    if let Some(pkl) = &package.pkl {
+        return pkl.version(tag);
+    }
+    let package = package.name;
     if parsed(tag).is_some() {
         return Some(tag);
     }
@@ -266,11 +287,19 @@ pub fn compare_url(source: Source, package: &str, old: &str, new: &str) -> Optio
 }
 fn inferred_tag(
     template: &str,
-    package: &str,
+    package: &Namespace<'_>,
     repository: &Repository,
     version: &Parsed,
 ) -> Option<String> {
     let raw = tag_version(template, package, repository)?;
+    if let Some(pkl) = &package.pkl {
+        return Some(format!(
+            "{}{}{}",
+            pkl.prefix,
+            version_id(version),
+            pkl.suffix
+        ));
+    }
     let prefix = &template[..template.len() - raw.len()];
     let v = if raw.starts_with('v') { "v" } else { "" };
     let components = raw
@@ -291,7 +320,7 @@ fn inferred_tag(
 
 fn note_bounds(
     source: Source,
-    package: &str,
+    package: &Namespace<'_>,
     current: &str,
     target: &str,
     repository: &Repository,
@@ -551,7 +580,7 @@ impl Client {
         current: &str,
         target: &str,
     ) -> Result<Notes> {
-        let (source, package) = (id.source, tag_name(id));
+        let (source, package) = (id.source, &tag_name(id));
         let mut notes = Notes {
             from: current.into(),
             to: target.into(),
@@ -602,7 +631,7 @@ impl Client {
         repository: &Repository,
         old: Parsed,
         new: Parsed,
-        package: &str,
+        package: &Namespace<'_>,
     ) -> Result<()> {
         let mut bounds = (None, None);
         let mut template = None;
@@ -821,7 +850,7 @@ fn take_releases<T>(
 
 /// The range and naming the compare tags are inferred from.
 struct Ends<'a> {
-    package: &'a str,
+    package: &'a Namespace<'a>,
     repository: &'a Repository,
     old: &'a Parsed,
     new: &'a Parsed,
@@ -1136,8 +1165,8 @@ mod tests {
         let repository = Repository::from_url("https://github.com/example/charts")
             .unwrap()
             .chart_sourced();
-        let package = tag_name(&id);
-        assert_eq!(package, "app");
+        let package = &tag_name(&id);
+        assert_eq!(package.name, "app");
         assert_eq!(
             tag_version("app-1.2.3", package, &repository),
             Some("1.2.3")
@@ -1151,7 +1180,35 @@ mod tests {
         assert_eq!(tag_version("other-1.2.3", package, &repository), None);
         // Only a chart's tags take a bare `-`.
         let plain = Repository::from_url("https://github.com/example/foo").unwrap();
-        assert_eq!(tag_version("foo-2", "foo", &plain), None);
-        assert_eq!(tag_version("foo-v2", "foo", &plain), Some("2"));
+        let foo_id = PackageId::public(Source::GithubReleases, "foo");
+        let foo = &tag_name(&foo_id);
+        assert_eq!(tag_version("foo-2", foo, &plain), None);
+        assert_eq!(tag_version("foo-v2", foo, &plain), Some("2"));
+    }
+
+    /// A Pkl package's releases are its own tags, spelled exactly: not a
+    /// monorepo neighbour's, not a plain `v` tag, and not a prerelease read
+    /// into a suffix.
+    #[test]
+    fn pkl_packages_read_only_their_own_tags() {
+        let pantry = Repository::from_url("https://github.com/apple/pkl-pantry").unwrap();
+        let toml_id = PackageId::public(Source::Pkl, "pkg.pkl-lang.org/pkl-pantry/pkl.toml");
+        let toml = &tag_name(&toml_id);
+        assert_eq!(tag_version("pkl.toml@1.0.3", toml, &pantry), Some("1.0.3"));
+        assert_eq!(tag_version("v1.0.4", toml, &pantry), None);
+        assert_eq!(tag_version("pkl.toml.contrib@1.0.3", toml, &pantry), None);
+        let b = Repository::from_url("https://github.com/a/b").unwrap();
+        let suffixed_id = PackageId::public(
+            Source::Pkl,
+            "github.com/a/b/releases/download/b-%version%-final/b",
+        );
+        let suffixed = &tag_name(&suffixed_id);
+        assert_eq!(tag_version("b-1.3.0-final", suffixed, &b), Some("1.3.0"));
+        assert_eq!(tag_version("v1.3.0-final", suffixed, &b), None);
+        let version = parsed("1.4.0").unwrap();
+        assert_eq!(
+            inferred_tag("b-1.3.0-final", suffixed, &b, &version).as_deref(),
+            Some("b-1.4.0-final")
+        );
     }
 }
