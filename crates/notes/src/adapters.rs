@@ -1,23 +1,6 @@
 //! Upstream-specific notes for upstreams without GitHub releases.
 use super::*;
 
-/// The parsed sections of one immutable upstream document.
-#[derive(Serialize, Deserialize)]
-pub(crate) struct AdapterSections(Vec<Section>);
-#[derive(Serialize)]
-pub(crate) struct AdapterScope {
-    repository: String,
-    path: String,
-    blob_sha: String,
-    representation: String,
-}
-impl State for AdapterSections {
-    const NAMESPACE: &'static str = "notes-adapter";
-    const VERSION: u32 = 9;
-    const CODE_VERSIONED: bool = true;
-    type Scope = AdapterScope;
-}
-
 /// Upstreams whose release notes are published outside GitHub releases.
 #[derive(Clone, Copy)]
 pub(super) enum Adapter {
@@ -69,7 +52,7 @@ pub(super) fn compact_listing(
     serde_json::to_vec(&listing)
 }
 pub(crate) const NOTES_ADAPTER_LISTING: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("notes-adapter-listing", 9, compact_listing);
+    patchula_http::Derived::new("notes-adapter-listing", 10, compact_listing);
 
 pub(super) fn compact_sgml(
     body: &mut dyn std::io::Read,
@@ -77,7 +60,7 @@ pub(super) fn compact_sgml(
     serde_json::to_vec(&parse_release_sgml(&changelog::blob_text(body)?))
 }
 pub(crate) const PARSED_POSTGRES_SGML: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("parsed-postgres-sgml", 9, compact_sgml);
+    patchula_http::Derived::new("parsed-postgres-sgml", 10, compact_sgml);
 
 pub(super) fn compact_history(
     body: &mut dyn std::io::Read,
@@ -85,7 +68,7 @@ pub(super) fn compact_history(
     serde_json::to_vec(&parse_go_history(&changelog::blob_text(body)?))
 }
 pub(crate) const PARSED_GO_HISTORY: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("parsed-go-history", 9, compact_history);
+    patchula_http::Derived::new("parsed-go-history", 10, compact_history);
 
 impl Client {
     /// Adapter notes for the requested range, and whether the adapter covered
@@ -103,13 +86,13 @@ impl Client {
         // The range filter, the newest-first order and the version budget are
         // the same as for releases and changelogs.
         let mut sorted: Vec<_> = sections
-            .into_iter()
-            .filter_map(|section| Some((parsed(&section.version)?, section)))
+            .iter()
+            .filter_map(|section| Some((parsed(&section.version)?, section.clone())))
             .filter(|(version, _)| in_range(version, old, new))
             .collect();
-        sorted.sort_by(|(a, _), (b, _)| Ecosystem::Loose.order(b, a));
-        let complete = complete && sorted.len() <= 32;
-        sorted.truncate(32);
+        newest_first(&mut sorted);
+        let complete = complete && sorted.len() <= NOTES_SECTIONS;
+        sorted.truncate(NOTES_SECTIONS);
         Ok((
             sorted.into_iter().map(|(_, section)| section).collect(),
             complete,
@@ -118,7 +101,11 @@ impl Client {
 
     /// PostgreSQL publishes release notes as SGML on the release branch only.
     /// The file at the target tag is immutable, so read it there.
-    async fn postgres_notes(&self, old: &Parsed, new: &Parsed) -> Result<(Vec<Section>, bool)> {
+    async fn postgres_notes(
+        &self,
+        old: &Parsed,
+        new: &Parsed,
+    ) -> Result<(Arc<Vec<Section>>, bool)> {
         let major = new.0.major;
         // PostgreSQL tags every release, including the major one, as
         // `REL_{major}_{minor}`. There is no `REL_{major}` tag.
@@ -132,7 +119,7 @@ impl Client {
             .find(|entry| entry.name == name)
             .ok_or_else(|| Error::Upstream("missing PostgreSQL release notes"))?;
         let sections = self
-            .adapter_sections(
+            .blob_sections(
                 "postgres/postgres",
                 &file.path,
                 &file.sha,
@@ -145,7 +132,7 @@ impl Client {
     }
 
     /// Go publishes its release history as data in the website repository.
-    async fn go_notes(&self) -> Result<(Vec<Section>, bool)> {
+    async fn go_notes(&self) -> Result<(Arc<Vec<Section>>, bool)> {
         let listing = self
             .adapter_listing("golang/website", "internal/history", "")
             .await?;
@@ -154,7 +141,7 @@ impl Client {
             .find(|entry| entry.name == "release.go")
             .ok_or_else(|| Error::Upstream("missing Go release history"))?;
         let sections = self
-            .adapter_sections("golang/website", &file.path, &file.sha, PARSED_GO_HISTORY)
+            .blob_sections("golang/website", &file.path, &file.sha, PARSED_GO_HISTORY)
             .await?;
         Ok((sections, true))
     }
@@ -178,53 +165,6 @@ impl Client {
             })
             .await?;
         Ok(serde_json::from_slice(&bytes)?)
-    }
-
-    /// Parsed notes of one immutable blob, cached by blob SHA.
-    async fn adapter_sections(
-        &self,
-        repo: &str,
-        path: &str,
-        sha: &str,
-        derived: patchula_http::Derived<serde_json::Error>,
-    ) -> Result<Vec<Section>> {
-        let scope = AdapterScope {
-            repository: repo.into(),
-            path: path.into(),
-            blob_sha: sha.into(),
-            representation: derived.representation(),
-        };
-        let shared = self
-            .changelogs
-            .lock()
-            .await
-            .entry(MemoKey::Adapter {
-                repo: repo.into(),
-                path: path.into(),
-                sha: sha.into(),
-            })
-            .or_default()
-            .clone();
-        let mut saved = shared.lock().await;
-        if let Some(sections) = &*saved {
-            return Ok(sections.iter().cloned().collect());
-        }
-        let sections =
-            if let Some(entry) = self.sources.cache.state::<AdapterSections>(&scope).await? {
-                entry.0
-            } else {
-                let response = self
-                    .sources
-                    .github
-                    .get_derived(&format!("repos/{repo}/git/blobs/{sha}"), &derived)
-                    .await?;
-                let entry = AdapterSections(serde_json::from_slice(&response.body)?);
-                self.sources.cache.set_state(&scope, &entry).await?;
-                entry.0
-            };
-        let sections = Arc::new(sections);
-        *saved = Some(sections.clone());
-        Ok(sections.iter().cloned().collect())
     }
 }
 

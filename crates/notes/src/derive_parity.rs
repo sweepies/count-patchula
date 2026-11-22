@@ -53,14 +53,7 @@ fn every_derive_versions_its_compaction_source() {
 #[test]
 fn every_code_versioned_state_versions_its_source() {
     let registered: std::collections::BTreeMap<&'static str, u32> = [
-        (
-            crate::ParsedChangelog::NAMESPACE,
-            crate::ParsedChangelog::VERSION,
-        ),
-        (
-            crate::adapters::AdapterSections::NAMESPACE,
-            crate::adapters::AdapterSections::VERSION,
-        ),
+        (crate::BlobSections::NAMESPACE, crate::BlobSections::VERSION),
         (
             crate::releases::SavedRelease::NAMESPACE,
             crate::releases::SavedRelease::VERSION,

@@ -27,7 +27,7 @@ pub(crate) struct ReleaseNotesScope {
 }
 impl State for SavedRelease {
     const NAMESPACE: &'static str = "release-notes";
-    const VERSION: u32 = 7;
+    const VERSION: u32 = 8;
     // Code-versioned: the stored release is this build's pick and decode
     // of the release's fields.
     const CODE_VERSIONED: bool = true;
@@ -51,7 +51,10 @@ impl Client {
             stream::iter(ranges.iter().cloned())
                 .map(|(id, current, target)| async move {
                     let mut selected = BTreeMap::new();
-                    let (source, package) = (id.source, &tag_name(&id));
+                    let source = id.source;
+                    let Some(package) = &tag_name(&id) else {
+                        return selected;
+                    };
                     // A chart that lists its own changes needs no upstream releases.
                     if matches!(
                         self.chart_sections(&id, &current, &target).await,
