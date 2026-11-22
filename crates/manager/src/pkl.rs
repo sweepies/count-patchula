@@ -203,8 +203,8 @@ impl crate::Ecosystem for Descriptor {
         path != patchula_config::CONFIG_PATH && crate::roles::leaf(path).ends_with(".pkl")
     }
     /// Python pickles are `.pkl` files too.
-    fn shared_name(&self) -> bool {
-        true
+    fn shared_name(&self, path: &str) -> bool {
+        crate::roles::leaf(path).ends_with(".pkl")
     }
     fn prepare<'a>(
         &self,

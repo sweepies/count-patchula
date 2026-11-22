@@ -517,10 +517,11 @@ pub(crate) trait Ecosystem {
     fn registry_file(&self, _path: &str) -> bool {
         false
     }
-    /// Whether this ecosystem's file names are shared with another format,
-    /// so a selected file may not be one of its own: `.pkl` is also
-    /// Python's pickle extension. See [`Scanner::shared_name`].
-    fn shared_name(&self) -> bool {
+    /// Whether another format shares `path`'s name with this ecosystem's
+    /// files, so a selected file of that name may not be one of its own:
+    /// `.pkl` is also Python's pickle extension. See
+    /// [`Scanner::shared_name`].
+    fn shared_name(&self, _path: &str) -> bool {
         false
     }
     /// The settings a package backend of this ecosystem reads, which mise's
@@ -757,6 +758,8 @@ impl Scanner {
     /// `path`. Such a file over [`SHARED_NAME_LIMIT`] is not read, and one
     /// that is not text is left out, rather than refusing the repository as
     /// any other selected file does: neither can be one of their files.
+    /// Settings and credential-checked files never are, whatever `files`
+    /// config selects.
     pub fn shared_name(&self, path: &str) -> bool {
         let mut selecting = self
             .config
@@ -765,8 +768,10 @@ impl Scanner {
             .filter(|m| self.selected(**m, path))
             .peekable();
         selecting.peek().is_some()
-            && selecting.all(|m| ecosystem(*m).shared_name())
+            && selecting.all(|m| ecosystem(*m).shared_name(path))
             && !self.registry_file(path)
+            && !registry_settings(path)
+            && !credential_scope(path)
     }
     /// Whether `path` sits under the repository's excluded paths.
     pub fn excluded(&self, path: &str) -> bool {

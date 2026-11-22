@@ -354,6 +354,40 @@ async fn pickles_named_pkl_do_not_refuse_the_read() {
     );
 }
 
+/// Only `.pkl` names are shared with pickles: a settings file or any other
+/// name a `files` override gives the pkl manager is read as every selected
+/// file is, so a settings file that is not text is unreadable and any
+/// other refuses the read.
+#[tokio::test]
+async fn a_pkl_files_override_does_not_loosen_other_names() {
+    let config_text = concat!(
+        "amends \"PatchulaConfig.pkl\"\n",
+        "managers = new Listing { \"pkl\" }\n",
+        "files = new Listing { new FileSet { manager = \"pkl\"; paths = new Listing { \".npmrc\"; \"app.yaml\" } } }\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    std::fs::write(root.join(".npmrc"), b"\xff").unwrap();
+    git(root, &["add", "."]);
+    let (config, scanner) = scanner(config_text);
+    let view = view(root, &config, &scanner).await;
+    assert!(
+        matches!(
+            view.files.get(".npmrc"),
+            Some(patchula_manager::Text::Unread(_))
+        ),
+        "{:?}",
+        view.files.keys()
+    );
+    std::fs::write(root.join("app.yaml"), b"\xff").unwrap();
+    git(root, &["add", "."]);
+    let Err(error) = local_view(root, &scanner, &config).await else {
+        panic!("the read succeeded")
+    };
+    assert_eq!(error.to_string(), "selected file is not UTF-8");
+}
+
 /// An executable file keeps the mode `git add` would record for it, so a
 /// written branch carries the same mode.
 #[cfg(unix)]

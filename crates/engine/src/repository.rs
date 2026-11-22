@@ -241,7 +241,7 @@ pub async fn view<S: Source>(
 /// Whether only managers whose file names another format shares read
 /// `path`, so it may be no manager's file at all.
 fn shared_name(scanner: &Scanner, path: &str) -> bool {
-    scanner.shared_name(path) && !tooling::reads(path)
+    scanner.shared_name(path) && !tooling::reads(path) && !tooling::manifest(path)
 }
 
 /// Why an entry is read.
