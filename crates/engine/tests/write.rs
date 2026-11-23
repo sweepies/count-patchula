@@ -1517,7 +1517,7 @@ async fn dashboard_create_click_bypasses_concurrent_hourly_and_schedule_holds() 
 #[tokio::test(start_paused = true)]
 async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
     let mut keep = Vec::new();
-    for origin in ["recreate", "create", "pr", "retry"] {
+    for origin in ["recreate", "create", "pr", "banner", "retry"] {
         let mut request_counts = Vec::new();
         for dependencies in [3, 6] {
             let mut files = base_files();
@@ -1547,15 +1547,44 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                 }
                 checkbox_run(&engine, &config, now).await;
             }
-            if origin == "pr" {
-                let mut state = fake.state();
-                let pr = state.repo_mut().prs.get_mut(&1).unwrap();
-                pr["body"] = json!(
-                    pr["body"]
-                        .as_str()
+            if origin == "banner" {
+                // An owner-closed PR beside the untouched open ones.
+                for pr in fake
+                    .state()
+                    .repo_mut()
+                    .prs
+                    .values_mut()
+                    .filter(|p| p["number"] != 1)
+                    .take(1)
+                {
+                    pr["state"] = json!("closed");
+                }
+                checkbox_run(&engine, &config, now).await;
+            }
+            if origin == "pr" || origin == "banner" {
+                {
+                    let mut state = fake.state();
+                    let pr = state.repo_mut().prs.get_mut(&1).unwrap();
+                    pr["body"] = json!(
+                        pr["body"]
+                            .as_str()
+                            .unwrap()
+                            .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+                    );
+                }
+                if origin == "banner" {
+                    // The server's acknowledgement got there first.
+                    assert!(
+                        patchula_update::pull_requests::acknowledge_tick(
+                            engine.github(),
+                            "demo/sandbox",
+                            1,
+                            "patchula[bot]",
+                        )
+                        .await
                         .unwrap()
-                        .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
-                );
+                    );
+                }
             } else if origin == "retry" {
                 // An unknown/stale target is consumed without invalidating any write receipt.
                 let mut state = fake.state();
@@ -1573,7 +1602,10 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                 .repo()
                 .prs
                 .values()
-                .filter(|p| origin != "pr" || !p["body"].as_str().unwrap().contains("- [x]"))
+                .filter(|p| {
+                    !matches!(origin, "pr" | "banner")
+                        || !p["body"].as_str().unwrap().contains("- [x]")
+                })
                 .map(|p| {
                     (
                         p["number"].as_u64().unwrap(),
@@ -1584,7 +1616,25 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             fake.clear_log();
             let report = checkbox_run(&engine, &config, now).await;
             assert_unticked(&fake);
+            for pr in fake.state().repo().prs.values() {
+                assert!(
+                    !pr["body"].as_str().unwrap().contains(REBASING),
+                    "{origin}: {pr}"
+                );
+            }
             let requests = fake.log();
+            if origin == "banner" {
+                // No unrelated PR was announced: the only body writes are
+                // the ticked PR's rewrite.
+                assert_eq!(
+                    requests
+                        .iter()
+                        .filter(|(m, p, _)| m == "PATCH" && p.contains("/pulls/"))
+                        .count(),
+                    1,
+                    "{requests:?}"
+                );
+            }
             assert_eq!(
                 requests
                     .iter()
@@ -1654,7 +1704,12 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
             request_counts[0],
             match origin {
                 "retry" => 5,
-                "pr" => 13,
+                // The ticked PR's rebasing banner adds a fresh read of
+                // the PR and its PATCH.
+                "pr" => 15,
+                // The server's banner is already up: the run neither reads
+                // nor writes it again before its rewrite takes it down.
+                "banner" => 13,
                 // The held-back plan's branch has no open pull: one batched
                 // `ClosedPulls` read checks it before admission.
                 "create" => 16,
@@ -2979,6 +3034,325 @@ async fn a_recheck_click_revalidates_advisories() {
 /// A PR recheck box ticked against saved controls retries the branch it
 /// names: on a warm cache an unticked run writes nothing, so the commit a
 /// ticked run writes can only be the tick driving the revalidation.
+/// The rebasing banner's opening marker.
+const REBASING: &str = "<!-- patchula-rebasing -->";
+
+/// A first run that opens PR #1, then a ticked box on it carrying the
+/// server's banner, as the acknowledgement leaves it before the batch.
+/// With `config`, the runs use that override; without it, the
+/// repository's own `patchula.pkl`, which the sweep's stored answer needs.
+async fn server_acknowledged(
+    fake: &Sandbox,
+    engine: &Engine,
+    now: chrono::DateTime<chrono::Utc>,
+    config: Option<patchula_config::Config>,
+) {
+    let report = engine
+        .run_at(
+            Options {
+                repositories: vec!["demo/sandbox".into()],
+                config,
+                ..Default::default()
+            },
+            false,
+            false,
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        report.repositories[0].status,
+        Status::Complete,
+        "{report:?}"
+    );
+    {
+        let mut state = fake.state();
+        let pr = state.repo_mut().prs.get_mut(&1).unwrap();
+        pr["body"] = json!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+        );
+    }
+    assert!(
+        patchula_update::pull_requests::acknowledge_tick(
+            engine.github(),
+            "demo/sandbox",
+            1,
+            "patchula[bot]",
+        )
+        .await
+        .unwrap()
+    );
+}
+
+/// The server's banner is up when someone closes the PR mid-run. The run
+/// leaves the PR closed and takes the banner down, and the sweep may skip
+/// the repository on that complete run's answer. When the write fails, the
+/// repository fails and the earlier run's answer is forgotten, so the
+/// sweep runs it again instead of skipping it with the banner up. The
+/// runs read the repository's own config, so the sweep can match.
+#[tokio::test(start_paused = true)]
+async fn a_server_banner_comes_down_when_the_pr_closes_mid_run_or_the_repository_fails() {
+    let mut keep = Vec::new();
+    for fails in [false, true] {
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
+        let now = chrono::Utc::now();
+        server_acknowledged(&fake, &engine, now, None).await;
+        fake.github.close_pulls_on_read();
+        if fails {
+            fake.github
+                .on(github::Matcher::Route {
+                    method: reqwest::Method::PATCH,
+                    path: "/repos/demo/sandbox/pulls/1".into(),
+                })
+                .respond(500, json!({"message":"patch boom"}));
+        }
+        let at = now + chrono::Duration::minutes(1);
+        let report = engine
+            .run_at(
+                Options {
+                    repositories: vec!["demo/sandbox".into()],
+                    ..Default::default()
+                },
+                false,
+                false,
+                at,
+            )
+            .await
+            .unwrap();
+        let repo = &report.repositories[0];
+        let pr = fake.state().repo().prs[&1].clone();
+        assert_eq!(pr["state"], "closed");
+        assert_eq!(
+            pr["body"].as_str().unwrap().contains(REBASING),
+            fails,
+            "{pr}"
+        );
+        if fails {
+            assert_eq!(repo.status, Status::Error, "{repo:?}");
+            assert!(
+                repo.reason
+                    .as_deref()
+                    .is_some_and(|r| r.contains("acknowledgement")),
+                "{repo:?}"
+            );
+        } else {
+            assert_eq!(repo.status, Status::Complete, "{repo:?}");
+        }
+        let quiet = engine
+            .sweep_quiet(&["demo/sandbox".into()], at + chrono::Duration::minutes(1))
+            .await
+            .unwrap();
+        assert_eq!(quiet.is_empty(), fails, "fails={fails}: {quiet:?}");
+    }
+    check_transcript();
+}
+
+/// A transport that forwards to the sandbox until it answers the request
+/// `stop_after` names, then leaves every later request unanswered for good:
+/// a run stopped there, as a kill or a time limit would stop it. Tasks the
+/// stopped run spawned stay stopped with it.
+struct Halt {
+    sandbox: Arc<Sandbox>,
+    stop_after: (reqwest::Method, &'static str),
+    stopped: std::sync::atomic::AtomicBool,
+}
+impl Transport for Halt {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        Box::pin(async move {
+            if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                return std::future::pending().await;
+            }
+            let last =
+                request.method() == self.stop_after.0 && request.url().path() == self.stop_after.1;
+            let response = self.sandbox.send(request).await;
+            if last {
+                self.stopped
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            response
+        })
+    }
+}
+
+/// A run that may leave a banner up forgets the sweep's stored answer
+/// before it shows one, so a run stopped right after its banner write never
+/// reaches `record_runs` with the earlier answer still standing. A plain
+/// rebuild, stopped at the same point, leaves the answer alone.
+#[tokio::test(start_paused = true)]
+async fn a_run_stopped_after_its_banner_leaves_the_sweep_no_answer_to_skip_with() {
+    // No release notes: their prefetch runs beside the banner write, so a
+    // stop right after that write would race it and vary the transcript.
+    let mut files = base_files();
+    files.insert(
+        "patchula.pkl".into(),
+        "amends \"PatchulaConfig.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0\n  releaseNotes = false }\nmanagers = new Listing { \"npm\" }\n".into(),
+    );
+    let fake = sandbox(files, None, vec![]);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache.clone(), 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    // Each stopped run gets an engine of its own over the same cache, so
+    // nothing it left running ever answers again.
+    let stopped_after = |method, path| {
+        let halt = Arc::new(Halt {
+            sandbox: fake.clone(),
+            stop_after: (method, path),
+            stopped: Default::default(),
+        });
+        Engine::with_transport("offline-installation", cache.clone(), 4, halt)
+            .unwrap()
+            .with_versions_host(false)
+    };
+    let now = chrono::Utc::now();
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Default::default()
+    };
+    let report = engine.run_at(options(), false, false, now).await.unwrap();
+    assert_eq!(
+        report.repositories[0].status,
+        Status::Complete,
+        "{report:?}"
+    );
+    let repositories = vec!["demo/sandbox".to_owned()];
+    let quiet = |at| engine.sweep_quiet(&repositories, at);
+    let later = now + chrono::Duration::minutes(5);
+    assert_eq!(quiet(later).await.unwrap().len(), 1);
+    // A repository-wide re-check rebuilds without a banner; stopped at its
+    // PR's fresh read, it leaves the stored answer as it was.
+    tick_dashboard(&fake, "recheck");
+    let plain = stopped_after(reqwest::Method::GET, "/repos/demo/sandbox/pulls/1");
+    let stopped = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        plain.run_at(options(), false, false, now + chrono::Duration::minutes(1)),
+    )
+    .await;
+    assert!(stopped.is_err(), "the plain run was not stopped");
+    assert_eq!(quiet(later).await.unwrap().len(), 1);
+    // A ticked PR: stopped right after its banner went up, the banner
+    // stays, and so does nothing the sweep could skip it with.
+    {
+        let mut state = fake.state();
+        let pr = state.repo_mut().prs.get_mut(&1).unwrap();
+        pr["body"] = json!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+        );
+    }
+    let ticked = stopped_after(reqwest::Method::PATCH, "/repos/demo/sandbox/pulls/1");
+    let stopped = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        ticked.run_at(options(), false, false, now + chrono::Duration::minutes(2)),
+    )
+    .await;
+    assert!(stopped.is_err(), "the ticked run was not stopped");
+    assert!(
+        fake.state().repo().prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .contains(REBASING)
+    );
+    assert!(quiet(later).await.unwrap().is_empty());
+    check_transcript();
+}
+
+/// A run that fails before rebuilding, here on cleanup's branch listing,
+/// takes the server's banner down and leaves the tick for the next run,
+/// also when someone closed the PR meanwhile.
+#[tokio::test(start_paused = true)]
+async fn a_cleanup_failure_withdraws_the_banner_and_keeps_the_tick() {
+    let mut keep = Vec::new();
+    for closes in [false, true] {
+        let fake = sandbox(base_files(), None, vec![]);
+        keep.push(fake.clone());
+        let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+        let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+            .unwrap()
+            .with_versions_host(false);
+        let now = chrono::Utc::now();
+        server_acknowledged(&fake, &engine, now, Some(checkbox_config())).await;
+        if closes {
+            fake.github.close_pulls_on_read();
+        }
+        fake.github
+            .on(github::Matcher::Route {
+                method: reqwest::Method::GET,
+                path: "/repos/demo/sandbox/branches".into(),
+            })
+            .respond(500, json!({"message":"branches boom"}));
+        let report = engine
+            .run_at(
+                Options {
+                    repositories: vec!["demo/sandbox".into()],
+                    config: Some(checkbox_config()),
+                    ..Default::default()
+                },
+                false,
+                false,
+                now + chrono::Duration::minutes(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.repositories[0].status, Status::Error, "{report:?}");
+        let pr = fake.state().repo().prs[&1].clone();
+        let body = pr["body"].as_str().unwrap();
+        assert!(!body.contains(REBASING), "{body}");
+        assert!(body.contains("- [x] Tick to re-check"), "{body}");
+        assert_eq!(pr["state"], if closes { "closed" } else { "open" });
+    }
+    check_transcript();
+}
+
+/// A banner left up by a run that stopped mid-rebuild keeps the next run
+/// off the receipts path, and that run takes it down, leaving the body as
+/// it was before; the run after it settles from receipts again.
+#[tokio::test(start_paused = true)]
+async fn a_banner_left_by_a_stopped_run_is_taken_down_by_the_next() {
+    let fake = sandbox(base_files(), None, vec![]);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let config = checkbox_config();
+    let now = chrono::Utc::now();
+    checkbox_run(&engine, &config, now).await;
+    let body = fake.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stale = body.replacen(
+        "<!-- patchula-begin -->\n",
+        &format!(
+            "<!-- patchula-begin -->\n{REBASING}\n> **The Count is sinking his teeth into this branch:** re-checking it against `main`…\n<!-- patchula-rebasing-end -->\n\n"
+        ),
+        1,
+    );
+    assert_ne!(stale, body);
+    fake.state().repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(stale);
+    fake.state().log.clear();
+    checkbox_run(&engine, &config, now + chrono::Duration::minutes(1)).await;
+    assert_eq!(fake.state().repo().prs[&1]["body"].as_str().unwrap(), body);
+    fake.state().log.clear();
+    checkbox_run(&engine, &config, now + chrono::Duration::minutes(2)).await;
+    assert!(
+        fake.state().writes().is_empty(),
+        "{:?}",
+        fake.state().writes().clone()
+    );
+    check_transcript();
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_ticked_pr_retries_the_branch_it_names() {
     let fake = sandbox(base_files(), None, vec![]);
@@ -3016,6 +3390,28 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
     assert!(
         !fake.state().writes().is_empty(),
         "the tick must be consumed and written back"
+    );
+    // The run said so on the PR before rebuilding, and its rewrite took
+    // the banner down with the tick.
+    let patches: Vec<_> = fake
+        .log()
+        .into_iter()
+        .filter(|(m, p, _)| m == "PATCH" && p == "/repos/demo/sandbox/pulls/1")
+        .map(|(_, _, body)| body["body"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert!(
+        patches[0].contains(REBASING)
+            && patches[0].contains("re-checking it against `main`…")
+            && patches[0].contains("- [x] Tick to re-check"),
+        "{patches:?}"
+    );
+    let body = fake.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !body.contains(REBASING) && !body.contains("- [x]"),
+        "{body}"
     );
     assert!(
         fake.log()

@@ -76,6 +76,15 @@ fn dashboard_failed(repo: &mut Repository, settlement: &Settlement) {
     }
 }
 
+impl Engine {
+    /// The engine's GitHub client. Clones share its write pacing, so a
+    /// server's writes between runs, such as a re-check acknowledgement,
+    /// count against the same budget as the runs' own.
+    pub fn github(&self) -> &patchula_github::Client {
+        &self.github
+    }
+}
+
 impl Write<'_> {
     pub(super) fn new(
         engine: &Engine,
@@ -256,6 +265,22 @@ impl Write<'_> {
             tokio::spawn(async move { sources.prepare_release_notes(&ranges).await })
         });
         if inventory.is_some() {
+            // The rebuilds with a real wait say so on their PRs first. A run
+            // that may stop with a banner up — killed, out of memory, timed
+            // out, before `record_runs` — first forgets the sweep's stored
+            // answer, so the sweep never skips over that banner; a run that
+            // completes records a fresh one. A run that cannot forget it
+            // shows no banner.
+            if let Some(state) = lifecycle.as_mut()
+                && state.may_leave_banners(&plans)
+            {
+                match self.engine.clear_quiet(&repo.repository).await {
+                    Ok(()) => state.announce(&self.engine.github, &plans).await,
+                    Err(error) => repo.warnings.push(format!(
+                        "quiet run cache: {error}; no rebasing banner shown"
+                    )),
+                }
+            }
             self.lockfiles(repo, &mut plans, &mut snapshot, &config)
                 .await;
         }
@@ -277,6 +302,14 @@ impl Write<'_> {
                     let _ = notes.await;
                 }
                 failed(repo, failure);
+                // Nothing is rebuilt now: the banners come down, the ticks
+                // stay for the next run.
+                if let Some(state) = lifecycle.as_mut()
+                    && let Err(error) = state.withdraw(&self.engine.github).await
+                {
+                    repo.warnings
+                        .push(format!("rebasing banner not taken down: {error}"));
+                }
                 return Ok(written);
             }
         }
@@ -304,6 +337,15 @@ impl Write<'_> {
                 .settle(repo, &config, inventory, &mut plans, Some(&mut *state))
                 .await;
             dashboard_failed(repo, &settlement);
+            // A box left ticked or a banner left up must not be hidden by a
+            // quiet-run answer: failing the repository records none, and
+            // the server retries it.
+            if let Err(error) = &settlement.acknowledged {
+                fail(
+                    repo,
+                    format!("PR checkbox or banner acknowledgement: {error}"),
+                );
+            }
             if state.actions.iter().any(|a| {
                 matches!(
                     a.status,
@@ -368,10 +410,18 @@ impl Write<'_> {
         if self.dry_run {
             return;
         }
-        for work in work
-            .iter_mut()
-            .filter(|work| work.report.status == Status::Complete)
-        {
+        for work in work.iter_mut() {
+            if work.report.status != Status::Complete {
+                // A run that did not complete — one that left a banner up
+                // among them — leaves no earlier answer for the sweep to
+                // skip the repository with; the next sweep runs it in full.
+                if let Err(error) = self.engine.clear_quiet(&work.report.repository).await {
+                    work.report
+                        .warnings
+                        .push(format!("quiet run cache: {error}"));
+                }
+                continue;
+            }
             if let Err(error) = self
                 .engine
                 .record_run(&work.report.repository, self.now)

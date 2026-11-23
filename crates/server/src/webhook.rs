@@ -8,6 +8,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use futures_util::future::BoxFuture;
 use hmac::{Hmac, KeyInit, Mac};
 use patchula_cache::{
     Cache,
@@ -218,6 +219,19 @@ pub struct Webhook {
     secret: Arc<Vec<u8>>,
     resolver: Option<Arc<crate::installations::Resolver>>,
     pub(crate) api: Option<crate::remote::Api>,
+    acknowledger: Option<Arc<dyn Acknowledge>>,
+    pub(crate) acknowledgements: Acknowledgements,
+}
+/// Writes the server's acknowledgement of a ticked re-check box: the
+/// rebasing banner, through the installation's own paced client.
+pub(crate) trait Acknowledge: Send + Sync + 'static {
+    fn acknowledge<'a>(
+        &'a self,
+        installation: u64,
+        repo: &'a str,
+        number: u64,
+        settings: &'a Settings,
+    ) -> BoxFuture<'a, ()>;
 }
 impl Webhook {
     pub fn new(cache: Cache, settings: Reload, bot_login: String, secret: Vec<u8>) -> Self {
@@ -229,7 +243,13 @@ impl Webhook {
             accepting: Arc::new(AtomicBool::new(true)),
             resolver: None,
             api: None,
+            acknowledger: None,
+            acknowledgements: Acknowledgements::default(),
         }
+    }
+    pub(crate) fn with_acknowledger(mut self, acknowledger: Arc<dyn Acknowledge>) -> Self {
+        self.acknowledger = Some(acknowledger);
+        self
     }
     pub(crate) fn with_api(mut self, api: crate::remote::Api) -> Self {
         self.api = Some(api);
@@ -355,6 +375,12 @@ pub async fn receive(
             .response(StatusCode::SERVICE_UNAVAILABLE);
     }
     let enqueued = !work.is_empty();
+    // A pull request edit enqueues one repository's work, which names the
+    // installation and repository an acknowledgement writes to.
+    let work_target = match work.as_slice() {
+        [one] if !one.repo.is_empty() => Some((one.installation, one.repo.clone())),
+        _ => None,
+    };
     let result = state
         .cache
         .enqueue(
@@ -375,7 +401,68 @@ pub async fn receive(
         }
     };
     log_delivery(event, delivery, &payload, outcome, reason, resolution);
+    if outcome == "accepted/enqueued"
+        && let Some(acknowledger) = state.acknowledger.clone()
+        && let Some((installation, repo, number)) = recheck_tick(event, &payload, &work_target)
+    {
+        // The delivery is answered now; the banner follows on its own
+        // task, which shutdown drains.
+        state
+            .acknowledgements
+            .spawn(async move {
+                acknowledger
+                    .acknowledge(installation, &repo, number, &settings)
+                    .await;
+            })
+            .await;
+    }
     StatusCode::ACCEPTED.into_response()
+}
+/// The acknowledgement tasks in flight. Finished ones are reaped as new
+/// ones start; shutdown waits a bounded time for the rest, then aborts and
+/// joins them, so none outlives the server. The set stays behind its lock
+/// while it drains, so a drain cut short leaves every task for the next
+/// one to abort.
+#[derive(Clone, Default)]
+pub(crate) struct Acknowledgements(Arc<tokio::sync::Mutex<tokio::task::JoinSet<()>>>);
+impl Acknowledgements {
+    pub(crate) async fn spawn(&self, task: impl std::future::Future<Output = ()> + Send + 'static) {
+        let mut tasks = self.0.lock().await;
+        while tasks.try_join_next().is_some() {}
+        tasks.spawn(task);
+    }
+    /// Waits up to `bound` for the tasks in flight, then aborts and joins
+    /// the rest.
+    pub(crate) async fn drain(&self, bound: std::time::Duration) {
+        let mut tasks = self.0.lock().await;
+        let finished =
+            tokio::time::timeout(bound, async { while tasks.join_next().await.is_some() {} })
+                .await
+                .is_ok();
+        if !finished {
+            tracing::warn!(target: "patchula_server", "shutdown deadline left re-check acknowledgements running; aborting them");
+            tasks.abort_all();
+            while tasks.join_next().await.is_some() {}
+        }
+    }
+}
+/// The PR whose re-check box this delivery newly ticked, with the
+/// installation and repository its enqueued work names: the tick the
+/// server acknowledges as it arrives. Ownership was settled when the
+/// delivery was classified; a closed PR, or one already showing the
+/// banner, needs no acknowledgement and costs no read.
+fn recheck_tick(
+    event: &str,
+    payload: &Payload,
+    target: &Option<(u64, String)>,
+) -> Option<(u64, String, u64)> {
+    let (installation, repo) = target.clone()?;
+    let pr = payload.pull_request.as_ref()?;
+    let before = payload.changes.as_ref()?.body.as_ref()?.from.as_deref()?;
+    (event == "pull_request"
+        && payload.action.as_deref() == Some("edited")
+        && patchula_update::pull_requests::acknowledgeable(before, pr))
+    .then_some((installation, repo, pr.number))
 }
 /// Keeps the repositories behind the public API current, whether or not the
 /// delivery starts a batch: installations add and remove them, and every

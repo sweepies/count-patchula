@@ -112,6 +112,21 @@ detail.
 Each trigger can be turned off under `triggers`. Events from the App itself,
 disallowed repositories and unrelated events are acknowledged and ignored.
 
+A ticked re-check box is also acknowledged on the PR itself as soon as the
+delivery is queued: the server puts the [rebasing
+banner](/guide/pull-requests/#the-rebasing-banner) at the top of the Count's
+part of the description, through the installation's own client and its write
+pacing, and leaves the box ticked for the batch that does the work. That
+batch's rewrite takes the banner down. While a batch or remote run holds
+the repository, or is waiting for it, the server leaves the banner to the
+run, or to the follow-up batch the tick queued; it never writes the
+description between a run's last read and its last write. Ticks on
+different PRs of a repository are acknowledged side by side, and two quick
+ticks on the same PR take turns, so the banner goes up once. Once the
+server stops taking deliveries at shutdown, acknowledgements still in
+flight get ten seconds to finish beside the current batch, and are then
+aborted.
+
 ## Webhook handling
 
 Signatures (`X-Hub-Signature-256`) are verified over the raw bytes before any

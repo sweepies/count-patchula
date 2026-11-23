@@ -2603,6 +2603,373 @@ async fn text_others_wrote_in_the_description_is_left_alone_and_never_doubled() 
     check_transcript();
 }
 
+/// The banner's opening marker, as the Count writes it.
+const REBASING: &str = "<!-- patchula-rebasing -->";
+
+/// A lockfile rebuild shows the rebasing banner at the top of his section
+/// before the tools run, keeps what others wrote, and takes it down when
+/// the rebuild ends: the final rewrite on success, the acknowledgement
+/// pass when the lockfile run fails and nothing is published.
+#[tokio::test(start_paused = true)]
+async fn a_lockfile_rebuild_shows_the_banner_until_it_ends_either_way() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    let own = server.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let edited = format!("Reviewer note.\n\n{own}\n\n{FOREIGN}");
+    for fails in [false, true] {
+        server.state().repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(edited);
+        let (next, _) = make_plan("22.0.0");
+        let mut next = Draft::from(next)
+            .changes(p.changes().to_vec())
+            .lock_job(patchula_lockfiles::Job::new(
+                patchula_lockfiles::Ecosystem::Node,
+                ".",
+                patchula_lockfiles::Scope::Directory,
+            ))
+            .build();
+        assert!(next.owes_lockfiles());
+        let mut state = patchula_update::Lifecycle::prepare_with_controls(
+            &github,
+            &repo,
+            std::slice::from_mut(&mut next),
+            &config,
+            chrono::Utc::now(),
+            patchula_words::Recheck::NextRun,
+            &Default::default(),
+            "patchula[bot]",
+        )
+        .await
+        .unwrap();
+        server.state().log.clear();
+        state.announce(&github, std::slice::from_ref(&next)).await;
+        let shown = server.state().repo().prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            shown.starts_with(&format!(
+                "Reviewer note.\n\n<!-- patchula-begin -->\n{REBASING}\n> <img src="
+            )),
+            "{shown}"
+        );
+        assert!(shown.contains("rebuilding it on `main` and regenerating its lockfiles…"));
+        assert!(shown.ends_with(FOREIGN));
+        assert_eq!(body_patches(&server), 1);
+        // A second announcement finds the banner up and writes nothing.
+        state.announce(&github, std::slice::from_ref(&next)).await;
+        assert_eq!(body_patches(&server), 1);
+        if fails {
+            next.lockfiles_failed(patchula_lockfiles::Failure::Text(
+                "fixture tool unavailable".into(),
+            ));
+        } else {
+            next.locked(Ok(patchula_lockfiles::Generated {
+                files: BTreeMap::new(),
+                warnings: Vec::new(),
+                moved: Vec::new(),
+            }));
+        }
+        patchula_update::apply_all(
+            &github,
+            std::slice::from_mut(&mut next),
+            &snapshot,
+            "main",
+            "patchula[bot]",
+            Rebase::Behind,
+        )
+        .await;
+        publish(&mut state, &github, std::slice::from_mut(&mut next)).await;
+        state.acknowledge(&github).await.unwrap();
+        let body = server.state().repo().prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // Either way the description is what it was before the banner.
+        assert_eq!(body, edited, "fails={fails}");
+        assert_eq!(
+            next.action().status == BranchStatus::Error,
+            fails,
+            "{:?}",
+            next.action()
+        );
+        assert_eq!(body_patches(&server), 2, "fails={fails}");
+    }
+    check_transcript();
+}
+
+/// A banner never outlives the run that put it up. A PR someone closes
+/// mid-rebuild loses it in a body-only write and stays closed; a run that
+/// stops before rebuilding withdraws it and leaves the tick for the next
+/// run.
+#[tokio::test(start_paused = true)]
+async fn a_banner_comes_down_when_the_pr_closes_mid_rebuild_or_the_run_stops() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    let own = server.state().repo().prs[&1]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for case in ["closed", "stopped"] {
+        let body = if case == "stopped" {
+            own.replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+        } else {
+            own.clone()
+        };
+        {
+            let mut s = server.state();
+            let pr = s.repo_mut().prs.get_mut(&1).unwrap();
+            pr["body"] = json!(body);
+            pr["state"] = json!("open");
+        }
+        let (next, _) = make_plan("22.0.0");
+        let mut draft = Draft::from(next).changes(p.changes().to_vec());
+        draft = if case == "closed" {
+            draft.lock_job(patchula_lockfiles::Job::new(
+                patchula_lockfiles::Ecosystem::Node,
+                ".",
+                patchula_lockfiles::Scope::Directory,
+            ))
+        } else {
+            draft.retry(true)
+        };
+        let mut next = draft.build();
+        let mut state = patchula_update::Lifecycle::prepare_with_controls(
+            &github,
+            &repo,
+            std::slice::from_mut(&mut next),
+            &config,
+            chrono::Utc::now(),
+            patchula_words::Recheck::NextRun,
+            &Default::default(),
+            "patchula[bot]",
+        )
+        .await
+        .unwrap();
+        state.announce(&github, std::slice::from_ref(&next)).await;
+        assert!(
+            server.state().repo().prs[&1]["body"]
+                .as_str()
+                .unwrap()
+                .contains(REBASING),
+            "{case}"
+        );
+        if case == "closed" {
+            server.state().repo_mut().prs.get_mut(&1).unwrap()["state"] = json!("closed");
+            state.acknowledge(&github).await.unwrap();
+        } else {
+            state.withdraw(&github).await.unwrap();
+        }
+        let s = server.state();
+        let pr = &s.repo().prs[&1];
+        assert_eq!(pr["body"].as_str().unwrap(), body, "{case}");
+        assert_eq!(
+            pr["state"],
+            if case == "closed" { "closed" } else { "open" }
+        );
+    }
+    check_transcript();
+}
+
+/// An obsolete PR showing the server's banner: the Count's own closure
+/// drops the banner, and a PR its owner closes while the run prepares —
+/// after the open listing, before the closure's fresh read — still loses
+/// the banner in the acknowledgement pass, and stays closed.
+#[tokio::test(start_paused = true)]
+async fn an_obsolete_bannered_pr_never_keeps_its_banner_however_it_closes() {
+    let mut servers = Vec::new();
+    for case in ["count", "owner"] {
+        let (config, repo) = pr_config();
+        let (mut p, snapshot) = make_plan("22.0.0");
+        let server = fake(&snapshot);
+        servers.push(server.clone());
+        let github = client(server.clone()).await;
+        pr_cycle(
+            &github,
+            &repo,
+            &config,
+            std::slice::from_mut(&mut p),
+            &snapshot,
+        )
+        .await;
+        let own = {
+            let mut s = server.state();
+            let commit = s
+                .repo_mut()
+                .commits
+                .get_mut(p.action().commit.as_ref().unwrap())
+                .unwrap();
+            commit["message"] = json!(commit["message"].as_str().unwrap().replace(
+                "Patchula-Base: base",
+                "Patchula-Base: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ));
+            let pr = s.repo_mut().prs.get_mut(&1).unwrap();
+            let own = pr["body"].as_str().unwrap().to_owned();
+            pr["body"] = json!(own.replacen(
+                "<!-- patchula-begin -->\n",
+                &format!(
+                    "<!-- patchula-begin -->\n{REBASING}\n> **The Count is sinking his teeth into this branch:** re-checking it against `main`…\n<!-- patchula-rebasing-end -->\n\n"
+                ),
+                1,
+            ));
+            own
+        };
+        if case == "owner" {
+            server.close_pulls_on_read();
+        }
+        let mut state = patchula_update::Lifecycle::prepare_with_controls(
+            &github,
+            &repo,
+            &mut [],
+            &config,
+            chrono::Utc::now(),
+            Default::default(),
+            &Default::default(),
+            "patchula[bot]",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            state.actions[0].status,
+            if case == "count" {
+                patchula_report::PullRequestStatus::Closed
+            } else {
+                patchula_report::PullRequestStatus::Skipped
+            }
+        );
+        state.acknowledge(&github).await.unwrap();
+        let s = server.state();
+        let pr = &s.repo().prs[&1];
+        assert_eq!(pr["state"], "closed");
+        let body = pr["body"].as_str().unwrap();
+        assert!(!body.contains(REBASING), "{case}: {body}");
+        if case == "owner" {
+            assert_eq!(body, own);
+        }
+    }
+    check_transcript();
+}
+
+/// A ticked re-check box: the server's acknowledgement shows the banner
+/// once and keeps the box ticked for the run, which finds the banner up
+/// and writes no second one; its rewrite replaces both. A plain rebuild,
+/// with no tick and no lockfiles, never shows one.
+#[tokio::test(start_paused = true)]
+async fn a_ticked_recheck_shows_the_banner_and_a_plain_rebuild_never_does() {
+    let (config, repo) = pr_config();
+    let (mut p, snapshot) = make_plan("22.0.0");
+    let server = fake(&snapshot);
+    let github = client(server.clone()).await;
+    pr_cycle(
+        &github,
+        &repo,
+        &config,
+        std::slice::from_mut(&mut p),
+        &snapshot,
+    )
+    .await;
+    for ticked in [false, true] {
+        if ticked {
+            let mut s = server.state();
+            let body = s.repo().prs[&1]["body"]
+                .as_str()
+                .unwrap()
+                .replace("- [ ] Tick to re-check", "- [x] Tick to re-check");
+            s.repo_mut().prs.get_mut(&1).unwrap()["body"] = json!(body);
+        }
+        let acknowledged = patchula_update::pull_requests::acknowledge_tick(
+            &github,
+            "demo/app",
+            1,
+            "patchula[bot]",
+        )
+        .await
+        .unwrap();
+        assert_eq!(acknowledged, ticked);
+        assert!(
+            !patchula_update::pull_requests::acknowledge_tick(
+                &github,
+                "demo/app",
+                1,
+                "patchula[bot]"
+            )
+            .await
+            .unwrap()
+        );
+        let (next, _) = make_plan("22.0.0");
+        let mut next = Draft::from(next)
+            .changes(p.changes().to_vec())
+            .retry(true)
+            .build();
+        let mut state = patchula_update::Lifecycle::prepare_with_controls(
+            &github,
+            &repo,
+            std::slice::from_mut(&mut next),
+            &config,
+            chrono::Utc::now(),
+            patchula_words::Recheck::NextRun,
+            &Default::default(),
+            "patchula[bot]",
+        )
+        .await
+        .unwrap();
+        server.state().log.clear();
+        state.announce(&github, std::slice::from_ref(&next)).await;
+        let shown = server.state().repo().prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(shown.contains(REBASING), ticked, "{shown}");
+        assert_eq!(body_patches(&server), 0);
+        if ticked {
+            assert!(shown.contains("re-checking it against `main`…"));
+            assert!(shown.contains("- [x] Tick to re-check"));
+        }
+        patchula_update::apply_all(
+            &github,
+            std::slice::from_mut(&mut next),
+            &snapshot,
+            "main",
+            "patchula[bot]",
+            Rebase::Behind,
+        )
+        .await;
+        publish(&mut state, &github, std::slice::from_mut(&mut next)).await;
+        state.acknowledge(&github).await.unwrap();
+        let body = server.state().repo().prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            !body.contains(REBASING) && !body.contains("- [x]"),
+            "{body}"
+        );
+    }
+    check_transcript();
+}
+
 #[tokio::test(start_paused = true)]
 async fn rechecks_refresh_notes_but_only_patch_changed_body_hashes() {
     let mut servers = Vec::new();
@@ -4415,9 +4782,10 @@ async fn unmarked_and_badly_marked_branch_tips_are_protected() {
     check_transcript();
 }
 
-/// The shared tail turns lifecycle failures into warnings and goes on:
-/// a batched closure and a checkbox acknowledgement that fail are reported,
-/// and a good recheck is still unticked.
+/// The shared tail reports lifecycle failures and goes on: a batched
+/// closure that fails is a warning, an acknowledgement that fails comes
+/// back for the caller to fail the repository on, and a good recheck is
+/// still unticked.
 #[tokio::test(start_paused = true)]
 async fn settle_turns_lifecycle_failures_into_report_warnings() {
     let (mut config, repo) = pr_config();
@@ -4450,7 +4818,20 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
                 &format!("- [x] Add to the batch PR. <!-- patchula-batch-add -->\n- [x] re-check <!-- patchula-recheck -->\n{}", marker(&key)),
             ),
         );
-        // A PR whose re-check box is ticked and can be acknowledged.
+        // PRs whose re-check box is ticked and can be acknowledged: #8 is
+        // read before the unreadable #7, #6 after it, so #6 proves the
+        // pass goes on past a failure.
+        s.repo_mut().prs.insert(
+            6,
+            owned(
+                6,
+                "patchula/another-1.x",
+                &format!(
+                    "- [x] re-check <!-- patchula-recheck -->\n{}",
+                    marker(&"c".repeat(64))
+                ),
+            ),
+        );
         s.repo_mut().prs.insert(
             8,
             owned(
@@ -4527,21 +4908,31 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
         "{:?}",
         settlement.warnings
     );
-    assert!(
-        settlement
-            .warnings
-            .iter()
-            .any(|w| w.starts_with("PR checkbox acknowledgement: ")),
-        "{:?}",
-        settlement.warnings
+    assert!(settlement.acknowledged.is_err());
+    // The reachable re-checks on both sides of the failure were unticked.
+    for number in [8, 6] {
+        let body = server.state().repo().prs[&number]["body"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(body.contains("- [ ]"), "#{number}: {body}");
+        assert!(!body.contains("- [x]"), "#{number}: {body}");
+    }
+    // The pass reads in the order the listing returned: #7 before #6.
+    let reads: Vec<_> = server
+        .state()
+        .requests()
+        .into_iter()
+        .filter(|(m, p)| {
+            m == "GET" && (p == "/repos/demo/app/pulls/7" || p == "/repos/demo/app/pulls/6")
+        })
+        .map(|(_, p)| p)
+        .collect();
+    assert_eq!(
+        reads.last().map(String::as_str),
+        Some("/repos/demo/app/pulls/6"),
+        "{reads:?}"
     );
-    // The reachable re-check was still unticked.
-    let body = server.state().repo().prs[&8]["body"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(body.contains("- [ ]"), "{body}");
-    assert!(!body.contains("- [x]"), "{body}");
     check_transcript();
 }
 

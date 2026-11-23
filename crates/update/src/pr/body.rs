@@ -472,16 +472,17 @@ pub(crate) enum Closure {
     /// The update moved into the batch PR.
     Batched,
 }
-/// The body a closure leaves behind: what the PR said, cut to make room,
-/// then the closure's marker. The marker keeps the closure from reading as
-/// an ordinary close: a batched closure never suppresses, and an obsolete
-/// one is still his.
+/// The body a closure leaves behind: what the PR said, less any rebasing
+/// banner, cut to make room, then the closure's marker. The marker keeps
+/// the closure from reading as an ordinary close: a batched closure never
+/// suppresses, and an obsolete one is still his.
 pub(crate) fn closure(body: &str, why: Closure) -> String {
     let marker = match why {
         Closure::Obsolete => markers::OBSOLETE,
         Closure::Batched => markers::BATCHED,
     };
-    let mut text = markers::truncate_marked(body, closure_budget(marker));
+    let body = crate::pr::banner::without_banner(body);
+    let mut text = markers::truncate_marked(&body, closure_budget(marker));
     text.push_str("\n\n");
     text.push_str(marker);
     text
