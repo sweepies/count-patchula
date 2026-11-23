@@ -92,19 +92,44 @@ fn a_removed_actions_lock_joins_the_content_hash() {
 }
 
 /// The closure texts: what the PR said, cut to the marker's budget, then
-/// the marker that says why it closed.
+/// the marker that says why it closed; a batched closure also places its
+/// link to the batch PR at the top of his section.
 #[test]
 fn closures_keep_the_body_within_its_budget_and_end_with_their_marker() {
+    assert_eq!(
+        closure("a body", Closure::Obsolete),
+        format!("a body\n\n{}", markers::OBSOLETE)
+    );
+    let batched_plain = closure("a body", Closure::Batched(42));
+    assert!(batched_plain.contains("#42"), "{batched_plain}");
+    assert!(batched_plain.contains("a body"), "{batched_plain}");
+    assert!(batched_plain.ends_with(markers::BATCHED), "{batched_plain}");
     for (why, marker) in [
         (Closure::Obsolete, markers::OBSOLETE),
-        (Closure::Batched, markers::BATCHED),
+        (Closure::Batched(42), markers::BATCHED),
     ] {
-        assert_eq!(closure("a body", why), format!("a body\n\n{marker}"));
         let text = closure(&"x".repeat(FOREIGN_LIMIT), why);
         assert!(text.ends_with(marker), "{text}");
-        assert_eq!(
-            text.len(),
-            closure_budget(marker) + "\n\n".len() + marker.len()
+        assert_eq!(text.len(), FOREIGN_LIMIT);
+        // When `START` is not followed by a newline, inserting the note adds
+        // one; the budget accounts for it so foreign text still fits cleanly.
+        let owner = format!(
+            "{}{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->",
+            markers::OWNERSHIP,
+            "a".repeat(64),
+            "b".repeat(64),
+        );
+        let tight_start = format!(
+            "{}body\n{owner}\n{}",
+            markers::START,
+            "x".repeat(FOREIGN_LIMIT)
+        );
+        let tight = closure(&tight_start, why);
+        assert!(tight.ends_with(marker), "{tight}");
+        assert!(
+            tight.len() <= FOREIGN_LIMIT,
+            "tight closure exceeded FOREIGN_LIMIT: {}",
+            tight.len()
         );
         // A rebasing banner still up does not outlive the closure.
         let permits = BTreeMap::new();
@@ -116,7 +141,14 @@ fn closures_keep_the_body_within_its_budget_and_end_with_their_marker() {
             &crate::pr::banner::banner(crate::pr::banner::Rebuild::Recheck, "main"),
         )
         .unwrap();
-        assert_eq!(closure(&shown, why), closure(&finished, why));
+        let closed = closure(&finished, why);
+        assert_eq!(closure(&shown, why), closed);
+        if matches!(why, Closure::Batched(42)) {
+            let start = closed.find(markers::START).unwrap();
+            let link = closed.find("#42").unwrap();
+            let end = closed.find(markers::OWNERSHIP).unwrap();
+            assert!(start < link && link < end, "{closed}");
+        }
     }
 }
 
@@ -384,6 +416,7 @@ mod security_tests {
                 number: Some(1),
                 title: "update @mallory/pkg".into(),
                 targets: vec![],
+                green: None,
             }])
             .contains("update @\u{200d}mallory/pkg")
         );

@@ -1015,22 +1015,13 @@ impl Lifecycle {
             {
                 continue;
             }
-            // Closed first: a closed PR is never visited again, so a failure
-            // after this cannot repeat the comment.
-            let text = closure(body(&fresh), Closure::Batched);
+            // Note the batch PR in the body as we close so no separate
+            // comment (and extra notification) is posted.
+            let text = closure(body(&fresh), Closure::Batched(number));
             let closed = client
                 .patch::<model::PullRequest>(&path, json!({"state":"closed","body":text}))
                 .await?;
-            let mut reason = format!("moved to the batch PR #{number}");
-            if let Err(error) = client
-                .post::<serde::de::IgnoredAny>(
-                    &format!("repos/{}/issues/{target}/comments", self.repo),
-                    json!({"body":format!("Moved to the batch PR #{number}. Tick this update's box there to bring it back.")}),
-                )
-                .await
-            {
-                reason.push_str(&format!("; the note saying so was not posted: {error}"));
-            }
+            let reason = format!("moved to the batch PR #{number}");
             self.actions.push(action(
                 &self.repo,
                 branch(&closed),

@@ -7,11 +7,13 @@ safe into one pull request, then merge that.
 
 ## Adding an update
 
-Every update PR ends with an "add to the batch" checkbox. Tick it, and on the
-next run (straight away under the [server](/guide/server/)) the Count moves the
-update into the repository's batch PR on `patchula/batch` and closes the
-original with a comment linking to the batch. Being batched never counts as
-being closed by hand, so the update is not suppressed.
+Every update PR ends with an "add to the batch" checkbox, and every open
+update PR on the [dashboard](/guide/dashboard/) has one too. Tick either box,
+and on the next run (straight away under the [server](/guide/server/)) the
+Count moves the update into the repository's batch PR on `patchula/batch` and
+closes the original with a note in its body linking to the batch (no extra
+comment is posted). Being batched never counts as being closed by hand, so the
+update is not suppressed.
 
 The batch keeps the version you reviewed. Each update PR records the targets it
 showed, and the batch uses those, not whatever was released since. A newer
@@ -46,6 +48,46 @@ prs { batchMerge = true }
 
 Then it merges behind the same [check gates](/guide/auto-merge/) as any other
 update.
+
+## Skipping redundant CI
+
+When every update in the batch came from a Count-owned PR that passed the same
+clean-and-green check as [auto-merge](/guide/auto-merge/) on the exact base
+commit the batch builds on, every item touched a disjoint set of files, the
+batch commit writes the exact blob SHAs those source PRs tested, and no
+lockfile is pending, the Count adds a trailer to the batch commit:
+
+```text
+Patchula-Batch-Green: true
+```
+
+The trailer is omitted if any item joined without clean green checks on that
+base, if two items touch the same file (such as a shared `Cargo.lock` or
+`mise.lock` regenerated together), if the batch commit differs from the tested
+blobs, or once the batch rebases onto a new base. GitHub must report each
+source PR's mergeability as `clean`, so in repositories that require an
+approving review before merge, unapproved source PRs won't qualify and CI runs
+on the batch as usual. Note that under the default `rebase = "conflicts"`, a
+batch without lockfile jobs stays on its old base when the default branch
+moves, and source PRs must be green on the current base tip to qualify.
+
+On its own the trailer does nothing; a repository's workflow can inspect it in
+a job-level `if:` so skipped jobs still report as `skipped` (satisfying
+required status checks, unlike `[skip ci]`):
+
+- Check that the PR comes from the same repository (not a fork), targets the
+  batch branch, and was opened by your Count Patchula bot.
+- Verify that the head commit has a single parent equal to the PR's base SHA,
+  with `Patchula-Base` equal to that parent and `Patchula-Batch-Green: true`.
+- If your repository enforces required workflows from protected refs, also
+  verify the head commit's author login and GitHub signature
+  (`verification.verified`) to guard against forks and unverified pushes. Keep
+  in mind that each item's green proof is stored in the batch PR's hidden
+  marker, so repository writers who can edit pull request descriptions are
+  still within the trust boundary.
+
+Two updates that pass on their own can still interact even when they touch
+different files, so skipping batch CI is a workflow choice per repository.
 
 ## Details
 

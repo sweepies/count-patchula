@@ -1405,7 +1405,7 @@ async fn dashboard_age_click_bypasses_only_the_selected_target_and_survives_unti
         fake.state().repo().issues[&100]["body"]
             .as_str()
             .unwrap()
-            .contains(" UTC)")
+            .contains(" UTC</sub>")
     );
     assert!(
         !fake.state().repo().issues[&100]["body"]
@@ -2335,16 +2335,34 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
         .unwrap()
         .clone();
     assert_eq!(closed["state"], "closed");
+    let closed_body = closed["body"].as_str().unwrap();
     assert!(
-        closed["body"]
-            .as_str()
-            .unwrap()
-            .contains("patchula-closed:batched")
+        closed_body.contains("patchula-closed:batched"),
+        "{closed_body}"
     );
-    assert!(fake.state().writes().iter().any(|(p, b)| {
-        p.ends_with(&format!("/issues/{number}/comments"))
-            && b["body"].as_str().unwrap().contains(&format!("#{batch}"))
-    }));
+    assert!(
+        closed_body.contains(&format!("Moved to the batch PR #{batch}.")),
+        "{closed_body}"
+    );
+    // Moving to the batch notes the link in the body instead of posting a comment.
+    assert!(
+        !fake
+            .state()
+            .writes()
+            .iter()
+            .any(|(p, _)| p.ends_with(&format!("/issues/{number}/comments")))
+    );
+    // The source PR had passing checks on the same base commit, so the batch
+    // commit carries `Patchula-Batch-Green: true`.
+    let batch_sha = open[0]["head"]["sha"].as_str().unwrap();
+    let batch_message = fake.state().repo().commits[batch_sha]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        batch_message.ends_with("\nPatchula-Batch-Green: true"),
+        "{batch_message}"
+    );
 
     let dashboard = fake.state().repo().issues[&100]["body"]
         .as_str()
@@ -2382,6 +2400,171 @@ async fn batching_moves_updates_into_one_pr_and_never_suppresses_them() {
     let open = open_prs(&fake);
     assert_eq!(open.len(), 1, "{open:?}");
     assert_eq!(open[0]["head"]["ref"], branch.as_str());
+    check_transcript();
+}
+
+/// Ticking an open PR's batch box on the dependency dashboard moves it into the
+/// batch PR without editing the PR body; the `Patchula-Batch-Green: true`
+/// trailer appears only while every item came from a PR green on the current base.
+#[tokio::test(start_paused = true)]
+async fn dashboard_batch_moves_updates_and_green_trailer_tracks_checks_and_base() {
+    let fake = sandbox(base_files(), None, vec![]);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let mut config = checkbox_config();
+    config.prs.rebase = patchula_config::Rebase::Behind;
+    let now = chrono::Utc::now();
+
+    // First run opens the update PR and lists it with a batch checkbox on the dashboard.
+    checkbox_run(&engine, &config, now).await;
+    let update = open_prs(&fake);
+    assert_eq!(update.len(), 1);
+    let number = update[0]["number"].as_u64().unwrap();
+    let dashboard = fake.state().repo().issues[&100]["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(dashboard.contains("\"action\":\"batch\""), "{dashboard}");
+
+    // With failing checks on the source PR, batching via the dashboard works
+    // but omits `Patchula-Batch-Green: true`.
+    fake.state().repo_mut().checks[0]["conclusion"] = json!("FAILURE");
+    tick_dashboard(&fake, "batch");
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0]["head"]["ref"], "patchula/batch");
+    let batch_number = open[0]["number"].as_u64().unwrap();
+    let red_sha = open[0]["head"]["sha"].as_str().unwrap().to_owned();
+    let red_message = fake.state().repo().commits[&red_sha]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !red_message.contains("Patchula-Batch-Green:"),
+        "{red_message}"
+    );
+    assert!(
+        !fake
+            .state()
+            .writes()
+            .iter()
+            .any(|(p, _)| p.ends_with(&format!("/issues/{number}/comments")))
+    );
+
+    // Send the item back, make its checks green, and batch it from the dashboard again.
+    tick_pr(&fake, batch_number, "patchula-batch-remove");
+    checkbox_run(&engine, &config, now).await;
+    fake.state().repo_mut().checks[0]["conclusion"] = json!("SUCCESS");
+    tick_dashboard(&fake, "batch");
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0]["head"]["ref"], "patchula/batch");
+    let green_sha = open[0]["head"]["sha"].as_str().unwrap().to_owned();
+    let green_message = fake.state().repo().commits[&green_sha]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        green_message.ends_with("\nPatchula-Batch-Green: true"),
+        "{green_message}"
+    );
+
+    // Advancing main forces a rebase onto a new base commit; the item was green
+    // only on the old base, so the rebased commit drops the trailer.
+    {
+        let mut state = fake.state();
+        let repo = state.repo_mut();
+        let base_tree = repo.commits["base"]["tree"]["sha"].clone();
+        repo.move_base("base2");
+        repo.commits.insert(
+            "base2".into(),
+            json!({"sha":"base2","tree":{"sha":base_tree},"message":"advance main","parents":[{"sha":"base"}],"verification":{"verified":true}}),
+        );
+        repo.refs.insert("refs/heads/main".into(), "base2".into());
+    }
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    let rebased_sha = open[0]["head"]["sha"].as_str().unwrap().to_owned();
+    assert_ne!(rebased_sha, green_sha);
+    let rebased_message = fake.state().repo().commits[&rebased_sha]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !rebased_message.contains("Patchula-Batch-Green:"),
+        "{rebased_message}"
+    );
+    check_transcript();
+}
+
+/// A source PR whose checks pass but whose GitHub mergeability is not `clean`
+/// does not earn `Patchula-Batch-Green: true`, and when an unchanged batch tree
+/// on the same base flips from un-green to green (e.g. a still-open ticked
+/// source PR becomes clean), the commit is rewritten to add the trailer.
+#[tokio::test(start_paused = true)]
+async fn batch_green_requires_clean_mergeability_and_updates_trailer_on_unchanged_tree() {
+    let fake = sandbox(base_files(), None, vec![]);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let config = checkbox_config();
+    let now = chrono::Utc::now();
+
+    checkbox_run(&engine, &config, now).await;
+    let update = open_prs(&fake);
+    assert_eq!(update.len(), 1);
+    let source_number = update[0]["number"].as_u64().unwrap();
+
+    // Checks pass, but mergeable_state is blocked (e.g. required checks or
+    // review still missing). Batching must omit the green trailer.
+    fake.state().repo_mut().prs.get_mut(&source_number).unwrap()["mergeable_state"] =
+        json!("blocked");
+    tick_pr(&fake, source_number, "patchula-batch-add");
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0]["head"]["ref"], "patchula/batch");
+    let first_sha = open[0]["head"]["sha"].as_str().unwrap().to_owned();
+    let first_message = fake.state().repo().commits[&first_sha]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !first_message.contains("Patchula-Batch-Green:"),
+        "{first_message}"
+    );
+
+    // Simulate a previous run where closing the source PR had failed so it
+    // stayed open and ticked, and its mergeability is now clean. Even though
+    // the batch tree bytes are identical on the same base, the batch commit
+    // is rewritten to carry `Patchula-Batch-Green: true`.
+    {
+        let mut state = fake.state();
+        let pr = state.repo_mut().prs.get_mut(&source_number).unwrap();
+        pr["state"] = json!("open");
+        pr["mergeable_state"] = json!("clean");
+        let body = pr["body"].as_str().unwrap().to_owned();
+        pr["body"] = json!(body.replace("<!-- patchula-closed:batched -->", ""));
+    }
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    let second_sha = open[0]["head"]["sha"].as_str().unwrap().to_owned();
+    assert_ne!(second_sha, first_sha);
+    let second_message = fake.state().repo().commits[&second_sha]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        second_message.ends_with("\nPatchula-Batch-Green: true"),
+        "{second_message}"
+    );
     check_transcript();
 }
 

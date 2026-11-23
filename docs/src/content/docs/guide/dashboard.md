@@ -17,23 +17,27 @@ closes the issue; turning it on again opens a new one.
 
 In order:
 
-1. known vulnerabilities, most severe first: one line per package and version
-   that lists the first five files it appears in (and a count of the rest),
-   with its advisories as links (and their summaries collapsed when there are
-   several), and the fix once: the
-   open PR (or batch PR) that fixes it, "fixed in X, whose PR was closed",
-   "fixed in X, not proposed", or "no fixed release yet". A severity shows only when the advisory carries a rating or a CVSS vector (see
+1. known vulnerabilities, most severe first: a summary callout, a table with
+   one row per package and version (listing the first five files it appears in
+   and a count of the rest, its advisories as links, and the fix once: the
+   open PR or batch PR that fixes it, "fixed in X, whose PR was closed",
+   "fixed in X, not proposed", or "no fixed release yet"), and a collapsed
+   advisory details table. A severity badge shows only when the advisory
+   carries a rating or a CVSS vector (see
    [severity](/guide/security/#severity));
-2. tooling warnings: updates set to merge in a repository whose CI, required
-   checks or delivery don't back that up, with the open PRs each affects, and
-   the ones you silenced with `warnings.quiet` collapsed under "Silenced" (see
+2. tooling warnings: caution callouts for updates set to merge in a repository
+   whose CI, required checks or delivery don't back that up, with the open PRs
+   each affects, and the ones you silenced with `warnings.quiet` collapsed
+   under "Silenced" (see
    [tooling warnings](/guide/auto-merge/#tooling-warnings)); the section goes
    once the condition clears;
-3. images the Count can't vouch for: pinned images whose SBOM can't show what
-   a rebuild fixes, with the reason, and the ones you silenced with
-   `security.quietImages` collapsed under "Silenced" (see
-   [container image rebuilds](/guide/security/#container-image-rebuilds));
-4. open update PRs, grouped by update type, then the ones he merged;
+3. images the Count can't vouch for: a warning callout and table of pinned
+   images whose SBOM can't show what a rebuild fixes, with the reason, and the
+   ones you silenced with `security.quietImages` collapsed under "Silenced"
+   (see [container image rebuilds](/guide/security/#container-image-rebuilds));
+4. open PRs, with their update-type badges and a checkbox on each batchable
+   update PR to add it to the [batch PR](/guide/batch/), followed by updates
+   carried in the batch ("Batched") and the ones he merged ("Merged");
 5. pending updates, grouped by why they wait, each group collapsed with its
    count: release age, the repository's cooldown, schedule windows,
    `prs.concurrent`, `prs.perHour`, and other reasons. A group says its reason
@@ -52,8 +56,8 @@ In order:
    ([Copier](/guide/managers/#copier)), and, under "Newer versions not proposed",
    releases whose declaration cannot be rewritten to allow them without
    guessing, each with the specific constraint that blocks it;
-7. updates you closed ("Updates you closed"), with the target that was
-   suppressed, and updates "Batched";
+7. updates you closed ("Updates you closed"), with a box to recreate each
+   suppressed target;
 8. lookup warnings and sources served from stale cache: one box per failing
    package and source, listing every file that declares it. Ticking it
    retries the lookup for all of them;
@@ -79,6 +83,9 @@ Ticking a box asks for one thing:
 - Re-check this repository: look everything up again and regenerate or
   rebase its branches. Release age, limits and your closures still apply to new
   updates.
+- Add an open PR to the batch: move that open update PR into the
+  [batch PR](/guide/batch/) and close the original, the same as ticking the box
+  on the PR itself.
 - Create a held-back update now: skip the release-age wait, PR limit or
   schedule window for that one update. Everything else, digest pins, lockfile
   generation and ownership checks, still applies — and a hold by a committed

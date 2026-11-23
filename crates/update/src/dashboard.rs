@@ -4,6 +4,7 @@ use crate::{
     Inventory, Plan,
     identity::{extracted_key, held_key, held_target, retry_key},
     markers,
+    pr::body::{id_cell, linked, prose_cell},
     text::{self, code},
 };
 use patchula_cache::{Cache, State};
@@ -18,6 +19,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const TITLE: &str = "Count Patchula's dependency dashboard";
 const LIMIT: usize = 60_000;
+/// Footer matching the Count's pull request bodies, with the avatar pinned to
+/// the running release.
+const FOOTER: &str = concat!(
+    "\n---\n\n<p>\n<a href=\"https://count-patchula.sweepy.dev\"><img align=\"left\" src=\"https://raw.githubusercontent.com/sweepies/count-patchula/v",
+    env!("CARGO_PKG_VERSION"),
+    "/assets/logo/bat.svg\" width=\"52\" alt=\"Count Patchula\"></a>\n<strong><a href=\"https://count-patchula.sweepy.dev\">Count Patchula</a></strong> keeps watch over this repository<br>\n<sub>The Count works for free, but if you find him helpful, <a href=\"https://github.com/sponsors/sweepies\">consider supporting his development</a>.</sub><br clear=\"left\">\n</p>\n"
+);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(
@@ -31,6 +39,7 @@ pub enum Action {
     Create(String),
     Recreate(String),
     Retry(String),
+    Batch(String),
 }
 #[derive(Clone, Debug, Default)]
 pub struct Controls {
@@ -39,6 +48,8 @@ pub struct Controls {
     pub create: BTreeSet<String>,
     pub recreate: BTreeSet<String>,
     pub retry: BTreeSet<String>,
+    /// Update keys whose "Add to batch" box was ticked on the dashboard.
+    pub batch: BTreeSet<String>,
     /// Accepted release-age targets survive unticking and later process restarts.
     pub age_permits: BTreeSet<String>,
     pub branch_permits: BTreeMap<String, BTreeSet<String>>,
@@ -55,7 +66,11 @@ fn checked_actions(body: &str) -> BTreeSet<Action> {
             continue;
         };
         let target = match &action {
-            Action::Recheck(t) | Action::Create(t) | Action::Recreate(t) | Action::Retry(t) => t,
+            Action::Recheck(t)
+            | Action::Create(t)
+            | Action::Recreate(t)
+            | Action::Retry(t)
+            | Action::Batch(t) => t,
         };
         if !is_key(target) {
             continue;
@@ -143,6 +158,9 @@ impl Controls {
                     }
                     Action::Retry(t) => {
                         result.retry.insert(t);
+                    }
+                    Action::Batch(t) => {
+                        result.batch.insert(t);
                     }
                 }
             }
@@ -236,6 +254,90 @@ fn escape(text: &str) -> String {
         .replace('*', "&#42;")
         .replace('_', "&#95;")
 }
+/// Generated text as an inline code span inside a table cell: its pipes
+/// escaped so they cannot end the cell.
+fn code_cell(text: &str) -> String {
+    code(text).replace('|', "\\|")
+}
+/// The update key carried by `tracked`'s PR body when that body also carries a
+/// non-empty reviewed-targets marker, so ticking the dashboard's batch box is
+/// guaranteed to match `batch::items`.
+fn batchable_pr_origin(tracked: &crate::pull_requests::Tracked) -> Option<String> {
+    let body = crate::pull_requests::body(&tracked.pr);
+    let origin = crate::pull_requests::marker_update(body)?;
+    let targets =
+        markers::section_json::<Vec<crate::Change>>(body, markers::TARGETS, markers::PAYLOAD)?;
+    (!targets.is_empty()).then_some(origin)
+}
+/// A plan's title formatted for a table cell: pipe-safe.
+fn titled_cell(plan: &Plan) -> String {
+    titled(plan).replace('|', "\\|")
+}
+/// Update-type badges for a plan, matching the PR body's `<kbd>` style.
+fn plan_badges(plan: &Plan) -> String {
+    if plan.batch_items().is_some() {
+        return "<kbd>batch</kbd>".into();
+    }
+    if plan.is_maintenance() {
+        return "<kbd>maintenance</kbd>".into();
+    }
+    let mut badges: Vec<String> = plan
+        .changes()
+        .iter()
+        .map(|c| c.kind.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|kind| format!("<kbd>{}</kbd>", escape(kind)))
+        .collect();
+    if plan.changes().iter().any(|c| !c.advisories.is_empty()) {
+        badges.push("<kbd>security</kbd>".into());
+    }
+    badges.join("&nbsp;")
+}
+/// A plan's title followed by its badges when it has any.
+fn plan_line(plan: &Plan) -> String {
+    let title = titled(plan);
+    let badges = plan_badges(plan);
+    if badges.is_empty() {
+        title
+    } else {
+        format!("{title} {badges}")
+    }
+}
+/// Rated severities as badges, worst first, each once with its count:
+/// `<kbd>high</kbd>&nbsp;×2, <kbd>low</kbd>`. Empty when none are rated.
+fn severity_summary(severities: impl IntoIterator<Item = Option<Severity>>) -> String {
+    let mut counts: BTreeMap<Severity, usize> = BTreeMap::new();
+    for severity in severities.into_iter().flatten() {
+        *counts.entry(severity).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(severity, n)| {
+            let word = severity.as_str();
+            if n > 1 {
+                format!("<kbd>{word}</kbd>&nbsp;×{n}")
+            } else {
+                format!("<kbd>{word}</kbd>")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+/// Package names as code spans in a sentence: "`a`", "`a` and `b`", "`a`,
+/// `b` and `c`", and past four, a count of the rest.
+fn listing(names: &[&str]) -> String {
+    const SHOWN: usize = 4;
+    let mut parts: Vec<String> = names.iter().take(SHOWN).map(|n| code(n)).collect();
+    if names.len() > SHOWN {
+        parts.push(format!("{} more", names.len() - SHOWN));
+    }
+    match parts.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
+}
 fn checkbox(label: &str, action: Action) -> String {
     format!(
         "- [ ] {label} {}{} -->\n",
@@ -267,6 +369,9 @@ pub fn issue(inventory: &Inventory) -> Result<Option<&crate::receipts::Issue>, E
     Ok(result)
 }
 
+/// Byte budget before the footer, so the footer always fits within `LIMIT`.
+const CONTENT_LIMIT: usize = LIMIT - FOOTER.len();
+
 /// No wall clock or lookup evaluation timestamps: unchanged evidence renders identically.
 /// `server` is the URL to advertise to the CLI, if any.
 pub fn render(
@@ -279,14 +384,24 @@ pub fn render(
 ) -> String {
     // Keep the numeric PR identity separate from the rendered Markdown.
     let mut sections = BTreeMap::<String, BTreeSet<(Option<u64>, String)>>::new();
+    let mut open_prs = BTreeSet::<(u8, u64, String)>::new();
+    let mut any_batchable_pr = false;
+    let open_batch_pr = plans
+        .iter()
+        .find(|p| p.batch_items().is_some())
+        .and_then(|plan| {
+            prs.iter()
+                .find(|t| t.pr.state == "open" && t.pr.head.branch == plan.action().branch)
+                .map(|t| t.pr.number)
+        });
     for row in merged.iter().filter(|row| row.merged_at.is_some()) {
         if let Some(number) = row.number {
             sections.entry("Merged".into()).or_default().insert((
                 Some(number),
                 format!(
-                    "- #{number}: {} — {}\n",
-                    safe(row.title.as_deref().unwrap_or("Update dependencies")),
-                    safe(row.merge_note.as_deref().unwrap_or("merged"),)
+                    "| #{number} | {} | {} |\n",
+                    prose_cell(row.title.as_deref().unwrap_or("Update dependencies")),
+                    prose_cell(row.merge_note.as_deref().unwrap_or("merged")),
                 ),
             ));
         }
@@ -297,13 +412,11 @@ pub fn render(
                 .iter()
                 .any(|plan| t.pr.head.branch == plan.action().branch)
     }) {
-        sections
-            .entry("Open PRs: other".into())
-            .or_default()
-            .insert((
-                Some(tracked.pr.number),
-                format!("- #{}: {}\n", tracked.pr.number, safe(&tracked.pr.title)),
-            ));
+        open_prs.insert((
+            2,
+            tracked.pr.number,
+            format!("- #{} {}\n", tracked.pr.number, safe(&tracked.pr.title)),
+        ));
     }
     for plan in plans {
         if plan.action().status == patchula_report::BranchStatus::Merged {
@@ -313,48 +426,46 @@ pub fn render(
             .iter()
             .find(|t| t.pr.state == "open" && t.pr.head.branch == plan.action().branch);
         if let Some(tracked) = open {
-            let kinds: BTreeSet<_> = plan.changes().iter().map(|c| c.kind.as_str()).collect();
-            let kind = if plan.is_maintenance() {
-                "maintenance".into()
+            let note = tracked
+                .merge_note()
+                .map(|reason| format!(" — <sub>{}</sub>", safe(reason)))
+                .unwrap_or_default();
+            let line = format!("#{} {}{note}", tracked.pr.number, plan_line(plan));
+            let (group, row) = if plan.batch_items().is_some() {
+                (0, format!("- {line}\n"))
+            } else if crate::pr::body::batchable(plan)
+                && let Some(origin) = batchable_pr_origin(tracked)
+            {
+                any_batchable_pr = true;
+                (1, checkbox(&line, Action::Batch(origin)))
             } else {
-                kinds.into_iter().collect::<Vec<_>>().join(", ")
+                (1, format!("- {line}\n"))
             };
-            sections
-                .entry(format!("Open PRs: {kind}"))
-                .or_default()
-                .insert((
-                    Some(tracked.pr.number),
-                    format!(
-                        "- #{}: {}{}\n",
-                        tracked.pr.number,
-                        titled(plan),
-                        tracked
-                            .merge_note()
-                            .map(|reason| format!(" — {}", safe(reason)))
-                            .unwrap_or_default()
-                    ),
-                ));
+            open_prs.insert((group, tracked.pr.number, row));
         } else if plan.held(&crate::plan::Hold::Batched) {
             // The batch PR is listed with the open PRs; these are its items.
+            let badges = plan_badges(plan);
+            let badges = if badges.is_empty() {
+                "—".into()
+            } else {
+                badges
+            };
             sections
                 .entry("Batched".into())
                 .or_default()
-                .insert((None, format!("- {}\n", titled(plan))));
+                .insert((None, format!("| {} | {badges} |\n", titled_cell(plan))));
         } else if plan.held(&crate::plan::Hold::ClosedByOwner) {
             sections
                 .entry("Updates you closed".into())
                 .or_default()
                 .insert((
                     None,
-                    checkbox(
-                        &format!("Bring back this update you closed: {}", titled(plan)),
-                        Action::Recreate(plan.update_key()),
-                    ),
+                    checkbox(&plan_line(plan), Action::Recreate(plan.update_key())),
                 ));
         } else if plan.action().reason.is_some() {
             let waiting = Waiting::of(plan);
             let row = if waiting.tickable() {
-                checkbox(&titled(plan), Action::Create(plan.update_key()))
+                checkbox(&plan_line(plan), Action::Create(plan.update_key()))
             } else {
                 let failure = plan.failure().expect("every reason keeps its failure");
                 let mut row = format!("- {}: {}\n", titled(plan), escape(&failure.summary));
@@ -404,15 +515,11 @@ pub fn render(
                     .as_deref()
                     .map(|digest| format!("@{}", digest.chars().take(19).collect::<String>()))
                     .unwrap_or_default();
-                let reference = format!(
-                    "{} in {}",
-                    code(&format!(
-                        "{}:{}{}",
-                        dep.package,
-                        dep.current.value.as_deref().unwrap_or("unknown"),
-                        pinned
-                    )),
-                    code(&file.path)
+                let image_ref = format!(
+                    "{}:{}{}",
+                    dep.package,
+                    dep.current.value.as_deref().unwrap_or("unknown"),
+                    pinned
                 );
                 let previous = dep
                     .updates
@@ -423,15 +530,29 @@ pub fn render(
                     let row = match &check.silenced {
                         Some(reason) => (
                             IMAGES_SILENCED,
-                            format!("- {reference}: {}\n", safe(reason)),
+                            format!(
+                                "| {} | {} | {} |\n",
+                                code_cell(&image_ref),
+                                code_cell(&file.path),
+                                prose_cell(reason),
+                            ),
                         ),
-                        None => (IMAGES, format!("- {reference}: {}\n", image_gap(check))),
+                        None => (
+                            IMAGES,
+                            format!(
+                                "| {} | {} | {} |\n",
+                                code_cell(&image_ref),
+                                code_cell(&file.path),
+                                image_gap(check).replace('|', "\\|"),
+                            ),
+                        ),
                     };
                     sections
                         .entry(row.0.into())
                         .or_default()
                         .insert((None, row.1));
                 }
+                let current_val = dep.current.value.as_deref().unwrap_or("unknown");
                 for held in &metadata.held_back {
                     let eligible = escape(&text::when(
                         held.target_eligible_at
@@ -444,10 +565,11 @@ pub fn render(
                         Some(cooldown) => (
                             Waiting::Cooldown,
                             format!(
-                                "- {} → {} ({}, {}; set in {}, eligible {})\n",
+                                "- **{}** {}&nbsp;→&nbsp;{} <kbd>{}</kbd> · {} · <sub>set in {}, eligible {}</sub>\n",
                                 code(&dep.name),
-                                safe(&held.version),
-                                safe(metadata.source.as_str()),
+                                code(current_val),
+                                code(&held.version),
+                                safe(held.update_type.as_str()),
                                 code(&file.path),
                                 code(&cooldown.file),
                                 eligible,
@@ -457,10 +579,11 @@ pub fn render(
                             Waiting::ReleaseAge,
                             checkbox(
                                 &format!(
-                                    "{} → {} ({}, {}; eligible {})",
+                                    "**{}** {}&nbsp;→&nbsp;{} <kbd>{}</kbd> · {} · <sub>eligible {}</sub>",
                                     code(&dep.name),
-                                    safe(&held.version),
-                                    safe(metadata.source.as_str()),
+                                    code(current_val),
+                                    code(&held.version),
+                                    safe(held.update_type.as_str()),
                                     code(&file.path),
                                     eligible,
                                 ),
@@ -526,18 +649,14 @@ pub fn render(
                 }
             }
             sections
-                .entry(format!(
-                    "Detected: {} / {}",
-                    safe(dep.manager.as_str()),
-                    safe(&file.path)
-                ))
+                .entry(format!("Detected: {}\0{}", dep.manager.as_str(), file.path))
                 .or_default()
                 .insert((
                     None,
                     format!(
-                        "- {}: {}\n",
-                        code(&dep.name),
-                        safe(dep.current.value.as_deref().unwrap_or("unknown"))
+                        "| {} | {} |\n",
+                        code_cell(&dep.name),
+                        code_cell(dep.current.value.as_deref().unwrap_or("unknown"))
                     ),
                 ));
         }
@@ -545,7 +664,7 @@ pub fn render(
     for ((manager, package, source), lookup) in lookups {
         let mut row = checkbox(
             &format!(
-                "Try that lookup again: {} ({}, {})",
+                "**{}** (<kbd>{}</kbd> · {})",
                 code(&lookup.name),
                 safe(&lookup.source),
                 lookup
@@ -583,32 +702,42 @@ pub fn render(
             .or_default()
             .insert((None, row));
     }
-    for group in vulnerabilities.into_values() {
-        let (rank, row) = group.render();
-        sections
-            .entry("Known vulnerabilities".into())
-            .or_default()
-            .insert((Some(rank), row));
-    }
     for notice in &repo.notices {
-        let (section, action) = if notice.is_template() {
-            ("Template updates", "; run copier update to apply it")
+        let range = format!(
+            "{}&nbsp;→&nbsp;{}",
+            code_cell(&notice.current),
+            code_cell(&notice.available)
+        );
+        if notice.is_template() {
+            let change = match &notice.compare_url {
+                Some(compare) => linked(&range, compare),
+                None => range,
+            };
+            sections
+                .entry("Template updates".into())
+                .or_default()
+                .insert((
+                    None,
+                    format!(
+                        "| **{}** | {change} | {} |\n",
+                        code_cell(&notice.name),
+                        code_cell(&notice.path),
+                    ),
+                ));
         } else {
-            ("Newer versions not proposed", "")
-        };
-        sections.entry(section.into()).or_default().insert((
-            None,
-            format!(
-                "- {} in {}{action}{}\n",
-                safe(&notice.text()),
-                safe(&notice.path),
-                notice
-                    .compare_url
-                    .as_ref()
-                    .map(|url| format!(" ([compare]({}))", safe(url)))
-                    .unwrap_or_default()
-            ),
-        ));
+            let reason = notice.reason.as_deref().map_or("—".into(), prose_cell);
+            sections
+                .entry("Newer versions not proposed".into())
+                .or_default()
+                .insert((
+                    None,
+                    format!(
+                        "| **{}** | {range} | {} | {reason} |\n",
+                        code_cell(&notice.name),
+                        code_cell(&notice.path),
+                    ),
+                ));
+        }
     }
     for warning in &repo.tooling {
         let open: Vec<_> = prs
@@ -616,28 +745,39 @@ pub fn render(
             .filter(|t| t.pr.state == "open" && warning.branches.contains(&t.pr.head.branch))
             .map(|t| format!("#{}", t.pr.number))
             .collect();
-        let open = if open.is_empty() {
-            String::new()
-        } else {
-            format!(" Open now: {}.", open.join(", "))
-        };
         let row = match &warning.silenced {
             Some(reason) => (
                 TOOLING_SILENCED,
-                format!("- `{}`: \"{}\"{open}\n", warning.rule, safe(reason)),
-            ),
-            None => (
-                TOOLING,
                 format!(
-                    "- {}{open}\n",
-                    tooling_line(
-                        warning,
-                        repo.default_branch
-                            .as_deref()
-                            .unwrap_or("the default branch")
-                    )
+                    "| {} | {} | {} |\n",
+                    code_cell(warning.rule.as_str()),
+                    prose_cell(reason),
+                    if open.is_empty() {
+                        "—".into()
+                    } else {
+                        open.join(", ")
+                    },
                 ),
             ),
+            None => {
+                let open = if open.is_empty() {
+                    String::new()
+                } else {
+                    format!(" Open now: {}.", open.join(", "))
+                };
+                (
+                    TOOLING,
+                    format!(
+                        "> [!CAUTION]\n> {}{open}\n\n",
+                        tooling_line(
+                            warning,
+                            repo.default_branch
+                                .as_deref()
+                                .unwrap_or("the default branch")
+                        )
+                    ),
+                )
+            }
         };
         sections
             .entry(row.0.into())
@@ -663,25 +803,25 @@ pub fn render(
         "Re-check this repository",
         Action::Recheck(hash(repo.repository.as_bytes())),
     ));
+    if !vulnerabilities.is_empty() {
+        render_vulnerabilities(&mut text, &vulnerabilities);
+    }
     let mut sections: Vec<_> = sections.into_iter().collect();
     sections.sort_by_key(|(section, _)| {
-        let rank = if section == "Known vulnerabilities" {
-            0
-        } else if section.starts_with(TOOLING) {
+        let rank = if section.starts_with(TOOLING) {
             1
         } else if section.starts_with(IMAGES) {
             2
-        } else if section.starts_with("Open PRs: ") {
-            3
         } else {
             3 + match section.as_str() {
-                "Merged" => 1,
-                PENDING => 2,
-                "Template updates" | "Newer versions not proposed" => 3,
-                "Updates you closed" => 4,
-                "Lookup warnings and errors" => 5,
-                "Report warnings" => 6,
-                _ => 7,
+                "Batched" => 1,
+                "Merged" => 2,
+                PENDING => 3,
+                "Template updates" | "Newer versions not proposed" => 4,
+                "Updates you closed" => 5,
+                "Lookup warnings and errors" => 6,
+                "Report warnings" => 7,
+                _ => 8,
             }
         };
         (rank, section.clone())
@@ -693,7 +833,40 @@ pub fn render(
         .filter(|(section, _)| section.starts_with("Detected: "))
         .fold((0, 0), |(files, rows), (_, r)| (files + 1, rows + r.len()));
     let mut outer = false;
+    let mut open_written = false;
+    let write_open = |text: &mut String, open_prs: &BTreeSet<(u8, u64, String)>| {
+        if open_prs.is_empty() {
+            return;
+        }
+        let header = if any_batchable_pr {
+            "\n## Open PRs\n\n<sub>Tick an open PR to add it to the batch PR.</sub>\n\n"
+        } else {
+            "\n## Open PRs\n\n"
+        };
+        if text.len() + header.len() + 150 > CONTENT_LIMIT {
+            return;
+        }
+        text.push_str(header);
+        for (_, _, row) in open_prs {
+            if text.len() + row.len() + 150 > CONTENT_LIMIT {
+                text.push_str("\nAdditional entries omitted to fit GitHub's issue body limit.\n");
+                break;
+            }
+            text.push_str(row);
+        }
+    };
     for (section, rows) in sections {
+        let rank = if section.starts_with(TOOLING) {
+            1
+        } else if section.starts_with(IMAGES) {
+            2
+        } else {
+            4
+        };
+        if rank > 2 && !open_written {
+            write_open(&mut text, &open_prs);
+            open_written = true;
+        }
         if section == PENDING {
             pending(&mut text, rows);
             continue;
@@ -701,7 +874,7 @@ pub fn render(
         if section.starts_with("Detected: ") && !outer {
             // One line stands for every file's list.
             text.push_str(&format!(
-                "\n<details>\n<summary>Every dependency found ({} in {} {})</summary>\n",
+                "\n<details>\n<summary><strong>Every dependency found</strong> ({} in {} {})</summary>\n",
                 detected.1,
                 detected.0,
                 if detected.0 == 1 { "file" } else { "files" }
@@ -718,7 +891,7 @@ pub fn render(
         } else if section == TOOLING_SILENCED {
             (
                 format!(
-                    "{}\n<details><summary>Silenced ({})</summary>\n\n",
+                    "{}\n<details>\n<summary><strong>Silenced</strong> ({})</summary>\n\n| Warning | Reason | Open PRs |\n| --- | --- | --- |\n",
                     if tooling {
                         String::new()
                     } else {
@@ -726,19 +899,19 @@ pub fn render(
                     },
                     rows.len()
                 ),
-                "</details>\n",
+                "\n</details>\n",
             )
         } else if section == IMAGES {
             (
                 format!(
-                    "\n## {IMAGES}\n\nThese pinned images give the Count no usable package list, so he can't tell whether a new digest fixes vulnerabilities. He still proposes their updates.\n\n"
+                    "\n## {IMAGES}\n\n> [!WARNING]\n> **These pinned images give the Count no usable package list**, so he can't tell whether a new digest fixes vulnerabilities. He still proposes their updates.\n\n| Image | File | Reason |\n| --- | --- | --- |\n"
                 ),
                 "",
             )
         } else if section == IMAGES_SILENCED {
             (
                 format!(
-                    "{}\n<details><summary>Silenced ({})</summary>\n\n",
+                    "{}\n<details>\n<summary><strong>Silenced</strong> ({})</summary>\n\n| Image | File | Reason |\n| --- | --- | --- |\n",
                     if image_gaps {
                         String::new()
                     } else {
@@ -746,12 +919,48 @@ pub fn render(
                     },
                     rows.len()
                 ),
-                "</details>\n",
+                "\n</details>\n",
             )
-        } else if let Some(label) = section.strip_prefix("Detected: ") {
+        } else if section == "Batched" {
+            let carried = open_batch_pr
+                .map(|n| format!("<sub>Carried by #{n}.</sub>\n\n"))
+                .unwrap_or_default();
+            (
+                format!("\n## Batched\n\n{carried}| Update | Type |\n| --- | --- |\n"),
+                "",
+            )
+        } else if section == "Merged" {
+            (
+                "\n## Merged\n\n| PR | Update | Status |\n| --- | --- | --- |\n".into(),
+                "",
+            )
+        } else if section == "Template updates" {
+            (
+                "\n## Template updates\n\n<sub>Run <code>copier update</code> to apply template updates.</sub>\n\n| Template | Change | File |\n| --- | --- | --- |\n".into(),
+                "",
+            )
+        } else if section == "Newer versions not proposed" {
+            (
+                "\n## Newer versions not proposed\n\n| Package | Change | File | Reason |\n| --- | --- | --- | --- |\n".into(),
+                "",
+            )
+        } else if section == "Updates you closed" {
+            (
+                "\n## Updates you closed\n\n<sub>Tick an update to bring it back as a new PR.</sub>\n\n".into(),
+                "",
+            )
+        } else if section == "Lookup warnings and errors" {
+            (
+                "\n## Lookup warnings and errors\n\n<sub>Tick a package to retry its lookup.</sub>\n\n".into(),
+                "",
+            )
+        } else if let Some(rest) = section.strip_prefix("Detected: ") {
+            let (manager, path) = rest.split_once('\0').unwrap_or(("", rest));
             (
                 format!(
-                    "\n<details>\n<summary>{label} ({} {})</summary>\n\n",
+                    "\n<details>\n<summary><code>{}</code> (<kbd>{}</kbd>, {} {})</summary>\n\n| Dependency | Current |\n| --- | --- |\n",
+                    safe(path),
+                    safe(manager),
                     rows.len(),
                     if rows.len() == 1 {
                         "dependency"
@@ -764,12 +973,12 @@ pub fn render(
         } else {
             (format!("\n## {section}\n\n"), "")
         };
-        if text.len() + start.len() + end.len() + 150 > LIMIT {
+        if text.len() + start.len() + end.len() + 150 > CONTENT_LIMIT {
             break;
         }
         text.push_str(&start);
         for (_, row) in rows {
-            if text.len() + row.len() + end.len() + 150 > LIMIT {
+            if text.len() + row.len() + end.len() + 150 > CONTENT_LIMIT {
                 text.push_str("\nAdditional entries omitted to fit GitHub's issue body limit.\n");
                 break;
             }
@@ -777,9 +986,13 @@ pub fn render(
         }
         text.push_str(end);
     }
+    if !open_written {
+        write_open(&mut text, &open_prs);
+    }
     if outer {
         text.push_str("\n</details>\n");
     }
+    text.push_str(FOOTER);
     text
 }
 
@@ -851,7 +1064,7 @@ impl Waiting {
 fn pending(text: &mut String, rows: BTreeSet<(Option<u64>, String)>) {
     const END: &str = "\n</details>\n";
     let heading = format!("\n## {PENDING}\n");
-    if text.len() + heading.len() + 150 > LIMIT {
+    if text.len() + heading.len() + 150 > CONTENT_LIMIT {
         return;
     }
     text.push_str(&heading);
@@ -870,17 +1083,17 @@ fn pending(text: &mut String, rows: BTreeSet<(Option<u64>, String)>) {
             ""
         };
         let start = format!(
-            "\n<details><summary>{} ({})</summary>\n\n{}{tick}\n\n",
+            "\n<details>\n<summary><strong>{}</strong> ({})</summary>\n\n<sub>{}{tick}</sub>\n\n",
             waiting.summary(),
             group.len(),
             waiting.explanation()
         );
-        if text.len() + start.len() + END.len() + 150 > LIMIT {
+        if text.len() + start.len() + END.len() + 150 > CONTENT_LIMIT {
             return;
         }
         text.push_str(&start);
         for row in group {
-            if text.len() + row.len() + END.len() + 150 > LIMIT {
+            if text.len() + row.len() + END.len() + 150 > CONTENT_LIMIT {
                 text.push_str("\nAdditional entries omitted to fit GitHub's issue body limit.\n");
                 text.push_str(END);
                 return;
@@ -894,7 +1107,7 @@ fn pending(text: &mut String, rows: BTreeSet<(Option<u64>, String)>) {
 /// A collapsed block of tool output, indented under a list item.
 fn details(output: &str, indent: &str) -> String {
     format!(
-        "{indent}<details>\n{indent}<summary>The tool's output</summary>\n\n{}\n{indent}</details>\n",
+        "{indent}<details>\n{indent}<summary><strong>The tool's output</strong></summary>\n\n{}\n{indent}</details>\n",
         text::block(output, indent)
     )
 }
@@ -935,9 +1148,11 @@ impl Fix {
     fn render(&self) -> String {
         match self {
             Self::Pr(number) => format!("fixed by #{number}"),
-            Self::Update(version) => format!("fixed by the update to {}", code(version)),
-            Self::NotProposed(version) => format!("fixed in {}, not proposed", code(version)),
-            Self::Closed(version) => format!("fixed in {}, whose PR was closed", code(version)),
+            Self::Update(version) => format!("fixed by the update to {}", code_cell(version)),
+            Self::NotProposed(version) => format!("fixed in {}, not proposed", code_cell(version)),
+            Self::Closed(version) => {
+                format!("fixed in {}, whose PR was closed", code_cell(version))
+            }
             Self::None => "no fixed release yet".into(),
         }
     }
@@ -1020,28 +1235,137 @@ fn severity_rank(severity: Option<Severity>) -> usize {
             .unwrap_or(Severity::ALL.len())
     })
 }
+/// Render the `## Known vulnerabilities` section: a PR-style `[!IMPORTANT]`
+/// callout, a summary table with one row per vulnerable package/version (most
+/// severe first), and a collapsed PR-style advisory details table.
+fn render_vulnerabilities(
+    text: &mut String,
+    vulnerabilities: &BTreeMap<(String, String, String), Vulnerable<'_>>,
+) {
+    let mut groups: Vec<&Vulnerable<'_>> = vulnerabilities.values().collect();
+    groups.sort_by_key(|g| (g.rank(), g.name.as_str(), g.version.as_str()));
+
+    // Deduplicate advisories once per package (matching PR bodies), worst first.
+    let mut distinct: BTreeMap<(usize, &str, &str), &patchula_report::Advisory> = BTreeMap::new();
+    let mut packages: Vec<&str> = Vec::new();
+    for group in &groups {
+        if !packages.contains(&group.name.as_str()) {
+            packages.push(&group.name);
+        }
+        for (advisory, _) in group.advisories.values() {
+            distinct
+                .entry((
+                    severity_rank(advisory.severity),
+                    group.name.as_str(),
+                    advisory.id.as_str(),
+                ))
+                .or_insert(*advisory);
+        }
+    }
+    let total_advisories = distinct.len();
+    let badges = severity_summary(distinct.values().map(|a| a.severity));
+    let badge_note = if badges.is_empty() {
+        String::new()
+    } else {
+        format!(" ({badges})")
+    };
+    let header = format!(
+        "\n## Known vulnerabilities\n\n> [!IMPORTANT]\n> **{} known vulnerabilit{}**{badge_note} in {}.\n\n| Package | Version | Severity | Advisories | File | Status |\n| --- | --- | --- | --- | --- | --- |\n",
+        total_advisories,
+        if total_advisories == 1 { "y" } else { "ies" },
+        listing(&packages),
+    );
+    if text.len() + header.len() + 150 > CONTENT_LIMIT {
+        return;
+    }
+    text.push_str(&header);
+    for group in &groups {
+        let row = group.table_row();
+        if text.len() + row.len() + 150 > CONTENT_LIMIT {
+            text.push_str("\nAdditional entries omitted to fit GitHub's issue body limit.\n");
+            return;
+        }
+        text.push_str(&row);
+    }
+
+    // Detailed advisory table, collapsed just like PRs' security section.
+    const MAX_ADVISORIES: usize = 60;
+    let details_open = format!(
+        "\n<details>\n<summary><strong>Advisory details</strong> ({total_advisories})</summary>\n\n| Advisory | Package | Severity | Fixed&nbsp;in | Summary |\n| --- | --- | --- | --- | --- |\n",
+    );
+    const DETAILS_CLOSE: &str = "\n</details>\n";
+    const BUDGET_OMITTED: &str =
+        "\nAdditional advisories omitted to fit GitHub's issue body limit.\n";
+    if text.len() + details_open.len() + BUDGET_OMITTED.len() + DETAILS_CLOSE.len() + 150
+        > CONTENT_LIMIT
+    {
+        return;
+    }
+    text.push_str(&details_open);
+    let mut shown = 0usize;
+    let mut budget_hit = false;
+    for ((_, package, _), advisory) in distinct.into_iter().take(MAX_ADVISORIES) {
+        let cves: Vec<_> = advisory
+            .aliases
+            .iter()
+            .filter(|a| a.starts_with("CVE-"))
+            .map(|a| code_cell(&text::inert(a)))
+            .collect();
+        let aliases = if cves.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", cves.join(", "))
+        };
+        let severity = advisory
+            .severity
+            .map_or("—".into(), |s| format!("<kbd>{}</kbd>", s.as_str()));
+        let fixed_in = advisory.fixed_in.as_deref().map_or("—".into(), code_cell);
+        let summary = advisory.summary.as_deref().map_or("—".into(), prose_cell);
+        let row = format!(
+            "| {}{aliases} | {} | {severity} | {fixed_in} | {summary} |\n",
+            linked(&id_cell(&advisory.id), &advisory.url),
+            code_cell(package),
+        );
+        if text.len() + row.len() + BUDGET_OMITTED.len() + DETAILS_CLOSE.len() + 150 > CONTENT_LIMIT
+        {
+            budget_hit = true;
+            break;
+        }
+        text.push_str(&row);
+        shown += 1;
+    }
+    if budget_hit {
+        text.push_str(BUDGET_OMITTED);
+    } else if shown < total_advisories {
+        let omitted = total_advisories - shown;
+        text.push_str(&format!(
+            "\n{omitted} additional advisor{} omitted.\n",
+            if omitted == 1 { "y" } else { "ies" }
+        ));
+    }
+    text.push_str(DETAILS_CLOSE);
+}
 impl Vulnerable<'_> {
-    /// Its severity rank, most severe first, and its bullet.
-    fn render(&self) -> (u64, String) {
-        let rank = self
-            .advisories
+    fn rank(&self) -> usize {
+        self.advisories
             .values()
             .map(|(a, _)| severity_rank(a.severity))
             .min()
-            .unwrap_or(Severity::ALL.len());
+            .unwrap_or(Severity::ALL.len())
+    }
+    fn table_row(&self) -> String {
         let severity = Severity::ALL
-            .get(rank)
-            .map(|s| format!("**{}**: ", s.as_str()))
-            .unwrap_or_default();
-        let files: Vec<_> = self.files.iter().map(|f| code(f)).collect();
+            .get(self.rank())
+            .map_or("—".into(), |s| format!("<kbd>{}</kbd>", s.as_str()));
+        let files: Vec<_> = self.files.iter().map(|f| code_cell(f)).collect();
         let files = if files.len() > 5 {
             format!(
-                "{} and {} more files",
-                files[..5].join(", "),
+                "{}<br>and {} more",
+                files[..5].join("<br>"),
                 files.len() - 5
             )
         } else {
-            files.join(", ")
+            files.join("<br>")
         };
         let mut fixes = BTreeMap::<&Fix, usize>::new();
         for (_, fix) in self.advisories.values() {
@@ -1056,15 +1380,14 @@ impl Vulnerable<'_> {
                 .collect::<Vec<_>>()
                 .join("; ")
         };
-        let link = |advisory: &patchula_report::Advisory| {
-            format!("[{}]({})", safe(&advisory.id), url(&advisory.url))
-        };
+        let link =
+            |advisory: &patchula_report::Advisory| linked(&id_cell(&advisory.id), &advisory.url);
         let aliases = |advisory: &patchula_report::Advisory| {
             let cves: Vec<_> = advisory
                 .aliases
                 .iter()
                 .filter(|a| a.starts_with("CVE-"))
-                .map(|a| safe(a))
+                .map(|a| code_cell(&text::inert(a)))
                 .collect();
             if cves.is_empty() {
                 String::new()
@@ -1072,59 +1395,30 @@ impl Vulnerable<'_> {
                 format!(" ({})", cves.join(", "))
             }
         };
-        let head = format!(
-            "- {severity}{} {} in {files}",
-            code(&self.name),
-            safe(&self.version)
-        );
         let mut advisories: Vec<_> = self.advisories.values().map(|(a, _)| *a).collect();
         advisories.sort_by_key(|a| (severity_rank(a.severity), a.id.clone()));
-        let row = if let [advisory] = advisories[..] {
-            format!(
-                "{head}: {}{}{}. {}.\n",
-                link(advisory),
-                aliases(advisory),
-                advisory
-                    .summary
-                    .as_ref()
-                    .map(|s| format!(": {}", safe(s)))
-                    .unwrap_or_default(),
-                capitalise(&fix)
-            )
+        let adv_cell = if let [advisory] = advisories[..] {
+            format!("{}{}", link(advisory), aliases(advisory))
         } else {
             let shown: Vec<_> = advisories.iter().take(12).map(|a| link(a)).collect();
             let more = advisories.len() - shown.len();
-            let mut row = format!(
-                "{head}: {} advisories ({}{}). {}.\n  <details>\n  <summary>What they say</summary>\n\n",
+            format!(
+                "{} advisories ({}{})",
                 advisories.len(),
                 shown.join(", "),
                 if more > 0 {
                     format!(" and {more} more")
                 } else {
                     String::new()
-                },
-                capitalise(&fix)
-            );
-            for advisory in advisories.iter().take(40) {
-                row.push_str(&format!(
-                    "  - {}{}{}{}\n",
-                    link(advisory),
-                    aliases(advisory),
-                    advisory
-                        .severity
-                        .map(|s| format!(", {}", safe(s.as_str())))
-                        .unwrap_or_default(),
-                    advisory
-                        .summary
-                        .as_ref()
-                        .map(|s| format!(": {}", safe(s)))
-                        .unwrap_or_default()
-                ));
-            }
-            row.push_str("\n  </details>\n");
-            row
+                }
+            )
         };
-        (rank as u64, row)
+        format!(
+            "| **{}** | {} | {severity} | {adv_cell} | {files} | {} |\n",
+            code_cell(&self.name),
+            code_cell(&self.version),
+            capitalise(&fix),
+        )
     }
 }
 fn capitalise(text: &str) -> String {
@@ -1133,18 +1427,6 @@ fn capitalise(text: &str) -> String {
         .next()
         .map(|c| c.to_uppercase().chain(chars).collect())
         .unwrap_or_default()
-}
-/// A link destination that no character in it can cut short.
-fn url(url: &str) -> String {
-    url.chars()
-        .map(|c| match c {
-            ' ' | '(' | ')' | '<' | '>' | '[' | ']' | '`' | '"' | '\\' => {
-                format!("%{:02X}", c as u32)
-            }
-            c => c.to_string(),
-        })
-        .collect::<String>()
-        .replace("<!--", "%3C!--")
 }
 
 /// One failing package from one source, with every file that declares it.
@@ -1415,6 +1697,7 @@ mod tests {
                 number: None,
                 title: "batched".into(),
                 targets: vec![change()],
+                green: None,
             }])
             .build();
         let prs = vec![crate::pull_requests::Tracked::from(

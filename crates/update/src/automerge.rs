@@ -208,7 +208,7 @@ fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
             })
     })
 }
-async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, Error> {
+pub(crate) async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, Error> {
     let (owner, name) = repo
         .split_once('/')
         .ok_or(Error::Refused("invalid repository".into()))?;
@@ -282,6 +282,40 @@ fn same_head(
         && fresh.head.branch == proof.head.branch
         && fresh.base.branch == proof.base.branch
         && body_hash(body(fresh)) == body_hash(body(proof))
+}
+/// Whether a fresh REST read confirms `proof` is still the same owned, open,
+/// non-draft, mergeable, clean pull request.
+fn clean_head(
+    fresh: &model::PullRequest,
+    proof: &model::PullRequest,
+    actor: &str,
+    repo: &str,
+) -> bool {
+    same_head(fresh, proof, actor, repo)
+        && fresh.draft == Some(false)
+        && fresh.mergeable == Some(true)
+        && fresh.mergeable_state.as_deref() == Some("clean")
+}
+/// Whether `pr` passes the full auto-merge green gate right now: a fresh REST
+/// read is clean on the same head, every check/status on that head passes (with
+/// at least one present), and a second fresh read confirms nothing changed
+/// while checks were paginated.
+pub(crate) async fn clean_and_green(
+    client: &Client,
+    actor: &str,
+    repo: &str,
+    pr: &model::PullRequest,
+) -> Result<bool, Error> {
+    let path = format!("repos/{repo}/pulls/{}", pr.number);
+    let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
+    if !clean_head(&fresh, pr, actor, repo) {
+        return Ok(false);
+    }
+    if !green(client, repo, &pr.head.sha).await? {
+        return Ok(false);
+    }
+    let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
+    Ok(clean_head(&fresh, pr, actor, repo))
 }
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Native {
@@ -400,11 +434,7 @@ async fn one(
     // Recheck ownership/protections after pagination, then use a head lease on the
     // normal merge API. No admin/bypass option, direct base write or force merge.
     let fresh = client.get_fresh::<model::PullRequest>(&path).await?;
-    if !same_head(&fresh, &pr.pr, &inventory.actor, &repo.repository)
-        || fresh.draft != Some(false)
-        || fresh.mergeable != Some(true)
-        || fresh.mergeable_state.as_deref() != Some("clean")
-    {
+    if !clean_head(&fresh, &pr.pr, &inventory.actor, &repo.repository) {
         return Ok((
             PullRequestStatus::Protected,
             MergeNote::Reason("auto-merge blocked: PR changed during check inspection".into()),
@@ -651,9 +681,11 @@ mod tests {
             patchula_words::Recheck::NextRun,
             None,
         );
-        // The merged section's line for this row.
+        // The merged section's row for this PR.
         assert!(
-            text.contains("- #42: chore(deps): bump serde — merged by patchula (squash)\n"),
+            text.contains("#42")
+                && text.contains("chore(deps): bump serde")
+                && text.contains("merged by patchula (squash)"),
             "{text}"
         );
     }

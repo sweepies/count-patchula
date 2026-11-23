@@ -172,7 +172,7 @@ fn rows(changes: &[Change]) -> Vec<Row<'_>> {
 }
 /// A source or compare link as a Markdown link target inside a table, or
 /// `None` when it is too long or not a web address.
-fn link_target(url: &str) -> Option<String> {
+pub(crate) fn link_target(url: &str) -> Option<String> {
     if url.len() > LINK
         || !(url.starts_with("https://") || url.starts_with("http://"))
         || url.chars().any(char::is_control)
@@ -734,18 +734,28 @@ fn failed_notes(package: &str, naming: Naming, budget: usize) -> String {
         budget,
     )
 }
+/// The reviewed-targets marker for `plan`, when it is neither the batch PR
+/// itself nor lockfile maintenance and fits within [`TARGETS_CAP`].
+fn targets_marker(plan: &Plan) -> Option<String> {
+    if plan.batch_items().is_some() || plan.is_maintenance() {
+        return None;
+    }
+    let targets = markers::hidden(markers::TARGETS, &plan.changes());
+    (targets.len() <= TARGETS_CAP).then_some(targets)
+}
+/// Whether `plan` can join the batch PR: neither the batch PR itself nor
+/// lockfile maintenance, and small enough for the reviewed-targets marker.
+pub(crate) fn batchable(plan: &Plan) -> bool {
+    targets_marker(plan).is_some()
+}
 /// The batch controls his body offers: the "Add to batch" box and the
 /// reviewed targets marker, when the group is small enough to record.
 /// The reviewed targets travel with the PR, so batching keeps them even
 /// after a newer release changes this branch's plan.
 fn controls(plan: &Plan) -> String {
-    if plan.batch_items().is_some() || plan.is_maintenance() {
+    let Some(targets) = targets_marker(plan) else {
         return String::new();
-    }
-    let targets = markers::hidden(markers::TARGETS, &plan.changes());
-    if targets.len() > TARGETS_CAP {
-        return String::new();
-    }
+    };
     format!(
         "- [ ] Add to the batch PR *(closes this PR and moves the update there)* {}\n{targets}\n",
         markers::ADD,
@@ -757,23 +767,61 @@ fn controls(plan: &Plan) -> String {
 pub(crate) enum Closure {
     /// The update is superseded or already satisfied.
     Obsolete,
-    /// The update moved into the batch PR.
-    Batched,
+    /// The update moved into the batch PR with this number.
+    Batched(u64),
 }
 /// The body a closure leaves behind: what the PR said, less any rebasing
-/// banner, cut to make room, then the closure's marker. The marker keeps
-/// the closure from reading as an ordinary close: a batched closure never
-/// suppresses, and an obsolete one is still his.
+/// banner, cut to make room, then the closure's marker. For a batched PR, a
+/// note pointing to the batch PR sits at the top of his section so closing
+/// needs no separate comment. The marker keeps the closure from reading as
+/// an ordinary close: a batched closure never suppresses, and an obsolete
+/// one is still his.
 pub(crate) fn closure(body: &str, why: Closure) -> String {
-    let marker = match why {
-        Closure::Obsolete => markers::OBSOLETE,
-        Closure::Batched => markers::BATCHED,
+    let (marker, note) = match why {
+        Closure::Obsolete => (markers::OBSOLETE, None),
+        Closure::Batched(number) => (
+            markers::BATCHED,
+            Some(format!(
+                "> [!NOTE]\n> Moved to the batch PR #{number}. Tick this update's box there to bring it back.\n\n"
+            )),
+        ),
     };
     let body = crate::pr::banner::without_banner(body);
-    let mut text = markers::truncate_marked(&body, closure_budget(marker));
+    let extra = note
+        .as_ref()
+        .map_or(0, |n| n.len() + usize::from(insert_top_adds_newline(&body)));
+    let mut text = markers::truncate_marked(&body, closure_budget(marker, extra));
+    if let Some(note) = note {
+        text = insert_top(&text, &note);
+    }
     text.push_str("\n\n");
     text.push_str(marker);
     text
+}
+/// Whether [`insert_top`] has to add a newline between `markers::START` and
+/// the rest of the Count's section.
+fn insert_top_adds_newline(body: &str) -> bool {
+    markers::regions(body)
+        .and_then(|(_, section, _)| section.strip_prefix(markers::START))
+        .is_some_and(|rest| !rest.starts_with("\r\n") && !rest.starts_with('\n'))
+}
+/// Insert `note` at the top of the Count's section (right after his start
+/// marker line when present, preserving any foreign text ahead of it), or
+/// at the start of `body` when it carries no section markers.
+fn insert_top(body: &str, note: &str) -> String {
+    let Some((before, section, after)) = markers::regions(body) else {
+        return format!("{note}{body}");
+    };
+    let (head, rest) = match section.strip_prefix(markers::START) {
+        Some(rest) if rest.starts_with("\r\n") => section.split_at(markers::START.len() + 2),
+        Some(rest) if rest.starts_with('\n') => section.split_at(markers::START.len() + 1),
+        Some(_) => {
+            let (head, rest) = section.split_at(markers::START.len());
+            return format!("{before}{head}\n{note}{rest}{after}");
+        }
+        None => ("", section),
+    };
+    format!("{before}{head}{note}{rest}{after}")
 }
 /// Whether two bodies carry the same ownership marker — the same writer
 /// and the same update — so a freshened PR is still the one this run read.
@@ -825,11 +873,11 @@ pub(crate) fn with_foreign(text: String, current: &str) -> String {
 /// bytes of other people's text fit beside it.
 const FOREIGN_LIMIT: usize = 65_000;
 /// The most `truncate_marked` may keep of a body a closure rewrites: the
-/// limit less the `"\n\n"` separator and `marker` appended after it.
-/// `truncate_marked` never cuts the Count's own section, which stays within
-/// `BODY_LIMIT`, so only the text around it gives way.
-fn closure_budget(marker: &str) -> usize {
-    FOREIGN_LIMIT - "\n\n".len() - marker.len()
+/// limit less any prepended note, the `"\n\n"` separator and `marker`
+/// appended after it. `truncate_marked` never cuts the Count's own section,
+/// which stays within `BODY_LIMIT`, so only the text around it gives way.
+fn closure_budget(marker: &str, extra: usize) -> usize {
+    FOREIGN_LIMIT - "\n\n".len() - marker.len() - extra
 }
 /// The content hash of a body, as receipts record it: GitHub may return
 /// CRLF for a body published with LF, so transport newlines do not count
@@ -1324,7 +1372,7 @@ fn code_cell(text: &str) -> String {
 /// SBOM's package name: cut first, then made inert and given no tag of its
 /// own, its backslashes escaped before its pipes so neither ends the cell,
 /// and no cut splits an escape.
-fn prose_cell(text: &str) -> String {
+pub(crate) fn prose_cell(text: &str) -> String {
     let text = patchula_datasource::upstream::truncate(text, 240).replace(['\n', '\r'], " ");
     crate::text::inert(&text)
         .replace('\\', "\\\\")
@@ -1335,7 +1383,7 @@ fn prose_cell(text: &str) -> String {
 /// An advisory id from a third party as a cell or link label: cut first,
 /// inert, with no tag, and its backslashes escaped before the pipes and
 /// brackets, so no bracket can end the label early.
-fn id_cell(id: &str) -> String {
+pub(crate) fn id_cell(id: &str) -> String {
     let id = patchula_datasource::upstream::truncate(id, 240).replace(['\n', '\r'], " ");
     crate::text::inert(&id)
         .replace('\\', "\\\\")
@@ -1346,7 +1394,7 @@ fn id_cell(id: &str) -> String {
         .replace('>', "&gt;")
 }
 /// `label` linked to `url`, or plain `label` when `url` is no safe link.
-fn linked(label: &str, url: &str) -> String {
+pub(crate) fn linked(label: &str, url: &str) -> String {
     match link_target(url) {
         Some(url) => format!("[{label}]({url})"),
         None => label.to_owned(),

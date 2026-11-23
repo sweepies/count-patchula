@@ -4850,6 +4850,7 @@ async fn settle_turns_lifecycle_failures_into_report_warnings() {
             number: Some(7),
             title: "batched".into(),
             targets,
+            green: None,
         }])
         .build();
     let mut lifecycle = patchula_update::Lifecycle::prepare_with_controls(

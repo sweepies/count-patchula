@@ -583,12 +583,25 @@ fn intent(plan: &Plan, config: &Config, recheck: Recheck, server: Option<&str>) 
         config,
         crate::pull_requests::recheck_hashed(recheck),
     );
-    // Tooling warnings join only when present, so other receipts stay valid.
+    let batch_green: Option<Vec<(&str, Option<&crate::batch::GreenProof>)>> = plan
+        .batch_items()
+        .filter(|items| items.iter().any(|i| i.green.is_some()))
+        .map(|items| {
+            items
+                .iter()
+                .map(|i| (i.origin.as_str(), i.green.as_ref()))
+                .collect()
+        });
+    // Tooling warnings and batch green proofs join only when present, so other
+    // receipts stay valid.
     hash(
-        match (server, plan.callouts().is_empty()) {
-            (None, true) => serde_json::to_string(&inputs),
-            (Some(url), true) => serde_json::to_string(&(inputs, url)),
-            (server, false) => serde_json::to_string(&(inputs, server, plan.callouts())),
+        match (server, plan.callouts().is_empty(), batch_green) {
+            (None, true, None) => serde_json::to_string(&inputs),
+            (Some(url), true, None) => serde_json::to_string(&(inputs, url)),
+            (server, false, None) => serde_json::to_string(&(inputs, server, plan.callouts())),
+            (server, _, Some(green)) => {
+                serde_json::to_string(&(inputs, server, plan.callouts(), green))
+            }
         }
         .expect("serializable intent")
         .as_bytes(),

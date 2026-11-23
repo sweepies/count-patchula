@@ -34,13 +34,16 @@ jobs:
       # release:bump --check reads the CI result of the release commit's parent.
       actions: read
     outputs:
-      rust: ${{ steps.release.outputs.bump != 'true' && (steps.some.outputs.rust == 'true' || steps.every.outputs.rust == 'true') }}
-      docs: ${{ steps.some.outputs.docs }}
+      rust: ${{ steps.release.outputs.bump != 'true' && steps.batch.outputs.green != 'true' && (steps.some.outputs.rust == 'true' || steps.every.outputs.rust == 'true') }}
+      docs: ${{ steps.batch.outputs.green != 'true' && steps.some.outputs.docs }}
     env:
       # The release bot's own PR from this repository, the only one the release
       # check below may run for (see there). One predicate, so the steps that
       # use it cannot drift apart.
       RELEASE_PR: ${{ github.event_name == 'pull_request' && github.head_ref == 'release-next' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]' }}
+      # The Count's own batch PR from this repository, the only one the
+      # batch-green trailer check below may run for.
+      BATCH_PR: ${{ github.event_name == 'pull_request' && github.head_ref == 'patchula/batch' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'sweepies-ops[bot]' }}
     steps:
       # A push is compared with the commit before it, which needs the history.
       - uses: actions/checkout@v7.0.1
@@ -92,12 +95,12 @@ jobs:
       # runs the PR's own copy of the task, so it only runs for the bot's PR
       # from this repository (RELEASE_PR): a fork could name its branch
       # release-next and make the task skip its tests.
-      - if: env.RELEASE_PR == 'true'
+      - if: env.RELEASE_PR == 'true' || env.BATCH_PR == 'true'
         uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: false
         env:
-          MISE_ENABLE_TOOLS: nu,gh
+          MISE_ENABLE_TOOLS: ${{ env.RELEASE_PR == 'true' && 'nu,gh' || 'nu' }}
       - id: release
         if: env.RELEASE_PR == 'true'
         env:
@@ -105,6 +108,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: mise run release:bump --check "$HEAD_SHA" --green-parent
+      # When every update in the batch PR came from a PR that was already green
+      # on this base commit, the Count marks the commit with
+      # `Patchula-Batch-Green: true`. Verify that the commit sits directly on
+      # the base commit with matching trailers before skipping the heavy jobs.
+      - id: batch
+        if: env.BATCH_PR == 'true'
+        env:
+          MISE_ENABLE_TOOLS: nu
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: mise run github:batch-green "$HEAD_SHA" --base "$BASE_SHA"
 
   # hk.pkl's check hook, the same steps the git hooks run, plus Clippy. It runs
   # on every change, since it is the only secret scan in CI, but each step

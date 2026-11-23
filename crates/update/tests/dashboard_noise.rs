@@ -268,11 +268,18 @@ fn render_with(repo: &Repository) -> String {
     ]
     .into_iter()
     .map(|(number, branch, title)| {
+        let matching = plans.iter().find(|p| p.action().branch == branch).unwrap();
+        let body = format!(
+            "<!-- patchula-begin -->\n<!-- patchula-targets:{} -->\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->\n",
+            serde_json::to_string(matching.changes()).unwrap(),
+            "a".repeat(64),
+            matching.update_key(),
+        );
         patchula_update::pull_requests::Tracked::from(
             serde_json::from_value::<patchula_github::model::PullRequest>(
                 json!({"node_id":format!("N{number}"),"number":number,
                 "html_url":format!("https://github.com/demo/app/pull/{number}"),"state":"open",
-                "title":title,"labels":[],"user":{"login":"bot"},
+                "title":title,"body":body,"labels":[],"user":{"login":"bot"},
                 "head":{"ref":branch,"sha":"h","repo":{"full_name":"demo/app"}},
                 "base":{"ref":"main","repo":{"full_name":"demo/app"}}}),
             )
@@ -297,7 +304,10 @@ fn redact(text: &str) -> String {
 
 #[test]
 fn the_first_live_dashboard_renders_grouped_and_readable() {
-    let text = redact(&render());
+    let text = redact(&render()).replace(
+        concat!("/count-patchula/v", env!("CARGO_PKG_VERSION"), "/assets/"),
+        "/count-patchula/v{version}/assets/",
+    );
     assert_eq!(text, include_str!("snapshots/dashboard-first-run.md"));
 }
 
@@ -382,7 +392,9 @@ fn the_lockfile_job_output_never_mentions_the_person_whose_tool_printed_it() {
 #[test]
 fn failure_output_is_a_collapsed_block_of_at_most_ten_lines_not_a_bullet() {
     let text = render();
-    let start = text.find("<summary>The tool's output</summary>").unwrap();
+    let start = text
+        .find("<summary><strong>The tool's output</strong></summary>")
+        .unwrap();
     let block = &text[start..text[start..].find("</details>").unwrap() + start];
     let fenced: Vec<_> = block
         .lines()
@@ -408,23 +420,34 @@ fn failure_output_is_a_collapsed_block_of_at_most_ten_lines_not_a_bullet() {
 }
 
 #[test]
-fn vulnerabilities_are_one_bullet_per_package_and_version_with_the_files_listed() {
+fn vulnerabilities_are_one_row_per_package_and_version_with_the_files_listed() {
     let text = render();
     let known =
         &text[text.find("## Known vulnerabilities").unwrap()..text.find("## Open PRs").unwrap()];
-    assert_eq!(known.matches("\n- ").count(), 5, "{known}");
-    assert_eq!(known.matches("`zstd-safe` 8.1.0").count(), 1);
-    assert!(known.contains("12 advisories"));
-    assert!(known.contains("Fixed by #93."), "{known}");
-    assert_eq!(known.matches("Fixed by #93").count(), 1);
-    assert!(
-        known.contains("`rsa` 0.9.10 in `crates/github/Cargo.toml`, `crates/server/Cargo.toml`")
+    let summary_table = &known[..known.find("<details>").unwrap()];
+    assert_eq!(
+        summary_table.matches("\n| **`").count(),
+        5,
+        "{summary_table}"
     );
-    assert_eq!(known.matches("RUSTSEC-2023-0071](").count(), 1, "{known}");
-    assert!(known.contains("Fixed in `0.7.6`, not proposed."));
-    assert!(known.contains("No fixed release yet."));
+    assert_eq!(summary_table.matches("`zstd-safe`").count(), 1);
+    assert!(summary_table.contains("12 advisories"));
+    assert_eq!(summary_table.matches("Fixed by #93").count(), 1);
+    assert!(
+        summary_table.contains("`rsa`")
+            && summary_table.contains("`CVE-2023-49092`")
+            && summary_table.contains("`crates/github/Cargo.toml`")
+            && summary_table.contains("`crates/server/Cargo.toml`"),
+        "{summary_table}"
+    );
+    assert_eq!(
+        summary_table.matches("RUSTSEC-2023-0071](").count(),
+        1,
+        "{summary_table}"
+    );
+    assert!(summary_table.contains("Fixed in `0.7.6`, not proposed"));
+    assert!(summary_table.contains("No fixed release yet"));
     assert!(!known.contains("unrated"));
-    assert!(known.contains("<summary>What they say</summary>"));
 }
 
 #[test]
@@ -435,19 +458,17 @@ fn vulnerabilities_come_most_severe_first_then_by_package() {
     deps[2].metadata.as_mut().unwrap().advisories[0].severity = Some(Severity::Critical);
     deps[3].metadata.as_mut().unwrap().advisories[0].severity = Some(Severity::High);
     let text = render_with(&repo);
+    let table =
+        &text[text.find("## Known vulnerabilities").unwrap()..text.find("<details>").unwrap()];
     let order: Vec<_> = [
-        "`unsafe-libyaml`",
-        "`zstd-safe`",
-        "`crypto-bigint`",
-        "`ctutils`",
+        "| **`unsafe-libyaml`** |",
+        "| **`zstd-safe`** |",
+        "| **`crypto-bigint`** |",
+        "| **`ctutils`** |",
     ]
-    .map(|name| {
-        text.find(&format!("- **{}**: {name}", "x"))
-            .or_else(|| text.find(name))
-            .unwrap()
-    })
+    .map(|name| table.find(name).unwrap())
     .into();
-    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{text}");
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{table}");
 }
 
 #[test]
@@ -455,7 +476,7 @@ fn one_retry_box_covers_every_file_that_declares_the_failing_package() {
     let text = render();
     let boxes: Vec<_> = text
         .lines()
-        .filter(|l| l.contains("Try that lookup again"))
+        .filter(|l| l.contains("\"action\":\"retry\""))
         .collect();
     assert_eq!(boxes.len(), 1, "{text}");
     for file in [
@@ -474,7 +495,7 @@ fn held_updates_read_as_dates_and_name_the_package_in_code() {
     let line = text.lines().find(|l| l.contains("0.42.8")).unwrap();
     assert!(
         line.contains(
-            "`@astrojs/starlight` → 0.42.8 (npm, `docs/package.json`; eligible 31 Oct 08:29 UTC)"
+            "**`@astrojs/starlight`** `0.42.6`&nbsp;→&nbsp;`0.42.8` <kbd>patch</kbd> · `docs/package.json` · <sub>eligible 31 Oct 08:29 UTC</sub>"
         ),
         "{line}"
     );
@@ -500,10 +521,12 @@ fn a_cooldown_hold_names_its_config_and_offers_no_checkbox() {
     let line = text.lines().find(|l| l.contains("0.42.8")).unwrap();
     assert_eq!(
         line,
-        "- `@astrojs/starlight` → 0.42.8 (npm, `docs/package.json`; set in `.cargo/config.toml`, eligible 31 Oct 08:29 UTC)"
+        "- **`@astrojs/starlight`** `0.42.6`&nbsp;→&nbsp;`0.42.8` <kbd>patch</kbd> · `docs/package.json` · <sub>set in `.cargo/config.toml`, eligible 31 Oct 08:29 UTC</sub>"
     );
     assert!(
-        text.contains("<details><summary>Held by the repository's cooldown (1)</summary>"),
+        text.contains(
+            "<details>\n<summary><strong>Held by the repository's cooldown</strong> (1)</summary>"
+        ),
         "{text}"
     );
     assert!(!line.contains("Create it now anyway"), "{line}");
@@ -538,13 +561,15 @@ fn equally_severe_packages_are_ordered_by_name() {
         }
     }
     let text = render_with(&repo);
+    let table =
+        &text[text.find("## Known vulnerabilities").unwrap()..text.find("<details>").unwrap()];
     let order: Vec<_> = [
-        "`crypto-bigint`",
-        "`ctutils`",
-        "`unsafe-libyaml`",
-        "`zstd-safe`",
+        "| **`crypto-bigint`** |",
+        "| **`ctutils`** |",
+        "| **`unsafe-libyaml`** |",
+        "| **`zstd-safe`** |",
     ]
-    .map(|name| text.find(&format!("**high**: {name}")).unwrap())
+    .map(|name| table.find(name).unwrap())
     .into();
-    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{text}");
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{table}");
 }
