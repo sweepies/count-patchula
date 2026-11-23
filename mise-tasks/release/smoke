@@ -20,5 +20,21 @@ def main [platform: string] {
   if (^$patchula config check --help | complete).exit_code != 0 {
     error make --unspanned {msg: $"($name): patchula config check --help failed"}
   }
+  let zsh = open --raw ($out | path join share zsh site-functions _patchula)
+  if not ($zsh | str starts-with "#compdef patchula\n") {
+    error make --unspanned {msg: $"($name): zsh completion missing #compdef header"}
+  }
+  for file in [
+    ($out | path join share bash-completion completions patchula)
+    ($out | path join share fish vendor_completions.d patchula.fish)
+  ] {
+    if (open --raw $file) !~ "__complete_word__" {
+      error make --unspanned {msg: $"($name): ($file) missing __complete_word__ callback"}
+    }
+  }
+  let complete_out = ^$patchula __complete_word__ --shell bash --line "patchula " | complete
+  if $complete_out.exit_code != 0 or $complete_out.stdout !~ "completion" {
+    error make --unspanned {msg: $"($name): patchula __complete_word__ failed"}
+  }
   print $"ok ($name): ($reported)"
 }

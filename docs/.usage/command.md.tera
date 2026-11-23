@@ -41,7 +41,8 @@
 | Argument | Description | Default |
 | --- | --- | --- |
 {%- for arg in visible %}
-| `{{ arg.usage }}` | {{ arg.help_md | default(value="") | escape_md | replace(from="\n", to=" ") | replace(from="|", to="\\|") }}{% if arg.choices and arg.choices.choices %} One of {% for choice in arg.choices.choices %}`{{ choice }}`{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}{% if arg.env %} Also `{{ arg.env }}`.{% endif %} | {% for value in arg.default %}`{{ value }}`{% if not loop.last %}, {% endif %}{% endfor %} |
+{%- set desc = arg.help_md | default(value="") | escape_md | replace(from=".\n\n", to=". ") | replace(from="\n\n", to=". ") | replace(from="\n", to=" ") | replace(from="|", to="\\|") | trim %}
+| `{{ arg.usage }}` | {{ desc }}{% if arg.choices and arg.choices.choices %}{% if desc and not (desc is ending_with(pat=".")) %}.{% endif %} One of {% for choice in arg.choices.choices %}`{{ choice }}`{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}{% if arg.env %}{% if desc and not (desc is ending_with(pat=".")) and not (arg.choices and arg.choices.choices) %}.{% endif %} Also `{{ arg.env }}`.{% endif %} | {% for value in arg.default %}`{{ value }}`{% if not loop.last %}, {% endif %}{% endfor %} |
 {%- endfor %}
 {%- endif %}
 {%- endfor %}
@@ -56,7 +57,8 @@
 | Flag | Description | Default |
 | --- | --- | --- |
 {%- for flag in group_globals %}
-| `{{ flag.usage }}` | {{ flag.help_md | default(value="") | escape_md | replace(from="\n", to=" ") | replace(from="|", to="\\|") }}{% if flag.arg.choices and flag.arg.choices.choices %} One of {% for choice in flag.arg.choices.choices %}`{{ choice }}`{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}{% if flag.env %} Also `{{ flag.env }}`.{% endif %} | {% for value in flag.default %}`{{ value }}`{% if not loop.last %}, {% endif %}{% endfor %} |
+{%- set desc = flag.help_md | default(value="") | escape_md | replace(from=".\n\n", to=". ") | replace(from="\n\n", to=". ") | replace(from="\n", to=" ") | replace(from="|", to="\\|") | trim %}
+| `{{ flag.usage }}` | {{ desc }}{% if flag.arg.choices and flag.arg.choices.choices %}{% if desc and not (desc is ending_with(pat=".")) %}.{% endif %} One of {% for choice in flag.arg.choices.choices %}`{{ choice }}`{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}{% if flag.env %}{% if desc and not (desc is ending_with(pat=".")) and not (flag.arg.choices and flag.arg.choices.choices) %}.{% endif %} Also `{{ flag.env }}`.{% endif %} | {% for value in flag.default %}`{{ value }}`{% if not loop.last %}, {% endif %}{% endfor %} |
 {%- endfor %}
 {%- endif %}
 {%- endfor %}
@@ -78,7 +80,8 @@
 | Flag | Description | Default |
 | --- | --- | --- |
 {%- for flag in group_flags %}
-| `{{ flag.usage }}` | {{ flag.help_md | default(value="") | escape_md | replace(from="\n", to=" ") | replace(from="|", to="\\|") }}{% if flag.arg.choices and flag.arg.choices.choices %} One of {% for choice in flag.arg.choices.choices %}`{{ choice }}`{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}{% if flag.env %} Also `{{ flag.env }}`.{% endif %} | {% for value in flag.default %}`{{ value }}`{% if not loop.last %}, {% endif %}{% endfor %} |
+{%- set desc = flag.help_md | default(value="") | escape_md | replace(from=".\n\n", to=". ") | replace(from="\n\n", to=". ") | replace(from="\n", to=" ") | replace(from="|", to="\\|") | trim %}
+| `{{ flag.usage }}` | {{ desc }}{% if flag.arg.choices and flag.arg.choices.choices %}{% if desc and not (desc is ending_with(pat=".")) %}.{% endif %} One of {% for choice in flag.arg.choices.choices %}`{{ choice }}`{% if not loop.last %}, {% endif %}{% endfor %}.{% endif %}{% if flag.env %}{% if desc and not (desc is ending_with(pat=".")) and not (flag.arg.choices and flag.arg.choices.choices) %}.{% endif %} Also `{{ flag.env }}`.{% endif %} | {% for value in flag.default %}`{{ value }}`{% if not loop.last %}, {% endif %}{% endfor %} |
 {%- endfor %}
 {%- endif %}
 {%- endfor %}

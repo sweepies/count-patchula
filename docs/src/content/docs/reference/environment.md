@@ -11,7 +11,10 @@ description: "The environment variables patchula reads, the commands that use th
 | `PATCHULA_TOOLS_DIR` | `run`, `tools`, server | the tool store, holding the lockfile tools, the pinned mise that lists `mise` tools, and the mise packslip installs when there is none on `PATH`; default `tools/` in the cache directory |
 | `XDG_CACHE_HOME` | local commands, server | the user cache directory on Linux and other non-macOS systems, holding `patchula/` (the server's default is `patchula/server`); default `~/.cache`. macOS uses `~/Library/Caches` |
 | `PATCHULA_SERVER` | `lookup`, `run`, `tui`, `auth` | the [server](/guide/server/#run-from-your-machine) URL for `--remote`, and for `auth` without `--server` |
-| `XDG_CONFIG_HOME` | `lookup`, `run`, `apply`, `tui`, `auth` | where the default operator settings (`patchula/settings.pkl`), the server sign-ins (`patchula/servers.json`) and per-repository server choices (`patchula/repositories.json`) live; default `~/.config` |
+| `XDG_CONFIG_HOME` | `lookup`, `run`, `apply`, `tui`, `auth`, `completion` | where the default operator settings (`patchula/settings.pkl`), the server sign-ins (`patchula/servers.json`), per-repository server choices (`patchula/repositories.json`) and installed fish, elvish, nu and PowerShell completions live; default `~/.config` (nu completions on macOS default to `~/Library/Application Support`) |
+| `XDG_DATA_HOME` | `completion` | where `completion --install` writes bash and zsh completions; default `~/.local/share` |
+| `BASH_COMPLETION_USER_DIR` | `completion` | overrides `XDG_DATA_HOME` for `completion bash --install` (first entry when colon-separated) |
+| `NU_VENDOR_AUTOLOAD_DIR` | `completion` | overrides `XDG_CONFIG_HOME` for `completion nu --install` |
 | `PATCHULA_APP_ID` | server | GitHub App ID |
 | `PATCHULA_APP_PRIVATE_KEY_FILE` | server | path to the App's PEM key |
 | `PATCHULA_APP_PRIVATE_KEY` | server | the PEM itself, instead of a file |
