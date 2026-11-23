@@ -1,7 +1,7 @@
 # The server image, built from Wolfi packages and the two local packages that
-# melange makes (patchula.melange.yaml and packslip.melange.yaml) by
-# mise run image:build. There is no mise in the image: on its first start the
-# server installs the pinned one into the volume with packslip.
+# melange makes (patchula.melange.yaml and mise.melange.yaml) by
+# mise run image:build. It ships the pinned mise directly; lockfile tools are
+# installed into the volume on demand.
 contents:
   repositories:
     - https://packages.wolfi.dev/os
@@ -24,7 +24,7 @@ contents:
     # .NET loads OpenSSL 3 at run time; git and curl link OpenSSL 4.
     - libssl3
     - patchula@local
-    - packslip@local
+    - mise@local
 
 accounts:
   groups:

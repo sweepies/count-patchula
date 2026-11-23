@@ -5,8 +5,8 @@
 # Each build takes Wolfi's current packages, so a release picks up its fixes.
 # Every timestamp comes from the commit, so image:push, which builds again from
 # this build's package cache, makes exactly the image the smoke test ran.
-# melange packages patchula from the archives and packslip from its pinned
-# release executables, and apko builds the image from those and Wolfi.
+# melange packages patchula from the archives and mise from its pinned
+# musl release archives, and apko builds the image from those and Wolfi.
 #
 # The local packages are unsigned: a signing key made for one build would end
 # up in the image's apk database and keyring, and change its digest every
@@ -21,6 +21,11 @@ def main [] {
   let version = $archives | first | path basename | parse "patchula-v{version}-linux-x64-musl.tar.gz" | first | get version
   if $env.GITHUB_REF_TYPE? == "tag" and $env.GITHUB_REF_NAME? != $"v($version)" {
     error make --unspanned {msg: $"tag ($env.GITHUB_REF_NAME) does not match the archives' version ($version)"}
+  }
+  let mise_image = open image/mise.melange.yaml | get package.version
+  let mise_default = open crates/tools/src/lockfiles/defaults.toml | get tools.mise
+  if $mise_image != $mise_default {
+    error make --unspanned {msg: $"image/mise.melange.yaml pins mise ($mise_image), but defaults.toml pins ($mise_default)"}
   }
   let out = "target/image" | path expand
   rm --recursive --force $out
@@ -49,7 +54,7 @@ def main [] {
       cp $"target/dist/patchula-v($version)-linux-($arch.archive)-musl.tar.gz" $source
       ^melange build $"($out)/patchula.melange.yaml" ...$melange --arch $arch.melange --source-dir $source
     }
-    ^melange build image/packslip.melange.yaml ...$melange --arch "x86_64,aarch64" --empty-workspace
+    ^melange build image/mise.melange.yaml ...$melange --arch "x86_64,aarch64" --empty-workspace
     ^apko build $"($out)/wolfi.apko.yaml" wolfi:checked $"($out)/wolfi.tar" --cache-dir $"($out)/apk-cache" --sbom=false
     ^apko build image/apko.yaml patchula:smoke $"($out)/image.tar" --cache-dir $"($out)/apk-cache" --offline --ignore-signatures --build-repository-append $"@local ($out)/packages" --vcs=false --sbom-path $"($out)/sbom" ...$annotations
   }

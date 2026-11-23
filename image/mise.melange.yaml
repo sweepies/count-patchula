@@ -1,0 +1,39 @@
+# mise for the server image: the static musl release executables, pinned by
+# digest to the version crates/tools/src/lockfiles/defaults.toml pins.
+package:
+  name: mise
+  version: 2026.10.11
+  epoch: 0
+  description: mise, the polyglot tool runner for lockfile updates
+  copyright:
+    - license: MIT
+
+environment:
+  contents:
+    repositories:
+      - https://packages.wolfi.dev/os
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    packages:
+      - busybox
+      - ca-certificates-bundle
+      - wget
+
+pipeline:
+  - if: ${{build.arch}} == 'x86_64'
+    uses: fetch
+    with:
+      uri: https://github.com/jdx/mise/releases/download/v${{package.version}}/mise-v${{package.version}}-linux-x64-musl.tar.gz
+      expected-sha256: b2d015b101c1b5e3a0a45f706d0a3a16cab57a6070d7bd43140614aeb7c3fed4
+      extract: false
+  - if: ${{build.arch}} == 'aarch64'
+    uses: fetch
+    with:
+      uri: https://github.com/jdx/mise/releases/download/v${{package.version}}/mise-v${{package.version}}-linux-arm64-musl.tar.gz
+      expected-sha256: 169b397cb8894e2f79098726f410951111d6d0d2a7d57232871d0d23dd7f6f31
+      extract: false
+  - runs: |
+      mkdir unpacked
+      tar -xzf mise-v${{package.version}}-linux-*-musl.tar.gz -C unpacked mise/bin/mise mise/LICENSE
+      install -Dm755 unpacked/mise/bin/mise ${{targets.destdir}}/usr/bin/mise
+      install -Dm644 unpacked/mise/LICENSE ${{targets.destdir}}/usr/share/doc/mise/LICENSE
