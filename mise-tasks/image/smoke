@@ -58,7 +58,7 @@ def main [--arch: string = "amd64"] {
     # address is fixed, so a throwaway App needs a stand-in GitHub: openssl
     # serves one answer for api.github.com under a CA only this container
     # trusts.
-    job spawn { cd $"($work)/www"; ^sudo openssl s_server -accept 443 -cert ../github.pem -key ../github.key -WWW -quiet }
+    job spawn { cd $"($work)/www"; try { ^sudo openssl s_server -accept 443 -cert ../github.pem -key ../github.key -WWW -quiet } }
     let started = date now
     ^docker run --detach --name $name --add-host api.github.com:host-gateway --publish 127.0.0.1:18080:8080 --volume $"($volume):/var/lib/patchula" --volume $"($work)/ca.pem:/etc/smoke-ca.pem:ro" --env SSL_CERT_FILE=/etc/smoke-ca.pem ...$credentials $image
     mut status = 0
