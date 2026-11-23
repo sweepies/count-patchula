@@ -3,15 +3,19 @@
 #MISE sources=["Cargo.toml", "crates/cli/**/*", "docs/.usage/*"]
 #MISE outputs=["generated/patchula.usage.kdl", "generated/patchula.1", "generated/completions/*", "docs/src/content/docs/reference/cli.md"]
 
+def patchula [...args: string] {
+  if ($env.PATCHULA_BIN? | is-empty) {
+    ^cargo run --quiet --locked -p patchula-cli -- ...$args
+  } else {
+    ^$env.PATCHULA_BIN ...$args
+  }
+}
+
 def main [] {
   let spec = "generated/patchula.usage.kdl"
   let page = "docs/src/content/docs/reference/cli.md"
   mkdir generated/completions
-  if ($env.PATCHULA_BIN? | is-empty) {
-    ^cargo run --quiet --locked -p patchula-cli -- __usage_spec__
-  } else {
-    ^$env.PATCHULA_BIN __usage_spec__
-  } | save --force $spec
+  patchula __usage_spec__ | save --force $spec
   ^usage lint $spec
   ^usage generate markdown --file $spec --template spec=docs/.usage/spec.md.tera --template command=docs/.usage/command.md.tera --out-file $page
   # Front matter must open the page, so drop the comment usage writes above it.
@@ -21,6 +25,6 @@ def main [] {
   }
   ^usage generate manpage --file $spec --out-file generated/patchula.1
   for shell in [bash zsh fish] {
-    ^usage generate completion $shell patchula --file $spec | save --force $"generated/completions/patchula.($shell)"
+    patchula completion $shell | save --force $"generated/completions/patchula.($shell)"
   }
 }

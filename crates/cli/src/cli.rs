@@ -28,6 +28,7 @@ pub const PALETTE: Palette = Palette::DEFAULT
 #[usage(
     bin = "patchula",
     version,
+    completion,
     unknown_flags = "error",
     logo = LOGO,
     logo_style = "bright-yellow",
@@ -137,6 +138,15 @@ pub enum Command {
         help = "Print the cache schema this binary supports"
     ))]
     Cache(Cache),
+    /// Print or install shell completion scripts.
+    #[usage(
+        example(
+            "patchula completion fish --install",
+            help = "Install fish completions"
+        ),
+        example("patchula completion zsh", help = "Print the zsh completion script")
+    )]
+    Completion(usage_rs::completion::Completion),
     /// Inspect and validate Pkl configuration.
     #[usage(
         example(

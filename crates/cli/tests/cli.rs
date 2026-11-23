@@ -48,7 +48,7 @@ fn help_version_and_bundled_schema() {
 #[test]
 fn help_pages_match_the_snapshot() {
     const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/help.txt");
-    let routes: [&[&str]; 19] = [
+    let routes: [&[&str]; 20] = [
         &[],
         &["apply"],
         &["auth"],
@@ -56,6 +56,7 @@ fn help_pages_match_the_snapshot() {
         &["auth", "logout"],
         &["cache"],
         &["cache", "schema"],
+        &["completion"],
         &["config"],
         &["config", "check"],
         &["config", "schema"],
@@ -673,4 +674,78 @@ fn no_repository_reads_the_working_tree_and_a_real_run_needs_it_pushed() {
     let elsewhere = tempfile::tempdir().unwrap();
     needs_token(elsewhere.path(), &["lookup", "--all-repos"]);
     needs_token(elsewhere.path(), &["run", "demo/app"]);
+}
+
+#[test]
+fn completion_prints_installs_and_answers_dynamic_callbacks() {
+    let printed = cli(&["completion", "fish"]);
+    assert!(printed.status.success(), "{printed:?}");
+    let script = String::from_utf8(printed.stdout).unwrap();
+    assert!(script.contains("__complete_word__"), "{script}");
+    assert!(printed.stderr.is_empty());
+
+    let home = tempfile::tempdir().unwrap();
+    let xdg = home.path().join("config");
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_patchula"))
+            .args(args)
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", &xdg)
+            .output()
+            .unwrap()
+    };
+
+    let installed = run(&["completion", "fish", "--install"]);
+    assert!(installed.status.success(), "{installed:?}");
+    assert!(installed.stdout.is_empty());
+    assert!(!installed.stderr.is_empty());
+    let target = xdg.join("fish/completions/patchula.fish");
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), script);
+
+    std::fs::write(&target, "# written by hand\n").unwrap();
+    let refused = run(&["completion", "fish", "--install"]);
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert!(refused.stdout.is_empty());
+    assert!(!refused.stderr.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "# written by hand\n"
+    );
+
+    let replaced = run(&["completion", "fish", "--install", "--force"]);
+    assert!(replaced.status.success(), "{replaced:?}");
+    assert!(replaced.stdout.is_empty());
+    assert!(!replaced.stderr.is_empty());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), script);
+
+    for bad in [
+        vec!["completion", "fish", "--force"],
+        vec!["completion", "tcsh"],
+    ] {
+        let output = cli(&bad);
+        assert_eq!(output.status.code(), Some(2), "{bad:?} {output:?}");
+    }
+
+    let candidates = cli(&[
+        "__complete_word__",
+        "--shell",
+        "fish",
+        "--line",
+        "patchula ",
+    ]);
+    assert!(candidates.status.success(), "{candidates:?}");
+    let words = String::from_utf8(candidates.stdout).unwrap();
+    assert!(words.contains("completion"), "{words}");
+
+    let flags = cli(&[
+        "__complete_word__",
+        "--shell",
+        "fish",
+        "--line",
+        "patchula -",
+    ]);
+    assert!(flags.status.success(), "{flags:?}");
+    let flag_words = String::from_utf8(flags.stdout).unwrap();
+    assert!(flag_words.contains("--help"), "{flag_words}");
+    assert!(flag_words.contains("--version"), "{flag_words}");
 }
