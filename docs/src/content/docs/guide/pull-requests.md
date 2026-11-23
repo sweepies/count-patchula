@@ -81,7 +81,9 @@ whether this run put the banner up or the server did.
 A banner the Count could not take down fails the repository's run rather
 than passing as a warning, so the next run, or the server's retry, tries
 again; the server's scheduled sweep runs the repository in full rather than
-skipping it on an earlier run's answer. A run that stops partway through leaves the banner up only until the
+skipping it on an earlier run's answer. That holds for a run killed partway
+through too: before the first banner goes up, the run forgets the earlier
+answer the sweep would have skipped the repository with. A run that stops partway through leaves the banner up only until the
 next run, which rewrites that PR's description even when nothing else in it
 changed; the other PRs in the repository still settle from their records.
 

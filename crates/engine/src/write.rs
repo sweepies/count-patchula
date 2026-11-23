@@ -265,9 +265,21 @@ impl Write<'_> {
             tokio::spawn(async move { sources.prepare_release_notes(&ranges).await })
         });
         if inventory.is_some() {
-            // The rebuilds with a real wait say so on their PRs first.
-            if let Some(state) = lifecycle.as_mut() {
-                state.announce(&self.engine.github, &plans).await;
+            // The rebuilds with a real wait say so on their PRs first. A run
+            // that may stop with a banner up — killed, out of memory, timed
+            // out, before `record_runs` — first forgets the sweep's stored
+            // answer, so the sweep never skips over that banner; a run that
+            // completes records a fresh one. A run that cannot forget it
+            // shows no banner.
+            if let Some(state) = lifecycle.as_mut()
+                && state.may_leave_banners(&plans)
+            {
+                match self.engine.clear_quiet(&repo.repository).await {
+                    Ok(()) => state.announce(&self.engine.github, &plans).await,
+                    Err(error) => repo.warnings.push(format!(
+                        "quiet run cache: {error}; no rebasing banner shown"
+                    )),
+                }
             }
             self.lockfiles(repo, &mut plans, &mut snapshot, &config)
                 .await;

@@ -68,7 +68,10 @@ release-age evaluation timestamps, catalog evidence, stats and clock fields
 excluded), `next_due` — the earliest instant time alone can change the
 answer: a held-back release's eligibility, a schedule window, a lockfile
 defer, an hourly PR quota freeing — and the run's timestamp. A run that does not complete removes the
-row, so nothing it left behind is skipped over. The server's
+row, and a run about to show a [rebasing
+banner](/guide/pull-requests/#the-rebasing-banner) removes it before the
+first one goes up, so a run that stops partway through leaves nothing for
+the sweep to skip over. The server's
 quiet sweep check runs only
 for batches the sweep alone claimed: candidates are rebuilt from the cached
 config and extraction without a head check, the hinted digests are

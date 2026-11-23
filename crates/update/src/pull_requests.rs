@@ -1053,22 +1053,7 @@ impl Lifecycle {
     /// stopped mid-rebuild, is left as it is. The banner is a courtesy:
     /// a failed write is logged and the rebuild goes on.
     pub async fn announce(&mut self, client: &Client, plans: &[Plan]) {
-        for plan in plans
-            .iter()
-            .filter(|p| p.restored_pr().is_none() && p.action().status == BranchStatus::Planned)
-        {
-            let Some(open) = self.open_pr(plan).filter(|t| {
-                owned_pr(&t.pr, &self.actor, &self.repo) && !banner::shown(body(&t.pr))
-            }) else {
-                continue;
-            };
-            let rebuild = if plan.owes_lockfiles() {
-                Rebuild::Lockfiles
-            } else if plan.retry() && checked(&open.pr) {
-                Rebuild::Recheck
-            } else {
-                continue;
-            };
+        for (open, rebuild) in self.announcements(plans) {
             let number = open.pr.number;
             let expected = body(&open.pr).to_owned();
             match show_banner(
@@ -1092,6 +1077,32 @@ impl Lifecycle {
                     "rebasing banner not shown"),
             }
         }
+    }
+    /// Whether this run's PRs carry a rebasing banner, or `announce` would
+    /// put one up for `plans`: a run that may stop with a banner up first
+    /// forgets its repository's stored answer for the sweep.
+    pub fn may_leave_banners(&self, plans: &[Plan]) -> bool {
+        !self.bannered.is_empty() || !self.announcements(plans).is_empty()
+    }
+    /// The open PRs `announce` puts a banner on for `plans`, with why.
+    fn announcements(&self, plans: &[Plan]) -> Vec<(Tracked, Rebuild)> {
+        plans
+            .iter()
+            .filter(|p| p.restored_pr().is_none() && p.action().status == BranchStatus::Planned)
+            .filter_map(|plan| {
+                let open = self.open_pr(plan).filter(|t| {
+                    owned_pr(&t.pr, &self.actor, &self.repo) && !banner::shown(body(&t.pr))
+                })?;
+                let rebuild = if plan.owes_lockfiles() {
+                    Rebuild::Lockfiles
+                } else if plan.retry() && checked(&open.pr) {
+                    Rebuild::Recheck
+                } else {
+                    return None;
+                };
+                Some((open.clone(), rebuild))
+            })
+            .collect()
     }
     /// Unticks the re-check box and takes the rebasing banner down on every
     /// open PR of his that still carries either: the PRs this run did not

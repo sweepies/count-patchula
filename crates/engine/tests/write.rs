@@ -3155,6 +3155,111 @@ async fn a_server_banner_comes_down_when_the_pr_closes_mid_run_or_the_repository
     check_transcript();
 }
 
+/// A transport that forwards to the sandbox until it answers the request
+/// `stop_after` names, then leaves every later request unanswered for good:
+/// a run stopped there, as a kill or a time limit would stop it. Tasks the
+/// stopped run spawned stay stopped with it.
+struct Halt {
+    sandbox: Arc<Sandbox>,
+    stop_after: (reqwest::Method, &'static str),
+    stopped: std::sync::atomic::AtomicBool,
+}
+impl Transport for Halt {
+    fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+        Box::pin(async move {
+            if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                return std::future::pending().await;
+            }
+            let last =
+                request.method() == self.stop_after.0 && request.url().path() == self.stop_after.1;
+            let response = self.sandbox.send(request).await;
+            if last {
+                self.stopped
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            response
+        })
+    }
+}
+
+/// A run that may leave a banner up forgets the sweep's stored answer
+/// before it shows one, so a run stopped right after its banner write never
+/// reaches `record_runs` with the earlier answer still standing. A plain
+/// rebuild, stopped at the same point, leaves the answer alone.
+#[tokio::test(start_paused = true)]
+async fn a_run_stopped_after_its_banner_leaves_the_sweep_no_answer_to_skip_with() {
+    let fake = sandbox(base_files(), None, vec![]);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache.clone(), 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    // Each stopped run gets an engine of its own over the same cache, so
+    // nothing it left running ever answers again.
+    let stopped_after = |method, path| {
+        let halt = Arc::new(Halt {
+            sandbox: fake.clone(),
+            stop_after: (method, path),
+            stopped: Default::default(),
+        });
+        Engine::with_transport("offline-installation", cache.clone(), 4, halt)
+            .unwrap()
+            .with_versions_host(false)
+    };
+    let now = chrono::Utc::now();
+    let options = || Options {
+        repositories: vec!["demo/sandbox".into()],
+        ..Default::default()
+    };
+    let report = engine.run_at(options(), false, false, now).await.unwrap();
+    assert_eq!(
+        report.repositories[0].status,
+        Status::Complete,
+        "{report:?}"
+    );
+    let repositories = vec!["demo/sandbox".to_owned()];
+    let quiet = |at| engine.sweep_quiet(&repositories, at);
+    let later = now + chrono::Duration::minutes(5);
+    assert_eq!(quiet(later).await.unwrap().len(), 1);
+    // A repository-wide re-check rebuilds without a banner; stopped at its
+    // PR's fresh read, it leaves the stored answer as it was.
+    tick_dashboard(&fake, "recheck");
+    let plain = stopped_after(reqwest::Method::GET, "/repos/demo/sandbox/pulls/1");
+    let stopped = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        plain.run_at(options(), false, false, now + chrono::Duration::minutes(1)),
+    )
+    .await;
+    assert!(stopped.is_err(), "the plain run was not stopped");
+    assert_eq!(quiet(later).await.unwrap().len(), 1);
+    // A ticked PR: stopped right after its banner went up, the banner
+    // stays, and so does nothing the sweep could skip it with.
+    {
+        let mut state = fake.state();
+        let pr = state.repo_mut().prs.get_mut(&1).unwrap();
+        pr["body"] = json!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+        );
+    }
+    let ticked = stopped_after(reqwest::Method::PATCH, "/repos/demo/sandbox/pulls/1");
+    let stopped = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        ticked.run_at(options(), false, false, now + chrono::Duration::minutes(2)),
+    )
+    .await;
+    assert!(stopped.is_err(), "the ticked run was not stopped");
+    assert!(
+        fake.state().repo().prs[&1]["body"]
+            .as_str()
+            .unwrap()
+            .contains(REBASING)
+    );
+    assert!(quiet(later).await.unwrap().is_empty());
+    check_transcript();
+}
+
 /// A run that fails before rebuilding, here on cleanup's branch listing,
 /// takes the server's banner down and leaves the tick for the next run,
 /// also when someone closed the PR meanwhile.
