@@ -29,7 +29,7 @@ jobs:
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: false
-      - uses: jdx/mr-boxington-action@v1.7.3
+      - uses: jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd # v1.7.4
         continue-on-error: true
         with:
           backend: github
