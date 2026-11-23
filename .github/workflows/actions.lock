@@ -11,7 +11,7 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/upload-artifact@v7.0.2'
         - 'jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785'
-        - 'jdx/mr-boxington-action@v1.7.3'
+        - 'jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd'
     '.github/workflows/ci.yml':
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
@@ -20,7 +20,7 @@ workflows:
         - 'dorny/paths-filter@v4.0.3'
         - 'github/codeql-action@33d7b85da1a04171e211befe2c739303b9a4c066'
         - 'jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785'
-        - 'jdx/mr-boxington-action@v1.7.3'
+        - 'jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd'
     '.github/workflows/patchula.yml':
         - 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
         - 'actions/cache@v6.1.0'
@@ -140,9 +140,9 @@ dependencies:
         commit: 'sha1-d5574b52816a478f9d4e6529a3f6ff17a8a36785'
         owner_id: 216188
         repo_id: 738284564
-    'jdx/mr-boxington-action@v1.7.3':
-        ref: 'v1.7.3'
-        commit: 'sha1-88acf2bb50552c7c508cbac13e5f8c576b95b1de'
+    'jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd':
+        ref: 'v1.7.4'
+        commit: 'sha1-b3ef673bd77c5426927fe8836c6185cdae04c2dd'
         owner_id: 216188
         repo_id: 1345301886
     'jdx/packslip@v1.11.2':
