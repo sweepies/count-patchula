@@ -3188,7 +3188,14 @@ impl Transport for Halt {
 /// rebuild, stopped at the same point, leaves the answer alone.
 #[tokio::test(start_paused = true)]
 async fn a_run_stopped_after_its_banner_leaves_the_sweep_no_answer_to_skip_with() {
-    let fake = sandbox(base_files(), None, vec![]);
+    // No release notes: their prefetch runs beside the banner write, so a
+    // stop right after that write would race it and vary the transcript.
+    let mut files = base_files();
+    files.insert(
+        "patchula.pkl".into(),
+        "amends \"PatchulaConfig.pkl\"\nprs { dashboard = true }\ndefaults { waitHours = 0\n  releaseNotes = false }\nmanagers = new Listing { \"npm\" }\n".into(),
+    );
+    let fake = sandbox(files, None, vec![]);
     let cache = Cache::open(":memory:", Default::default()).await.unwrap();
     let engine = Engine::with_transport("offline-installation", cache.clone(), 4, fake.clone())
         .unwrap()
