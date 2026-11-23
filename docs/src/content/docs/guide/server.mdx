@@ -249,11 +249,11 @@ sign-in. A comment pasted by a person is ignored, and a server advertised in
 another App's comment can only ever sign you in to that other App, never to the
 Count's; when GitHub cannot be asked, nothing is found.
 
-Once found, the server URL and its verified App client ID are remembered for
-that repository in `~/.config/patchula/repositories.json` so later `patchula
-remote` commands skip the scan and refuse the server if it later names a
-different App. `patchula remote logout` forgets both the server's token and any
-repositories remembered for it.
+Once found and used successfully, the server URL and its verified App client ID
+are remembered for that repository in `~/.config/patchula/remotes.json` (with a
+one-line note on stderr) so later `patchula remote` commands skip the scan and
+refuse the server if it later names a different App. `patchula remote logout`
+forgets both the server's token and any repositories remembered for it.
 
 The advertised URL is `publicUrl`, or the App's webhook URL with `/webhook`
 removed. A webhook relay such as smee.io gives no server URL, so set

@@ -78,6 +78,9 @@ struct Services {
     /// Stands in for the current directory.
     #[cfg(test)]
     dir: Option<std::path::PathBuf>,
+    /// Stands in for the checkout's GitHub remote (`owner/repo`).
+    #[cfg(test)]
+    repository: Option<String>,
 }
 impl Services {
     fn current_dir(&self) -> io::Result<std::path::PathBuf> {
@@ -242,19 +245,27 @@ async fn remote_command(
     remote: &cli::Remote,
     services: &Services,
 ) -> Result<u8, (u8, miette::Report)> {
-    let explicit = remote.server.as_deref();
     match &remote.command {
-        RemoteCommand::Login => {
-            let target = match explicit {
+        RemoteCommand::Login(options) => {
+            let mut discovered_repo = None;
+            let target = match options.server.as_deref() {
                 Some(server) => remote::Server::named(remote::parse(server)?),
                 None => match remote::configured(services)? {
                     Some(server) => remote::Server::named(server),
                     None => {
-                        let discovered = match current_repository(REMOTE_CHECKOUT_HELP).await {
-                            Ok(repo) => remote::find(services, &repo).await?,
+                        let found = match current_repository(services, REMOTE_CHECKOUT_HELP).await {
+                            Ok(repo) => match remote::find(services, &repo).await? {
+                                Some((server, newly_discovered)) => {
+                                    if newly_discovered {
+                                        discovered_repo = Some(repo);
+                                    }
+                                    Some(server)
+                                }
+                                None => None,
+                            },
                             Err(_) => None,
                         };
-                        discovered.ok_or_else(|| {
+                        found.ok_or_else(|| {
                             usage(format!(
                                 "name the server with --server or {}",
                                 remote::SERVER_VAR
@@ -264,6 +275,9 @@ async fn remote_command(
                 },
             };
             remote::sign_in(services, &target).await?;
+            if let Some(repo) = discovered_repo {
+                remote::remember(services, &repo, &target)?;
+            }
             let result = if app.json {
                 serde_json::json!({"schemaVersion":1,"server":target.url,"changed":true})
                     .to_string()
@@ -274,16 +288,17 @@ async fn remote_command(
                 .map(|_| 0)
                 .map_err(fail)
         }
-        RemoteCommand::Logout => {
-            let server = match explicit {
+        RemoteCommand::Logout(options) => {
+            let server = match options.server.as_deref() {
                 Some(server) => remote::parse(server)?,
                 None => match remote::configured(services)? {
                     Some(server) => server,
                     None => {
-                        let remembered = match current_repository(REMOTE_CHECKOUT_HELP).await {
-                            Ok(repo) => remote::remembered(services, &repo)?,
-                            Err(_) => None,
-                        };
+                        let remembered =
+                            match current_repository(services, REMOTE_CHECKOUT_HELP).await {
+                                Ok(repo) => remote::remembered(services, &repo)?,
+                                Err(_) => None,
+                            };
                         remembered.map(|s| s.url).ok_or_else(|| {
                             usage(format!(
                                 "name the server with --server or {}",
@@ -309,21 +324,32 @@ async fn remote_command(
                 .map_err(fail)
         }
         RemoteCommand::Lookup(options) => {
-            let (server, repositories) =
-                remote_target(explicit, &options.repositories, services).await?;
-            let report =
-                remote::report(services, &server, repositories, remote::Mode::Lookup).await?;
+            let (server, repositories, discovered) =
+                remote_target(options.server.as_deref(), &options.repositories, services).await?;
+            let report = remote::report(
+                services,
+                &server,
+                repositories.clone(),
+                remote::Mode::Lookup,
+            )
+            .await?;
+            if discovered && let [repo] = repositories.as_slice() {
+                remote::remember(services, repo, &server)?;
+            }
             write_report(app, &report, false)
         }
         RemoteCommand::Run(options) => {
-            let (server, repositories) =
-                remote_target(explicit, &options.repositories, services).await?;
+            let (server, repositories, discovered) =
+                remote_target(options.server.as_deref(), &options.repositories, services).await?;
             let mode = if options.dry_run {
                 remote::Mode::DryRun
             } else {
                 remote::Mode::Run
             };
-            let report = remote::report(services, &server, repositories, mode).await?;
+            let report = remote::report(services, &server, repositories.clone(), mode).await?;
+            if discovered && let [repo] = repositories.as_slice() {
+                remote::remember(services, repo, &server)?;
+            }
             write_report(app, &report, true)
         }
         RemoteCommand::Tui(options) => {
@@ -332,34 +358,50 @@ async fn remote_command(
                     "patchula remote tui needs a terminal; use --once for a plain snapshot",
                 ));
             }
-            let (server, repositories) =
-                remote_target(explicit, &options.repositories, services).await?;
-            let report =
-                remote::report(services, &server, repositories, remote::Mode::Lookup).await?;
+            let (server, repositories, discovered) =
+                remote_target(options.server.as_deref(), &options.repositories, services).await?;
+            let report = remote::report(
+                services,
+                &server,
+                repositories.clone(),
+                remote::Mode::Lookup,
+            )
+            .await?;
+            if discovered && let [repo] = repositories.as_slice() {
+                remote::remember(services, repo, &server)?;
+            }
             run_tui(options.once, &report, tui::Origin::Server)
         }
     }
 }
 
-/// Resolves the repositories and server for `patchula remote lookup|run|tui`.
+/// Resolves the repositories and server for `patchula remote lookup|run|tui`,
+/// returning whether the server was newly discovered (not yet remembered).
 async fn remote_target(
     explicit: Option<&str>,
     repositories: &[String],
     services: &Services,
-) -> Result<(remote::Server, Vec<String>), (u8, miette::Report)> {
+) -> Result<(remote::Server, Vec<String>, bool), (u8, miette::Report)> {
     let repositories = if repositories.is_empty() {
         vec![
-            current_repository(REMOTE_CHECKOUT_HELP)
+            current_repository(services, REMOTE_CHECKOUT_HELP)
                 .await
                 .map_err(|e| (USAGE, e))?,
         ]
     } else {
+        for repository in repositories {
+            if !remote::valid_repository(repository) {
+                return Err(usage(format!(
+                    "repository must be owner/repo: {repository}"
+                )));
+            }
+        }
         repositories.to_vec()
     };
-    let server = match explicit {
-        Some(server) => remote::Server::named(remote::parse(server)?),
+    let (server, discovered) = match explicit {
+        Some(server) => (remote::Server::named(remote::parse(server)?), false),
         None => match remote::configured(services)? {
-            Some(server) => remote::Server::named(server),
+            Some(server) => (remote::Server::named(server), false),
             None => match repositories.as_slice() {
                 [repository] => remote::find(services, repository).await?.ok_or_else(|| {
                     usage(format!(
@@ -376,7 +418,7 @@ async fn remote_target(
             },
         },
     };
-    Ok((server, repositories))
+    Ok((server, repositories, discovered))
 }
 
 /// `patchula cache schema`: print the cache schema this binary supports.
@@ -890,7 +932,23 @@ async fn source(
                 let config = match &options.scan.config {
                     Some(path) => Some(patchula_config::load(path).map_err(|e| (USAGE, e))?),
                     None => {
-                        missing_config(dir, false, services, &output::Style::stderr(app.color))?
+                        let found = patchula_config::discover(dir)
+                            .map_err(|e| usage(format!("cannot read {}: {e}", dir.display())))?;
+                        if found.is_none() {
+                            let path = dir.join(patchula_config::CONFIG_PATH);
+                            return Err((
+                                USAGE,
+                                miette::miette!(
+                                    help = format!(
+                                        "pass --config FILE, or create {} containing `amends \"PatchulaConfig.pkl\"`",
+                                        path.display()
+                                    ),
+                                    "the Count stays outside: {} has no patchula.pkl",
+                                    dir.display()
+                                ),
+                            ));
+                        }
+                        None
                     }
                 };
                 return Ok(Source::Local(dir.clone(), config.map(Box::new)));
@@ -900,7 +958,7 @@ async fn source(
                     .map(Source::GitHub)
                     .map_err(|e| (USAGE, e));
             }
-            let repository = current_repository(CHECKOUT_HELP)
+            let repository = current_repository(services, CHECKOUT_HELP)
                 .await
                 .map_err(|e| (USAGE, e))?;
             Ok(Source::GitHub(vec![repository]))
@@ -1102,7 +1160,15 @@ async fn git_remote(help: &'static str) -> Result<String, miette::Report> {
 }
 
 /// The `owner/name` of the current checkout's GitHub remote.
-async fn current_repository(help: &'static str) -> Result<String, miette::Report> {
+async fn current_repository(
+    services: &Services,
+    help: &'static str,
+) -> Result<String, miette::Report> {
+    #[cfg(test)]
+    if let Some(repository) = &services.repository {
+        return Ok(repository.clone());
+    }
+    let _ = services;
     let remote = git_remote(help).await?;
     git(&["remote", "get-url", &remote])
         .await

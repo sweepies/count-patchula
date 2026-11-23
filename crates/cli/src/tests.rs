@@ -1246,3 +1246,83 @@ async fn check_settings_names_the_field_the_engine_rules_refuse() {
     let app = App::parse_from(&args).unwrap();
     assert_eq!(run(&app, &Services::default()).await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn run_dry_run_dir_plans_local_directory_and_requires_config() {
+    struct NpmOnly;
+    impl patchula_http::Transport for NpmOnly {
+        fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
+            let host = request.url().host_str().unwrap_or_default().to_owned();
+            let body = request
+                .body()
+                .and_then(|b| b.as_bytes())
+                .and_then(|b| serde_json::from_slice::<Value>(b).ok())
+                .unwrap_or(Value::Null);
+            let value = match host.as_str() {
+                "api.osv.dev" => {
+                    let queries = body["queries"].as_array().map_or(0, Vec::len);
+                    json!({"results": vec![json!({}); queries]})
+                }
+                "registry.npmjs.org" => {
+                    json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}})
+                }
+                other => panic!("unexpected host for --dir dry run: {other}"),
+            };
+            Box::pin(async move {
+                Ok(patchula_http::Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: serde_json::to_vec(&value).unwrap(),
+                    stale: None,
+                })
+            })
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let tree = dir.path().join("project");
+    std::fs::create_dir(&tree).unwrap();
+    std::fs::write(
+        tree.join("package.json"),
+        "{\n  \"dependencies\": {\"fixture\": \"1.0.0\"}\n}\n",
+    )
+    .unwrap();
+    let services = Services {
+        token: Some("offline-installation".into()),
+        transport: Some(Arc::new(NpmOnly)),
+        ..Services::default()
+    };
+
+    // Without patchula.pkl, fail cleanly without suggesting `--default-config`.
+    let args: Vec<_> = [
+        OsStr::new("run"),
+        OsStr::new("--dry-run"),
+        OsStr::new("--dir"),
+        tree.as_os_str(),
+        OsStr::new("--cache"),
+        cache.as_os_str(),
+    ]
+    .into();
+    let app = App::parse_from(&args).unwrap();
+    let (code, error) = run(&app, &services).await.unwrap_err();
+    assert_eq!(code, 2);
+    let rendered = format!("{error:?}");
+    assert!(!rendered.contains("--default-config"), "{rendered}");
+    assert!(rendered.contains("--config"), "{rendered}");
+
+    // With patchula.pkl, `--dry-run --dir` plans branches offline from the directory.
+    std::fs::write(
+        tree.join("patchula.pkl"),
+        "amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n",
+    )
+    .unwrap();
+    let Some(super::Command::Run(run_opts)) = &app.command else {
+        panic!("run")
+    };
+    let (report, read) = crate::report(&app, super::Batch::Run(run_opts), &services)
+        .await
+        .unwrap();
+    assert!(matches!(read, super::Read::Checkout(_)));
+    let actions = report.actions.expect("dry-run produces actions");
+    assert!(!actions.branches.is_empty(), "{actions:?}");
+}

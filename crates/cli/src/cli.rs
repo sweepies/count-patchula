@@ -247,9 +247,6 @@ pub enum Command {
 
 #[derive(Args)]
 pub struct Remote {
-    /// Server URL; also PATCHULA_SERVER. Omit to discover the server advertised by the repository.
-    #[usage(long, value_name = "URL", global)]
-    pub server: Option<String>,
     #[usage(subcommand)]
     pub command: RemoteCommand,
 }
@@ -257,9 +254,9 @@ pub struct Remote {
 #[derive(Subcommands)]
 pub enum RemoteCommand {
     /// Sign in with the server's GitHub App, replacing any stored token.
-    Login,
+    Login(RemoteLogin),
     /// Forget the stored token for a server and any remembered repositories using it.
-    Logout,
+    Logout(RemoteLogout),
     /// Report available updates from a Count Patchula server without writing.
     Lookup(RemoteLookup),
     /// Create or update dependency branches and pull requests on a Count Patchula server.
@@ -269,10 +266,27 @@ pub enum RemoteCommand {
 }
 
 #[derive(Args)]
+pub struct RemoteLogin {
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, discovers the server advertised by this checkout.
+    #[usage(long, value_name = "URL")]
+    pub server: Option<String>,
+}
+
+#[derive(Args)]
+pub struct RemoteLogout {
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, uses the server remembered for this checkout.
+    #[usage(long, value_name = "URL")]
+    pub server: Option<String>,
+}
+
+#[derive(Args)]
 pub struct RemoteLookup {
     /// Repositories as owner/repo; omit for this checkout's GitHub repository.
     #[usage(value_name = "OWNER/REPO")]
     pub repositories: Vec<String>,
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises.
+    #[usage(long, value_name = "URL")]
+    pub server: Option<String>,
 }
 
 #[derive(Args)]
@@ -280,6 +294,9 @@ pub struct RemoteRun {
     /// Repositories as owner/repo; omit for this checkout's GitHub repository.
     #[usage(value_name = "OWNER/REPO")]
     pub repositories: Vec<String>,
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises.
+    #[usage(long, value_name = "URL")]
+    pub server: Option<String>,
     /// Print planned branches, files and unified diffs without writing to GitHub.
     #[usage(long)]
     pub dry_run: bool,
@@ -290,6 +307,9 @@ pub struct RemoteTui {
     /// Repositories as owner/repo; omit for this checkout's GitHub repository.
     #[usage(value_name = "OWNER/REPO")]
     pub repositories: Vec<String>,
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises.
+    #[usage(long, value_name = "URL")]
+    pub server: Option<String>,
     /// Print a plain-text snapshot of the updates and exit with `lookup`'s exit code, for pipes and CI logs.
     #[usage(long)]
     pub once: bool,
@@ -671,25 +691,25 @@ mod tests {
     }
 
     #[test]
-    fn remote_subcommands_accept_server_before_or_after_and_reject_local_flags() {
+    fn remote_subcommands_accept_server_and_reject_local_flags() {
         fn words<'a>(args: &[&'a str]) -> Vec<&'a std::ffi::OsStr> {
             args.iter().map(|arg| std::ffi::OsStr::new(*arg)).collect()
         }
         let app = App::parse_from(&words(&[
             "remote",
+            "tui",
             "--server",
             "https://x.dev",
-            "tui",
             "--once",
         ]))
         .unwrap();
         let Some(Command::Remote(remote)) = app.command else {
             panic!("remote")
         };
-        assert_eq!(remote.server.as_deref(), Some("https://x.dev"));
         let RemoteCommand::Tui(tui) = remote.command else {
             panic!("remote tui")
         };
+        assert_eq!(tui.server.as_deref(), Some("https://x.dev"));
         assert!(tui.once && tui.repositories.is_empty());
 
         let app = App::parse_from(&words(&[
@@ -704,10 +724,10 @@ mod tests {
         let Some(Command::Remote(remote)) = app.command else {
             panic!("remote")
         };
-        assert_eq!(remote.server.as_deref(), Some("https://x.dev"));
         let RemoteCommand::Run(run) = remote.command else {
             panic!("remote run")
         };
+        assert_eq!(run.server.as_deref(), Some("https://x.dev"));
         assert!(run.dry_run && run.repositories == ["acme/app"]);
 
         for rejected in [

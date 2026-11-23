@@ -516,7 +516,7 @@ impl Model {
         match self.origin {
             Origin::Local(_) => None,
             Origin::Server => Some(
-                "this lookup ran on a server; run `patchula tui` to apply to this working tree",
+                "this lookup ran on a server; only a local working tree (`patchula tui`) can be written",
             ),
             Origin::GitHub => Some(
                 "these repositories come from GitHub; only a working tree, with no repository named, can be written",
@@ -2035,7 +2035,7 @@ mod tests {
         let mut server = Model::new(&report, Origin::Server);
         let text = flat(&sized(&mut server, 80, 24));
         assert!(
-            text.contains("w apply (off: this lookup ran on a server; run `patchula tui`"),
+            server.read_only().is_some() && text.contains("w apply (off:"),
             "{text}"
         );
         let mut github = Model::new(&report, Origin::GitHub);

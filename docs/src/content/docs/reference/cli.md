@@ -328,15 +328,9 @@ patchula lookup --json
 
 ## `patchula remote`
 
-- **Usage:** `patchula remote [--server <URL>] <SUBCOMMAND>`
+- **Usage:** `patchula remote <SUBCOMMAND>`
 
 Run commands on a Count Patchula server with its credentials and warm caches.
-
-### Global Flags
-
-| Flag | Description | Default |
-| --- | --- | --- |
-| `--server <URL>` | Server URL; also PATCHULA_SERVER. Omit to discover the server advertised by the repository. |  |
 
 ### Flags
 
@@ -378,7 +372,7 @@ patchula remote login --server https://patchula.example.com
 
 ## `patchula remote login`
 
-- **Usage:** `patchula remote login`
+- **Usage:** `patchula remote login [--server <URL>]`
 
 Sign in with the server's GitHub App, replacing any stored token.
 
@@ -386,11 +380,12 @@ Sign in with the server's GitHub App, replacing any stored token.
 
 | Flag | Description | Default |
 | --- | --- | --- |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, discovers the server advertised by this checkout. |  |
 | `-h --help` | Print help |  |
 
 ## `patchula remote logout`
 
-- **Usage:** `patchula remote logout`
+- **Usage:** `patchula remote logout [--server <URL>]`
 
 Forget the stored token for a server and any remembered repositories using it.
 
@@ -398,11 +393,12 @@ Forget the stored token for a server and any remembered repositories using it.
 
 | Flag | Description | Default |
 | --- | --- | --- |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, uses the server remembered for this checkout. |  |
 | `-h --help` | Print help |  |
 
 ## `patchula remote lookup`
 
-- **Usage:** `patchula remote lookup [OWNER/REPO]…`
+- **Usage:** `patchula remote lookup [--server <URL>] [OWNER/REPO]…`
 
 Report available updates from a Count Patchula server without writing.
 
@@ -416,11 +412,12 @@ Report available updates from a Count Patchula server without writing.
 
 | Flag | Description | Default |
 | --- | --- | --- |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises. |  |
 | `-h --help` | Print help |  |
 
 ## `patchula remote run`
 
-- **Usage:** `patchula remote run [--dry-run] [OWNER/REPO]…`
+- **Usage:** `patchula remote run [--server <URL>] [--dry-run] [OWNER/REPO]…`
 
 Create or update dependency branches and pull requests on a Count Patchula server.
 
@@ -434,12 +431,13 @@ Create or update dependency branches and pull requests on a Count Patchula serve
 
 | Flag | Description | Default |
 | --- | --- | --- |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises. |  |
 | `--dry-run` | Print planned branches, files and unified diffs without writing to GitHub. |  |
 | `-h --help` | Print help |  |
 
 ## `patchula remote tui`
 
-- **Usage:** `patchula remote tui [--once] [OWNER/REPO]…`
+- **Usage:** `patchula remote tui [--server <URL>] [--once] [OWNER/REPO]…`
 
 Browse dependencies and updates from a Count Patchula server in the terminal.
 
@@ -453,6 +451,7 @@ Browse dependencies and updates from a Count Patchula server in the terminal.
 
 | Flag | Description | Default |
 | --- | --- | --- |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises. |  |
 | `--once` | Print a plain-text snapshot of the updates and exit with `lookup`'s exit code, for pipes and CI logs. |  |
 | `-h --help` | Print help |  |
 

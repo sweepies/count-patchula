@@ -84,6 +84,9 @@ impl Transport for Fake {
             ("GET", "https://api.github.com/apps/other") => {
                 (200, json!({"slug": "other", "client_id": "Iv23other"}))
             }
+            ("GET", "https://api.github.com/apps/imposter") => {
+                (404, json!({"message": "Not Found"}))
+            }
             ("GET", "https://api.github.com/apps/patchula") if self.no_app => {
                 (404, json!({"message": "Not Found"}))
             }
@@ -173,7 +176,7 @@ fn services(fake: Arc<Fake>, dir: &std::path::Path) -> Services {
     }
 }
 fn remembered_store(dir: &std::path::Path) -> Value {
-    serde_json::from_slice(&std::fs::read(dir.join("repositories.json")).unwrap()).unwrap()
+    serde_json::from_slice(&std::fs::read(dir.join("remotes.json")).unwrap()).unwrap()
 }
 fn stored(dir: &std::path::Path) -> Value {
     serde_json::from_slice(&std::fs::read(dir.join("servers.json")).unwrap()).unwrap()
@@ -378,23 +381,30 @@ async fn remote_login_and_logout_manage_the_store() {
 }
 
 #[tokio::test]
-async fn find_discovers_remembers_and_logout_forgets() {
+async fn find_discovers_and_remember_and_logout_manage_the_pin() {
     let dir = tempfile::tempdir().unwrap();
     let fake = Arc::new(Fake::default());
-    let found = find(&services(fake.clone(), dir.path()), "acme/app")
+    let (found, newly_discovered) = find(&services(fake.clone(), dir.path()), "acme/app")
         .await
+        .unwrap()
         .unwrap();
-    assert_eq!(found.map(|s| s.url).as_deref(), Some(SERVER));
+    assert_eq!(found.url, SERVER);
+    assert!(newly_discovered);
+    // `find` alone does not write the pin until the caller completes login/run.
+    assert!(!dir.path().join("remotes.json").exists());
+    remember(&services(fake.clone(), dir.path()), "acme/app", &found).unwrap();
     assert_eq!(
         remembered_store(dir.path()),
         json!({"acme/app": {"server": SERVER, "app": "Iv23client"}})
     );
     // Remembered: no GitHub request on the next lookup.
     fake.requests.lock().unwrap().clear();
-    let again = find(&services(fake.clone(), dir.path()), "acme/app")
+    let (again, newly_discovered) = find(&services(fake.clone(), dir.path()), "acme/app")
         .await
+        .unwrap()
         .unwrap();
-    assert_eq!(again.map(|s| s.url).as_deref(), Some(SERVER));
+    assert_eq!(again.url, SERVER);
+    assert!(!newly_discovered);
     assert!(fake.requests.lock().unwrap().is_empty());
     // Signing out forgets the remembered repository too.
     run(
@@ -404,6 +414,274 @@ async fn find_discovers_remembers_and_logout_forgets() {
     .await
     .unwrap();
     assert_eq!(remembered_store(dir.path()), json!({}));
+}
+
+#[tokio::test(start_paused = true)]
+async fn legacy_repositories_json_does_not_block_logout_or_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    // Legacy file written by earlier releases contains `"remote": true|false`.
+    std::fs::write(
+        dir.path().join("repositories.json"),
+        json!({"acme/app": {"server": SERVER, "remote": false, "app": "Iv23client"}}).to_string(),
+    )
+    .unwrap();
+    seed(dir.path(), json!({"accessToken": "ghu_old"}));
+    let fake = Arc::new(Fake::default());
+    let services = Services {
+        server: None,
+        ..services(fake.clone(), dir.path())
+    };
+    assert_eq!(
+        run(&app(&["remote", "logout", "--server", SERVER]), &services)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(stored(dir.path()), json!({}));
+    assert_eq!(
+        run(&app(&["remote", "lookup", "acme/app"]), &services)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        remembered_store(dir.path()),
+        json!({"acme/app": {"server": SERVER, "app": "Iv23client"}})
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn remote_login_and_logout_infer_checkout_server_and_failed_login_does_not_pin() {
+    let dir = tempfile::tempdir().unwrap();
+    // A failed login must not write a pin to remotes.json.
+    let failing = Arc::new(Fake {
+        client_id: Some("Iv23client"),
+        ..Fake::default()
+    });
+    // Discovery succeeds for acme/app, then sign-in fails if device flow is disabled.
+    struct DisabledDeviceFlow(Arc<Fake>);
+    impl Transport for DisabledDeviceFlow {
+        fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+            if request.url().as_str() == DEVICE_CODE_URL {
+                return Box::pin(async {
+                    Ok(Response {
+                        status: reqwest::StatusCode::OK,
+                        headers: reqwest::header::HeaderMap::new(),
+                        body: serde_json::to_vec(&json!({"error": "device_flow_disabled"}))
+                            .unwrap(),
+                        stale: None,
+                    })
+                });
+            }
+            self.0.send(request)
+        }
+    }
+    let failed_services = Services {
+        transport: Some(Arc::new(DisabledDeviceFlow(failing))),
+        config_dir: Some(dir.path().to_owned()),
+        server: None,
+        repository: Some("acme/app".into()),
+        ..Services::default()
+    };
+    assert!(
+        run(&app(&["remote", "login"]), &failed_services)
+            .await
+            .is_err()
+    );
+    assert!(!dir.path().join("remotes.json").exists());
+
+    // A successful checkout login pins the server, and logout without --server clears both stores.
+    let fake = Arc::new(Fake::default());
+    let checkout_services = Services {
+        server: None,
+        repository: Some("acme/app".into()),
+        ..services(fake.clone(), dir.path())
+    };
+    assert_eq!(
+        run(&app(&["remote", "login"]), &checkout_services)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(stored(dir.path())[SERVER]["accessToken"], "ghu_device");
+    assert_eq!(
+        remembered_store(dir.path()),
+        json!({"acme/app": {"server": SERVER, "app": "Iv23client"}})
+    );
+    fake.requests.lock().unwrap().clear();
+    assert_eq!(
+        run(&app(&["remote", "logout"]), &checkout_services)
+            .await
+            .unwrap(),
+        0
+    );
+    // Logout reads remotes.json locally without hitting the network.
+    assert!(fake.requests.lock().unwrap().is_empty());
+    assert_eq!(stored(dir.path()), json!({}));
+    assert_eq!(remembered_store(dir.path()), json!({}));
+}
+
+#[tokio::test]
+async fn remote_target_precedence_and_repository_validation() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("remotes.json"),
+        json!({"acme/app": {"server": "https://remembered.acme.dev", "app": "Iv23client"}})
+            .to_string(),
+    )
+    .unwrap();
+    let fake = Arc::new(Fake::default());
+
+    // 1. Explicit --server beats PATCHULA_SERVER and remembered.
+    let svc = services(fake.clone(), dir.path());
+    let (server, repos, discovered) = crate::remote_target(
+        Some("https://explicit.acme.dev"),
+        &["acme/app".into()],
+        &svc,
+    )
+    .await
+    .unwrap();
+    assert_eq!(server.url, "https://explicit.acme.dev");
+    assert_eq!(repos, ["acme/app"]);
+    assert!(!discovered);
+
+    // 2. PATCHULA_SERVER beats remembered.
+    let (server, _, discovered) = crate::remote_target(None, &["acme/app".into()], &svc)
+        .await
+        .unwrap();
+    assert_eq!(server.url, SERVER);
+    assert!(!discovered);
+
+    // 3. With neither set, remembered wins without network calls.
+    let no_env = Services {
+        server: None,
+        ..services(fake.clone(), dir.path())
+    };
+    let (server, _, discovered) = crate::remote_target(None, &["acme/app".into()], &no_env)
+        .await
+        .unwrap();
+    assert_eq!(server.url, "https://remembered.acme.dev");
+    assert!(!discovered);
+    assert!(fake.requests.lock().unwrap().is_empty());
+
+    // 4. Invalid repository slugs are rejected before any request.
+    for bad in [
+        "../../user",
+        "acme/",
+        "/app",
+        "acme/app/extra",
+        "acme/app?x=1",
+        "acme/..",
+    ] {
+        let (code, _) = crate::remote_target(None, &[bad.into()], &no_env)
+            .await
+            .unwrap_err();
+        assert_eq!(code, 2, "{bad}");
+    }
+    assert!(fake.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn discover_checks_github_app_before_contacting_advertised_host_and_caps_probes() {
+    struct ProbeFake {
+        requests: Mutex<Vec<String>>,
+    }
+    impl Transport for ProbeFake {
+        fn send(&self, request: reqwest::Request) -> Exchange<'_> {
+            let url = request.url().to_string();
+            self.requests.lock().unwrap().push(url.clone());
+            let (status, value) = match url.as_str() {
+                u if u.starts_with(ISSUES) => {
+                    let mut items = vec![json!({
+                        "user": {"type": "Bot", "login": "unknown[bot]"},
+                        "body": "<!-- patchula-server:https://never-contact.acme.dev -->"
+                    })];
+                    // 7 distinct servers from a real App whose auth endpoints disagree,
+                    // followed by the real server (beyond DISCOVERY_SERVER_LIMIT = 5).
+                    for i in 1..=7 {
+                        items.push(json!({
+                            "user": {"type": "Bot", "login": "other[bot]"},
+                            "body": format!("<!-- patchula-server:https://s{i}.acme.dev -->")
+                        }));
+                    }
+                    items.push(json!({
+                        "user": {"type": "Bot", "login": "patchula[bot]"},
+                        "body": format!("<!-- patchula-server:{SERVER} -->")
+                    }));
+                    (200, json!(items))
+                }
+                "https://api.github.com/apps/unknown" => (404, json!({"message": "Not Found"})),
+                "https://api.github.com/apps/other" => {
+                    (200, json!({"slug": "other", "client_id": "Iv23other"}))
+                }
+                "https://api.github.com/apps/patchula" => {
+                    (200, json!({"slug": "patchula", "client_id": "Iv23client"}))
+                }
+                u if u.ends_with("/api/v1/auth") => {
+                    (200, json!({"clientId": "Iv23wrong", "bot": "other[bot]"}))
+                }
+                other => panic!("unexpected request {other}"),
+            };
+            Box::pin(async move {
+                Ok(Response {
+                    status: reqwest::StatusCode::from_u16(status).unwrap(),
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: serde_json::to_vec(&value).unwrap(),
+                    stale: None,
+                })
+            })
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(ProbeFake {
+        requests: Mutex::default(),
+    });
+    let svc = Services {
+        transport: Some(fake.clone()),
+        config_dir: Some(dir.path().to_owned()),
+        ..Services::default()
+    };
+    assert_eq!(discover(&svc, "acme/app").await, None);
+    let urls = fake.requests.lock().unwrap().clone();
+    assert!(
+        !urls.iter().any(|u| u.contains("never-contact.acme.dev")),
+        "unknown bot's advertised server must never be contacted: {urls:?}"
+    );
+    let auth_probes: Vec<_> = urls
+        .iter()
+        .filter(|u| u.ends_with("/api/v1/auth"))
+        .collect();
+    assert_eq!(auth_probes.len(), DISCOVERY_SERVER_LIMIT, "{auth_probes:?}");
+}
+
+#[tokio::test]
+async fn unreachable_remembered_server_suggests_remote_logout() {
+    struct DeadTransport;
+    impl Transport for DeadTransport {
+        fn send(&self, _request: reqwest::Request) -> Exchange<'_> {
+            Box::pin(async { Err(patchula_http::Error::Connect) })
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    seed(
+        dir.path(),
+        json!({"accessToken": "ghu_stored", "expiresAt": 4_000_000_000_i64}),
+    );
+    let svc = Services {
+        transport: Some(Arc::new(DeadTransport)),
+        config_dir: Some(dir.path().to_owned()),
+        ..Services::default()
+    };
+    let target = Server {
+        url: SERVER.into(),
+        app: Some("Iv23client".into()),
+    };
+    let (code, error) = report(&svc, &target, vec!["acme/app".into()], Mode::Lookup)
+        .await
+        .unwrap_err();
+    assert_eq!(code, 1);
+    let rendered = format!("{error:?}");
+    assert!(rendered.contains("patchula remote logout"), "{rendered}");
 }
 
 #[tokio::test]
@@ -417,9 +695,18 @@ async fn a_marker_from_another_app_is_skipped_even_if_its_server_claims_that_bot
         Some((SERVER.to_owned(), "Iv23client".to_owned()))
     );
     let requests = methods(&fake);
-    assert!(requests.contains(&"GET https://api.github.com/apps/other".to_owned()));
-    // The impostor's bot is not the one the server names: GitHub is not asked.
-    assert!(!requests.iter().any(|r| r.ends_with("/apps/imposter")));
+    let other_app = requests
+        .iter()
+        .position(|r| r == "GET https://api.github.com/apps/other")
+        .unwrap();
+    let evil_auth = requests
+        .iter()
+        .position(|r| r == "GET https://evil.acme.dev/api/v1/auth")
+        .unwrap();
+    assert!(
+        other_app < evil_auth,
+        "GitHub App must be resolved before probing advertised host"
+    );
 }
 
 #[tokio::test]
@@ -468,7 +755,7 @@ async fn a_remembered_server_that_names_another_app_is_refused_before_sign_in() 
     // Discovery verified Iv23client; the server now hands out another ID.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
-        dir.path().join("repositories.json"),
+        dir.path().join("remotes.json"),
         json!({"acme/app": {"server": SERVER, "app": "Iv23client"}}).to_string(),
     )
     .unwrap();
@@ -477,7 +764,8 @@ async fn a_remembered_server_that_names_another_app_is_refused_before_sign_in() 
         ..Fake::default()
     });
     let services = services(fake.clone(), dir.path());
-    let target = find(&services, "acme/app").await.unwrap().unwrap();
+    let (target, discovered) = find(&services, "acme/app").await.unwrap().unwrap();
+    assert!(!discovered);
     let error = report(&services, &target, vec!["acme/app".into()], Mode::Lookup)
         .await
         .unwrap_err();

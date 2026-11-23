@@ -406,7 +406,7 @@ Run 'patchula <command> --help' for more information on a command.
 ==> patchula remote --help
 Run commands on a Count Patchula server with its credentials and warm caches.
 
-Usage: patchula remote [--server <URL>] <SUBCOMMAND>
+Usage: patchula remote <SUBCOMMAND>
 
 Commands:
   login   Sign in with the server's GitHub App, replacing any stored token.
@@ -420,8 +420,6 @@ Commands:
   help    Print this message or the help of the given subcommand(s)
 
 Flags:
-      --server <URL>  Server URL; also PATCHULA_SERVER. Omit to discover the
-                      server advertised by the repository.
   -h, --help          Print help
 
 Global flags:
@@ -453,9 +451,11 @@ Run 'patchula <command> --help' for more information on a command.
 ==> patchula remote login --help
 Sign in with the server's GitHub App, replacing any stored token.
 
-Usage: patchula remote login
+Usage: patchula remote login [--server <URL>]
 
 Flags:
+      --server <URL>  Server URL; overrides PATCHULA_SERVER. With neither set,
+                      discovers the server advertised by this checkout.
   -h, --help          Print help
 
 Global flags:
@@ -465,17 +465,17 @@ Global flags:
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-      --server <URL>  Server URL; also PATCHULA_SERVER. Omit to discover the
-                      server advertised by the repository.
 
 Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula remote logout --help
 Forget the stored token for a server and any remembered repositories using it.
 
-Usage: patchula remote logout
+Usage: patchula remote logout [--server <URL>]
 
 Flags:
+      --server <URL>  Server URL; overrides PATCHULA_SERVER. With neither set,
+                      uses the server remembered for this checkout.
   -h, --help          Print help
 
 Global flags:
@@ -485,21 +485,21 @@ Global flags:
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-      --server <URL>  Server URL; also PATCHULA_SERVER. Omit to discover the
-                      server advertised by the repository.
 
 Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula remote lookup --help
 Report available updates from a Count Patchula server without writing.
 
-Usage: patchula remote lookup [OWNER/REPO]…
+Usage: patchula remote lookup [--server <URL>] [OWNER/REPO]…
 
 Arguments:
   [OWNER/REPO]…  Repositories as owner/repo; omit for this checkout's GitHub
                  repository.
 
 Flags:
+      --server <URL>  Server URL; overrides PATCHULA_SERVER. With neither set, a
+                      single repository discovers the server it advertises.
   -h, --help          Print help
 
 Global flags:
@@ -509,8 +509,6 @@ Global flags:
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-      --server <URL>  Server URL; also PATCHULA_SERVER. Omit to discover the
-                      server advertised by the repository.
 
 Run 'patchula <command> --help' for more information on a command.
 
@@ -518,13 +516,15 @@ Run 'patchula <command> --help' for more information on a command.
 Create or update dependency branches and pull requests on a Count Patchula
 server.
 
-Usage: patchula remote run [--dry-run] [OWNER/REPO]…
+Usage: patchula remote run [--server <URL>] [--dry-run] [OWNER/REPO]…
 
 Arguments:
   [OWNER/REPO]…  Repositories as owner/repo; omit for this checkout's GitHub
                  repository.
 
 Flags:
+      --server <URL>  Server URL; overrides PATCHULA_SERVER. With neither set, a
+                      single repository discovers the server it advertises.
       --dry-run       Print planned branches, files and unified diffs without
                       writing to GitHub.
   -h, --help          Print help
@@ -536,21 +536,21 @@ Global flags:
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-      --server <URL>  Server URL; also PATCHULA_SERVER. Omit to discover the
-                      server advertised by the repository.
 
 Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula remote tui --help
 Browse dependencies and updates from a Count Patchula server in the terminal.
 
-Usage: patchula remote tui [--once] [OWNER/REPO]…
+Usage: patchula remote tui [--server <URL>] [--once] [OWNER/REPO]…
 
 Arguments:
   [OWNER/REPO]…  Repositories as owner/repo; omit for this checkout's GitHub
                  repository.
 
 Flags:
+      --server <URL>  Server URL; overrides PATCHULA_SERVER. With neither set, a
+                      single repository discovers the server it advertises.
       --once          Print a plain-text snapshot of the updates and exit with
                       `lookup`'s exit code, for pipes and CI logs.
   -h, --help          Print help
@@ -562,8 +562,6 @@ Global flags:
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-      --server <URL>  Server URL; also PATCHULA_SERVER. Omit to discover the
-                      server advertised by the repository.
 
 Run 'patchula <command> --help' for more information on a command.
 

@@ -209,6 +209,28 @@ secret, so the action saves its cache in a public repository only when the
 token is an installation token whose listing is that repository alone. It
 saves nothing when it cannot show that, a personal token included.
 
+## Remote CLI discovery and sign-in
+
+`patchula remote` runs a lookup or run on a server chosen by `--server`,
+`PATCHULA_SERVER`, or — when targeting a single repository with neither set —
+by scanning that repository's open issues and PRs for a hidden
+`patchula-server` advertisement.
+
+- **Repository arguments are validated** as plain `owner/name` slugs before any
+  API request, preventing path traversal on `api.github.com`.
+- **GitHub is asked before any advertised host.** Discovery ignores non-bot
+  authors, resolves the author's App client ID via `GET /apps/{slug}` first,
+  and caps distinct advertised hosts contacted per scan (5). An unknown bot's
+  URL is never contacted.
+- **App binding and TOFU pinning.** An advertised server counts only when its
+  `/api/v1/auth` names both the bot login that wrote the advertisement and the
+  client ID GitHub reports for that App. The `(server, clientId)` pin is saved
+  to `remotes.json` only after sign-in or the run succeeds, with a notice on
+  stderr, and later runs refuse the server if it switches to another App.
+- **Per-server tokens.** User access tokens in `servers.json` are keyed by
+  server URL (mode `0600`), so a newly discovered server never receives another
+  server's token and requires explicit GitHub device-flow consent for its App.
+
 ## Out of scope
 
 - Protecting a repository from its own writers.

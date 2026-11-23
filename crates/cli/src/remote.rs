@@ -17,9 +17,11 @@ const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const LOGINS: &str = "servers.json";
-const CHOICES: &str = "repositories.json";
+const REMOTES: &str = "remotes.json";
 /// Open issues and PRs read while looking for the server, 100 a page.
 const DISCOVERY_PAGES: u32 = 5;
+/// Maximum distinct advertised server URLs contacted during one discovery scan.
+const DISCOVERY_SERVER_LIMIT: usize = 5;
 
 type Result<T> = std::result::Result<T, (u8, miette::Report)>;
 use crate::{fail, usage};
@@ -53,6 +55,23 @@ pub fn configured(services: &Services) -> Result<Option<String>> {
     }
 }
 
+/// Whether `repository` is a plain `owner/name` GitHub slug, with no dot
+/// segments or URL metacharacters that could shift a GitHub API path.
+pub fn valid_repository(repository: &str) -> bool {
+    let Some((owner, name)) = repository.split_once('/') else {
+        return false;
+    };
+    let segment = |part: &str| {
+        !part.is_empty()
+            && part != "."
+            && part != ".."
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    segment(owner) && segment(name)
+}
+
 /// A server's base URL: https, or http only on loopback.
 pub fn parse(value: &str) -> Result<String> {
     let url = Url::parse(value).map_err(|_| usage(format!("{value} is not a server URL")))?;
@@ -76,6 +95,17 @@ pub use patchula_server::remote::protocol::Mode;
 
 /// Runs `repositories` on the server and returns its report.
 pub async fn report(
+    services: &Services,
+    target: &Server,
+    repositories: Vec<String>,
+    mode: Mode,
+) -> Result<patchula_report::Report> {
+    report_inner(services, target, repositories, mode)
+        .await
+        .map_err(|error| unreachable_hint(target, error))
+}
+
+async fn report_inner(
     services: &Services,
     target: &Server,
     repositories: Vec<String>,
@@ -184,7 +214,33 @@ fn rejected(server: &str, status: u16, value: &Value) -> (u8, miette::Report) {
 /// `patchula remote login`: sign in now, replacing any stored token.
 pub async fn sign_in(services: &Services, target: &Server) -> Result<String> {
     let transport = services.remote_transport().map_err(fail)?;
-    login(services, &*transport, target).await
+    login(services, &*transport, target)
+        .await
+        .map_err(|error| unreachable_hint(target, error))
+}
+
+/// When a remembered server can no longer be reached, tell the user how to
+/// clear the pin.
+fn unreachable_hint(target: &Server, error: (u8, miette::Report)) -> (u8, miette::Report) {
+    if target.app.is_some() && error.0 == crate::FAILED {
+        let host = Url::parse(&target.url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned));
+        let message = error.1.to_string();
+        if host.is_some_and(|host| message == format!("cannot reach {host}")) {
+            return (
+                error.0,
+                miette::miette!(
+                    help = format!(
+                        "if this server moved, run `patchula remote logout --server {}` to forget it",
+                        target.url
+                    ),
+                    "{message}"
+                ),
+            );
+        }
+    }
+    error
 }
 
 /// `patchula remote logout`: forget the server's token, and which repositories
@@ -193,7 +249,7 @@ pub async fn sign_in(services: &Services, target: &Server) -> Result<String> {
 pub fn forget(services: &Services, server: &str) -> Result<bool> {
     let remembered = update(
         services,
-        CHOICES,
+        REMOTES,
         |entries: &mut BTreeMap<String, Remembered>| {
             let before = entries.len();
             entries.retain(|_, entry| entry.server != server);
@@ -227,39 +283,54 @@ impl Remembered {
 
 /// The server remembered for `repository`, without touching the network.
 pub fn remembered(services: &Services, repository: &str) -> Result<Option<Server>> {
-    Ok(load::<Remembered>(services, CHOICES)?
+    Ok(load::<Remembered>(services, REMOTES)?
         .remove(repository)
         .map(Remembered::target))
 }
 
-/// The server for `repository`: the one remembered for it, or one the Count
-/// advertises, which is then remembered so later remote runs skip the scan and
-/// pin its App client ID.
-pub async fn find(services: &Services, repository: &str) -> Result<Option<Server>> {
+/// The server for `repository`: the one remembered for it (`discovered = false`),
+/// or one the Count advertises (`discovered = true`), without writing the pin
+/// yet so a cancelled or failed run leaves nothing behind.
+pub async fn find(services: &Services, repository: &str) -> Result<Option<(Server, bool)>> {
     if let Some(target) = remembered(services, repository)? {
-        return Ok(Some(target));
+        return Ok(Some((target, false)));
     }
     let Some((server, app)) = discover(services, repository).await else {
         return Ok(None);
     };
+    Ok(Some((
+        Server {
+            url: server,
+            app: Some(app),
+        },
+        true,
+    )))
+}
+
+/// Remember a newly discovered server for `repository` and note it on stderr.
+pub fn remember(services: &Services, repository: &str, target: &Server) -> Result<()> {
+    let Some(app) = &target.app else {
+        return Ok(());
+    };
     update(
         services,
-        CHOICES,
+        REMOTES,
         |entries: &mut BTreeMap<String, Remembered>| {
             entries.insert(
                 repository.to_owned(),
                 Remembered {
-                    server: server.clone(),
+                    server: target.url.clone(),
                     app: app.clone(),
                 },
             );
             true
         },
     )?;
-    Ok(Some(Server {
-        url: server,
-        app: Some(app),
-    }))
+    eprintln!(
+        "patchula: remembered {} (App {app}) for {repository}; `patchula remote logout --server {}` forgets it",
+        target.url, target.url
+    );
+    Ok(())
 }
 
 /// `GET /repos/{owner}/{repo}/issues` — the `issue` schema trimmed to the
@@ -286,13 +357,20 @@ struct DiscoveryAuthor {
 /// or PR whose author is the GitHub App the server signs in with. Anyone can
 /// paste the marker, any installed App can write as a bot, and the advertised
 /// server answers whatever it likes, so only GitHub can tie the two: the
-/// author's App, as `GET /apps/{slug}` describes it, must have the client ID
-/// the server hands the device flow. The sign-in then always goes to the App
-/// that wrote the marker. Anything that cannot be checked is skipped.
+/// author's App, as `GET /apps/{slug}` describes it, is resolved first (never
+/// contacting an advertised URL for an unknown bot), and must match the client
+/// ID and bot login the server hands out. Distinct servers contacted per scan
+/// are capped at `DISCOVERY_SERVER_LIMIT`. Anything that cannot be checked is
+/// skipped.
 async fn discover(services: &Services, repository: &str) -> Option<(String, String)> {
+    if !valid_repository(repository) {
+        return None;
+    }
     let transport = services.transport().ok()?;
     // Public repositories answer without a token.
     let token = services.token().await;
+    let mut apps: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut probed_servers = std::collections::BTreeSet::new();
     let mut checked = std::collections::BTreeSet::new();
     for page in 1..=DISCOVERY_PAGES {
         let url = format!(
@@ -320,15 +398,29 @@ async fn discover(services: &Services, repository: &str) -> Option<(String, Stri
             if !checked.insert((server.clone(), author.login.clone())) {
                 continue;
             }
+            let app = match apps.get(&author.login) {
+                Some(cached) => cached.clone(),
+                None => {
+                    let resolved =
+                        app_client_id(&*transport, token.as_deref(), &author.login).await;
+                    apps.insert(author.login.clone(), resolved.clone());
+                    resolved
+                }
+            };
+            let Some(app_id) = app else {
+                continue;
+            };
+            if !probed_servers.contains(&server) {
+                if probed_servers.len() >= DISCOVERY_SERVER_LIMIT {
+                    continue;
+                }
+                probed_servers.insert(server.clone());
+            }
             let Some(info) = auth_info(services, &server).await else {
                 continue;
             };
-            if info.bot != author.login {
-                continue;
-            }
-            let app = app_client_id(&*transport, token.as_deref(), &author.login).await;
-            if app.as_deref() == Some(info.client_id.as_str()) {
-                return Some((server, info.client_id));
+            if info.bot == author.login && info.client_id == app_id {
+                return Some((server, app_id));
             }
         }
         if items.len() < 100 {
