@@ -45,4 +45,4 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 rusqlite = { version = "0.42.0", features = ["bundled"] }
 
 [target.'cfg(unix)'.dev-dependencies]
-nix = { version = "0.31", features = ["signal", "process"] }
+nix = { version = "0.32", features = ["signal", "process"] }
