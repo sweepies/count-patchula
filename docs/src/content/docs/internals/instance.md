@@ -42,7 +42,8 @@ The Deployment is all the workflow writes. The namespace (`INSTANCE_NAMESPACE`,
 Pods are labeled `app.kubernetes.io/name: count-patchula` and name their
 port `http`, for a Service to select. They run only on nodes labeled
 `count-patchula.sweepy.dev/instance=true` and tolerate a `NoSchedule` taint
-with that key.
+with that key. They resolve names with the node's own resolvers
+(`dnsPolicy: Default`), not cluster DNS.
 
 The workflow signs in with the job's GitHub OIDC token, minted for the
 audience in `INSTANCE_AUDIENCE`. The cluster must accept that issuer and

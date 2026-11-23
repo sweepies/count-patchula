@@ -50,6 +50,10 @@ export default Alchemy.Stack(
             metadata: { labels },
             spec: {
               automountServiceAccountToken: false,
+              // The node's own resolvers: the server talks only to GitHub and
+              // registries, never to in-cluster Services, so it needs no
+              // cluster DNS, which may run on another node.
+              dnsPolicy: "Default",
               nodeSelector: { [instanceLabel]: "true" },
               tolerations: [{ key: instanceLabel, operator: "Exists", effect: "NoSchedule" }],
               // Longer than the server's 60-second drain.
