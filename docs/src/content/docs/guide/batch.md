@@ -64,10 +64,12 @@ Patchula-Batch-Green: true
 The trailer is omitted if any item joined without clean green checks on that
 base, if two items touch the same file (such as a shared `Cargo.lock` or
 `mise.lock` regenerated together), if the batch commit differs from the tested
-blobs, or once the batch rebases onto a new base. Note that under the default
-`rebase = "conflicts"`, a batch without lockfile jobs stays on its old base
-when the default branch moves, and source PRs must be green on the current base
-tip to qualify.
+blobs, or once the batch rebases onto a new base. GitHub must report each
+source PR's mergeability as `clean`, so in repositories that require an
+approving review before merge, unapproved source PRs won't qualify and CI runs
+on the batch as usual. Note that under the default `rebase = "conflicts"`, a
+batch without lockfile jobs stays on its old base when the default branch
+moves, and source PRs must be green on the current base tip to qualify.
 
 On its own the trailer does nothing; a repository's workflow can inspect it in
 a job-level `if:` so skipped jobs still report as `skipped` (satisfying
@@ -79,7 +81,10 @@ required status checks, unlike `[skip ci]`):
   with `Patchula-Base` equal to that parent and `Patchula-Batch-Green: true`.
 - If your repository enforces required workflows from protected refs, also
   verify the head commit's author login and GitHub signature
-  (`verification.verified`) before trusting the trailer.
+  (`verification.verified`) to guard against forks and unverified pushes. Keep
+  in mind that each item's green proof is stored in the batch PR's hidden
+  marker, so repository writers who can edit pull request descriptions are
+  still within the trust boundary.
 
 Two updates that pass on their own can still interact even when they touch
 different files, so skipping batch CI is a workflow choice per repository.

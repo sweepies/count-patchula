@@ -537,7 +537,7 @@ impl Write<'_> {
                 controls.batched = batched;
                 Ok(())
             }
-            Err(error) => Err(StepFailure::from(error)),
+            Err(error) => Err(StepFailure::Repo(error.to_string())),
         }
     }
 

@@ -2,7 +2,7 @@
 //! keeps the targets that were reviewed; the individual PR closes as batched,
 //! which never suppresses the update. Unticking, removing or closing the batch
 //! returns its updates to individual PRs.
-use crate::error::{Error, PlanError};
+use crate::error::PlanError;
 use crate::markers;
 use crate::{Change, Inventory, Plan, Snapshot, pull_requests};
 use patchula_config::{Config, Registry};
@@ -20,6 +20,9 @@ use std::collections::{BTreeMap, BTreeSet};
 const MAX_GREEN_FILES: usize = 64;
 /// Maximum serialized byte size of one item's [`GreenProof`].
 const MAX_GREEN_PROOF_BYTES: usize = 4_096;
+/// Maximum combined serialized byte size of all [`GreenProof`]s on one batch
+/// PR so large batches never push the items marker near GitHub's body limit.
+const MAX_TOTAL_GREEN_PROOF_BYTES: usize = 8_192;
 
 /// Proof that an item's source PR passed every check on `base`, together with
 /// the exact file-level tree delta that commit tested.
@@ -269,18 +272,39 @@ fn eligible_for_green<'a>(
     ok.then_some(c.tree.oid.as_str())
 }
 
-async fn fetch_commit(client: &Client, repo: &str, sha: &str) -> Result<GitCommit, Error> {
+async fn fetch_commit(
+    client: &Client,
+    repo: &str,
+    sha: &str,
+) -> Result<GitCommit, patchula_github::Error> {
     client
         .get_immutable::<GitCommit>(&format!("repos/{repo}/git/commits/{sha}"))
         .await
-        .map_err(|_| Error::Raced("failed to inspect base commit tree; rerun"))
 }
 
-async fn fetch_tree(client: &Client, repo: &str, sha: &str) -> Result<Tree, Error> {
+async fn fetch_tree(
+    client: &Client,
+    repo: &str,
+    sha: &str,
+) -> Result<Tree, patchula_github::Error> {
     client
         .get_immutable::<Tree>(&format!("repos/{repo}/git/trees/{sha}?recursive=1"))
         .await
-        .map_err(|_| Error::Raced("failed to inspect commit tree; rerun"))
+}
+
+/// Drop all green proofs if their combined serialized size exceeds
+/// [`MAX_TOTAL_GREEN_PROOF_BYTES`], so proofs never bloat the items marker.
+fn bound_green_proofs(items: &mut [Item]) {
+    let total = items
+        .iter()
+        .filter_map(|item| item.green.as_ref())
+        .map(|proof| serde_json::to_string(proof).map_or(usize::MAX, |s| s.len()))
+        .fold(0usize, usize::saturating_add);
+    if total > MAX_TOTAL_GREEN_PROOF_BYTES {
+        for item in items {
+            item.green = None;
+        }
+    }
 }
 
 /// Add the batch plan and skip the update plans it carries. Items whose targets the
@@ -298,9 +322,8 @@ pub async fn apply(
     allow_pending: bool,
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<BTreeSet<String>, Error> {
-    let name = crate::branch_name(&config.prs.branch, LABEL)
-        .map_err(|e| Error::Refused(e.to_string().into()))?;
+) -> Result<BTreeSet<String>, PlanError> {
+    let name = crate::branch_name(&config.prs.branch, LABEL)?;
     let prs = inventory.pull_requests(&repository.repository);
     let mut items = items(
         &prs,
@@ -313,6 +336,7 @@ pub async fn apply(
         repository.commit.as_deref(),
         repository.default_branch.as_deref(),
     ) {
+        let repo = &repository.repository;
         let mut base_entries: Option<Option<Vec<TreeEntry>>> = None;
         for item in &mut items {
             if item.green.is_some() {
@@ -332,27 +356,61 @@ pub async fn apply(
             else {
                 continue;
             };
-            let passed = crate::automerge::clean_and_green(
-                client,
-                &inventory.actor,
-                &repository.repository,
-                &source.pr,
-            )
-            .await
-            .map_err(|_| Error::Raced("failed to inspect batched PR checks; rerun"))?;
+            // Gathering green proofs is optional: any error fails closed by
+            // omitting the proof so CI runs in full, without blocking writes.
+            let passed =
+                match crate::automerge::clean_and_green(client, &inventory.actor, repo, &source.pr)
+                    .await
+                {
+                    Ok(passed) => passed,
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "patchula_update::batch",
+                            repo = %repo,
+                            pr = source.pr.number,
+                            %error,
+                            "failed to inspect batched PR checks; omitting green proof"
+                        );
+                        continue;
+                    }
+                };
             if !passed {
                 continue;
             }
-            let repo = &repository.repository;
             if base_entries.is_none() {
-                let base_git = fetch_commit(client, repo, base_commit).await?;
-                let base_tree = fetch_tree(client, repo, &base_git.tree.sha).await?;
-                base_entries = Some((!base_tree.truncated).then_some(base_tree.tree));
+                let fetched = match fetch_commit(client, repo, base_commit).await {
+                    Ok(base_git) => fetch_tree(client, repo, &base_git.tree.sha).await,
+                    Err(error) => Err(error),
+                };
+                base_entries = Some(match fetched {
+                    Ok(tree) => (!tree.truncated).then_some(tree.tree),
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "patchula_update::batch",
+                            repo = %repo,
+                            %error,
+                            "failed to inspect base commit tree; omitting green proofs"
+                        );
+                        None
+                    }
+                });
             }
             let Some(base_tree_entries) = base_entries.as_ref().and_then(|o| o.as_deref()) else {
                 continue;
             };
-            let source_tree = fetch_tree(client, repo, source_tree_oid).await?;
+            let source_tree = match fetch_tree(client, repo, source_tree_oid).await {
+                Ok(tree) => tree,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "patchula_update::batch",
+                        repo = %repo,
+                        pr = source.pr.number,
+                        %error,
+                        "failed to inspect batched PR tree; omitting green proof"
+                    );
+                    continue;
+                }
+            };
             if source_tree.truncated {
                 continue;
             }
@@ -367,6 +425,7 @@ pub async fn apply(
                 item.green = Some(proof);
             }
         }
+        bound_green_proofs(&mut items);
     }
     apply_items(
         plans,
@@ -379,7 +438,6 @@ pub async fn apply(
         since,
         now,
     )
-    .map_err(|e| Error::Refused(e.to_string().into()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -996,5 +1054,28 @@ mod tests {
             entry("sub", "sha5", "160000", "commit"),
         ];
         assert_eq!(tree_delta(&base, &submodule), None);
+    }
+
+    #[test]
+    fn bound_green_proofs_drops_proofs_once_total_exceeds_budget() {
+        let make = |n: usize, files: usize| Item {
+            origin: format!("item-{n}"),
+            number: Some(n as u64),
+            title: format!("item {n}"),
+            targets: vec![change("pkg", "2.0.0")],
+            green: Some(GreenProof {
+                base: "b".repeat(40),
+                files: (0..files)
+                    .map(|f| (format!("dir-{n}/file-{f}.toml"), Some("a".repeat(40))))
+                    .collect(),
+            }),
+        };
+        let mut small = vec![make(1, 2), make(2, 2)];
+        bound_green_proofs(&mut small);
+        assert!(small.iter().all(|i| i.green.is_some()));
+
+        let mut huge: Vec<_> = (0..10).map(|n| make(n, 20)).collect();
+        bound_green_proofs(&mut huge);
+        assert!(huge.iter().all(|i| i.green.is_none()));
     }
 }

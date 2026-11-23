@@ -583,8 +583,10 @@ fn intent(plan: &Plan, config: &Config, recheck: Recheck, server: Option<&str>) 
         config,
         crate::pull_requests::recheck_hashed(recheck),
     );
-    let batch_green: Option<Vec<(&str, Option<&crate::batch::GreenProof>)>> =
-        plan.batch_items().map(|items| {
+    let batch_green: Option<Vec<(&str, Option<&crate::batch::GreenProof>)>> = plan
+        .batch_items()
+        .filter(|items| items.iter().any(|i| i.green.is_some()))
+        .map(|items| {
             items
                 .iter()
                 .map(|i| (i.origin.as_str(), i.green.as_ref()))

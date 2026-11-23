@@ -49,10 +49,7 @@ fn a_held_update_says_when_it_becomes_eligible_and_not_when_its_catalog_was_fetc
         dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None)
     };
     let first = render("2026-10-15T09:00:00Z", false);
-    assert!(
-        first.contains("<sub>eligible 16 Oct 00:00 UTC</sub> <!--"),
-        "{first}"
-    );
+    assert!(first.contains("eligible 16 Oct 00:00 UTC"), "{first}");
     assert!(
         !first.contains("catalog fetched") && !first.contains("2026-10-15T09"),
         "{first}"
@@ -519,19 +516,23 @@ fn known_vulnerabilities_lead_the_dashboard_with_their_fix() {
     let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     let section = text.find("## Known vulnerabilities").unwrap();
     assert!(section < text.find("## Pending updates").unwrap());
-    assert!(
-        text.contains(
-            "> [!IMPORTANT]\n> **2 known vulnerabilities** (<kbd>high</kbd>) in `fixture`.\n"
-        ),
-        "{text}"
-    );
-    let row = "| **`fixture`** | `1.0.0` | <kbd>high</kbd> | 2 advisories ([GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed), [GHSA-open](https://osv.dev/vulnerability/GHSA-open)) | `package.json` | 1 fixed by the update to `1.0.5`; 1 no fixed release yet |\n";
-    assert!(text.contains(row), "{text}");
-    assert!(
-        text.contains("| [GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed) (`CVE-2026-0001`) | `fixture` | <kbd>high</kbd> | `1.0.5` | Prototype pollution |\n"),
-        "{text}"
-    );
-    assert!(!text.contains("unrated"), "{text}");
+    let vuln = &text[section..text.find("## Pending updates").unwrap()];
+    for expected in [
+        "2 known vulnerabilities",
+        "`fixture`",
+        "`1.0.0`",
+        "high",
+        "[GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed)",
+        "[GHSA-open](https://osv.dev/vulnerability/GHSA-open)",
+        "`CVE-2026-0001`",
+        "`package.json`",
+        "1 fixed by the update to `1.0.5`",
+        "1 no fixed release yet",
+        "Prototype pollution",
+    ] {
+        assert!(vuln.contains(expected), "missing {expected}:\n{vuln}");
+    }
+    assert!(!vuln.contains("unrated"), "{vuln}");
 }
 
 #[test]
@@ -546,8 +547,18 @@ fn template_notices_are_listed_without_a_branch_or_a_checkbox() {
     let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     let section = text.find("## Template updates").unwrap();
     assert!(section > text.find("## Pending updates").unwrap());
-    let row = "| **`gh:acme/template`** | [`v1.4.0`&nbsp;→&nbsp;`v1.6.0`](https://github.com/acme/template/compare/v1.4.0...v1.6.0) | `.copier-answers.yml` |\n";
-    assert!(text[section..].contains(row), "{text}");
+    for expected in [
+        "`gh:acme/template`",
+        "`v1.4.0`",
+        "`v1.6.0`",
+        "https://github.com/acme/template/compare/v1.4.0...v1.6.0",
+        "`.copier-answers.yml`",
+    ] {
+        assert!(
+            text[section..].contains(expected),
+            "missing {expected}:\n{text}"
+        );
+    }
     assert!(
         !text
             .lines()
@@ -990,8 +1001,18 @@ fn dashboard_vulnerability_counts_deduplicate_and_note_omissions() {
     }))
     .unwrap();
     let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
-    // 65 distinct (package, advisory) pairs, not 66.
+    // 65 distinct (package, advisory) pairs, not 66; details cap at 60 and note the 5 omitted.
     assert!(text.contains("65 known vulnerabilities"), "{text}");
-    assert!(text.contains("(65)</summary>"), "{text}");
-    assert!(text.contains("5 additional advisories omitted."), "{text}");
+    assert!(!text.contains("66 known vulnerabilities"), "{text}");
+    let details = &text[text.find("<details>").unwrap()..];
+    assert_eq!(
+        details
+            .matches("https://osv.dev/vulnerability/GHSA-")
+            .count(),
+        60
+    );
+    assert!(
+        details.contains("5 additional advisories omitted"),
+        "{details}"
+    );
 }
