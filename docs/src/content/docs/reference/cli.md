@@ -380,7 +380,7 @@ Sign in with the server's GitHub App, replacing any stored token.
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, discovers the server advertised by this checkout. |  |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, uses the server remembered for, or advertised by, this checkout. |  |
 | `-h --help` | Print help |  |
 
 ## `patchula remote logout`
@@ -412,7 +412,7 @@ Report available updates from a Count Patchula server without writing.
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises. |  |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it. |  |
 | `-h --help` | Print help |  |
 
 ## `patchula remote run`
@@ -431,7 +431,7 @@ Create or update dependency branches and pull requests on a Count Patchula serve
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises. |  |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it. |  |
 | `--dry-run` | Print planned branches, files and unified diffs without writing to GitHub. |  |
 | `-h --help` | Print help |  |
 
@@ -451,7 +451,7 @@ Browse dependencies and updates from a Count Patchula server in the terminal.
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises. |  |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it. |  |
 | `--once` | Print a plain-text snapshot of the updates and exit with `lookup`'s exit code, for pipes and CI logs. |  |
 | `-h --help` | Print help |  |
 

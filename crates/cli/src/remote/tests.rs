@@ -675,6 +675,7 @@ async fn unreachable_remembered_server_suggests_remote_logout() {
     let target = Server {
         url: SERVER.into(),
         app: Some("Iv23client".into()),
+        remembered: true,
     };
     let (code, error) = report(&svc, &target, vec!["acme/app".into()], Mode::Lookup)
         .await
@@ -682,6 +683,19 @@ async fn unreachable_remembered_server_suggests_remote_logout() {
     assert_eq!(code, 1);
     let rendered = format!("{error:?}");
     assert!(rendered.contains("patchula remote logout"), "{rendered}");
+
+    // A freshly discovered (not yet remembered) server does not tell you to forget it.
+    let unpinned = Server {
+        url: SERVER.into(),
+        app: Some("Iv23client".into()),
+        remembered: false,
+    };
+    let (code, error) = report(&svc, &unpinned, vec!["acme/app".into()], Mode::Lookup)
+        .await
+        .unwrap_err();
+    assert_eq!(code, 1);
+    let rendered = format!("{error:?}");
+    assert!(!rendered.contains("patchula remote logout"), "{rendered}");
 }
 
 #[tokio::test]

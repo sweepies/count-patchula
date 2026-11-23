@@ -34,11 +34,16 @@ use crate::{fail, usage};
 pub struct Server {
     pub url: String,
     app: Option<String>,
+    remembered: bool,
 }
 impl Server {
     /// A server the user named.
     pub fn named(url: String) -> Self {
-        Self { url, app: None }
+        Self {
+            url,
+            app: None,
+            remembered: false,
+        }
     }
 }
 
@@ -222,7 +227,7 @@ pub async fn sign_in(services: &Services, target: &Server) -> Result<String> {
 /// When a remembered server can no longer be reached, tell the user how to
 /// clear the pin.
 fn unreachable_hint(target: &Server, error: (u8, miette::Report)) -> (u8, miette::Report) {
-    if target.app.is_some() && error.0 == crate::FAILED {
+    if target.remembered && error.0 == crate::FAILED {
         let host = Url::parse(&target.url)
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned));
@@ -277,6 +282,7 @@ impl Remembered {
         Server {
             url: self.server,
             app: Some(self.app),
+            remembered: true,
         }
     }
 }
@@ -302,6 +308,7 @@ pub async fn find(services: &Services, repository: &str) -> Result<Option<(Serve
         Server {
             url: server,
             app: Some(app),
+            remembered: false,
         },
         true,
     )))
@@ -327,7 +334,7 @@ pub fn remember(services: &Services, repository: &str, target: &Server) -> Resul
         },
     )?;
     eprintln!(
-        "patchula: remembered {} (App {app}) for {repository}; `patchula remote logout --server {}` forgets it",
+        "patchula: remembered {} (App {app}) for {repository}; `patchula remote logout --server {}` signs out and forgets it",
         target.url, target.url
     );
     Ok(())
@@ -370,7 +377,7 @@ async fn discover(services: &Services, repository: &str) -> Option<(String, Stri
     // Public repositories answer without a token.
     let token = services.token().await;
     let mut apps: BTreeMap<String, Option<String>> = BTreeMap::new();
-    let mut probed_servers = std::collections::BTreeSet::new();
+    let mut probed_servers: BTreeMap<String, Option<(String, String)>> = BTreeMap::new();
     let mut checked = std::collections::BTreeSet::new();
     for page in 1..=DISCOVERY_PAGES {
         let url = format!(
@@ -410,16 +417,23 @@ async fn discover(services: &Services, repository: &str) -> Option<(String, Stri
             let Some(app_id) = app else {
                 continue;
             };
-            if !probed_servers.contains(&server) {
-                if probed_servers.len() >= DISCOVERY_SERVER_LIMIT {
-                    continue;
+            let info = match probed_servers.get(&server) {
+                Some(cached) => cached.clone(),
+                None => {
+                    if probed_servers.len() >= DISCOVERY_SERVER_LIMIT {
+                        continue;
+                    }
+                    let fetched = auth_info(services, &server)
+                        .await
+                        .map(|info| (info.bot, info.client_id));
+                    probed_servers.insert(server.clone(), fetched.clone());
+                    fetched
                 }
-                probed_servers.insert(server.clone());
-            }
-            let Some(info) = auth_info(services, &server).await else {
+            };
+            let Some((bot, client_id)) = info else {
                 continue;
             };
-            if info.bot == author.login && info.client_id == app_id {
+            if bot == author.login && client_id == app_id {
                 return Some((server, app_id));
             }
         }

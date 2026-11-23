@@ -455,7 +455,8 @@ Usage: patchula remote login [--server <URL>]
 
 Flags:
       --server <URL>  Server URL; overrides PATCHULA_SERVER. With neither set,
-                      discovers the server advertised by this checkout.
+                      uses the server remembered for, or advertised by, this
+                      checkout.
   -h, --help          Print help
 
 Global flags:
@@ -499,7 +500,8 @@ Arguments:
 
 Flags:
       --server <URL>  Server URL; overrides PATCHULA_SERVER. With neither set, a
-                      single repository discovers the server it advertises.
+                      single repository uses the server remembered for, or
+                      advertised by, it.
   -h, --help          Print help
 
 Global flags:
@@ -524,7 +526,8 @@ Arguments:
 
 Flags:
       --server <URL>  Server URL; overrides PATCHULA_SERVER. With neither set, a
-                      single repository discovers the server it advertises.
+                      single repository uses the server remembered for, or
+                      advertised by, it.
       --dry-run       Print planned branches, files and unified diffs without
                       writing to GitHub.
   -h, --help          Print help
@@ -550,7 +553,8 @@ Arguments:
 
 Flags:
       --server <URL>  Server URL; overrides PATCHULA_SERVER. With neither set, a
-                      single repository discovers the server it advertises.
+                      single repository uses the server remembered for, or
+                      advertised by, it.
       --once          Print a plain-text snapshot of the updates and exit with
                       `lookup`'s exit code, for pipes and CI logs.
   -h, --help          Print help

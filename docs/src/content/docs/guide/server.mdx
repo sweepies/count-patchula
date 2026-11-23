@@ -242,12 +242,14 @@ deadline.
 The server hides its URL in an HTML comment in each PR and dashboard it writes.
 When `patchula remote` runs one repository with neither `--server` nor
 `PATCHULA_SERVER`, it looks for that comment in the 500 most recently updated
-open issues and PRs. The comment counts only if a GitHub App wrote it, the
-server names that App's bot at `/api/v1/auth`, and GitHub's own description of
-that App (`GET /apps/{slug}`) has the client ID the server hands out for
-sign-in. A comment pasted by a person is ignored, and a server advertised in
-another App's comment can only ever sign you in to that other App, never to the
-Count's; when GitHub cannot be asked, nothing is found.
+open issues and PRs. The comment counts only if a GitHub App wrote it, the server names that App's
+bot at `/api/v1/auth`, and GitHub's own description of that App
+(`GET /apps/{slug}`) has the client ID the server hands out for sign-in. A
+comment pasted by a person is ignored, and a server advertised in another App's
+comment can only ever sign you in to that other App, never to the Count's; when
+GitHub cannot be asked, nothing is found. Discovery probes at most five distinct
+advertised servers per scan; pass `--server <URL>` (or set `PATCHULA_SERVER`) if
+the repository's server is not found.
 
 Once found and used successfully, the server URL and its verified App client ID
 are remembered for that repository in `~/.config/patchula/remotes.json` (with a

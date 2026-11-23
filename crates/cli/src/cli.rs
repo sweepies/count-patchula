@@ -267,7 +267,7 @@ pub enum RemoteCommand {
 
 #[derive(Args)]
 pub struct RemoteLogin {
-    /// Server URL; overrides PATCHULA_SERVER. With neither set, discovers the server advertised by this checkout.
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, uses the server remembered for, or advertised by, this checkout.
     #[usage(long, value_name = "URL")]
     pub server: Option<String>,
 }
@@ -284,7 +284,7 @@ pub struct RemoteLookup {
     /// Repositories as owner/repo; omit for this checkout's GitHub repository.
     #[usage(value_name = "OWNER/REPO")]
     pub repositories: Vec<String>,
-    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises.
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it.
     #[usage(long, value_name = "URL")]
     pub server: Option<String>,
 }
@@ -294,7 +294,7 @@ pub struct RemoteRun {
     /// Repositories as owner/repo; omit for this checkout's GitHub repository.
     #[usage(value_name = "OWNER/REPO")]
     pub repositories: Vec<String>,
-    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises.
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it.
     #[usage(long, value_name = "URL")]
     pub server: Option<String>,
     /// Print planned branches, files and unified diffs without writing to GitHub.
@@ -307,7 +307,7 @@ pub struct RemoteTui {
     /// Repositories as owner/repo; omit for this checkout's GitHub repository.
     #[usage(value_name = "OWNER/REPO")]
     pub repositories: Vec<String>,
-    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository discovers the server it advertises.
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it.
     #[usage(long, value_name = "URL")]
     pub server: Option<String>,
     /// Print a plain-text snapshot of the updates and exit with `lookup`'s exit code, for pipes and CI logs.
