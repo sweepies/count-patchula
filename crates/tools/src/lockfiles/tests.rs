@@ -2477,8 +2477,29 @@ impl Executor for MiseFixture {
             if self.fault == "failure" {
                 return Err(Failure::Io("offline fixture failure".into()));
             }
-            if self.fault != "stale" {
+            if !self.fault.starts_with("stale") {
                 lock = lock.replace("22.0.0", "24.0.0");
+            }
+            // An older mise writes back an entry without a field it does not
+            // know.
+            if self.fault.ends_with("drop-field") {
+                lock = lock
+                    .lines()
+                    .filter(|line| !line.starts_with("checksum_source"))
+                    .map(|line| format!("{line}\n"))
+                    .collect();
+            }
+            if self.fault == "add-unrelated" {
+                lock.push_str("\n[[tools.deno]]\nversion = \"2.0.0\"\nbackend = \"core:deno\"\nspecifiers = [\"2.0.0\"]\n");
+            }
+            if self.fault == "add-selected" {
+                lock.push_str("\n[[tools.deno]]\nversion = \"24.0.0\"\nbackend = \"core:deno\"\nspecifiers = [\"24.0.0\"]\n");
+            }
+            if self.fault == "remove-unrelated" {
+                lock = lock[..lock.find("[[tools.bun]]").unwrap()].to_string();
+            }
+            if self.fault == "metadata" {
+                lock = lock.replace("lockfile_version = 1", "lockfile_version = 2");
             }
             if self.fault == "specifiers" {
                 lock = lock.replace("specifiers = [\"24.0.0\"]", "specifiers = [\"latest\"]");
@@ -2606,6 +2627,236 @@ async fn mise_lock_is_targeted_scrubbed_and_committed_with_each_supported_manife
             assert_eq!(calls[0].last().unwrap(), "node");
             assert!(calls[0].iter().any(|arg| arg == "linux-x64,macos-arm64"));
         }
+    }
+}
+
+/// A targeted update of `name` from 22.0.0 to 24.0.0 in `mise.toml`, with
+/// the fake mise applying `fault`. Answers the plan and the `mise lock` calls.
+async fn mise_update(
+    manifest: &str,
+    lock: &str,
+    name: &str,
+    fault: &'static str,
+) -> (Plan, Vec<Vec<String>>) {
+    let files = BTreeMap::from([
+        ("mise.toml".to_string(), manifest.to_string()),
+        ("mise.lock".to_string(), lock.to_string()),
+    ]);
+    let executor = Arc::new(MiseFixture {
+        git: fixture(files.clone(), false, false),
+        fault,
+        calls: Mutex::new(Vec::new()),
+        tomls: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = test_runner(temp.path(), executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let dep = patchula_manager::Scanner::new(&config)
+        .unwrap()
+        .extract(&patchula_manager::all_read(&files))
+        .unwrap()
+        .dependencies
+        .into_iter()
+        .find(|d| d.name == name)
+        .unwrap();
+    let update = Update {
+        new_version: Some("24.0.0".into()),
+        new_value: Some("24.0.0".into()),
+        ..serde_json::from_value(serde_json::json!({"updateType":"major"})).unwrap()
+    };
+    let job = job(&dep, &update, &snapshot).unwrap().unwrap();
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
+        .unwrap()
+        .unwrap();
+    p = Draft::from(p)
+        .update()
+        .lock_jobs(vec![job])
+        .edit(
+            "mise.toml",
+            manifest.replace("22.0.0", "24.0.0"),
+            FileAction {
+                path: "mise.toml".into(),
+                blob_sha: blob_sha(manifest),
+                diff: String::new(),
+            },
+        )
+        .build();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    let calls = executor.calls.lock().unwrap().clone();
+    (p, calls)
+}
+
+/// The committed lock as a newer mise wrote it: a field the Count's mise
+/// does not know on an unrelated tool's platform entry.
+fn lock_with_newer_field() -> String {
+    include_str!("fixtures/mise.lock").replace(
+        "checksum = \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"\n",
+        "checksum = \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"\nchecksum_source = \"mise-versions\"\n",
+    )
+}
+
+/// mise writes the whole lockfile back, and one older than the mise that
+/// wrote it drops the fields it does not know. Every entry the update did
+/// not change keeps its committed bytes.
+#[tokio::test]
+async fn mise_lock_keeps_the_committed_bytes_of_entries_it_did_not_change() {
+    let lock = lock_with_newer_field();
+    let (p, _) = mise_update(
+        "[tools]\nnode = '22.0.0'\nbun = '1.4.3'\n",
+        &lock,
+        "node",
+        "drop-field",
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    assert_eq!(p.contents()["mise.lock"], lock.replace("22.0.0", "24.0.0"));
+}
+
+/// A change mise makes beyond the selected tool holds the update: another
+/// tool's entry changed, added or removed, or the lockfile's own metadata.
+#[tokio::test]
+async fn mise_lock_holds_changes_the_update_did_not_ask_for() {
+    for fault in ["unrelated", "add-unrelated", "remove-unrelated", "metadata"] {
+        let (p, _) = mise_update(
+            "[tools]\nnode = '22.0.0'\nbun = '1.4.3'\n",
+            include_str!("fixtures/mise.lock"),
+            "node",
+            fault,
+        )
+        .await;
+        assert_eq!(
+            p.action().status,
+            BranchStatus::Error,
+            "{fault}: {:?}",
+            p.action()
+        );
+        assert!(!p.contents().contains_key("mise.lock"), "{fault}");
+    }
+}
+
+/// mise records a tool under its short name: without bracketed options or
+/// `core:`, and with `nodejs` unaliased. The Count finds the entry there and
+/// still hands mise the manifest's spelling.
+#[tokio::test]
+async fn mise_lock_finds_a_tool_under_the_name_mise_records() {
+    for (declared, recorded) in [
+        ("github:acme/tool[bin=tool]", "\"github:acme/tool\""),
+        ("nodejs", "node"),
+        ("core:node", "node"),
+    ] {
+        let lock = include_str!("fixtures/mise.lock").replace(
+            "[[tools.node]]\nversion = \"22.0.0\"\nbackend = \"core:node\"\nspecifiers = [\"22.0.0\"]\n[tools.node.\"platforms.linux-x64\"]\nurl = \"https://example.invalid/node/22.0.0/linux.tar.gz\"\nchecksum = \"sha256:0000000000000000000000000000000000000000000000000000000000000000\"\n[tools.node.\"platforms.macos-arm64\"]\nurl = \"https://example.invalid/node/22.0.0/macos.tar.gz\"\nchecksum = \"sha256:1111111111111111111111111111111111111111111111111111111111111111\"\n",
+            &format!("[[tools.{recorded}]]\nversion = \"22.0.0\"\nbackend = \"core:node\"\nspecifiers = [\"22.0.0\"]\n[tools.{recorded}.\"platforms.linux-x64\"]\nurl = \"https://example.invalid/node/22.0.0/linux.tar.gz\"\nchecksum = \"sha256:0000000000000000000000000000000000000000000000000000000000000000\"\n"),
+        );
+        let (p, calls) = mise_update(
+            &format!("[tools]\n\"{declared}\" = '22.0.0'\nbun = '1.4.3'\n"),
+            &lock,
+            declared,
+            "",
+        )
+        .await;
+        assert_eq!(
+            p.action().status,
+            BranchStatus::Planned,
+            "{declared}: {:?}",
+            p.action()
+        );
+        assert_eq!(
+            p.contents()["mise.lock"],
+            lock.replace("22.0.0", "24.0.0"),
+            "{declared}"
+        );
+        assert_eq!(calls[0].last().unwrap(), declared);
+        // The tool's own platforms, not every platform the lockfile records.
+        assert!(
+            calls[0].iter().any(|arg| arg == "linux-x64"),
+            "{declared}: {:?}",
+            calls[0]
+        );
+    }
+}
+
+/// A selected tool the committed lock has no entry for yet gets mise's
+/// entry, placed before the first committed tool whose name sorts after it;
+/// every committed byte stays.
+#[tokio::test]
+async fn mise_lock_inserts_a_tool_the_lock_did_not_record() {
+    let lock = &include_str!("fixtures/mise.lock").replace("22.0.0", "20.0.0");
+    let (p, _) = mise_update(
+        "[tools]\nnode = '20.0.0'\nbun = '1.4.3'\ndeno = '22.0.0'\n",
+        lock,
+        "deno",
+        "add-selected",
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let written = &p.contents()["mise.lock"];
+    let block = "[[tools.deno]]\nversion = \"24.0.0\"\nbackend = \"core:deno\"\nspecifiers = [\"24.0.0\"]\n\n";
+    // Before node, the first committed tool whose name sorts after it.
+    let at = written.find(block).expect("deno's entry");
+    assert!(at < written.find("[[tools.node]]").unwrap(), "{written}");
+    assert_eq!(written.replacen(block, "", 1).trim_end(), lock.trim_end());
+}
+
+/// Two declarations mise records under one name leave the Count unable to
+/// say which one the lock answers, so the update holds.
+#[tokio::test]
+async fn mise_lock_holds_two_spellings_of_one_tool() {
+    let (p, calls) = mise_update(
+        "[tools]\nnode = '22.0.0'\nnodejs = '22.0.0'\nbun = '1.4.3'\n",
+        include_str!("fixtures/mise.lock"),
+        "node",
+        "",
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    assert!(calls.is_empty());
+}
+
+/// Maintenance locks every tool the lockfile names, a manifest declaring one
+/// with options included, and keeps the committed bytes of the entries mise
+/// wrote back without a field.
+#[tokio::test]
+async fn mise_lock_maintenance_follows_recorded_names_and_keeps_unchanged_bytes() {
+    let lock = format!(
+        "{}\n[[tools.\"github:acme/tool\"]]\nversion = \"1.0.0\"\nbackend = \"github:acme/tool\"\nspecifiers = [\"1.0.0\"]\n",
+        lock_with_newer_field()
+    );
+    let files = BTreeMap::from([
+        (
+            "mise.toml".to_string(),
+            "[tools]\nnode = '22.0.0'\nbun = '1.4.3'\n\"github:acme/tool[bin=tool]\" = '1.0.0'\n"
+                .to_string(),
+        ),
+        ("mise.lock".to_string(), lock.clone()),
+    ]);
+    let executor = Arc::new(MiseFixture {
+        git: fixture(files.clone(), false, false),
+        fault: "stale-drop-field",
+        calls: Mutex::new(Vec::new()),
+        tomls: Mutex::new(Vec::new()),
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let runner = test_runner(temp.path(), executor.clone());
+    let mut snapshot = snapshot(&files);
+    let config = config();
+    let mut p = maintenance(&repo(), &config, &snapshot, &[], None, monday())
+        .unwrap()
+        .unwrap();
+    prepare_one(&runner, &mut p, &mut snapshot, &config).await;
+    assert_ne!(p.action().status, BranchStatus::Error, "{:?}", p.action());
+    let calls = executor.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert!(
+        calls[0]
+            .iter()
+            .any(|arg| arg == "github:acme/tool[bin=tool]"),
+        "{:?}",
+        calls[0]
+    );
+    if let Some(written) = p.contents().get("mise.lock") {
+        assert_eq!(*written, lock);
     }
 }
 

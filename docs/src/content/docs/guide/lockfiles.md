@@ -52,6 +52,16 @@ plugin backend first, such as `yarn` or `poetry`, is locked with its next
 backend (`aqua:yarnpkg/berry`, `pypi:poetry`), and the lock entry's `backend`
 records that one.
 
+The Count finds a tool's lock entry under the name mise records it by: without
+bracketed options or a `core:` prefix, and with `nodejs`, `golang` and
+`dotnet-core` written as `node`, `go` and `dotnet`. Two declarations that mise
+records under one name, such as `node` and `nodejs`, fail the update. Only the
+updated tools' entries are written. Every other entry keeps its committed bytes,
+including fields a newer mise wrote that the Count's mise does not know. Any
+other change mise makes fails the update with the entries it changed: another
+tool's entry, an entry added or removed, or the lockfile's own metadata such as
+`lockfile_version`.
+
 A Cargo update across a semver-incompatible boundary, such as `0.22` to `0.23`
 or `1.x` to `2.x`, adds a second entry beside the old one, because other crates
 may still require it. The Count runs `cargo update --workspace` for it, which

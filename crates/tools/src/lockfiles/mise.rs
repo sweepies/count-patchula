@@ -94,6 +94,172 @@ fn parsed(text: &str) -> Result<Value, String> {
         doc.iter().map(|(k, v)| (k.into(), item(v))).collect(),
     ))
 }
+/// The top-level keys that differ between two parsed lockfiles.
+fn changed(before: &Value, after: &Value) -> Vec<String> {
+    let empty = serde_json::Map::new();
+    let keys = |value: &Value| -> BTreeSet<String> {
+        value
+            .as_object()
+            .unwrap_or(&empty)
+            .keys()
+            .cloned()
+            .collect()
+    };
+    keys(before)
+        .union(&keys(after))
+        .filter(|key| before.get(key.as_str()) != after.get(key.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// The key mise records a tool under in `mise.lock`: its `BackendArg` short
+/// name, which drops the bracketed options and any leading `core:`, and
+/// unaliases `nodejs`, `golang` and `dotnet-core` (`BackendArg::from`,
+/// `strip_opts` and `unalias_backend` in mise's source). Registry shorthands
+/// stay as written: `gh` is recorded as `gh`. Only meaningful for a name
+/// `patchula_mise::check` admits, whose brackets close at its end.
+fn lock_key(tool: &str) -> String {
+    let name = patchula_mise::split(tool).0;
+    let name = name.trim_start_matches("core:");
+    match name {
+        "nodejs" => "node",
+        "golang" => "go",
+        "dotnet-core" => "dotnet",
+        name => name,
+    }
+    .to_owned()
+}
+
+/// A parsed lockfile without its `tools` table.
+fn without_tools(lock: &Value) -> Value {
+    let mut lock = lock.clone();
+    if let Some(top) = lock.as_object_mut() {
+        top.remove("tools");
+    }
+    lock
+}
+
+/// Whether `after` is `before` with nothing changed but table keys left out,
+/// as a mise that does not know a field writes an entry back. Arrays keep
+/// their length and scalars their value.
+fn omits_only(before: &Value, after: &Value) -> bool {
+    match (before, after) {
+        (Value::Object(before), Value::Object(after)) => after.iter().all(|(key, after)| {
+            before
+                .get(key)
+                .is_some_and(|before| omits_only(before, after))
+        }),
+        (Value::Array(before), Value::Array(after)) => {
+            before.len() == after.len()
+                && before
+                    .iter()
+                    .zip(after)
+                    .all(|(before, after)| omits_only(before, after))
+        }
+        (before, after) => before == after,
+    }
+}
+
+/// One table section of a lockfile: its header line through the line before
+/// the next header, and the `tools` entry it belongs to, if any.
+struct Section<'a> {
+    tool: Option<String>,
+    text: &'a str,
+}
+
+/// `text` split at its table headers: what precedes the first header, then
+/// each section. A header starts in the first column, as mise writes it; a
+/// first-column `[` line that is no header is refused rather than guessed.
+fn sections(text: &str) -> Result<(&str, Vec<Section<'_>>), String> {
+    let mut starts = Vec::new();
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        if line.starts_with('[') {
+            let header = line.trim_end();
+            let inner = header
+                .strip_prefix("[[")
+                .and_then(|rest| rest.strip_suffix("]]"))
+                .or_else(|| {
+                    header
+                        .strip_prefix('[')
+                        .and_then(|rest| rest.strip_suffix(']'))
+                })
+                .ok_or_else(|| format!("mise.lock: unreadable table header {header}"))?;
+            let keys = toml_edit::Key::parse(inner.trim())
+                .map_err(|e| format!("mise.lock: unreadable table header {header}: {e}"))?;
+            let tool = match keys.as_slice() {
+                [tools, tool, ..] if tools.get() == "tools" => Some(tool.get().to_owned()),
+                _ => None,
+            };
+            starts.push((offset, tool));
+        }
+        offset += line.len();
+    }
+    let preamble = &text[..starts.first().map_or(text.len(), |(start, _)| *start)];
+    let sections = starts
+        .iter()
+        .enumerate()
+        .map(|(i, (start, tool))| Section {
+            tool: tool.clone(),
+            text: &text[*start..starts.get(i + 1).map_or(text.len(), |(next, _)| *next)],
+        })
+        .collect();
+    Ok((preamble, sections))
+}
+
+/// The committed lockfile with each `take` tool's sections replaced by the
+/// generated lockfile's, every other byte kept. A taken tool the committed
+/// lock lacks is inserted before the first tool that sorts after it.
+fn graft(original: &str, generated: &str, take: &BTreeSet<String>) -> Result<String, String> {
+    let (preamble, committed) = sections(original)?;
+    let (_, fresh) = sections(generated)?;
+    let mut blocks: BTreeMap<&str, String> = BTreeMap::new();
+    for section in &fresh {
+        if let Some(tool) = section.tool.as_deref().filter(|tool| take.contains(*tool)) {
+            let block = blocks.entry(tool).or_default();
+            block.push_str(section.text);
+        }
+    }
+    // A block cut from the end of the generated file may lack the blank
+    // line that separates it from the next section.
+    for block in blocks.values_mut() {
+        if !block.ends_with("\n\n") {
+            block.push_str(if block.ends_with('\n') { "\n" } else { "\n\n" });
+        }
+    }
+    let present: BTreeSet<&str> = committed.iter().filter_map(|s| s.tool.as_deref()).collect();
+    let mut inserts: Vec<&str> = blocks
+        .keys()
+        .copied()
+        .filter(|tool| !present.contains(tool))
+        .collect();
+    inserts.reverse();
+    let mut out = String::from(preamble);
+    let mut emitted = BTreeSet::new();
+    for section in &committed {
+        if let Some(tool) = section.tool.as_deref() {
+            while inserts.last().is_some_and(|insert| *insert < tool) {
+                out.push_str(&blocks[inserts.pop().unwrap()]);
+            }
+            if take.contains(tool) {
+                if emitted.insert(tool) {
+                    out.push_str(blocks.get(tool).ok_or(
+                        "mise lock wrote a selected tool in a form the Count cannot graft",
+                    )?);
+                }
+                continue;
+            }
+        }
+        out.push_str(section.text);
+    }
+    while let Some(insert) = inserts.pop() {
+        out.push_str(&blocks[insert]);
+    }
+    // The file ends as the committed one does.
+    let ending = if original.ends_with('\n') { "\n" } else { "" };
+    Ok(format!("{}{ending}", out.trim_end()))
+}
+
 fn platforms(entries: &Value) -> BTreeSet<String> {
     entries
         .as_array()
@@ -276,7 +442,7 @@ fn task_declarations(
         out.extend(
             declarations
                 .iter()
-                .filter(|(name, _)| selected.contains(*name))
+                .filter(|(name, _)| selected.contains(&lock_key(name)))
                 .map(|(name, spec)| (name.to_owned(), spec.clone())),
         );
     }
@@ -307,11 +473,14 @@ impl Runner {
         let old_tools = before["tools"]
             .as_object()
             .ok_or("mise.lock has no tool entries")?;
-        let selected: BTreeSet<_> = if maintenance {
+        // The selected tools by the key mise records them under in
+        // mise.lock; a manifest may spell a tool otherwise (`nodejs`,
+        // `x[bin=y]`), and mise is handed the manifest's spelling.
+        let selected: BTreeSet<String> = if maintenance {
             old_tools.keys().cloned().collect()
         } else {
             jobs.iter()
-                .filter_map(|job| job.package().map(str::to_owned))
+                .filter_map(|job| job.package().map(lock_key))
                 .collect()
         };
         let work = driver.join(format!("mise-lock-{}", hash(directory.as_bytes())));
@@ -332,7 +501,7 @@ impl Runner {
         for path in paths {
             let text = std::fs::read_to_string(root.join(path)).map_err(|e| e.to_string())?;
             for (name, pin) in pins(path, &text)? {
-                if !selected.contains(name.as_str()) {
+                if !selected.contains(&lock_key(&name)) {
                     continue;
                 }
                 match pin {
@@ -407,9 +576,6 @@ impl Runner {
                 }
             }
         }
-        if selected.is_empty() || selected.iter().any(|name| !tools.contains_key(name)) {
-            return Err("mise.lock tool has no literal project declaration".into());
-        }
         // mise locks each tool with its options as it would list it, so each
         // passes the checks a lookup makes before mise sees it.
         let requested = tools
@@ -421,6 +587,20 @@ impl Runner {
             patchula_mise::admit(&tool)
                 .await
                 .map_err(|e| format!("mise.lock is not regenerated: {e}"))?;
+        }
+        // Each selected lock key and the one manifest name that declares it,
+        // read once every name is admitted, so its brackets close at its end.
+        let mut manifest: BTreeMap<String, String> = BTreeMap::new();
+        for (name, _) in tools.iter() {
+            if let Some(other) = manifest.insert(lock_key(name), name.to_owned()) {
+                return Err(format!(
+                    "mise.lock records {name} and {other} under one name; the Count cannot tell which to lock"
+                )
+                .into());
+            }
+        }
+        if selected.is_empty() || selected.iter().any(|key| !manifest.contains_key(key)) {
+            return Err("mise.lock tool has no literal project declaration".into());
         }
         let mut doc = toml_edit::DocumentMut::new();
         doc["tools"] = toml_edit::Item::Table(tools);
@@ -458,7 +638,7 @@ impl Runner {
                 format!("{}h", config.defaults.wait_hours),
             ]);
         }
-        args.extend(selected.iter().cloned());
+        args.extend(manifest.values().cloned());
         self.tool(
             driver,
             Invocation {
@@ -484,16 +664,9 @@ impl Runner {
         let generated =
             std::fs::read_to_string(work.join("mise.lock")).map_err(|e| e.to_string())?;
         let after = parsed(&generated)?;
-        let mut untouched_before = before.clone();
-        let mut untouched_after = after.clone();
-        for name in &selected {
-            if let Some(tools) = untouched_before["tools"].as_object_mut() {
-                tools.remove(name);
-            }
-            if let Some(tools) = untouched_after["tools"].as_object_mut() {
-                tools.remove(name);
-            }
-            let entries = after["tools"][name]
+        for key in &selected {
+            let name = &manifest[key];
+            let entries = after["tools"][key]
                 .as_array()
                 .filter(|entries| !entries.is_empty())
                 .ok_or("mise lock removed a selected tool")?;
@@ -521,12 +694,12 @@ impl Runner {
                 )
                 .into());
             }
-            if !platforms(&before["tools"][name]).is_subset(&platforms(&after["tools"][name])) {
+            if !platforms(&before["tools"][key]).is_subset(&platforms(&after["tools"][key])) {
                 return Err(format!("mise lock dropped an existing platform for {name}").into());
             }
             for job in jobs
                 .iter()
-                .filter(|job| job.package() == Some(name.as_str()))
+                .filter(|job| job.package().map(lock_key).as_ref() == Some(key))
             {
                 if let Some(target) = job.target()
                     && !entries.iter().any(|entry| {
@@ -539,8 +712,51 @@ impl Runner {
                 }
             }
         }
-        if untouched_before != untouched_after {
-            return Err("mise lock changed unrelated entries or lockfile metadata".into());
+        // Everything outside `tools` is the lockfile's own metadata and
+        // sections a tool entry may refer to: any change, a lost key
+        // included, holds.
+        if without_tools(&before) != without_tools(&after) {
+            return Err(format!(
+                "mise lock changed lockfile metadata: {}",
+                changed(&without_tools(&before), &without_tools(&after)).join(", ")
+            )
+            .into());
+        }
+        // A tool entry mise left alone, or wrote back without fields it does
+        // not know, keeps its committed bytes: a newer mise may have written
+        // them. A selected tool mise changed takes mise's entry. Any other
+        // change is one the Count did not ask for and holds.
+        let empty = serde_json::Map::new();
+        let old = before["tools"].as_object().unwrap_or(&empty);
+        let new = after["tools"].as_object().unwrap_or(&empty);
+        let mut take = BTreeSet::new();
+        let mut unrelated = Vec::new();
+        for key in old.keys().chain(new.keys()).collect::<BTreeSet<_>>() {
+            match (old.get(key), new.get(key)) {
+                (Some(old), Some(new)) if omits_only(old, new) => {}
+                (_, Some(_)) if selected.contains(key) => {
+                    take.insert(key.clone());
+                }
+                _ => unrelated.push(format!("tools.{key}")),
+            }
+        }
+        if !unrelated.is_empty() {
+            return Err(format!(
+                "mise lock changed unrelated entries: {}",
+                unrelated.join(", ")
+            )
+            .into());
+        }
+        let grafted = graft(original, &generated, &take)?;
+        // The grafted text must read as the committed lock with exactly the
+        // taken entries replaced by mise's.
+        let written = parsed(&grafted)?;
+        let mut expected = before.clone();
+        for key in &take {
+            expected["tools"][key] = after["tools"][key].clone();
+        }
+        if written != expected {
+            return Err("the grafted mise.lock does not read back as planned".into());
         }
         if collect(&work)?
             .keys()
@@ -548,13 +764,34 @@ impl Runner {
         {
             return Err("mise lock produced unsupported sidecar files".into());
         }
-        write(root, &lock_path, &generated).map_err(Failure::from)
+        write(root, &lock_path, &grafted).map_err(Failure::from)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each declaration and the key mise 2026.11.12 recorded it under in
+    /// `mise.lock`, from `mise lock` runs on one-tool configurations.
+    #[test]
+    fn lock_keys_match_what_mise_records() {
+        for (tool, key) in [
+            ("node", "node"),
+            ("nodejs", "node"),
+            ("core:node", "node"),
+            ("core:core:node", "node"),
+            ("nodejs[os=\"linux\"]", "node"),
+            ("golang", "go"),
+            ("aqua:jdx/mise", "aqua:jdx/mise"),
+            (
+                "github:github/gh-actions-lock[bin=gh-actions-lock]",
+                "github:github/gh-actions-lock",
+            ),
+        ] {
+            assert_eq!(lock_key(tool), key, "{tool}");
+        }
+    }
 
     fn spec(text: &str) -> toml_edit::Item {
         toml_edit::Document::parse(format!("tool = {text}"))
