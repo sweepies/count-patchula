@@ -47,7 +47,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 01:03:41 GMT"
+            "Mon, 23 Nov 2026 19:48:06 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -71,13 +71,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "B0A6:3372F4:4E6546:781EA0:6AF7B36C"
+            "C9A8:0934:381F2:62C80:6B049875"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -86,16 +86,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4921"
+            "4969"
           ],
           "x-ratelimit-reset": [
-            "1794620669"
+            "1795466078"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "79"
+            "31"
           ],
           "x-xss-protection": [
             "0"
@@ -157,6 +157,159 @@
         "body": {
           "format": "json",
           "value": {
+            "query": "query($owner0: String!, $name0: String!, $oid0: GitObjectID!, $tag0: String!, $head0: String!, $tagRef0: String!, $headRef0: String!, $owner1: String!, $name1: String!, $oid1: GitObjectID!, $tag1: String!, $head1: String!, $tagRef1: String!, $headRef1: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid0) { oid } tag: object(expression: $tag0) { oid } head: object(expression: $head0) { oid } tagRef: ref(qualifiedName: $tagRef0) { name } headRef: ref(qualifiedName: $headRef0) { name } } a1: repository(owner: $owner1, name: $name1) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid1) { oid } tag: object(expression: $tag1) { oid } head: object(expression: $head1) { oid } tagRef: ref(qualifiedName: $tagRef1) { name } headRef: ref(qualifiedName: $headRef1) { name } } }",
+            "variables": {
+              "head0": "refs/heads/v7.0.0^{commit}",
+              "head1": "refs/heads/v7.0.1^{commit}",
+              "headRef0": "refs/heads/v7.0.0",
+              "headRef1": "refs/heads/v7.0.1",
+              "name0": "checkout",
+              "name1": "checkout",
+              "oid0": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+              "oid1": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+              "owner0": "actions",
+              "owner1": "actions",
+              "tag0": "refs/tags/v7.0.0^{commit}",
+              "tag1": "refs/tags/v7.0.1^{commit}",
+              "tagRef0": "refs/tags/v7.0.0",
+              "tagRef1": "refs/tags/v7.0.1"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Mon, 23 Nov 2026 19:48:06 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "switzerlandnorth"
+          ],
+          "x-github-media-type": [
+            "github.v4; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "C9A8:0934:3820B:62CA0:6B049876"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4910"
+          ],
+          "x-ratelimit-reset": [
+            "1795465792"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "90"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "a0": {
+                "commit": {
+                  "oid": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                },
+                "databaseId": 197814629,
+                "head": null,
+                "headRef": null,
+                "nameWithOwner": "actions/checkout",
+                "owner": {
+                  "databaseId": 44036562
+                },
+                "tag": {
+                  "oid": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+                },
+                "tagRef": {
+                  "name": "v7.0.0"
+                }
+              },
+              "a1": {
+                "commit": {
+                  "oid": "3d3c42e5aac5ba805825da76410c181273ba90b1"
+                },
+                "databaseId": 197814629,
+                "head": null,
+                "headRef": null,
+                "nameWithOwner": "actions/checkout",
+                "owner": {
+                  "databaseId": 44036562
+                },
+                "tag": {
+                  "oid": "3d3c42e5aac5ba805825da76410c181273ba90b1"
+                },
+                "tagRef": {
+                  "name": "v7.0.1"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
             "query": "query($owner0: String!, $name0: String!, $expr0: String!, $yml0: String!, $yaml0: String!, $docker0: String!, $dockerLower0: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner object(expression: $expr0) { ... on Commit { oid file: file(path: $yml0) { object { ... on Blob { text } } } fileYaml: file(path: $yaml0) { object { ... on Blob { text } } } dockerfile: file(path: $docker0) { oid } dockerfileLower: file(path: $dockerLower0) { oid } } } } }",
             "variables": {
               "docker0": "Dockerfile",
@@ -186,7 +339,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 01:03:41 GMT"
+            "Mon, 23 Nov 2026 19:48:06 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -210,13 +363,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "B0A6:3372F4:4E68BA:7823F8:6AF7B36D"
+            "C9A8:0934:3820B:62CA2:6B049876"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -225,16 +378,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4920"
+            "4911"
           ],
           "x-ratelimit-reset": [
-            "1794620669"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "80"
+            "89"
           ],
           "x-xss-protection": [
             "0"
@@ -312,159 +465,6 @@
     },
     {
       "request": {
-        "method": "POST",
-        "url": "https://api.github.com/graphql",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "query": "query($owner0: String!, $name0: String!, $oid0: GitObjectID!, $tag0: String!, $head0: String!, $tagRef0: String!, $headRef0: String!, $owner1: String!, $name1: String!, $oid1: GitObjectID!, $tag1: String!, $head1: String!, $tagRef1: String!, $headRef1: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid0) { oid } tag: object(expression: $tag0) { oid } head: object(expression: $head0) { oid } tagRef: ref(qualifiedName: $tagRef0) { name } headRef: ref(qualifiedName: $headRef0) { name } } a1: repository(owner: $owner1, name: $name1) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid1) { oid } tag: object(expression: $tag1) { oid } head: object(expression: $head1) { oid } tagRef: ref(qualifiedName: $tagRef1) { name } headRef: ref(qualifiedName: $headRef1) { name } } }",
-            "variables": {
-              "head0": "refs/heads/v7.0.0^{commit}",
-              "head1": "refs/heads/v7.0.1^{commit}",
-              "headRef0": "refs/heads/v7.0.0",
-              "headRef1": "refs/heads/v7.0.1",
-              "name0": "checkout",
-              "name1": "checkout",
-              "oid0": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-              "oid1": "3d3c42e5aac5ba805825da76410c181273ba90b1",
-              "owner0": "actions",
-              "owner1": "actions",
-              "tag0": "refs/tags/v7.0.0^{commit}",
-              "tag1": "refs/tags/v7.0.1^{commit}",
-              "tagRef0": "refs/tags/v7.0.0",
-              "tagRef1": "refs/tags/v7.0.1"
-            }
-          }
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Sat, 14 Nov 2026 01:03:41 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            "repo"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v4; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "B0A6:3372F4:4E68B9:7823F5:6AF7B36D"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4919"
-          ],
-          "x-ratelimit-reset": [
-            "1794620669"
-          ],
-          "x-ratelimit-resource": [
-            "graphql"
-          ],
-          "x-ratelimit-used": [
-            "81"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "data": {
-              "a0": {
-                "commit": {
-                  "oid": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
-                },
-                "databaseId": 197814629,
-                "head": null,
-                "headRef": null,
-                "nameWithOwner": "actions/checkout",
-                "owner": {
-                  "databaseId": 44036562
-                },
-                "tag": {
-                  "oid": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
-                },
-                "tagRef": {
-                  "name": "v7.0.0"
-                }
-              },
-              "a1": {
-                "commit": {
-                  "oid": "3d3c42e5aac5ba805825da76410c181273ba90b1"
-                },
-                "databaseId": 197814629,
-                "head": null,
-                "headRef": null,
-                "nameWithOwner": "actions/checkout",
-                "owner": {
-                  "databaseId": 44036562
-                },
-                "tag": {
-                  "oid": "3d3c42e5aac5ba805825da76410c181273ba90b1"
-                },
-                "tagRef": {
-                  "name": "v7.0.1"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "request": {
         "method": "GET",
         "url": "https://api.github.com/repos/actions/checkout/tags?per_page=100",
         "headers": {
@@ -502,13 +502,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 01:03:42 GMT"
+            "Mon, 23 Nov 2026 19:48:07 GMT"
           ],
           "etag": [
             "W/\"0b0ba7b8679105501668a0b41def299b95d15cfb2a61ca31e2653262eb093898\""
           ],
           "last-modified": [
-            "Fri, 13 Nov 2026 18:40:43 GMT"
+            "Mon, 23 Nov 2026 16:34:31 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -535,13 +535,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "B0A6:3372F4:4E6CF9:782A5E:6AF7B36D"
+            "C9A8:0934:38222:62CD7:6B049876"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -550,16 +550,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4926"
+            "4903"
           ],
           "x-ratelimit-reset": [
-            "1794619196"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "74"
+            "97"
           ],
           "x-xss-protection": [
             "0"
@@ -1291,10 +1291,10 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 01:03:42 GMT"
+            "Mon, 23 Nov 2026 19:48:07 GMT"
           ],
           "etag": [
-            "W/\"199540797292b22461ca89e79e3c1176f01332d41f86bbd1ea112a4d4afb3ebb\""
+            "W/\"8778536830ae0ed4a1199491dd0316046b1bdc4ee823e8c0c60cdd980f752ac4\""
           ],
           "link": [
             "<https://api.github.com/repositories/197814629/releases?per_page=30&page=2>; rel=\"next\", <https://api.github.com/repositories/197814629/releases?per_page=30&page=2>; rel=\"last\""
@@ -1324,13 +1324,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "B0A6:3372F4:4E6F41:782DF9:6AF7B36E"
+            "C9A8:0934:38239:62D01:6B049877"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -1339,16 +1339,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4925"
+            "4900"
           ],
           "x-ratelimit-reset": [
-            "1794619196"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "75"
+            "100"
           ],
           "x-xss-protection": [
             "0"
@@ -1393,15 +1393,15 @@
               "prerelease": false,
               "published_at": "2026-07-20T15:10:05Z",
               "reactions": {
-                "+1": 8,
+                "+1": 10,
                 "-1": 0,
                 "confused": 0,
                 "eyes": 5,
-                "heart": 0,
-                "hooray": 11,
+                "heart": 2,
+                "hooray": 12,
                 "laugh": 0,
-                "rocket": 2,
-                "total_count": 26,
+                "rocket": 4,
+                "total_count": 33,
                 "url": "https://api.github.com/repos/actions/checkout/releases/356804776/reactions"
               },
               "tag_name": "v7.0.1",

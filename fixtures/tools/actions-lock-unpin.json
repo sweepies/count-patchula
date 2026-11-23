@@ -47,7 +47,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:41 GMT"
+            "Mon, 23 Nov 2026 19:48:09 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -71,13 +71,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81C0:25B751:F647E8:171A029:6AF756D9"
+            "C9D6:2B9DC1:365B4:61134:6B049879"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -86,16 +86,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4856"
+            "4903"
           ],
           "x-ratelimit-reset": [
-            "1794595595"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "144"
+            "97"
           ],
           "x-xss-protection": [
             "0"
@@ -182,7 +182,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:41 GMT"
+            "Mon, 23 Nov 2026 19:48:09 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -206,13 +206,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81C0:25B751:F64BB6:171A5C0:6AF756D9"
+            "C9D6:2B9DC1:365C4:61158:6B049879"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -221,16 +221,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4852"
+            "4900"
           ],
           "x-ratelimit-reset": [
-            "1794595595"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "148"
+            "100"
           ],
           "x-xss-protection": [
             "0"
@@ -294,13 +294,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:42 GMT"
+            "Mon, 23 Nov 2026 19:48:10 GMT"
           ],
           "etag": [
-            "W/\"e3e714f290c3154c4bfbd360765880c544ea2207c75024d9b11eb92dfb684b89\""
+            "W/\"d6cb3ba262c9e7214a38a9d923acb503430308ca99267cf65342ad13f573850c\""
           ],
           "last-modified": [
-            "Fri, 13 Nov 2026 15:56:43 GMT"
+            "Mon, 23 Nov 2026 16:34:31 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -327,13 +327,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81C0:25B751:F64FB0:171ABB9:6AF756DA"
+            "C9D6:2B9DC1:365D9:6117B:6B049879"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -342,16 +342,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4978"
+            "4893"
           ],
           "x-ratelimit-reset": [
-            "1794597892"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "22"
+            "107"
           ],
           "x-xss-protection": [
             "0"
@@ -382,8 +382,8 @@
             "downloads_url": "https://api.github.com/repos/actions/checkout/downloads",
             "events_url": "https://api.github.com/repos/actions/checkout/events",
             "fork": false,
-            "forks": 2752,
-            "forks_count": 2752,
+            "forks": 2748,
+            "forks_count": 2748,
             "forks_url": "https://api.github.com/repos/actions/checkout/forks",
             "full_name": "actions/checkout",
             "git_commits_url": "https://api.github.com/repos/actions/checkout/git/commits%7B/sha%7D",
@@ -420,11 +420,11 @@
             "milestones_url": "https://api.github.com/repos/actions/checkout/milestones%7B/number%7D",
             "mirror_url": null,
             "name": "checkout",
-            "network_count": 2752,
+            "network_count": 2748,
             "node_id": "MDEwOlJlcG9zaXRvcnkxOTc4MTQ2Mjk=",
             "notifications_url": "https://api.github.com/repos/actions/checkout/notifications%7B?since%2Call%2Cparticipating%7D=",
-            "open_issues": 703,
-            "open_issues_count": 703,
+            "open_issues": 702,
+            "open_issues_count": 702,
             "organization": {
               "avatar_url": "https://avatars.githubusercontent.com/u/44036562?v=4",
               "events_url": "https://api.github.com/users/actions/events%7B/privacy%7D",
@@ -481,10 +481,10 @@
             "releases_url": "https://api.github.com/repos/actions/checkout/releases%7B/id%7D",
             "size": 6682,
             "ssh_url": "git@github.com:actions/checkout.git",
-            "stargazers_count": 9016,
+            "stargazers_count": 9038,
             "stargazers_url": "https://api.github.com/repos/actions/checkout/stargazers",
             "statuses_url": "https://api.github.com/repos/actions/checkout/statuses/%7Bsha%7D",
-            "subscribers_count": 201,
+            "subscribers_count": 203,
             "subscribers_url": "https://api.github.com/repos/actions/checkout/subscribers",
             "subscription_url": "https://api.github.com/repos/actions/checkout/subscription",
             "svn_url": "https://github.com/actions/checkout",
@@ -493,607 +493,12 @@
             "temp_clone_token": "[REDACTED]",
             "topics": [],
             "trees_url": "https://api.github.com/repos/actions/checkout/git/trees%7B/sha%7D",
-            "updated_at": "2026-11-13T15:56:43Z",
+            "updated_at": "2026-11-23T16:34:31Z",
             "url": "https://api.github.com/repos/actions/checkout",
             "visibility": "public",
-            "watchers": 9016,
-            "watchers_count": 9016,
+            "watchers": 9038,
+            "watchers_count": 9038,
             "web_commit_signoff_required": false
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/actions/checkout/git/ref/heads/main",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "cache-control": [
-            "private, max-age=60, s-maxage=60"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Fri, 13 Nov 2026 18:28:42 GMT"
-          ],
-          "etag": [
-            "W/\"d9448b64aceeae875cc6a83ff3ac01efb659cda2709c6be9b2f1f6b8e9fdbf14\""
-          ],
-          "last-modified": [
-            "Fri, 13 Nov 2026 15:56:43 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            "repo"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v3; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "81C0:25B751:F6547A:171B349:6AF756DA"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-poll-interval": [
-            "300"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4974"
-          ],
-          "x-ratelimit-reset": [
-            "1794597892"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "26"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "node_id": "MDM6UmVmMTk3ODE0NjI5OnJlZnMvaGVhZHMvbWFpbg==",
-            "object": {
-              "sha": "f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a",
-              "type": "commit",
-              "url": "https://api.github.com/repos/actions/checkout/git/commits/f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a"
-            },
-            "ref": "refs/heads/main",
-            "url": "https://api.github.com/repos/actions/checkout/git/refs/heads/main"
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/actions/checkout/compare/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0...f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a?per_page=1&page=2",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "cache-control": [
-            "private, max-age=60, s-maxage=60"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Fri, 13 Nov 2026 18:28:43 GMT"
-          ],
-          "etag": [
-            "W/\"34ed9efdfdebecebd3664ba88e3d28197ad5f33d986fff7f2abde8461b08a810\""
-          ],
-          "last-modified": [
-            "Mon, 20 Jul 2026 16:20:47 GMT"
-          ],
-          "link": [
-            "<https://api.github.com/repositories/197814629/compare/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0...f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a?per_page=1&page=13>; rel=\"last\", <https://api.github.com/repositories/197814629/compare/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0...f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a?per_page=1&page=3>; rel=\"next\", <https://api.github.com/repositories/197814629/compare/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0...f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a?per_page=1&page=1>; rel=\"first\", <https://api.github.com/repositories/197814629/compare/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0...f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a?per_page=1&page=1>; rel=\"prev\""
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            ""
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v3; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "81C0:25B751:F657B2:171B7EA:6AF756DA"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4971"
-          ],
-          "x-ratelimit-reset": [
-            "1794597892"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "29"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "ahead_by": 13,
-            "base_commit": {
-              "author": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/55104035?v=4",
-                "events_url": "https://api.github.com/users/aiqiaoy/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/aiqiaoy/followers",
-                "following_url": "https://api.github.com/users/aiqiaoy/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/aiqiaoy/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/aiqiaoy",
-                "id": 55104035,
-                "login": "aiqiaoy",
-                "node_id": "MDQ6VXNlcjU1MTA0MDM1",
-                "organizations_url": "https://api.github.com/users/aiqiaoy/orgs",
-                "received_events_url": "https://api.github.com/users/aiqiaoy/received_events",
-                "repos_url": "https://api.github.com/users/aiqiaoy/repos",
-                "site_admin": true,
-                "starred_url": "https://api.github.com/users/aiqiaoy/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/aiqiaoy/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/aiqiaoy",
-                "user_view_type": "public"
-              },
-              "comments_url": "https://api.github.com/repos/actions/checkout/commits/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0/comments",
-              "commit": {
-                "author": {
-                  "date": "2026-06-17T17:51:53Z",
-                  "email": "55104035+aiqiaoy@users.noreply.github.com",
-                  "name": "Aiqiao Yan"
-                },
-                "comment_count": 0,
-                "committer": {
-                  "date": "2026-06-17T17:51:53Z",
-                  "email": "noreply@github.com",
-                  "name": "GitHub"
-                },
-                "message": "update error wording (#2467)",
-                "tree": {
-                  "sha": "2ddbcfc53840ba99a608fb2a72dd13c3ea7cb8dc",
-                  "url": "https://api.github.com/repos/actions/checkout/git/trees/2ddbcfc53840ba99a608fb2a72dd13c3ea7cb8dc"
-                },
-                "url": "https://api.github.com/repos/actions/checkout/git/commits/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-                "verification": {
-                  "payload": "tree 2ddbcfc53840ba99a608fb2a72dd13c3ea7cb8dc\nparent 1044a6dea927916f2c38ba5aeffbc0a847b1221a\nauthor Aiqiao Yan <55104035+aiqiaoy@users.noreply.github.com> 1781718713 -0400\ncommitter GitHub <noreply@github.com> 1781718713 -0400\n\nupdate error wording (#2467)",
-                  "reason": "valid",
-                  "signature": "[REDACTED]",
-                  "verified": true,
-                  "verified_at": "2026-06-17T17:51:54Z"
-                }
-              },
-              "committer": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
-                "events_url": "https://api.github.com/users/web-flow/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/web-flow/followers",
-                "following_url": "https://api.github.com/users/web-flow/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/web-flow/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/web-flow",
-                "id": 19864447,
-                "login": "web-flow",
-                "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
-                "organizations_url": "https://api.github.com/users/web-flow/orgs",
-                "received_events_url": "https://api.github.com/users/web-flow/received_events",
-                "repos_url": "https://api.github.com/users/web-flow/repos",
-                "site_admin": false,
-                "starred_url": "https://api.github.com/users/web-flow/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/web-flow",
-                "user_view_type": "public"
-              },
-              "html_url": "https://github.com/actions/checkout/commit/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-              "node_id": "C_kwDOC8ppZdoAKDljMDkxYmIyMWI3YzFjMWQxOTkxYmI5MDhkODllNGU5ZGRkZmUzZTA",
-              "parents": [
-                {
-                  "html_url": "https://github.com/actions/checkout/commit/1044a6dea927916f2c38ba5aeffbc0a847b1221a",
-                  "sha": "1044a6dea927916f2c38ba5aeffbc0a847b1221a",
-                  "url": "https://api.github.com/repos/actions/checkout/commits/1044a6dea927916f2c38ba5aeffbc0a847b1221a"
-                }
-              ],
-              "sha": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-              "url": "https://api.github.com/repos/actions/checkout/commits/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
-            },
-            "behind_by": 0,
-            "commits": [
-              {
-                "author": {
-                  "avatar_url": "https://avatars.githubusercontent.com/in/29110?v=4",
-                  "events_url": "https://api.github.com/users/dependabot%5Bbot%5D/events%7B/privacy%7D",
-                  "followers_url": "https://api.github.com/users/dependabot%5Bbot%5D/followers",
-                  "following_url": "https://api.github.com/users/dependabot%5Bbot%5D/following%7B/other_user%7D",
-                  "gists_url": "https://api.github.com/users/dependabot%5Bbot%5D/gists%7B/gist_id%7D",
-                  "gravatar_id": "",
-                  "html_url": "https://github.com/apps/dependabot",
-                  "id": 49699333,
-                  "login": "dependabot[bot]",
-                  "node_id": "MDM6Qm90NDk2OTkzMzM=",
-                  "organizations_url": "https://api.github.com/users/dependabot%5Bbot%5D/orgs",
-                  "received_events_url": "https://api.github.com/users/dependabot%5Bbot%5D/received_events",
-                  "repos_url": "https://api.github.com/users/dependabot%5Bbot%5D/repos",
-                  "site_admin": false,
-                  "starred_url": "https://api.github.com/users/dependabot%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
-                  "subscriptions_url": "https://api.github.com/users/dependabot%5Bbot%5D/subscriptions",
-                  "type": "Bot",
-                  "url": "https://api.github.com/users/dependabot%5Bbot%5D",
-                  "user_view_type": "public"
-                },
-                "comments_url": "https://api.github.com/repos/actions/checkout/commits/5de26ee9b11f6ffa02406edecc0e750256af18b1/comments",
-                "commit": {
-                  "author": {
-                    "date": "2026-06-22T14:12:03Z",
-                    "email": "49699333+dependabot[bot]@users.noreply.github.com",
-                    "name": "dependabot[bot]"
-                  },
-                  "comment_count": 0,
-                  "committer": {
-                    "date": "2026-06-22T14:12:03Z",
-                    "email": "noreply@github.com",
-                    "name": "GitHub"
-                  },
-                  "message": "Bump actions/setup-node from 4 to 6 (#2477)\n\nBumps [actions/setup-node](https://github.com/actions/setup-node) from 4 to 6.\n- [Release notes](https://github.com/actions/setup-node/releases)\n- [Commits](https://github.com/actions/setup-node/compare/v4...v6)\n\n---\nupdated-dependencies:\n- dependency-name: actions/setup-node\n  dependency-version: '6'\n  dependency-type: direct:production\n  update-type: version-update:semver-major\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
-                  "tree": {
-                    "sha": "afb15ee1ffca852172f828e00826613bc6b29a7f",
-                    "url": "https://api.github.com/repos/actions/checkout/git/trees/afb15ee1ffca852172f828e00826613bc6b29a7f"
-                  },
-                  "url": "https://api.github.com/repos/actions/checkout/git/commits/5de26ee9b11f6ffa02406edecc0e750256af18b1",
-                  "verification": {
-                    "payload": "tree afb15ee1ffca852172f828e00826613bc6b29a7f\nparent 79102f25032f3f70eb9d8386b1451cf1ef55902d\nauthor dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> 1782137523 -0400\ncommitter GitHub <noreply@github.com> 1782137523 -0400\n\nBump actions/setup-node from 4 to 6 (#2477)\n\nBumps [actions/setup-node](https://github.com/actions/setup-node) from 4 to 6.\n- [Release notes](https://github.com/actions/setup-node/releases)\n- [Commits](https://github.com/actions/setup-node/compare/v4...v6)\n\n---\nupdated-dependencies:\n- dependency-name: actions/setup-node\n  dependency-version: '6'\n  dependency-type: direct:production\n  update-type: version-update:semver-major\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
-                    "reason": "valid",
-                    "signature": "[REDACTED]",
-                    "verified": true,
-                    "verified_at": "2026-06-22T14:12:04Z"
-                  }
-                },
-                "committer": {
-                  "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
-                  "events_url": "https://api.github.com/users/web-flow/events%7B/privacy%7D",
-                  "followers_url": "https://api.github.com/users/web-flow/followers",
-                  "following_url": "https://api.github.com/users/web-flow/following%7B/other_user%7D",
-                  "gists_url": "https://api.github.com/users/web-flow/gists%7B/gist_id%7D",
-                  "gravatar_id": "",
-                  "html_url": "https://github.com/web-flow",
-                  "id": 19864447,
-                  "login": "web-flow",
-                  "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
-                  "organizations_url": "https://api.github.com/users/web-flow/orgs",
-                  "received_events_url": "https://api.github.com/users/web-flow/received_events",
-                  "repos_url": "https://api.github.com/users/web-flow/repos",
-                  "site_admin": false,
-                  "starred_url": "https://api.github.com/users/web-flow/starred%7B/owner%7D%7B/repo%7D",
-                  "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
-                  "type": "User",
-                  "url": "https://api.github.com/users/web-flow",
-                  "user_view_type": "public"
-                },
-                "html_url": "https://github.com/actions/checkout/commit/5de26ee9b11f6ffa02406edecc0e750256af18b1",
-                "node_id": "C_kwDOC8ppZdoAKDVkZTI2ZWU5YjExZjZmZmEwMjQwNmVkZWNjMGU3NTAyNTZhZjE4YjE",
-                "parents": [
-                  {
-                    "html_url": "https://github.com/actions/checkout/commit/79102f25032f3f70eb9d8386b1451cf1ef55902d",
-                    "sha": "79102f25032f3f70eb9d8386b1451cf1ef55902d",
-                    "url": "https://api.github.com/repos/actions/checkout/commits/79102f25032f3f70eb9d8386b1451cf1ef55902d"
-                  }
-                ],
-                "sha": "5de26ee9b11f6ffa02406edecc0e750256af18b1",
-                "url": "https://api.github.com/repos/actions/checkout/commits/5de26ee9b11f6ffa02406edecc0e750256af18b1"
-              }
-            ],
-            "diff_url": "https://github.com/actions/checkout/compare/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0...f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a.diff",
-            "html_url": "https://github.com/actions/checkout/compare/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0...f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a",
-            "merge_base_commit": {
-              "author": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/55104035?v=4",
-                "events_url": "https://api.github.com/users/aiqiaoy/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/aiqiaoy/followers",
-                "following_url": "https://api.github.com/users/aiqiaoy/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/aiqiaoy/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/aiqiaoy",
-                "id": 55104035,
-                "login": "aiqiaoy",
-                "node_id": "MDQ6VXNlcjU1MTA0MDM1",
-                "organizations_url": "https://api.github.com/users/aiqiaoy/orgs",
-                "received_events_url": "https://api.github.com/users/aiqiaoy/received_events",
-                "repos_url": "https://api.github.com/users/aiqiaoy/repos",
-                "site_admin": true,
-                "starred_url": "https://api.github.com/users/aiqiaoy/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/aiqiaoy/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/aiqiaoy",
-                "user_view_type": "public"
-              },
-              "comments_url": "https://api.github.com/repos/actions/checkout/commits/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0/comments",
-              "commit": {
-                "author": {
-                  "date": "2026-06-17T17:51:53Z",
-                  "email": "55104035+aiqiaoy@users.noreply.github.com",
-                  "name": "Aiqiao Yan"
-                },
-                "comment_count": 0,
-                "committer": {
-                  "date": "2026-06-17T17:51:53Z",
-                  "email": "noreply@github.com",
-                  "name": "GitHub"
-                },
-                "message": "update error wording (#2467)",
-                "tree": {
-                  "sha": "2ddbcfc53840ba99a608fb2a72dd13c3ea7cb8dc",
-                  "url": "https://api.github.com/repos/actions/checkout/git/trees/2ddbcfc53840ba99a608fb2a72dd13c3ea7cb8dc"
-                },
-                "url": "https://api.github.com/repos/actions/checkout/git/commits/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-                "verification": {
-                  "payload": "tree 2ddbcfc53840ba99a608fb2a72dd13c3ea7cb8dc\nparent 1044a6dea927916f2c38ba5aeffbc0a847b1221a\nauthor Aiqiao Yan <55104035+aiqiaoy@users.noreply.github.com> 1781718713 -0400\ncommitter GitHub <noreply@github.com> 1781718713 -0400\n\nupdate error wording (#2467)",
-                  "reason": "valid",
-                  "signature": "[REDACTED]",
-                  "verified": true,
-                  "verified_at": "2026-06-17T17:51:54Z"
-                }
-              },
-              "committer": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
-                "events_url": "https://api.github.com/users/web-flow/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/web-flow/followers",
-                "following_url": "https://api.github.com/users/web-flow/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/web-flow/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/web-flow",
-                "id": 19864447,
-                "login": "web-flow",
-                "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
-                "organizations_url": "https://api.github.com/users/web-flow/orgs",
-                "received_events_url": "https://api.github.com/users/web-flow/received_events",
-                "repos_url": "https://api.github.com/users/web-flow/repos",
-                "site_admin": false,
-                "starred_url": "https://api.github.com/users/web-flow/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/web-flow",
-                "user_view_type": "public"
-              },
-              "html_url": "https://github.com/actions/checkout/commit/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-              "node_id": "C_kwDOC8ppZdoAKDljMDkxYmIyMWI3YzFjMWQxOTkxYmI5MDhkODllNGU5ZGRkZmUzZTA",
-              "parents": [
-                {
-                  "html_url": "https://github.com/actions/checkout/commit/1044a6dea927916f2c38ba5aeffbc0a847b1221a",
-                  "sha": "1044a6dea927916f2c38ba5aeffbc0a847b1221a",
-                  "url": "https://api.github.com/repos/actions/checkout/commits/1044a6dea927916f2c38ba5aeffbc0a847b1221a"
-                }
-              ],
-              "sha": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-              "url": "https://api.github.com/repos/actions/checkout/commits/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
-            },
-            "patch_url": "https://github.com/actions/checkout/compare/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0...f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a.patch",
-            "permalink_url": "https://github.com/actions/checkout/compare/actions:9c091bb...actions:f548e57",
-            "status": "ahead",
-            "total_commits": 13,
-            "url": "https://api.github.com/repos/actions/checkout/compare/9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0...f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a"
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/actions/checkout/git/ref/tags/main",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 404,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Fri, 13 Nov 2026 18:28:44 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            "repo"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v3; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "81C0:25B751:F65D81:171C04D:6AF756DB"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-poll-interval": [
-            "300"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4969"
-          ],
-          "x-ratelimit-reset": [
-            "1794597892"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "31"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "documentation_url": "https://docs.github.com/rest/git/refs",
-            "message": "Not Found",
-            "status": "404"
           }
         }
       }
@@ -1137,13 +542,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:44 GMT"
+            "Mon, 23 Nov 2026 19:48:10 GMT"
           ],
           "etag": [
             "W/\"0b0ba7b8679105501668a0b41def299b95d15cfb2a61ca31e2653262eb093898\""
           ],
           "last-modified": [
-            "Fri, 13 Nov 2026 15:56:43 GMT"
+            "Mon, 23 Nov 2026 16:34:31 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -1170,13 +575,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81C0:25B751:F6627F:171C7EE:6AF756DC"
+            "C9D6:2B9DC1:365F8:611B9:6B04987A"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -1185,16 +590,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4968"
+            "4891"
           ],
           "x-ratelimit-reset": [
-            "1794597892"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "32"
+            "109"
           ],
           "x-xss-protection": [
             "0"
@@ -1926,10 +1331,10 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:44 GMT"
+            "Mon, 23 Nov 2026 19:48:11 GMT"
           ],
           "etag": [
-            "W/\"199540797292b22461ca89e79e3c1176f01332d41f86bbd1ea112a4d4afb3ebb\""
+            "W/\"8778536830ae0ed4a1199491dd0316046b1bdc4ee823e8c0c60cdd980f752ac4\""
           ],
           "link": [
             "<https://api.github.com/repositories/197814629/releases?per_page=30&page=2>; rel=\"next\", <https://api.github.com/repositories/197814629/releases?per_page=30&page=2>; rel=\"last\""
@@ -1959,13 +1364,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81C0:25B751:F66625:171CCFB:6AF756DC"
+            "C9D6:2B9DC1:36617:611E4:6B04987A"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -1974,16 +1379,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4967"
+            "4888"
           ],
           "x-ratelimit-reset": [
-            "1794597892"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "33"
+            "112"
           ],
           "x-xss-protection": [
             "0"
@@ -2028,15 +1433,15 @@
               "prerelease": false,
               "published_at": "2026-07-20T15:10:05Z",
               "reactions": {
-                "+1": 8,
+                "+1": 10,
                 "-1": 0,
                 "confused": 0,
                 "eyes": 5,
-                "heart": 0,
-                "hooray": 11,
+                "heart": 2,
+                "hooray": 12,
                 "laugh": 0,
-                "rocket": 2,
-                "total_count": 26,
+                "rocket": 4,
+                "total_count": 33,
                 "url": "https://api.github.com/repos/actions/checkout/releases/356804776/reactions"
               },
               "tag_name": "v7.0.1",

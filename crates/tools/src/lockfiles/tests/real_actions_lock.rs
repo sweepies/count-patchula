@@ -43,6 +43,22 @@ pub(super) struct GitHubProxy {
     unmatched: Mutex<Vec<String>>,
 }
 
+/// The runtime every tunnel's exchanges run on. The recording transport
+/// pools connections, and a pooled connection is driven by the runtime that
+/// opened it, so tunnels on separate runtimes stall when one reuses
+/// another's connection. Static, so it is never dropped inside a test's own
+/// runtime.
+fn exchanges() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+    })
+}
+
 impl GitHubProxy {
     /// Bind the proxy and its cassette, `fixtures/tools/{cassette}.json`, and
     /// start serving on a std thread.
@@ -178,12 +194,7 @@ impl GitHubProxy {
             return;
         };
         let mut tls = rustls::Stream::new(&mut conn, &mut stream);
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        else {
-            return;
-        };
+        let runtime = exchanges();
         while let Some(request) = Request::read(&mut tls) {
             let Some(reqwest) = request.reqwest() else {
                 break;

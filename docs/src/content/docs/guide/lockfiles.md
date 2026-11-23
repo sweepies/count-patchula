@@ -162,7 +162,7 @@ defaults apply:
 | Ruby | 4.0.9 |
 | PHP, Composer | 8.5.8, 2.10.3 |
 | APM | 0.35.0 |
-| gh-actions-lock | 0.4.1 |
+| gh-actions-lock | 0.5.1 |
 
 ### PHP
 
