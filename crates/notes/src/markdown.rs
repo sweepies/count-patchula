@@ -826,8 +826,15 @@ fn details_depth(mut depth: usize, line: &str) -> usize {
 /// span), a code fence or after a heading with nothing under it. Anything open
 /// at the end is closed. The flag says whether all of `text` fit.
 pub fn fit(text: &str, limit: usize) -> (String, bool) {
+    let (_, kept, whole) = fit_at(text, limit);
+    (kept, whole)
+}
+
+/// [`fit`], with the byte offset it cut `text` at: `text.len()` when all of
+/// it fit.
+pub(crate) fn fit_at(text: &str, limit: usize) -> (usize, String, bool) {
     if text.len() <= limit {
-        return (close_open_blocks(text), true);
+        return (text.len(), close_open_blocks(text), true);
     }
     let lines = lines_with_fences(text);
     let mut cut = 0;
@@ -870,5 +877,5 @@ pub fn fit(text: &str, limit: usize) -> (String, bool) {
             }
         }
     }
-    (close_open_blocks(&text[..cut]), false)
+    (cut, close_open_blocks(&text[..cut]), false)
 }

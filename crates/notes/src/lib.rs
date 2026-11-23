@@ -972,20 +972,20 @@ pub fn escape_html(text: &str) -> String {
 /// [`fit`], with the lines that close what the cut left open counted too:
 /// the result is never longer than `limit`, and whatever `text` leaves open
 /// is closed even when all of it fits. When the closing lines push it past
-/// `limit`, the cut moves back until the closed prefix fits, and nothing at
-/// all is the last resort.
-pub fn fit_within(text: &str, limit: usize) -> String {
+/// `limit`, the next cut lands strictly before the one that failed, so the
+/// tries are bounded by the blocks, not the bytes; nothing at all is the
+/// last resort. The flag says whether all of `text` was kept.
+pub fn fit_within(text: &str, limit: usize) -> (String, bool) {
     let mut room = limit;
     loop {
-        let (kept, _) = fit(text, room);
+        let (cut, kept, whole) = markdown::fit_at(text, room);
         if kept.len() <= limit {
-            return kept;
+            return (kept, whole);
         }
-        let over = kept.len() - limit;
-        if room <= over {
-            return String::new();
+        if cut == 0 {
+            return (String::new(), false);
         }
-        room -= over;
+        room = cut - 1;
     }
 }
 
@@ -1186,7 +1186,10 @@ impl Notes {
             }
             // Upstream headings sit under the version heading.
             let body = demote_headings(&sanitise(&section.body, links), NOTE_HEADINGS);
-            let (body, whole) = fit(&body, room - heading.len());
+            // The fitted body and the blank line after it stay within the
+            // room, so the fold never outgrows `limit` and no release that
+            // already fit is lost to `cut`.
+            let (body, whole) = fit_within(&body, room - heading.len() - 1);
             if body.trim().is_empty() && !section.body.trim().is_empty() {
                 // Not even its first block fits; a bare heading says nothing.
                 trimmed = true;

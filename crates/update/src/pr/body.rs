@@ -18,6 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 const TABLE_CAP: usize = 18_000;
 /// The plan's own `bodyNotes`, after the table.
 const BODY_NOTES_CAP: usize = 22_000;
+/// The line that says some `bodyNotes` were cut or left out; reserved, so it
+/// always fits.
+const BODY_NOTES_OMITTED: &str =
+    "\nSome body notes were omitted to keep the PR body within its size budget.\n";
 /// The security headline and its collapsed advisory table together.
 const ADVISORY_CAP: usize = 6_000;
 /// The whole image section: its headline, warnings and notes before the
@@ -270,20 +274,29 @@ impl Bodies<'_> {
             }
         }
         let body_notes: BTreeSet<_> = plan.changes().iter().flat_map(|c| &c.body_notes).collect();
-        let mut notes = crate::body::Body::new(BODY_NOTES_CAP, length + after.len());
         // Each note is fitted whole or cut where a block ends, with what it
-        // leaves open closed; once one no longer fits, the rest stay out.
+        // leaves open closed; a note with no room left is skipped and a
+        // shorter one after it still tried. A note cut or left out is never
+        // silent: one reserved line says so.
+        let mut notes = crate::body::Body::new(
+            BODY_NOTES_CAP,
+            length + after.len() + BODY_NOTES_OMITTED.len(),
+        );
+        let mut omitted = false;
         for note in body_notes {
+            if note.trim().is_empty() {
+                continue;
+            }
             let room = notes.room(usize::MAX).saturating_sub(2);
-            let kept = patchula_notes::fit_within(&safe(note), room);
+            let (kept, whole) = patchula_notes::fit_within(&safe(note), room);
+            omitted |= !whole;
             let kept = kept.trim_end_matches('\n');
-            if kept.is_empty() {
-                break;
+            if !kept.trim().is_empty() {
+                notes.push(&format!("\n{kept}\n"), usize::MAX);
             }
-            notes.push(&format!("\n{kept}\n"), usize::MAX);
-            if kept.len() < safe(note).trim_end().len() {
-                break;
-            }
+        }
+        if omitted {
+            notes.push_reserved(BODY_NOTES_OMITTED);
         }
         after.push_str(notes.text());
         let intent = Intent {
@@ -654,7 +667,7 @@ impl Draft<'_> {
             .bodies
             .tail(self.plan, &marker, &self.controls, self.permit.as_deref());
         let budget = BODY_LIMIT.saturating_sub(fixed(tail.len(), self.batch.len()));
-        let visible = patchula_notes::fit_within(visible.trim_end_matches('\n'), budget);
+        let (visible, _) = patchula_notes::fit_within(visible.trim_end_matches('\n'), budget);
         let visible = visible.trim_end_matches('\n');
         let mut body = String::with_capacity(BODY_LIMIT);
         body.push_str(markers::START);
