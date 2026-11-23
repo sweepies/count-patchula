@@ -42,7 +42,7 @@ workflows:
         - 'docker/setup-qemu-action@v4.4.0'
         - 'infisical/secrets-action@v1.0.18'
         - 'jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785'
-        - 'jdx/packslip@v1.11.2'
+        - 'jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564'
 dependencies:
     'actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8':
         ref: 'v4.2.2'
@@ -145,9 +145,9 @@ dependencies:
         commit: 'sha1-88acf2bb50552c7c508cbac13e5f8c576b95b1de'
         owner_id: 216188
         repo_id: 1345301886
-    'jdx/packslip@v1.11.2':
-        ref: 'v1.11.2'
-        commit: 'sha1-b934a22ba187f1d3928441170b9413c5119360bf'
+    'jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564':
+        ref: 'v1.11.4'
+        commit: 'sha1-e0340e0c1d10c90a434de2b90f3a1ba345923564'
         owner_id: 216188
         repo_id: 1356006409
         uses:

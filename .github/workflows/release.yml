@@ -245,7 +245,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "Count Patchula $GITHUB_REF_NAME" --generate-notes dist/*
-      - uses: jdx/packslip@v1.11.2
+      - uses: jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564 # v1.11.4
         with:
           artifacts: dist/*.tar.gz
           bin: patchula=bin/patchula
