@@ -92,20 +92,28 @@ fn a_removed_actions_lock_joins_the_content_hash() {
 }
 
 /// The closure texts: what the PR said, cut to the marker's budget, then
-/// the marker that says why it closed.
+/// the marker that says why it closed; a batched closure also places its
+/// link to the batch PR at the top of his section.
 #[test]
 fn closures_keep_the_body_within_its_budget_and_end_with_their_marker() {
+    assert_eq!(
+        closure("a body", Closure::Obsolete),
+        format!("a body\n\n{}", markers::OBSOLETE)
+    );
+    assert_eq!(
+        closure("a body", Closure::Batched(42)),
+        format!(
+            "> [!NOTE]\n> Moved to the batch PR #42. Tick this update's box there to bring it back.\n\na body\n\n{}",
+            markers::BATCHED
+        )
+    );
     for (why, marker) in [
         (Closure::Obsolete, markers::OBSOLETE),
-        (Closure::Batched, markers::BATCHED),
+        (Closure::Batched(42), markers::BATCHED),
     ] {
-        assert_eq!(closure("a body", why), format!("a body\n\n{marker}"));
         let text = closure(&"x".repeat(FOREIGN_LIMIT), why);
         assert!(text.ends_with(marker), "{text}");
-        assert_eq!(
-            text.len(),
-            closure_budget(marker) + "\n\n".len() + marker.len()
-        );
+        assert_eq!(text.len(), FOREIGN_LIMIT);
         // A rebasing banner still up does not outlive the closure.
         let permits = BTreeMap::new();
         let finished = bodies(&permits)
@@ -116,7 +124,17 @@ fn closures_keep_the_body_within_its_budget_and_end_with_their_marker() {
             &crate::pr::banner::banner(crate::pr::banner::Rebuild::Recheck, "main"),
         )
         .unwrap();
-        assert_eq!(closure(&shown, why), closure(&finished, why));
+        let closed = closure(&finished, why);
+        assert_eq!(closure(&shown, why), closed);
+        if matches!(why, Closure::Batched(42)) {
+            assert!(
+                closed.contains(&format!(
+                    "{}\n> [!NOTE]\n> Moved to the batch PR #42.",
+                    markers::START
+                )),
+                "{closed}"
+            );
+        }
     }
 }
 
@@ -384,6 +402,7 @@ mod security_tests {
                 number: Some(1),
                 title: "update @mallory/pkg".into(),
                 targets: vec![],
+                green_base: None,
             }])
             .contains("update @\u{200d}mallory/pkg")
         );

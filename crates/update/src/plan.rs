@@ -328,6 +328,17 @@ impl Plan {
             _ => None,
         }
     }
+    /// Whether every item in this batch plan came from a source PR whose checks
+    /// were already green on this plan's base commit and no lockfile is pending.
+    pub fn batch_green(&self) -> bool {
+        !self.action.lockfile_pending
+            && self.batch_items().is_some_and(|items| {
+                !items.is_empty()
+                    && items.iter().all(|item| {
+                        item.green_base.as_deref() == Some(self.action.base_commit.as_str())
+                    })
+            })
+    }
     /// The `actions.lock` refs the plan's maintenance relock advanced.
     pub fn moved_refs(&self) -> &[contract::MovedRef] {
         &self.moved_refs

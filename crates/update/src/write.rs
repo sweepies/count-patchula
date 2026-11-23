@@ -415,16 +415,20 @@ async fn apply_inner(
     } else {
         String::new()
     };
-    let message = format!(
-        "{}{}\n\n{}",
-        plan.action().message,
-        pending,
+    let trailer_block = if plan.batch_green() {
+        trailers::batch_green_block(
+            plan.identity(),
+            &plan.action().base_commit,
+            plan.fingerprint(),
+        )
+    } else {
         trailers::block(
             plan.identity(),
             &plan.action().base_commit,
-            plan.fingerprint()
+            plan.fingerprint(),
         )
-    );
+    };
+    let message = format!("{}{}\n\n{}", plan.action().message, pending, trailer_block);
     // App bot signing requires GitHub-supplied authorship and signature.
     let commit = client
         .post::<GitCommit>(

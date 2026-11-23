@@ -36,7 +36,7 @@ enum CatalogAccess {
 }
 impl State for Saved<'_> {
     const NAMESPACE: &'static str = "catalog";
-    const VERSION: u32 = 27;
+    const VERSION: u32 = 28;
     // Code-versioned: the view is datasource output decoded into `Catalog`;
     // a stale-but-decodable view from a release whose transforms moved is
     // worse than a miss.
@@ -176,7 +176,7 @@ pub(crate) struct Controls {
 }
 impl State for Controls {
     const NAMESPACE: &'static str = "catalog-controls";
-    const VERSION: u32 = 27;
+    const VERSION: u32 = 28;
     // Code-versioned: the stored keys come from `identity` and `plan`
     // code, and a key written by older code that no longer matches its
     // dependency quietly un-retries a ticked box.

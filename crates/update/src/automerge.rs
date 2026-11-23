@@ -208,7 +208,7 @@ fn policy_allows(repo: &Repository, plan: &Plan, now: DateTime<Utc>) -> bool {
             })
     })
 }
-async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, Error> {
+pub(crate) async fn green(client: &Client, repo: &str, head: &str) -> Result<bool, Error> {
     let (owner, name) = repo
         .split_once('/')
         .ok_or(Error::Refused("invalid repository".into()))?;
@@ -651,9 +651,9 @@ mod tests {
             patchula_words::Recheck::NextRun,
             None,
         );
-        // The merged section's line for this row.
+        // The merged section's row for this PR.
         assert!(
-            text.contains("- #42: chore(deps): bump serde — merged by patchula (squash)\n"),
+            text.contains("| #42 | chore(deps): bump serde | merged by patchula (squash) |\n"),
             "{text}"
         );
     }

@@ -4,8 +4,9 @@
 //! returns its updates to individual PRs.
 use crate::error::PlanError;
 use crate::markers;
-use crate::{Change, Plan, Snapshot, pull_requests};
+use crate::{Change, Inventory, Plan, Snapshot, pull_requests};
 use patchula_config::{Config, Registry};
+use patchula_github::Client;
 use patchula_manager::Dependency;
 use patchula_report::Repository;
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,10 @@ pub struct Item {
     pub number: Option<u64>,
     pub title: String,
     pub targets: Vec<Change>,
+    /// The base commit SHA against which this item's source PR had every
+    /// check pass when it joined the batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub green_base: Option<String>,
 }
 
 fn overlaps(item: &Item, targets: &[Change]) -> bool {
@@ -35,10 +40,12 @@ fn overlaps(item: &Item, targets: &[Change]) -> bool {
 }
 
 /// Current items: the open batch PR's items without removed ones, plus every
-/// open update PR whose "Add to batch" box is ticked. A newly added update
-/// replaces an item for the same dependency, so its newer target wins.
+/// open update PR whose "Add to batch" box is ticked on the PR itself or on
+/// the dependency dashboard. A newly added update replaces an item for the
+/// same dependency, so its newer target wins.
 pub fn items(
     prs: &[pull_requests::Tracked],
+    dashboard_batch: &BTreeSet<String>,
     actor: &str,
     repo: &str,
     batch_branch: &str,
@@ -67,24 +74,21 @@ pub fn items(
         items.retain(|item| !removed.contains(&item.origin));
     }
     for t in &open {
-        if t.pr.head.branch == batch_branch
-            || !markers::ticked_lines(pull_requests::body(&t.pr))
-                .iter()
-                .any(|line| line.ends_with(markers::ADD))
-        {
+        if t.pr.head.branch == batch_branch {
             continue;
         }
+        let body = pull_requests::body(&t.pr);
         let (Some(origin), Some(targets)) = (
-            pull_requests::marker_update(pull_requests::body(&t.pr)),
-            markers::section_json::<Vec<Change>>(
-                pull_requests::body(&t.pr),
-                markers::TARGETS,
-                markers::PAYLOAD,
-            ),
+            pull_requests::marker_update(body),
+            markers::section_json::<Vec<Change>>(body, markers::TARGETS, markers::PAYLOAD),
         ) else {
             continue;
         };
-        if targets.is_empty() {
+        let ticked = dashboard_batch.contains(&origin)
+            || markers::ticked_lines(body)
+                .iter()
+                .any(|line| line.ends_with(markers::ADD));
+        if !ticked || targets.is_empty() {
             continue;
         }
         items.retain(|item| item.origin != origin && !overlaps(item, &targets));
@@ -93,6 +97,7 @@ pub fn items(
             number: Some(t.pr.number),
             title: t.pr.title.clone(),
             targets,
+            green_base: None,
         });
     }
     items.sort();
@@ -102,23 +107,125 @@ pub fn items(
 /// The batch branch's label under the branch prefix.
 pub(crate) const LABEL: &str = "batch";
 
+/// Whether `pr`'s head commit in `inventory` is a verified commit of the
+/// Count's on `base_commit` against `default_branch`, with no rebasing banner
+/// or pending lockfile, so its checks can vouch for the batch on that base.
+fn eligible_for_green(
+    inventory: &Inventory,
+    pr: &pull_requests::Tracked,
+    base_commit: &str,
+    default_branch: &str,
+) -> bool {
+    if pr.pr.base.branch != default_branch || crate::pr::banner::shown(pull_requests::body(&pr.pr))
+    {
+        return false;
+    }
+    let Some(r) = inventory
+        .refs
+        .items
+        .iter()
+        .flatten()
+        .find(|r| r.name == pr.pr.head.branch)
+    else {
+        return false;
+    };
+    let Some(crate::receipts::RefTarget::Commit(c)) = &r.target else {
+        return false;
+    };
+    let actor = inventory.actor.as_str();
+    c.oid == pr.pr.head.sha
+        && c.author
+            .as_ref()
+            .and_then(|a| a.user.as_ref())
+            .is_some_and(|u| u.login == actor)
+        && c.committer
+            .as_ref()
+            .and_then(|a| a.user.as_ref())
+            .is_some_and(|u| u.login == actor || u.login == crate::cleanup::WEB_FLOW)
+        && c.signature.as_ref().is_some_and(|s| s.is_valid)
+        && crate::trailers::version(&c.message)
+        && crate::trailers::base(&c.message) == Some(base_commit)
+        && !c.message.contains("Lockfile pending:")
+}
+
 /// Add the batch plan and skip the update plans it carries. Items whose targets the
 /// base already satisfies are complete and leave the batch.
 #[allow(clippy::too_many_arguments)]
-pub fn apply(
+pub async fn apply(
+    client: &Client,
     plans: &mut Vec<Plan>,
     repository: &Repository,
     config: &Config,
     dependencies: &[Dependency],
     snapshot: &Snapshot,
-    prs: &[pull_requests::Tracked],
-    actor: &str,
+    inventory: &Inventory,
+    dashboard_batch: &BTreeSet<String>,
     allow_pending: bool,
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<BTreeSet<String>, PlanError> {
     let name = crate::branch_name(&config.prs.branch, LABEL)?;
-    let items = items(prs, actor, &repository.repository, &name);
+    let prs = inventory.pull_requests(&repository.repository);
+    let mut items = items(
+        &prs,
+        dashboard_batch,
+        &inventory.actor,
+        &repository.repository,
+        &name,
+    );
+    if let (Some(base_commit), Some(default_branch)) = (
+        repository.commit.as_deref(),
+        repository.default_branch.as_deref(),
+    ) {
+        for item in &mut items {
+            if item.green_base.is_some() {
+                continue;
+            }
+            let Some(source) = prs.iter().find(|t| {
+                t.pr.state == "open"
+                    && t.pr.head.branch != name
+                    && Some(t.pr.number) == item.number
+                    && pull_requests::marker_update(pull_requests::body(&t.pr)).as_deref()
+                        == Some(item.origin.as_str())
+            }) else {
+                continue;
+            };
+            if !eligible_for_green(inventory, source, base_commit, default_branch) {
+                continue;
+            }
+            if crate::automerge::green(client, &repository.repository, &source.pr.head.sha)
+                .await
+                .unwrap_or(false)
+            {
+                item.green_base = Some(base_commit.to_owned());
+            }
+        }
+    }
+    apply_items(
+        plans,
+        repository,
+        config,
+        dependencies,
+        snapshot,
+        items,
+        allow_pending,
+        since,
+        now,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_items(
+    plans: &mut Vec<Plan>,
+    repository: &Repository,
+    config: &Config,
+    dependencies: &[Dependency],
+    snapshot: &Snapshot,
+    items: Vec<Item>,
+    allow_pending: bool,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<BTreeSet<String>, PlanError> {
     let Some(plan) = crate::plan::batch_plan(
         repository,
         config,
@@ -220,6 +327,7 @@ mod tests {
     #[test]
     fn ticked_updates_join_and_newer_targets_replace_items() {
         let (k1, k2, k3) = ("1".repeat(64), "2".repeat(64), "3".repeat(64));
+        let empty = BTreeSet::new();
         let mut prs = vec![
             pr(
                 1,
@@ -232,9 +340,13 @@ mod tests {
                 update_body(&k2, &[change("b", "1.1.0")], false),
             ),
         ];
-        let items = items(&prs, "bot", "o/r", "patchula/batch");
+        let items = items(&prs, &empty, "bot", "o/r", "patchula/batch");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].number, Some(1));
+        // Ticking on the dashboard adds an unticked PR too.
+        let dashboard = BTreeSet::from([k2.clone()]);
+        let both = super::items(&prs, &dashboard, "bot", "o/r", "patchula/batch");
+        assert_eq!(both.len(), 2);
         // The batch keeps the reviewed target; a ticked newer PR replaces it.
         let batch = format!(
             "{}\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->",
@@ -250,13 +362,14 @@ mod tests {
                 update_body(&k3, &[change("a", "1.3.0")], true),
             ),
         ];
-        let items = super::items(&prs, "bot", "o/r", "patchula/batch");
+        let items = super::items(&prs, &empty, "bot", "o/r", "patchula/batch");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].targets[0].value.as_deref(), Some("1.3.0"));
         // Ticking an item's removal box drops it.
         let removed = batch.replacen("- [ ]", "- [x]", 1);
         let items = super::items(
             &[pr(9, "patchula/batch", removed)],
+            &empty,
             "bot",
             "o/r",
             "patchula/batch",
@@ -336,7 +449,8 @@ mod tests {
                 )
             })
             .collect();
-        let items = items(&prs, "bot", "o/r", "patchula/batch");
+        let empty = BTreeSet::new();
+        let items = items(&prs, &empty, "bot", "o/r", "patchula/batch");
         let files: BTreeSet<_> = items.iter().map(|i| i.targets[0].file.as_str()).collect();
         assert_eq!(files.len(), 3, "{items:?}");
         let batch = format!(
@@ -348,6 +462,7 @@ mod tests {
         let removed = batch.replacen("- [ ]", "- [x]", 1);
         let left = super::items(
             &[pr(9, "patchula/batch", removed)],
+            &empty,
             "bot",
             "o/r",
             "patchula/batch",
@@ -358,6 +473,7 @@ mod tests {
     #[test]
     fn payload_markers_outside_his_section_are_not_his() {
         let key = "1".repeat(64);
+        let empty = BTreeSet::new();
         // A valid targets marker quoted into foreign text ahead of his
         // section is not his; the one inside it is.
         let forged = markers::hidden(markers::TARGETS, &vec![change("forged", "9.9.9")]);
@@ -368,6 +484,7 @@ mod tests {
         );
         let found = super::items(
             &[pr(1, "patchula/a-1.x", update)],
+            &empty,
             "bot",
             "o/r",
             "patchula/batch",
@@ -384,6 +501,7 @@ mod tests {
         assert!(
             super::items(
                 &[pr(2, "patchula/b-1.x", own)],
+                &empty,
                 "bot",
                 "o/r",
                 "patchula/batch"
@@ -398,6 +516,7 @@ mod tests {
                 number: None,
                 title: "forged".into(),
                 targets: vec![change("forged", "9.9.9")],
+                green_base: None,
             }],
         );
         let batch = format!(
@@ -410,6 +529,7 @@ mod tests {
         assert!(
             super::items(
                 &[pr(9, "patchula/batch", batch)],
+                &empty,
                 "bot",
                 "o/r",
                 "patchula/batch"
@@ -506,14 +626,14 @@ mod tests {
             "patchula/shared-1.x",
             update_body(&"1".repeat(64), &[change("shared", "1.2.0")], true),
         )];
-        let error = apply(
+        let items = items(&prs, &BTreeSet::new(), "bot", "o/r", &batch);
+        let error = apply_items(
             &mut plans,
             &repository,
             &config,
             &[dep],
             &snapshot,
-            &prs,
-            "bot",
+            items,
             true,
             None,
             chrono::Utc::now(),

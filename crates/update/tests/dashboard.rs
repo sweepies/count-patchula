@@ -50,7 +50,7 @@ fn a_held_update_says_when_it_becomes_eligible_and_not_when_its_catalog_was_fetc
     };
     let first = render("2026-10-15T09:00:00Z", false);
     assert!(
-        first.contains("; eligible 16 Oct 00:00 UTC) <!--"),
+        first.contains("<sub>eligible 16 Oct 00:00 UTC</sub> <!--"),
         "{first}"
     );
     assert!(
@@ -104,6 +104,10 @@ fn dashboard_snapshot_and_identity_do_not_depend_on_wording() {
         .replace(
             &identity::held_key("package.json", dep, "2.0.0", "major"),
             "HELD_UPDATE",
+        )
+        .replace(
+            concat!("/count-patchula/v", env!("CARGO_PKG_VERSION"), "/assets/"),
+            "/count-patchula/v{version}/assets/",
         );
     assert_eq!(snapshot, include_str!("snapshots/dashboard.md"));
     assert_eq!(
@@ -127,13 +131,13 @@ fn dashboard_orders_pr_numbers_numerically_and_dependency_summaries_last() {
     let text = dashboard::render(&repo, &[], &prs, &[], Recheck::NextRun, None);
     let positions: Vec<_> = [
         "## Open PRs",
-        "- #3:",
-        "- #11:",
-        "- #24:",
+        "- #3 ",
+        "- #11 ",
+        "- #24 ",
         "## Pending updates",
         "## Lookup warnings",
         "## Report warnings",
-        "<summary>Every dependency found",
+        "<summary><strong>Every dependency found</strong>",
     ]
     .into_iter()
     .map(|label| text.find(label).unwrap())
@@ -515,10 +519,16 @@ fn known_vulnerabilities_lead_the_dashboard_with_their_fix() {
     let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     let section = text.find("## Known vulnerabilities").unwrap();
     assert!(section < text.find("## Pending updates").unwrap());
-    let row = "- **high**: `fixture` 1.0.0 in `package.json`: 2 advisories ([GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed), [GHSA-open](https://osv.dev/vulnerability/GHSA-open)). 1 fixed by the update to `1.0.5`; 1 no fixed release yet.\n";
+    assert!(
+        text.contains(
+            "> [!IMPORTANT]\n> **2 known vulnerabilities** (<kbd>high</kbd>) in `fixture`.\n"
+        ),
+        "{text}"
+    );
+    let row = "| **`fixture`** | `1.0.0` | <kbd>high</kbd> | 2 advisories ([GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed), [GHSA-open](https://osv.dev/vulnerability/GHSA-open)) | `package.json` | 1 fixed by the update to `1.0.5`; 1 no fixed release yet |\n";
     assert!(text.contains(row), "{text}");
     assert!(
-        text.contains("  - [GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed) (CVE-2026-0001), high: Prototype pollution\n"),
+        text.contains("| [GHSA-fixed](https://osv.dev/vulnerability/GHSA-fixed) (`CVE-2026-0001`) | `fixture` | <kbd>high</kbd> | `1.0.5` | Prototype pollution |\n"),
         "{text}"
     );
     assert!(!text.contains("unrated"), "{text}");
@@ -536,7 +546,7 @@ fn template_notices_are_listed_without_a_branch_or_a_checkbox() {
     let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
     let section = text.find("## Template updates").unwrap();
     assert!(section > text.find("## Pending updates").unwrap());
-    let row = "- template gh:acme/template: v1.4.0 → v1.6.0 available in .copier-answers.yml; run copier update to apply it ([compare](https://github.com/acme/template/compare/v1.4.0...v1.6.0))\n";
+    let row = "| **`gh:acme/template`** | [`v1.4.0`&nbsp;→&nbsp;`v1.6.0`](https://github.com/acme/template/compare/v1.4.0...v1.6.0) | `.copier-answers.yml` |\n";
     assert!(text[section..].contains(row), "{text}");
     assert!(
         !text
@@ -597,10 +607,10 @@ fn images_the_count_cant_vouch_for_follow_known_vulnerabilities() {
     );
     assert!(text.find("## Pending updates").unwrap() > section, "{text}");
     for line in [
-        "- `quay.io/argoproj/argocd:v3.1.8@sha256:aa` in `compose.yaml`: no SBOM published\n",
-        "- `ghcr.io/acme/api:2.4@sha256:aa` in `compose.yaml`: its SBOM (made by ko) lists no OS packages\n",
-        "- `mysql:8.4@sha256:aa` in `compose.yaml`: ol 9, which OSV.dev doesn't cover\n",
-        "<details><summary>Silenced (1)</summary>\n\n- `ghcr.io/acme/internal-base:1@sha256:aa` in `compose.yaml`: built from our own Wolfi base, scanned in CI\n</details>\n",
+        "| `quay.io/argoproj/argocd:v3.1.8@sha256:aa` | `compose.yaml` | no SBOM published |\n",
+        "| `ghcr.io/acme/api:2.4@sha256:aa` | `compose.yaml` | its SBOM (made by ko) lists no OS packages |\n",
+        "| `mysql:8.4@sha256:aa` | `compose.yaml` | ol 9, which OSV.dev doesn't cover |\n",
+        "<details>\n<summary><strong>Silenced</strong> (1)</summary>\n\n| Image | File | Reason |\n| --- | --- | --- |\n| `ghcr.io/acme/internal-base:1@sha256:aa` | `compose.yaml` | built from our own Wolfi base, scanned in CI |\n\n</details>\n",
     ] {
         assert!(text[section..].contains(line), "{line}\n{text}");
     }
@@ -655,9 +665,9 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
     assert!(text.find("## Pending updates").unwrap() > images, "{text}");
     for line in [
         "These settings let updates merge on their own, and checks of this repository's CI, branch protection and delivery found a gap behind them.\n\n",
-        "- **Nothing requires checks before GitHub merges.** `main` requires a review but no status checks. Open now: #412.\n",
-        "- **Security fixes merge, but nothing ships them.** Fixes merge on their own, and no workflow runs when `main` changes. Open now: #412.\n",
-        "<details><summary>Silenced (1)</summary>\n\n- `merge-without-ci`: \"CI runs in Buildkite, reporting to another org\" Open now: #412.\n</details>\n",
+        "> [!CAUTION]\n> **Nothing requires checks before GitHub merges.** `main` requires a review but no status checks. Open now: #412.\n",
+        "> [!CAUTION]\n> **Security fixes merge, but nothing ships them.** Fixes merge on their own, and no workflow runs when `main` changes. Open now: #412.\n",
+        "<details>\n<summary><strong>Silenced</strong> (1)</summary>\n\n| Warning | Reason | Open PRs |\n| --- | --- | --- |\n| `merge-without-ci` | CI runs in Buildkite, reporting to another org | #412 |\n\n</details>\n",
     ] {
         assert!(text[section..].contains(line), "{line}\n{text}");
     }
@@ -667,7 +677,9 @@ fn tooling_warnings_sit_between_known_vulnerabilities_and_images() {
         .push(warning("merge-without-ci", None, Some("Buildkite")));
     let text = dashboard::render(&repo, &[], &prs, &[], Recheck::NextRun, None);
     assert!(
-        text.contains("\n## Tooling warnings\n\n<details><summary>Silenced (1)</summary>"),
+        text.contains(
+            "\n## Tooling warnings\n\n<details>\n<summary><strong>Silenced</strong> (1)</summary>"
+        ),
         "{text}"
     );
     repo.tooling.clear();
@@ -709,11 +721,11 @@ fn updates_held_by_the_pr_limits_are_listed_with_their_reason_and_a_box() {
     let pending = &text[text.find("## Pending updates").unwrap()..];
     for (summary, line) in [
         (
-            "<details><summary>prs.concurrent limit reached (1)</summary>",
+            "<details>\n<summary><strong>prs.concurrent limit reached</strong> (1)</summary>",
             "- [ ] chore(deps): update left-pad to 2.0.0 <!-- patchula-action:",
         ),
         (
-            "<details><summary>prs.perHour limit reached (1)</summary>",
+            "<details>\n<summary><strong>prs.perHour limit reached</strong> (1)</summary>",
             "- [ ] chore(deps): update is-odd to 2.0.0 <!-- patchula-action:",
         ),
     ] {
@@ -750,7 +762,97 @@ fn newer_versions_that_cannot_be_proposed_are_listed_with_their_reason() {
     assert!(!text.contains("copier"), "{text}");
     let section = &text[text.find("## Newer versions not proposed").unwrap()..];
     assert!(
-        section.contains("- acme/lib ^1 | ^2 → 3.0.0 available, not proposed: the constraint &#96;^1 | ^2&#96; cannot be rewritten to allow it without guessing in composer.json\n"),
+        section.contains("| **`acme/lib`** | `^1 \\| ^2`&nbsp;→&nbsp;`3.0.0` | `composer.json` | the constraint &#96;^1 \\| ^2&#96; cannot be rewritten to allow it without guessing |\n"),
         "{section}"
     );
+}
+
+/// Open update PRs on the dashboard carry a batch checkbox whose tick is
+/// detected by `Controls::checkbox_edited` and recorded in `Controls.batch`,
+/// while the batch PR itself and maintenance PRs carry none.
+#[test]
+fn open_update_prs_on_the_dashboard_carry_batch_checkboxes() {
+    let update = patchula_update::testing::Draft::new(patchula_report::BranchAction {
+        repository: "demo/app".into(),
+        branch: "patchula/serde-1.x".into(),
+        base_commit: "a".repeat(40),
+        status: patchula_report::BranchStatus::Planned,
+        reason: None,
+        message: "chore(deps): update serde to 1.0.210".into(),
+        previous_commit: None,
+        commit: None,
+        verified: None,
+        lockfile_pending: false,
+        files: Vec::new(),
+    })
+    .identity("serde")
+    .change(patchula_update::testing::change("serde"))
+    .build();
+    let batch = patchula_update::testing::Draft::new(patchula_report::BranchAction {
+        repository: "demo/app".into(),
+        branch: "patchula/batch".into(),
+        base_commit: "a".repeat(40),
+        status: patchula_report::BranchStatus::Planned,
+        reason: None,
+        message: "chore(deps): update dependencies".into(),
+        previous_commit: None,
+        commit: None,
+        verified: None,
+        lockfile_pending: false,
+        files: Vec::new(),
+    })
+    .identity("batch")
+    .batch(vec![patchula_update::batch::Item {
+        origin: "1".repeat(64),
+        number: Some(9),
+        title: "other".into(),
+        targets: vec![patchula_update::testing::change("other")],
+        green_base: None,
+    }])
+    .build();
+    let key = update.update_key();
+    let prs = vec![
+        tracked(
+            12,
+            "open",
+            "patchula/serde-1.x",
+            "chore(deps): update serde to 1.0.210",
+        ),
+        tracked(
+            50,
+            "open",
+            "patchula/batch",
+            "chore(deps): update dependencies",
+        ),
+    ];
+    let text = dashboard::render(
+        &repository(),
+        &[update, batch],
+        &prs,
+        &[],
+        Recheck::NextRun,
+        None,
+    );
+    let batch_pos = text.find("- #50 ").unwrap();
+    let update_pos = text.find("- [ ] #12 ").unwrap();
+    assert!(batch_pos < update_pos, "batch PR leads Open PRs:\n{text}");
+    assert!(
+        text.contains(&format!("\"action\":\"batch\",\"target\":\"{key}\"")),
+        "{text}"
+    );
+    let ticked = text.replacen("- [ ] #12 ", "- [x] #12 ", 1);
+    assert!(dashboard::Controls::checkbox_edited(&text, &ticked));
+    let inventory = Inventory {
+        actor: "patchula[bot]".into(),
+        issues: patchula_update::Page::of(vec![
+            serde_json::from_value(json!({
+                "id":"i1","number":1,"title":"dashboard","body":ticked,
+                "state":"OPEN","author":{"__typename":"Bot","login":"patchula"}
+            }))
+            .unwrap(),
+        ]),
+        ..Default::default()
+    };
+    let controls = dashboard::Controls::read(&inventory, "demo/app", true).unwrap();
+    assert!(controls.batch.contains(&key));
 }

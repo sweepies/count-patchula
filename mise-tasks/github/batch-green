@@ -1,0 +1,45 @@
+#!/usr/bin/env nu
+#MISE description="Check whether a commit is a single Count Patchula batch commit on its base carrying Patchula-Batch-Green: true; print green=true or green=false (also to GITHUB_OUTPUT)"
+#USAGE arg "<commit>" help="The batch PR head commit to inspect"
+#USAGE flag "--base <commit>" help="Require the commit's single parent and Patchula-Base trailer to match this base commit"
+
+# True when the commit has one parent matching --base (when given) and carries
+# Patchula-Base equal to that parent alongside Patchula-Batch-Green: true.
+def main [commit: string, --base: string] {
+  let green = if $base != null {
+    is-green $commit $base
+  } else {
+    is-green $commit ""
+  }
+  print $"green=($green)"
+  if "GITHUB_OUTPUT" in $env {
+    $"green=($green)\n" | save --append $env.GITHUB_OUTPUT
+  }
+}
+
+def is-green [commit: string, base: string]: nothing -> bool {
+  let parents = ^git show --no-patch --format=%P $commit | str trim | split words
+  if ($parents | length) != 1 {
+    return false
+  }
+  let parent = $parents | first
+  if ($base | is-not-empty) and $parent != $base {
+    return false
+  }
+  let trailer_base = single-trailer $commit "Patchula-Base"
+  let trailer_green = single-trailer $commit "Patchula-Batch-Green"
+  $trailer_base == $parent and $trailer_green == "true"
+}
+
+def single-trailer [commit: string, key: string]: nothing -> string {
+  let format = $"--format=%\(trailers:key=($key),valueonly\)"
+  let values = ^git show --no-patch $format $commit
+    | lines
+    | each { str trim }
+    | where { is-not-empty }
+  if ($values | length) == 1 {
+    $values | first
+  } else {
+    ""
+  }
+}

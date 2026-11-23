@@ -157,16 +157,19 @@ impl Write<'_> {
             }
         };
         if let Some(inventory) = inventory {
-            if let Err(failure) = self.controls(
-                repo,
-                &config,
-                &dependencies,
-                &snapshot,
-                &mut plans,
-                &mut controls,
-                inventory,
-                since,
-            ) {
+            if let Err(failure) = self
+                .controls(
+                    repo,
+                    &config,
+                    &dependencies,
+                    &snapshot,
+                    &mut plans,
+                    &mut controls,
+                    inventory,
+                    since,
+                )
+                .await
+            {
                 failed(repo, failure);
                 return Ok(written);
             }
@@ -503,7 +506,7 @@ impl Write<'_> {
     /// Dashboard controls onto the plans, then the batch PR over the
     /// inventory's open owned pull requests.
     #[allow(clippy::too_many_arguments)]
-    fn controls(
+    async fn controls(
         &self,
         repo: &Repository,
         config: &Config,
@@ -516,17 +519,20 @@ impl Write<'_> {
     ) -> std::result::Result<(), StepFailure> {
         controls.apply(plans, dependencies);
         match patchula_update::batch::apply(
+            &self.engine.github,
             plans,
             repo,
             config,
             dependencies,
             snapshot,
-            &inventory.pull_requests(&repo.repository),
-            &inventory.actor,
+            inventory,
+            &controls.batch,
             self.allow_lockfile_pending,
             since,
             self.now,
-        ) {
+        )
+        .await
+        {
             Ok(batched) => {
                 controls.batched = batched;
                 Ok(())

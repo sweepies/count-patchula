@@ -40,12 +40,28 @@ pub(crate) fn base(message: &str) -> Option<&str> {
 pub(crate) fn plan(message: &str) -> Option<&str> {
     trailer(message, "Patchula-Plan: ")
 }
+/// Whether the message carries `Patchula-Batch-Green: true`, marking a batch
+/// commit whose items all came from source PRs that were already green on its
+/// base commit.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn batch_green(message: &str) -> bool {
+    trailer(message, "Patchula-Batch-Green: ") == Some("true")
+}
 
 /// The trailer block every commit message he writes ends with, in the
 /// order and wording releases have always used.
 pub(crate) fn block(identity: &str, base: &str, fingerprint: &str) -> String {
     format!(
         "Patchula: v1\nPatchula-Branch: {identity}\nPatchula-Base: {base}\nPatchula-Plan: {fingerprint}"
+    )
+}
+
+/// The trailer block for a batch commit whose items all came from source PRs
+/// already green on `base`.
+pub(crate) fn batch_green_block(identity: &str, base: &str, fingerprint: &str) -> String {
+    format!(
+        "{}\nPatchula-Batch-Green: true",
+        block(identity, base, fingerprint)
     )
 }
 
@@ -59,6 +75,29 @@ mod tests {
             block("id", "base", "fp"),
             "Patchula: v1\nPatchula-Branch: id\nPatchula-Base: base\nPatchula-Plan: fp"
         );
+        assert_eq!(
+            batch_green_block("id", "base", "fp"),
+            "Patchula: v1\nPatchula-Branch: id\nPatchula-Base: base\nPatchula-Plan: fp\nPatchula-Batch-Green: true"
+        );
+    }
+
+    #[test]
+    fn batch_green_reads_strictly_from_the_trailer_block() {
+        let message = format!("subject\n\n{}", batch_green_block("id", "base", "fp"));
+        assert!(version(&message));
+        assert_eq!(branch(&message), Some("id"));
+        assert_eq!(base(&message), Some("base"));
+        assert_eq!(plan(&message), Some("fp"));
+        assert!(batch_green(&message));
+        assert!(!batch_green(&format!(
+            "subject\n\n{}",
+            block("id", "base", "fp")
+        )));
+        assert!(!batch_green("subject\n\nPatchula-Batch-Green: false"));
+        assert!(!batch_green(&format!(
+            "subject\n\nPatchula-Batch-Green: true\n\n{}",
+            block("id", "base", "fp")
+        )));
     }
 
     #[test]
