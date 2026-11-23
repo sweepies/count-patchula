@@ -194,7 +194,7 @@ jobs:
           # A release never restores a cache, so nothing cached reaches the image.
           cache: false
           install_args: nu
-      - uses: docker/login-action@v4.7.0
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
