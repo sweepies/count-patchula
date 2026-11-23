@@ -18,7 +18,11 @@ def main [commit: string, --base: string] {
 }
 
 def is-green [commit: string, base: string]: nothing -> bool {
-  let parents = ^git show --no-patch --format=%P $commit | str trim | split words
+  let raw = ^git show --no-patch --format=%P $commit | str trim
+  if ($raw | is-empty) {
+    return false
+  }
+  let parents = $raw | split row " "
   if ($parents | length) != 1 {
     return false
   }

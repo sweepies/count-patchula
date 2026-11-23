@@ -386,7 +386,11 @@ async fn apply_inner(
                     );
                 }
             }
-            if contents_match && (moved_base || leaves(existing_entries) == expected) {
+            let green_matches = plan.batch_items().is_none()
+                || trailers::batch_green(tip_message) == crate::batch::is_green(plan);
+            if contents_match
+                && (moved_base || (green_matches && leaves(existing_entries) == expected))
+            {
                 plan.unchanged(old.clone(), existing_tree);
                 return Ok(());
             }
@@ -415,7 +419,7 @@ async fn apply_inner(
     } else {
         String::new()
     };
-    let trailer_block = if plan.batch_green() {
+    let trailer_block = if crate::batch::is_green(plan) {
         trailers::batch_green_block(
             plan.identity(),
             &plan.action().base_commit,

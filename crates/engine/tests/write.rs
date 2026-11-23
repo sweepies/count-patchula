@@ -2502,6 +2502,72 @@ async fn dashboard_batch_moves_updates_and_green_trailer_tracks_checks_and_base(
     check_transcript();
 }
 
+/// A source PR whose checks pass but whose GitHub mergeability is not `clean`
+/// does not earn `Patchula-Batch-Green: true`, and when an unchanged batch tree
+/// on the same base flips from un-green to green (e.g. a still-open ticked
+/// source PR becomes clean), the commit is rewritten to add the trailer.
+#[tokio::test(start_paused = true)]
+async fn batch_green_requires_clean_mergeability_and_updates_trailer_on_unchanged_tree() {
+    let fake = sandbox(base_files(), None, vec![]);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let engine = Engine::with_transport("offline-installation", cache, 4, fake.clone())
+        .unwrap()
+        .with_versions_host(false);
+    let config = checkbox_config();
+    let now = chrono::Utc::now();
+
+    checkbox_run(&engine, &config, now).await;
+    let update = open_prs(&fake);
+    assert_eq!(update.len(), 1);
+    let source_number = update[0]["number"].as_u64().unwrap();
+
+    // Checks pass, but mergeable_state is blocked (e.g. required checks or
+    // review still missing). Batching must omit the green trailer.
+    fake.state().repo_mut().prs.get_mut(&source_number).unwrap()["mergeable_state"] =
+        json!("blocked");
+    tick_pr(&fake, source_number, "patchula-batch-add");
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0]["head"]["ref"], "patchula/batch");
+    let first_sha = open[0]["head"]["sha"].as_str().unwrap().to_owned();
+    let first_message = fake.state().repo().commits[&first_sha]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !first_message.contains("Patchula-Batch-Green:"),
+        "{first_message}"
+    );
+
+    // Simulate a previous run where closing the source PR had failed so it
+    // stayed open and ticked, and its mergeability is now clean. Even though
+    // the batch tree bytes are identical on the same base, the batch commit
+    // is rewritten to carry `Patchula-Batch-Green: true`.
+    {
+        let mut state = fake.state();
+        let pr = state.repo_mut().prs.get_mut(&source_number).unwrap();
+        pr["state"] = json!("open");
+        pr["mergeable_state"] = json!("clean");
+        let body = pr["body"].as_str().unwrap().to_owned();
+        pr["body"] = json!(body.replace("<!-- patchula-closed:batched -->", ""));
+    }
+    checkbox_run(&engine, &config, now).await;
+    let open = open_prs(&fake);
+    assert_eq!(open.len(), 1, "{open:?}");
+    let second_sha = open[0]["head"]["sha"].as_str().unwrap().to_owned();
+    assert_ne!(second_sha, first_sha);
+    let second_message = fake.state().repo().commits[&second_sha]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        second_message.ends_with("\nPatchula-Batch-Green: true"),
+        "{second_message}"
+    );
+    check_transcript();
+}
+
 /// The batch PR replaces the PRs it carries, which count toward
 /// `prs.concurrent` until it exists; at the limit it is still created.
 #[tokio::test(start_paused = true)]

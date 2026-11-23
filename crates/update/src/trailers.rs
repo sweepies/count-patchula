@@ -43,7 +43,6 @@ pub(crate) fn plan(message: &str) -> Option<&str> {
 /// Whether the message carries `Patchula-Batch-Green: true`, marking a batch
 /// commit whose items all came from source PRs that were already green on its
 /// base commit.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn batch_green(message: &str) -> bool {
     trailer(message, "Patchula-Batch-Green: ") == Some("true")
 }

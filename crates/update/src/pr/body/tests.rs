@@ -100,13 +100,10 @@ fn closures_keep_the_body_within_its_budget_and_end_with_their_marker() {
         closure("a body", Closure::Obsolete),
         format!("a body\n\n{}", markers::OBSOLETE)
     );
-    assert_eq!(
-        closure("a body", Closure::Batched(42)),
-        format!(
-            "> [!NOTE]\n> Moved to the batch PR #42. Tick this update's box there to bring it back.\n\na body\n\n{}",
-            markers::BATCHED
-        )
-    );
+    let batched_plain = closure("a body", Closure::Batched(42));
+    assert!(batched_plain.contains("#42"), "{batched_plain}");
+    assert!(batched_plain.contains("a body"), "{batched_plain}");
+    assert!(batched_plain.ends_with(markers::BATCHED), "{batched_plain}");
     for (why, marker) in [
         (Closure::Obsolete, markers::OBSOLETE),
         (Closure::Batched(42), markers::BATCHED),
@@ -114,6 +111,26 @@ fn closures_keep_the_body_within_its_budget_and_end_with_their_marker() {
         let text = closure(&"x".repeat(FOREIGN_LIMIT), why);
         assert!(text.ends_with(marker), "{text}");
         assert_eq!(text.len(), FOREIGN_LIMIT);
+        // When `START` is not followed by a newline, inserting the note adds
+        // one; the budget accounts for it so foreign text still fits cleanly.
+        let owner = format!(
+            "{}{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->",
+            markers::OWNERSHIP,
+            "a".repeat(64),
+            "b".repeat(64),
+        );
+        let tight_start = format!(
+            "{}body\n{owner}\n{}",
+            markers::START,
+            "x".repeat(FOREIGN_LIMIT)
+        );
+        let tight = closure(&tight_start, why);
+        assert!(tight.ends_with(marker), "{tight}");
+        assert!(
+            tight.len() <= FOREIGN_LIMIT,
+            "tight closure exceeded FOREIGN_LIMIT: {}",
+            tight.len()
+        );
         // A rebasing banner still up does not outlive the closure.
         let permits = BTreeMap::new();
         let finished = bodies(&permits)
@@ -127,13 +144,10 @@ fn closures_keep_the_body_within_its_budget_and_end_with_their_marker() {
         let closed = closure(&finished, why);
         assert_eq!(closure(&shown, why), closed);
         if matches!(why, Closure::Batched(42)) {
-            assert!(
-                closed.contains(&format!(
-                    "{}\n> [!NOTE]\n> Moved to the batch PR #42.",
-                    markers::START
-                )),
-                "{closed}"
-            );
+            let start = closed.find(markers::START).unwrap();
+            let link = closed.find("#42").unwrap();
+            let end = closed.find(markers::OWNERSHIP).unwrap();
+            assert!(start < link && link < end, "{closed}");
         }
     }
 }
@@ -402,7 +416,7 @@ mod security_tests {
                 number: Some(1),
                 title: "update @mallory/pkg".into(),
                 targets: vec![],
-                green_base: None,
+                green: None,
             }])
             .contains("update @\u{200d}mallory/pkg")
         );

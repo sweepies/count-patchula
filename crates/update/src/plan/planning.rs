@@ -954,7 +954,7 @@ fn batched(targets: Vec<crate::plan::Change>) -> Vec<crate::batch::Item> {
         number: None,
         title: "batched".into(),
         targets,
-        green_base: None,
+        green: None,
     }]
 }
 

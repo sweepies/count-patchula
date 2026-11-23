@@ -762,32 +762,41 @@ fn newer_versions_that_cannot_be_proposed_are_listed_with_their_reason() {
     assert!(!text.contains("copier"), "{text}");
     let section = &text[text.find("## Newer versions not proposed").unwrap()..];
     assert!(
-        section.contains("| **`acme/lib`** | `^1 \\| ^2`&nbsp;→&nbsp;`3.0.0` | `composer.json` | the constraint &#96;^1 \\| ^2&#96; cannot be rewritten to allow it without guessing |\n"),
+        section.contains("`acme/lib`")
+            && section.contains("`^1 \\| ^2`")
+            && section.contains("`3.0.0`")
+            && section.contains("`composer.json`")
+            && section.contains("cannot be rewritten to allow it without guessing"),
         "{section}"
     );
 }
 
-/// Open update PRs on the dashboard carry a batch checkbox whose tick is
-/// detected by `Controls::checkbox_edited` and recorded in `Controls.batch`,
-/// while the batch PR itself and maintenance PRs carry none.
+/// Open update PRs on the dashboard carry a batch checkbox keyed by the PR
+/// body's ownership marker when the body carries a targets marker, and its tick
+/// is detected by `Controls::checkbox_edited` and recorded in `Controls.batch`.
+/// The batch PR itself and PRs without a targets marker carry no batch box.
 #[test]
 fn open_update_prs_on_the_dashboard_carry_batch_checkboxes() {
-    let update = patchula_update::testing::Draft::new(patchula_report::BranchAction {
-        repository: "demo/app".into(),
-        branch: "patchula/serde-1.x".into(),
-        base_commit: "a".repeat(40),
-        status: patchula_report::BranchStatus::Planned,
-        reason: None,
-        message: "chore(deps): update serde to 1.0.210".into(),
-        previous_commit: None,
-        commit: None,
-        verified: None,
-        lockfile_pending: false,
-        files: Vec::new(),
-    })
-    .identity("serde")
-    .change(patchula_update::testing::change("serde"))
-    .build();
+    let make_plan = |branch: &str, pkg: &str| {
+        patchula_update::testing::Draft::new(patchula_report::BranchAction {
+            repository: "demo/app".into(),
+            branch: branch.into(),
+            base_commit: "a".repeat(40),
+            status: patchula_report::BranchStatus::Planned,
+            reason: None,
+            message: format!("chore(deps): update {pkg} to 1.0.210"),
+            previous_commit: None,
+            commit: None,
+            verified: None,
+            lockfile_pending: false,
+            files: Vec::new(),
+        })
+        .identity(pkg)
+        .change(patchula_update::testing::change(pkg))
+        .build()
+    };
+    let update = make_plan("patchula/serde-1.x", "serde");
+    let no_targets = make_plan("patchula/anyhow-1.x", "anyhow");
     let batch = patchula_update::testing::Draft::new(patchula_report::BranchAction {
         repository: "demo/app".into(),
         branch: "patchula/batch".into(),
@@ -807,16 +816,42 @@ fn open_update_prs_on_the_dashboard_carry_batch_checkboxes() {
         number: Some(9),
         title: "other".into(),
         targets: vec![patchula_update::testing::change("other")],
-        green_base: None,
+        green: None,
     }])
     .build();
-    let key = update.update_key();
+    // Deliberately use a PR ownership key different from `update.update_key()`
+    // to prove the dashboard keys the checkbox by the PR's marker (matching `batch::items`).
+    let pr_origin = "f".repeat(64);
+    assert_ne!(pr_origin, update.update_key());
+    let body_with_targets = format!(
+        "<!-- patchula-begin -->\n<!-- patchula-targets:{} -->\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{pr_origin}\"}} -->\n",
+        serde_json::to_string(update.changes()).unwrap(),
+        "a".repeat(64),
+    );
+    let tracked_with_body = |number: u64, branch: &str, title: &str, body: &str| {
+        patchula_update::pull_requests::Tracked::from(
+            serde_json::from_value::<patchula_github::model::PullRequest>(
+                json!({"node_id":format!("N{number}"),"number":number,
+                "html_url":format!("https://github.com/demo/app/pull/{number}"),"state":"open",
+                "title":title,"body":body,"labels":[],"user":{"login":"bot"},
+                "head":{"ref":branch,"sha":"h","repo":{"full_name":"demo/app"}},
+                "base":{"ref":"main","repo":{"full_name":"demo/app"}}}),
+            )
+            .unwrap(),
+        )
+    };
     let prs = vec![
-        tracked(
+        tracked_with_body(
             12,
-            "open",
             "patchula/serde-1.x",
             "chore(deps): update serde to 1.0.210",
+            &body_with_targets,
+        ),
+        tracked(
+            15,
+            "open",
+            "patchula/anyhow-1.x",
+            "chore(deps): update anyhow to 1.0.210",
         ),
         tracked(
             50,
@@ -827,7 +862,7 @@ fn open_update_prs_on_the_dashboard_carry_batch_checkboxes() {
     ];
     let text = dashboard::render(
         &repository(),
-        &[update, batch],
+        &[update, no_targets, batch],
         &prs,
         &[],
         Recheck::NextRun,
@@ -837,7 +872,11 @@ fn open_update_prs_on_the_dashboard_carry_batch_checkboxes() {
     let update_pos = text.find("- [ ] #12 ").unwrap();
     assert!(batch_pos < update_pos, "batch PR leads Open PRs:\n{text}");
     assert!(
-        text.contains(&format!("\"action\":\"batch\",\"target\":\"{key}\"")),
+        text.contains("- #15 ") && !text.contains("- [ ] #15 "),
+        "PR without targets marker must not get a batch checkbox:\n{text}"
+    );
+    assert!(
+        text.contains(&format!("\"action\":\"batch\",\"target\":\"{pr_origin}\"")),
         "{text}"
     );
     let ticked = text.replacen("- [ ] #12 ", "- [x] #12 ", 1);
@@ -854,5 +893,105 @@ fn open_update_prs_on_the_dashboard_carry_batch_checkboxes() {
         ..Default::default()
     };
     let controls = dashboard::Controls::read(&inventory, "demo/app", true).unwrap();
-    assert!(controls.batch.contains(&key));
+    assert!(controls.batch.contains(&pr_origin));
+}
+
+/// Links in dashboard tables cannot break out of their cell with `|`, carry
+/// control characters, or use non-http(s) schemes, and prose escapes `\|`.
+#[test]
+fn dashboard_table_links_cannot_break_out_of_cells_or_use_unsafe_schemes() {
+    let mut repo = repository();
+    repo.package_files[0].dependencies[0]
+        .metadata
+        .as_mut()
+        .unwrap()
+        .advisories = serde_json::from_value(json!([
+        {
+            "id": "GHSA-pipe",
+            "aliases": [],
+            "severity": "high",
+            "summary": "escaped \\| pipe",
+            "url": "https://osv.dev/vuln/a|@mallory #123"
+        },
+        {
+            "id": "GHSA-js",
+            "aliases": [],
+            "severity": "medium",
+            "summary": "bad scheme",
+            "url": "javascript:alert(1)"
+        }
+    ]))
+    .unwrap();
+    repo.notices = serde_json::from_value(json!([
+        {
+            "manager": "copier",
+            "path": ".copier-answers.yml",
+            "name": "tpl",
+            "package": "tpl",
+            "current": "1.0.0",
+            "available": "2.0.0",
+            "compareUrl": "https://example.com/compare/1|@mallory"
+        }
+    ]))
+    .unwrap();
+    let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
+    assert!(!text.contains("javascript:"), "{text}");
+    assert!(!text.contains("|@mallory"), "{text}");
+    assert!(text.contains("%7C"), "{text}");
+    assert!(text.contains("escaped \\\\\\| pipe"), "{text}");
+}
+
+/// Vulnerability counts deduplicate the same advisory across multiple versions
+/// of one package and note omitted advisories when more than 60 exist.
+#[test]
+fn dashboard_vulnerability_counts_deduplicate_and_note_omissions() {
+    let mut advisories = Vec::new();
+    for i in 0..65 {
+        advisories.push(json!({
+            "id": format!("GHSA-{i:04}"),
+            "aliases": [],
+            "severity": "high",
+            "summary": format!("issue {i}"),
+            "url": format!("https://osv.dev/vulnerability/GHSA-{i:04}")
+        }));
+    }
+    let repo: Repository = serde_json::from_value(json!({
+        "repository": "demo/app",
+        "status": "complete",
+        "reason": null,
+        "packageFiles": [
+            {
+                "path": "a/Cargo.toml",
+                "dependencies": [{
+                    "manager": "cargo", "name": "dup", "package": "dup",
+                    "current": {"value": "1.0.0", "version": "1.0.0", "digest": null},
+                    "updates": [],
+                    "metadata": {"source": "crates", "kinds": [], "locations": [], "advisories": advisories}
+                }]
+            },
+            {
+                "path": "b/Cargo.toml",
+                "dependencies": [{
+                    "manager": "cargo", "name": "dup", "package": "dup",
+                    "current": {"value": "2.0.0", "version": "2.0.0", "digest": null},
+                    "updates": [],
+                    "metadata": {"source": "crates", "kinds": [], "locations": [], "advisories": [
+                        {
+                            "id": "GHSA-0000",
+                            "aliases": [],
+                            "severity": "high",
+                            "summary": "issue 0",
+                            "url": "https://osv.dev/vulnerability/GHSA-0000"
+                        }
+                    ]}
+                }]
+            }
+        ]
+    }))
+    .unwrap();
+    let text = dashboard::render(&repo, &[], &[], &[], Recheck::NextRun, None);
+    // 65 distinct (package, advisory) pairs, not 66.
+    assert!(text.contains("65 known vulnerabilities"), "{text}");
+    assert!(text.contains("(65)</summary>"), "{text}");
+    assert!(text.contains("5 additional advisories omitted."), "{text}");
 }

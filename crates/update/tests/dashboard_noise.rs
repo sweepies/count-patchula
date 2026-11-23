@@ -268,11 +268,18 @@ fn render_with(repo: &Repository) -> String {
     ]
     .into_iter()
     .map(|(number, branch, title)| {
+        let matching = plans.iter().find(|p| p.action().branch == branch).unwrap();
+        let body = format!(
+            "<!-- patchula-begin -->\n<!-- patchula-targets:{} -->\n<!-- patchula:{{\"version\":1,\"identity\":\"{}\",\"update\":\"{}\"}} -->\n",
+            serde_json::to_string(matching.changes()).unwrap(),
+            "a".repeat(64),
+            matching.update_key(),
+        );
         patchula_update::pull_requests::Tracked::from(
             serde_json::from_value::<patchula_github::model::PullRequest>(
                 json!({"node_id":format!("N{number}"),"number":number,
                 "html_url":format!("https://github.com/demo/app/pull/{number}"),"state":"open",
-                "title":title,"labels":[],"user":{"login":"bot"},
+                "title":title,"body":body,"labels":[],"user":{"login":"bot"},
                 "head":{"ref":branch,"sha":"h","repo":{"full_name":"demo/app"}},
                 "base":{"ref":"main","repo":{"full_name":"demo/app"}}}),
             )

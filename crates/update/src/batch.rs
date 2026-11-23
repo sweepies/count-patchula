@@ -2,15 +2,36 @@
 //! keeps the targets that were reviewed; the individual PR closes as batched,
 //! which never suppresses the update. Unticking, removing or closing the batch
 //! returns its updates to individual PRs.
-use crate::error::PlanError;
+use crate::error::{Error, PlanError};
 use crate::markers;
 use crate::{Change, Inventory, Plan, Snapshot, pull_requests};
 use patchula_config::{Config, Registry};
-use patchula_github::Client;
+use patchula_github::{
+    Client,
+    model::{GitCommit, Tree, TreeEntry},
+};
 use patchula_manager::Dependency;
 use patchula_report::Repository;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Maximum changed files recorded in one item's [`GreenProof`] so a large PR
+/// cannot bloat the batch PR's items marker.
+const MAX_GREEN_FILES: usize = 64;
+/// Maximum serialized byte size of one item's [`GreenProof`].
+const MAX_GREEN_PROOF_BYTES: usize = 4_096;
+
+/// Proof that an item's source PR passed every check on `base`, together with
+/// the exact file-level tree delta that commit tested.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GreenProof {
+    /// The base commit SHA the source PR was built and verified on.
+    pub base: String,
+    /// Exact changed blobs (`Some(blob_sha)`) and deleted blobs (`None`) in the
+    /// verified source PR head commit relative to `base`.
+    pub files: BTreeMap<String, Option<String>>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,10 +41,10 @@ pub struct Item {
     pub number: Option<u64>,
     pub title: String,
     pub targets: Vec<Change>,
-    /// The base commit SHA against which this item's source PR had every
-    /// check pass when it joined the batch.
+    /// Proof that this item's source PR was clean and green on a specific base
+    /// commit, along with the exact blob changes it tested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub green_base: Option<String>,
+    pub green: Option<GreenProof>,
 }
 
 fn overlaps(item: &Item, targets: &[Change]) -> bool {
@@ -97,7 +118,7 @@ pub fn items(
             number: Some(t.pr.number),
             title: t.pr.title.clone(),
             targets,
-            green_base: None,
+            green: None,
         });
     }
     items.sort();
@@ -107,33 +128,132 @@ pub fn items(
 /// The batch branch's label under the branch prefix.
 pub(crate) const LABEL: &str = "batch";
 
-/// Whether `pr`'s head commit in `inventory` is a verified commit of the
-/// Count's on `base_commit` against `default_branch`, with no rebasing banner
-/// or pending lockfile, so its checks can vouch for the batch on that base.
-fn eligible_for_green(
-    inventory: &Inventory,
+/// Whether `plan` is a non-empty batch plan whose exact written tree equals
+/// `base_commit` plus the pairwise-disjoint file deltas of verified clean,
+/// green source PRs built on that same `base_commit`, with no lockfile pending.
+pub(crate) fn is_green(plan: &Plan) -> bool {
+    if plan.action().lockfile_pending || plan.owes_lockfiles() {
+        return false;
+    }
+    let Some(items) = plan.batch_items() else {
+        return false;
+    };
+    if items.is_empty() {
+        return false;
+    }
+    let base_commit = plan.action().base_commit.as_str();
+    let mut expected: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+    for item in items {
+        let Some(proof) = &item.green else {
+            return false;
+        };
+        if proof.base != base_commit || proof.files.is_empty() {
+            return false;
+        }
+        for (path, blob) in &proof.files {
+            // Overlapping files (e.g. a shared lockfile or manifest) mean the
+            // combined result was never tested by any single source PR.
+            if expected.insert(path.as_str(), blob.as_deref()).is_some() {
+                return false;
+            }
+        }
+    }
+    let contents = plan.contents();
+    let deleted = plan.deleted();
+    if expected.len() != contents.len() {
+        return false;
+    }
+    expected
+        .into_iter()
+        .all(|(path, expected_sha)| match expected_sha {
+            None => deleted.contains(path) && contents.contains_key(path),
+            Some(sha) => {
+                !deleted.contains(path)
+                    && contents
+                        .get(path)
+                        .is_some_and(|content| crate::blob_sha(content) == sha)
+            }
+        })
+}
+
+fn leaf_entries(entries: &[TreeEntry]) -> BTreeMap<&str, (&str, &str, &str)> {
+    entries
+        .iter()
+        .filter(|e| e.kind != "tree")
+        .map(|e| {
+            (
+                e.path.as_str(),
+                (e.sha.as_str(), e.mode.as_str(), e.kind.as_str()),
+            )
+        })
+        .collect()
+}
+
+/// Exact blob-level delta from `base_entries` to `source_entries`, or `None`
+/// if empty, non-blob, mode-changing, or too large to vouch for.
+fn tree_delta(
+    base_entries: &[TreeEntry],
+    source_entries: &[TreeEntry],
+) -> Option<BTreeMap<String, Option<String>>> {
+    let base = leaf_entries(base_entries);
+    let source = leaf_entries(source_entries);
+    let mut files = BTreeMap::new();
+    for (&path, &(sha, mode, kind)) in &source {
+        match base.get(path) {
+            None => {
+                if kind != "blob" || mode != "100644" {
+                    return None;
+                }
+                files.insert(path.to_owned(), Some(sha.to_owned()));
+            }
+            Some(&(base_sha, base_mode, base_kind)) => {
+                if (sha, mode, kind) != (base_sha, base_mode, base_kind) {
+                    if kind != "blob" || base_kind != "blob" || mode != base_mode {
+                        return None;
+                    }
+                    files.insert(path.to_owned(), Some(sha.to_owned()));
+                }
+            }
+        }
+    }
+    for (&path, &(_, _, base_kind)) in &base {
+        if !source.contains_key(path) {
+            if base_kind != "blob" {
+                return None;
+            }
+            files.insert(path.to_owned(), None);
+        }
+    }
+    if files.is_empty() || files.len() > MAX_GREEN_FILES {
+        return None;
+    }
+    Some(files)
+}
+
+/// If `pr`'s head commit in `inventory` is a verified commit of the Count's on
+/// `base_commit` against `default_branch` with no rebasing banner or pending
+/// lockfile, return its tree OID so its checks can vouch for its exact changes.
+fn eligible_for_green<'a>(
+    inventory: &'a Inventory,
     pr: &pull_requests::Tracked,
     base_commit: &str,
     default_branch: &str,
-) -> bool {
+) -> Option<&'a str> {
     if pr.pr.base.branch != default_branch || crate::pr::banner::shown(pull_requests::body(&pr.pr))
     {
-        return false;
+        return None;
     }
-    let Some(r) = inventory
+    let r = inventory
         .refs
         .items
         .iter()
         .flatten()
-        .find(|r| r.name == pr.pr.head.branch)
-    else {
-        return false;
-    };
+        .find(|r| r.name == pr.pr.head.branch)?;
     let Some(crate::receipts::RefTarget::Commit(c)) = &r.target else {
-        return false;
+        return None;
     };
     let actor = inventory.actor.as_str();
-    c.oid == pr.pr.head.sha
+    let ok = c.oid == pr.pr.head.sha
         && c.author
             .as_ref()
             .and_then(|a| a.user.as_ref())
@@ -145,7 +265,8 @@ fn eligible_for_green(
         && c.signature.as_ref().is_some_and(|s| s.is_valid)
         && crate::trailers::version(&c.message)
         && crate::trailers::base(&c.message) == Some(base_commit)
-        && !c.message.contains("Lockfile pending:")
+        && !c.message.contains("Lockfile pending:");
+    ok.then_some(c.tree.oid.as_str())
 }
 
 /// Add the batch plan and skip the update plans it carries. Items whose targets the
@@ -163,8 +284,9 @@ pub async fn apply(
     allow_pending: bool,
     since: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<BTreeSet<String>, PlanError> {
-    let name = crate::branch_name(&config.prs.branch, LABEL)?;
+) -> Result<BTreeSet<String>, Error> {
+    let name = crate::branch_name(&config.prs.branch, LABEL)
+        .map_err(|e| Error::Refused(e.to_string().into()))?;
     let prs = inventory.pull_requests(&repository.repository);
     let mut items = items(
         &prs,
@@ -177,8 +299,9 @@ pub async fn apply(
         repository.commit.as_deref(),
         repository.default_branch.as_deref(),
     ) {
+        let mut base_entries: Option<Option<Vec<TreeEntry>>> = None;
         for item in &mut items {
-            if item.green_base.is_some() {
+            if item.green.is_some() {
                 continue;
             }
             let Some(source) = prs.iter().find(|t| {
@@ -190,14 +313,61 @@ pub async fn apply(
             }) else {
                 continue;
             };
-            if !eligible_for_green(inventory, source, base_commit, default_branch) {
+            let Some(source_tree_oid) =
+                eligible_for_green(inventory, source, base_commit, default_branch)
+            else {
+                continue;
+            };
+            let passed = crate::automerge::clean_and_green(
+                client,
+                &inventory.actor,
+                &repository.repository,
+                &source.pr,
+            )
+            .await
+            .map_err(|_| Error::Raced("failed to inspect batched PR checks; rerun"))?;
+            if !passed {
                 continue;
             }
-            if crate::automerge::green(client, &repository.repository, &source.pr.head.sha)
+            if base_entries.is_none() {
+                let base_git = client
+                    .get_immutable::<GitCommit>(&format!(
+                        "repos/{}/git/commits/{base_commit}",
+                        repository.repository
+                    ))
+                    .await
+                    .map_err(|_| Error::Raced("failed to inspect base commit tree; rerun"))?;
+                let base_tree = client
+                    .get_immutable::<Tree>(&format!(
+                        "repos/{}/git/trees/{}?recursive=1",
+                        repository.repository, base_git.tree.sha
+                    ))
+                    .await
+                    .map_err(|_| Error::Raced("failed to inspect base commit tree; rerun"))?;
+                base_entries = Some((!base_tree.truncated).then_some(base_tree.tree));
+            }
+            let Some(base_tree_entries) = base_entries.as_ref().and_then(|o| o.as_deref()) else {
+                continue;
+            };
+            let source_tree = client
+                .get_immutable::<Tree>(&format!(
+                    "repos/{}/git/trees/{source_tree_oid}?recursive=1",
+                    repository.repository
+                ))
                 .await
-                .unwrap_or(false)
-            {
-                item.green_base = Some(base_commit.to_owned());
+                .map_err(|_| Error::Raced("failed to inspect batched PR tree; rerun"))?;
+            if source_tree.truncated {
+                continue;
+            }
+            let Some(files) = tree_delta(base_tree_entries, &source_tree.tree) else {
+                continue;
+            };
+            let proof = GreenProof {
+                base: base_commit.to_owned(),
+                files,
+            };
+            if serde_json::to_string(&proof).is_ok_and(|s| s.len() <= MAX_GREEN_PROOF_BYTES) {
+                item.green = Some(proof);
             }
         }
     }
@@ -212,6 +382,7 @@ pub async fn apply(
         since,
         now,
     )
+    .map_err(|e| Error::Refused(e.to_string().into()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -516,7 +687,7 @@ mod tests {
                 number: None,
                 title: "forged".into(),
                 targets: vec![change("forged", "9.9.9")],
-                green_base: None,
+                green: None,
             }],
         );
         let batch = format!(
@@ -643,5 +814,190 @@ mod tests {
             error.to_string(),
             format!("{batch} is reserved for the batch PR; rename the update group")
         );
+    }
+
+    #[test]
+    fn is_green_requires_disjoint_files_and_exact_blob_match() {
+        let base = "b".repeat(40);
+        let a_content = "{\"a\":\"2.0.0\"}\n";
+        let b_content = "{\"b\":\"2.0.0\"}\n";
+        let item = |origin: &str, files: BTreeMap<String, Option<String>>| Item {
+            origin: origin.into(),
+            number: Some(1),
+            title: origin.into(),
+            targets: vec![change(origin, "2.0.0")],
+            green: Some(GreenProof {
+                base: base.clone(),
+                files,
+            }),
+        };
+        let mut action = crate::plan::testing::action("patchula/batch");
+        action.base_commit = base.clone();
+
+        // A plan whose lockfiles have not yet been marked ready fails closed.
+        let unready = crate::plan::testing::Draft::new(action.clone())
+            .batch(vec![item(
+                "a",
+                BTreeMap::from([("a.json".into(), Some(crate::blob_sha(a_content)))]),
+            )])
+            .content("a.json", a_content)
+            .build();
+        assert!(!is_green(&unready));
+
+        // Single item with exact blob SHA match is green.
+        let one = crate::plan::testing::Draft::new(action.clone())
+            .batch(vec![item(
+                "a",
+                BTreeMap::from([("a.json".into(), Some(crate::blob_sha(a_content)))]),
+            )])
+            .content("a.json", a_content)
+            .lockfiles_ready(true)
+            .build();
+        assert!(is_green(&one));
+
+        // Two items touching disjoint files with exact blob SHAs are green.
+        let two = crate::plan::testing::Draft::new(action.clone())
+            .batch(vec![
+                item(
+                    "a",
+                    BTreeMap::from([("a.json".into(), Some(crate::blob_sha(a_content)))]),
+                ),
+                item(
+                    "b",
+                    BTreeMap::from([("b.json".into(), Some(crate::blob_sha(b_content)))]),
+                ),
+            ])
+            .content("a.json", a_content)
+            .content("b.json", b_content)
+            .lockfiles_ready(true)
+            .build();
+        assert!(is_green(&two));
+
+        // Two items overlapping on a shared lockfile are NOT green, even if the
+        // blob SHA happened to match one of them.
+        let shared_lock = "lock-v2\n";
+        let overlapping = crate::plan::testing::Draft::new(action.clone())
+            .batch(vec![
+                item(
+                    "a",
+                    BTreeMap::from([
+                        ("a.json".into(), Some(crate::blob_sha(a_content))),
+                        ("Cargo.lock".into(), Some(crate::blob_sha(shared_lock))),
+                    ]),
+                ),
+                item(
+                    "b",
+                    BTreeMap::from([
+                        ("b.json".into(), Some(crate::blob_sha(b_content))),
+                        ("Cargo.lock".into(), Some(crate::blob_sha(shared_lock))),
+                    ]),
+                ),
+            ])
+            .content("a.json", a_content)
+            .content("b.json", b_content)
+            .content("Cargo.lock", shared_lock)
+            .lockfiles_ready(true)
+            .build();
+        assert!(!is_green(&overlapping));
+
+        // A single byte of drift between the source head's blob and the batch's
+        // written content (e.g. body/branch desync or rebuilt content) fails closed.
+        let drifted = crate::plan::testing::Draft::new(action.clone())
+            .batch(vec![item(
+                "a",
+                BTreeMap::from([("a.json".into(), Some(crate::blob_sha(a_content)))]),
+            )])
+            .content("a.json", "{\"a\":\"2.0.1\"}\n")
+            .lockfiles_ready(true)
+            .build();
+        assert!(!is_green(&drifted));
+
+        // Extra files written by the batch that no green proof vouches for fail closed.
+        let extra = crate::plan::testing::Draft::new(action.clone())
+            .batch(vec![item(
+                "a",
+                BTreeMap::from([("a.json".into(), Some(crate::blob_sha(a_content)))]),
+            )])
+            .content("a.json", a_content)
+            .content("Cargo.lock", shared_lock)
+            .lockfiles_ready(true)
+            .build();
+        assert!(!is_green(&extra));
+
+        // Pending lockfile fails closed.
+        let mut pending_action = action.clone();
+        pending_action.lockfile_pending = true;
+        let pending = crate::plan::testing::Draft::new(pending_action)
+            .batch(vec![item(
+                "a",
+                BTreeMap::from([("a.json".into(), Some(crate::blob_sha(a_content)))]),
+            )])
+            .content("a.json", a_content)
+            .lockfiles_ready(true)
+            .build();
+        assert!(!is_green(&pending));
+
+        // Base mismatch fails closed.
+        let mut moved_action = action;
+        moved_action.base_commit = "c".repeat(40);
+        let moved = crate::plan::testing::Draft::new(moved_action)
+            .batch(vec![item(
+                "a",
+                BTreeMap::from([("a.json".into(), Some(crate::blob_sha(a_content)))]),
+            )])
+            .content("a.json", a_content)
+            .lockfiles_ready(true)
+            .build();
+        assert!(!is_green(&moved));
+    }
+
+    #[test]
+    fn tree_delta_rejects_empty_mode_changes_and_non_blobs() {
+        let entry = |path: &str, sha: &str, mode: &str, kind: &str| TreeEntry {
+            path: path.into(),
+            sha: sha.into(),
+            mode: mode.into(),
+            kind: kind.into(),
+            size: None,
+        };
+        let base = vec![
+            entry("a.toml", "sha1", "100644", "blob"),
+            entry("old.lock", "sha2", "100644", "blob"),
+        ];
+        // Identical trees produce None (empty delta).
+        assert_eq!(tree_delta(&base, &base), None);
+        // Modified + added + deleted blobs produce the exact delta.
+        let changed = vec![
+            entry("a.toml", "sha1-new", "100644", "blob"),
+            entry("new.toml", "sha3", "100644", "blob"),
+        ];
+        assert_eq!(
+            tree_delta(&base, &changed),
+            Some(BTreeMap::from([
+                ("a.toml".into(), Some("sha1-new".into())),
+                ("new.toml".into(), Some("sha3".into())),
+                ("old.lock".into(), None),
+            ]))
+        );
+        // Mode change on an existing file fails closed.
+        let mode_changed = vec![
+            entry("a.toml", "sha1", "100755", "blob"),
+            entry("old.lock", "sha2", "100644", "blob"),
+        ];
+        assert_eq!(tree_delta(&base, &mode_changed), None);
+        // Non-100644 new file fails closed.
+        let exec_new = vec![
+            entry("a.toml", "sha1", "100644", "blob"),
+            entry("old.lock", "sha2", "100644", "blob"),
+            entry("run.sh", "sha4", "100755", "blob"),
+        ];
+        assert_eq!(tree_delta(&base, &exec_new), None);
+        // Submodule / non-blob addition fails closed.
+        let submodule = vec![
+            entry("a.toml", "sha1", "100644", "blob"),
+            entry("old.lock", "sha2", "100644", "blob"),
+            entry("sub", "sha5", "160000", "commit"),
+        ];
+        assert_eq!(tree_delta(&base, &submodule), None);
     }
 }

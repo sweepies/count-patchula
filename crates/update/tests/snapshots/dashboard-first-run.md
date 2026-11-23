@@ -23,20 +23,20 @@
 | Advisory | Package | Severity | Fixed&nbsp;in | Summary |
 | --- | --- | --- | --- | --- |
 | [RUSTSEC-2026-0387](https://osv.dev/vulnerability/RUSTSEC-2026-0387) | `crypto-bigint` | — | `0.7.6` | Multiple timing variability issues in operations intended to be constant-time |
-| [RUSTSEC-2026-0385](https://osv.dev/vulnerability/RUSTSEC-2026-0385) | `ctutils` | — | `0.4.4` | Non-constant-time mask generation and &#96;u128&#96; comparisons |
+| [RUSTSEC-2026-0385](https://osv.dev/vulnerability/RUSTSEC-2026-0385) | `ctutils` | — | `0.4.4` | Non-constant-time mask generation and `u128` comparisons |
 | [RUSTSEC-2023-0071](https://osv.dev/vulnerability/RUSTSEC-2023-0071) (`CVE-2023-49092`) | `rsa` | — | — | Marvin Attack: potential key recovery through timing sidechannels |
 | [RUSTSEC-2024-0449](https://osv.dev/vulnerability/RUSTSEC-2024-0449) | `unsafe-libyaml` | — | — | unsafe-libyaml is unmaintained |
-| [RUSTSEC-2026-0395](https://osv.dev/vulnerability/RUSTSEC-2026-0395) | `zstd-safe` | — | `8.2.0` | Use-after-free with &#96;CParameter::StableInBuffer&#96; |
-| [RUSTSEC-2026-0396](https://osv.dev/vulnerability/RUSTSEC-2026-0396) | `zstd-safe` | — | `8.2.0` | &#96;Seekable&#96; reads a NULL or out-of-bounds seek table |
-| [RUSTSEC-2026-0397](https://osv.dev/vulnerability/RUSTSEC-2026-0397) | `zstd-safe` | — | `8.2.0` | &#96;OutBuffer::around&#95;pos&#96; exposes uninitialized memory |
-| [RUSTSEC-2026-0398](https://osv.dev/vulnerability/RUSTSEC-2026-0398) | `zstd-safe` | — | `8.2.0` | &#96;Seekable::decompress&#96; sets a &#96;Vec&#96; length beyond its capacity for offsets past the end |
-| [RUSTSEC-2026-0399](https://osv.dev/vulnerability/RUSTSEC-2026-0399) | `zstd-safe` | — | `8.2.0` | Use-after-free through &#96;init&#95;using&#95;cdict&#96; and &#96;init&#95;using&#95;ddict&#96; |
+| [RUSTSEC-2026-0395](https://osv.dev/vulnerability/RUSTSEC-2026-0395) | `zstd-safe` | — | `8.2.0` | Use-after-free with `CParameter::StableInBuffer` |
+| [RUSTSEC-2026-0396](https://osv.dev/vulnerability/RUSTSEC-2026-0396) | `zstd-safe` | — | `8.2.0` | `Seekable` reads a NULL or out-of-bounds seek table |
+| [RUSTSEC-2026-0397](https://osv.dev/vulnerability/RUSTSEC-2026-0397) | `zstd-safe` | — | `8.2.0` | `OutBuffer::around_pos` exposes uninitialized memory |
+| [RUSTSEC-2026-0398](https://osv.dev/vulnerability/RUSTSEC-2026-0398) | `zstd-safe` | — | `8.2.0` | `Seekable::decompress` sets a `Vec` length beyond its capacity for offsets past the end |
+| [RUSTSEC-2026-0399](https://osv.dev/vulnerability/RUSTSEC-2026-0399) | `zstd-safe` | — | `8.2.0` | Use-after-free through `init_using_cdict` and `init_using_ddict` |
 | [RUSTSEC-2026-0400](https://osv.dev/vulnerability/RUSTSEC-2026-0400) | `zstd-safe` | — | `8.2.0` | Use-after-free of a dictionary after a one-shot call on a context with an open stream |
-| [RUSTSEC-2026-0401](https://osv.dev/vulnerability/RUSTSEC-2026-0401) | `zstd-safe` | — | `8.2.0` | Out-of-bounds read in &#96;train&#95;from&#95;buffer&#96; when sample sizes overflow |
-| [RUSTSEC-2026-0402](https://osv.dev/vulnerability/RUSTSEC-2026-0402) | `zstd-safe` | — | `8.2.0` | Heap buffer overflow in &#96;CCtx::try&#95;clone&#96; on a multithreaded context |
+| [RUSTSEC-2026-0401](https://osv.dev/vulnerability/RUSTSEC-2026-0401) | `zstd-safe` | — | `8.2.0` | Out-of-bounds read in `train_from_buffer` when sample sizes overflow |
+| [RUSTSEC-2026-0402](https://osv.dev/vulnerability/RUSTSEC-2026-0402) | `zstd-safe` | — | `8.2.0` | Heap buffer overflow in `CCtx::try_clone` on a multithreaded context |
 | [RUSTSEC-2026-0403](https://osv.dev/vulnerability/RUSTSEC-2026-0403) | `zstd-safe` | — | `8.2.0` | Uninitialized memory exposed when streaming decompression of a legacy frame fails |
-| [RUSTSEC-2026-0404](https://osv.dev/vulnerability/RUSTSEC-2026-0404) | `zstd-safe` | — | `8.2.0` | Double free in &#96;DCtx::try&#95;clone&#96; |
-| [RUSTSEC-2026-0405](https://osv.dev/vulnerability/RUSTSEC-2026-0405) | `zstd-safe` | — | `8.2.0` | Out-of-bounds read with an out-of-range &#96;InBuffer::pos&#96; |
+| [RUSTSEC-2026-0404](https://osv.dev/vulnerability/RUSTSEC-2026-0404) | `zstd-safe` | — | `8.2.0` | Double free in `DCtx::try_clone` |
+| [RUSTSEC-2026-0405](https://osv.dev/vulnerability/RUSTSEC-2026-0405) | `zstd-safe` | — | `8.2.0` | Out-of-bounds read with an out-of-range `InBuffer::pos` |
 | [RUSTSEC-2026-0406](https://osv.dev/vulnerability/RUSTSEC-2026-0406) | `zstd-safe` | — | `8.2.0` | Use-after-free when changing a multithreaded context with an unfinished frame |
 
 </details>

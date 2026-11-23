@@ -4,6 +4,7 @@ use crate::{
     Inventory, Plan,
     identity::{extracted_key, held_key, held_target, retry_key},
     markers,
+    pr::body::{id_cell, linked, prose_cell},
     text::{self, code},
 };
 use patchula_cache::{Cache, State};
@@ -258,9 +259,15 @@ fn escape(text: &str) -> String {
 fn code_cell(text: &str) -> String {
     code(text).replace('|', "\\|")
 }
-/// Third-party prose inside a table cell: inert, escaped and pipe-safe.
-fn prose_cell(text: &str) -> String {
-    safe(text).replace('|', "\\|")
+/// The update key carried by `tracked`'s PR body when that body also carries a
+/// non-empty reviewed-targets marker, so ticking the dashboard's batch box is
+/// guaranteed to match `batch::items`.
+fn batchable_pr_origin(tracked: &crate::pull_requests::Tracked) -> Option<String> {
+    let body = crate::pull_requests::body(&tracked.pr);
+    let origin = crate::pull_requests::marker_update(body)?;
+    let targets =
+        markers::section_json::<Vec<crate::Change>>(body, markers::TARGETS, markers::PAYLOAD)?;
+    (!targets.is_empty()).then_some(origin)
 }
 /// A plan's title formatted for a table cell: pipe-safe.
 fn titled_cell(plan: &Plan) -> String {
@@ -426,9 +433,11 @@ pub fn render(
             let line = format!("#{} {}{note}", tracked.pr.number, plan_line(plan));
             let (group, row) = if plan.batch_items().is_some() {
                 (0, format!("- {line}\n"))
-            } else if crate::pr::body::batchable(plan) {
+            } else if crate::pr::body::batchable(plan)
+                && let Some(origin) = batchable_pr_origin(tracked)
+            {
                 any_batchable_pr = true;
-                (1, checkbox(&line, Action::Batch(plan.update_key())))
+                (1, checkbox(&line, Action::Batch(origin)))
             } else {
                 (1, format!("- {line}\n"))
             };
@@ -701,7 +710,7 @@ pub fn render(
         );
         if notice.is_template() {
             let change = match &notice.compare_url {
-                Some(compare) => format!("[{range}]({})", url(compare)),
+                Some(compare) => linked(&range, compare),
                 None => range,
             };
             sections
@@ -1236,17 +1245,25 @@ fn render_vulnerabilities(
     let mut groups: Vec<&Vulnerable<'_>> = vulnerabilities.values().collect();
     groups.sort_by_key(|g| (g.rank(), g.name.as_str(), g.version.as_str()));
 
-    let mut total_advisories = 0usize;
-    let mut severities = Vec::new();
+    // Deduplicate advisories once per package (matching PR bodies), worst first.
+    let mut distinct: BTreeMap<(usize, &str, &str), &patchula_report::Advisory> = BTreeMap::new();
     let mut packages: Vec<&str> = Vec::new();
     for group in &groups {
-        total_advisories += group.advisories.len();
-        severities.extend(group.advisories.values().map(|(a, _)| a.severity));
         if !packages.contains(&group.name.as_str()) {
             packages.push(&group.name);
         }
+        for (advisory, _) in group.advisories.values() {
+            distinct
+                .entry((
+                    severity_rank(advisory.severity),
+                    group.name.as_str(),
+                    advisory.id.as_str(),
+                ))
+                .or_insert(*advisory);
+        }
     }
-    let badges = severity_summary(severities);
+    let total_advisories = distinct.len();
+    let badges = severity_summary(distinct.values().map(|a| a.severity));
     let badge_note = if badges.is_empty() {
         String::new()
     } else {
@@ -1272,23 +1289,22 @@ fn render_vulnerabilities(
     }
 
     // Detailed advisory table, collapsed just like PRs' security section.
-    let mut all_advisories: Vec<(usize, &str, &patchula_report::Advisory)> = Vec::new();
-    for group in &groups {
-        for (advisory, _) in group.advisories.values() {
-            all_advisories.push((severity_rank(advisory.severity), &group.name, *advisory));
-        }
-    }
-    all_advisories.sort_by_key(|(rank, pkg, adv)| (*rank, *pkg, adv.id.as_str()));
+    const MAX_ADVISORIES: usize = 60;
     let details_open = format!(
-        "\n<details>\n<summary><strong>Advisory details</strong> ({})</summary>\n\n| Advisory | Package | Severity | Fixed&nbsp;in | Summary |\n| --- | --- | --- | --- | --- |\n",
-        all_advisories.len(),
+        "\n<details>\n<summary><strong>Advisory details</strong> ({total_advisories})</summary>\n\n| Advisory | Package | Severity | Fixed&nbsp;in | Summary |\n| --- | --- | --- | --- | --- |\n",
     );
     const DETAILS_CLOSE: &str = "\n</details>\n";
-    if text.len() + details_open.len() + DETAILS_CLOSE.len() + 150 > CONTENT_LIMIT {
+    const BUDGET_OMITTED: &str =
+        "\nAdditional advisories omitted to fit GitHub's issue body limit.\n";
+    if text.len() + details_open.len() + BUDGET_OMITTED.len() + DETAILS_CLOSE.len() + 150
+        > CONTENT_LIMIT
+    {
         return;
     }
     text.push_str(&details_open);
-    for (_, package, advisory) in all_advisories.into_iter().take(60) {
+    let mut shown = 0usize;
+    let mut budget_hit = false;
+    for ((_, package, _), advisory) in distinct.into_iter().take(MAX_ADVISORIES) {
         let cves: Vec<_> = advisory
             .aliases
             .iter()
@@ -1306,16 +1322,26 @@ fn render_vulnerabilities(
         let fixed_in = advisory.fixed_in.as_deref().map_or("—".into(), code_cell);
         let summary = advisory.summary.as_deref().map_or("—".into(), prose_cell);
         let row = format!(
-            "| [{}]({}){aliases} | {} | {severity} | {fixed_in} | {summary} |\n",
-            prose_cell(&advisory.id),
-            url(&advisory.url),
+            "| {}{aliases} | {} | {severity} | {fixed_in} | {summary} |\n",
+            linked(&id_cell(&advisory.id), &advisory.url),
             code_cell(package),
         );
-        if text.len() + row.len() + DETAILS_CLOSE.len() + 150 > CONTENT_LIMIT {
-            text.push_str("\nAdditional advisories omitted to fit GitHub's issue body limit.\n");
+        if text.len() + row.len() + BUDGET_OMITTED.len() + DETAILS_CLOSE.len() + 150 > CONTENT_LIMIT
+        {
+            budget_hit = true;
             break;
         }
         text.push_str(&row);
+        shown += 1;
+    }
+    if budget_hit {
+        text.push_str(BUDGET_OMITTED);
+    } else if shown < total_advisories {
+        let omitted = total_advisories - shown;
+        text.push_str(&format!(
+            "\n{omitted} additional advisor{} omitted.\n",
+            if omitted == 1 { "y" } else { "ies" }
+        ));
     }
     text.push_str(DETAILS_CLOSE);
 }
@@ -1354,9 +1380,8 @@ impl Vulnerable<'_> {
                 .collect::<Vec<_>>()
                 .join("; ")
         };
-        let link = |advisory: &patchula_report::Advisory| {
-            format!("[{}]({})", prose_cell(&advisory.id), url(&advisory.url))
-        };
+        let link =
+            |advisory: &patchula_report::Advisory| linked(&id_cell(&advisory.id), &advisory.url);
         let aliases = |advisory: &patchula_report::Advisory| {
             let cves: Vec<_> = advisory
                 .aliases
@@ -1402,18 +1427,6 @@ fn capitalise(text: &str) -> String {
         .next()
         .map(|c| c.to_uppercase().chain(chars).collect())
         .unwrap_or_default()
-}
-/// A link destination that no character in it can cut short.
-fn url(url: &str) -> String {
-    url.chars()
-        .map(|c| match c {
-            ' ' | '(' | ')' | '<' | '>' | '[' | ']' | '`' | '"' | '\\' => {
-                format!("%{:02X}", c as u32)
-            }
-            c => c.to_string(),
-        })
-        .collect::<String>()
-        .replace("<!--", "%3C!--")
 }
 
 /// One failing package from one source, with every file that declares it.
@@ -1684,7 +1697,7 @@ mod tests {
                 number: None,
                 title: "batched".into(),
                 targets: vec![change()],
-                green_base: None,
+                green: None,
             }])
             .build();
         let prs = vec![crate::pull_requests::Tracked::from(

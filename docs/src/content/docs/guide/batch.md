@@ -51,28 +51,38 @@ update.
 
 ## Skipping redundant CI
 
-When every update in the batch came from a Count-owned PR whose checks were
-already green on the exact base commit the batch builds on (and no lockfile is
-pending), the Count adds a trailer to the batch commit:
+When every update in the batch came from a Count-owned PR that passed the same
+clean-and-green check as [auto-merge](/guide/auto-merge/) on the exact base
+commit the batch builds on, every item touched a disjoint set of files, the
+batch commit writes the exact blob SHAs those source PRs tested, and no
+lockfile is pending, the Count adds a trailer to the batch commit:
 
 ```text
 Patchula-Batch-Green: true
 ```
 
-The trailer is omitted if any item joined without green checks on that base, or
-once the base moves and the batch rebases. On its own the trailer does nothing;
-a repository's workflow can inspect it in a job-level `if:` so skipped jobs
-still report as `skipped` (satisfying required status checks, unlike
-`[skip ci]`):
+The trailer is omitted if any item joined without clean green checks on that
+base, if two items touch the same file (such as a shared `Cargo.lock` or
+`mise.lock` regenerated together), if the batch commit differs from the tested
+blobs, or once the batch rebases onto a new base. Note that under the default
+`rebase = "conflicts"`, a batch without lockfile jobs stays on its old base
+when the default branch moves, and source PRs must be green on the current base
+tip to qualify.
+
+On its own the trailer does nothing; a repository's workflow can inspect it in
+a job-level `if:` so skipped jobs still report as `skipped` (satisfying
+required status checks, unlike `[skip ci]`):
 
 - Check that the PR comes from the same repository (not a fork), targets the
   batch branch, and was opened by your Count Patchula bot.
 - Verify that the head commit has a single parent equal to the PR's base SHA,
   with `Patchula-Base` equal to that parent and `Patchula-Batch-Green: true`.
+- If your repository enforces required workflows from protected refs, also
+  verify the head commit's author login and GitHub signature
+  (`verification.verified`) before trusting the trailer.
 
-Two updates that pass on their own can still interact when combined (especially
-when a lockfile is regenerated for the whole set), so skipping batch CI is a
-workflow choice per repository.
+Two updates that pass on their own can still interact even when they touch
+different files, so skipping batch CI is a workflow choice per repository.
 
 ## Details
 
