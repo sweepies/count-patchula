@@ -1,7 +1,7 @@
 //! `copier update` for one template, in the user's own working tree, with
 //! the user's own `copier`, environment and permissions. Only the working-tree
 //! TUI (after its own confirmation) and `patchula apply --copier` call this;
-//! lookups, runs, the server and `--remote` never reach it. Copier inherits
+//! lookups, runs, the server and `patchula remote` never reach it. Copier inherits
 //! the terminal so it can ask its own questions. The Count never passes
 //! `--trust` and never commits.
 use patchula_process::Executor as _;

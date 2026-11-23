@@ -82,8 +82,8 @@ Select updates with `space` or `a`, press `w`, then `y`. Only the working tree
 here can be written, with the same edits as
 [`patchula apply`](/guide/apply/#what-gets-written); lockfiles are not
 regenerated. An update that cannot be written in place is skipped with a reason
-and does not stop the rest, as in `patchula apply`. If this checkout is set to
-run on a server, pass `--here`.
+and does not stop the rest, as in `patchula apply`. `patchula remote tui`
+browses a server's lookup and is read-only.
 
 To write updates without picking them, in a script or a pre-commit hook, use
 [`patchula apply`](/guide/apply/). It writes through the same edits, and

@@ -18,9 +18,8 @@ It reads the working tree the way [`lookup`](/reference/cli/#patchula-lookup)
 does with no repository named: the `patchula.pkl` here, or `--config`,
 uncommitted changes included. It takes the same cache, concurrency and HTTP
 flags, and needs a [token](/guide/how-it-works/#tokens) for the lookups like
-every other command. It always runs on this machine. Repository arguments,
-`--all-repos` and `--remote` are refused, and a checkout you chose to run
-on a server is never offered to it.
+every other command. It always runs on this machine, and repository arguments
+and `--all-repos` are refused.
 
 In a checkout with no `patchula.pkl` it [asks
 first](/guide/configuration/#where-the-config-lives). Scripts and hooks pass

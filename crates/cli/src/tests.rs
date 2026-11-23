@@ -729,10 +729,9 @@ async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
     let (report, _) = crate::report(
         &app,
         match &app.command {
-            Some(super::Command::Lookup(options)) => options,
+            Some(super::Command::Lookup(options)) => super::Batch::Lookup(options),
             _ => panic!("lookup"),
         },
-        None,
         &services,
     )
     .await
@@ -779,10 +778,6 @@ fn exit_codes_rank_errors_then_stale_runs_then_lookup_failures() {
         }
         report
     };
-    let app = App::parse_from(&[OsStr::new("run"), OsStr::new("acme/app")]).unwrap();
-    let Some(super::Command::Run(run)) = &app.command else {
-        panic!("run");
-    };
     for (statuses, failed, lookup, real) in [
         (&[Status::Complete][..], false, 0, 0),
         (&[Status::Complete], true, super::LOOKUP_FAILED, 0),
@@ -794,8 +789,8 @@ fn exit_codes_rank_errors_then_stale_runs_then_lookup_failures() {
         ),
         (&[Status::Stale, Status::Error], true, 1, 1),
     ] {
-        assert_eq!(super::exit_code(&report(statuses, failed), None), lookup);
-        assert_eq!(super::exit_code(&report(statuses, failed), Some(run)), real);
+        assert_eq!(super::exit_code(&report(statuses, failed), false), lookup);
+        assert_eq!(super::exit_code(&report(statuses, failed), true), real);
     }
 }
 
@@ -809,7 +804,6 @@ async fn apply_is_always_local_and_validates_its_filters() {
     for (args, message) in [
         (&["acme/app"][..], "takes no repository"),
         (&["--all-repos"], "takes no --all-repos"),
-        (&["--remote"], "drop --remote"),
         (
             &["--manager", "npn"],
             "--manager npn is not a known manager",
@@ -824,7 +818,8 @@ async fn apply_is_always_local_and_validates_its_filters() {
         assert!(format!("{error}").contains(message), "{args:?}: {error}");
     }
     for args in [
-        &["apply", "--here"][..],
+        &["apply", "--remote"][..],
+        &["apply", "--here"],
         &["apply", "--check", "--dry-run"],
         &["apply", "--type", "huge"],
     ] {
@@ -853,44 +848,30 @@ fn longs<'a>(command: &'a usage_rs::Command<'a>, out: &mut Vec<&'a str>) {
 }
 
 #[test]
-fn local_flags_and_remote_applies_partition_every_lookup_run_and_tui_flag() {
-    use crate::cli::Command;
-    // The flags that apply on a --remote server: they travel in the request,
-    // or belong to the server itself.
-    const REMOTE_APPLIES: &[&str] = &[
-        "color", "dry-run", "here", "json", "once", "remote", "verbose",
-    ];
-    let words = ["lookup", "--remote", "demo/app"];
-    let app = App::parse_from(&words.iter().map(OsStr::new).collect::<Vec<_>>()).unwrap();
-    let Some(Command::Lookup(options)) = &app.command else {
-        panic!("lookup")
-    };
-    let local = super::local_flags(&app, options, None).map(|(name, _)| name);
-    // Global flags live on the root command; the rest on lookup, run and tui.
+fn remote_commands_only_expose_flags_that_apply_remotely() {
+    const ALLOWED: &[&str] = &["color", "dry-run", "json", "once", "server", "verbose"];
     let root = App::command();
-    let mut applicable: Vec<&str> = root
+    let mut flags: Vec<&str> = root
         .flags
         .iter()
         .flat_map(|flag| flag.longs.iter().copied())
         .collect();
-    for wanted in ["lookup", "run", "tui"] {
-        let command = root
-            .subcommands
-            .iter()
-            .find(|sub| sub.name == wanted)
-            .unwrap_or_else(|| panic!("{wanted}"));
-        longs(command, &mut applicable);
-    }
-    for name in local.iter().chain(REMOTE_APPLIES) {
+    let remote = root
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "remote")
+        .expect("remote");
+    longs(remote, &mut flags);
+    for name in &flags {
         assert!(
-            applicable.contains(name),
-            "--{name} is listed but is not a lookup/run/tui or global flag"
+            ALLOWED.contains(name),
+            "--{name} is exposed on `patchula remote`; local-only flags must not be global"
         );
     }
-    for name in applicable {
+    for name in ALLOWED {
         assert!(
-            local.contains(&name) != REMOTE_APPLIES.contains(&name),
-            "--{name} must be in exactly one of local_flags and REMOTE_APPLIES"
+            flags.contains(name),
+            "--{name} is listed in ALLOWED but missing from `patchula remote`"
         );
     }
 }
@@ -1264,4 +1245,84 @@ async fn check_settings_names_the_field_the_engine_rules_refuse() {
     .into();
     let app = App::parse_from(&args).unwrap();
     assert_eq!(run(&app, &Services::default()).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn run_dry_run_dir_plans_local_directory_and_requires_config() {
+    struct NpmOnly;
+    impl patchula_http::Transport for NpmOnly {
+        fn send(&self, request: reqwest::Request) -> patchula_http::Exchange<'_> {
+            let host = request.url().host_str().unwrap_or_default().to_owned();
+            let body = request
+                .body()
+                .and_then(|b| b.as_bytes())
+                .and_then(|b| serde_json::from_slice::<Value>(b).ok())
+                .unwrap_or(Value::Null);
+            let value = match host.as_str() {
+                "api.osv.dev" => {
+                    let queries = body["queries"].as_array().map_or(0, Vec::len);
+                    json!({"results": vec![json!({}); queries]})
+                }
+                "registry.npmjs.org" => {
+                    json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}})
+                }
+                other => panic!("unexpected host for --dir dry run: {other}"),
+            };
+            Box::pin(async move {
+                Ok(patchula_http::Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: serde_json::to_vec(&value).unwrap(),
+                    stale: None,
+                })
+            })
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let tree = dir.path().join("project");
+    std::fs::create_dir(&tree).unwrap();
+    std::fs::write(
+        tree.join("package.json"),
+        "{\n  \"dependencies\": {\"fixture\": \"1.0.0\"}\n}\n",
+    )
+    .unwrap();
+    let services = Services {
+        token: Some("offline-installation".into()),
+        transport: Some(Arc::new(NpmOnly)),
+        ..Services::default()
+    };
+
+    // Without patchula.pkl, fail cleanly without suggesting `--default-config`.
+    let args: Vec<_> = [
+        OsStr::new("run"),
+        OsStr::new("--dry-run"),
+        OsStr::new("--dir"),
+        tree.as_os_str(),
+        OsStr::new("--cache"),
+        cache.as_os_str(),
+    ]
+    .into();
+    let app = App::parse_from(&args).unwrap();
+    let (code, error) = run(&app, &services).await.unwrap_err();
+    assert_eq!(code, 2);
+    let rendered = format!("{error:?}");
+    assert!(!rendered.contains("--default-config"), "{rendered}");
+    assert!(rendered.contains("--config"), "{rendered}");
+
+    // With patchula.pkl, `--dry-run --dir` plans branches offline from the directory.
+    std::fs::write(
+        tree.join("patchula.pkl"),
+        "amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n",
+    )
+    .unwrap();
+    let Some(super::Command::Run(run_opts)) = &app.command else {
+        panic!("run")
+    };
+    let (report, read) = crate::report(&app, super::Batch::Run(run_opts), &services)
+        .await
+        .unwrap();
+    assert!(matches!(read, super::Read::Checkout(_)));
+    let actions = report.actions.expect("dry-run produces actions");
+    assert!(!actions.branches.is_empty(), "{actions:?}");
 }

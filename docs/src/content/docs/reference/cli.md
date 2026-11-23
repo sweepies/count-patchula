@@ -18,12 +18,6 @@ Report updates for the checkout here
 patchula lookup
 ```
 
-Plan branches and diffs, writing nothing
-
-```sh
-patchula run --dry-run
-```
-
 Browse updates and apply the ones you pick
 
 ```sh
@@ -42,6 +36,12 @@ Write only GitHub Actions updates
 patchula apply --manager github-actions
 ```
 
+Run this checkout's repository on its Count server
+
+```sh
+patchula remote run
+```
+
 Run the GitHub App webhook server
 
 ```sh
@@ -54,7 +54,6 @@ patchula serve --settings settings.pkl
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `--recheck <WHEN>` | When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: now in the server, next-run in the CLI. One of `now`, `next-run`. |  |
 | `-v --verbose` | Show request counts and phase timings after a batch; repeat for debug logs. |  |
 | `--color <WHEN>` | Control ANSI colors in diagnostics. One of `auto`, `always`, `never`. | `auto` |
 | `--json` | Emit command results and errors as JSON; configs stay Pkl. |  |
@@ -79,10 +78,10 @@ Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage 
 | Flag | Description | Default |
 | --- | --- | --- |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
-| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
+| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config`. |  |
 | `--manager <MANAGER>` | Only updates from this manager, such as github-actions; repeat for more. |  |
 | `--dependency <PATTERN>` | Only dependencies matching this name or package, with config's `glob:`, `regex:` and `!`; repeat for more. |  |
 | `--type <TYPE>` | Only updates of this type; repeat for more. One of `major`, `minor`, `patch`, `pin`, `digest`. |  |
@@ -117,58 +116,6 @@ Write only the actions/* updates
 ```sh
 patchula apply --manager github-actions --dependency 'glob:actions/*'
 ```
-
-## `patchula auth`
-
-- **Usage:** `patchula auth <SUBCOMMAND>`
-
-Sign in to or out of a Count Patchula server for `--remote`.
-
-### Flags
-
-| Flag | Description | Default |
-| --- | --- | --- |
-| `-h --help` | Print help |  |
-
-### Examples
-
-Sign in through the server's GitHub App
-
-```sh
-patchula auth login --server https://patchula.example.com
-```
-
-Forget the token for PATCHULA_SERVER
-
-```sh
-patchula auth logout
-```
-
-## `patchula auth login`
-
-- **Usage:** `patchula auth login [--server <URL>]`
-
-Sign in with the server's GitHub App, replacing any stored token.
-
-### Flags
-
-| Flag | Description | Default |
-| --- | --- | --- |
-| `--server <URL>` | Server URL; also PATCHULA_SERVER. |  |
-| `-h --help` | Print help |  |
-
-## `patchula auth logout`
-
-- **Usage:** `patchula auth logout [--server <URL>]`
-
-Forget the stored token for a server.
-
-### Flags
-
-| Flag | Description | Default |
-| --- | --- | --- |
-| `--server <URL>` | Server URL; also PATCHULA_SERVER. |  |
-| `-h --help` | Print help |  |
 
 ## `patchula cache`
 
@@ -352,13 +299,11 @@ Report available updates without writing; with no repository, reads the working 
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
-| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
 | `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
-| `--remote` | Run on a Count Patchula server (PATCHULA_SERVER, or the one found for this checkout) with its credentials and caches; local config, cache and HTTP flags don't apply. |  |
-| `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
+| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
 | `-h --help` | Print help |  |
 
 ### Examples
@@ -381,19 +326,142 @@ The same report, as JSON
 patchula lookup --json
 ```
 
-Look up on your Count Patchula server
+## `patchula remote`
+
+- **Usage:** `patchula remote <SUBCOMMAND>`
+
+Run commands on a Count Patchula server with its credentials and warm caches.
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-h --help` | Print help |  |
+
+### Examples
+
+Look up this checkout's repository on its server
 
 ```sh
-patchula lookup --remote
+patchula remote lookup
 ```
+
+Open or update pull requests on the server
+
+```sh
+patchula remote run
+```
+
+Plan pull requests for acme/app on the server
+
+```sh
+patchula remote run --dry-run acme/app
+```
+
+Browse updates from the server in the terminal
+
+```sh
+patchula remote tui
+```
+
+Sign in through the server's GitHub App
+
+```sh
+patchula remote login --server https://patchula.example.com
+```
+
+## `patchula remote login`
+
+- **Usage:** `patchula remote login [--server <URL>]`
+
+Sign in with the server's GitHub App, replacing any stored token.
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, uses the server remembered for, or advertised by, this checkout. |  |
+| `-h --help` | Print help |  |
+
+## `patchula remote logout`
+
+- **Usage:** `patchula remote logout [--server <URL>]`
+
+Forget the stored token for a server and any remembered repositories using it.
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, uses the server remembered for this checkout. |  |
+| `-h --help` | Print help |  |
+
+## `patchula remote lookup`
+
+- **Usage:** `patchula remote lookup [--server <URL>] [OWNER/REPO]…`
+
+Report available updates from a Count Patchula server without writing.
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[OWNER/REPO]…` | Repositories as owner/repo; omit for this checkout's GitHub repository. |  |
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it. |  |
+| `-h --help` | Print help |  |
+
+## `patchula remote run`
+
+- **Usage:** `patchula remote run [--server <URL>] [--dry-run] [OWNER/REPO]…`
+
+Create or update dependency branches and pull requests on a Count Patchula server.
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[OWNER/REPO]…` | Repositories as owner/repo; omit for this checkout's GitHub repository. |  |
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it. |  |
+| `--dry-run` | Print planned branches, files and unified diffs without writing to GitHub. |  |
+| `-h --help` | Print help |  |
+
+## `patchula remote tui`
+
+- **Usage:** `patchula remote tui [--server <URL>] [--once] [OWNER/REPO]…`
+
+Browse dependencies and updates from a Count Patchula server in the terminal.
+
+### Arguments
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `[OWNER/REPO]…` | Repositories as owner/repo; omit for this checkout's GitHub repository. |  |
+
+### Flags
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--server <URL>` | Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it. |  |
+| `--once` | Print a plain-text snapshot of the updates and exit with `lookup`'s exit code, for pipes and CI logs. |  |
+| `-h --help` | Print help |  |
 
 ## `patchula run`
 
 - **Usage:** `patchula run [FLAGS] [OWNER/REPO]…`
 
-Create or update dependency branches and pull requests with verified API commits.
+Create or update dependency branches and pull requests on GitHub with verified API commits.
 
-With no repository, `--dry-run` plans from the working tree, uncommitted changes included. A real run with no repository opens pull requests for this checkout's GitHub repository and requires a clean tree at the remote's default branch.
+Reads GitHub rather than the working tree, even with `--dry-run`. With no repository, runs this checkout's GitHub repository; `--dir` with `--dry-run` plans from a local directory instead.
 
 Failed lookups are reported but the run still exits 0, since it keeps the pull requests it could plan; it holds off auto-merge and closing pull requests for that repository.
 
@@ -401,7 +469,7 @@ Failed lookups are reported but the run still exits 0, since it keeps the pull r
 
 | Argument | Description | Default |
 | --- | --- | --- |
-| `[OWNER/REPO]…` | Repositories as owner/repo, read through the GitHub API; omit for the checkout here. |  |
+| `[OWNER/REPO]…` | Repositories as owner/repo, read through the GitHub API; omit for this checkout's GitHub repository. |  |
 
 ### Flags
 
@@ -409,23 +477,22 @@ Failed lookups are reported but the run still exits 0, since it keeps the pull r
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
-| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
 | `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
-| `--remote` | Run on a Count Patchula server (PATCHULA_SERVER, or the one found for this checkout) with its credentials and caches; local config, cache and HTTP flags don't apply. |  |
-| `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
+| `--dir <DIR>` | Plan branches and diffs from a local directory instead of GitHub; requires `--dry-run`. |  |
+| `--recheck <WHEN>` | When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: next-run. One of `now`, `next-run`. |  |
 | `--dry-run` | Print planned branches, files and unified diffs without writing to GitHub. |  |
 | `--allow-lockfile-pending` | For testing: write manifest-only branches for binary `bun.lockb` lockfiles, which can't be regenerated. |  |
 | `-h --help` | Print help |  |
 
 ### Examples
 
-Plan branches and diffs from this tree
+Plan branches and diffs for acme/app, writing nothing
 
 ```sh
-patchula run --dry-run
+patchula run --dry-run acme/app
 ```
 
 Open or update pull requests for acme/app
@@ -457,6 +524,7 @@ Run the API-only GitHub App webhook server.
 | `--private-key-file <FILE>` | PEM private key file; also PATCHULA_APP_PRIVATE_KEY_FILE. |  |
 | `--webhook-secret-file <FILE>` | Webhook secret file; also PATCHULA_WEBHOOK_SECRET_FILE. |  |
 | `--shutdown-timeout-secs <SECS>` | Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60). |  |
+| `--recheck <WHEN>` | When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: now. One of `now`, `next-run`. |  |
 | `-h --help` | Print help |  |
 
 ### Examples
@@ -544,13 +612,11 @@ Browse dependencies and updates in the terminal; with no repository, apply selec
 | --- | --- | --- |
 | `--all-repos` | Process every repository the token can reach instead of naming them. |  |
 | `--cache <DIR>` | Cache directory, shared by every checkout. Default: `patchula` in the user cache directory (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`). |  |
-| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on this machine; a server uses its own settings. |  |
+| `--settings <FILE>` | Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. |  |
 | `--concurrency <N>` | Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits are per host. Default: 8. |  |
 | `--config <FILE>` | Local Pkl override applied to every selected repository. |  |
-| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
 | `--config-dir <DIR>` | Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`. |  |
-| `--remote` | Run on a Count Patchula server (PATCHULA_SERVER, or the one found for this checkout) with its credentials and caches; local config, cache and HTTP flags don't apply. |  |
-| `--here` | Run on this machine, even if you chose to run this checkout on a server. |  |
+| `--default-config` | Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking. Conflicts with `--config` and `--config-dir`. |  |
 | `--once` | Print a plain-text snapshot of the updates and exit with `lookup`'s exit code, for pipes and CI logs. |  |
 | `-h --help` | Print help |  |
 

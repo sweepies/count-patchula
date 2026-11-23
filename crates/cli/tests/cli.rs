@@ -48,12 +48,9 @@ fn help_version_and_bundled_schema() {
 #[test]
 fn help_pages_match_the_snapshot() {
     const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/help.txt");
-    let routes: [&[&str]; 20] = [
+    let routes: [&[&str]; 23] = [
         &[],
         &["apply"],
-        &["auth"],
-        &["auth", "login"],
-        &["auth", "logout"],
         &["cache"],
         &["cache", "schema"],
         &["completion"],
@@ -63,6 +60,12 @@ fn help_pages_match_the_snapshot() {
         &["config", "settings-schema"],
         &["config", "check-settings"],
         &["lookup"],
+        &["remote"],
+        &["remote", "login"],
+        &["remote", "logout"],
+        &["remote", "lookup"],
+        &["remote", "run"],
+        &["remote", "tui"],
         &["run"],
         &["serve"],
         &["tools"],
@@ -532,7 +535,7 @@ fn recheck_flag_overrides_environment_and_invalid_environment_is_a_usage_error()
 }
 
 #[test]
-fn no_repository_reads_the_working_tree_and_a_real_run_needs_it_pushed() {
+fn lookup_reads_the_working_tree_and_run_targets_github_unless_given_dir() {
     let git = |dir: &std::path::Path, args: &[&str]| {
         let status = Command::new("git")
             .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
@@ -577,23 +580,15 @@ fn no_repository_reads_the_working_tree_and_a_real_run_needs_it_pushed() {
 
     let dir = tempfile::tempdir().unwrap();
     let dir = dir.path();
-    // The working tree needs a config to read.
     // Without a terminal, a working tree with no config is refused, not asked
     // about, and --default-config reads it with the Count's defaults.
     refused(dir, &["lookup"], "has no patchula.pkl");
-    refused(dir, &["run", "--dry-run"], "has no patchula.pkl");
     refused(dir, &["tui", "--once"], "has no patchula.pkl");
     needs_token(dir, &["lookup", "--default-config"]);
-    needs_token(dir, &["run", "--dry-run", "--default-config"]);
     assert!(!dir.join("patchula.pkl").exists());
     refused(
         dir,
         &["lookup", "--default-config", "demo/app"],
-        "--default-config is for the working tree",
-    );
-    refused(
-        dir,
-        &["run", "--default-config"],
         "--default-config is for the working tree",
     );
     refused(
@@ -603,27 +598,37 @@ fn no_repository_reads_the_working_tree_and_a_real_run_needs_it_pushed() {
     );
     refused(
         dir,
-        &["lookup", "--default-config", "--remote", "demo/app"],
-        "--default-config only works on this machine",
-    );
-    refused(
-        dir,
-        &[
-            "lookup",
-            "--settings",
-            "settings.pkl",
-            "--remote",
-            "demo/app",
-        ],
-        "--settings only works on this machine",
-    );
-    refused(
-        dir,
         &["lookup", "--config-dir", "policy"],
         "--config-dir picks config",
     );
-    // A real run needs this checkout's GitHub repository.
+
+    // `run --dir` requires `--dry-run`, rejects named repos/--config-dir, and reads the directory.
+    refused(dir, &["run", "--dir", "."], "--dir requires --dry-run");
+    refused(
+        dir,
+        &["run", "--dry-run", "--dir", ".", "demo/app"],
+        "--dir cannot be combined",
+    );
+    refused(
+        dir,
+        &["run", "--dry-run", "--dir", ".", "--config-dir", "policy"],
+        "--config-dir picks config",
+    );
+    refused(
+        dir,
+        &["run", "--dry-run", "--dir", "missing"],
+        "is not a directory",
+    );
+    refused(
+        dir,
+        &["run", "--dry-run", "--dir", "."],
+        "has no patchula.pkl",
+    );
+
+    // `run` (with or without `--dry-run`) and `remote` infer this checkout's GitHub repository.
     refused(dir, &["run"], "not a Git checkout");
+    refused(dir, &["run", "--dry-run"], "not a Git checkout");
+    refused(dir, &["remote", "run"], "not a Git checkout");
     git(dir, &["init", "--quiet", "--initial-branch=main"]);
     refused(dir, &["run"], "no Git remote");
     git(
@@ -640,31 +645,12 @@ fn no_repository_reads_the_working_tree_and_a_real_run_needs_it_pushed() {
         &["remote", "set-url", "origin", "git@github.com:demo/app.git"],
     );
 
-    // Uncommitted changes are read by a lookup or a dry run, and refused by a real run.
+    // Uncommitted changes do not block `run` or `run --dry-run`, because `run` reads GitHub.
     std::fs::write(dir.join("patchula.pkl"), "amends \"patchula:Config\"\n").unwrap();
     needs_token(dir, &["lookup"]);
-    needs_token(dir, &["run", "--dry-run"]);
-    refused(dir, &["run"], "uncommitted changes");
-    git(dir, &["add", "patchula.pkl"]);
-    git(dir, &["commit", "--quiet", "-m", "config"]);
-    refused(dir, &["run"], "cannot tell the default branch of origin");
-    git(dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    git(
-        dir,
-        &[
-            "symbolic-ref",
-            "refs/remotes/origin/HEAD",
-            "refs/remotes/origin/main",
-        ],
-    );
-    // At the pushed default branch, a real run goes ahead against GitHub.
     needs_token(dir, &["run"]);
-    git(
-        dir,
-        &["commit", "--quiet", "--allow-empty", "-m", "unpushed"],
-    );
-    refused(dir, &["run"], "HEAD is not at origin/main");
     needs_token(dir, &["run", "--dry-run"]);
+    needs_token(dir, &["run", "--dry-run", "--dir", "."]);
 
     refused(
         dir,

@@ -33,8 +33,8 @@ it before installing anything, and explain what it gives them:
   [which tool version](https://count-patchula.sweepy.dev/guide/lockfiles/#which-tool-version).
 
 Some setups do not need mise on the user's machine: the GitHub Action installs
-the Count with mise itself, and a CLI that hands its work to a server with
-`--remote` needs no mise and no GitHub token. A machine that runs the Count
+the Count with mise itself, and `patchula remote` hands its work to a server
+with no mise and no GitHub token locally. A machine that runs the Count
 itself, such as the server's host, still needs mise.
 
 If the user declines, respect that and use one of the other methods on the
@@ -143,11 +143,12 @@ Set the Count up the way the user chose, installing it as agreed above.
      `PATCHULA_WEBHOOK_SECRET_FILE`. Help with the server settings file and the
      deployment.
 4. Show the user what the Count would do. With a token in the user's
-   environment, or a server and `--remote`, run these in the checkout:
+   environment, run these in the checkout (or `patchula remote lookup` and
+   `patchula remote run --dry-run` against a server):
 
    ```sh
    patchula lookup
-   patchula run --dry-run
+   patchula run --dry-run --dir .
    ```
 
    Go no further than `--dry-run` unless the user asks for a real run.

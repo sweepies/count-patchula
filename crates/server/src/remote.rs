@@ -1,4 +1,4 @@
-//! The API behind the CLI's `--remote` option. A GitHub user access token from
+//! The API behind `patchula remote`. A GitHub user access token from
 //! the App's device flow identifies the caller, and every repository in a
 //! request must let that user push. Jobs live in memory only: a restart loses
 //! them, and the CLI reports that.
@@ -161,7 +161,7 @@ fn unauthorized() -> Reject {
     reject(
         StatusCode::UNAUTHORIZED,
         "unauthorized",
-        "sign in with this server's GitHub App: patchula auth login --server <url>",
+        "sign in with this server's GitHub App: patchula remote login --server <url>",
     )
 }
 fn github_unavailable() -> Reject {

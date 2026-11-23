@@ -46,10 +46,6 @@ pub const PALETTE: Palette = Palette::DEFAULT
 
 {$dim+italic}Run 'patchula <command> --help' for more information on a command.{/$}",
     example("patchula lookup", help = "Report updates for the checkout here"),
-    example(
-        "patchula run --dry-run",
-        help = "Plan branches and diffs, writing nothing"
-    ),
     example("patchula tui", help = "Browse updates and apply the ones you pick"),
     example(
         "patchula apply --check",
@@ -60,14 +56,15 @@ pub const PALETTE: Palette = Palette::DEFAULT
         help = "Write only GitHub Actions updates"
     ),
     example(
+        "patchula remote run",
+        help = "Run this checkout's repository on its Count server"
+    ),
+    example(
         "patchula serve --settings settings.pkl",
         help = "Run the GitHub App webhook server"
     )
 )]
 pub struct App {
-    /// When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: now in the server, next-run in the CLI.
-    #[usage(long, choices("now", "next-run"), value_name = "WHEN", global)]
-    pub recheck: Option<patchula_words::Recheck>,
     /// Show request counts and phase timings after a batch; repeat for debug logs.
     #[usage(short = 'v', long, count, global)]
     pub verbose: u8,
@@ -123,15 +120,6 @@ pub enum Command {
         )
     )]
     Apply(Apply),
-    /// Sign in to or out of a Count Patchula server for `--remote`.
-    #[usage(
-        example(
-            "patchula auth login --server https://patchula.example.com",
-            help = "Sign in through the server's GitHub App"
-        ),
-        example("patchula auth logout", help = "Forget the token for PATCHULA_SERVER")
-    )]
-    Auth(Auth),
     /// Inspect the cache directory's database.
     #[usage(example(
         "patchula cache schema",
@@ -171,25 +159,45 @@ pub enum Command {
             "patchula lookup acme/app acme/api",
             help = "Read two repositories through the API"
         ),
-        example("patchula lookup --json", help = "The same report, as JSON"),
-        example(
-            "patchula lookup --remote",
-            help = "Look up on your Count Patchula server"
-        )
+        example("patchula lookup --json", help = "The same report, as JSON")
     )]
     Lookup(Lookup),
-    /// Create or update dependency branches and pull requests with verified API commits.
+    /// Run commands on a Count Patchula server with its credentials and warm caches.
+    #[usage(
+        example(
+            "patchula remote lookup",
+            help = "Look up this checkout's repository on its server"
+        ),
+        example(
+            "patchula remote run",
+            help = "Open or update pull requests on the server"
+        ),
+        example(
+            "patchula remote run --dry-run acme/app",
+            help = "Plan pull requests for acme/app on the server"
+        ),
+        example(
+            "patchula remote tui",
+            help = "Browse updates from the server in the terminal"
+        ),
+        example(
+            "patchula remote login --server https://patchula.example.com",
+            help = "Sign in through the server's GitHub App"
+        )
+    )]
+    Remote(Remote),
+    /// Create or update dependency branches and pull requests on GitHub with verified API commits.
     ///
-    /// With no repository, `--dry-run` plans from the working tree, uncommitted changes
-    /// included. A real run with no repository opens pull requests for this checkout's GitHub
-    /// repository and requires a clean tree at the remote's default branch.
+    /// Reads GitHub rather than the working tree, even with `--dry-run`. With no repository,
+    /// runs this checkout's GitHub repository; `--dir` with `--dry-run` plans from a local
+    /// directory instead.
     ///
     /// Failed lookups are reported but the run still exits 0, since it keeps the pull requests
     /// it could plan; it holds off auto-merge and closing pull requests for that repository.
     #[usage(
         example(
-            "patchula run --dry-run",
-            help = "Plan branches and diffs from this tree"
+            "patchula run --dry-run acme/app",
+            help = "Plan branches and diffs for acme/app, writing nothing"
         ),
         example(
             "patchula run acme/app",
@@ -238,17 +246,73 @@ pub enum Command {
 }
 
 #[derive(Args)]
-pub struct Auth {
+pub struct Remote {
     #[usage(subcommand)]
-    pub command: AuthCommand,
+    pub command: RemoteCommand,
 }
 
 #[derive(Subcommands)]
-pub enum AuthCommand {
+pub enum RemoteCommand {
     /// Sign in with the server's GitHub App, replacing any stored token.
-    Login(AuthServer),
-    /// Forget the stored token for a server.
-    Logout(AuthServer),
+    Login(RemoteLogin),
+    /// Forget the stored token for a server and any remembered repositories using it.
+    Logout(RemoteLogout),
+    /// Report available updates from a Count Patchula server without writing.
+    Lookup(RemoteLookup),
+    /// Create or update dependency branches and pull requests on a Count Patchula server.
+    Run(RemoteRun),
+    /// Browse dependencies and updates from a Count Patchula server in the terminal.
+    Tui(RemoteTui),
+}
+
+#[derive(Args)]
+pub struct RemoteLogin {
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, uses the server remembered for, or advertised by, this checkout.
+    #[usage(long, value_name = "URL")]
+    pub server: Option<String>,
+}
+
+#[derive(Args)]
+pub struct RemoteLogout {
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, uses the server remembered for this checkout.
+    #[usage(long, value_name = "URL")]
+    pub server: Option<String>,
+}
+
+#[derive(Args)]
+pub struct RemoteLookup {
+    /// Repositories as owner/repo; omit for this checkout's GitHub repository.
+    #[usage(value_name = "OWNER/REPO")]
+    pub repositories: Vec<String>,
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it.
+    #[usage(long, value_name = "URL")]
+    pub server: Option<String>,
+}
+
+#[derive(Args)]
+pub struct RemoteRun {
+    /// Repositories as owner/repo; omit for this checkout's GitHub repository.
+    #[usage(value_name = "OWNER/REPO")]
+    pub repositories: Vec<String>,
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it.
+    #[usage(long, value_name = "URL")]
+    pub server: Option<String>,
+    /// Print planned branches, files and unified diffs without writing to GitHub.
+    #[usage(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Args)]
+pub struct RemoteTui {
+    /// Repositories as owner/repo; omit for this checkout's GitHub repository.
+    #[usage(value_name = "OWNER/REPO")]
+    pub repositories: Vec<String>,
+    /// Server URL; overrides PATCHULA_SERVER. With neither set, a single repository uses the server remembered for, or advertised by, it.
+    #[usage(long, value_name = "URL")]
+    pub server: Option<String>,
+    /// Print a plain-text snapshot of the updates and exit with `lookup`'s exit code, for pipes and CI logs.
+    #[usage(long)]
+    pub once: bool,
 }
 
 #[derive(Args)]
@@ -261,13 +325,6 @@ pub struct Cache {
 pub enum CacheCommand {
     /// Print the cache database schema this binary supports; it refuses a cache from a newer one.
     Schema,
-}
-
-#[derive(Args)]
-pub struct AuthServer {
-    /// Server URL; also PATCHULA_SERVER.
-    #[usage(long, value_name = "URL")]
-    pub server: Option<String>,
 }
 
 #[derive(Args)]
@@ -294,6 +351,9 @@ pub struct Serve {
     /// Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60).
     #[usage(long, value_name = "SECS")]
     pub shutdown_timeout_secs: Option<u64>,
+    /// When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: now.
+    #[usage(long, choices("now", "next-run"), value_name = "WHEN")]
+    pub recheck: Option<patchula_words::Recheck>,
 }
 
 #[derive(Args)]
@@ -337,8 +397,24 @@ pub struct Prune {
 
 #[derive(Args)]
 pub struct Run {
+    /// Repositories as owner/repo, read through the GitHub API; omit for this checkout's GitHub repository.
+    #[usage(value_name = "OWNER/REPO")]
+    pub repositories: Vec<String>,
+    /// Process every repository the token can reach instead of naming them.
+    #[usage(long)]
+    pub all_repos: bool,
     #[usage(flatten)]
-    pub lookup: Lookup,
+    pub scan: Scan,
+    /// Per-repository overrides: `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`; other
+    /// repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`.
+    #[usage(long, value_name = "DIR", conflicts = "--config")]
+    pub config_dir: Option<PathBuf>,
+    /// Plan branches and diffs from a local directory instead of GitHub; requires `--dry-run`.
+    #[usage(long, value_name = "DIR")]
+    pub dir: Option<PathBuf>,
+    /// When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: next-run.
+    #[usage(long, choices("now", "next-run"), value_name = "WHEN")]
+    pub recheck: Option<patchula_words::Recheck>,
     /// Print planned branches, files and unified diffs without writing to GitHub.
     #[usage(long)]
     pub dry_run: bool,
@@ -361,16 +437,13 @@ pub struct Lookup {
     /// repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`.
     #[usage(long, value_name = "DIR", conflicts = "--config")]
     pub config_dir: Option<PathBuf>,
-    /// Run on a Count Patchula server (PATCHULA_SERVER, or the one found for this checkout)
-    /// with its credentials and caches; local config, cache and HTTP flags don't apply.
-    #[usage(long, conflicts = "--here")]
-    pub remote: bool,
-    /// Run on this machine, even if you chose to run this checkout on a server.
+    /// Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.
+    /// Conflicts with `--config` and `--config-dir`.
     #[usage(long)]
-    pub here: bool,
+    pub default_config: bool,
 }
 
-/// How the Count reads and looks up, for every command that runs on this machine.
+/// How the Count reads and looks up on this machine.
 #[derive(Args, Clone)]
 pub struct Scan {
     /// Cache directory, shared by every checkout. Default: `patchula` in the user cache directory
@@ -378,8 +451,7 @@ pub struct Scan {
     #[usage(long, value_name = "DIR")]
     pub cache: Option<PathBuf>,
     /// Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the
-    /// user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists. Keeps the run on
-    /// this machine; a server uses its own settings.
+    /// user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists.
     #[usage(long, value_name = "FILE")]
     pub settings: Option<PathBuf>,
     /// Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits
@@ -389,16 +461,16 @@ pub struct Scan {
     /// Local Pkl override applied to every selected repository.
     #[usage(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
-    /// Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.
-    /// Conflicts with `--config` and `--config-dir`.
-    #[usage(long)]
-    pub default_config: bool,
 }
 
 #[derive(Args)]
 pub struct Apply {
     #[usage(flatten)]
     pub scan: Scan,
+    /// Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.
+    /// Conflicts with `--config`.
+    #[usage(long)]
+    pub default_config: bool,
     /// Only updates from this manager, such as github-actions; repeat for more.
     #[usage(long, value_name = "MANAGER")]
     pub manager: Vec<String>,
@@ -427,8 +499,6 @@ pub struct Apply {
     pub repositories: Vec<String>,
     #[usage(long, hide)]
     pub all_repos: bool,
-    #[usage(long, hide)]
-    pub remote: bool,
 }
 
 #[derive(Args)]
@@ -494,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn serve_takes_its_flags_and_global_recheck_still_works_for_run() {
+    fn serve_and_run_take_recheck_while_other_commands_reject_it() {
         let app = App::parse_from(
             &[
                 "serve",
@@ -513,12 +583,21 @@ mod tests {
             serve.settings.as_deref(),
             Some(std::path::Path::new("/operator/settings.pkl"))
         );
-        assert_eq!(app.recheck, Some(patchula_words::Recheck::NextRun));
+        assert_eq!(serve.recheck, Some(patchula_words::Recheck::NextRun));
         let app =
             App::parse_from(&["run", "--recheck", "now", "owner/repo"].map(std::ffi::OsStr::new))
                 .unwrap();
-        assert_eq!(app.recheck, Some(patchula_words::Recheck::Now));
-        assert!(matches!(app.command, Some(Command::Run(_))));
+        let Some(Command::Run(run)) = &app.command else {
+            panic!("run")
+        };
+        assert_eq!(run.recheck, Some(patchula_words::Recheck::Now));
+        assert!(
+            App::parse_from(&["lookup", "--recheck", "now"].map(std::ffi::OsStr::new)).is_err()
+        );
+        assert!(
+            App::parse_from(&["remote", "run", "--recheck", "now"].map(std::ffi::OsStr::new))
+                .is_err()
+        );
     }
 
     #[test]
@@ -612,24 +691,69 @@ mod tests {
     }
 
     #[test]
-    fn remote_and_here_are_bare_flags_that_conflict() {
+    fn remote_subcommands_accept_server_and_reject_local_flags() {
         fn words<'a>(args: &[&'a str]) -> Vec<&'a std::ffi::OsStr> {
             args.iter().map(|arg| std::ffi::OsStr::new(*arg)).collect()
         }
-        let app = App::parse_from(&words(&["tui", "--remote", "--once"])).unwrap();
-        let Some(Command::Tui(tui)) = app.command else {
-            panic!("tui")
+        let app = App::parse_from(&words(&[
+            "remote",
+            "tui",
+            "--server",
+            "https://x.dev",
+            "--once",
+        ]))
+        .unwrap();
+        let Some(Command::Remote(remote)) = app.command else {
+            panic!("remote")
         };
-        assert!(tui.lookup.remote && tui.once);
-        assert!(tui.lookup.repositories.is_empty());
-        let app = App::parse_from(&words(&["run", "--remote", "acme/app"])).unwrap();
-        let Some(Command::Run(run)) = app.command else {
-            panic!("run")
+        let RemoteCommand::Tui(tui) = remote.command else {
+            panic!("remote tui")
         };
-        assert_eq!(run.lookup.repositories, ["acme/app"]);
-        assert!(App::parse_from(&words(&["lookup", "--remote", "--here"])).is_err());
-        assert!(App::parse_from(&words(&["lookup", "--no-remote"])).is_err());
-        assert!(App::parse_from(&words(&["lookup", "--local"])).is_err());
-        assert!(App::parse_from(&words(&["lookup", "--server", "https://x.dev"])).is_err());
+        assert_eq!(tui.server.as_deref(), Some("https://x.dev"));
+        assert!(tui.once && tui.repositories.is_empty());
+
+        let app = App::parse_from(&words(&[
+            "remote",
+            "run",
+            "--dry-run",
+            "--server",
+            "https://x.dev",
+            "acme/app",
+        ]))
+        .unwrap();
+        let Some(Command::Remote(remote)) = app.command else {
+            panic!("remote")
+        };
+        let RemoteCommand::Run(run) = remote.command else {
+            panic!("remote run")
+        };
+        assert_eq!(run.server.as_deref(), Some("https://x.dev"));
+        assert!(run.dry_run && run.repositories == ["acme/app"]);
+
+        for rejected in [
+            &["lookup", "--remote"][..],
+            &["lookup", "--here"],
+            &["lookup", "--no-remote"],
+            &["lookup", "--local"],
+            &["lookup", "--server", "https://x.dev"],
+            &["run", "--remote"],
+            &["run", "--here"],
+            &["run", "--default-config"],
+            &["tui", "--remote"],
+            &["tui", "--here"],
+            &["apply", "--remote"],
+            &["auth", "login"],
+            &["remote", "lookup", "--config", "x.pkl", "acme/app"],
+            &["remote", "lookup", "--config-dir", "policy", "acme/app"],
+            &["remote", "lookup", "--all-repos"],
+            &["remote", "lookup", "--cache", "dir"],
+            &["remote", "lookup", "--settings", "s.pkl"],
+            &["remote", "lookup", "--concurrency", "4"],
+            &["remote", "lookup", "--default-config"],
+            &["remote", "run", "--allow-lockfile-pending", "acme/app"],
+            &["remote", "run", "--dir", "."],
+        ] {
+            assert!(App::parse_from(&words(rejected)).is_err(), "{rejected:?}");
+        }
     }
 }

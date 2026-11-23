@@ -50,11 +50,6 @@ pub async fn command(
     if options.copier_defaults && !options.copier {
         return Err(usage("--copier-defaults only goes with --copier".into()));
     }
-    if options.remote {
-        return Err(usage(
-            "patchula apply runs on this machine, since a server cannot write your files; drop --remote".into(),
-        ));
-    }
     let managers: Vec<Manager> = options
         .manager
         .iter()
@@ -73,10 +68,9 @@ pub async fn command(
         all_repos: false,
         scan: options.scan.clone(),
         config_dir: None,
-        remote: false,
-        here: true,
+        default_config: options.default_config,
     };
-    let (report, read) = crate::report(app, &lookup, None, services).await?;
+    let (report, read) = crate::report(app, crate::Batch::Lookup(&lookup), services).await?;
     let crate::Read::Checkout(checkout) = read else {
         return Err(crate::fail("the lookup did not read the working tree"));
     };

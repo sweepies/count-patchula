@@ -1,5 +1,5 @@
 //! Flags/env are operator overrides; secret contents never enter the usage model.
-use crate::cli::{App, Serve};
+use crate::cli::Serve;
 use std::{path::PathBuf, time::Duration};
 
 type Result<T> = std::result::Result<T, (u8, miette::Report)>;
@@ -44,7 +44,7 @@ fn secret_with(
     };
     secret.read_bytes().map_err(crate::usage)
 }
-pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
+pub async fn run(serve: &Serve) -> Result<u8> {
     let settings = patchula_config::settings::Settings::for_server(serve.settings.as_deref())
         .map_err(|e| (crate::USAGE, e))?;
     let listen = serve.listen.map(Ok).unwrap_or_else(|| {
@@ -68,7 +68,7 @@ pub async fn run(app: &App, serve: &Serve) -> Result<u8> {
     if timeout == 0 || timeout > 3600 {
         return Err(crate::usage("shutdown timeout must be 1..3600 seconds"));
     }
-    let recheck = match app.recheck {
+    let recheck = match serve.recheck {
         Some(recheck) => Some(recheck),
         None => env("PATCHULA_RECHECK")?
             .map(|value| crate::parse_recheck(&value))
@@ -134,7 +134,7 @@ mod tests {
     /// flag is accepted and the run still stops on the missing secret files.
     #[tokio::test]
     async fn serve_takes_the_recheck_flag_before_reading_secrets() {
-        let app = App::parse_from(
+        let app = crate::cli::App::parse_from(
             &[
                 "serve",
                 "--settings",
@@ -160,7 +160,7 @@ mod tests {
         let Some(crate::cli::Command::Serve(serve)) = &app.command else {
             panic!("serve")
         };
-        let result = run(&app, serve).await;
+        let result = run(serve).await;
         assert!(matches!(result, Err((crate::USAGE, _))), "{result:?}");
     }
 }
