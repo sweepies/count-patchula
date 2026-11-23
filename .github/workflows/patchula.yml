@@ -64,7 +64,7 @@ jobs:
           permission-checks: read
           permission-statuses: read
       - if: ${{ !inputs.source }}
-        uses: sweepies/count-patchula@v0.6.0
+        uses: sweepies/count-patchula@b78f970fd30690e712159d3d32f313fbf9eaaf81 # v0.9.0
         with:
           token: ${{ steps.app.outputs.token }}
       # The action from this commit, running the binary built above.
