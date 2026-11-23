@@ -1252,7 +1252,7 @@ async fn age_cached_catalogs_refresh_for_checked_pr_and_repository_controls_only
             pr["body"]
                 .as_str()
                 .unwrap()
-                .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+                .replace("- [ ] Re-check", "- [x] Re-check")
         );
     }
     *fake.catalog.lock().unwrap() = json!({"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}},"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":"2022-01-01T00:00:00Z"}});
@@ -1569,7 +1569,7 @@ async fn targeted_clicks_keep_unrelated_open_and_closed_receipts_fast() {
                         pr["body"]
                             .as_str()
                             .unwrap()
-                            .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+                            .replace("- [ ] Re-check", "- [x] Re-check")
                     );
                 }
                 if origin == "banner" {
@@ -1767,7 +1767,7 @@ async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkb
                 pr["body"]
                     .as_str()
                     .unwrap()
-                    .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+                    .replace("- [ ] Re-check", "- [x] Re-check")
             );
         }
         fake.state().log.clear();
@@ -1822,7 +1822,7 @@ async fn repository_and_pr_recheck_clicks_force_branch_work_and_clear_the_checkb
                 pr["body"]
                     .as_str()
                     .unwrap()
-                    .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+                    .replace("- [ ] Re-check", "- [x] Re-check")
             );
         }
         fake.state().log.clear();
@@ -3072,7 +3072,7 @@ async fn server_acknowledged(
             pr["body"]
                 .as_str()
                 .unwrap()
-                .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+                .replace("- [ ] Re-check", "- [x] Re-check")
         );
     }
     assert!(
@@ -3247,7 +3247,7 @@ async fn a_run_stopped_after_its_banner_leaves_the_sweep_no_answer_to_skip_with(
             pr["body"]
                 .as_str()
                 .unwrap()
-                .replace("- [ ] Tick to re-check", "- [x] Tick to re-check")
+                .replace("- [ ] Re-check", "- [x] Re-check")
         );
     }
     let ticked = stopped_after(reqwest::Method::PATCH, "/repos/demo/sandbox/pulls/1");
@@ -3308,7 +3308,7 @@ async fn a_cleanup_failure_withdraws_the_banner_and_keeps_the_tick() {
         let pr = fake.state().repo().prs[&1].clone();
         let body = pr["body"].as_str().unwrap();
         assert!(!body.contains(REBASING), "{body}");
-        assert!(body.contains("- [x] Tick to re-check"), "{body}");
+        assert!(body.contains("- [x] Re-check"), "{body}");
         assert_eq!(pr["state"], if closes { "closed" } else { "open" });
     }
     check_transcript();
@@ -3334,7 +3334,7 @@ async fn a_banner_left_by_a_stopped_run_is_taken_down_by_the_next() {
     let stale = body.replacen(
         "<!-- patchula-begin -->\n",
         &format!(
-            "<!-- patchula-begin -->\n{REBASING}\n> **The Count is sinking his teeth into this branch:** re-checking it against `main`…\n<!-- patchula-rebasing-end -->\n\n"
+            "<!-- patchula-begin -->\n{REBASING}\n> [!NOTE]\n> **The Count is sinking his teeth into this branch.**\n> Re-checking against `main`. Hold off merging until this is done.\n<!-- patchula-rebasing-end -->\n\n"
         ),
         1,
     );
@@ -3379,11 +3379,11 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
         .unwrap()
         .to_owned();
     assert!(
-        body.contains("- [ ] Tick to re-check"),
+        body.contains("- [ ] Re-check"),
         "the re-check marker drifted: {body}"
     );
     fake.state().repo_mut().prs.get_mut(&1).unwrap()["body"] =
-        json!(body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check"));
+        json!(body.replace("- [ ] Re-check", "- [x] Re-check"));
     fake.state().log.clear();
     fake.clear_log();
     checkbox_run(&engine, &config, now + chrono::Duration::minutes(2)).await;
@@ -3400,9 +3400,7 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
         .map(|(_, _, body)| body["body"].as_str().unwrap_or_default().to_owned())
         .collect();
     assert!(
-        patches[0].contains(REBASING)
-            && patches[0].contains("re-checking it against `main`…")
-            && patches[0].contains("- [x] Tick to re-check"),
+        patches[0].contains(REBASING) && patches[0].contains("- [x] Re-check"),
         "{patches:?}"
     );
     let body = fake.state().repo().prs[&1]["body"]
@@ -3442,7 +3440,7 @@ async fn a_ticked_pr_retries_the_branch_it_names() {
         .unwrap()
         .to_owned();
     fake.state().repo_mut().prs.get_mut(&1).unwrap()["body"] =
-        json!(body.replace("- [ ] Tick to re-check", "- [x] Tick to re-check"));
+        json!(body.replace("- [ ] Re-check", "- [x] Re-check"));
     fake.state().log.clear();
     checkbox_run(&engine, &config, now + chrono::Duration::minutes(3)).await;
     assert!(

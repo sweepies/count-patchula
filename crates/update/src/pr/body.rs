@@ -8,6 +8,7 @@ use crate::{Change, Plan};
 use patchula_config::PackageId;
 use patchula_github::model;
 use patchula_manager::hash;
+use patchula_notes::{Naming, escape_html};
 use patchula_words::{Recheck, Severity, ToolingDetail, ToolingRule, Update as UpdateKind};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,9 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 const TABLE_CAP: usize = 18_000;
 /// The plan's own `bodyNotes`, after the table.
 const BODY_NOTES_CAP: usize = 22_000;
-/// The security section, header and advisory rows.
+/// The security headline and its collapsed advisory table together.
 const ADVISORY_CAP: usize = 6_000;
-/// The whole image section.
+/// The whole image section: its headline, warnings and notes before the
+/// update table and its collapsed advisory table after it.
 const IMAGE_CAP: usize = 13_000;
 /// The image section's table of fixed advisories, within [`IMAGE_CAP`], so
 /// the lines after it keep room.
@@ -30,13 +32,22 @@ const IMAGE_WARNING: &str =
     "> [!WARNING]\n> **The Count can't tell whether this rebuild fixes any vulnerabilities.**\n";
 /// The most a block break takes: two newlines after a cut line.
 const BLOCK_BREAK: usize = 2;
+/// What closes a collapsed block.
+const CLOSE: &str = "\n</details>\n";
+/// The collapsed blocks a cut body may leave open that `finish` closes.
+const CLOSES: usize = 4;
 /// The bytes of advisory links a line on what a rebuild fixes lists
 /// before it counts the rest.
 const FIXED_LINKS: usize = 3_000;
 /// The same for the advisories a rebuild brings in.
 const BROUGHT_LINKS: usize = 1_500;
-/// The room the intent and release notes leave the tail's fixed text.
-const TAIL_RESERVE: usize = 1_500;
+/// The room the intent and release notes leave the tail's fixed text: the
+/// footer, the content and ownership markers, the re-check box and a
+/// server advert.
+const TAIL_RESERVE: usize = 2_500;
+/// The line that ends the notes when the room or the fetches ran out;
+/// reserved from the start, so it always fits.
+const OUT_OF_ROOM: &str = "<sub>Out of room for more release notes — see the linked source repositories for the rest.</sub>\n";
 /// The least room a release-notes fetch is worth asking for.
 const MIN_NOTES_ROOM: usize = 1_000;
 /// The most bytes one package's release notes take.
@@ -48,6 +59,18 @@ pub(crate) const RELEASES_PER_BODY: usize = 8;
 const PERMIT_RESERVE: usize = 1_000;
 /// The largest reviewed-targets marker the batch controls carry.
 const TARGETS_CAP: usize = 12_000;
+/// The longest source or compare link the update table carries.
+const LINK: usize = 512;
+/// The salt in the content hash. Changing how a body renders changes it, so
+/// every open PR is rewritten once into the new layout and reused after.
+const RENDER: &str = "notes-render-v7";
+/// The line between his sections and the controls: who opened the PR, with
+/// the avatar pinned to the running release like the rebasing banner.
+const FOOTER: &str = concat!(
+    "---\n\n<p>\n<a href=\"https://count-patchula.sweepy.dev\"><img align=\"left\" src=\"https://raw.githubusercontent.com/sweepies/count-patchula/v",
+    env!("CARGO_PKG_VERSION"),
+    "/assets/logo/bat.svg\" width=\"52\" alt=\"Count Patchula\"></a>\n<strong><a href=\"https://count-patchula.sweepy.dev\">Count Patchula</a></strong> opened this PR<br>\n<sub>The Count keeps watch over this repo. He works for free, but if you find him helpful, <a href=\"https://github.com/sponsors/sweepies\">consider supporting his development</a>.</sub><br clear=\"left\">\n</p>\n"
+);
 /// What one run's pull request bodies share: the re-check timing, the
 /// server to advertise, the branch age permits and the maintenance group
 /// name the maintenance body prints.
@@ -61,14 +84,143 @@ pub(crate) struct Bodies<'a> {
     /// The mise group name a maintenance body names.
     pub maintenance_group: &'a str,
 }
+/// One row of the update table: the changes that move one package from one
+/// version to the same target, whichever files they sit in.
+struct Row<'a> {
+    first: &'a Change,
+    target: String,
+    security: bool,
+    files: Vec<&'a str>,
+}
+/// Where a row's package and version range link: the source repository and
+/// the compare view, as the release-notes fetch found them.
+#[derive(Clone, Default)]
+struct Link {
+    source: Option<String>,
+    compare: Option<String>,
+}
+impl Row<'_> {
+    /// The row as the table shows it, linked where `link` has a link.
+    fn render(&self, link: Option<&Link>) -> String {
+        let name = format!(
+            "**{}**",
+            cell(&self.first.package)
+                .replace('[', "\\[")
+                .replace(']', "\\]")
+        );
+        let package = match link.and_then(|l| l.source.as_deref()) {
+            Some(url) => format!("[{name}]({url})"),
+            None => name,
+        };
+        let range = format!(
+            "{}&nbsp;→&nbsp;{}",
+            code_cell(&self.first.current),
+            code_cell(&self.target)
+        );
+        let range = match link.and_then(|l| l.compare.as_deref()) {
+            Some(url) => format!("[{range}]({url})"),
+            None => range,
+        };
+        let security = if self.security {
+            "&nbsp;<kbd>security</kbd>"
+        } else {
+            ""
+        };
+        let files: Vec<_> = self.files.iter().map(|f| code_cell(f)).collect();
+        format!(
+            "| {package} | {range} | <kbd>{}</kbd>{security} | {} |\n",
+            cell(self.first.kind.as_str()),
+            files.join("<br>")
+        )
+    }
+}
+/// The rows of `changes`' table, in plan order: changes that share a
+/// package, a version, a target and a kind share a row.
+fn rows(changes: &[Change]) -> Vec<Row<'_>> {
+    let mut rows: Vec<Row<'_>> = Vec::new();
+    for c in changes {
+        let target = crate::plan::with_digest(
+            c.value
+                .as_deref()
+                .or(c.version.as_deref())
+                .unwrap_or("unchanged"),
+            c.digest.as_deref(),
+        );
+        let security = !c.advisories.is_empty();
+        match rows.iter_mut().find(|r| {
+            r.first.source == c.source
+                && r.first.registry == c.registry
+                && r.first.package == c.package
+                && r.first.current == c.current
+                && r.target == target
+                && r.first.kind == c.kind
+        }) {
+            Some(row) => {
+                row.security |= security;
+                if !row.files.contains(&c.file.as_str()) {
+                    row.files.push(&c.file);
+                }
+            }
+            None => rows.push(Row {
+                first: c,
+                target,
+                security,
+                files: vec![&c.file],
+            }),
+        }
+    }
+    rows
+}
+/// A source or compare link as a Markdown link target inside a table, or
+/// `None` when it is too long or not a web address.
+fn link_target(url: &str) -> Option<String> {
+    if url.len() > LINK || !(url.starts_with("https://") || url.starts_with("http://")) {
+        return None;
+    }
+    Some(
+        url.replace(' ', "%20")
+            .replace('(', "%28")
+            .replace(')', "%29")
+            .replace('|', "%7C")
+            .replace('<', "%3C")
+            .replace('>', "%3E"),
+    )
+}
+/// The visible text the content marker hashes, in parts: everything before
+/// the table's rows, the rows, and everything after them. The rows stay
+/// apart so `finish` can link them once the fetches name their sources.
+struct Intent<'a> {
+    before: String,
+    rows: Vec<Row<'a>>,
+    after: String,
+}
+impl Intent<'_> {
+    /// The text, each row linked where `links` has its link.
+    fn text(&self, links: &BTreeMap<usize, Link>) -> String {
+        let mut text = self.before.clone();
+        for (at, row) in self.rows.iter().enumerate() {
+            text.push_str(&row.render(links.get(&at)));
+        }
+        text.push_str(&self.after);
+        text
+    }
+}
 impl Bodies<'_> {
-    /// The body's visible start — the cautions, advisories, the update
-    /// table and the plan's own notes — and the content marker hashing it,
-    /// so an existing body can be reused when nothing it records changed.
+    /// The body's visible start — the cautions, the security headlines, the
+    /// update table, the collapsed advisory tables and the plan's own notes
+    /// — and the content marker hashing it, so an existing body can be
+    /// reused when nothing it records changed.
     pub(crate) fn intent(&self, plan: &Plan) -> (String, String) {
+        let (intent, _, marker) = self.compose(plan);
+        (intent.text(&BTreeMap::new()), marker)
+    }
+    /// The intent in its parts, the batch section and the content marker.
+    fn compose<'a>(&self, plan: &'a Plan) -> (Intent<'a>, String, String) {
         let mut text = tooling_section(plan.callouts());
-        text.push_str(&security_section(plan.changes()));
-        text.push_str(&image_section(plan.changes()));
+        let (security, advisories) = security_section(plan.changes());
+        let (image, image_advisories) = image_section(plan.changes());
+        text.push_str(&security);
+        text.push_str(&image);
         // A plan without changes, lockfile maintenance's, has no table rows,
         // so it gets no table either.
         if !plan.changes().is_empty() {
@@ -96,40 +248,42 @@ impl Bodies<'_> {
             }
             text.push_str(lists.text());
         }
-        for c in plan.changes() {
-            let target = crate::plan::with_digest(
-                c.value
-                    .as_deref()
-                    .or(c.version.as_deref())
-                    .unwrap_or("unchanged"),
-                c.digest.as_deref(),
-            );
-            let row = format!(
-                "| {} | {} → {} | {} | {} |\n",
-                cell(&c.package),
-                cell(&c.current),
-                cell(&target),
-                cell(c.kind.as_str()),
-                cell(&c.file)
-            );
-            if text.len() + row.len() > TABLE_CAP {
-                text.push_str("\nAdditional updates omitted from this table to keep the PR body within its size budget.\n");
+        let mut length = text.len();
+        let mut shown = Vec::new();
+        let mut after = String::new();
+        for row in rows(plan.changes()) {
+            let line = row.render(None);
+            if length + line.len() > TABLE_CAP {
+                after.push_str("\nAdditional updates omitted from this table to keep the PR body within its size budget.\n");
                 break;
             }
-            text.push_str(&row);
+            length += line.len();
+            shown.push(row);
         }
         if plan.action().lockfile_pending {
-            text.push_str("\nLockfile pending: regenerate and validate it before merging.\n");
+            after.push_str("\nLockfile pending: regenerate and validate it before merging.\n");
         }
-        if let Some(items) = plan.batch_items() {
-            text.push_str(&crate::batch::render(items));
+        for details in [advisories, image_advisories] {
+            if !details.is_empty() {
+                after.push('\n');
+                after.push_str(&details);
+            }
         }
         let body_notes: BTreeSet<_> = plan.changes().iter().flat_map(|c| &c.body_notes).collect();
-        let mut notes = crate::body::Body::new(BODY_NOTES_CAP, text.len());
+        let mut notes = crate::body::Body::new(BODY_NOTES_CAP, length + after.len());
         for note in body_notes {
             notes.push(&format!("\n{}\n", safe(note)), usize::MAX);
         }
-        text.push_str(notes.text());
+        after.push_str(notes.text());
+        let intent = Intent {
+            before: text,
+            rows: shown,
+            after,
+        };
+        let batch = plan
+            .batch_items()
+            .map(crate::batch::render)
+            .unwrap_or_default();
         let ranges: Vec<_> = plan
             .changes()
             .iter()
@@ -147,8 +301,9 @@ impl Bodies<'_> {
             })
             .collect();
         let inputs = (
-            "notes-render-v6",
-            &text,
+            RENDER,
+            &intent.text(&BTreeMap::new()),
+            &batch,
             ranges,
             recheck_hashed(self.recheck),
             self.branch_permits.get(&plan.action().branch),
@@ -163,7 +318,7 @@ impl Bodies<'_> {
             .expect("serializable body intent"),
         );
         let content_marker = format!("{}{content_hash} -->", markers::CONTENT);
-        (text, content_marker)
+        (intent, batch, content_marker)
     }
     /// Whether `existing`'s body already says everything this plan would
     /// write: it carries this run's content marker in his section, nobody
@@ -183,57 +338,75 @@ impl Bodies<'_> {
                     .is_some_and(|m| m.identity == plan.identity() && m.update == plan.update_key())
         })
     }
-    /// The bytes `tail` reserves for this plan, for budget checks before
-    /// the body is rendered.
+    /// The bytes `finish` reserves for this plan beside the visible text,
+    /// for budget checks before the body is rendered.
     pub(crate) fn reserved(&self, plan: &Plan) -> usize {
         let controls = controls(plan);
         let permit = self
             .branch_permits
             .get(&plan.action().branch)
             .map(crate::dashboard::permit_marker);
-        markers::START.len()
-            + 1
-            + self
-                .tail(
-                    plan,
-                    &" ".repeat(markers::CONTENT_MARKER_LEN),
-                    &controls,
-                    permit.as_deref(),
-                )
-                .len()
+        let batch = plan
+            .batch_items()
+            .map(crate::batch::render)
+            .unwrap_or_default();
+        fixed(
+            self.tail(
+                plan,
+                &" ".repeat(markers::CONTENT_MARKER_LEN),
+                &controls,
+                permit.as_deref(),
+            )
+            .len(),
+            batch.len(),
+        )
     }
     /// The body under construction for `plan`: the intent is already in it,
     /// and each [`Draft::next`] names a release-notes fetch still worth its
     /// room. The caller fetches; the draft decides.
     pub(crate) fn draft<'a>(&'a self, plan: &'a Plan) -> Draft<'a> {
-        let (intent, marker) = self.intent(plan);
+        let (intent, batch, marker) = self.compose(plan);
         let controls = controls(plan);
         let permit = self
             .branch_permits
             .get(&plan.action().branch)
             .map(crate::dashboard::permit_marker);
-        // The intent and the release notes share the room the budget leaves
-        // after his controls.
-        let mut notes = crate::body::Body::new(BODY_LIMIT - TAIL_RESERVE, controls.len());
-        notes.push(&intent, usize::MAX);
+        let unlinked = intent.text(&BTreeMap::new());
+        // The intent, the release notes and the links share the room the
+        // budget leaves after his controls and the batch section.
+        let notes = crate::body::Body::new(
+            BODY_LIMIT - TAIL_RESERVE,
+            controls.len() + batch.len() + unlinked.len() + BLOCK_BREAK + OUT_OF_ROOM.len(),
+        );
+        // One range of notes needs no name; several each name their package.
+        let ranges: BTreeSet<_> = plan.changes().iter().filter_map(notes_key).collect();
         Draft {
             bodies: self,
             plan,
+            ends_in_break: unlinked.is_empty() || unlinked.ends_with("\n\n"),
+            intent,
+            links: BTreeMap::new(),
+            naming: if ranges.len() > 1 {
+                Naming::Named
+            } else {
+                Naming::Only
+            },
             changes: plan.changes().iter(),
             pending: None,
             releases: BTreeSet::new(),
             notes,
             marker,
             controls,
+            batch,
             permit,
             done: false,
             failed: false,
         }
     }
-    /// Everything after the release notes, hidden markers included, in the
-    /// order `finish` writes it: the age permits, the server advert, the
-    /// content marker, the re-check box, the batch controls and the
-    /// ownership marker. The batch box is the tail's lowest priority: it
+    /// Everything after the visible text, hidden markers included, in the
+    /// order `finish` writes it: the footer, the age permits, the server
+    /// advert, the content marker, the re-check box, the batch controls and
+    /// the ownership marker. The batch box is the tail's lowest priority: it
     /// joins only when the whole body still fits his budget.
     fn tail(
         &self,
@@ -242,7 +415,7 @@ impl Bodies<'_> {
         controls: &str,
         permit: Option<&str>,
     ) -> String {
-        let mut tail = String::new();
+        let mut tail = String::from(FOOTER);
         if let Some(marker) = permit {
             tail.push('\n');
             tail.push_str(marker);
@@ -255,7 +428,7 @@ impl Bodies<'_> {
         tail.push_str(content_marker);
         let timing = recheck_timing(self.recheck);
         tail.push_str(&format!(
-            "\n- [ ] Tick to re-check this PR {timing}. {}\n",
+            "\n- [ ] Re-check this PR {timing} {}\n",
             markers::RECHECK
         ));
         let ownership = markers::ownership(&markers::Marker::new(
@@ -269,6 +442,12 @@ impl Bodies<'_> {
             format!("{tail}\n{ownership}\n")
         }
     }
+}
+/// The bytes a body keeps beside its visible text: the start marker's
+/// line, the tail, the batch section, the block break before them and the
+/// closing tags a cut may need.
+fn fixed(tail: usize, batch: usize) -> usize {
+    markers::START.len() + 1 + tail + batch + BLOCK_BREAK + CLOSES * CLOSE.len()
 }
 /// The release-notes fetch `change` asks for: the package, the version it
 /// is on and the version it moves to. `None` for a change with no upstream
@@ -301,17 +480,29 @@ pub(crate) fn notes_key(change: &Change) -> Option<(PackageId, String, String)> 
 pub(crate) struct Draft<'a> {
     bodies: &'a Bodies<'a>,
     plan: &'a Plan,
+    /// The intent in its parts; the notes follow it.
+    intent: Intent<'a>,
+    /// Whether the intent ends in a blank line, so the first section needs
+    /// no break of its own.
+    ends_in_break: bool,
+    /// The links each table row gained from its fetch, by row.
+    links: BTreeMap<usize, Link>,
+    /// Whether the notes name their packages.
+    naming: Naming,
     changes: std::slice::Iter<'a, Change>,
     /// The change whose `next` key waits for its [`push`](Draft::push).
     pending: Option<&'a Change>,
     /// The keys already fetched: a duplicate asks for nothing twice.
     releases: BTreeSet<(PackageId, String, String)>,
-    /// The visible text so far: the intent, then one section per fetch.
+    /// The release notes so far, one section per fetch, within the room
+    /// the intent and the links leave.
     notes: crate::body::Body,
     /// The content marker `intent` computed.
     marker: String,
     /// The batch controls and their reservation, from `draft`.
     controls: String,
+    /// The batch section of a batch PR: its removal list and items marker.
+    batch: String,
     /// The branch's release-age permit marker, if it has one.
     permit: Option<String>,
     /// No more fetches: the room ran out or the changes did.
@@ -331,7 +522,9 @@ impl Draft<'_> {
             if self.releases.len() >= RELEASES_PER_BODY
                 || self.notes.room(usize::MAX) < MIN_NOTES_ROOM
             {
-                self.notes.push("\nOut of room for more release notes. The source repositories have the rest.\n", usize::MAX);
+                let missing = self.block_break();
+                self.notes.push_reserved(missing);
+                self.notes.push_reserved(OUT_OF_ROOM);
                 self.done = true;
                 return None;
             }
@@ -347,31 +540,68 @@ impl Draft<'_> {
         self.done = true;
         None
     }
-    /// The answer to the fetch [`next`](Draft::next) named, rendered into
-    /// the body within the room left. A transient failure says so in its
-    /// section and keeps the body from being reused, so the next run
-    /// fetches again.
+    /// What the text lacks of a blank line before the next block.
+    fn block_break(&self) -> &'static str {
+        let text = self.notes.text();
+        if text.is_empty() {
+            if self.ends_in_break { "" } else { "\n" }
+        } else if text.ends_with("\n\n") {
+            ""
+        } else if text.ends_with('\n') {
+            "\n"
+        } else {
+            "\n\n"
+        }
+    }
+    /// The answer to the fetch [`next`](Draft::next) named: its links into
+    /// the table rows it answers, then its notes into the body, within the
+    /// room left. A transient failure says so in its section and keeps the
+    /// body from being reused, so the next run fetches again.
     pub(crate) fn push(&mut self, fetched: &Fetched) {
         let change = self
             .pending
             .take()
             .expect("push answers the fetch next() named");
-        // Two bytes for the newlines around the section.
-        let budget = self.notes.room(NOTES_SECTION_CAP + 2).saturating_sub(2);
-        let section = match fetched {
-            Fetched::Read(notes) => notes.render(&change.package, budget),
-            Fetched::Lasting(None) => {
-                patchula_notes::Notes::default().render(&change.package, budget)
+        let link = match fetched {
+            Fetched::Read(notes) => Link {
+                source: notes.source.as_ref().and_then(|s| link_target(&s.url)),
+                compare: notes.compare.as_deref().and_then(link_target),
+            },
+            Fetched::Lasting(Some(source)) => Link {
+                source: link_target(&source.url),
+                compare: None,
+            },
+            Fetched::Lasting(None) | Fetched::Transient => Link::default(),
+        };
+        if link.source.is_some() || link.compare.is_some() {
+            let key = notes_key(change);
+            for (at, row) in self.intent.rows.iter().enumerate() {
+                if self.links.contains_key(&at) || notes_key(row.first) != key {
+                    continue;
+                }
+                let more = row.render(Some(&link)).len() - row.render(None).len();
+                if self.notes.reserve(more) {
+                    self.links.insert(at, link.clone());
+                }
             }
-            Fetched::Lasting(Some(source)) => unreadable_notes(&change.package, source, budget),
+        }
+        let missing = self.block_break();
+        self.notes.push(missing, usize::MAX);
+        let budget = self.notes.room(NOTES_SECTION_CAP);
+        let section = match fetched {
+            Fetched::Read(notes) => notes.render(&change.package, self.naming, budget),
+            Fetched::Lasting(None) => {
+                patchula_notes::Notes::default().render(&change.package, self.naming, budget)
+            }
+            Fetched::Lasting(Some(source)) => {
+                unreadable_notes(&change.package, self.naming, source, budget)
+            }
             Fetched::Transient => {
                 self.failed = true;
-                failed_notes(&change.package)
+                failed_notes(&change.package, self.naming)
             }
         };
-        self.notes.push("\n", usize::MAX);
         self.notes.push(&section, usize::MAX);
-        self.notes.push("\n", usize::MAX);
     }
     /// Whether a fetch failed in a way a later run may not: the finished
     /// body is then not settled.
@@ -379,16 +609,20 @@ impl Draft<'_> {
         self.failed
     }
     /// The finished body: the visible text fitted around the permit and
-    /// controls, the start marker and the tail's hidden markers. Every
-    /// hidden marker was reserved before the visible text was added, so
-    /// the result always fits and no marker is ever cut.
+    /// controls, the batch section, the start marker and the tail's footer
+    /// and hidden markers. Every hidden marker was reserved before the
+    /// visible text was added, so the result always fits, no marker is ever
+    /// cut, and a cut never leaves a collapsed block open over the footer.
     pub(crate) fn finish(self) -> String {
-        let mut visible = self.notes.into_text();
+        let mut visible = self.intent.text(&self.links);
+        visible.push_str(self.notes.text());
         if let Some(marker) = &self.permit {
             // Keep policy evidence with the PR even if its local cache is lost.
             visible = patchula_notes::fit(
                 &visible,
-                BODY_LIMIT.saturating_sub(marker.len() + self.controls.len() + PERMIT_RESERVE),
+                BODY_LIMIT.saturating_sub(
+                    marker.len() + self.controls.len() + self.batch.len() + PERMIT_RESERVE,
+                ),
             )
             .0;
         }
@@ -406,8 +640,26 @@ impl Draft<'_> {
         let tail = self
             .bodies
             .tail(self.plan, &marker, &self.controls, self.permit.as_deref());
-        let mut body = crate::body::Body::new(BODY_LIMIT, markers::START.len() + 1 + tail.len());
-        body.push(&visible, usize::MAX);
+        let mut body = crate::body::Body::new(BODY_LIMIT, fixed(tail.len(), self.batch.len()));
+        body.push(visible.trim_end_matches('\n'), usize::MAX);
+        let open = body
+            .text()
+            .matches("<details>")
+            .count()
+            .saturating_sub(body.text().matches("</details>").count());
+        for _ in 0..open.min(CLOSES) {
+            body.push_reserved(CLOSE);
+        }
+        if !body.text().is_empty() {
+            // The footer opens with a rule, which right under a line of
+            // text would turn it into a heading.
+            body.push_reserved(if body.text().ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            });
+        }
+        body.push_reserved(&self.batch);
         format!("{}\n{}{}", markers::START, body.text(), tail)
     }
 }
@@ -421,29 +673,44 @@ pub(crate) enum Fetched {
     /// A failure a later run may not repeat.
     Transient,
 }
-/// The section for a package whose source resolved but whose notes could
-/// not be read, linking the source when it fits `budget`.
-fn unreadable_notes(package: &str, source: &patchula_notes::Repository, budget: usize) -> String {
+/// How a one-line note names `package`: not at all for the only package.
+fn subject(package: &str, naming: Naming) -> String {
+    match naming {
+        Naming::Only => String::new(),
+        Naming::Named => format!(
+            " for <code>{}</code>",
+            escape_html(
+                &patchula_datasource::upstream::truncate(package, 160).replace(['\n', '\r'], " ")
+            )
+        ),
+    }
+}
+/// The line for a package whose source resolved but whose notes could not
+/// be read, linking the source when it fits `budget`.
+fn unreadable_notes(
+    package: &str,
+    naming: Naming,
+    source: &patchula_notes::Repository,
+    budget: usize,
+) -> String {
     if budget < 512 {
         return String::new();
     }
-    let package =
-        patchula_datasource::upstream::truncate(&safe(package), 160).replace(['\n', '\r'], " ");
-    if source.url.len() <= 512 && source.url.len() + package.len() + 160 <= budget {
+    let subject = subject(package, naming);
+    if source.url.len() <= LINK && source.url.len() + subject.len() + 160 <= budget {
         format!(
-            "### {package}\n\nThe Count could not read these release notes; [view upstream]({}).\n",
-            safe(&source.url)
+            "<sub>The Count could not read the release notes{subject} — <a href=\"{}\">view upstream</a>.</sub>\n",
+            escape_html(&source.url)
         )
     } else {
-        format!("### {package}\n\nThe Count could not read these release notes.\n")
+        format!("<sub>The Count could not read the release notes{subject}.</sub>\n")
     }
 }
-/// The section for a package whose release-notes fetch failed this run.
-fn failed_notes(package: &str) -> String {
-    let package =
-        patchula_datasource::upstream::truncate(&safe(package), 160).replace(['\n', '\r'], " ");
+/// The line for a package whose release-notes fetch failed this run.
+fn failed_notes(package: &str, naming: Naming) -> String {
     format!(
-        "### {package}\n\nThe Count could not read these release notes this run; he will try again on the next.\n"
+        "<sub>The Count could not read the release notes{} this run; he will try again on the next.</sub>\n",
+        subject(package, naming)
     )
 }
 /// The batch controls his body offers: the "Add to batch" box and the
@@ -459,7 +726,7 @@ fn controls(plan: &Plan) -> String {
         return String::new();
     }
     format!(
-        "- [ ] Add to the batch PR. This one closes and the update moves there. {}\n{targets}\n",
+        "- [ ] Add to the batch PR *(closes this PR and moves the update there)* {}\n{targets}\n",
         markers::ADD,
     )
 }
@@ -577,58 +844,145 @@ fn tooling_section(callouts: &[crate::tooling::Callout]) -> String {
     }
     text
 }
-/// Advisories the changes leave behind, after any tooling warnings.
-fn security_section(changes: &[crate::Change]) -> String {
-    let mut rows = BTreeSet::new();
+/// The severities of a set of advisories as badges, worst first, each
+/// once with its count: `<kbd>high</kbd>&nbsp;×2, <kbd>low</kbd>`.
+fn severity_badges(severities: impl IntoIterator<Item = Option<Severity>>) -> String {
+    let mut counts: BTreeMap<(bool, Option<Severity>), usize> = BTreeMap::new();
+    for severity in severities {
+        *counts.entry((severity.is_none(), severity)).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|((_, severity), n)| {
+            let word = severity.map_or("unrated", Severity::as_str);
+            if n > 1 {
+                format!("<kbd>{word}</kbd>&nbsp;×{n}")
+            } else {
+                format!("<kbd>{word}</kbd>")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+/// Names as code spans in a sentence: "`a`", "`a` and `b`", "`a`, `b` and
+/// `c`", and past four, a count of the rest.
+fn listing(names: &[&str]) -> String {
+    const SHOWN: usize = 4;
+    let mut parts: Vec<String> = names.iter().take(SHOWN).map(|n| code(n)).collect();
+    if names.len() > SHOWN {
+        parts.push(format!("{} more", names.len() - SHOWN));
+    }
+    match parts.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
+}
+/// A count of vulnerabilities as the headline words it.
+fn vulnerabilities(n: usize) -> String {
+    format!("{n} known vulnerabilit{}", if n == 1 { "y" } else { "ies" })
+}
+/// Advisories the changes leave behind: a headline for above the update
+/// table and the collapsed table of advisories for below it, both within
+/// [`ADVISORY_CAP`].
+fn security_section(changes: &[crate::Change]) -> (String, String) {
+    // Each advisory once per package, worst first.
+    let mut fixed: BTreeMap<(bool, Option<Severity>, &str, &str), &patchula_report::Advisory> =
+        BTreeMap::new();
     for change in changes.iter().filter(|c| c.image.is_none()) {
         for advisory in &change.advisories {
-            let cves: Vec<_> = advisory
-                .aliases
-                .iter()
-                .filter(|a| a.starts_with("CVE-"))
-                .map(|a| safe(a))
-                .collect();
-            rows.insert(format!(
-                "| [{}]({}){} | {} | {} | {} |\n",
-                cell(&advisory.id),
-                safe(&advisory.url),
-                if cves.is_empty() {
-                    String::new()
-                } else {
-                    format!(" ({})", cves.join(", "))
-                },
-                cell(advisory.severity.map_or("unrated", Severity::as_str)),
-                cell(&change.package),
-                prose_cell(advisory.summary.as_deref().unwrap_or("")),
-            ));
+            fixed
+                .entry((
+                    advisory.severity.is_none(),
+                    advisory.severity,
+                    advisory.id.as_str(),
+                    change.package.as_str(),
+                ))
+                .or_insert(advisory);
         }
     }
-    if rows.is_empty() {
-        return String::new();
+    if fixed.is_empty() {
+        return (String::new(), String::new());
     }
-    let mut section = crate::body::Body::new(ADVISORY_CAP, 0);
-    section.push(
-        &format!(
-            "> [!IMPORTANT]\n> This update fixes {} known vulnerabilit{}. The Count does not care for anyone else drawing blood.\n\n| Advisory | Severity | Package | Summary |\n| --- | --- | --- | --- |\n",
-            rows.len(),
-            if rows.len() == 1 { "y" } else { "ies" }
-        ),
-        usize::MAX,
+    let mut packages: Vec<&str> = Vec::new();
+    for change in changes.iter().filter(|c| c.image.is_none()) {
+        if !change.advisories.is_empty() && !packages.contains(&change.package.as_str()) {
+            packages.push(&change.package);
+        }
+    }
+    let headline = format!(
+        "> [!IMPORTANT]\n> **Fixes {}** ({}) in {}.\n\n",
+        vulnerabilities(fixed.len()),
+        severity_badges(fixed.values().map(|a| a.severity)),
+        listing(&packages)
     );
-    for row in rows {
-        section.push(&row, usize::MAX);
+    let mut head = crate::body::Body::new(ADVISORY_CAP / 2, 0);
+    head.push(&headline, usize::MAX);
+    let head = head.into_text();
+    let by_package = packages.len() > 1;
+    let opening = format!(
+        "<details>\n<summary><strong>Security advisories</strong> ({} fixed)</summary>\n\n{}",
+        fixed.len(),
+        if by_package {
+            "| Advisory | Package | Severity | Fixed&nbsp;in | Summary |\n| --- | --- | --- | --- | --- |\n"
+        } else {
+            "| Advisory | Severity | Fixed&nbsp;in | Summary |\n| --- | --- | --- | --- |\n"
+        }
+    );
+    let omitted = "\nThe Count left some advisories out to keep this description short.\n";
+    let mut details = crate::body::Body::new(
+        ADVISORY_CAP - head.len(),
+        opening.len() + omitted.len() + CLOSE.len(),
+    );
+    details.push_reserved(&opening);
+    let mut left_out = false;
+    for ((_, _, _, package), advisory) in &fixed {
+        let cves: Vec<_> = advisory
+            .aliases
+            .iter()
+            .filter(|a| a.starts_with("CVE-"))
+            .map(|a| code_cell(a))
+            .collect();
+        let package = if by_package {
+            format!(" {} |", code_cell(package))
+        } else {
+            String::new()
+        };
+        let row = format!(
+            "| [{}]({}){} |{package} <kbd>{}</kbd> | {} | {} |\n",
+            cell(&advisory.id),
+            link_target(&advisory.url).unwrap_or_default(),
+            if cves.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", cves.join(", "))
+            },
+            cell(advisory.severity.map_or("unrated", Severity::as_str)),
+            advisory.fixed_in.as_deref().map_or("—".into(), code_cell),
+            prose_cell(advisory.summary.as_deref().unwrap_or("")),
+        );
+        if details.room(usize::MAX) < row.len() {
+            left_out = true;
+            break;
+        }
+        details.push(&row, usize::MAX);
     }
-    let mut text = section.into_text();
-    text.push('\n');
-    text
+    if left_out {
+        details.push_reserved(omitted);
+    }
+    details.push_reserved(CLOSE);
+    (head, details.into_text())
 }
 /// What the Count found comparing each rebuilt image's old and new SBOMs:
-/// the advisories fixed, then one line per image he can't vouch for, then
-/// plain notes.
-fn image_section(changes: &[crate::Change]) -> String {
+/// for above the update table, the headline on what the rebuilds fix, what
+/// they bring in, one warning per image he can't vouch for, and plain
+/// notes; for below it, the collapsed table of fixed advisories.
+fn image_section(changes: &[crate::Change]) -> (String, String) {
     let mut rows = Vec::new();
     let mut listed = BTreeSet::new();
     let mut fixed_ids = BTreeSet::new();
+    let mut verified: BTreeMap<&str, Option<Severity>> = BTreeMap::new();
+    let mut fixing: Vec<&str> = Vec::new();
     let mut brings_in = Vec::new();
     let mut brings_in_listed = BTreeSet::new();
     let mut warnings = BTreeSet::new();
@@ -645,15 +999,19 @@ fn image_section(changes: &[crate::Change]) -> String {
                 listed.insert(id.to_owned());
                 continue;
             };
+            verified.insert(&advisory.id, advisory.severity);
+            if !fixing.contains(&change.package.as_str()) {
+                fixing.push(&change.package);
+            }
             for fixed in check.fixed.iter().filter(|f| f.id == id) {
                 let row = format!(
-                    "| [{}]({}) | {} | {} | {} | {} | {} |\n",
+                    "| [{}]({}) | <kbd>{}</kbd> | {} | {} | {} | {} |\n",
                     cell(&fixed.id),
-                    safe(&advisory.url),
+                    link_target(&advisory.url).unwrap_or_default(),
                     cell(advisory.severity.map_or("unrated", Severity::as_str)),
                     cell(&fixed.package),
-                    cell(&fixed.old),
-                    cell(fixed.new.as_deref().unwrap_or("removed")),
+                    code_cell(&fixed.old),
+                    fixed.new.as_deref().map_or("removed".into(), code_cell),
                     cell(&fixed.platforms.join(", ")),
                 );
                 if !rows.contains(&row) {
@@ -747,6 +1105,32 @@ fn image_section(changes: &[crate::Change]) -> String {
             ));
         }
     }
+    // The collapsed table first: the headline above the update table takes
+    // what it leaves of the section's cap.
+    let mut details = String::new();
+    if !rows.is_empty() {
+        let opening = format!(
+            "<details>\n<summary><strong>Image advisories</strong> ({} fixed)</summary>\n\n| Advisory | Severity | Package | Old | New | Platforms |\n| --- | --- | --- | --- | --- | --- |\n",
+            verified.len()
+        );
+        let mut table = crate::body::Body::new(IMAGE_TABLE_CAP, 0);
+        table.push(&opening, usize::MAX);
+        for row in &rows {
+            if table.room(usize::MAX) < row.len() {
+                break;
+            }
+            table.push(row, usize::MAX);
+        }
+        details.push_str(table.text());
+        if !listed.is_empty() {
+            details.push_str(&format!(
+                "\nAnd {} more listed by OSV: {}.\n",
+                listed.len(),
+                id_links(&listed, FIXED_LINKS)
+            ));
+        }
+        details.push_str(CLOSE);
+    }
     // The section always ends on a block break, so the table after it
     // starts its own block; with warnings, their callout and the breaks
     // around them are reserved too, so a full section never drops or cuts
@@ -756,43 +1140,25 @@ fn image_section(changes: &[crate::Change]) -> String {
     } else {
         3 * BLOCK_BREAK + IMAGE_WARNING.len()
     };
-    let mut text = crate::body::Body::new(IMAGE_CAP, reserve);
+    let mut text = crate::body::Body::new(IMAGE_CAP - details.len(), reserve);
     if !rows.is_empty() {
-        let verified = fixed_ids.len() - listed.len();
+        let more = if listed.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", and OSV.dev lists {} more that the new image no longer has",
+                listed.len()
+            )
+        };
         text.push(
-            &if listed.is_empty() {
-                format!(
-                    "> [!IMPORTANT]\n> This rebuild fixes {verified} known vulnerabilit{} in the image's OS packages, according to OSV.dev. The Count does not care for anyone else drawing blood.\n\n",
-                    if verified == 1 { "y" } else { "ies" }
-                )
-            } else {
-                format!(
-                    "> [!IMPORTANT]\n> This rebuild fixes known vulnerabilities in the image's OS packages. The Count read OSV.dev's record for the {verified} below, and OSV.dev lists {} more that the new image no longer has. The Count does not care for anyone else drawing blood.\n\n",
-                    listed.len()
-                )
-            },
+            &format!(
+                "> [!IMPORTANT]\n> **Fixes {}** ({}) in the OS packages of {}{more}.\n\n",
+                vulnerabilities(verified.len()),
+                severity_badges(verified.values().copied()),
+                listing(&fixing)
+            ),
             usize::MAX,
         );
-        let mut table = crate::body::Body::new(IMAGE_TABLE_CAP, 0);
-        table.push(
-            "| Advisory | Severity | Package | Old | New | Platforms |\n| --- | --- | --- | --- | --- | --- |\n",
-            usize::MAX,
-        );
-        for row in &rows {
-            table.push(row, usize::MAX);
-        }
-        text.push(table.text(), usize::MAX);
-        if !listed.is_empty() {
-            text.push(
-                &format!(
-                    "\nAnd {} more listed by OSV: {}.\n",
-                    listed.len(),
-                    id_links(&listed, FIXED_LINKS)
-                ),
-                usize::MAX,
-            );
-        }
-        text.push("\n", usize::MAX);
     } else if !listed.is_empty() {
         text.push(
             &format!(
@@ -843,7 +1209,7 @@ fn image_section(changes: &[crate::Change]) -> String {
         text.push(&format!("{note}\n\n"), usize::MAX);
     }
     end_block(&mut text);
-    text.into_text()
+    (text.into_text(), details)
 }
 /// End `text`'s last block with a blank line, out of the reserve, unless
 /// it is empty or already ends so.
@@ -928,6 +1294,11 @@ fn cell(text: &str) -> String {
         240,
     )
     .to_owned()
+}
+/// Generated text as an inline code span inside a table cell: its pipes
+/// escaped so they cannot end the cell.
+fn code_cell(text: &str) -> String {
+    code(text).replace('|', "\\|")
 }
 /// A table cell of third-party prose, such as an advisory summary.
 fn prose_cell(text: &str) -> String {

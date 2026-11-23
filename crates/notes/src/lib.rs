@@ -109,7 +109,7 @@ struct BlobScope {
 }
 impl State for BlobSections {
     const NAMESPACE: &'static str = "changelog";
-    const VERSION: u32 = 14;
+    const VERSION: u32 = 15;
     const CODE_VERSIONED: bool = true;
     type Scope = BlobScope;
 }
@@ -927,24 +927,19 @@ fn finish(
     }
 }
 
-/// Upstream's top heading level inside a version's notes: the package is
-/// `###` and each version `####`.
+/// Upstream's top heading level inside a version's notes: each version is
+/// `####`, so upstream's own headings start one below it.
 const NOTE_HEADINGS: usize = 5;
-/// A single release this short stays expanded: at most this many lines and bytes.
-const SHORT_LINES: usize = 8;
-const SHORT_BYTES: usize = 600;
 /// The smallest budget a dependency's notes render into at all.
 const MIN_RENDER: usize = 512;
-/// The longest package name a heading shows.
+/// The longest package name a section names, before escaping.
 const PACKAGE_NAME: usize = 160;
 /// The longest source or release link rendered.
 const LINK: usize = 512;
 /// Room for the markup around the package name and the source link.
 const SOURCE_MARKUP: usize = 160;
-/// Room past the source line a release needs for the notes to list any.
+/// Room past the opening a release needs for the notes to list any.
 const RELEASE_ROOM: usize = 200;
-/// Room for the summary, the closing tag and the notice.
-const FOLD_RESERVE: usize = 700;
 /// Body room a release heading needs beside it to be shown.
 const BODY_ROOM: usize = 40;
 /// The longest version a summary line shows, in characters.
@@ -959,64 +954,76 @@ fn summary_text(version: &str) -> String {
         .collect()
 }
 
+/// `text` safe inside HTML text or a double-quoted attribute: the four
+/// characters that could open a tag, an entity or close the attribute are
+/// escaped, which also keeps `<!--` and `-->` from forming.
+pub fn escape_html(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+/// How a package's notes name it. A pull request for one package needs no
+/// name, since its table has one row; a group's notes name each package.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Naming {
+    /// The notes are the only package's: "Release notes".
+    Only,
+    /// The notes name their package.
+    Named,
+}
+
 impl Notes {
-    /// Includes the source/compare links even when no upstream text is published.
-    /// Budgets count UTF-8 bytes, a conservative bound on GitHub's character cap.
-    pub fn render(&self, package: &str, limit: usize) -> String {
+    /// One package's notes, in at most `limit` bytes: a collapsed block of
+    /// its releases, or one small line saying why there is none. The source
+    /// and compare links live in the update table, not here. Budgets count
+    /// UTF-8 bytes, a conservative bound on GitHub's character cap.
+    pub fn render(&self, package: &str, naming: Naming, limit: usize) -> String {
         if limit < MIN_RENDER {
             return String::new();
         }
-        let package = truncate(package, PACKAGE_NAME)
-            .replace(['\n', '\r'], " ")
-            .replace("<!--", "&lt;!--")
-            .replace("-->", "--&gt;");
-        let package = truncate(&package, PACKAGE_NAME);
+        let name = escape_html(&truncate(package, PACKAGE_NAME).replace(['\n', '\r'], " "));
+        // What the one-line notes say the notes are for.
+        let subject = match naming {
+            Naming::Only => String::new(),
+            Naming::Named => format!(" for <code>{name}</code>"),
+        };
+        let line = |text: String| format!("<sub>{text}</sub>\n");
         // A chart's own list of changes needs no source; anything else does.
         let chart = self.from_chart && !self.sections.is_empty();
         let fits = |source: &&Repository| {
-            source.url.len() <= LINK && source.url.len() + package.len() + SOURCE_MARKUP <= limit
+            source.url.len() <= LINK && source.url.len() + name.len() + SOURCE_MARKUP <= limit
         };
         let source = match &self.source {
             None if !chart => {
-                return format!(
-                    "### {package}\n\nRelease notes unavailable: source repository could not be resolved.\n"
-                );
+                return line(format!(
+                    "No release notes{subject}: the Count could not find the source repository."
+                ));
             }
             Some(source) if !chart && !fits(&source) => {
-                return format!(
-                    "### {package}\n\nSource found; upstream URL exceeds the release-note budget.\n"
-                );
+                return line(format!(
+                    "No release notes{subject}: the source repository's address is too long to link."
+                ));
             }
             source => source.as_ref().filter(fits),
         };
         let cut = || match source {
-            Some(source) => format!(
-                "### {package}\n\nRelease notes truncated; [view upstream]({}).\n",
-                source.url
-            ),
-            None => format!("### {package}\n\nRelease notes truncated.\n"),
+            Some(source) => line(format!(
+                "Release notes{subject} left out to keep this description short — <a href=\"{}\">view upstream</a>.",
+                escape_html(&source.url)
+            )),
+            None => line(format!(
+                "Release notes{subject} left out to keep this description short."
+            )),
         };
-        let mut text = format!("### {package}\n\n");
-        if let Some(source) = source {
-            text.push_str(&format!("[Source]({})", source.url));
-            if let Some(compare) = &self.compare {
-                let label = if self.compare_inferred {
-                    "Compare changes (inferred tags)"
-                } else {
-                    "Compare changes"
-                };
-                text.push_str(&format!(" · [{label}]({compare})"));
-            }
-            text.push_str("\n\n");
-            if source.chart_sources && !chart {
-                text.push_str(
-                    "The Count found these notes in the repository the chart lists under `sources`, so they may describe the packaged application rather than the chart itself.\n\n",
-                );
-            }
-        }
-        if text.len() + RELEASE_ROOM > limit {
-            return cut();
-        }
         let links = match source {
             _ if chart => Links::None,
             Some(Repository {
@@ -1026,14 +1033,77 @@ impl Notes {
                 forge: Some(forge), ..
             }) => Links::Forge(forge),
             _ => {
-                text.push_str(
-                    "Source found, unsupported host. Release notes support GitHub, GitLab and Gitea/Forgejo.\n",
-                );
-                return text;
+                return line(format!(
+                    "No release notes{subject}: the source is on a host the Count cannot read. He reads GitHub, GitLab and Gitea/Forgejo."
+                ));
             }
         };
+        // Upstream's own history, for the notice when text is left out. A
+        // chart's own changes have no upstream history to point to.
+        let history = source.filter(|_| !chart).map(|source| {
+            escape_html(
+                &source
+                    .forge
+                    .as_ref()
+                    .map_or_else(|| format!("{}/releases", source.url), releases_url),
+            )
+        });
+        let trimmed_notice = match &history {
+            Some(history) => format!(
+                "The Count left some release notes out to keep this description short — <a href=\"{history}\">read all releases</a>."
+            ),
+            None => "The Count left some release notes out to keep this description short.".into(),
+        };
+        let incomplete_notice = match &history {
+            Some(history) => format!(
+                "These release notes may be incomplete — <a href=\"{history}\">see upstream's history</a>."
+            ),
+            None => "These release notes may be incomplete.".into(),
+        };
         if self.sections.is_empty() {
-            text.push_str("No upstream release text or changelog sections found for this range.\n");
+            let mut text = line(match naming {
+                Naming::Only => "No upstream release notes found for this range.".into(),
+                Naming::Named => {
+                    format!(
+                        "No upstream release notes found for <code>{name}</code> in this range."
+                    )
+                }
+            });
+            if self.incomplete {
+                text.push_str(&line(incomplete_notice));
+            }
+            return if text.len() > limit { cut() } else { text };
+        }
+        let label = match naming {
+            Naming::Only => "<strong>Release notes</strong>".to_owned(),
+            Naming::Named => format!("<strong>{name}</strong>"),
+        };
+        let range = if self.from.is_empty() || self.to.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " · <code>{}</code> → <code>{}</code>",
+                summary_text(&self.from),
+                summary_text(&self.to)
+            )
+        };
+        let summary =
+            |count: &str| format!("<details>\n<summary>{label}{range} ({count})</summary>\n\n");
+        let mut opening = String::new();
+        if source.is_some_and(|source| source.chart_sources) && !chart {
+            opening.push_str(
+                "<sub>The Count found these notes in the repository the chart lists under <code>sources</code>, so they may describe the packaged application rather than the chart itself.</sub>\n\n",
+            );
+        }
+        // Room the fold takes besides the releases: its widest summary, the
+        // longer notice and the closing tag.
+        let fold = summary(&format!("{0} of {0} releases", self.sections.len())).len()
+            + opening.len()
+            + "---\n\n<sub></sub>\n\n".len()
+            + trimmed_notice.len().max(incomplete_notice.len())
+            + "</details>\n".len();
+        if fold + RELEASE_ROOM > limit {
+            return cut();
         }
         let mut releases = String::new();
         let mut shown = 0;
@@ -1049,7 +1119,7 @@ impl Notes {
             } else {
                 format!("#### [{}]({})\n\n", section.version, section.link)
             };
-            let room = limit.saturating_sub(text.len() + releases.len() + FOLD_RESERVE);
+            let room = limit.saturating_sub(fold + releases.len());
             if heading.len() + BODY_ROOM > room {
                 trimmed = true;
                 break;
@@ -1064,6 +1134,9 @@ impl Notes {
             }
             releases.push_str(&heading);
             releases.push_str(&body);
+            if !releases.ends_with('\n') {
+                releases.push('\n');
+            }
             releases.push('\n');
             shown += 1;
             if !whole {
@@ -1071,62 +1144,34 @@ impl Notes {
                 break;
             }
         }
-        if shown > 0 {
-            let total = self.sections.len();
-            // One short release is shorter than its own fold.
-            let short = shown == total
-                && total == 1
-                && releases.lines().count() <= SHORT_LINES
-                && releases.len() <= SHORT_BYTES;
-            if short {
-                text.push_str(&releases);
-            } else {
-                let range = if self.from.is_empty() || self.to.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        ": {} → {}",
-                        summary_text(&self.from),
-                        summary_text(&self.to)
-                    )
-                };
-                let count = if shown == total {
-                    format!(
-                        "{shown} {}",
-                        if shown == 1 { "release" } else { "releases" }
-                    )
-                } else {
-                    format!("{shown} of {total} releases")
-                };
-                text.push_str(&format!(
-                    "<details>\n<summary>Release notes{range} ({count})</summary>\n\n{releases}</details>\n"
-                ));
-            }
-        }
         // One notice: either the Count left text out, or upstream's own
-        // history couldn't be read in full. A chart's own changes have no
-        // upstream history to point to.
-        let history = source.filter(|_| !chart).map(|source| {
-            source
-                .forge
-                .as_ref()
-                .map_or_else(|| format!("{}/releases", source.url), releases_url)
-        });
-        if trimmed {
-            text.push_str(&match &history {
-                Some(history) => format!(
-                    "\nThe Count left some release notes out to keep this description short; [read them all]({history}).\n"
-                ),
-                None => "\nThe Count left some release notes out to keep this description short.\n".into(),
-            });
+        // history couldn't be read in full.
+        let notice = if trimmed {
+            Some(trimmed_notice)
         } else if self.incomplete || unreadable {
-            text.push_str(&match &history {
-                Some(history) => format!(
-                    "\nThese release notes may be incomplete; [see upstream's history]({history}).\n"
-                ),
-                None => "\nThese release notes may be incomplete.\n".into(),
-            });
+            Some(incomplete_notice)
+        } else {
+            None
+        };
+        if shown == 0 {
+            return notice.map_or_else(cut, line);
         }
+        let total = self.sections.len();
+        let count = if shown == total {
+            format!(
+                "{shown} {}",
+                if shown == 1 { "release" } else { "releases" }
+            )
+        } else {
+            format!("{shown} of {total} releases")
+        };
+        let mut text = summary(&count);
+        text.push_str(&opening);
+        text.push_str(&releases);
+        if let Some(notice) = notice {
+            text.push_str(&format!("---\n\n<sub>{notice}</sub>\n\n"));
+        }
+        text.push_str("</details>\n");
         if text.len() > limit {
             return cut();
         }

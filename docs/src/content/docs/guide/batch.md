@@ -31,7 +31,8 @@ base already meets, or has since moved past, drop out.
 
 ## Taking things out
 
-Each item in the batch body has its own checkbox. Tick it and the update goes
+Each item in the batch body has its own checkbox, in a collapsed list below the
+release notes. Tick it and the update goes
 back to its own pull request, on its original branch. If nothing is left, the
 batch PR closes. Closing the batch PR without merging sends every item back.
 

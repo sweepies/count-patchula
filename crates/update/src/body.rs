@@ -42,6 +42,15 @@ impl Body {
             .expect("reserved text within its reserve");
         self.text.push_str(text);
     }
+    /// Set `bytes` more aside for what is appended later, when the budget
+    /// has that much room left; whether it had.
+    pub(crate) fn reserve(&mut self, bytes: usize) -> bool {
+        let fits = self.room(usize::MAX) >= bytes;
+        if fits {
+            self.reserved += bytes;
+        }
+        fits
+    }
     /// The text so far; the caller appends the reserved markers.
     pub(crate) fn text(&self) -> &str {
         &self.text

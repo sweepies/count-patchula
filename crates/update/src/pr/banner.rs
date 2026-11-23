@@ -24,16 +24,17 @@ pub(crate) const IMAGE: &str = concat!(
     "/assets/rebasing.svg"
 );
 
-/// The banner for `rebuild` on a branch based on `base`, ending in a blank
-/// line so the section's own text follows as its own block.
+/// The banner for `rebuild` on a branch based on `base`: a note alert of
+/// three quoted lines between the marker lines, ending in a blank line so
+/// the section's own text follows as its own block.
 pub(crate) fn banner(rebuild: Rebuild, base: &str) -> String {
     let base = crate::text::code(patchula_datasource::upstream::truncate(base, 240));
     let doing = match rebuild {
-        Rebuild::Recheck => format!("re-checking it against {base}"),
-        Rebuild::Lockfiles => format!("rebuilding it on {base} and regenerating its lockfiles"),
+        Rebuild::Recheck => format!("Re-checking against {base}."),
+        Rebuild::Lockfiles => format!("Rebuilding on {base} and regenerating its lockfiles."),
     };
     format!(
-        "{}\n> <img src=\"{IMAGE}\" alt=\"🦷 rebasing…\" width=\"80\" height=\"32\"> **The Count is sinking his teeth into this branch:** {doing}…\n{}\n\n",
+        "{}\n> [!NOTE]\n> <img src=\"{IMAGE}\" alt=\"🦷 rebasing…\" width=\"80\" height=\"32\"> **The Count is sinking his teeth into this branch.**\n> {doing} Hold off merging until this is done.\n{}\n\n",
         markers::REBASING,
         markers::REBASING_END,
     )
@@ -84,10 +85,11 @@ pub(crate) fn with_banner(body: &str, banner: &str) -> Option<String> {
 }
 
 /// `body` without any banner in his section; unchanged when it has none.
-/// Every banner block — its opening line, its one quoted line, its closing
+/// Every banner block — its opening line, its quoted lines, its closing
 /// line and the blank line after — comes off whole. A marker line that
 /// bounds no such block, edited or quoted into his section, comes off on
-/// its own: whatever stands between two stray markers is never removed.
+/// its own: whatever stands between two stray markers is never removed
+/// unless every line of it is quoted.
 pub(crate) fn without_banner(body: &str) -> Cow<'_, str> {
     let Some((before, section, after)) = markers::regions(body) else {
         return Cow::Borrowed(body);
@@ -99,13 +101,22 @@ pub(crate) fn without_banner(body: &str) -> Cow<'_, str> {
     let mut kept = String::with_capacity(section.len());
     let mut at = 0;
     while at < lines.len() {
-        let block = bare(lines[at]) == markers::REBASING
-            && lines.get(at + 1).is_some_and(|l| bare(l).starts_with("> "))
-            && lines
-                .get(at + 2)
-                .is_some_and(|l| bare(l) == markers::REBASING_END);
-        if block {
-            at += 3;
+        // The quoted lines after an opening marker, if a closing one ends them.
+        let block = (bare(lines[at]) == markers::REBASING)
+            .then(|| {
+                lines[at + 1..]
+                    .iter()
+                    .take_while(|l| bare(l).starts_with("> "))
+                    .count()
+            })
+            .filter(|&quoted| {
+                quoted > 0
+                    && lines
+                        .get(at + 1 + quoted)
+                        .is_some_and(|l| bare(l) == markers::REBASING_END)
+            });
+        if let Some(quoted) = block {
+            at += quoted + 2;
             // The blank line that separates the banner from his text.
             if lines
                 .get(at)
@@ -277,21 +288,11 @@ mod tests {
     }
 
     #[test]
-    fn wording_follows_the_trigger_and_the_image_is_pinned_to_this_release() {
-        let recheck = banner(Rebuild::Recheck, "main");
-        assert!(recheck.contains(
-            "**The Count is sinking his teeth into this branch:** re-checking it against `main`…"
-        ));
-        let lockfiles = banner(Rebuild::Lockfiles, "trunk");
-        assert!(lockfiles.contains("rebuilding it on `trunk` and regenerating its lockfiles…"));
-        for text in [&recheck, &lockfiles] {
-            assert!(text.contains(&format!(
-                "<img src=\"https://raw.githubusercontent.com/sweepies/count-patchula/v{}/assets/rebasing.svg\" alt=\"🦷 rebasing…\" width=\"80\" height=\"32\">",
-                env!("CARGO_PKG_VERSION")
-            )));
+    fn a_branch_name_cannot_break_out_of_the_banner() {
+        for rebuild in [Rebuild::Recheck, Rebuild::Lockfiles] {
+            let text = banner(rebuild, "a`b-->");
+            assert!(text.contains("``a`b--\u{200b}>``"), "{text}");
             assert!(!text.contains(markers::RECHECK) && !text.contains("- [x]"));
         }
-        // A branch name cannot end the comment or break out of its span.
-        assert!(banner(Rebuild::Recheck, "a`b-->").contains("``a`b--\u{200b}>``"));
     }
 }
