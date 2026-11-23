@@ -11,7 +11,7 @@ mod sandbox;
 mod targets;
 
 pub use lookup::{Bootstrap, Lookup, PACKAGE, Query, Release, bootstrap};
-pub use policy::{bracketed, check, lock_key, options, split};
+pub use policy::{bracketed, check, options, split};
 pub use registry::{backends, github_sources, listed_github_repository};
 pub use sandbox::{sandbox_env, without_plugins};
 

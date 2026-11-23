@@ -20,24 +20,6 @@ pub fn split(tool: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// The key mise records a tool under in `mise.lock`: its `BackendArg` short
-/// name, which drops the bracketed options and a leading `core:`, and
-/// unaliases `nodejs`, `golang` and `dotnet-core` (`BackendArg::from`,
-/// `strip_opts` and `unalias_backend` in mise's source). Registry shorthands
-/// stay as written: `gh` is recorded as `gh`. Only meaningful for a name
-/// `check` admits, whose brackets close at its end.
-pub fn lock_key(tool: &str) -> String {
-    let name = split(tool).0;
-    let name = name.strip_prefix("core:").unwrap_or(name);
-    match name {
-        "nodejs" => "node",
-        "golang" => "go",
-        "dotnet-core" => "dotnet",
-        name => name,
-    }
-    .to_owned()
-}
-
 /// Tool arguments the Count lets through to `mise ls-remote`: a registry
 /// shorthand or `backend:tool` for any backend mise has, apart from the plugin
 /// backends, with options in brackets as mise reads them. An unknown backend
@@ -299,25 +281,6 @@ mod tests {
             .unwrap()
             .as_table()
             .clone()
-    }
-
-    /// Each declaration and the key mise 2026.11.12 recorded it under in
-    /// `mise.lock`, from `mise lock` runs on one-tool configurations.
-    #[test]
-    fn lock_keys_match_what_mise_records() {
-        for (tool, key) in [
-            ("node", "node"),
-            ("nodejs", "node"),
-            ("core:node", "node"),
-            ("golang", "go"),
-            ("aqua:jdx/mise", "aqua:jdx/mise"),
-            (
-                "github:github/gh-actions-lock[bin=gh-actions-lock]",
-                "github:github/gh-actions-lock",
-            ),
-        ] {
-            assert_eq!(lock_key(tool), key, "{tool}");
-        }
     }
 
     #[test]

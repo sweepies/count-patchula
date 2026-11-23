@@ -122,6 +122,24 @@ fn changed(before: &Value, after: &Value) -> Vec<String> {
     changed
 }
 
+/// The key mise records a tool under in `mise.lock`: its `BackendArg` short
+/// name, which drops the bracketed options and a leading `core:`, and
+/// unaliases `nodejs`, `golang` and `dotnet-core` (`BackendArg::from`,
+/// `strip_opts` and `unalias_backend` in mise's source). Registry shorthands
+/// stay as written: `gh` is recorded as `gh`. Only meaningful for a name
+/// `patchula_mise::check` admits, whose brackets close at its end.
+fn lock_key(tool: &str) -> String {
+    let name = patchula_mise::split(tool).0;
+    let name = name.strip_prefix("core:").unwrap_or(name);
+    match name {
+        "nodejs" => "node",
+        "golang" => "go",
+        "dotnet-core" => "dotnet",
+        name => name,
+    }
+    .to_owned()
+}
+
 /// A parsed lockfile without its `tools` table.
 fn without_tools(lock: &Value) -> Value {
     let mut lock = lock.clone();
@@ -436,7 +454,7 @@ fn task_declarations(
         out.extend(
             declarations
                 .iter()
-                .filter(|(name, _)| selected.contains(&patchula_mise::lock_key(name)))
+                .filter(|(name, _)| selected.contains(&lock_key(name)))
                 .map(|(name, spec)| (name.to_owned(), spec.clone())),
         );
     }
@@ -474,7 +492,7 @@ impl Runner {
             old_tools.keys().cloned().collect()
         } else {
             jobs.iter()
-                .filter_map(|job| job.package().map(patchula_mise::lock_key))
+                .filter_map(|job| job.package().map(lock_key))
                 .collect()
         };
         let work = driver.join(format!("mise-lock-{}", hash(directory.as_bytes())));
@@ -495,7 +513,7 @@ impl Runner {
         for path in paths {
             let text = std::fs::read_to_string(root.join(path)).map_err(|e| e.to_string())?;
             for (name, pin) in pins(path, &text)? {
-                if !selected.contains(&patchula_mise::lock_key(&name)) {
+                if !selected.contains(&lock_key(&name)) {
                     continue;
                 }
                 match pin {
@@ -586,7 +604,7 @@ impl Runner {
         // read once every name is admitted, so its brackets close at its end.
         let mut manifest: BTreeMap<String, String> = BTreeMap::new();
         for (name, _) in tools.iter() {
-            if let Some(other) = manifest.insert(patchula_mise::lock_key(name), name.to_owned()) {
+            if let Some(other) = manifest.insert(lock_key(name), name.to_owned()) {
                 return Err(format!(
                     "mise.lock records {name} and {other} under one name; the Count cannot tell which to lock"
                 )
@@ -693,7 +711,7 @@ impl Runner {
             }
             for job in jobs
                 .iter()
-                .filter(|job| job.package().map(patchula_mise::lock_key).as_ref() == Some(key))
+                .filter(|job| job.package().map(lock_key).as_ref() == Some(key))
             {
                 if let Some(target) = job.target()
                     && !entries.iter().any(|entry| {
@@ -765,6 +783,25 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each declaration and the key mise 2026.11.12 recorded it under in
+    /// `mise.lock`, from `mise lock` runs on one-tool configurations.
+    #[test]
+    fn lock_keys_match_what_mise_records() {
+        for (tool, key) in [
+            ("node", "node"),
+            ("nodejs", "node"),
+            ("core:node", "node"),
+            ("golang", "go"),
+            ("aqua:jdx/mise", "aqua:jdx/mise"),
+            (
+                "github:github/gh-actions-lock[bin=gh-actions-lock]",
+                "github:github/gh-actions-lock",
+            ),
+        ] {
+            assert_eq!(lock_key(tool), key, "{tool}");
+        }
+    }
 
     fn spec(text: &str) -> toml_edit::Item {
         toml_edit::Document::parse(format!("tool = {text}"))
