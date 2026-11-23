@@ -970,13 +970,11 @@ pub fn escape_html(text: &str) -> String {
 }
 
 /// [`fit`], with the lines that close what the cut left open counted too:
-/// the result is never longer than `limit`. Text that already fits comes
-/// back as it is; otherwise the cut moves back until the closed prefix fits,
-/// and nothing at all is the last resort.
+/// the result is never longer than `limit`, and whatever `text` leaves open
+/// is closed even when all of it fits. When the closing lines push it past
+/// `limit`, the cut moves back until the closed prefix fits, and nothing at
+/// all is the last resort.
 pub fn fit_within(text: &str, limit: usize) -> String {
-    if text.len() <= limit {
-        return text.to_owned();
-    }
     let mut room = limit;
     loop {
         let (kept, _) = fit(text, room);

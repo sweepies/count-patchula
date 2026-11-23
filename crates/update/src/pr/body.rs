@@ -271,8 +271,19 @@ impl Bodies<'_> {
         }
         let body_notes: BTreeSet<_> = plan.changes().iter().flat_map(|c| &c.body_notes).collect();
         let mut notes = crate::body::Body::new(BODY_NOTES_CAP, length + after.len());
+        // Each note is fitted whole or cut where a block ends, with what it
+        // leaves open closed; once one no longer fits, the rest stay out.
         for note in body_notes {
-            notes.push(&format!("\n{}\n", safe(note)), usize::MAX);
+            let room = notes.room(usize::MAX).saturating_sub(2);
+            let kept = patchula_notes::fit_within(&safe(note), room);
+            let kept = kept.trim_end_matches('\n');
+            if kept.is_empty() {
+                break;
+            }
+            notes.push(&format!("\n{kept}\n"), usize::MAX);
+            if kept.len() < safe(note).trim_end().len() {
+                break;
+            }
         }
         after.push_str(notes.text());
         let intent = Intent {
@@ -1002,10 +1013,10 @@ fn image_section(changes: &[crate::Change]) -> (String, String) {
                     "| {} | <kbd>{}</kbd> | {} | {} | {} | {} |\n",
                     linked(&id_cell(&fixed.id), &advisory.url),
                     cell(advisory.severity.map_or("unrated", Severity::as_str)),
-                    cell(&fixed.package),
+                    prose_cell(&fixed.package),
                     code_cell(&fixed.old),
                     fixed.new.as_deref().map_or("removed".into(), code_cell),
-                    cell(&fixed.platforms.join(", ")),
+                    prose_cell(&fixed.platforms.join(", ")),
                 );
                 if !rows.iter().any(|(_, r)| r == &row) {
                     // Worst first; within a severity, in the order OSV's
@@ -1052,7 +1063,7 @@ fn image_section(changes: &[crate::Change]) -> (String, String) {
             ),
             ImageState::OsNotCovered => format!(
                 "{image} is built on {}, and OSV.dev has no advisories for it.",
-                cell(check.os.as_deref().unwrap_or("an OS"))
+                prose_cell(check.os.as_deref().unwrap_or("an OS"))
             ),
             ImageState::Unreadable
             | ImageState::PartialSources
@@ -1071,7 +1082,7 @@ fn image_section(changes: &[crate::Change]) -> (String, String) {
             ),
             ImageState::Unreadable => format!(
                 "The Count couldn't read {image}'s SBOM on this run ({}). He'll try again on the next run.",
-                cell(check.detail.as_deref().unwrap_or("no answer"))
+                prose_cell(check.detail.as_deref().unwrap_or("no answer"))
             ),
             ImageState::PartialSources
             | ImageState::Checked
@@ -1296,21 +1307,30 @@ fn cell(text: &str) -> String {
 fn code_cell(text: &str) -> String {
     code(text).replace('|', "\\|")
 }
-/// A table cell of third-party prose, such as an advisory summary: inert,
-/// and with no tag of its own, so it cannot open or close a block.
+/// A table cell of third-party prose, such as an advisory summary or an
+/// SBOM's package name: cut first, then made inert and given no tag of its
+/// own, its backslashes escaped before its pipes so neither ends the cell,
+/// and no cut splits an escape.
 fn prose_cell(text: &str) -> String {
-    cell(
-        &crate::text::inert(text)
-            .replace('<', "&lt;")
-            .replace('>', "&gt;"),
-    )
+    let text = patchula_datasource::upstream::truncate(text, 240).replace(['\n', '\r'], " ");
+    crate::text::inert(&text)
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
-/// An advisory id from a third party as a cell or link label: no tag, and
-/// no bracket that could end the label.
+/// An advisory id from a third party as a cell or link label: cut first,
+/// inert, with no tag, and its backslashes escaped before the pipes and
+/// brackets, so no bracket can end the label early.
 fn id_cell(id: &str) -> String {
-    cell(&id.replace('<', "&lt;").replace('>', "&gt;"))
+    let id = patchula_datasource::upstream::truncate(id, 240).replace(['\n', '\r'], " ");
+    crate::text::inert(&id)
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
         .replace('[', "\\[")
         .replace(']', "\\]")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 /// `label` linked to `url`, or plain `label` when `url` is no safe link.
 fn linked(label: &str, url: &str) -> String {
