@@ -269,6 +269,20 @@ fn eligible_for_green<'a>(
     ok.then_some(c.tree.oid.as_str())
 }
 
+async fn fetch_commit(client: &Client, repo: &str, sha: &str) -> Result<GitCommit, Error> {
+    client
+        .get_immutable::<GitCommit>(&format!("repos/{repo}/git/commits/{sha}"))
+        .await
+        .map_err(|_| Error::Raced("failed to inspect base commit tree; rerun"))
+}
+
+async fn fetch_tree(client: &Client, repo: &str, sha: &str) -> Result<Tree, Error> {
+    client
+        .get_immutable::<Tree>(&format!("repos/{repo}/git/trees/{sha}?recursive=1"))
+        .await
+        .map_err(|_| Error::Raced("failed to inspect commit tree; rerun"))
+}
+
 /// Add the batch plan and skip the update plans it carries. Items whose targets the
 /// base already satisfies are complete and leave the batch.
 #[allow(clippy::too_many_arguments)]
@@ -329,33 +343,16 @@ pub async fn apply(
             if !passed {
                 continue;
             }
+            let repo = &repository.repository;
             if base_entries.is_none() {
-                let base_git = client
-                    .get_immutable::<GitCommit>(&format!(
-                        "repos/{}/git/commits/{base_commit}",
-                        repository.repository
-                    ))
-                    .await
-                    .map_err(|_| Error::Raced("failed to inspect base commit tree; rerun"))?;
-                let base_tree = client
-                    .get_immutable::<Tree>(&format!(
-                        "repos/{}/git/trees/{}?recursive=1",
-                        repository.repository, base_git.tree.sha
-                    ))
-                    .await
-                    .map_err(|_| Error::Raced("failed to inspect base commit tree; rerun"))?;
+                let base_git = fetch_commit(client, repo, base_commit).await?;
+                let base_tree = fetch_tree(client, repo, &base_git.tree.sha).await?;
                 base_entries = Some((!base_tree.truncated).then_some(base_tree.tree));
             }
             let Some(base_tree_entries) = base_entries.as_ref().and_then(|o| o.as_deref()) else {
                 continue;
             };
-            let source_tree = client
-                .get_immutable::<Tree>(&format!(
-                    "repos/{}/git/trees/{source_tree_oid}?recursive=1",
-                    repository.repository
-                ))
-                .await
-                .map_err(|_| Error::Raced("failed to inspect batched PR tree; rerun"))?;
+            let source_tree = fetch_tree(client, repo, source_tree_oid).await?;
             if source_tree.truncated {
                 continue;
             }
