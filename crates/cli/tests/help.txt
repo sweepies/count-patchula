@@ -1,26 +1,19 @@
 ==> patchula  --help
 patchula {version}                                          ⠂⣤⣄⣀     ⡄⢠     ⣀⣠⣤⠐
-Count Patchula vants to update your deps. A modern           ⢹⣿⣿⣿⣷⣶⣤⣀⣿⣿⣀⣤⣶⣾⣿⣿⣿⡏
-dependency updater with strong defaults.                      ⠋⠙⢿⠿⣿⣿⣿⣿⣿⣿⣿⣿⠿⡿⠋⠙
-                                                                  ⠘⠋⠹⢿⡿⠏⠙⠃
-Exit codes: 0 = success; 1 = runtime error; 2 = usage or             ⠈⠁
-configuration error; `lookup`, `tui --once` and `apply`
-add 4 = a lookup failed; `apply` adds 3 = updates still
-waiting; `run` adds 5 = a repository changed during the
-run; run again.
-
-Usage: patchula [FLAGS] [SUBCOMMAND]
-
+Dependency updates with strong defaults.                     ⢹⣿⣿⣿⣷⣶⣤⣀⣿⣿⣀⣤⣶⣾⣿⣿⣿⡏
+                                                              ⠋⠙⢿⠿⣿⣿⣿⣿⣿⣿⣿⣿⠿⡿⠋⠙
+Usage: patchula [FLAGS] <SUBCOMMAND>                              ⠘⠋⠹⢿⡿⠏⠙⠃
+                                                                     ⠈⠁
 Commands:
-  apply       Write available updates into the working
-              tree here, without branches or pull
+  apply       Write available updates into the current
+              working tree, without branches or pull
               requests.
   cache       Inspect the cache directory's database.
   completion  Print or install shell completion scripts.
   config      Inspect and validate Pkl configuration.
   lookup      Report available updates without writing;
-              with no repository, reads the working tree
-              here.
+              omit repositories to scan the current
+              working tree.
   remote      Run commands on a Count Patchula server with
               its credentials and warm caches.
   run         Create or update dependency branches and
@@ -31,16 +24,16 @@ Commands:
               (`PATCHULA_TOOLS_DIR`, or `tools/` in the
               cache directory).
   tui         Browse dependencies and updates in the
-              terminal; with no repository, apply selected
-              updates to the working tree.
+              terminal; omit repositories to apply updates
+              locally.
   help        Print this message or the help of the given
               subcommand(s)
 
 Flags:
-  -v, --verbose       Show request counts and phase
-                      timings after a batch; repeat for
-                      debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+  -v, --verbose       Show cache details, request counts,
+                      and phase timings; repeat for debug
+                      logs.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always,
                       never]
                       (default: auto)
@@ -50,10 +43,10 @@ Flags:
   -V, --version       Print version
 
 Examples:
-    Report updates for the checkout here
+    Report updates for the current checkout
     $ patchula lookup
 
-    Browse updates and apply the ones you pick
+    Browse updates and apply selected ones
     $ patchula tui
 
     Exit 3 in CI while updates are waiting
@@ -62,45 +55,56 @@ Examples:
     Write only GitHub Actions updates
     $ patchula apply --manager github-actions
 
-    Run this checkout's repository on its Count server
+    Run this checkout's repository on its remote server
     $ patchula remote run
 
     Run the GitHub App webhook server
     $ patchula serve --settings settings.pkl
 
-Run 'patchula <command> --help' for more information on a command.
+Exit codes: 0 = success; 1 = runtime error; 2 = usage or
+configuration error; `lookup`, `tui --once`, and `apply`
+add 4 = a lookup failed; `apply` adds 3 = updates still
+waiting; `run` adds 5 = a repository changed during the
+run (run again).
+
+Run 'patchula <command> --help' for details on a command.
 
 ==> patchula apply --help
-Write available updates into the working tree here, without branches or pull
+Write available updates into the current working tree, without branches or pull
 requests.
 
 Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage
-or configuration error; 3 = selected updates are still waiting: `--check` or
-`--dry-run` found some, or some could not be written in place; 4 = a
+or configuration error; 3 = selected updates are still waiting (`--check` or
+`--dry-run` found some, or some could not be written in place); 4 = a
 dependency's lookup failed, so its updates are unknown. 4 takes precedence over
 3.
 
 Usage: patchula apply [FLAGS]
 
 Flags:
-      --cache <DIR>           Cache directory, shared by every checkout.
-                              Default: `patchula` in the user cache directory
-                              (`~/Library/Caches` on macOS, else
-                              `XDG_CACHE_HOME` or `~/.cache`).
-      --settings <FILE>       Operator settings file; also PATCHULA_SETTINGS.
-                              Default: `patchula/settings.pkl` in the user
-                              config directory (`XDG_CONFIG_HOME` or
-                              `~/.config`), when it exists.
-      --concurrency <N>       Maximum concurrent repository scans (1–100),
-                              overriding the settings file; HTTP limits are per
-                              host. Default: 8.
-      --config <FILE>         Local Pkl override applied to every selected
-                              repository.
-      --default-config        Use the Count's defaults when the working tree has
-                              no `patchula.pkl`, instead of asking. Conflicts
-                              with `--config`.
-      --manager <MANAGER>     Only updates from this manager, such as
-                              github-actions; repeat for more.
+      --cache <DIR>           Cache directory, shared across checkouts (default:
+                              `patchula` in the user cache directory:
+                              `~/Library/Caches` on macOS, else `XDG_CACHE_HOME`
+                              or `~/.cache`).
+      --settings <FILE>       Operator settings file; also PATCHULA_SETTINGS
+                              (default: `patchula/settings.pkl` in
+                              `XDG_CONFIG_HOME` or `~/.config`, when present).
+      --concurrency <N>       Maximum concurrency (1–100), overriding the
+                              settings file; HTTP limits are per host (default:
+                              8).
+      --config <FILE>         Local Pkl config file to use instead of the
+                              working tree's `patchula.pkl`.
+      --default-config        Use default configuration when the working tree
+                              has no `patchula.pkl`, instead of prompting.
+                              Conflicts with `--config`.
+      --manager <MANAGER>     Only updates from this manager; repeat for more.
+                              [possible values: npm, bun, github-actions, mise,
+                              cargo, dockerfile, compose, go, terraform,
+                              kubernetes, kustomize, flux, helm-values,
+                              pyproject, pre-commit, helm, devcontainer,
+                              woodpecker, copier, maven, gradle, nuget, bundler,
+                              composer, gitlabci, gitlabci-include, nix, apm,
+                              pkl, regex]
       --dependency <PATTERN>  Only dependencies matching this name or package,
                               with config's `glob:`, `regex:` and `!`; repeat
                               for more.
@@ -111,40 +115,35 @@ Flags:
                               and write nothing.
       --check                 Write nothing; exit 3 if any selected update is
                               waiting, or 4 if a lookup failed.
-      --copier                Also run your own `copier update` for each
-                              selected template, before the other updates.
-
-                              The template's code runs on this machine as you.
-                              The tree must be clean, the Count never passes
-                              `--trust`, and copier asks its questions on the
-                              terminal.
-      --copier-defaults       With `--copier`, take the defaults for questions
-                              copier would ask, for use without a terminal.
+      --copier                Also run `copier update` for each selected
+                              template before other updates. Template code runs
+                              locally as you; the tree must be clean and
+                              `--trust` is never passed.
+      --copier-defaults       With `--copier`, take default answers for copier
+                              prompts, for use without a terminal.
   -h, --help                  Print help
 
 Global flags:
-  -v, --verbose               Show request counts and phase timings after a
-                              batch; repeat for debug logs.
-      --color <WHEN>          Control ANSI colors in diagnostics.
+  -v, --verbose               Show cache details, request counts, and phase
+                              timings; repeat for debug logs.
+      --color <WHEN>          Control ANSI color in output.
                               [possible values: auto, always, never]
                               (default: auto)
       --json                  Emit command results and errors as JSON; configs
                               stay Pkl.
 
 Examples:
-    Write every available update here
+    Write every available update
     $ patchula apply
 
     Write nothing; exit 3 if updates are waiting
     $ patchula apply --check
 
-    Show the patch updates as a diff
+    Show patch updates as a unified diff
     $ patchula apply --dry-run --type patch
 
-    Write only the actions/* updates
+    Write only actions/* updates
     $ patchula apply --manager github-actions --dependency 'glob:actions/*'
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula cache --help
 Inspect the cache directory's database.
@@ -152,17 +151,17 @@ Inspect the cache directory's database.
 Usage: patchula cache <SUBCOMMAND>
 
 Commands:
-  schema  Print the cache database schema this binary supports; it refuses a
-          cache from a newer one.
+  schema  Print the cache database schema supported by this binary; newer caches
+          are refused.
   help    Print this message or the help of the given subcommand(s)
 
 Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
@@ -171,11 +170,9 @@ Examples:
     Print the cache schema this binary supports
     $ patchula cache schema
 
-Run 'patchula <command> --help' for more information on a command.
-
 ==> patchula cache schema --help
-Print the cache database schema this binary supports; it refuses a cache from a
-newer one.
+Print the cache database schema supported by this binary; newer caches are
+refused.
 
 Usage: patchula cache schema
 
@@ -183,14 +180,12 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula completion --help
 Print or install shell completion scripts.
@@ -213,9 +208,9 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
@@ -226,8 +221,6 @@ Examples:
 
     Print the zsh completion script
     $ patchula completion zsh
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula config --help
 Inspect and validate Pkl configuration.
@@ -247,9 +240,9 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
@@ -267,8 +260,6 @@ Examples:
     Check operator settings
     $ patchula config check-settings settings.pkl
 
-Run 'patchula <command> --help' for more information on a command.
-
 ==> patchula config check --help
 Validate a Pkl config file or discover one in a repository directory.
 
@@ -281,14 +272,12 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula config schema --help
 Print the bundled PatchulaConfig.pkl schema as Pkl source.
@@ -299,14 +288,12 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula config settings-schema --help
 Print the bundled PatchulaSettings.pkl operator schema.
@@ -317,14 +304,12 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula config check-settings --help
 Validate an operator settings file without credentials or network.
@@ -338,70 +323,64 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
 
-Run 'patchula <command> --help' for more information on a command.
-
 ==> patchula lookup --help
-Report available updates without writing; with no repository, reads the working
-tree here.
+Report available updates without writing; omit repositories to scan the current
+working tree.
 
 Usage: patchula lookup [FLAGS] [OWNER/REPO]…
 
 Arguments:
   [OWNER/REPO]…  Repositories as owner/repo, read through the GitHub API; omit
-                 for the checkout here.
+                 for the current checkout.
 
 Flags:
-      --all-repos         Process every repository the token can reach instead
-                          of naming them.
-      --cache <DIR>       Cache directory, shared by every checkout. Default:
-                          `patchula` in the user cache directory
-                          (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or
+      --all-repos         Scan every repository the token can reach.
+      --cache <DIR>       Cache directory, shared across checkouts (default:
+                          `patchula` in the user cache directory:
+                          `~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or
                           `~/.cache`).
-      --settings <FILE>   Operator settings file; also PATCHULA_SETTINGS.
-                          Default: `patchula/settings.pkl` in the user config
-                          directory (`XDG_CONFIG_HOME` or `~/.config`), when it
-                          exists.
+      --settings <FILE>   Operator settings file; also PATCHULA_SETTINGS
+                          (default: `patchula/settings.pkl` in `XDG_CONFIG_HOME`
+                          or `~/.config`, when present).
       --concurrency <N>   Maximum concurrent repository scans (1–100),
-                          overriding the settings file; HTTP limits are per
-                          host. Default: 8.
-      --config <FILE>     Local Pkl override applied to every selected
+                          overriding the settings file; HTTP limits are per host
+                          (default: 8).
+      --config <FILE>     Local Pkl config override applied to every selected
                           repository.
       --config-dir <DIR>  Per-repository overrides: `DIR/<owner>/<name>.pkl`,
                           then `DIR/<name>.pkl`; other repositories use their
                           own `patchula.pkl`, or are skipped without one.
                           Conflicts with `--config`.
-      --default-config    Use the Count's defaults when the working tree has no
-                          `patchula.pkl`, instead of asking. Conflicts with
+      --default-config    Use default configuration when the working tree has no
+                          `patchula.pkl`, instead of prompting. Conflicts with
                           `--config` and `--config-dir`.
   -h, --help              Print help
 
 Global flags:
-  -v, --verbose           Show request counts and phase timings after a batch;
+  -v, --verbose           Show cache details, request counts, and phase timings;
                           repeat for debug logs.
-      --color <WHEN>      Control ANSI colors in diagnostics.
+      --color <WHEN>      Control ANSI color in output.
                           [possible values: auto, always, never]
                           (default: auto)
       --json              Emit command results and errors as JSON; configs stay
                           Pkl.
 
 Examples:
-    Report updates for the checkout here
+    Report updates for the current checkout
     $ patchula lookup
 
     Read two repositories through the API
     $ patchula lookup acme/app acme/api
 
-    The same report, as JSON
+    Emit the report as JSON
     $ patchula lookup --json
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula remote --help
 Run commands on a Count Patchula server with its credentials and warm caches.
@@ -423,9 +402,9 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
@@ -446,8 +425,6 @@ Examples:
     Sign in through the server's GitHub App
     $ patchula remote login --server https://patchula.example.com
 
-Run 'patchula <command> --help' for more information on a command.
-
 ==> patchula remote login --help
 Sign in with the server's GitHub App, replacing any stored token.
 
@@ -460,14 +437,12 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula remote logout --help
 Forget the stored token for a server and any remembered repositories using it.
@@ -480,14 +455,12 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula remote lookup --help
 Report available updates from a Count Patchula server without writing.
@@ -505,14 +478,12 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula remote run --help
 Create or update dependency branches and pull requests on a Count Patchula
@@ -533,14 +504,12 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula remote tui --help
 Browse dependencies and updates from a Count Patchula server in the terminal.
@@ -560,14 +529,12 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula run --help
 Create or update dependency branches and pull requests on GitHub with verified
@@ -588,46 +555,40 @@ Arguments:
                  for this checkout's GitHub repository.
 
 Flags:
-      --all-repos               Process every repository the token can reach
-                                instead of naming them.
-      --cache <DIR>             Cache directory, shared by every checkout.
-                                Default: `patchula` in the user cache directory
-                                (`~/Library/Caches` on macOS, else
-                                `XDG_CACHE_HOME` or `~/.cache`).
-      --settings <FILE>         Operator settings file; also PATCHULA_SETTINGS.
-                                Default: `patchula/settings.pkl` in the user
-                                config directory (`XDG_CONFIG_HOME` or
-                                `~/.config`), when it exists.
-      --concurrency <N>         Maximum concurrent repository scans (1–100),
-                                overriding the settings file; HTTP limits are
-                                per host. Default: 8.
-      --config <FILE>           Local Pkl override applied to every selected
-                                repository.
-      --config-dir <DIR>        Per-repository overrides:
-                                `DIR/<owner>/<name>.pkl`, then `DIR/<name>.pkl`;
-                                other repositories use their own `patchula.pkl`,
-                                or are skipped without one. Conflicts with
-                                `--config`.
-      --dir <DIR>               Plan branches and diffs from a local directory
-                                instead of GitHub; requires `--dry-run`.
-      --recheck <WHEN>          When a ticked checkbox says it takes effect;
-                                also PATCHULA_RECHECK. Default: next-run.
-                                [possible values: now, next-run]
-      --dry-run                 Print planned branches, files and unified diffs
-                                without writing to GitHub.
-      --allow-lockfile-pending  For testing: write manifest-only branches for
-                                binary `bun.lockb` lockfiles, which can't be
-                                regenerated.
-  -h, --help                    Print help
+      --all-repos         Scan every repository the token can reach.
+      --cache <DIR>       Cache directory, shared across checkouts (default:
+                          `patchula` in the user cache directory:
+                          `~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or
+                          `~/.cache`).
+      --settings <FILE>   Operator settings file; also PATCHULA_SETTINGS
+                          (default: `patchula/settings.pkl` in `XDG_CONFIG_HOME`
+                          or `~/.config`, when present).
+      --concurrency <N>   Maximum concurrent repository scans (1–100),
+                          overriding the settings file; HTTP limits are per host
+                          (default: 8).
+      --config <FILE>     Local Pkl config override applied to every selected
+                          repository.
+      --config-dir <DIR>  Per-repository overrides: `DIR/<owner>/<name>.pkl`,
+                          then `DIR/<name>.pkl`; other repositories use their
+                          own `patchula.pkl`, or are skipped without one.
+                          Conflicts with `--config`.
+      --dir <DIR>         Plan branches and diffs from a local directory instead
+                          of GitHub; requires `--dry-run`.
+      --recheck <WHEN>    When a ticked PR or dashboard checkbox takes effect;
+                          also PATCHULA_RECHECK (default: next-run).
+                          [possible values: now, next-run]
+      --dry-run           Print planned branches, files and unified diffs
+                          without writing to GitHub.
+  -h, --help              Print help
 
 Global flags:
-  -v, --verbose                 Show request counts and phase timings after a
-                                batch; repeat for debug logs.
-      --color <WHEN>            Control ANSI colors in diagnostics.
-                                [possible values: auto, always, never]
-                                (default: auto)
-      --json                    Emit command results and errors as JSON; configs
-                                stay Pkl.
+  -v, --verbose           Show cache details, request counts, and phase timings;
+                          repeat for debug logs.
+      --color <WHEN>      Control ANSI color in output.
+                          [possible values: auto, always, never]
+                          (default: auto)
+      --json              Emit command results and errors as JSON; configs stay
+                          Pkl.
 
 Examples:
     Plan branches and diffs for acme/app, writing nothing
@@ -636,10 +597,8 @@ Examples:
     Open or update pull requests for acme/app
     $ patchula run acme/app
 
-    Every repository the token reaches
+    Run every repository the token can reach
     $ patchula run --all-repos --config-dir overrides
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula serve --help
 Run the API-only GitHub App webhook server.
@@ -650,27 +609,28 @@ Flags:
       --settings <FILE>           Operator settings file; also
                                   PATCHULA_SETTINGS.
       --listen <ADDR>             Server bind address; also PATCHULA_LISTEN
-                                  (default 127.0.0.1:8080).
+                                  (default: 127.0.0.1:8080).
       --cache <DIR>               Server cache and queue directory; also
-                                  PATCHULA_SERVER_CACHE. Default:
-                                  `patchula/server` in the user cache directory.
+                                  PATCHULA_SERVER_CACHE (default:
+                                  `patchula/server` in the user cache
+                                  directory).
       --app-id <ID>               GitHub App ID; also PATCHULA_APP_ID.
       --private-key-file <FILE>   PEM private key file; also
                                   PATCHULA_APP_PRIVATE_KEY_FILE.
       --webhook-secret-file <FILE>  Webhook secret file; also
                                   PATCHULA_WEBHOOK_SECRET_FILE.
       --shutdown-timeout-secs <SECS>  Graceful server drain deadline; also
-                                  PATCHULA_SHUTDOWN_TIMEOUT_SECS (default
+                                  PATCHULA_SHUTDOWN_TIMEOUT_SECS (default:
                                   60).
-      --recheck <WHEN>            When a ticked checkbox says it takes effect;
-                                  also PATCHULA_RECHECK. Default: now.
+      --recheck <WHEN>            When a ticked PR or dashboard checkbox takes
+                                  effect; also PATCHULA_RECHECK (default: now).
                                   [possible values: now, next-run]
   -h, --help                      Print help
 
 Global flags:
-  -v, --verbose                   Show request counts and phase timings after a
-                                  batch; repeat for debug logs.
-      --color <WHEN>              Control ANSI colors in diagnostics.
+  -v, --verbose                   Show cache details, request counts, and phase
+                                  timings; repeat for debug logs.
+      --color <WHEN>              Control ANSI color in output.
                                   [possible values: auto, always, never]
                                   (default: auto)
       --json                      Emit command results and errors as JSON;
@@ -682,8 +642,6 @@ Examples:
 
     Listen on every interface
     $ patchula serve --settings settings.pkl --listen 0.0.0.0:8080
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula tools --help
 Manage the lockfile runner's tool store (`PATCHULA_TOOLS_DIR`, or `tools/` in
@@ -702,21 +660,19 @@ Flags:
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
 
 Examples:
-    Install the pinned toolchains, e.g. in an image
+    Install pinned toolchains ahead of time (e.g. in an image)
     $ patchula tools install
 
     Drop versions unused for two weeks
     $ patchula tools prune --days 14
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula tools install --help
 Install the pinned lockfile toolchains ahead of time, e.g. in an image build.
@@ -724,19 +680,17 @@ Install the pinned lockfile toolchains ahead of time, e.g. in an image build.
 Usage: patchula tools install [--cache <DIR>]
 
 Flags:
-      --cache <DIR>   Cache directory, holding the tool store. Default:
-                      `patchula` in the user cache directory.
+      --cache <DIR>   Cache directory holding the tool store (default:
+                      `patchula` in the user cache directory).
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
-
-Run 'patchula <command> --help' for more information on a command.
 
 ==> patchula tools prune --help
 Uninstall tool versions no run has used recently; pinned defaults stay.
@@ -744,70 +698,66 @@ Uninstall tool versions no run has used recently; pinned defaults stay.
 Usage: patchula tools prune [--cache <DIR>] [--days <DAYS>]
 
 Flags:
-      --cache <DIR>   Cache directory, holding the tool store. Default:
-                      `patchula` in the user cache directory.
+      --cache <DIR>   Cache directory holding the tool store (default:
+                      `patchula` in the user cache directory).
       --days <DAYS>   Remove versions unused for at least this many days.
                       (default: 30)
   -h, --help          Print help
 
 Global flags:
-  -v, --verbose       Show request counts and phase timings after a batch;
+  -v, --verbose       Show cache details, request counts, and phase timings;
                       repeat for debug logs.
-      --color <WHEN>  Control ANSI colors in diagnostics.
+      --color <WHEN>  Control ANSI color in output.
                       [possible values: auto, always, never]
                       (default: auto)
       --json          Emit command results and errors as JSON; configs stay Pkl.
 
-Run 'patchula <command> --help' for more information on a command.
-
 ==> patchula tui --help
-Browse dependencies and updates in the terminal; with no repository, apply
-selected updates to the working tree.
+Browse dependencies and updates in the terminal; omit repositories to apply
+updates locally.
 
 Usage: patchula tui [FLAGS] [OWNER/REPO]…
 
 Arguments:
   [OWNER/REPO]…  Repositories as owner/repo, read through the GitHub API; omit
-                 for the checkout here.
+                 for the current checkout.
 
 Flags:
-      --all-repos         Process every repository the token can reach instead
-                          of naming them.
-      --cache <DIR>       Cache directory, shared by every checkout. Default:
-                          `patchula` in the user cache directory
-                          (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or
+      --all-repos         Scan every repository the token can reach.
+      --cache <DIR>       Cache directory, shared across checkouts (default:
+                          `patchula` in the user cache directory:
+                          `~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or
                           `~/.cache`).
-      --settings <FILE>   Operator settings file; also PATCHULA_SETTINGS.
-                          Default: `patchula/settings.pkl` in the user config
-                          directory (`XDG_CONFIG_HOME` or `~/.config`), when it
-                          exists.
+      --settings <FILE>   Operator settings file; also PATCHULA_SETTINGS
+                          (default: `patchula/settings.pkl` in `XDG_CONFIG_HOME`
+                          or `~/.config`, when present).
       --concurrency <N>   Maximum concurrent repository scans (1–100),
-                          overriding the settings file; HTTP limits are per
-                          host. Default: 8.
-      --config <FILE>     Local Pkl override applied to every selected
+                          overriding the settings file; HTTP limits are per host
+                          (default: 8).
+      --config <FILE>     Local Pkl config override applied to every selected
                           repository.
       --config-dir <DIR>  Per-repository overrides: `DIR/<owner>/<name>.pkl`,
                           then `DIR/<name>.pkl`; other repositories use their
                           own `patchula.pkl`, or are skipped without one.
                           Conflicts with `--config`.
-      --default-config    Use the Count's defaults when the working tree has no
-                          `patchula.pkl`, instead of asking. Conflicts with
+      --default-config    Use default configuration when the working tree has no
+                          `patchula.pkl`, instead of prompting. Conflicts with
                           `--config` and `--config-dir`.
       --once              Print a plain-text snapshot of the updates and exit
                           with `lookup`'s exit code, for pipes and CI logs.
   -h, --help              Print help
 
 Global flags:
-  -v, --verbose           Show request counts and phase timings after a batch;
+  -v, --verbose           Show cache details, request counts, and phase timings;
                           repeat for debug logs.
-      --color <WHEN>      Control ANSI colors in diagnostics.
+      --color <WHEN>      Control ANSI color in output.
                           [possible values: auto, always, never]
                           (default: auto)
       --json              Emit command results and errors as JSON; configs stay
                           Pkl.
 
 Examples:
-    Pick updates and apply them here
+    Pick updates and apply them locally
     $ patchula tui
 
     Browse a repository through the API
@@ -815,6 +765,4 @@ Examples:
 
     Print a plain snapshot, for pipes and CI logs
     $ patchula tui --once
-
-Run 'patchula <command> --help' for more information on a command.
 

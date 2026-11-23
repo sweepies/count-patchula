@@ -392,7 +392,13 @@ async fn find_discovers_and_remember_and_logout_manage_the_pin() {
     assert!(newly_discovered);
     // `find` alone does not write the pin until the caller completes login/run.
     assert!(!dir.path().join("remotes.json").exists());
-    remember(&services(fake.clone(), dir.path()), "acme/app", &found).unwrap();
+    remember(
+        &services(fake.clone(), dir.path()),
+        "acme/app",
+        &found,
+        false,
+    )
+    .unwrap();
     assert_eq!(
         remembered_store(dir.path()),
         json!({"acme/app": {"server": SERVER, "app": "Iv23client"}})
@@ -677,7 +683,7 @@ async fn unreachable_remembered_server_suggests_remote_logout() {
         app: Some("Iv23client".into()),
         remembered: true,
     };
-    let (code, error) = report(&svc, &target, vec!["acme/app".into()], Mode::Lookup)
+    let (code, error) = report(&svc, &target, vec!["acme/app".into()], Mode::Lookup, None)
         .await
         .unwrap_err();
     assert_eq!(code, 1);
@@ -690,7 +696,7 @@ async fn unreachable_remembered_server_suggests_remote_logout() {
         app: Some("Iv23client".into()),
         remembered: false,
     };
-    let (code, error) = report(&svc, &unpinned, vec!["acme/app".into()], Mode::Lookup)
+    let (code, error) = report(&svc, &unpinned, vec!["acme/app".into()], Mode::Lookup, None)
         .await
         .unwrap_err();
     assert_eq!(code, 1);
@@ -780,9 +786,15 @@ async fn a_remembered_server_that_names_another_app_is_refused_before_sign_in() 
     let services = services(fake.clone(), dir.path());
     let (target, discovered) = find(&services, "acme/app").await.unwrap().unwrap();
     assert!(!discovered);
-    let error = report(&services, &target, vec!["acme/app".into()], Mode::Lookup)
-        .await
-        .unwrap_err();
+    let error = report(
+        &services,
+        &target,
+        vec!["acme/app".into()],
+        Mode::Lookup,
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(
         error.1.to_string().contains("names a different GitHub App"),
         "{}",
@@ -882,6 +894,7 @@ async fn run_statuses_surface_their_own_failures() {
             &Server::named(SERVER.into()),
             vec!["acme/app".into()],
             Mode::Lookup,
+            None,
         )
         .await
     };
@@ -945,6 +958,7 @@ async fn a_rejected_run_start_says_the_run_is_gone() {
         &Server::named(SERVER.into()),
         vec!["acme/app".into()],
         Mode::Lookup,
+        None,
     )
     .await
     else {
@@ -965,6 +979,7 @@ async fn a_run_that_never_finishes_times_out_with_the_servers_limit() {
         &Server::named(SERVER.into()),
         vec!["acme/app".into()],
         Mode::Lookup,
+        None,
     )
     .await
     else {

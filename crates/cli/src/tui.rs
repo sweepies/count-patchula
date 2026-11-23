@@ -427,9 +427,15 @@ impl Model {
                 warnings.push((repo.repository.clone(), Warning::Failure(failure.clone())));
             }
             if let Some(reason) = &repo.reason {
+                let status = match repo.status {
+                    patchula_report::Status::Complete => "complete",
+                    patchula_report::Status::Skipped => "skipped",
+                    patchula_report::Status::Stale => "stale",
+                    patchula_report::Status::Error => "error",
+                };
                 warnings.push((
                     repo.repository.clone(),
-                    Warning::Note(format!("{:?}: {reason}", repo.status)),
+                    Warning::Note(format!("{status}: {reason}")),
                 ));
             }
             for file in &repo.package_files {
@@ -524,34 +530,41 @@ impl Model {
         }
     }
     /// Why `w` cannot apply right now.
-    pub fn apply_blocked(&self) -> Option<String> {
+    fn apply_block(&self) -> Option<Blocked> {
         if let Some(reason) = self.read_only() {
-            return Some(reason.into());
+            return Some(Blocked::ReadOnly(reason));
         }
-        (self.selected() == 0).then(|| "select updates with space or a first".into())
+        (self.selected() == 0).then_some(Blocked::NoneSelected)
     }
     /// Why `u` cannot run copier for the template under the cursor.
-    pub fn copier_blocked(&self) -> Option<String> {
+    fn copier_block(&self) -> Option<Blocked> {
         if let Some(reason) = self.read_only() {
-            return Some(reason.into());
+            return Some(Blocked::ReadOnly(reason));
         }
         let template = self.templates.get(self.cursor)?;
         if template.applied {
-            Some("copier already updated this template; review and commit its changes".into())
+            Some(Blocked::AlreadyApplied)
         } else if self.uncommitted {
-            Some("the working tree has uncommitted changes, and copier needs a clean tree".into())
+            Some(Blocked::DirtyTree)
         } else {
             None
         }
+    }
+    /// Why `w` cannot apply right now.
+    pub fn apply_blocked(&self) -> Option<String> {
+        self.apply_block().map(|b| b.reason().into())
+    }
+    /// Why `u` cannot run copier for the template under the cursor.
+    pub fn copier_blocked(&self) -> Option<String> {
+        self.copier_block().map(|b| b.reason().into())
     }
     /// The question waiting for `y`, if any.
     pub fn prompt(&self) -> Option<String> {
         let index = match self.mode {
             Mode::ConfirmApply => {
-                let n = self.selected();
                 return Some(format!(
-                    "Write {n} selected update{} into the working tree? y writes, any other key cancels.",
-                    plural(n)
+                    "Write {} into the working tree? y writes, any other key cancels.",
+                    crate::output::count(self.selected(), "selected update", "selected updates")
                 ));
             }
             Mode::ConfirmCopier(index) => index,
@@ -570,19 +583,23 @@ impl Model {
                 .unwrap_or_default()
         ))
     }
+    /// Short state tag for the key bar when `w` or `u` is disabled.
+    fn bar_off(&self, action: Action) -> Option<&'static str> {
+        match action {
+            Action::Apply => self.apply_block().map(Blocked::tag),
+            Action::Copier => self.copier_block().map(Blocked::tag),
+            _ => None,
+        }
+    }
     /// The key bar for the current tab, built from [`KEYS`].
     pub fn bar(&self) -> String {
         KEYS.iter()
             .filter(|b| b.on(self.tab))
             .filter_map(|b| {
                 let label = format!("{} {}", b.keys[0].name(), b.bar?);
-                let blocked = match b.action {
-                    Action::Apply => self.apply_blocked(),
-                    Action::Copier => self.copier_blocked(),
-                    _ => None,
-                };
-                Some(match (b.action, blocked) {
-                    (_, Some(reason)) => format!("{label} (off: {reason})"),
+                let off = self.bar_off(b.action);
+                Some(match (b.action, off) {
+                    (_, Some(reason)) => format!("{label} ({reason})"),
                     (Action::Filter, _) => format!("{label}: {}", self.filter.label()),
                     (Action::Search, _) if !self.search.is_empty() => {
                         format!("{label} \"{}\"", self.search)
@@ -668,19 +685,21 @@ impl Model {
             self.mode = Mode::Browse;
             self.message = Some(if yes {
                 match self.apply() {
-                    Ok((edits, files, skipped)) => {
+                    Ok((edits, files, skipped, locked)) => {
                         let mut message = format!(
-                            "The Count wrote {edits} update{} into {files} file{}.",
-                            plural(edits),
-                            plural(files)
+                            "The Count wrote {} into {}.",
+                            crate::output::count(edits, "update", "updates"),
+                            crate::output::count(files, "file", "files"),
                         );
                         if !skipped.is_empty() {
-                            message.push_str(&format!(" Left alone: {}.", skipped.join("; ")));
+                            message.push_str(&format!(" Skipped: {}.", skipped.join("; ")));
                         }
-                        message.push_str(" Refresh lockfiles with your package manager.");
+                        if locked {
+                            message.push_str(" Refresh lockfiles with your package manager.");
+                        }
                         message
                     }
-                    Err(error) => format!("The Count stopped: {error}"),
+                    Err(error) => format!("Write failed: {error}"),
                 }
             } else {
                 "Apply cancelled; nothing was written.".into()
@@ -751,7 +770,7 @@ impl Model {
                 }
             }
             Action::Apply => match self.apply_blocked() {
-                Some(reason) => self.message = Some(format!("The Count cannot apply: {reason}.")),
+                Some(reason) => self.message = Some(format!("Cannot apply: {reason}.")),
                 None => self.mode = Mode::ConfirmApply,
             },
             Action::Copier => {
@@ -760,9 +779,7 @@ impl Model {
                 }
                 self.refresh();
                 match self.copier_blocked() {
-                    Some(reason) => {
-                        self.message = Some(format!("The Count cannot run copier: {reason}."))
-                    }
+                    Some(reason) => self.message = Some(format!("Cannot run copier: {reason}.")),
                     None => self.mode = Mode::ConfirmCopier(self.cursor),
                 }
             }
@@ -795,7 +812,7 @@ impl Model {
     /// Write the selected updates into the local directory's files. As in
     /// `patchula apply`, the applicable subset is written and each skip is
     /// reported; an error says what was written.
-    fn apply(&mut self) -> Result<(usize, usize, Vec<String>), String> {
+    fn apply(&mut self) -> Result<(usize, usize, Vec<String>, bool), String> {
         let Origin::Local(local) = &self.origin else {
             return Err("not a local directory; nothing was written".into());
         };
@@ -812,15 +829,16 @@ impl Model {
         self.uncommitted = uncommitted(&local.dir);
         let (applied, skipped) = crate::plan::outcomes(&plan, &chosen);
         let edits = applied.len();
+        let locked = applied.iter().any(|u| u.locked);
         let files = plan.files.len();
         let skipped: Vec<String> = skipped
             .iter()
-            .map(|(update, reason)| format!("{}: {reason}", update.name))
+            .map(|(_, reason)| (*reason).to_owned())
             .collect();
         for &position in &plan.applied {
             self.updates[selected[position]].pick = Pick::Applied;
         }
-        Ok((edits, files, skipped))
+        Ok((edits, files, skipped, locked))
     }
     /// Run copier for the confirmed template, with the terminal handed over
     /// to it, and say what it changed.
@@ -847,13 +865,42 @@ impl Model {
     }
 }
 
+/// Why a write action (`w` or `u`) cannot run right now.
+#[derive(Clone, Copy)]
+enum Blocked {
+    ReadOnly(&'static str),
+    NoneSelected,
+    AlreadyApplied,
+    DirtyTree,
+}
+
+impl Blocked {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::ReadOnly(_) => "read-only",
+            Self::NoneSelected => "none selected",
+            Self::AlreadyApplied => "done",
+            Self::DirtyTree => "dirty tree",
+        }
+    }
+    fn reason(self) -> &'static str {
+        match self {
+            Self::ReadOnly(reason) => reason,
+            Self::NoneSelected => "select updates with space or a first",
+            Self::AlreadyApplied => {
+                "copier already updated this template; review and commit its changes"
+            }
+            Self::DirtyTree => {
+                "the working tree has uncommitted changes, and copier needs a clean tree"
+            }
+        }
+    }
+}
+
 /// Whether the checkout holding `dir` has changes Git would commit; false
 /// when Git cannot tell, and copier then says why itself.
 fn uncommitted(dir: &Path) -> bool {
     crate::copier::changed(dir).is_ok_and(|paths| !paths.is_empty())
-}
-fn plural(n: usize) -> &'static str {
-    if n == 1 { "" } else { "s" }
 }
 fn kind_style(kind: UpdateKind) -> Style {
     Style::new().fg(palette::kind_colour(kind).tui())
@@ -925,11 +972,10 @@ pub fn draw(frame: &mut Frame, model: &mut Model) {
                     .bold(),
             ),
             Span::raw(format!(
-                "  {} repositor{} · {} dependencies · {} updates",
-                model.repositories,
-                if model.repositories == 1 { "y" } else { "ies" },
-                model.found.len(),
-                model.updates.len()
+                "  {} · {} · {}",
+                crate::output::count(model.repositories, "repository", "repositories"),
+                crate::output::count(model.found.len(), "dependency", "dependencies"),
+                crate::output::count(model.updates.len(), "update", "updates"),
             )),
             Span::styled(
                 if selected > 0 {
@@ -1296,10 +1342,7 @@ fn draw_templates(frame: &mut Frame, model: &mut Model, area: Rect) {
         .block(
             Block::new()
                 .borders(Borders::TOP)
-                .title(format!(
-                    " Template updates: reported, never edited ({}) ",
-                    model.templates.len()
-                ))
+                .title(format!(" Template updates ({}) ", model.templates.len()))
                 .title_style(Style::new().fg(palette::ACCENT.tui())),
         ),
         area,
@@ -1595,7 +1638,7 @@ fn draw_help(frame: &mut Frame) {
     frame.render_widget(
         Paragraph::new(text).wrap(Wrap { trim: false }).block(
             Block::bordered()
-                .title(" The Count's keys ")
+                .title(" Keys ")
                 .title_style(Style::new().fg(palette::ACCENT.tui()))
                 .border_style(Style::new().fg(palette::ACCENT_DIM.tui())),
         ),
@@ -1605,16 +1648,15 @@ fn draw_help(frame: &mut Frame) {
 /// A plain-text snapshot of the updates, for pipes and CI logs.
 pub fn snapshot(model: &Model) -> String {
     let mut out = format!(
-        "Count Patchula: {} repositor{}, {} dependencies, {} updates, {} held back\n",
-        model.repositories,
-        if model.repositories == 1 { "y" } else { "ies" },
-        model.found.len(),
-        model.updates.len(),
+        "Count Patchula: {}, {}, {}, {} held back\n",
+        crate::output::count(model.repositories, "repository", "repositories"),
+        crate::output::count(model.found.len(), "dependency", "dependencies"),
+        crate::output::count(model.updates.len(), "update", "updates"),
         model.held.len()
     );
     for u in &model.updates {
         out.push_str(&format!(
-            "{:<7} {} {} -> {}  ({}{})\n",
+            "{:<7} {} {} → {}  ({}{})\n",
             u.kind,
             u.name,
             u.current,
@@ -1664,7 +1706,7 @@ pub fn interact(mut model: Model) -> std::io::Result<()> {
                 ratatui::restore();
                 model.run_copier("copier");
                 println!(
-                    "\n{}\nPress Enter to return to the Count.",
+                    "\n{}\nPress Enter to return.",
                     model.message.as_deref().unwrap_or("")
                 );
                 std::io::stdin().read_line(&mut String::new())?;
@@ -1753,11 +1795,11 @@ mod tests {
         press(&mut model, KeyCode::Char('3'));
         assert_eq!(model.tab, Tab::Dependencies);
         press(&mut model, KeyCode::Char('?'));
-        assert!(screen(&mut model).contains("The Count's keys"));
+        assert!(screen(&mut model).contains("Keys"));
         press(&mut model, KeyCode::Char('x'));
         press(&mut model, KeyCode::Char('q'));
         assert!(model.quit);
-        assert!(snapshot(&model).contains("major   zod 3.22.0 -> 4.1.0  (package.json)"));
+        assert!(snapshot(&model).contains("major   zod 3.22.0 → 4.1.0  (package.json)"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2035,21 +2077,15 @@ mod tests {
         let mut server = Model::new(&report, Origin::Server);
         let text = flat(&sized(&mut server, 80, 24));
         assert!(
-            server.read_only().is_some() && text.contains("w apply (off:"),
+            server.read_only().is_some() && text.contains("w apply (read-only)"),
             "{text}"
         );
         let mut github = Model::new(&report, Origin::GitHub);
         let text = flat(&sized(&mut github, 80, 24));
-        assert!(
-            text.contains("w apply (off: these repositories come from GitHub"),
-            "{text}"
-        );
+        assert!(text.contains("w apply (read-only)"), "{text}");
         let (_dir, mut model) = local_model(MANIFEST);
         let text = flat(&sized(&mut model, 80, 24));
-        assert!(
-            text.contains("w apply (off: select updates with space or a first)"),
-            "{text}"
-        );
+        assert!(text.contains("w apply (none selected)"), "{text}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2092,7 +2128,7 @@ mod tests {
             press(&mut model, KeyCode::Char('j'));
             assert_eq!(model.message, None, "a key press clears the message");
             let text = flat(&sized(&mut model, width, height));
-            assert!(text.contains("w apply (off: select updates"), "{text}");
+            assert!(text.contains("w apply (none selected)"), "{text}");
         }
     }
 

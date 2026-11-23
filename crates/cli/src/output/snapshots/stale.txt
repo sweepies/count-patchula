@@ -1,5 +1,5 @@
 The Count visited 2 repositories and found 4 dependencies, 5 updates, 1
-vulnerability, 1 failed lookup, 1 notice, 1 skipped value and 1 warning.
+vulnerability, 1 failed lookup, 1 notice, 1 skipped entry and 1 warning.
 
 acme/api  stale: default branch changed during the run; run again
 
@@ -7,7 +7,7 @@ acme/api  stale: default branch changed during the run; run again
     stale  patchula/npm-lodash-4.x
       default branch moved since extraction; stale blob refusal, rerun
 
-acme/web  4 dependencies, 5 updates, 1 vulnerability, 1 failed lookup, 1 notice, 1 skipped value and 1 warning
+acme/web  4 dependencies, 5 updates, 1 vulnerability, 1 failed lookup, 1 notice, 1 skipped entry and 1 warning
 
   Vulnerabilities (1)
     high  lodash 4.17.20  GHSA-35jh-r3h4-6jhm (CVE-2021-23337)  fixed in 4.17.21  package.json

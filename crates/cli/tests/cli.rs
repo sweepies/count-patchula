@@ -137,7 +137,13 @@ fn help_is_plain_when_piped_or_refused_colour_and_styled_when_forced() {
     assert!(!plain.contains('\x1b'), "{plain}");
     assert!(plain.contains("\nExamples:\n"), "{plain}");
     assert!(
-        plain.ends_with("Run 'patchula <command> --help' for more information on a command.\n")
+        !plain.contains("Run 'patchula <command> --help'"),
+        "subcommand help should not print the root subcommand hint: {plain}"
+    );
+    let root = help(&["--help"], &[]);
+    assert!(
+        root.ends_with("Run 'patchula <command> --help' for details on a command.\n"),
+        "{root}"
     );
     let refused = [("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")];
     assert_eq!(help(&["lookup", "--help"], &refused), plain);
@@ -379,17 +385,95 @@ fn lookup_requires_token_without_network_and_validates_concurrency() {
 }
 
 #[test]
-fn invalid_arguments_exit_two() {
-    for args in [
-        vec![],
-        vec!["config", "check"],
-        vec!["--color", "purple", "lookup"],
-        vec!["--unknown"],
+fn invalid_arguments_exit_two_with_inline_help_and_no_extra_help_step() {
+    let bare = cli(&[]);
+    assert_eq!(bare.status.code(), Some(2), "{bare:?}");
+    let stderr = String::from_utf8(bare.stderr).unwrap();
+    assert!(
+        stderr.contains("Usage: patchula") && stderr.contains("Commands:"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("choose a subcommand"), "{stderr}");
+
+    for (args, expected_help) in [
+        (
+            vec!["config", "check"],
+            "Usage: patchula config check <PATH>",
+        ),
+        (
+            vec!["--color", "purple", "lookup"],
+            "Usage: patchula lookup",
+        ),
+        (vec!["--unknown"], "Commands:"),
     ] {
         let output = cli(&args);
-        assert_eq!(output.status.code(), Some(2), "{output:?}");
-        assert!(!output.stderr.is_empty());
+        assert_eq!(output.status.code(), Some(2), "{args:?} {output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.starts_with("error:"), "{args:?}: {stderr}");
+        assert!(stderr.contains(expected_help), "{args:?}: {stderr}");
+        assert!(
+            !stderr.contains("For more information, try"),
+            "{args:?}: {stderr}"
+        );
     }
+
+    // Parse errors with --json emit JSON on stdout instead of human help on stderr.
+    for (args, expected) in [
+        (vec!["--json", "--unknown"], "--unknown"),
+        (vec!["apply", "--json", "--manager", "npn"], "npn"),
+        (vec!["--json"], "subcommand"),
+    ] {
+        let json_err = cli(&args);
+        assert_eq!(json_err.status.code(), Some(2), "{args:?} {json_err:?}");
+        assert!(json_err.stderr.is_empty(), "{args:?} {json_err:?}");
+        let value: serde_json::Value = serde_json::from_slice(&json_err.stdout).unwrap();
+        assert_eq!(value["exitCode"], 2, "{args:?} {value}");
+        assert!(
+            value["error"].as_str().unwrap().contains(expected),
+            "{args:?} {value}"
+        );
+    }
+
+    // --color=always forces ANSI styling on parse errors even when piped.
+    let coloured = Command::new(env!("CARGO_BIN_EXE_patchula"))
+        .args(["--color=always", "apply", "--manager", "npn"])
+        .env_remove("NO_COLOR")
+        .output()
+        .unwrap();
+    assert_eq!(coloured.status.code(), Some(2), "{coloured:?}");
+    let coloured_err = String::from_utf8(coloured.stderr).unwrap();
+    assert!(coloured_err.contains("\x1b["), "{coloured_err}");
+
+    // Plain post-parse errors use `error:` / `hint:` matching flag errors, not miette's `×`.
+    let plain_err = cli(&["tools", "prune", "--days", "0"]);
+    assert_eq!(plain_err.status.code(), Some(2), "{plain_err:?}");
+    let stderr = String::from_utf8(plain_err.stderr).unwrap();
+    assert_eq!(stderr.trim(), "error: --days must be at least 1");
+
+    // Plain errors with a help line render `error:` and `hint:`, and wrapped errors join causes with `: `.
+    let empty = tempfile::tempdir().unwrap();
+    let missing = Command::new(env!("CARGO_BIN_EXE_patchula"))
+        .arg("lookup")
+        .current_dir(empty.path())
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(2), "{missing:?}");
+    let stderr = String::from_utf8(missing.stderr).unwrap();
+    assert!(
+        stderr.starts_with("error: ")
+            && stderr.contains("has no patchula.pkl\nhint: pass --default-config"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("×"), "{stderr}");
+
+    let missing_file = cli(&["lookup", "--config", "does-not-exist.pkl", "owner/repo"]);
+    assert_eq!(missing_file.status.code(), Some(2), "{missing_file:?}");
+    let stderr = String::from_utf8(missing_file.stderr).unwrap();
+    assert!(
+        stderr.starts_with("error: ") && stderr.contains("does-not-exist.pkl"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("×"), "{stderr}");
 }
 
 #[test]
@@ -424,7 +508,12 @@ fn config_validation_and_json_results_use_documented_exit_codes() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("unknownPolicy") && stderr.contains("patchula.pkl"));
+    assert!(
+        stderr.contains("unknownPolicy")
+            && stderr.contains("patchula.pkl")
+            && stderr.contains("╭─["),
+        "{stderr}"
+    );
     assert!(!stderr.contains("\x1b["));
 
     let output = cli(&["config", "schema", "--json"]);
@@ -589,7 +678,7 @@ fn lookup_reads_the_working_tree_and_run_targets_github_unless_given_dir() {
     refused(
         dir,
         &["lookup", "--default-config", "demo/app"],
-        "--default-config is for the working tree",
+        "--default-config only applies to the local working tree",
     );
     refused(
         dir,

@@ -19,16 +19,13 @@ pub const PALETTE: Palette = Palette::DEFAULT
     .metavar("dim")
     .command("bold");
 
-/// Count Patchula vants to update your deps. A modern dependency updater with strong defaults.
-///
-/// Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error;
-/// `lookup`, `tui --once` and `apply` add 4 = a lookup failed; `apply` adds 3 = updates still waiting;
-/// `run` adds 5 = a repository changed during the run; run again.
+/// Dependency updates with strong defaults.
 #[derive(Cli)]
 #[usage(
     bin = "patchula",
     version,
     completion,
+    arg_required_else_help,
     unknown_flags = "error",
     logo = LOGO,
     logo_style = "bright-yellow",
@@ -42,11 +39,10 @@ pub const PALETTE: Palette = Palette::DEFAULT
 
 {{flags}}
 
-{{after_help}}
-
-{$dim+italic}Run 'patchula <command> --help' for more information on a command.{/$}",
-    example("patchula lookup", help = "Report updates for the checkout here"),
-    example("patchula tui", help = "Browse updates and apply the ones you pick"),
+{{after_help}}",
+    after_help = "Exit codes: 0 = success; 1 = runtime error; 2 = usage or configuration error; `lookup`, `tui --once`, and `apply` add 4 = a lookup failed; `apply` adds 3 = updates still waiting; `run` adds 5 = a repository changed during the run (run again).\n\nRun 'patchula <command> --help' for details on a command.",
+    example("patchula lookup", help = "Report updates for the current checkout"),
+    example("patchula tui", help = "Browse updates and apply selected ones"),
     example(
         "patchula apply --check",
         help = "Exit 3 in CI while updates are waiting"
@@ -57,7 +53,7 @@ pub const PALETTE: Palette = Palette::DEFAULT
     ),
     example(
         "patchula remote run",
-        help = "Run this checkout's repository on its Count server"
+        help = "Run this checkout's repository on its remote server"
     ),
     example(
         "patchula serve --settings settings.pkl",
@@ -65,17 +61,17 @@ pub const PALETTE: Palette = Palette::DEFAULT
     )
 )]
 pub struct App {
-    /// Show request counts and phase timings after a batch; repeat for debug logs.
+    /// Show cache details, request counts, and phase timings; repeat for debug logs.
     #[usage(short = 'v', long, count, global)]
     pub verbose: u8,
-    /// Control ANSI colors in diagnostics.
+    /// Control ANSI color in output.
     #[usage(long, value_enum, value_name = "WHEN", default = "auto", global)]
     pub color: Color,
     /// Emit command results and errors as JSON; configs stay Pkl.
     #[usage(long, global)]
     pub json: bool,
     #[usage(subcommand)]
-    pub command: Option<Command>,
+    pub command: Command,
 }
 
 /// `--type`'s value: an update kind, listed in rank order.
@@ -83,6 +79,17 @@ pub struct App {
 pub struct UpdateType(pub patchula_words::Update);
 impl usage_rs::spec::ValueEnum for UpdateType {
     const CHOICES: &'static [&'static str] = patchula_words::Update::WORDS;
+
+    fn from_choice(value: &str) -> Option<Self> {
+        value.parse().ok().map(Self)
+    }
+}
+
+/// `--manager`'s value: a known dependency manager.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManagerArg(pub patchula_words::Manager);
+impl usage_rs::spec::ValueEnum for ManagerArg {
+    const CHOICES: &'static [&'static str] = patchula_words::Manager::WORDS;
 
     fn from_choice(value: &str) -> Option<Self> {
         value.parse().ok().map(Self)
@@ -98,25 +105,25 @@ pub enum Color {
 
 #[derive(Subcommands)]
 pub enum Command {
-    /// Write available updates into the working tree here, without branches or pull requests.
+    /// Write available updates into the current working tree, without branches or pull requests.
     ///
     /// Exit codes: 0 = nothing selected is left to apply; 1 = runtime error; 2 = usage or
-    /// configuration error; 3 = selected updates are still waiting: `--check` or `--dry-run`
-    /// found some, or some could not be written in place; 4 = a dependency's lookup failed, so
+    /// configuration error; 3 = selected updates are still waiting (`--check` or `--dry-run`
+    /// found some, or some could not be written in place); 4 = a dependency's lookup failed, so
     /// its updates are unknown. 4 takes precedence over 3.
     #[usage(
-        example("patchula apply", help = "Write every available update here"),
+        example("patchula apply", help = "Write every available update"),
         example(
             "patchula apply --check",
             help = "Write nothing; exit 3 if updates are waiting"
         ),
         example(
             "patchula apply --dry-run --type patch",
-            help = "Show the patch updates as a diff"
+            help = "Show patch updates as a unified diff"
         ),
         example(
             "patchula apply --manager github-actions --dependency 'glob:actions/*'",
-            help = "Write only the actions/* updates"
+            help = "Write only actions/* updates"
         )
     )]
     Apply(Apply),
@@ -152,14 +159,14 @@ pub enum Command {
         )
     )]
     Config(Config),
-    /// Report available updates without writing; with no repository, reads the working tree here.
+    /// Report available updates without writing; omit repositories to scan the current working tree.
     #[usage(
-        example("patchula lookup", help = "Report updates for the checkout here"),
+        example("patchula lookup", help = "Report updates for the current checkout"),
         example(
             "patchula lookup acme/app acme/api",
             help = "Read two repositories through the API"
         ),
-        example("patchula lookup --json", help = "The same report, as JSON")
+        example("patchula lookup --json", help = "Emit the report as JSON")
     )]
     Lookup(Lookup),
     /// Run commands on a Count Patchula server with its credentials and warm caches.
@@ -205,7 +212,7 @@ pub enum Command {
         ),
         example(
             "patchula run --all-repos --config-dir overrides",
-            help = "Every repository the token reaches"
+            help = "Run every repository the token can reach"
         )
     )]
     Run(Run),
@@ -225,7 +232,7 @@ pub enum Command {
     #[usage(
         example(
             "patchula tools install",
-            help = "Install the pinned toolchains, e.g. in an image"
+            help = "Install pinned toolchains ahead of time (e.g. in an image)"
         ),
         example(
             "patchula tools prune --days 14",
@@ -233,9 +240,9 @@ pub enum Command {
         )
     )]
     Tools(Tools),
-    /// Browse dependencies and updates in the terminal; with no repository, apply selected updates to the working tree.
+    /// Browse dependencies and updates in the terminal; omit repositories to apply updates locally.
     #[usage(
-        example("patchula tui", help = "Pick updates and apply them here"),
+        example("patchula tui", help = "Pick updates and apply them locally"),
         example("patchula tui acme/app", help = "Browse a repository through the API"),
         example(
             "patchula tui --once",
@@ -323,7 +330,7 @@ pub struct Cache {
 
 #[derive(Subcommands)]
 pub enum CacheCommand {
-    /// Print the cache database schema this binary supports; it refuses a cache from a newer one.
+    /// Print the cache database schema supported by this binary; newer caches are refused.
     Schema,
 }
 
@@ -332,11 +339,10 @@ pub struct Serve {
     /// Operator settings file; also PATCHULA_SETTINGS.
     #[usage(long, value_name = "FILE")]
     pub settings: Option<PathBuf>,
-    /// Server bind address; also PATCHULA_LISTEN (default 127.0.0.1:8080).
+    /// Server bind address; also PATCHULA_LISTEN (default: 127.0.0.1:8080).
     #[usage(long, value_name = "ADDR")]
     pub listen: Option<std::net::SocketAddr>,
-    /// Server cache and queue directory; also PATCHULA_SERVER_CACHE. Default: `patchula/server`
-    /// in the user cache directory.
+    /// Server cache and queue directory; also PATCHULA_SERVER_CACHE (default: `patchula/server` in the user cache directory).
     #[usage(long, value_name = "DIR")]
     pub cache: Option<PathBuf>,
     /// GitHub App ID; also PATCHULA_APP_ID.
@@ -348,10 +354,10 @@ pub struct Serve {
     /// Webhook secret file; also PATCHULA_WEBHOOK_SECRET_FILE.
     #[usage(long, value_name = "FILE")]
     pub webhook_secret_file: Option<PathBuf>,
-    /// Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default 60).
+    /// Graceful server drain deadline; also PATCHULA_SHUTDOWN_TIMEOUT_SECS (default: 60).
     #[usage(long, value_name = "SECS")]
     pub shutdown_timeout_secs: Option<u64>,
-    /// When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: now.
+    /// When a ticked PR or dashboard checkbox takes effect; also PATCHULA_RECHECK (default: now).
     #[usage(long, choices("now", "next-run"), value_name = "WHEN")]
     pub recheck: Option<patchula_words::Recheck>,
 }
@@ -381,7 +387,7 @@ pub enum ToolsCommand {
 
 #[derive(Args)]
 pub struct ToolStore {
-    /// Cache directory, holding the tool store. Default: `patchula` in the user cache directory.
+    /// Cache directory holding the tool store (default: `patchula` in the user cache directory).
     #[usage(long, value_name = "DIR")]
     pub cache: Option<PathBuf>,
 }
@@ -400,7 +406,7 @@ pub struct Run {
     /// Repositories as owner/repo, read through the GitHub API; omit for this checkout's GitHub repository.
     #[usage(value_name = "OWNER/REPO")]
     pub repositories: Vec<String>,
-    /// Process every repository the token can reach instead of naming them.
+    /// Scan every repository the token can reach.
     #[usage(long)]
     pub all_repos: bool,
     #[usage(flatten)]
@@ -412,23 +418,23 @@ pub struct Run {
     /// Plan branches and diffs from a local directory instead of GitHub; requires `--dry-run`.
     #[usage(long, value_name = "DIR")]
     pub dir: Option<PathBuf>,
-    /// When a ticked checkbox says it takes effect; also PATCHULA_RECHECK. Default: next-run.
+    /// When a ticked PR or dashboard checkbox takes effect; also PATCHULA_RECHECK (default: next-run).
     #[usage(long, choices("now", "next-run"), value_name = "WHEN")]
     pub recheck: Option<patchula_words::Recheck>,
     /// Print planned branches, files and unified diffs without writing to GitHub.
     #[usage(long)]
     pub dry_run: bool,
-    /// For testing: write manifest-only branches for binary `bun.lockb` lockfiles, which can't be regenerated.
-    #[usage(long)]
+    /// Write manifest-only branches for binary `bun.lockb` lockfiles, which can't be regenerated.
+    #[usage(long, hide)]
     pub allow_lockfile_pending: bool,
 }
 
 #[derive(Args)]
 pub struct Lookup {
-    /// Repositories as owner/repo, read through the GitHub API; omit for the checkout here.
+    /// Repositories as owner/repo, read through the GitHub API; omit for the current checkout.
     #[usage(value_name = "OWNER/REPO")]
     pub repositories: Vec<String>,
-    /// Process every repository the token can reach instead of naming them.
+    /// Scan every repository the token can reach.
     #[usage(long)]
     pub all_repos: bool,
     #[usage(flatten)]
@@ -437,43 +443,56 @@ pub struct Lookup {
     /// repositories use their own `patchula.pkl`, or are skipped without one. Conflicts with `--config`.
     #[usage(long, value_name = "DIR", conflicts = "--config")]
     pub config_dir: Option<PathBuf>,
-    /// Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.
+    /// Use default configuration when the working tree has no `patchula.pkl`, instead of prompting.
     /// Conflicts with `--config` and `--config-dir`.
     #[usage(long)]
     pub default_config: bool,
 }
 
-/// How the Count reads and looks up on this machine.
+/// Shared scan flags for commands that can target multiple repositories.
 #[derive(Args, Clone)]
 pub struct Scan {
-    /// Cache directory, shared by every checkout. Default: `patchula` in the user cache directory
-    /// (`~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`).
+    /// Cache directory, shared across checkouts (default: `patchula` in the user cache directory:
+    /// `~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`).
     #[usage(long, value_name = "DIR")]
     pub cache: Option<PathBuf>,
-    /// Operator settings file; also PATCHULA_SETTINGS. Default: `patchula/settings.pkl` in the
-    /// user config directory (`XDG_CONFIG_HOME` or `~/.config`), when it exists.
+    /// Operator settings file; also PATCHULA_SETTINGS (default: `patchula/settings.pkl` in
+    /// `XDG_CONFIG_HOME` or `~/.config`, when present).
     #[usage(long, value_name = "FILE")]
     pub settings: Option<PathBuf>,
     /// Maximum concurrent repository scans (1–100), overriding the settings file; HTTP limits
-    /// are per host. Default: 8.
+    /// are per host (default: 8).
     #[usage(long, value_name = "N")]
     pub concurrency: Option<usize>,
-    /// Local Pkl override applied to every selected repository.
+    /// Local Pkl config override applied to every selected repository.
     #[usage(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
 }
 
 #[derive(Args)]
 pub struct Apply {
-    #[usage(flatten)]
-    pub scan: Scan,
-    /// Use the Count's defaults when the working tree has no `patchula.pkl`, instead of asking.
+    /// Cache directory, shared across checkouts (default: `patchula` in the user cache directory:
+    /// `~/Library/Caches` on macOS, else `XDG_CACHE_HOME` or `~/.cache`).
+    #[usage(long, value_name = "DIR")]
+    pub cache: Option<PathBuf>,
+    /// Operator settings file; also PATCHULA_SETTINGS (default: `patchula/settings.pkl` in
+    /// `XDG_CONFIG_HOME` or `~/.config`, when present).
+    #[usage(long, value_name = "FILE")]
+    pub settings: Option<PathBuf>,
+    /// Maximum concurrency (1–100), overriding the settings file; HTTP limits are per host
+    /// (default: 8).
+    #[usage(long, value_name = "N")]
+    pub concurrency: Option<usize>,
+    /// Local Pkl config file to use instead of the working tree's `patchula.pkl`.
+    #[usage(long, value_name = "FILE")]
+    pub config: Option<PathBuf>,
+    /// Use default configuration when the working tree has no `patchula.pkl`, instead of prompting.
     /// Conflicts with `--config`.
     #[usage(long)]
     pub default_config: bool,
-    /// Only updates from this manager, such as github-actions; repeat for more.
-    #[usage(long, value_name = "MANAGER")]
-    pub manager: Vec<String>,
+    /// Only updates from this manager; repeat for more.
+    #[usage(long, value_enum, value_name = "MANAGER")]
+    pub manager: Vec<ManagerArg>,
     /// Only dependencies matching this name or package, with config's `glob:`, `regex:` and `!`; repeat for more.
     #[usage(long, value_name = "PATTERN")]
     pub dependency: Vec<String>,
@@ -486,19 +505,28 @@ pub struct Apply {
     /// Write nothing; exit 3 if any selected update is waiting, or 4 if a lookup failed.
     #[usage(long)]
     pub check: bool,
-    /// Also run your own `copier update` for each selected template, before the other updates.
-    ///
-    /// The template's code runs on this machine as you. The tree must be clean, the Count
-    /// never passes `--trust`, and copier asks its questions on the terminal.
+    /// Also run `copier update` for each selected template before other updates. Template code
+    /// runs locally as you; the tree must be clean and `--trust` is never passed.
     #[usage(long, conflicts = "--dry-run")]
     pub copier: bool,
-    /// With `--copier`, take the defaults for questions copier would ask, for use without a terminal.
+    /// With `--copier`, take default answers for copier prompts, for use without a terminal.
     #[usage(long)]
     pub copier_defaults: bool,
     #[usage(hide)]
     pub repositories: Vec<String>,
     #[usage(long, hide)]
     pub all_repos: bool,
+}
+
+impl Apply {
+    pub fn scan(&self) -> Scan {
+        Scan {
+            cache: self.cache.clone(),
+            settings: self.settings.clone(),
+            concurrency: self.concurrency,
+            config: self.config.clone(),
+        }
+    }
 }
 
 #[derive(Args)]
@@ -560,7 +588,26 @@ mod tests {
         );
         assert!(pages.contains("\x1b[1m--dry-run\x1b[0m"));
         assert!(pages.contains("\x1b[2m<MANAGER>\x1b[0m"));
-        assert!(pages.contains("\x1b[2;3mRun 'patchula <command> --help'"));
+        let root = render_at_styled(App::spec(), &[App::command()], true, style).unwrap();
+        assert!(root.contains("Run 'patchula <command> --help'"));
+        let lookup = render_at_styled(
+            App::spec(),
+            &[
+                App::command(),
+                App::command()
+                    .subcommands
+                    .iter()
+                    .find(|c| c.name == "lookup")
+                    .unwrap(),
+            ],
+            true,
+            style,
+        )
+        .unwrap();
+        assert!(
+            !lookup.contains("Run 'patchula <command> --help'"),
+            "leaf commands must not print the root subcommand hint"
+        );
     }
 
     #[test]
@@ -576,7 +623,7 @@ mod tests {
             .map(std::ffi::OsStr::new),
         )
         .unwrap();
-        let Some(Command::Serve(serve)) = &app.command else {
+        let Command::Serve(serve) = &app.command else {
             panic!("serve")
         };
         assert_eq!(
@@ -587,7 +634,7 @@ mod tests {
         let app =
             App::parse_from(&["run", "--recheck", "now", "owner/repo"].map(std::ffi::OsStr::new))
                 .unwrap();
-        let Some(Command::Run(run)) = &app.command else {
+        let Command::Run(run) = &app.command else {
             panic!("run")
         };
         assert_eq!(run.recheck, Some(patchula_words::Recheck::Now));
@@ -626,13 +673,13 @@ mod tests {
         .map(std::ffi::OsStr::new);
         let app = App::parse_from(&words).unwrap();
         assert!(app.json);
-        let Some(Command::Lookup(options)) = app.command else {
+        let Command::Lookup(options) = app.command else {
             panic!("lookup")
         };
         assert_eq!(options.repositories, vec!["acme/runner"]);
         assert_eq!(options.scan.concurrency, Some(4));
         let app = App::parse_from(&[std::ffi::OsStr::new("lookup")]).unwrap();
-        let Some(Command::Lookup(options)) = app.command else {
+        let Command::Lookup(options) = app.command else {
             panic!("lookup")
         };
         assert!(options.repositories.is_empty());
@@ -648,7 +695,7 @@ mod tests {
         ]
         .map(std::ffi::OsStr::new);
         let app = App::parse_from(&words).unwrap();
-        let Some(Command::Lookup(options)) = app.command else {
+        let Command::Lookup(options) = app.command else {
             panic!("lookup")
         };
         assert_eq!(options.repositories, ["owner/repo"]);
@@ -675,7 +722,7 @@ mod tests {
         ]
         .map(std::ffi::OsStr::new);
         let app = App::parse_from(&words).unwrap();
-        let Some(Command::Apply(apply)) = app.command else {
+        let Command::Apply(apply) = app.command else {
             panic!("apply")
         };
         assert_eq!(
@@ -685,7 +732,10 @@ mod tests {
                 UpdateType(patchula_words::Update::Digest)
             ]
         );
-        assert_eq!(apply.manager, ["github-actions"]);
+        assert_eq!(
+            apply.manager,
+            [ManagerArg(patchula_words::Manager::GithubActions)]
+        );
         assert_eq!(apply.dependency, ["glob:actions/*"]);
         assert!(apply.check && !apply.dry_run);
     }
@@ -703,7 +753,7 @@ mod tests {
             "--once",
         ]))
         .unwrap();
-        let Some(Command::Remote(remote)) = app.command else {
+        let Command::Remote(remote) = app.command else {
             panic!("remote")
         };
         let RemoteCommand::Tui(tui) = remote.command else {
@@ -721,7 +771,7 @@ mod tests {
             "acme/app",
         ]))
         .unwrap();
-        let Some(Command::Remote(remote)) = app.command else {
+        let Command::Remote(remote) = app.command else {
             panic!("remote")
         };
         let RemoteCommand::Run(run) = remote.command else {

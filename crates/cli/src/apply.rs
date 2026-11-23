@@ -12,8 +12,9 @@ use std::{
 /// Some selected updates are still waiting after the command.
 const WAITING: u8 = 3;
 
-/// Diffs go to `out` and the summary to `err`, drawn in `style`, so a dry
-/// run's output is a patch.
+/// Normal `apply` and `--check` summaries go to `out`. With `--dry-run`,
+/// unified diffs go to `out` and the summary goes to `err` so `out` stays a
+/// clean patch.
 pub async fn command(
     app: &cli::App,
     options: &cli::Apply,
@@ -22,55 +23,45 @@ pub async fn command(
     err: &mut dyn Write,
     style: &Style,
 ) -> Result<u8, (u8, miette::Report)> {
-    let usage = |message: String| {
-        (
+    if !options.repositories.is_empty() || options.all_repos {
+        return Err((
             crate::USAGE,
             miette::miette!(
                 help = "patchula apply only writes the working tree in the current directory",
-                "{message}"
+                "patchula apply takes no {}; for GitHub repositories, `patchula run` opens pull requests",
+                if options.all_repos {
+                    "--all-repos"
+                } else {
+                    "repository"
+                }
             ),
-        )
-    };
-    if !options.repositories.is_empty() || options.all_repos {
-        return Err(usage(format!(
-            "patchula apply takes no {}; for GitHub repositories, `patchula run` opens pull requests",
-            if options.all_repos {
-                "--all-repos"
-            } else {
-                "repository"
-            }
-        )));
+        ));
     }
     if options.copier && (options.check || app.json) {
-        return Err(usage(format!(
+        return Err(crate::usage(format!(
             "--copier cannot run with {}: copier writes the tree and talks on the terminal",
             if options.check { "--check" } else { "--json" }
         )));
     }
     if options.copier_defaults && !options.copier {
-        return Err(usage("--copier-defaults only goes with --copier".into()));
+        return Err(crate::usage("--copier-defaults requires --copier"));
     }
-    let managers: Vec<Manager> = options
-        .manager
-        .iter()
-        .map(|manager| {
-            manager.parse().map_err(|_| {
-                (crate::USAGE, miette::miette!(help = "the managers are listed at https://count-patchula.sweepy.dev/guide/managers/",
-                        "--manager {manager} is not a known manager"))
-            })
-        })
-        .collect::<Result<_, _>>()?;
+    let managers: Vec<Manager> = options.manager.iter().map(|m| m.0).collect();
     let names = patchula_config::Patterns::compile(&options.dependency)
         .map_err(|e| crate::usage(format!("--dependency: {e}")))?;
     let types = &options.update_type;
     let lookup = cli::Lookup {
         repositories: Vec::new(),
         all_repos: false,
-        scan: options.scan.clone(),
+        scan: options.scan(),
         config_dir: None,
         default_config: options.default_config,
     };
-    let (report, read) = crate::report(app, crate::Batch::Lookup(&lookup), services).await?;
+    let Some((report, read)) =
+        crate::report(app, crate::Batch::Lookup(&lookup), services, false).await?
+    else {
+        return Ok(crate::USAGE);
+    };
     let crate::Read::Checkout(checkout) = read else {
         return Err(crate::fail("the lookup did not read the working tree"));
     };
@@ -221,27 +212,26 @@ pub async fn command(
     crate::output::warnings(&mut text, style, 0, &warnings);
     let mut notes = Vec::new();
     if !options.copier && !template_notices.is_empty() {
-        notes.push(
-            "Only copier applies template updates; patchula apply --copier runs it for them."
-                .to_owned(),
-        );
+        notes.push("Run `patchula apply --copier` to apply template updates with copier.".into());
     }
     if filtered > 0 {
-        notes.push(format!(
-            "{} stayed out of it, by your filters.",
-            count(filtered, "more update", "more updates")
-        ));
+        let label = if applied.is_empty() && skipped.is_empty() {
+            count(filtered, "update", "updates")
+        } else {
+            count(filtered, "other update", "other updates")
+        };
+        let verb = if filtered == 1 { "was" } else { "were" };
+        notes.push(format!("{label} {verb} excluded by your filters."));
     }
-    if !failures.is_empty() {
+    if !failures.is_empty() && (!applied.is_empty() || !skipped.is_empty()) {
         notes.push(format!(
-            "{} failed, so those dependencies may have updates the Count cannot see.",
+            "{} failed, so some updates may be missing.",
             count(failures.len(), "lookup", "lookups")
         ));
     }
     if applied.iter().any(|u| u.locked) {
-        notes.push(
-            "Lockfiles are not regenerated, so refresh them with your package manager.".into(),
-        );
+        notes
+            .push("Lockfiles were not regenerated; refresh them with your package manager.".into());
     }
     if !notes.is_empty() {
         text.push('\n');
@@ -249,7 +239,11 @@ pub async fn command(
             style.wrap(&mut text, 0, &note, Paint::Dim);
         }
     }
-    write!(err, "{text}").map_err(fail)?;
+    if options.dry_run {
+        write!(err, "{text}").map_err(fail)?;
+    } else {
+        write!(out, "{text}").map_err(fail)?;
+    }
     Ok(code)
 }
 
@@ -292,7 +286,7 @@ fn templates(
 }
 
 /// What the Count did, or would do, in his own words: the headline with its
-/// counts, then the updates applied and those left alone.
+/// counts, then the updates applied and those skipped.
 fn summary(
     style: &Style,
     options: &cli::Apply,
@@ -313,9 +307,12 @@ fn summary(
     };
     let writes = !options.check && !options.dry_run;
     let headline = if applied.is_empty() && skipped.is_empty() && failed > 0 {
-        "The Count found nothing to apply, but only because some lookups failed.".to_owned()
+        format!(
+            "The Count found nothing to apply, though {} failed.",
+            count(failed, "lookup", "lookups")
+        )
     } else if applied.is_empty() && skipped.is_empty() && warned {
-        "The Count found nothing to apply, but read the warnings first: a failed lookup finds nothing either.".to_owned()
+        "The Count found nothing to apply; check the warnings below.".to_owned()
     } else if applied.is_empty() && skipped.is_empty() {
         "The Count found nothing to apply. Rest easy.".to_owned()
     } else if applied.is_empty() {
@@ -332,14 +329,9 @@ fn summary(
         let files = count(files, "file", "files");
         let n = updates(applied.len());
         if options.check {
-            let verb = if applied.len() == 1 {
-                "awaits"
-            } else {
-                "await"
-            };
-            format!("{n} {verb} in {files}. The Count wrote nothing.")
+            format!("The Count found {n} waiting in {files} (nothing written).")
         } else if options.dry_run {
-            format!("The Count would apply {n} to {files}, but wrote nothing.")
+            format!("The Count would apply {n} to {files} (nothing written).")
         } else {
             format!("The Count applied {n} to {files}.")
         }
@@ -354,7 +346,7 @@ fn summary(
     let rows: Vec<_> = applied.iter().map(|u| row(u)).collect();
     style.table(&mut out, 2, &rows, 3);
     if !skipped.is_empty() {
-        style.heading(&mut out, 0, "Left alone", skipped.len(), Paint::Warning);
+        style.heading(&mut out, 0, "Skipped", skipped.len(), Paint::Warning);
         let rows: Vec<_> = skipped.iter().map(|(u, _)| row(u)).collect();
         for (line, (_, reason)) in style.lines(2, &rows, 3).iter().zip(skipped) {
             out.push_str(line);
