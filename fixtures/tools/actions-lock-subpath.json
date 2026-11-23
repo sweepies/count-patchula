@@ -47,7 +47,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:41 GMT"
+            "Mon, 23 Nov 2026 19:48:07 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -71,13 +71,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81E0:3534:99E19A:E87FF9:6AF756D9"
+            "C9CC:2A7EFA:3771A:61D47:6B049877"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -86,16 +86,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4855"
+            "4907"
           ],
           "x-ratelimit-reset": [
-            "1794595595"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "145"
+            "93"
           ],
           "x-xss-protection": [
             "0"
@@ -186,7 +186,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:41 GMT"
+            "Mon, 23 Nov 2026 19:48:07 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -210,13 +210,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81E0:3534:99E547:E8859F:6AF756D9"
+            "C9CC:2A7EFA:37736:61D6F:6B049877"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -225,16 +225,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4853"
+            "4906"
           ],
           "x-ratelimit-reset": [
-            "1794595595"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "147"
+            "94"
           ],
           "x-xss-protection": [
             "0"
@@ -306,13 +306,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:42 GMT"
+            "Mon, 23 Nov 2026 19:48:08 GMT"
           ],
           "etag": [
             "W/\"886c578fc2f5175ab5a9aed46c4082e4bec6772e83cb5a147cb674e676f76b39\""
           ],
           "last-modified": [
-            "Fri, 13 Nov 2026 14:01:40 GMT"
+            "Mon, 23 Nov 2026 15:23:52 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -339,13 +339,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81E0:3534:99E8C5:E88B29:6AF756D9"
+            "C9CC:2A7EFA:3774F:61D9A:6B049877"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -354,16 +354,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4977"
+            "4897"
           ],
           "x-ratelimit-reset": [
-            "1794597892"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "23"
+            "103"
           ],
           "x-xss-protection": [
             "0"
@@ -1245,7 +1245,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:42 GMT"
+            "Mon, 23 Nov 2026 19:48:08 GMT"
           ],
           "etag": [
             "W/\"54fe92d33d0ecd29a8ba2bd266b8bb550389681d3b84a052b0073204480fe3f1\""
@@ -1278,13 +1278,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81E0:3534:99EC36:E89050:6AF756DA"
+            "C9CC:2A7EFA:3775E:61DAD:6B049878"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -1293,16 +1293,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4975"
+            "4896"
           ],
           "x-ratelimit-reset": [
-            "1794597892"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "25"
+            "104"
           ],
           "x-xss-protection": [
             "0"
@@ -2972,13 +2972,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:43 GMT"
+            "Mon, 23 Nov 2026 19:48:09 GMT"
           ],
           "etag": [
-            "W/\"55583c3f53db78d0be5e68e3fc7a9e1660ade7569c25155773c50c9b27bb1e3e\""
+            "W/\"0c6a7aa649425ca0b6e2fb82ab75858e8f6bc2d530fdf84ddba9513d4624aadd\""
           ],
           "last-modified": [
-            "Fri, 13 Nov 2026 14:01:40 GMT"
+            "Mon, 23 Nov 2026 15:23:52 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -3005,13 +3005,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81E0:3534:99F0A6:E896E6:6AF756DA"
+            "C9CC:2A7EFA:37779:61DE4:6B049878"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -3020,16 +3020,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4972"
+            "4894"
           ],
           "x-ratelimit-reset": [
-            "1794597892"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "28"
+            "106"
           ],
           "x-xss-protection": [
             "0"
@@ -3060,8 +3060,8 @@
             "downloads_url": "https://api.github.com/repos/actions/cache/downloads",
             "events_url": "https://api.github.com/repos/actions/cache/events",
             "fork": false,
-            "forks": 1614,
-            "forks_count": 1614,
+            "forks": 1620,
+            "forks_count": 1620,
             "forks_url": "https://api.github.com/repos/actions/cache/forks",
             "full_name": "actions/cache",
             "git_commits_url": "https://api.github.com/repos/actions/cache/git/commits%7B/sha%7D",
@@ -3098,11 +3098,11 @@
             "milestones_url": "https://api.github.com/repos/actions/cache/milestones%7B/number%7D",
             "mirror_url": null,
             "name": "cache",
-            "network_count": 1614,
+            "network_count": 1620,
             "node_id": "MDEwOlJlcG9zaXRvcnkyMTU1NjY0NjI=",
             "notifications_url": "https://api.github.com/repos/actions/cache/notifications%7B?since%2Call%2Cparticipating%7D=",
-            "open_issues": 242,
-            "open_issues_count": 242,
+            "open_issues": 243,
+            "open_issues_count": 243,
             "organization": {
               "avatar_url": "https://avatars.githubusercontent.com/u/44036562?v=4",
               "events_url": "https://api.github.com/users/actions/events%7B/privacy%7D",
@@ -3159,7 +3159,7 @@
             "releases_url": "https://api.github.com/repos/actions/cache/releases%7B/id%7D",
             "size": 34125,
             "ssh_url": "git@github.com:actions/cache.git",
-            "stargazers_count": 5597,
+            "stargazers_count": 5605,
             "stargazers_url": "https://api.github.com/repos/actions/cache/stargazers",
             "statuses_url": "https://api.github.com/repos/actions/cache/statuses/%7Bsha%7D",
             "subscribers_count": 124,
@@ -3171,11 +3171,11 @@
             "temp_clone_token": "[REDACTED]",
             "topics": [],
             "trees_url": "https://api.github.com/repos/actions/cache/git/trees%7B/sha%7D",
-            "updated_at": "2026-11-13T14:01:40Z",
+            "updated_at": "2026-11-23T15:23:52Z",
             "url": "https://api.github.com/repos/actions/cache",
             "visibility": "public",
-            "watchers": 5597,
-            "watchers_count": 5597,
+            "watchers": 5605,
+            "watchers_count": 5605,
             "web_commit_signoff_required": false
           }
         }

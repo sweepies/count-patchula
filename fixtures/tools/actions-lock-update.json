@@ -47,7 +47,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 22:17:46 GMT"
+            "Mon, 23 Nov 2026 19:48:11 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -77,7 +77,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "8C12:27D1AC:157526:2626B5:6AF78C8A"
+            "CA02:2F8997:387C7:632E9:6B04987B"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -86,16 +86,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4916"
+            "4896"
           ],
           "x-ratelimit-reset": [
-            "1794610102"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "84"
+            "104"
           ],
           "x-xss-protection": [
             "0"
@@ -186,7 +186,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 22:17:47 GMT"
+            "Mon, 23 Nov 2026 19:48:11 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -216,7 +216,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "8C12:27D1AC:157545:2626ED:6AF78C8A"
+            "CA02:2F8997:387E0:63314:6B04987B"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -225,16 +225,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4915"
+            "4895"
           ],
           "x-ratelimit-reset": [
-            "1794610102"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "85"
+            "105"
           ],
           "x-xss-protection": [
             "0"
@@ -306,13 +306,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 22:17:47 GMT"
+            "Mon, 23 Nov 2026 19:48:12 GMT"
           ],
           "etag": [
             "W/\"0b0ba7b8679105501668a0b41def299b95d15cfb2a61ca31e2653262eb093898\""
           ],
           "last-modified": [
-            "Fri, 13 Nov 2026 18:40:43 GMT"
+            "Mon, 23 Nov 2026 16:34:31 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -345,7 +345,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "8C12:27D1AC:157575:262733:6AF78C8B"
+            "CA02:2F8997:38802:63341:6B04987C"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -354,16 +354,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4994"
+            "4882"
           ],
           "x-ratelimit-reset": [
-            "1794610138"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "6"
+            "118"
           ],
           "x-xss-protection": [
             "0"
@@ -1095,10 +1095,10 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 22:17:47 GMT"
+            "Mon, 23 Nov 2026 19:48:12 GMT"
           ],
           "etag": [
-            "W/\"199540797292b22461ca89e79e3c1176f01332d41f86bbd1ea112a4d4afb3ebb\""
+            "W/\"8778536830ae0ed4a1199491dd0316046b1bdc4ee823e8c0c60cdd980f752ac4\""
           ],
           "link": [
             "<https://api.github.com/repositories/197814629/releases?per_page=30&page=2>; rel=\"next\", <https://api.github.com/repositories/197814629/releases?per_page=30&page=2>; rel=\"last\""
@@ -1134,7 +1134,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "8C12:27D1AC:15758E:26275E:6AF78C8B"
+            "CA02:2F8997:38822:6336D:6B04987C"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -1143,16 +1143,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4993"
+            "4881"
           ],
           "x-ratelimit-reset": [
-            "1794610138"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "7"
+            "119"
           ],
           "x-xss-protection": [
             "0"
@@ -1197,15 +1197,15 @@
               "prerelease": false,
               "published_at": "2026-07-20T15:10:05Z",
               "reactions": {
-                "+1": 8,
+                "+1": 10,
                 "-1": 0,
                 "confused": 0,
                 "eyes": 5,
-                "heart": 0,
-                "hooray": 11,
+                "heart": 2,
+                "hooray": 12,
                 "laugh": 0,
-                "rocket": 2,
-                "total_count": 26,
+                "rocket": 4,
+                "total_count": 33,
                 "url": "https://api.github.com/repos/actions/checkout/releases/356804776/reactions"
               },
               "tag_name": "v7.0.1",

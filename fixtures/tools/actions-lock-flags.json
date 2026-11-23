@@ -49,7 +49,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:41 GMT"
+            "Mon, 23 Nov 2026 19:48:06 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -73,13 +73,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81BE:3534:99E199:E87FF7:6AF756D9"
+            "C9B2:C9F7F:34FAF:5F623:6B049875"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -88,16 +88,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4838"
+            "4915"
           ],
           "x-ratelimit-reset": [
-            "1794595165"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "162"
+            "85"
           ],
           "x-xss-protection": [
             "0"
@@ -177,7 +177,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Fri, 13 Nov 2026 18:28:41 GMT"
+            "Mon, 23 Nov 2026 19:48:06 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -201,13 +201,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "81C4:268689:F538FB:1702816:6AF756D9"
+            "C9B2:C9F7F:34FAF:5F624:6B049875"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -216,16 +216,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4854"
+            "4968"
           ],
           "x-ratelimit-reset": [
-            "1794595595"
+            "1795466078"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "146"
+            "32"
           ],
           "x-xss-protection": [
             "0"

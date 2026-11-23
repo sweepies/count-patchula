@@ -47,7 +47,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:35 GMT"
+            "Mon, 23 Nov 2026 19:48:09 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -71,13 +71,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5AEAC:12F0AEE:6AF7C626"
+            "C9F4:A7D1C:36FEC:618C1:6B049879"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -86,16 +86,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4732"
+            "4902"
           ],
           "x-ratelimit-reset": [
-            "1794624562"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "268"
+            "98"
           ],
           "x-xss-protection": [
             "0"
@@ -189,7 +189,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:35 GMT"
+            "Mon, 23 Nov 2026 19:48:09 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -213,13 +213,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5B135:12F0EEC:6AF7C627"
+            "C9F4:A7D1C:37004:618EF:6B049879"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -228,16 +228,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4731"
+            "4965"
           ],
           "x-ratelimit-reset": [
-            "1794624562"
+            "1795466078"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "269"
+            "35"
           ],
           "x-xss-protection": [
             "0"
@@ -358,7 +358,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:36 GMT"
+            "Mon, 23 Nov 2026 19:48:10 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -382,13 +382,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5B41E:12F1374:6AF7C627"
+            "C9F4:A7D1C:3701E:61920:6B04987A"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -397,16 +397,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4730"
+            "4963"
           ],
           "x-ratelimit-reset": [
-            "1794624562"
+            "1795466078"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "270"
+            "37"
           ],
           "x-xss-protection": [
             "0"
@@ -523,7 +523,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:36 GMT"
+            "Mon, 23 Nov 2026 19:48:10 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -547,13 +547,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5B779:12F1841:6AF7C628"
+            "C9F4:A7D1C:3703F:61962:6B04987A"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -562,16 +562,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4728"
+            "4898"
           ],
           "x-ratelimit-reset": [
-            "1794624562"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "272"
+            "102"
           ],
           "x-xss-protection": [
             "0"
@@ -688,7 +688,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:36 GMT"
+            "Mon, 23 Nov 2026 19:48:11 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -712,13 +712,13 @@
             "deny"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5B76E:12F1831:6AF7C628"
+            "C9F4:A7D1C:3703F:61963:6B04987A"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -727,16 +727,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4729"
+            "4897"
           ],
           "x-ratelimit-reset": [
-            "1794624562"
+            "1795465792"
           ],
           "x-ratelimit-resource": [
             "graphql"
           ],
           "x-ratelimit-used": [
-            "271"
+            "103"
           ],
           "x-xss-protection": [
             "0"
@@ -898,7 +898,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:37 GMT"
+            "Mon, 23 Nov 2026 19:48:11 GMT"
           ],
           "etag": [
             "W/\"2d39db65975a997f1892b210757b42e600874be96ef5547e7542a79a012367fb\""
@@ -934,13 +934,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5BB86:12F1EFC:6AF7C628"
+            "C9F4:A7D1C:37068:619A1:6B04987B"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -949,16 +949,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4806"
+            "4885"
           ],
           "x-ratelimit-reset": [
-            "1794623374"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "194"
+            "115"
           ],
           "x-xss-protection": [
             "0"
@@ -1267,13 +1267,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:37 GMT"
+            "Mon, 23 Nov 2026 19:48:12 GMT"
           ],
           "etag": [
-            "W/\"fe45ca34b8371d1153d458f85b5a1c896ec59b2c5fdcad0255ea907358e18ce1\""
+            "W/\"f79bf3e5b89459d26f7f2aba0907ca20e6a921162ea610b51fd2d59aa1fb9d83\""
           ],
           "last-modified": [
-            "Mon, 09 Nov 2026 17:40:39 GMT"
+            "Fri, 20 Nov 2026 20:17:37 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -1300,13 +1300,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5BF4F:12F2475:6AF7C629"
+            "C9F4:A7D1C:3708A:619D0:6B04987B"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -1315,16 +1315,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4805"
+            "4883"
           ],
           "x-ratelimit-reset": [
-            "1794623374"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "195"
+            "117"
           ],
           "x-xss-protection": [
             "0"
@@ -1355,8 +1355,8 @@
             "downloads_url": "https://api.github.com/repos/actions/attest-build-provenance/downloads",
             "events_url": "https://api.github.com/repos/actions/attest-build-provenance/events",
             "fork": false,
-            "forks": 871,
-            "forks_count": 871,
+            "forks": 872,
+            "forks_count": 872,
             "forks_url": "https://api.github.com/repos/actions/attest-build-provenance/forks",
             "full_name": "actions/attest-build-provenance",
             "git_commits_url": "https://api.github.com/repos/actions/attest-build-provenance/git/commits%7B/sha%7D",
@@ -1393,7 +1393,7 @@
             "milestones_url": "https://api.github.com/repos/actions/attest-build-provenance/milestones%7B/number%7D",
             "mirror_url": null,
             "name": "attest-build-provenance",
-            "network_count": 871,
+            "network_count": 872,
             "node_id": "R_kgDOLVdnJQ",
             "notifications_url": "https://api.github.com/repos/actions/attest-build-provenance/notifications%7B?since%2Call%2Cparticipating%7D=",
             "open_issues": 7,
@@ -1454,10 +1454,10 @@
             "releases_url": "https://api.github.com/repos/actions/attest-build-provenance/releases%7B/id%7D",
             "size": 3557,
             "ssh_url": "git@github.com:actions/attest-build-provenance.git",
-            "stargazers_count": 1075,
+            "stargazers_count": 1076,
             "stargazers_url": "https://api.github.com/repos/actions/attest-build-provenance/stargazers",
             "statuses_url": "https://api.github.com/repos/actions/attest-build-provenance/statuses/%7Bsha%7D",
-            "subscribers_count": 70,
+            "subscribers_count": 71,
             "subscribers_url": "https://api.github.com/repos/actions/attest-build-provenance/subscribers",
             "subscription_url": "https://api.github.com/repos/actions/attest-build-provenance/subscription",
             "svn_url": "https://github.com/actions/attest-build-provenance",
@@ -1486,8 +1486,8 @@
               "downloads_url": "https://api.github.com/repos/actions/typescript-action/downloads",
               "events_url": "https://api.github.com/repos/actions/typescript-action/events",
               "fork": false,
-              "forks": 581,
-              "forks_count": 581,
+              "forks": 582,
+              "forks_count": 582,
               "forks_url": "https://api.github.com/repos/actions/typescript-action/forks",
               "full_name": "actions/typescript-action",
               "git_commits_url": "https://api.github.com/repos/actions/typescript-action/git/commits%7B/sha%7D",
@@ -1526,8 +1526,8 @@
               "name": "typescript-action",
               "node_id": "MDEwOlJlcG9zaXRvcnkxOTM1NTgzMTk=",
               "notifications_url": "https://api.github.com/repos/actions/typescript-action/notifications%7B?since%2Call%2Cparticipating%7D=",
-              "open_issues": 23,
-              "open_issues_count": 23,
+              "open_issues": 22,
+              "open_issues_count": 22,
               "owner": {
                 "avatar_url": "https://avatars.githubusercontent.com/u/44036562?v=4",
                 "events_url": "https://api.github.com/users/actions/events%7B/privacy%7D",
@@ -1578,7 +1578,7 @@
                 "typescript"
               ],
               "trees_url": "https://api.github.com/repos/actions/typescript-action/git/trees%7B/sha%7D",
-              "updated_at": "2026-11-12T09:42:16Z",
+              "updated_at": "2026-11-20T12:44:07Z",
               "url": "https://api.github.com/repos/actions/typescript-action",
               "visibility": "public",
               "watchers": 2418,
@@ -1587,713 +1587,12 @@
             },
             "topics": [],
             "trees_url": "https://api.github.com/repos/actions/attest-build-provenance/git/trees%7B/sha%7D",
-            "updated_at": "2026-11-09T17:40:39Z",
+            "updated_at": "2026-11-20T20:17:37Z",
             "url": "https://api.github.com/repos/actions/attest-build-provenance",
             "visibility": "public",
-            "watchers": 1075,
-            "watchers_count": 1075,
+            "watchers": 1076,
+            "watchers_count": 1076,
             "web_commit_signoff_required": false
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/actions/attest-build-provenance/git/ref/heads/predicate@1.1.4",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 404,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Sat, 14 Nov 2026 02:23:38 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            "repo"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v3; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "AD46:202AD5:C5C33C:12F2A93:6AF7C629"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-poll-interval": [
-            "300"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4804"
-          ],
-          "x-ratelimit-reset": [
-            "1794623374"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "196"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "documentation_url": "https://docs.github.com/rest/git/refs",
-            "message": "Not Found",
-            "status": "404"
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/actions/attest-build-provenance/git/ref/heads/main",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "cache-control": [
-            "private, max-age=60, s-maxage=60"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Sat, 14 Nov 2026 02:23:38 GMT"
-          ],
-          "etag": [
-            "W/\"95ba3103a61f1f2d370c6fc0fa15b3d7ed2811a8b085e8b6eb626e481e0d2e02\""
-          ],
-          "last-modified": [
-            "Mon, 09 Nov 2026 17:40:39 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            "repo"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v3; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "AD46:202AD5:C5C6F5:12F3073:6AF7C62A"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-poll-interval": [
-            "300"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4803"
-          ],
-          "x-ratelimit-reset": [
-            "1794623374"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "197"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "node_id": "REF_kwDOLVdnJa9yZWZzL2hlYWRzL21haW4",
-            "object": {
-              "sha": "9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad",
-              "type": "commit",
-              "url": "https://api.github.com/repos/actions/attest-build-provenance/git/commits/9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad"
-            },
-            "ref": "refs/heads/main",
-            "url": "https://api.github.com/repos/actions/attest-build-provenance/git/refs/heads/main"
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/actions/attest-build-provenance/compare/36fa7d009e22618ca7cd599486979b8150596c74...9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad?per_page=1&page=2",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "cache-control": [
-            "private, max-age=60, s-maxage=60"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Sat, 14 Nov 2026 02:23:39 GMT"
-          ],
-          "etag": [
-            "W/\"fad078a487b89711cc18c1e96097f2842f074141498d46d1bbe8d30ba7069bbd\""
-          ],
-          "last-modified": [
-            "Fri, 21 Aug 2026 19:01:27 GMT"
-          ],
-          "link": [
-            "<https://api.github.com/repositories/760702757/compare/36fa7d009e22618ca7cd599486979b8150596c74...9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad?per_page=1&page=119>; rel=\"last\", <https://api.github.com/repositories/760702757/compare/36fa7d009e22618ca7cd599486979b8150596c74...9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad?per_page=1&page=3>; rel=\"next\", <https://api.github.com/repositories/760702757/compare/36fa7d009e22618ca7cd599486979b8150596c74...9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad?per_page=1&page=1>; rel=\"first\", <https://api.github.com/repositories/760702757/compare/36fa7d009e22618ca7cd599486979b8150596c74...9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad?per_page=1&page=1>; rel=\"prev\""
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            ""
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v3; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "AD46:202AD5:C5CA9D:12F3640:6AF7C62A"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4802"
-          ],
-          "x-ratelimit-reset": [
-            "1794623374"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "198"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "ahead_by": 119,
-            "base_commit": {
-              "author": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/398027?v=4",
-                "events_url": "https://api.github.com/users/bdehamer/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/bdehamer/followers",
-                "following_url": "https://api.github.com/users/bdehamer/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/bdehamer/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/bdehamer",
-                "id": 398027,
-                "login": "bdehamer",
-                "node_id": "MDQ6VXNlcjM5ODAyNw==",
-                "organizations_url": "https://api.github.com/users/bdehamer/orgs",
-                "received_events_url": "https://api.github.com/users/bdehamer/received_events",
-                "repos_url": "https://api.github.com/users/bdehamer/repos",
-                "site_admin": true,
-                "starred_url": "https://api.github.com/users/bdehamer/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/bdehamer/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/bdehamer",
-                "user_view_type": "public"
-              },
-              "comments_url": "https://api.github.com/repos/actions/attest-build-provenance/commits/36fa7d009e22618ca7cd599486979b8150596c74/comments",
-              "commit": {
-                "author": {
-                  "date": "2024-11-05T16:49:24Z",
-                  "email": "bdehamer@github.com",
-                  "name": "Brian DeHamer"
-                },
-                "comment_count": 0,
-                "committer": {
-                  "date": "2024-11-05T16:49:24Z",
-                  "email": "noreply@github.com",
-                  "name": "GitHub"
-                },
-                "message": "bump @actions/attest from 1.4.2 to 1.5.0 (#309)\n\nSigned-off-by: Brian DeHamer <bdehamer@github.com>",
-                "tree": {
-                  "sha": "fb8dd69e8a7beef80211a2c8c7452bc2a3f66936",
-                  "url": "https://api.github.com/repos/actions/attest-build-provenance/git/trees/fb8dd69e8a7beef80211a2c8c7452bc2a3f66936"
-                },
-                "url": "https://api.github.com/repos/actions/attest-build-provenance/git/commits/36fa7d009e22618ca7cd599486979b8150596c74",
-                "verification": {
-                  "payload": "tree fb8dd69e8a7beef80211a2c8c7452bc2a3f66936\nparent 390c0bb1a35248f1131918ae2ff5fbebb9c49da4\nauthor Brian DeHamer <bdehamer@github.com> 1730825364 -0800\ncommitter GitHub <noreply@github.com> 1730825364 -0800\n\nbump @actions/attest from 1.4.2 to 1.5.0 (#309)\n\nSigned-off-by: Brian DeHamer <bdehamer@github.com>",
-                  "reason": "valid",
-                  "signature": "[REDACTED]",
-                  "verified": true,
-                  "verified_at": "2024-11-05T16:49:27Z"
-                }
-              },
-              "committer": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
-                "events_url": "https://api.github.com/users/web-flow/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/web-flow/followers",
-                "following_url": "https://api.github.com/users/web-flow/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/web-flow/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/web-flow",
-                "id": 19864447,
-                "login": "web-flow",
-                "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
-                "organizations_url": "https://api.github.com/users/web-flow/orgs",
-                "received_events_url": "https://api.github.com/users/web-flow/received_events",
-                "repos_url": "https://api.github.com/users/web-flow/repos",
-                "site_admin": false,
-                "starred_url": "https://api.github.com/users/web-flow/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/web-flow",
-                "user_view_type": "public"
-              },
-              "html_url": "https://github.com/actions/attest-build-provenance/commit/36fa7d009e22618ca7cd599486979b8150596c74",
-              "node_id": "C_kwDOLVdnJdoAKDM2ZmE3ZDAwOWUyMjYxOGNhN2NkNTk5NDg2OTc5YjgxNTA1OTZjNzQ",
-              "parents": [
-                {
-                  "html_url": "https://github.com/actions/attest-build-provenance/commit/390c0bb1a35248f1131918ae2ff5fbebb9c49da4",
-                  "sha": "390c0bb1a35248f1131918ae2ff5fbebb9c49da4",
-                  "url": "https://api.github.com/repos/actions/attest-build-provenance/commits/390c0bb1a35248f1131918ae2ff5fbebb9c49da4"
-                }
-              ],
-              "sha": "36fa7d009e22618ca7cd599486979b8150596c74",
-              "url": "https://api.github.com/repos/actions/attest-build-provenance/commits/36fa7d009e22618ca7cd599486979b8150596c74"
-            },
-            "behind_by": 0,
-            "commits": [
-              {
-                "author": {
-                  "avatar_url": "https://avatars.githubusercontent.com/in/29110?v=4",
-                  "events_url": "https://api.github.com/users/dependabot%5Bbot%5D/events%7B/privacy%7D",
-                  "followers_url": "https://api.github.com/users/dependabot%5Bbot%5D/followers",
-                  "following_url": "https://api.github.com/users/dependabot%5Bbot%5D/following%7B/other_user%7D",
-                  "gists_url": "https://api.github.com/users/dependabot%5Bbot%5D/gists%7B/gist_id%7D",
-                  "gravatar_id": "",
-                  "html_url": "https://github.com/apps/dependabot",
-                  "id": 49699333,
-                  "login": "dependabot[bot]",
-                  "node_id": "MDM6Qm90NDk2OTkzMzM=",
-                  "organizations_url": "https://api.github.com/users/dependabot%5Bbot%5D/orgs",
-                  "received_events_url": "https://api.github.com/users/dependabot%5Bbot%5D/received_events",
-                  "repos_url": "https://api.github.com/users/dependabot%5Bbot%5D/repos",
-                  "site_admin": false,
-                  "starred_url": "https://api.github.com/users/dependabot%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
-                  "subscriptions_url": "https://api.github.com/users/dependabot%5Bbot%5D/subscriptions",
-                  "type": "Bot",
-                  "url": "https://api.github.com/users/dependabot%5Bbot%5D",
-                  "user_view_type": "public"
-                },
-                "comments_url": "https://api.github.com/repos/actions/attest-build-provenance/commits/dada0c3b62db61803b192ec65edf06260cb71f18/comments",
-                "commit": {
-                  "author": {
-                    "date": "2024-11-18T15:38:38Z",
-                    "email": "49699333+dependabot[bot]@users.noreply.github.com",
-                    "name": "dependabot[bot]"
-                  },
-                  "comment_count": 0,
-                  "committer": {
-                    "date": "2024-11-18T15:38:38Z",
-                    "email": "noreply@github.com",
-                    "name": "GitHub"
-                  },
-                  "message": "Bump the npm-development group across 1 directory with 5 updates (#317)\n\nBumps the npm-development group with 5 updates in the / directory:\r\n\r\n| Package | From | To |\r\n| --- | --- | --- |\r\n| [@types/node](https://github.com/DefinitelyTyped/DefinitelyTyped/tree/HEAD/types/node) | `22.8.7` | `22.9.0` |\r\n| [@vercel/ncc](https://github.com/vercel/ncc) | `0.38.2` | `0.38.3` |\r\n| [eslint-plugin-jest](https://github.com/jest-community/eslint-plugin-jest) | `28.8.3` | `28.9.0` |\r\n| [eslint-plugin-jsonc](https://github.com/ota-meshi/eslint-plugin-jsonc) | `2.16.0` | `2.18.1` |\r\n| [nock](https://github.com/nock/nock) | `13.5.5` | `13.5.6` |\r\n\r\n\r\n\r\nUpdates `@types/node` from 22.8.7 to 22.9.0\r\n- [Release notes](https://github.com/DefinitelyTyped/DefinitelyTyped/releases)\r\n- [Commits](https://github.com/DefinitelyTyped/DefinitelyTyped/commits/HEAD/types/node)\r\n\r\nUpdates `@vercel/ncc` from 0.38.2 to 0.38.3\r\n- [Release notes](https://github.com/vercel/ncc/releases)\r\n- [Commits](https://github.com/vercel/ncc/compare/0.38.2...0.38.3)\r\n\r\nUpdates `eslint-plugin-jest` from 28.8.3 to 28.9.0\r\n- [Release notes](https://github.com/jest-community/eslint-plugin-jest/releases)\r\n- [Changelog](https://github.com/jest-community/eslint-plugin-jest/blob/main/CHANGELOG.md)\r\n- [Commits](https://github.com/jest-community/eslint-plugin-jest/compare/v28.8.3...v28.9.0)\r\n\r\nUpdates `eslint-plugin-jsonc` from 2.16.0 to 2.18.1\r\n- [Release notes](https://github.com/ota-meshi/eslint-plugin-jsonc/releases)\r\n- [Changelog](https://github.com/ota-meshi/eslint-plugin-jsonc/blob/master/CHANGELOG.md)\r\n- [Commits](https://github.com/ota-meshi/eslint-plugin-jsonc/compare/v2.16.0...v2.18.1)\r\n\r\nUpdates `nock` from 13.5.5 to 13.5.6\r\n- [Release notes](https://github.com/nock/nock/releases)\r\n- [Changelog](https://github.com/nock/nock/blob/main/CHANGELOG.md)\r\n- [Commits](https://github.com/nock/nock/compare/v13.5.5...v13.5.6)\r\n\r\n---\r\nupdated-dependencies:\r\n- dependency-name: \"@types/node\"\r\n  dependency-type: direct:development\r\n  update-type: version-update:semver-minor\r\n  dependency-group: npm-development\r\n- dependency-name: \"@vercel/ncc\"\r\n  dependency-type: direct:development\r\n  update-type: version-update:semver-patch\r\n  dependency-group: npm-development\r\n- dependency-name: eslint-plugin-jest\r\n  dependency-type: direct:development\r\n  update-type: version-update:semver-minor\r\n  dependency-group: npm-development\r\n- dependency-name: eslint-plugin-jsonc\r\n  dependency-type: direct:development\r\n  update-type: version-update:semver-minor\r\n  dependency-group: npm-development\r\n- dependency-name: nock\r\n  dependency-type: direct:development\r\n  update-type: version-update:semver-patch\r\n  dependency-group: npm-development\r\n...\r\n\r\nSigned-off-by: dependabot[bot] <support@github.com>\r\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
-                  "tree": {
-                    "sha": "e72a40a4ebbf40039b66f15df755c7d0cc6dbb04",
-                    "url": "https://api.github.com/repos/actions/attest-build-provenance/git/trees/e72a40a4ebbf40039b66f15df755c7d0cc6dbb04"
-                  },
-                  "url": "https://api.github.com/repos/actions/attest-build-provenance/git/commits/dada0c3b62db61803b192ec65edf06260cb71f18",
-                  "verification": {
-                    "payload": "tree e72a40a4ebbf40039b66f15df755c7d0cc6dbb04\nparent ef244123eb79f2f7a7e75d99086184180e6d0018\nauthor dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> 1731944318 -0500\ncommitter GitHub <noreply@github.com> 1731944318 -0500\n\nBump the npm-development group across 1 directory with 5 updates (#317)\n\nBumps the npm-development group with 5 updates in the / directory:\r\n\r\n| Package | From | To |\r\n| --- | --- | --- |\r\n| [@types/node](https://github.com/DefinitelyTyped/DefinitelyTyped/tree/HEAD/types/node) | `22.8.7` | `22.9.0` |\r\n| [@vercel/ncc](https://github.com/vercel/ncc) | `0.38.2` | `0.38.3` |\r\n| [eslint-plugin-jest](https://github.com/jest-community/eslint-plugin-jest) | `28.8.3` | `28.9.0` |\r\n| [eslint-plugin-jsonc](https://github.com/ota-meshi/eslint-plugin-jsonc) | `2.16.0` | `2.18.1` |\r\n| [nock](https://github.com/nock/nock) | `13.5.5` | `13.5.6` |\r\n\r\n\r\n\r\nUpdates `@types/node` from 22.8.7 to 22.9.0\r\n- [Release notes](https://github.com/DefinitelyTyped/DefinitelyTyped/releases)\r\n- [Commits](https://github.com/DefinitelyTyped/DefinitelyTyped/commits/HEAD/types/node)\r\n\r\nUpdates `@vercel/ncc` from 0.38.2 to 0.38.3\r\n- [Release notes](https://github.com/vercel/ncc/releases)\r\n- [Commits](https://github.com/vercel/ncc/compare/0.38.2...0.38.3)\r\n\r\nUpdates `eslint-plugin-jest` from 28.8.3 to 28.9.0\r\n- [Release notes](https://github.com/jest-community/eslint-plugin-jest/releases)\r\n- [Changelog](https://github.com/jest-community/eslint-plugin-jest/blob/main/CHANGELOG.md)\r\n- [Commits](https://github.com/jest-community/eslint-plugin-jest/compare/v28.8.3...v28.9.0)\r\n\r\nUpdates `eslint-plugin-jsonc` from 2.16.0 to 2.18.1\r\n- [Release notes](https://github.com/ota-meshi/eslint-plugin-jsonc/releases)\r\n- [Changelog](https://github.com/ota-meshi/eslint-plugin-jsonc/blob/master/CHANGELOG.md)\r\n- [Commits](https://github.com/ota-meshi/eslint-plugin-jsonc/compare/v2.16.0...v2.18.1)\r\n\r\nUpdates `nock` from 13.5.5 to 13.5.6\r\n- [Release notes](https://github.com/nock/nock/releases)\r\n- [Changelog](https://github.com/nock/nock/blob/main/CHANGELOG.md)\r\n- [Commits](https://github.com/nock/nock/compare/v13.5.5...v13.5.6)\r\n\r\n---\r\nupdated-dependencies:\r\n- dependency-name: \"@types/node\"\r\n  dependency-type: direct:development\r\n  update-type: version-update:semver-minor\r\n  dependency-group: npm-development\r\n- dependency-name: \"@vercel/ncc\"\r\n  dependency-type: direct:development\r\n  update-type: version-update:semver-patch\r\n  dependency-group: npm-development\r\n- dependency-name: eslint-plugin-jest\r\n  dependency-type: direct:development\r\n  update-type: version-update:semver-minor\r\n  dependency-group: npm-development\r\n- dependency-name: eslint-plugin-jsonc\r\n  dependency-type: direct:development\r\n  update-type: version-update:semver-minor\r\n  dependency-group: npm-development\r\n- dependency-name: nock\r\n  dependency-type: direct:development\r\n  update-type: version-update:semver-patch\r\n  dependency-group: npm-development\r\n...\r\n\r\nSigned-off-by: dependabot[bot] <support@github.com>\r\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
-                    "reason": "valid",
-                    "signature": "[REDACTED]",
-                    "verified": true,
-                    "verified_at": "2024-11-18T15:38:42Z"
-                  }
-                },
-                "committer": {
-                  "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
-                  "events_url": "https://api.github.com/users/web-flow/events%7B/privacy%7D",
-                  "followers_url": "https://api.github.com/users/web-flow/followers",
-                  "following_url": "https://api.github.com/users/web-flow/following%7B/other_user%7D",
-                  "gists_url": "https://api.github.com/users/web-flow/gists%7B/gist_id%7D",
-                  "gravatar_id": "",
-                  "html_url": "https://github.com/web-flow",
-                  "id": 19864447,
-                  "login": "web-flow",
-                  "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
-                  "organizations_url": "https://api.github.com/users/web-flow/orgs",
-                  "received_events_url": "https://api.github.com/users/web-flow/received_events",
-                  "repos_url": "https://api.github.com/users/web-flow/repos",
-                  "site_admin": false,
-                  "starred_url": "https://api.github.com/users/web-flow/starred%7B/owner%7D%7B/repo%7D",
-                  "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
-                  "type": "User",
-                  "url": "https://api.github.com/users/web-flow",
-                  "user_view_type": "public"
-                },
-                "html_url": "https://github.com/actions/attest-build-provenance/commit/dada0c3b62db61803b192ec65edf06260cb71f18",
-                "node_id": "C_kwDOLVdnJdoAKGRhZGEwYzNiNjJkYjYxODAzYjE5MmVjNjVlZGYwNjI2MGNiNzFmMTg",
-                "parents": [
-                  {
-                    "html_url": "https://github.com/actions/attest-build-provenance/commit/ef244123eb79f2f7a7e75d99086184180e6d0018",
-                    "sha": "ef244123eb79f2f7a7e75d99086184180e6d0018",
-                    "url": "https://api.github.com/repos/actions/attest-build-provenance/commits/ef244123eb79f2f7a7e75d99086184180e6d0018"
-                  }
-                ],
-                "sha": "dada0c3b62db61803b192ec65edf06260cb71f18",
-                "url": "https://api.github.com/repos/actions/attest-build-provenance/commits/dada0c3b62db61803b192ec65edf06260cb71f18"
-              }
-            ],
-            "diff_url": "https://github.com/actions/attest-build-provenance/compare/36fa7d009e22618ca7cd599486979b8150596c74...9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad.diff",
-            "html_url": "https://github.com/actions/attest-build-provenance/compare/36fa7d009e22618ca7cd599486979b8150596c74...9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad",
-            "merge_base_commit": {
-              "author": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/398027?v=4",
-                "events_url": "https://api.github.com/users/bdehamer/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/bdehamer/followers",
-                "following_url": "https://api.github.com/users/bdehamer/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/bdehamer/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/bdehamer",
-                "id": 398027,
-                "login": "bdehamer",
-                "node_id": "MDQ6VXNlcjM5ODAyNw==",
-                "organizations_url": "https://api.github.com/users/bdehamer/orgs",
-                "received_events_url": "https://api.github.com/users/bdehamer/received_events",
-                "repos_url": "https://api.github.com/users/bdehamer/repos",
-                "site_admin": true,
-                "starred_url": "https://api.github.com/users/bdehamer/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/bdehamer/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/bdehamer",
-                "user_view_type": "public"
-              },
-              "comments_url": "https://api.github.com/repos/actions/attest-build-provenance/commits/36fa7d009e22618ca7cd599486979b8150596c74/comments",
-              "commit": {
-                "author": {
-                  "date": "2024-11-05T16:49:24Z",
-                  "email": "bdehamer@github.com",
-                  "name": "Brian DeHamer"
-                },
-                "comment_count": 0,
-                "committer": {
-                  "date": "2024-11-05T16:49:24Z",
-                  "email": "noreply@github.com",
-                  "name": "GitHub"
-                },
-                "message": "bump @actions/attest from 1.4.2 to 1.5.0 (#309)\n\nSigned-off-by: Brian DeHamer <bdehamer@github.com>",
-                "tree": {
-                  "sha": "fb8dd69e8a7beef80211a2c8c7452bc2a3f66936",
-                  "url": "https://api.github.com/repos/actions/attest-build-provenance/git/trees/fb8dd69e8a7beef80211a2c8c7452bc2a3f66936"
-                },
-                "url": "https://api.github.com/repos/actions/attest-build-provenance/git/commits/36fa7d009e22618ca7cd599486979b8150596c74",
-                "verification": {
-                  "payload": "tree fb8dd69e8a7beef80211a2c8c7452bc2a3f66936\nparent 390c0bb1a35248f1131918ae2ff5fbebb9c49da4\nauthor Brian DeHamer <bdehamer@github.com> 1730825364 -0800\ncommitter GitHub <noreply@github.com> 1730825364 -0800\n\nbump @actions/attest from 1.4.2 to 1.5.0 (#309)\n\nSigned-off-by: Brian DeHamer <bdehamer@github.com>",
-                  "reason": "valid",
-                  "signature": "[REDACTED]",
-                  "verified": true,
-                  "verified_at": "2024-11-05T16:49:27Z"
-                }
-              },
-              "committer": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
-                "events_url": "https://api.github.com/users/web-flow/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/web-flow/followers",
-                "following_url": "https://api.github.com/users/web-flow/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/web-flow/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/web-flow",
-                "id": 19864447,
-                "login": "web-flow",
-                "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
-                "organizations_url": "https://api.github.com/users/web-flow/orgs",
-                "received_events_url": "https://api.github.com/users/web-flow/received_events",
-                "repos_url": "https://api.github.com/users/web-flow/repos",
-                "site_admin": false,
-                "starred_url": "https://api.github.com/users/web-flow/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/web-flow",
-                "user_view_type": "public"
-              },
-              "html_url": "https://github.com/actions/attest-build-provenance/commit/36fa7d009e22618ca7cd599486979b8150596c74",
-              "node_id": "C_kwDOLVdnJdoAKDM2ZmE3ZDAwOWUyMjYxOGNhN2NkNTk5NDg2OTc5YjgxNTA1OTZjNzQ",
-              "parents": [
-                {
-                  "html_url": "https://github.com/actions/attest-build-provenance/commit/390c0bb1a35248f1131918ae2ff5fbebb9c49da4",
-                  "sha": "390c0bb1a35248f1131918ae2ff5fbebb9c49da4",
-                  "url": "https://api.github.com/repos/actions/attest-build-provenance/commits/390c0bb1a35248f1131918ae2ff5fbebb9c49da4"
-                }
-              ],
-              "sha": "36fa7d009e22618ca7cd599486979b8150596c74",
-              "url": "https://api.github.com/repos/actions/attest-build-provenance/commits/36fa7d009e22618ca7cd599486979b8150596c74"
-            },
-            "patch_url": "https://github.com/actions/attest-build-provenance/compare/36fa7d009e22618ca7cd599486979b8150596c74...9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad.patch",
-            "permalink_url": "https://github.com/actions/attest-build-provenance/compare/actions:36fa7d0...actions:9d57eef",
-            "status": "ahead",
-            "total_commits": 119,
-            "url": "https://api.github.com/repos/actions/attest-build-provenance/compare/36fa7d009e22618ca7cd599486979b8150596c74...9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad"
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/actions/attest-build-provenance/git/ref/tags/main",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 404,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Sat, 14 Nov 2026 02:23:39 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            "repo"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v3; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "AD46:202AD5:C5CE32:12F3BC1:6AF7C62B"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-poll-interval": [
-            "300"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4801"
-          ],
-          "x-ratelimit-reset": [
-            "1794623374"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "199"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "documentation_url": "https://docs.github.com/rest/git/refs",
-            "message": "Not Found",
-            "status": "404"
           }
         }
       }
@@ -2337,13 +1636,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:40 GMT"
+            "Mon, 23 Nov 2026 19:48:12 GMT"
           ],
           "etag": [
             "W/\"e384691c3501d8341f4892bf101db627929ea0e06722ffc82b5f458fec3f76c7\""
           ],
           "last-modified": [
-            "Mon, 09 Nov 2026 17:40:39 GMT"
+            "Fri, 20 Nov 2026 20:17:37 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -2370,13 +1669,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5D08B:12F3FCA:6AF7C62B"
+            "C9F4:A7D1C:370B6:61A1B:6B04987C"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -2385,16 +1684,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4800"
+            "4880"
           ],
           "x-ratelimit-reset": [
-            "1794623374"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "200"
+            "120"
           ],
           "x-xss-protection": [
             "0"
@@ -2926,13 +2225,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:40 GMT"
+            "Mon, 23 Nov 2026 19:48:13 GMT"
           ],
           "etag": [
-            "W/\"5bc73b4fd02d4b33c4b86166263c00e73bc1b98302ab41eb7aba6c9025da8013\""
+            "W/\"3a428adda0993e585b3174688477bb5722c81004283a424daf66e7b4d5964adf\""
           ],
           "last-modified": [
-            "Thu, 12 Nov 2026 00:22:32 GMT"
+            "Sat, 21 Nov 2026 21:20:41 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -2959,13 +2258,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5D4CD:12F468B:6AF7C62C"
+            "C9F4:A7D1C:370CF:61A41:6B04987C"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -2974,16 +2273,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4799"
+            "4879"
           ],
           "x-ratelimit-reset": [
-            "1794623374"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "201"
+            "121"
           ],
           "x-xss-protection": [
             "0"
@@ -3014,8 +2313,8 @@
             "downloads_url": "https://api.github.com/repos/actions/attest/downloads",
             "events_url": "https://api.github.com/repos/actions/attest/events",
             "fork": false,
-            "forks": 65,
-            "forks_count": 65,
+            "forks": 66,
+            "forks_count": 66,
             "forks_url": "https://api.github.com/repos/actions/attest/forks",
             "full_name": "actions/attest",
             "git_commits_url": "https://api.github.com/repos/actions/attest/git/commits%7B/sha%7D",
@@ -3052,7 +2351,7 @@
             "milestones_url": "https://api.github.com/repos/actions/attest/milestones%7B/number%7D",
             "mirror_url": null,
             "name": "attest",
-            "network_count": 65,
+            "network_count": 66,
             "node_id": "R_kgDOLVdghQ",
             "notifications_url": "https://api.github.com/repos/actions/attest/notifications%7B?since%2Call%2Cparticipating%7D=",
             "open_issues": 20,
@@ -3109,11 +2408,11 @@
             "private": false,
             "pull_request_creation_policy": "collaborators_only",
             "pulls_url": "https://api.github.com/repos/actions/attest/pulls%7B/number%7D",
-            "pushed_at": "2026-11-12T16:17:02Z",
+            "pushed_at": "2026-11-17T22:07:19Z",
             "releases_url": "https://api.github.com/repos/actions/attest/releases%7B/id%7D",
-            "size": 11999,
+            "size": 12003,
             "ssh_url": "git@github.com:actions/attest.git",
-            "stargazers_count": 186,
+            "stargazers_count": 189,
             "stargazers_url": "https://api.github.com/repos/actions/attest/stargazers",
             "statuses_url": "https://api.github.com/repos/actions/attest/statuses/%7Bsha%7D",
             "subscribers_count": 8,
@@ -3145,8 +2444,8 @@
               "downloads_url": "https://api.github.com/repos/actions/typescript-action/downloads",
               "events_url": "https://api.github.com/repos/actions/typescript-action/events",
               "fork": false,
-              "forks": 581,
-              "forks_count": 581,
+              "forks": 582,
+              "forks_count": 582,
               "forks_url": "https://api.github.com/repos/actions/typescript-action/forks",
               "full_name": "actions/typescript-action",
               "git_commits_url": "https://api.github.com/repos/actions/typescript-action/git/commits%7B/sha%7D",
@@ -3185,8 +2484,8 @@
               "name": "typescript-action",
               "node_id": "MDEwOlJlcG9zaXRvcnkxOTM1NTgzMTk=",
               "notifications_url": "https://api.github.com/repos/actions/typescript-action/notifications%7B?since%2Call%2Cparticipating%7D=",
-              "open_issues": 23,
-              "open_issues_count": 23,
+              "open_issues": 22,
+              "open_issues_count": 22,
               "owner": {
                 "avatar_url": "https://avatars.githubusercontent.com/u/44036562?v=4",
                 "events_url": "https://api.github.com/users/actions/events%7B/privacy%7D",
@@ -3237,7 +2536,7 @@
                 "typescript"
               ],
               "trees_url": "https://api.github.com/repos/actions/typescript-action/git/trees%7B/sha%7D",
-              "updated_at": "2026-11-12T09:42:16Z",
+              "updated_at": "2026-11-20T12:44:07Z",
               "url": "https://api.github.com/repos/actions/typescript-action",
               "visibility": "public",
               "watchers": 2418,
@@ -3246,607 +2545,12 @@
             },
             "topics": [],
             "trees_url": "https://api.github.com/repos/actions/attest/git/trees%7B/sha%7D",
-            "updated_at": "2026-11-12T00:22:32Z",
+            "updated_at": "2026-11-21T21:20:41Z",
             "url": "https://api.github.com/repos/actions/attest",
             "visibility": "public",
-            "watchers": 186,
-            "watchers_count": 186,
+            "watchers": 189,
+            "watchers_count": 189,
             "web_commit_signoff_required": false
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/actions/attest/git/ref/heads/main",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "cache-control": [
-            "private, max-age=60, s-maxage=60"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Sat, 14 Nov 2026 02:23:41 GMT"
-          ],
-          "etag": [
-            "W/\"b90dd59ab001ea70a22929aca51e54235dafa2af1bcf2c025098d7f1f34b7ad6\""
-          ],
-          "last-modified": [
-            "Thu, 12 Nov 2026 00:22:32 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            "repo"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v3; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "AD46:202AD5:C5D90C:12F4CC5:6AF7C62C"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-poll-interval": [
-            "300"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4798"
-          ],
-          "x-ratelimit-reset": [
-            "1794623374"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "202"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "node_id": "REF_kwDOLVdgha9yZWZzL2hlYWRzL21haW4",
-            "object": {
-              "sha": "badbb428b0055a04f53d6ce00bda98cf1c04e56e",
-              "type": "commit",
-              "url": "https://api.github.com/repos/actions/attest/git/commits/badbb428b0055a04f53d6ce00bda98cf1c04e56e"
-            },
-            "ref": "refs/heads/main",
-            "url": "https://api.github.com/repos/actions/attest/git/refs/heads/main"
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/actions/attest/compare/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d...badbb428b0055a04f53d6ce00bda98cf1c04e56e?per_page=1&page=2",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "cache-control": [
-            "private, max-age=60, s-maxage=60"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Sat, 14 Nov 2026 02:23:41 GMT"
-          ],
-          "etag": [
-            "W/\"835cfaae8ebc000eeda93e0bbc30f1b0c306110cc46fa860699ea04a57af9fcf\""
-          ],
-          "last-modified": [
-            "Fri, 06 Nov 2026 17:54:39 GMT"
-          ],
-          "link": [
-            "<https://api.github.com/repositories/760701061/compare/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d...badbb428b0055a04f53d6ce00bda98cf1c04e56e?per_page=1&page=221>; rel=\"last\", <https://api.github.com/repositories/760701061/compare/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d...badbb428b0055a04f53d6ce00bda98cf1c04e56e?per_page=1&page=3>; rel=\"next\", <https://api.github.com/repositories/760701061/compare/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d...badbb428b0055a04f53d6ce00bda98cf1c04e56e?per_page=1&page=1>; rel=\"first\", <https://api.github.com/repositories/760701061/compare/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d...badbb428b0055a04f53d6ce00bda98cf1c04e56e?per_page=1&page=1>; rel=\"prev\""
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            ""
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v3; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "AD46:202AD5:C5DBF4:12F5111:6AF7C62D"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4797"
-          ],
-          "x-ratelimit-reset": [
-            "1794623374"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "203"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "ahead_by": 221,
-            "base_commit": {
-              "author": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/398027?v=4",
-                "events_url": "https://api.github.com/users/bdehamer/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/bdehamer/followers",
-                "following_url": "https://api.github.com/users/bdehamer/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/bdehamer/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/bdehamer",
-                "id": 398027,
-                "login": "bdehamer",
-                "node_id": "MDQ6VXNlcjM5ODAyNw==",
-                "organizations_url": "https://api.github.com/users/bdehamer/orgs",
-                "received_events_url": "https://api.github.com/users/bdehamer/received_events",
-                "repos_url": "https://api.github.com/users/bdehamer/repos",
-                "site_admin": true,
-                "starred_url": "https://api.github.com/users/bdehamer/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/bdehamer/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/bdehamer",
-                "user_view_type": "public"
-              },
-              "comments_url": "https://api.github.com/repos/actions/attest/commits/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d/comments",
-              "commit": {
-                "author": {
-                  "date": "2024-08-22T17:29:29Z",
-                  "email": "bdehamer@github.com",
-                  "name": "Brian DeHamer"
-                },
-                "comment_count": 0,
-                "committer": {
-                  "date": "2024-08-22T17:29:29Z",
-                  "email": "noreply@github.com",
-                  "name": "GitHub"
-                },
-                "message": "Bump @actions/attest from 1.3.1 to 1.4.1 (#127)\n\nSigned-off-by: Brian DeHamer <bdehamer@github.com>",
-                "tree": {
-                  "sha": "f3922cac72124e73929d5821c722c243b76ec96b",
-                  "url": "https://api.github.com/repos/actions/attest/git/trees/f3922cac72124e73929d5821c722c243b76ec96b"
-                },
-                "url": "https://api.github.com/repos/actions/attest/git/commits/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d",
-                "verification": {
-                  "payload": "tree f3922cac72124e73929d5821c722c243b76ec96b\nparent 9a1607877e639e0d36baa85cca6e96882365bf0d\nauthor Brian DeHamer <bdehamer@github.com> 1724347769 -0700\ncommitter GitHub <noreply@github.com> 1724347769 -0700\n\nBump @actions/attest from 1.3.1 to 1.4.1 (#127)\n\nSigned-off-by: Brian DeHamer <bdehamer@github.com>",
-                  "reason": "valid",
-                  "signature": "[REDACTED]",
-                  "verified": true,
-                  "verified_at": "2024-11-05T22:57:50Z"
-                }
-              },
-              "committer": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
-                "events_url": "https://api.github.com/users/web-flow/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/web-flow/followers",
-                "following_url": "https://api.github.com/users/web-flow/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/web-flow/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/web-flow",
-                "id": 19864447,
-                "login": "web-flow",
-                "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
-                "organizations_url": "https://api.github.com/users/web-flow/orgs",
-                "received_events_url": "https://api.github.com/users/web-flow/received_events",
-                "repos_url": "https://api.github.com/users/web-flow/repos",
-                "site_admin": false,
-                "starred_url": "https://api.github.com/users/web-flow/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/web-flow",
-                "user_view_type": "public"
-              },
-              "html_url": "https://github.com/actions/attest/commit/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d",
-              "node_id": "C_kwDOLVdghdoAKDY3NDIyZjU1MTFiN2ZmNzI1ZjRkYmQ2ZmI5YmQyY2Q5MjVjNjVhOGQ",
-              "parents": [
-                {
-                  "html_url": "https://github.com/actions/attest/commit/9a1607877e639e0d36baa85cca6e96882365bf0d",
-                  "sha": "9a1607877e639e0d36baa85cca6e96882365bf0d",
-                  "url": "https://api.github.com/repos/actions/attest/commits/9a1607877e639e0d36baa85cca6e96882365bf0d"
-                }
-              ],
-              "sha": "67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d",
-              "url": "https://api.github.com/repos/actions/attest/commits/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d"
-            },
-            "behind_by": 0,
-            "commits": [
-              {
-                "author": {
-                  "avatar_url": "https://avatars.githubusercontent.com/in/29110?v=4",
-                  "events_url": "https://api.github.com/users/dependabot%5Bbot%5D/events%7B/privacy%7D",
-                  "followers_url": "https://api.github.com/users/dependabot%5Bbot%5D/followers",
-                  "following_url": "https://api.github.com/users/dependabot%5Bbot%5D/following%7B/other_user%7D",
-                  "gists_url": "https://api.github.com/users/dependabot%5Bbot%5D/gists%7B/gist_id%7D",
-                  "gravatar_id": "",
-                  "html_url": "https://github.com/apps/dependabot",
-                  "id": 49699333,
-                  "login": "dependabot[bot]",
-                  "node_id": "MDM6Qm90NDk2OTkzMzM=",
-                  "organizations_url": "https://api.github.com/users/dependabot%5Bbot%5D/orgs",
-                  "received_events_url": "https://api.github.com/users/dependabot%5Bbot%5D/received_events",
-                  "repos_url": "https://api.github.com/users/dependabot%5Bbot%5D/repos",
-                  "site_admin": false,
-                  "starred_url": "https://api.github.com/users/dependabot%5Bbot%5D/starred%7B/owner%7D%7B/repo%7D",
-                  "subscriptions_url": "https://api.github.com/users/dependabot%5Bbot%5D/subscriptions",
-                  "type": "Bot",
-                  "url": "https://api.github.com/users/dependabot%5Bbot%5D",
-                  "user_view_type": "public"
-                },
-                "comments_url": "https://api.github.com/repos/actions/attest/commits/95cefe03588128f50eef67985db4e83f3d6cd3d9/comments",
-                "commit": {
-                  "author": {
-                    "date": "2024-09-10T02:30:30Z",
-                    "email": "49699333+dependabot[bot]@users.noreply.github.com",
-                    "name": "dependabot[bot]"
-                  },
-                  "comment_count": 0,
-                  "committer": {
-                    "date": "2024-09-10T02:30:30Z",
-                    "email": "noreply@github.com",
-                    "name": "GitHub"
-                  },
-                  "message": "Bump the npm-development group with 3 updates (#131)\n\nBumps the npm-development group with 3 updates: [@types/node](https://github.com/DefinitelyTyped/DefinitelyTyped/tree/HEAD/types/node), [eslint-plugin-jest](https://github.com/jest-community/eslint-plugin-jest) and [typescript](https://github.com/microsoft/TypeScript).\n\n\nUpdates `@types/node` from 22.5.2 to 22.5.4\n- [Release notes](https://github.com/DefinitelyTyped/DefinitelyTyped/releases)\n- [Commits](https://github.com/DefinitelyTyped/DefinitelyTyped/commits/HEAD/types/node)\n\nUpdates `eslint-plugin-jest` from 28.8.2 to 28.8.3\n- [Release notes](https://github.com/jest-community/eslint-plugin-jest/releases)\n- [Changelog](https://github.com/jest-community/eslint-plugin-jest/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/jest-community/eslint-plugin-jest/compare/v28.8.2...v28.8.3)\n\nUpdates `typescript` from 5.5.4 to 5.6.2\n- [Release notes](https://github.com/microsoft/TypeScript/releases)\n- [Changelog](https://github.com/microsoft/TypeScript/blob/main/azure-pipelines.release.yml)\n- [Commits](https://github.com/microsoft/TypeScript/compare/v5.5.4...v5.6.2)\n\n---\nupdated-dependencies:\n- dependency-name: \"@types/node\"\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: npm-development\n- dependency-name: eslint-plugin-jest\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: npm-development\n- dependency-name: typescript\n  dependency-type: direct:development\n  update-type: version-update:semver-minor\n  dependency-group: npm-development\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
-                  "tree": {
-                    "sha": "27591a8222c2d84b47fb845d13ebff35bccda057",
-                    "url": "https://api.github.com/repos/actions/attest/git/trees/27591a8222c2d84b47fb845d13ebff35bccda057"
-                  },
-                  "url": "https://api.github.com/repos/actions/attest/git/commits/95cefe03588128f50eef67985db4e83f3d6cd3d9",
-                  "verification": {
-                    "payload": "tree 27591a8222c2d84b47fb845d13ebff35bccda057\nparent f04a32dbbdd24d9ce6d3d9fa86c9cb649c8ac625\nauthor dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> 1725935430 -0700\ncommitter GitHub <noreply@github.com> 1725935430 -0700\n\nBump the npm-development group with 3 updates (#131)\n\nBumps the npm-development group with 3 updates: [@types/node](https://github.com/DefinitelyTyped/DefinitelyTyped/tree/HEAD/types/node), [eslint-plugin-jest](https://github.com/jest-community/eslint-plugin-jest) and [typescript](https://github.com/microsoft/TypeScript).\n\n\nUpdates `@types/node` from 22.5.2 to 22.5.4\n- [Release notes](https://github.com/DefinitelyTyped/DefinitelyTyped/releases)\n- [Commits](https://github.com/DefinitelyTyped/DefinitelyTyped/commits/HEAD/types/node)\n\nUpdates `eslint-plugin-jest` from 28.8.2 to 28.8.3\n- [Release notes](https://github.com/jest-community/eslint-plugin-jest/releases)\n- [Changelog](https://github.com/jest-community/eslint-plugin-jest/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/jest-community/eslint-plugin-jest/compare/v28.8.2...v28.8.3)\n\nUpdates `typescript` from 5.5.4 to 5.6.2\n- [Release notes](https://github.com/microsoft/TypeScript/releases)\n- [Changelog](https://github.com/microsoft/TypeScript/blob/main/azure-pipelines.release.yml)\n- [Commits](https://github.com/microsoft/TypeScript/compare/v5.5.4...v5.6.2)\n\n---\nupdated-dependencies:\n- dependency-name: \"@types/node\"\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: npm-development\n- dependency-name: eslint-plugin-jest\n  dependency-type: direct:development\n  update-type: version-update:semver-patch\n  dependency-group: npm-development\n- dependency-name: typescript\n  dependency-type: direct:development\n  update-type: version-update:semver-minor\n  dependency-group: npm-development\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
-                    "reason": "valid",
-                    "signature": "[REDACTED]",
-                    "verified": true,
-                    "verified_at": "2024-11-08T09:11:25Z"
-                  }
-                },
-                "committer": {
-                  "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
-                  "events_url": "https://api.github.com/users/web-flow/events%7B/privacy%7D",
-                  "followers_url": "https://api.github.com/users/web-flow/followers",
-                  "following_url": "https://api.github.com/users/web-flow/following%7B/other_user%7D",
-                  "gists_url": "https://api.github.com/users/web-flow/gists%7B/gist_id%7D",
-                  "gravatar_id": "",
-                  "html_url": "https://github.com/web-flow",
-                  "id": 19864447,
-                  "login": "web-flow",
-                  "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
-                  "organizations_url": "https://api.github.com/users/web-flow/orgs",
-                  "received_events_url": "https://api.github.com/users/web-flow/received_events",
-                  "repos_url": "https://api.github.com/users/web-flow/repos",
-                  "site_admin": false,
-                  "starred_url": "https://api.github.com/users/web-flow/starred%7B/owner%7D%7B/repo%7D",
-                  "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
-                  "type": "User",
-                  "url": "https://api.github.com/users/web-flow",
-                  "user_view_type": "public"
-                },
-                "html_url": "https://github.com/actions/attest/commit/95cefe03588128f50eef67985db4e83f3d6cd3d9",
-                "node_id": "C_kwDOLVdghdoAKDk1Y2VmZTAzNTg4MTI4ZjUwZWVmNjc5ODVkYjRlODNmM2Q2Y2QzZDk",
-                "parents": [
-                  {
-                    "html_url": "https://github.com/actions/attest/commit/f04a32dbbdd24d9ce6d3d9fa86c9cb649c8ac625",
-                    "sha": "f04a32dbbdd24d9ce6d3d9fa86c9cb649c8ac625",
-                    "url": "https://api.github.com/repos/actions/attest/commits/f04a32dbbdd24d9ce6d3d9fa86c9cb649c8ac625"
-                  }
-                ],
-                "sha": "95cefe03588128f50eef67985db4e83f3d6cd3d9",
-                "url": "https://api.github.com/repos/actions/attest/commits/95cefe03588128f50eef67985db4e83f3d6cd3d9"
-              }
-            ],
-            "diff_url": "https://github.com/actions/attest/compare/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d...badbb428b0055a04f53d6ce00bda98cf1c04e56e.diff",
-            "html_url": "https://github.com/actions/attest/compare/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d...badbb428b0055a04f53d6ce00bda98cf1c04e56e",
-            "merge_base_commit": {
-              "author": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/398027?v=4",
-                "events_url": "https://api.github.com/users/bdehamer/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/bdehamer/followers",
-                "following_url": "https://api.github.com/users/bdehamer/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/bdehamer/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/bdehamer",
-                "id": 398027,
-                "login": "bdehamer",
-                "node_id": "MDQ6VXNlcjM5ODAyNw==",
-                "organizations_url": "https://api.github.com/users/bdehamer/orgs",
-                "received_events_url": "https://api.github.com/users/bdehamer/received_events",
-                "repos_url": "https://api.github.com/users/bdehamer/repos",
-                "site_admin": true,
-                "starred_url": "https://api.github.com/users/bdehamer/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/bdehamer/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/bdehamer",
-                "user_view_type": "public"
-              },
-              "comments_url": "https://api.github.com/repos/actions/attest/commits/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d/comments",
-              "commit": {
-                "author": {
-                  "date": "2024-08-22T17:29:29Z",
-                  "email": "bdehamer@github.com",
-                  "name": "Brian DeHamer"
-                },
-                "comment_count": 0,
-                "committer": {
-                  "date": "2024-08-22T17:29:29Z",
-                  "email": "noreply@github.com",
-                  "name": "GitHub"
-                },
-                "message": "Bump @actions/attest from 1.3.1 to 1.4.1 (#127)\n\nSigned-off-by: Brian DeHamer <bdehamer@github.com>",
-                "tree": {
-                  "sha": "f3922cac72124e73929d5821c722c243b76ec96b",
-                  "url": "https://api.github.com/repos/actions/attest/git/trees/f3922cac72124e73929d5821c722c243b76ec96b"
-                },
-                "url": "https://api.github.com/repos/actions/attest/git/commits/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d",
-                "verification": {
-                  "payload": "tree f3922cac72124e73929d5821c722c243b76ec96b\nparent 9a1607877e639e0d36baa85cca6e96882365bf0d\nauthor Brian DeHamer <bdehamer@github.com> 1724347769 -0700\ncommitter GitHub <noreply@github.com> 1724347769 -0700\n\nBump @actions/attest from 1.3.1 to 1.4.1 (#127)\n\nSigned-off-by: Brian DeHamer <bdehamer@github.com>",
-                  "reason": "valid",
-                  "signature": "[REDACTED]",
-                  "verified": true,
-                  "verified_at": "2024-11-05T22:57:50Z"
-                }
-              },
-              "committer": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
-                "events_url": "https://api.github.com/users/web-flow/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/web-flow/followers",
-                "following_url": "https://api.github.com/users/web-flow/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/web-flow/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/web-flow",
-                "id": 19864447,
-                "login": "web-flow",
-                "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
-                "organizations_url": "https://api.github.com/users/web-flow/orgs",
-                "received_events_url": "https://api.github.com/users/web-flow/received_events",
-                "repos_url": "https://api.github.com/users/web-flow/repos",
-                "site_admin": false,
-                "starred_url": "https://api.github.com/users/web-flow/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/web-flow",
-                "user_view_type": "public"
-              },
-              "html_url": "https://github.com/actions/attest/commit/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d",
-              "node_id": "C_kwDOLVdghdoAKDY3NDIyZjU1MTFiN2ZmNzI1ZjRkYmQ2ZmI5YmQyY2Q5MjVjNjVhOGQ",
-              "parents": [
-                {
-                  "html_url": "https://github.com/actions/attest/commit/9a1607877e639e0d36baa85cca6e96882365bf0d",
-                  "sha": "9a1607877e639e0d36baa85cca6e96882365bf0d",
-                  "url": "https://api.github.com/repos/actions/attest/commits/9a1607877e639e0d36baa85cca6e96882365bf0d"
-                }
-              ],
-              "sha": "67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d",
-              "url": "https://api.github.com/repos/actions/attest/commits/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d"
-            },
-            "patch_url": "https://github.com/actions/attest/compare/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d...badbb428b0055a04f53d6ce00bda98cf1c04e56e.patch",
-            "permalink_url": "https://github.com/actions/attest/compare/actions:67422f5...actions:badbb42",
-            "status": "ahead",
-            "total_commits": 221,
-            "url": "https://api.github.com/repos/actions/attest/compare/67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d...badbb428b0055a04f53d6ce00bda98cf1c04e56e"
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
-        "url": "https://api.github.com/repos/actions/attest/git/ref/tags/main",
-        "headers": {
-          "accept": [
-            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "x-github-api-version": [
-            "2022-11-28"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 404,
-        "headers": {
-          "access-control-allow-origin": [
-            "*"
-          ],
-          "access-control-expose-headers": [
-            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
-          ],
-          "content-security-policy": [
-            "default-src 'none'"
-          ],
-          "content-type": [
-            "application/json; charset=utf-8"
-          ],
-          "date": [
-            "Sat, 14 Nov 2026 02:23:42 GMT"
-          ],
-          "referrer-policy": [
-            "origin-when-cross-origin, strict-origin-when-cross-origin"
-          ],
-          "server": [
-            "github.com"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000; includeSubdomains; preload"
-          ],
-          "vary": [
-            "Accept-Encoding, Accept, X-Requested-With"
-          ],
-          "x-accepted-oauth-scopes": [
-            "repo"
-          ],
-          "x-content-type-options": [
-            "nosniff"
-          ],
-          "x-frame-options": [
-            "deny"
-          ],
-          "x-github-api-version-selected": [
-            "2022-11-28"
-          ],
-          "x-github-edge-region": [
-            "fra"
-          ],
-          "x-github-media-type": [
-            "github.v3; param=merge-info-preview.nebula-preview; format=json"
-          ],
-          "x-github-request-id": [
-            "AD46:202AD5:C5DFF7:12F5739:6AF7C62D"
-          ],
-          "x-oauth-scopes": [
-            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
-          ],
-          "x-poll-interval": [
-            "300"
-          ],
-          "x-ratelimit-limit": [
-            "5000"
-          ],
-          "x-ratelimit-remaining": [
-            "4796"
-          ],
-          "x-ratelimit-reset": [
-            "1794623374"
-          ],
-          "x-ratelimit-resource": [
-            "core"
-          ],
-          "x-ratelimit-used": [
-            "204"
-          ],
-          "x-xss-protection": [
-            "0"
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "documentation_url": "https://docs.github.com/rest/git/refs",
-            "message": "Not Found",
-            "status": "404"
           }
         }
       }
@@ -3890,13 +2594,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:42 GMT"
+            "Mon, 23 Nov 2026 19:48:13 GMT"
           ],
           "etag": [
             "W/\"c954316e8ff31ef306ea983ca41433375dc0c6fbdaf9fad23f61b9ab293ea578\""
           ],
           "last-modified": [
-            "Thu, 12 Nov 2026 00:22:32 GMT"
+            "Sat, 21 Nov 2026 21:20:41 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -3923,13 +2627,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5E351:12F5C5A:6AF7C62E"
+            "C9F4:A7D1C:370EF:61A82:6B04987D"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -3938,16 +2642,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4795"
+            "4878"
           ],
           "x-ratelimit-reset": [
-            "1794623374"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "205"
+            "122"
           ],
           "x-xss-protection": [
             "0"
@@ -4339,13 +3043,13 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:42 GMT"
+            "Mon, 23 Nov 2026 19:48:14 GMT"
           ],
           "etag": [
-            "W/\"90c2f6a3ce233ead9ad4f86a8b0f874b97f6641a9842a2a44e6a43095b9776e3\""
+            "W/\"b2beaba16db4d194d741e53da742ced6f384b62fc84ebf344a0f1fc8a49b2566\""
           ],
           "last-modified": [
-            "Fri, 13 Nov 2026 07:08:47 GMT"
+            "Mon, 23 Nov 2026 16:47:32 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -4372,13 +3076,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5E636:12F60E9:6AF7C62E"
+            "C9F4:A7D1C:37105:61AB0:6B04987D"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -4387,16 +3091,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4794"
+            "4877"
           ],
           "x-ratelimit-reset": [
-            "1794623374"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "206"
+            "123"
           ],
           "x-xss-protection": [
             "0"
@@ -4405,6 +3109,16 @@
         "body": {
           "format": "json",
           "value": [
+            {
+              "commit": {
+                "sha": "d8cbb8045d7f43706b9177cceb36c1f91a6644d5",
+                "url": "https://api.github.com/repos/actions/setup-go/commits/d8cbb8045d7f43706b9177cceb36c1f91a6644d5"
+              },
+              "name": "v7.1.0",
+              "node_id": "MDM6UmVmMTkyNjI0NTk0OnJlZnMvdGFncy92Ny4xLjA=",
+              "tarball_url": "https://api.github.com/repos/actions/setup-go/tarball/refs/tags/v7.1.0",
+              "zipball_url": "https://api.github.com/repos/actions/setup-go/zipball/refs/tags/v7.1.0"
+            },
             {
               "commit": {
                 "sha": "b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
@@ -4417,8 +3131,8 @@
             },
             {
               "commit": {
-                "sha": "b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
-                "url": "https://api.github.com/repos/actions/setup-go/commits/b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"
+                "sha": "d8cbb8045d7f43706b9177cceb36c1f91a6644d5",
+                "url": "https://api.github.com/repos/actions/setup-go/commits/d8cbb8045d7f43706b9177cceb36c1f91a6644d5"
               },
               "name": "v7",
               "node_id": "MDM6UmVmMTkyNjI0NTk0OnJlZnMvdGFncy92Nw==",
@@ -5018,10 +3732,10 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:43 GMT"
+            "Mon, 23 Nov 2026 19:48:14 GMT"
           ],
           "etag": [
-            "W/\"c150d7304b78ea124c5087f65df0bce332e3217f736ae393b2da73d9312f8dc3\""
+            "W/\"99f7b5fa080313fc727298c18fa034d4a59554a7b15d33468e885c33aec2bfb9\""
           ],
           "link": [
             "<https://api.github.com/repositories/192624594/releases?per_page=30&page=2>; rel=\"next\", <https://api.github.com/repositories/192624594/releases?per_page=30&page=2>; rel=\"last\""
@@ -5051,13 +3765,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5E92D:12F65A0:6AF7C62F"
+            "C9F4:A7D1C:37123:61AE6:6B04987E"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -5066,16 +3780,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4793"
+            "4876"
           ],
           "x-ratelimit-reset": [
-            "1794623374"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "207"
+            "124"
           ],
           "x-xss-protection": [
             "0"
@@ -5084,6 +3798,61 @@
         "body": {
           "format": "json",
           "value": [
+            {
+              "assets": [],
+              "assets_url": "https://api.github.com/repos/actions/setup-go/releases/448038898/assets",
+              "author": {
+                "avatar_url": "https://avatars.githubusercontent.com/u/147703874?v=4",
+                "events_url": "https://api.github.com/users/v-priya-kinthali/events%7B/privacy%7D",
+                "followers_url": "https://api.github.com/users/v-priya-kinthali/followers",
+                "following_url": "https://api.github.com/users/v-priya-kinthali/following%7B/other_user%7D",
+                "gists_url": "https://api.github.com/users/v-priya-kinthali/gists%7B/gist_id%7D",
+                "gravatar_id": "",
+                "html_url": "https://github.com/v-priya-kinthali",
+                "id": 147703874,
+                "login": "v-priya-kinthali",
+                "node_id": "U_kgDOCM3IQg",
+                "organizations_url": "https://api.github.com/users/v-priya-kinthali/orgs",
+                "received_events_url": "https://api.github.com/users/v-priya-kinthali/received_events",
+                "repos_url": "https://api.github.com/users/v-priya-kinthali/repos",
+                "site_admin": false,
+                "starred_url": "https://api.github.com/users/v-priya-kinthali/starred%7B/owner%7D%7B/repo%7D",
+                "subscriptions_url": "https://api.github.com/users/v-priya-kinthali/subscriptions",
+                "type": "User",
+                "url": "https://api.github.com/users/v-priya-kinthali",
+                "user_view_type": "public"
+              },
+              "body": "## What's Changed\r\n### Enhancements\r\n* Expose go env variables as action outputs by @v-mahabaleshwars in https://github.com/actions/setup-go/pull/791\r\n* Preserve native Go environment names in action outputs by @v-mahabaleshwars in https://github.com/actions/setup-go/pull/793\r\n* Add support for native Go version syntax in go-version input by @v-jitenderpalsingh in https://github.com/actions/setup-go/pull/804\r\n* Add support for rc and beta versions in go.mod file by @arnested in https://github.com/actions/setup-go/pull/701\r\n* Clarify description of go-bin-path output and its fallback behavior by @v-mahabaleshwars in https://github.com/actions/setup-go/pull/803\r\n* Group verbose Go installation logs and normalize package.json line endings by @v-priyagupta108 in https://github.com/actions/setup-go/pull/789\r\n\r\n### Dependency updates\r\n* Bump js-yaml from 3.15.1 to 3.15.2 by @dependabot in https://github.com/actions/setup-go/pull/790\r\n* Bump @actions/cache to 6.3.0 by @qmuntal in https://github.com/actions/setup-go/pull/794\r\n* Bump handlebars from 4.7.9 to 4.7.10 by @dependabot in https://github.com/actions/setup-go/pull/802\r\n* Bump nock from 14.0.15 to 14.0.17 by @dependabot in https://github.com/actions/setup-go/pull/767\r\n* Bump @typescript-eslint/parser from 8.62.0 to 8.72.1 by @dependabot in https://github.com/actions/setup-go/pull/777\r\n* Bump undici from 6.28.0 to 6.29.1 by @dependabot in https://github.com/actions/setup-go/pull/807\r\n* Bump eslint-plugin-jest from 29.15.2 to 29.17.0 by @dependabot in #776  \r\n* Bump @typescript-eslint/eslint-plugin from 8.62.0 to 8.72.1 by @dependabot in https://github.com/actions/setup-go/pull/778\r\n* Bump prettier from 3.8.4 to 3.9.10 by @dependabot in https://github.com/actions/setup-go/pull/775\r\n* Bump package version to 7.1.0 by @v-priyagupta108 in https://github.com/actions/setup-go/pull/818\r\n* fix: resolve audit/license failures by @v-HarithaVattikuti in https://github.com/actions/setup-go/pull/784\r\n* Upgrade checkout refs and docs to v7 by @v-HarithaVattikuti in https://github.com/actions/setup-go/pull/779\r\n* fix: update macOS runner configuration to use macOS 15 Intel by @v-priya-kinthali in https://github.com/actions/setup-go/pull/786\r\n\r\n\r\n## New Contributors\r\n* @qmuntal made their first contribution in https://github.com/actions/setup-go/pull/794\r\n* @v-jitenderpalsingh made their first contribution in https://github.com/actions/setup-go/pull/804\r\n* @arnested made their first contribution in https://github.com/actions/setup-go/pull/701\r\n\r\n**Full Changelog**: https://github.com/actions/setup-go/compare/v7.0.0...v7.1.0",
+              "created_at": "2026-11-17T02:54:41Z",
+              "draft": false,
+              "html_url": "https://github.com/actions/setup-go/releases/tag/v7.1.0",
+              "id": 448038898,
+              "immutable": true,
+              "mentions_count": 8,
+              "name": "v7.1.0",
+              "node_id": "RE_kwDOC3s30s4atIfy",
+              "prerelease": false,
+              "published_at": "2026-11-17T03:01:17Z",
+              "reactions": {
+                "+1": 0,
+                "-1": 0,
+                "confused": 0,
+                "eyes": 0,
+                "heart": 1,
+                "hooray": 1,
+                "laugh": 0,
+                "rocket": 1,
+                "total_count": 3,
+                "url": "https://api.github.com/repos/actions/setup-go/releases/448038898/reactions"
+              },
+              "tag_name": "v7.1.0",
+              "tarball_url": "https://api.github.com/repos/actions/setup-go/tarball/v7.1.0",
+              "target_commitish": "main",
+              "updated_at": "2026-11-17T03:01:17Z",
+              "upload_url": "https://uploads.github.com/repos/actions/setup-go/releases/448038898/assets%7B?name%2Clabel%7D=",
+              "url": "https://api.github.com/repos/actions/setup-go/releases/448038898",
+              "zipball_url": "https://api.github.com/repos/actions/setup-go/zipball/v7.1.0"
+            },
             {
               "assets": [],
               "assets_url": "https://api.github.com/repos/actions/setup-go/releases/354838381/assets",
@@ -6612,60 +5381,6 @@
               "upload_url": "https://uploads.github.com/repos/actions/setup-go/releases/71704147/assets%7B?name%2Clabel%7D=",
               "url": "https://api.github.com/repos/actions/setup-go/releases/71704147",
               "zipball_url": "https://api.github.com/repos/actions/setup-go/zipball/v3.2.1"
-            },
-            {
-              "assets": [],
-              "assets_url": "https://api.github.com/repos/actions/setup-go/releases/67905329/assets",
-              "author": {
-                "avatar_url": "https://avatars.githubusercontent.com/u/28229110?v=4",
-                "events_url": "https://api.github.com/users/dmitry-shibanov/events%7B/privacy%7D",
-                "followers_url": "https://api.github.com/users/dmitry-shibanov/followers",
-                "following_url": "https://api.github.com/users/dmitry-shibanov/following%7B/other_user%7D",
-                "gists_url": "https://api.github.com/users/dmitry-shibanov/gists%7B/gist_id%7D",
-                "gravatar_id": "",
-                "html_url": "https://github.com/dmitry-shibanov",
-                "id": 28229110,
-                "login": "dmitry-shibanov",
-                "node_id": "MDQ6VXNlcjI4MjI5MTEw",
-                "organizations_url": "https://api.github.com/users/dmitry-shibanov/orgs",
-                "received_events_url": "https://api.github.com/users/dmitry-shibanov/received_events",
-                "repos_url": "https://api.github.com/users/dmitry-shibanov/repos",
-                "site_admin": false,
-                "starred_url": "https://api.github.com/users/dmitry-shibanov/starred%7B/owner%7D%7B/repo%7D",
-                "subscriptions_url": "https://api.github.com/users/dmitry-shibanov/subscriptions",
-                "type": "User",
-                "url": "https://api.github.com/users/dmitry-shibanov",
-                "user_view_type": "public"
-              },
-              "body": "This release introduces support for caching dependency files and compiler's build outputs [#228](https://github.com/actions/setup-go/pull/228). For that action uses [@toolkit/cache](https://github.com/actions/toolkit/tree/main/packages/cache) library under the hood that in turn allows getting rid of configuring [@actions/cache](https://github.com/actions/cache) action separately and simplifies the whole workflow. \r\n\r\nSuch input parameters as `cache` and `cache-dependency-path` were added. The `cache` input is optional, and caching is turned off by default, `cache-dependency-path` is used to specify the path to a dependency file - `go.sum`.\r\n\r\n**Examples of use-cases:**\r\n\r\n- `cache` input only:\r\n\r\n```yaml\r\nsteps:\r\n- uses: actions/checkout@v3\r\n- uses: actions/setup-go@v3\r\n  with:\r\n    go-version: '18'\r\n    cache: true\r\n```\r\n\r\n- `cache` along with `cache-dependency-path`:\r\n\r\n```yaml\r\nsteps:\r\n- uses: actions/checkout@v3\r\n- uses: actions/setup-go@v3\r\n  with:\r\n    go-version: '18'\r\n    cache: true\r\n    cache-dependency-path: subdir/go.sum\r\n```",
-              "created_at": "2022-05-25T10:07:29Z",
-              "draft": false,
-              "html_url": "https://github.com/actions/setup-go/releases/tag/v3.2.0",
-              "id": 67905329,
-              "immutable": false,
-              "name": "Support for caching dependency files and compiler's build outputs ",
-              "node_id": "RE_kwDOC3s30s4EDCcx",
-              "prerelease": false,
-              "published_at": "2022-05-26T10:17:46Z",
-              "reactions": {
-                "+1": 0,
-                "-1": 0,
-                "confused": 0,
-                "eyes": 0,
-                "heart": 6,
-                "hooray": 10,
-                "laugh": 0,
-                "rocket": 3,
-                "total_count": 19,
-                "url": "https://api.github.com/repos/actions/setup-go/releases/67905329/reactions"
-              },
-              "tag_name": "v3.2.0",
-              "tarball_url": "https://api.github.com/repos/actions/setup-go/tarball/v3.2.0",
-              "target_commitish": "main",
-              "updated_at": "2022-05-26T10:17:46Z",
-              "upload_url": "https://uploads.github.com/repos/actions/setup-go/releases/67905329/assets%7B?name%2Clabel%7D=",
-              "url": "https://api.github.com/repos/actions/setup-go/releases/67905329",
-              "zipball_url": "https://api.github.com/repos/actions/setup-go/zipball/v3.2.0"
             }
           ]
         }
@@ -6710,7 +5425,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:44 GMT"
+            "Mon, 23 Nov 2026 19:48:15 GMT"
           ],
           "etag": [
             "W/\"c1ddce5a05b6d917c92d06f7007999df9443c1d23b242db84bddd0c35fd571a2\""
@@ -6743,13 +5458,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5ECF6:12F6B8C:6AF7C62F"
+            "C9F4:A7D1C:37149:61B2A:6B04987E"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -6758,16 +5473,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4792"
+            "4875"
           ],
           "x-ratelimit-reset": [
-            "1794623374"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "208"
+            "125"
           ],
           "x-xss-protection": [
             "0"
@@ -8421,7 +7136,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Sat, 14 Nov 2026 02:23:44 GMT"
+            "Mon, 23 Nov 2026 19:48:15 GMT"
           ],
           "etag": [
             "W/\"7e15560d381d4aba520629144bb0aac15a97c5dd0ba92f6ac8f6a691b219729e\""
@@ -8451,13 +7166,13 @@
             "2022-11-28"
           ],
           "x-github-edge-region": [
-            "fra"
+            "switzerlandnorth"
           ],
           "x-github-media-type": [
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "AD46:202AD5:C5F104:12F7165:6AF7C630"
+            "C9F4:A7D1C:3716B:61B6F:6B04987F"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -8466,16 +7181,16 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4791"
+            "4874"
           ],
           "x-ratelimit-reset": [
-            "1794623374"
+            "1795464508"
           ],
           "x-ratelimit-resource": [
             "core"
           ],
           "x-ratelimit-used": [
-            "209"
+            "126"
           ],
           "x-xss-protection": [
             "0"
