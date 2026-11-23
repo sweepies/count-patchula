@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -19 512 512" width="512" height="512" role="img" aria-label="Count Patchula, a bat holding a wrench">
+  <title>Count Patchula</title>
+  <defs>
+    <!-- Wings, body/ears/crest, feet, and wrench defined once for both outer rim and fill -->
+    <path id="wing-left" d="M138 274
+      C126 271, 118 262, 112 246
+      C109 234, 107 222, 100 221
+      C74 221, 32 252, 12 304
+      C5 324, 5 352, 9 365
+      C12 368, 17 365, 22 358
+      C32 349, 44 348, 55 362
+      C58 367, 62 368, 65 363
+      C75 352, 92 351, 106 367
+      C110 373, 114 374, 118 368
+      C129 354, 146 346, 174 346 Z"/>
+    <path id="wing-right" d="M374 274
+      C386 271, 394 262, 400 246
+      C403 234, 405 222, 412 221
+      C438 221, 480 252, 500 304
+      C507 324, 507 352, 503 365
+      C500 368, 495 365, 490 358
+      C480 349, 468 348, 457 362
+      C454 367, 450 368, 447 363
+      C437 352, 420 351, 406 367
+      C402 373, 398 374, 394 368
+      C383 354, 366 346, 338 346 Z"/>
+    <path id="bat-head" d="M210 139
+      C209 88, 173 42, 107 24
+      C100 22, 96 26, 95 34
+      C91 66, 72 108, 73 142
+      C74 176, 92 204, 126 218
+      C122 224, 121 230, 121 234 C124 233, 127 232, 130 232
+      C124 240, 122 249, 124 256 C127 255, 130 254, 133 253
+      C131 266, 134 282, 142 296
+      C154 324, 170 364, 190 392
+      C204 410, 224 418, 244 418
+      C249 422, 253 426, 256 428
+      C259 426, 263 422, 268 418
+      C288 418, 308 410, 322 392
+      C342 364, 358 324, 370 296
+      C378 282, 381 266, 379 253
+      C382 254, 385 255, 388 256 C390 249, 388 240, 382 232
+      C385 232, 388 233, 391 234 C391 230, 390 224, 386 218
+      C420 204, 438 176, 439 142
+      C440 108, 421 66, 417 34
+      C416 26, 412 22, 405 24
+      C339 42, 303 88, 300 139
+      C292 136, 286 135, 280 135
+      C283 132, 285 129, 285 127
+      C278 126, 271 129, 265 133
+      C270 123, 273 116, 271 112
+      C258 112, 245 122, 238 133
+      C240 126, 242 122, 241 120
+      C230 122, 220 130, 210 139 Z"/>
+    <g id="feet">
+      <path d="M210 406 C199 414, 198 432, 205 442 C209 445, 213 440, 214 434 C216 443, 221 448, 226 444 C230 440, 230 432, 230 428 C233 437, 238 440, 241 435 C244 427, 241 412, 231 405 C224 401, 216 402, 210 406 Z"/>
+      <path d="M302 406 C313 414, 314 432, 307 442 C303 445, 299 440, 298 434 C296 443, 291 448, 286 444 C282 440, 282 432, 282 428 C279 437, 274 440, 271 435 C268 427, 271 412, 281 405 C288 401, 296 402, 302 406 Z"/>
+    </g>
+    <path id="wrench-shape" d="
+      M-55 -23 L55 -23
+      C69 -48, 102 -54, 123 -35
+      C132 -27, 134 -17, 132 -12
+      L99 -16 L86 0 L99 16 L132 12
+      C134 17, 132 27, 123 35
+      C102 54, 69 48, 55 23
+      L-55 23
+      C-69 48, -102 54, -123 35
+      C-132 27, -134 17, -132 12
+      L-99 16 L-86 0 L-99 -16 L-132 -12
+      C-134 -17, -132 -27, -123 -35
+      C-102 -54, -69 -48, -55 -23 Z"/>
+    <linearGradient id="wrench-gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffd77d"/>
+      <stop offset="55%" stop-color="#f2b54c"/>
+      <stop offset="100%" stop-color="#df9a2c"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Unified refined plum-purple sticker rim -->
+  <g fill="#1f171b" stroke="#755385" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">
+    <use href="#wing-left"/>
+    <use href="#wing-right"/>
+    <use href="#bat-head"/>
+  </g>
+  <g transform="translate(256 351) rotate(16.5)">
+    <use href="#wrench-shape" fill="#1f171b" stroke="#755385" stroke-width="20" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Wings fill + 3 inset coral membrane bays per side -->
+  <g>
+    <use href="#wing-left" fill="#1f171b"/>
+    <path fill="#e85a4f" d="M77 259 C52 272, 26 306, 15 355 C28 341, 46 341, 59 356 C63 324, 70 288, 77 259 Z"/>
+    <path fill="#e85a4f" d="M97 264 C85 288, 74 322, 68 353 C81 343, 97 344, 108 358 C108 326, 105 292, 97 264 Z"/>
+    <path fill="#e85a4f" d="M114 287 C116 312, 118 338, 119 360 C130 347, 145 340, 162 340 L154 306 C140 298, 126 292, 114 287 Z"/>
+
+    <use href="#wing-right" fill="#1f171b"/>
+    <path fill="#e85a4f" d="M435 259 C460 272, 486 306, 497 355 C484 341, 466 341, 453 356 C449 324, 442 288, 435 259 Z"/>
+    <path fill="#e85a4f" d="M415 264 C427 288, 438 322, 444 353 C431 343, 415 344, 404 358 C404 326, 407 292, 415 264 Z"/>
+    <path fill="#e85a4f" d="M398 287 C396 312, 394 338, 393 360 C382 347, 367 340, 350 340 L358 306 C372 298, 386 292, 398 287 Z"/>
+  </g>
+
+  <!-- Body, head, tall ears and sweeping head fur -->
+  <use href="#bat-head" fill="#1f171b"/>
+
+  <!-- Two compact, cleanly separated 3-toed feet -->
+  <use href="#feet" fill="#1f171b" stroke="#755385" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+  <use href="#feet" fill="#1f171b"/>
+
+  <!-- Left inner ear: cream outer trim, coral interior and rounded ear hair -->
+  <path fill="#faf0dc" d="M111 45 C144 62, 168 96, 170 138 C166 172, 152 196, 134 206 C108 195, 92 172, 91 140 C90 108, 102 72, 111 45 Z"/>
+  <path fill="#e85a4f" d="M119 75 C146 90, 168 118, 172 152 C170 176, 154 189, 140 195 C119 185, 105 166, 104 142 C103 116, 111 92, 119 75 Z"/>
+  <path fill="none" stroke="#1f171b" stroke-width="6.5" stroke-linecap="round" d="M128 104 C147 112, 161 129, 171 153"/>
+  <path fill="none" stroke="#1f171b" stroke-width="6.5" stroke-linecap="round" d="M125 132 C143 139, 156 156, 163 181"/>
+  <path fill="#1f171b" d="M167 148 L178 148 L172 192 L147 195 C154 185, 162 172, 167 148 Z"/>
+
+  <!-- Right inner ear (exact mirror around x=256) -->
+  <path fill="#faf0dc" d="M401 45 C368 62, 344 96, 342 138 C346 172, 360 196, 378 206 C404 195, 420 172, 421 140 C422 108, 410 72, 401 45 Z"/>
+  <path fill="#e85a4f" d="M393 75 C366 90, 344 118, 340 152 C342 176, 358 189, 372 195 C393 185, 407 166, 408 142 C409 116, 401 92, 393 75 Z"/>
+  <path fill="none" stroke="#1f171b" stroke-width="6.5" stroke-linecap="round" d="M384 104 C365 112, 351 129, 341 153"/>
+  <path fill="none" stroke="#1f171b" stroke-width="6.5" stroke-linecap="round" d="M387 132 C369 139, 356 156, 349 181"/>
+  <path fill="#1f171b" d="M345 148 L334 148 L340 192 L365 195 C358 185, 350 172, 345 148 Z"/>
+
+  <!-- Confident half-moon eyes + sleek gold brows -->
+  <path fill="#faf0dc" d="M169 224 L226 228 C227 248, 214 260, 197 259 C179 258, 167 245, 169 224 Z"/>
+  <path fill="#1f171b" d="M185 225 L216 227 C218 242, 210 251, 199 250 C188 249, 183 239, 185 225 Z"/>
+  <path fill="#faf0dc" d="M343 224 L286 228 C285 248, 298 260, 315 259 C333 258, 345 245, 343 224 Z"/>
+  <path fill="#1f171b" d="M327 225 L296 227 C294 242, 302 251, 313 250 C324 249, 329 239, 327 225 Z"/>
+  <path fill="none" stroke="#f2b54c" stroke-width="11" stroke-linecap="round" d="M161 213 L233 219"/>
+  <path fill="none" stroke="#f2b54c" stroke-width="11" stroke-linecap="round" d="M351 213 L279 219"/>
+
+  <!-- Soft coral cheeks -->
+  <ellipse fill="#ec6058" cx="168" cy="270" rx="16.5" ry="11"/>
+  <ellipse fill="#ec6058" cx="344" cy="270" rx="16.5" ry="11"/>
+
+  <!-- Compact grin & crisp little fangs -->
+  <path fill="none" stroke="#faf0dc" stroke-width="5.2" stroke-linecap="round" d="M214 270 Q256 289 298 270"/>
+  <path fill="#faf0dc" d="M216 272 L231 278 L224 296 Z"/>
+  <path fill="#faf0dc" d="M296 272 L281 278 L288 296 Z"/>
+
+  <!-- Chunky gold wrench + compact 3-toed paws -->
+  <g transform="translate(256 351) rotate(16.5)">
+    <use href="#wrench-shape" fill="url(#wrench-gold)" stroke="#1f171b" stroke-width="11" stroke-linejoin="round"/>
+    <rect x="-22" y="-6" width="44" height="10" rx="5" fill="#ffe49e" opacity="0.88"/>
+    <path fill="none" stroke="#ffe49e" stroke-width="4.5" stroke-linecap="round" opacity="0.55" d="M-108 -25 C-94 -36, -74 -34, -62 -21 M62 -21 C74 -34, 94 -36, 108 -25"/>
+
+    <path fill="none" stroke="#755385" stroke-width="6" stroke-linecap="round" d="M-54 -12 C-53 -34, -18 -34, -17 -12"/>
+    <path fill="#1f171b" d="M-55 -6 C-55 -33, -16 -33, -16 -6 C-16 6, -21 16, -27 18 C-30 13, -31 6, -32 1 C-34 11, -37 19, -41 19 C-45 14, -46 7, -47 1 C-49 9, -53 14, -56 12 C-58 6, -55 -1, -55 -6 Z"/>
+
+    <path fill="none" stroke="#755385" stroke-width="6" stroke-linecap="round" d="M17 -12 C18 -34, 53 -34, 54 -12"/>
+    <path fill="#1f171b" d="M16 -6 C16 -33, 55 -33, 55 -6 C55 -1, 58 6, 56 12 C53 14, 49 9, 47 1 C46 7, 45 14, 41 19 C37 19, 34 11, 32 1 C31 6, 30 13, 27 18 C21 16, 16 6, 16 -6 Z"/>
+  </g>
+</svg>

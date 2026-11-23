@@ -184,8 +184,8 @@ export default defineConfig({
       title: "Count Patchula",
       description:
         "A modern dependency updater with strong defaults. He never sleeps. Neither do your CVEs.",
-      logo: { src: "./src/assets/logo.png", alt: "Count Patchula, a bat holding a wrench" },
-      favicon: "/favicon.png",
+      logo: { src: "./src/assets/logo.svg", alt: "Count Patchula, a bat holding a wrench" },
+      favicon: "/favicon.svg",
       head: [
         { tag: "link", attrs: { rel: "apple-touch-icon", href: "/apple-touch-icon.png" } },
         { tag: "meta", attrs: { name: "theme-color", content: "#e85a4f" } },
