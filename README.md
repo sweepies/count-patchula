@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/public/logo.png" width="180" alt="Count Patchula, a bat holding a wrench">
+  <img src="docs/public/logo.svg" width="180" alt="Count Patchula, a bat holding a wrench">
   <h1>Count Patchula</h1>
   <p><strong>Count Patchula vants to update your deps. He never sleeps. Neither do your CVEs.</strong></p>
   <p>A modern dependency updater with strong defaults.</p>
