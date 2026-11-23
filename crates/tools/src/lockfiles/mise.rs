@@ -94,8 +94,7 @@ fn parsed(text: &str) -> Result<Value, String> {
         doc.iter().map(|(k, v)| (k.into(), item(v))).collect(),
     ))
 }
-/// The top-level keys, and the `tools` entries by name, that differ between
-/// two parsed lockfiles.
+/// The top-level keys that differ between two parsed lockfiles.
 fn changed(before: &Value, after: &Value) -> Vec<String> {
     let empty = serde_json::Map::new();
     let keys = |value: &Value| -> BTreeSet<String> {
@@ -106,31 +105,22 @@ fn changed(before: &Value, after: &Value) -> Vec<String> {
             .cloned()
             .collect()
     };
-    let mut changed = Vec::new();
-    for key in keys(before).union(&keys(after)) {
-        if key == "tools" {
-            let (old, new) = (&before["tools"], &after["tools"]);
-            for name in keys(old).union(&keys(new)) {
-                if old.get(name) != new.get(name) {
-                    changed.push(format!("tools.{name}"));
-                }
-            }
-        } else if before.get(key) != after.get(key) {
-            changed.push(key.clone());
-        }
-    }
-    changed
+    keys(before)
+        .union(&keys(after))
+        .filter(|key| before.get(key.as_str()) != after.get(key.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// The key mise records a tool under in `mise.lock`: its `BackendArg` short
-/// name, which drops the bracketed options and a leading `core:`, and
+/// name, which drops the bracketed options and any leading `core:`, and
 /// unaliases `nodejs`, `golang` and `dotnet-core` (`BackendArg::from`,
 /// `strip_opts` and `unalias_backend` in mise's source). Registry shorthands
 /// stay as written: `gh` is recorded as `gh`. Only meaningful for a name
 /// `patchula_mise::check` admits, whose brackets close at its end.
 fn lock_key(tool: &str) -> String {
     let name = patchula_mise::split(tool).0;
-    let name = name.strip_prefix("core:").unwrap_or(name);
+    let name = name.trim_start_matches("core:");
     match name {
         "nodejs" => "node",
         "golang" => "go",
@@ -253,11 +243,9 @@ fn graft(original: &str, generated: &str, take: &BTreeSet<String>) -> Result<Str
             }
             if take.contains(tool) {
                 if emitted.insert(tool) {
-                    out.push_str(
-                        blocks
-                            .get(tool)
-                            .ok_or("mise lock removed a selected tool")?,
-                    );
+                    out.push_str(blocks.get(tool).ok_or(
+                        "mise lock wrote a selected tool in a form the Count cannot graft",
+                    )?);
                 }
                 continue;
             }
@@ -792,6 +780,8 @@ mod tests {
             ("node", "node"),
             ("nodejs", "node"),
             ("core:node", "node"),
+            ("core:core:node", "node"),
+            ("nodejs[os=\"linux\"]", "node"),
             ("golang", "go"),
             ("aqua:jdx/mise", "aqua:jdx/mise"),
             (

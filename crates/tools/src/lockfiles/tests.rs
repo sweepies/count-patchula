@@ -2492,6 +2492,9 @@ impl Executor for MiseFixture {
             if self.fault == "add-unrelated" {
                 lock.push_str("\n[[tools.deno]]\nversion = \"2.0.0\"\nbackend = \"core:deno\"\nspecifiers = [\"2.0.0\"]\n");
             }
+            if self.fault == "add-selected" {
+                lock.push_str("\n[[tools.deno]]\nversion = \"24.0.0\"\nbackend = \"core:deno\"\nspecifiers = [\"24.0.0\"]\n");
+            }
             if self.fault == "remove-unrelated" {
                 lock = lock[..lock.find("[[tools.bun]]").unwrap()].to_string();
             }
@@ -2772,6 +2775,28 @@ async fn mise_lock_finds_a_tool_under_the_name_mise_records() {
             calls[0]
         );
     }
+}
+
+/// A selected tool the committed lock has no entry for yet gets mise's
+/// entry, placed before the first committed tool whose name sorts after it;
+/// every committed byte stays.
+#[tokio::test]
+async fn mise_lock_inserts_a_tool_the_lock_did_not_record() {
+    let lock = &include_str!("fixtures/mise.lock").replace("22.0.0", "20.0.0");
+    let (p, _) = mise_update(
+        "[tools]\nnode = '20.0.0'\nbun = '1.4.3'\ndeno = '22.0.0'\n",
+        lock,
+        "deno",
+        "add-selected",
+    )
+    .await;
+    assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
+    let written = &p.contents()["mise.lock"];
+    let block = "[[tools.deno]]\nversion = \"24.0.0\"\nbackend = \"core:deno\"\nspecifiers = [\"24.0.0\"]\n\n";
+    // Before node, the first committed tool whose name sorts after it.
+    let at = written.find(block).expect("deno's entry");
+    assert!(at < written.find("[[tools.node]]").unwrap(), "{written}");
+    assert_eq!(written.replacen(block, "", 1).trim_end(), lock.trim_end());
 }
 
 /// Two declarations mise records under one name leave the Count unable to
