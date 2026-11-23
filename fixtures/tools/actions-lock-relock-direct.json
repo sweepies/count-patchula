@@ -52,7 +52,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:08 GMT"
+            "Mon, 23 Nov 2026 20:03:58 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -82,7 +82,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9E8:2835CE:37E51:62930:6B049878"
+            "B720:2CB954:495BE:8120C:6B049C2D"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -91,7 +91,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4904"
+            "4805"
           ],
           "x-ratelimit-reset": [
             "1795465792"
@@ -100,7 +100,7 @@
             "graphql"
           ],
           "x-ratelimit-used": [
-            "96"
+            "195"
           ],
           "x-xss-protection": [
             "0"
@@ -210,7 +210,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:09 GMT"
+            "Mon, 23 Nov 2026 20:03:58 GMT"
           ],
           "etag": [
             "W/\"ef6d72c7fba84c73f1727e4295a922897dac54d55126020872e66179f97df980\""
@@ -252,7 +252,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9E8:2835CE:37E6F:62956:6B049878"
+            "B720:2CB954:495EA:81247:6B049C2E"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -261,7 +261,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4895"
+            "4813"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -270,7 +270,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "105"
+            "187"
           ],
           "x-xss-protection": [
             "0"
@@ -601,7 +601,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:09 GMT"
+            "Mon, 23 Nov 2026 20:03:59 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -631,7 +631,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9E8:2835CE:37E94:6299B:6B049879"
+            "B720:2CB954:49619:81296:6B049C2F"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -640,7 +640,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4901"
+            "4799"
           ],
           "x-ratelimit-reset": [
             "1795465792"
@@ -649,7 +649,7 @@
             "graphql"
           ],
           "x-ratelimit-used": [
-            "99"
+            "201"
           ],
           "x-xss-protection": [
             "0"
@@ -757,7 +757,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:10 GMT"
+            "Mon, 23 Nov 2026 20:03:59 GMT"
           ],
           "etag": [
             "W/\"ef6d72c7fba84c73f1727e4295a922897dac54d55126020872e66179f97df980\""
@@ -799,7 +799,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9E8:2835CE:37EBB:629CE:6B049879"
+            "B720:2CB954:4963C:812CC:6B049C2F"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -808,7 +808,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4892"
+            "4810"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -817,7 +817,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "108"
+            "190"
           ],
           "x-xss-protection": [
             "0"
@@ -1126,7 +1126,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:10 GMT"
+            "Mon, 23 Nov 2026 20:04:00 GMT"
           ],
           "etag": [
             "W/\"0b0ba7b8679105501668a0b41def299b95d15cfb2a61ca31e2653262eb093898\""
@@ -1165,7 +1165,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9E8:2835CE:37EDD:62A20:6B04987A"
+            "B720:2CB954:49667:8130B:6B049C2F"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -1174,7 +1174,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4890"
+            "4809"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -1183,7 +1183,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "110"
+            "191"
           ],
           "x-xss-protection": [
             "0"
@@ -1915,7 +1915,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:11 GMT"
+            "Mon, 23 Nov 2026 20:04:00 GMT"
           ],
           "etag": [
             "W/\"8778536830ae0ed4a1199491dd0316046b1bdc4ee823e8c0c60cdd980f752ac4\""
@@ -1954,7 +1954,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9E8:2835CE:37F04:62A4A:6B04987A"
+            "B720:2CB954:4968E:81362:6B049C30"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -1963,7 +1963,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4887"
+            "4807"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -1972,7 +1972,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "113"
+            "193"
           ],
           "x-xss-protection": [
             "0"
@@ -3631,6 +3631,305 @@
               "zipball_url": "https://api.github.com/repos/actions/checkout/zipball/v3.5.3"
             }
           ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner0: String!, $name0: String!, $oid0: GitObjectID!, $tag0: String!, $head0: String!, $tagRef0: String!, $headRef0: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid0) { oid } tag: object(expression: $tag0) { oid } head: object(expression: $head0) { oid } tagRef: ref(qualifiedName: $tagRef0) { name } headRef: ref(qualifiedName: $headRef0) { name } } }",
+            "variables": {
+              "head0": "refs/heads/v7^{commit}",
+              "headRef0": "refs/heads/v7",
+              "name0": "checkout",
+              "oid0": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+              "owner0": "actions",
+              "tag0": "refs/tags/v7^{commit}",
+              "tagRef0": "refs/tags/v7"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Mon, 23 Nov 2026 20:04:01 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "switzerlandnorth"
+          ],
+          "x-github-media-type": [
+            "github.v4; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B720:2CB954:496C1:8139E:6B049C30"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4794"
+          ],
+          "x-ratelimit-reset": [
+            "1795465792"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "206"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "a0": {
+                "commit": {
+                  "oid": "3d3c42e5aac5ba805825da76410c181273ba90b1"
+                },
+                "databaseId": 197814629,
+                "head": null,
+                "headRef": null,
+                "nameWithOwner": "actions/checkout",
+                "owner": {
+                  "databaseId": 44036562
+                },
+                "tag": {
+                  "oid": "3d3c42e5aac5ba805825da76410c181273ba90b1"
+                },
+                "tagRef": {
+                  "name": "v7"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner0: String!, $name0: String!, $expr0: String!, $yml0: String!, $yaml0: String!, $docker0: String!, $dockerLower0: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner object(expression: $expr0) { ... on Commit { oid file: file(path: $yml0) { object { ... on Blob { text } } } fileYaml: file(path: $yaml0) { object { ... on Blob { text } } } dockerfile: file(path: $docker0) { oid } dockerfileLower: file(path: $dockerLower0) { oid } } } } }",
+            "variables": {
+              "docker0": "Dockerfile",
+              "dockerLower0": "dockerfile",
+              "expr0": "3d3c42e5aac5ba805825da76410c181273ba90b1^{commit}",
+              "name0": "checkout",
+              "owner0": "actions",
+              "yaml0": "action.yaml",
+              "yml0": "action.yml"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Mon, 23 Nov 2026 20:04:01 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "switzerlandnorth"
+          ],
+          "x-github-media-type": [
+            "github.v4; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B720:2CB954:496C1:8139F:6B049C30"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4936"
+          ],
+          "x-ratelimit-reset": [
+            "1795466078"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "64"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "a0": {
+                "nameWithOwner": "actions/checkout",
+                "object": {
+                  "dockerfile": null,
+                  "dockerfileLower": null,
+                  "file": {
+                    "object": {
+                      "text": "name: 'Checkout'\r\ndescription: 'Checkout a Git repository at a particular version'\r\ninputs:\r\n  repository:\r\n    description: 'Repository name with owner. For example, actions/checkout'\r\n    default: ${{ github.repository }}\r\n  ref:\r\n    description: >\r\n      The branch, tag or SHA to checkout. When checking out the repository that\r\n      triggered a workflow, this defaults to the reference or SHA for that\r\n      event.  Otherwise, uses the default branch.\r\n  token:\r\n    description: >\r\n      Personal access token (PAT) used to fetch the repository. The PAT is configured\r\n      with the local git config, which enables your scripts to run authenticated git\r\n      commands. The post-job step removes the PAT.\r\n\r\n\r\n      We recommend using a service account with the least permissions necessary.\r\n      Also when generating a new PAT, select the least scopes necessary.\r\n\r\n\r\n      [Learn more about creating and using encrypted secrets](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/creating-and-using-encrypted-secrets)\r\n    default: ${{ github.token }}\r\n  ssh-key:\r\n    description: >\r\n      SSH key used to fetch the repository. The SSH key is configured with the local\r\n      git config, which enables your scripts to run authenticated git commands.\r\n      The post-job step removes the SSH key.\r\n\r\n\r\n      We recommend using a service account with the least permissions necessary.\r\n\r\n\r\n      [Learn more about creating and using\r\n      encrypted secrets](https://help.github.com/en/actions/automating-your-workflow-with-github-actions/creating-and-using-encrypted-secrets)\r\n  ssh-known-hosts:\r\n    description: >\r\n      Known hosts in addition to the user and global host key database. The public\r\n      SSH keys for a host may be obtained using the utility `ssh-keyscan`. For example,\r\n      `ssh-keyscan github.com`. The public key for github.com is always implicitly added.\r\n  ssh-strict:\r\n    description: >\r\n      Whether to perform strict host key checking. When true, adds the options `StrictHostKeyChecking=yes`\r\n      and `CheckHostIP=no` to the SSH command line. Use the input `ssh-known-hosts` to\r\n      configure additional hosts.\r\n    default: true\r\n  ssh-user:\r\n    description: >\r\n      The user to use when connecting to the remote SSH host. By default 'git' is used.\r\n    default: git\r\n  persist-credentials:\r\n    description: 'Whether to configure the token or SSH key with the local git config'\r\n    default: true\r\n  path:\r\n    description: 'Relative path under $GITHUB_WORKSPACE to place the repository'\r\n  clean:\r\n    description: 'Whether to execute `git clean -ffdx && git reset --hard HEAD` before fetching'\r\n    default: true\r\n  filter:\r\n    description: >\r\n      Partially clone against a given filter.\r\n      Overrides sparse-checkout if set.\r\n    default: null\r\n  sparse-checkout:\r\n    description: >\r\n      Do a sparse checkout on given patterns.\r\n      Each pattern should be separated with new lines.\r\n    default: null\r\n  sparse-checkout-cone-mode:\r\n    description: >\r\n      Specifies whether to use cone-mode when doing a sparse checkout.\r\n    default: true\r\n  fetch-depth:\r\n    description: 'Number of commits to fetch. 0 indicates all history for all branches and tags.'\r\n    default: 1\r\n  fetch-tags:\r\n    description: 'Whether to fetch tags, even if fetch-depth > 0.'\r\n    default: false\r\n  show-progress:\r\n    description: 'Whether to show progress status output when fetching.'\r\n    default: true\r\n  lfs:\r\n    description: 'Whether to download Git-LFS files'\r\n    default: false\r\n  submodules:\r\n    description: >\r\n      Whether to checkout submodules: `true` to checkout submodules or `recursive` to\r\n      recursively checkout submodules.\r\n\r\n\r\n      When the `ssh-key` input is not provided, SSH URLs beginning with `git@github.com:` are\r\n      converted to HTTPS.\r\n    default: false\r\n  set-safe-directory:\r\n    description: Add repository path as safe.directory for Git global config by running `git config --global --add safe.directory <path>`\r\n    default: true\r\n  github-server-url:\r\n    description: The base URL for the GitHub instance that you are trying to clone from, will use environment defaults to fetch from the same instance that the workflow is running from unless specified. Example URLs are https://github.com or https://my-ghes-server.example.com\r\n    required: false\r\n  allow-unsafe-pr-checkout:\r\n    description: >\r\n      Required to check out fork pull request code from a workflow triggered by\r\n      `pull_request_target` or `workflow_run`. These workflows run with the\r\n      base repository's GITHUB_TOKEN, secrets, default-branch cache scope, and\r\n      runner access; fetching and executing a fork's code in that trusted\r\n      context commonly leads to \"pwn request\" vulnerabilities. Set to `true`\r\n      only after reviewing the risks at https://gh.io/securely-using-pull_request_target.\r\n    default: false\r\noutputs:\r\n  ref:\r\n    description: 'The branch, tag or SHA that was checked out'\r\n  commit:\r\n    description: 'The commit SHA that was checked out'\r\nruns:\r\n  using: node24\r\n  main: dist/index.js\r\n  post: dist/index.js\r\n"
+                    }
+                  },
+                  "fileYaml": null,
+                  "oid": "3d3c42e5aac5ba805825da76410c181273ba90b1"
+                }
+              }
+            },
+            "errors": [
+              {
+                "locations": [
+                  {
+                    "column": 307,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'action.yaml'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "fileYaml"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 372,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'Dockerfile'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "dockerfile"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 413,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'dockerfile'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "dockerfileLower"
+                ],
+                "type": "NOT_FOUND"
+              }
+            ]
+          }
         }
       }
     }

@@ -47,7 +47,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:09 GMT"
+            "Mon, 23 Nov 2026 20:03:59 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -77,7 +77,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:36FEC:618C1:6B049879"
+            "B728:2C10A:4AB2C:82A03:6B049C2E"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -86,7 +86,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4902"
+            "4801"
           ],
           "x-ratelimit-reset": [
             "1795465792"
@@ -95,7 +95,7 @@
             "graphql"
           ],
           "x-ratelimit-used": [
-            "98"
+            "199"
           ],
           "x-xss-protection": [
             "0"
@@ -189,7 +189,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:09 GMT"
+            "Mon, 23 Nov 2026 20:03:59 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -219,7 +219,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:37004:618EF:6B049879"
+            "B728:2C10A:4AB45:82A2F:6B049C2F"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -228,7 +228,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4965"
+            "4939"
           ],
           "x-ratelimit-reset": [
             "1795466078"
@@ -237,7 +237,7 @@
             "graphql"
           ],
           "x-ratelimit-used": [
-            "35"
+            "61"
           ],
           "x-xss-protection": [
             "0"
@@ -358,7 +358,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:10 GMT"
+            "Mon, 23 Nov 2026 20:03:59 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -388,7 +388,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:3701E:61920:6B04987A"
+            "B728:2C10A:4AB68:82A6A:6B049C2F"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -397,7 +397,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4963"
+            "4938"
           ],
           "x-ratelimit-reset": [
             "1795466078"
@@ -406,7 +406,7 @@
             "graphql"
           ],
           "x-ratelimit-used": [
-            "37"
+            "62"
           ],
           "x-xss-protection": [
             "0"
@@ -523,7 +523,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:10 GMT"
+            "Mon, 23 Nov 2026 20:04:00 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -553,7 +553,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:3703F:61962:6B04987A"
+            "B728:2C10A:4AB82:82A8C:6B049C2F"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -562,7 +562,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4898"
+            "4797"
           ],
           "x-ratelimit-reset": [
             "1795465792"
@@ -571,7 +571,7 @@
             "graphql"
           ],
           "x-ratelimit-used": [
-            "102"
+            "203"
           ],
           "x-xss-protection": [
             "0"
@@ -688,7 +688,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:11 GMT"
+            "Mon, 23 Nov 2026 20:04:00 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -718,7 +718,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:3703F:61963:6B04987A"
+            "B728:2C10A:4AB82:82A8D:6B049C2F"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -727,7 +727,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4897"
+            "4795"
           ],
           "x-ratelimit-reset": [
             "1795465792"
@@ -736,7 +736,7 @@
             "graphql"
           ],
           "x-ratelimit-used": [
-            "103"
+            "205"
           ],
           "x-xss-protection": [
             "0"
@@ -898,7 +898,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:11 GMT"
+            "Mon, 23 Nov 2026 20:04:01 GMT"
           ],
           "etag": [
             "W/\"2d39db65975a997f1892b210757b42e600874be96ef5547e7542a79a012367fb\""
@@ -940,7 +940,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:37068:619A1:6B04987B"
+            "B728:2C10A:4ABAD:82ADF:6B049C30"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -949,7 +949,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4885"
+            "4804"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -958,7 +958,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "115"
+            "196"
           ],
           "x-xss-protection": [
             "0"
@@ -1267,7 +1267,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:12 GMT"
+            "Mon, 23 Nov 2026 20:04:01 GMT"
           ],
           "etag": [
             "W/\"f79bf3e5b89459d26f7f2aba0907ca20e6a921162ea610b51fd2d59aa1fb9d83\""
@@ -1306,7 +1306,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:3708A:619D0:6B04987B"
+            "B728:2C10A:4ABC5:82B10:6B049C31"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -1315,7 +1315,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4883"
+            "4801"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -1324,7 +1324,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "117"
+            "199"
           ],
           "x-xss-protection": [
             "0"
@@ -1636,7 +1636,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:12 GMT"
+            "Mon, 23 Nov 2026 20:04:02 GMT"
           ],
           "etag": [
             "W/\"e384691c3501d8341f4892bf101db627929ea0e06722ffc82b5f458fec3f76c7\""
@@ -1675,7 +1675,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:370B6:61A1B:6B04987C"
+            "B728:2C10A:4ABF0:82B6F:6B049C31"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -1684,7 +1684,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4880"
+            "4800"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -1693,7 +1693,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "120"
+            "200"
           ],
           "x-xss-protection": [
             "0"
@@ -2225,7 +2225,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:13 GMT"
+            "Mon, 23 Nov 2026 20:04:03 GMT"
           ],
           "etag": [
             "W/\"3a428adda0993e585b3174688477bb5722c81004283a424daf66e7b4d5964adf\""
@@ -2264,7 +2264,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:370CF:61A41:6B04987C"
+            "B728:2C10A:4AC18:82BA7:6B049C32"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -2273,7 +2273,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4879"
+            "4799"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -2282,7 +2282,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "121"
+            "201"
           ],
           "x-xss-protection": [
             "0"
@@ -2594,7 +2594,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:13 GMT"
+            "Mon, 23 Nov 2026 20:04:03 GMT"
           ],
           "etag": [
             "W/\"c954316e8ff31ef306ea983ca41433375dc0c6fbdaf9fad23f61b9ab293ea578\""
@@ -2633,7 +2633,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:370EF:61A82:6B04987D"
+            "B728:2C10A:4AC5A:82BF6:6B049C33"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -2642,7 +2642,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4878"
+            "4798"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -2651,7 +2651,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "122"
+            "202"
           ],
           "x-xss-protection": [
             "0"
@@ -3043,7 +3043,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:14 GMT"
+            "Mon, 23 Nov 2026 20:04:03 GMT"
           ],
           "etag": [
             "W/\"b2beaba16db4d194d741e53da742ced6f384b62fc84ebf344a0f1fc8a49b2566\""
@@ -3082,7 +3082,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:37105:61AB0:6B04987D"
+            "B728:2C10A:4AC70:82C21:6B049C33"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -3091,7 +3091,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4877"
+            "4797"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -3100,7 +3100,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "123"
+            "203"
           ],
           "x-xss-protection": [
             "0"
@@ -3732,7 +3732,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:14 GMT"
+            "Mon, 23 Nov 2026 20:04:04 GMT"
           ],
           "etag": [
             "W/\"99f7b5fa080313fc727298c18fa034d4a59554a7b15d33468e885c33aec2bfb9\""
@@ -3771,7 +3771,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:37123:61AE6:6B04987E"
+            "B728:2C10A:4AC84:82C78:6B049C33"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -3780,7 +3780,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4876"
+            "4796"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -3789,7 +3789,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "124"
+            "204"
           ],
           "x-xss-protection": [
             "0"
@@ -5425,7 +5425,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:15 GMT"
+            "Mon, 23 Nov 2026 20:04:05 GMT"
           ],
           "etag": [
             "W/\"c1ddce5a05b6d917c92d06f7007999df9443c1d23b242db84bddd0c35fd571a2\""
@@ -5464,7 +5464,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:37149:61B2A:6B04987E"
+            "B728:2C10A:4ACA8:82CBB:6B049C34"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -5473,7 +5473,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4875"
+            "4795"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -5482,7 +5482,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "125"
+            "205"
           ],
           "x-xss-protection": [
             "0"
@@ -7136,7 +7136,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:15 GMT"
+            "Mon, 23 Nov 2026 20:04:05 GMT"
           ],
           "etag": [
             "W/\"7e15560d381d4aba520629144bb0aac15a97c5dd0ba92f6ac8f6a691b219729e\""
@@ -7172,7 +7172,7 @@
             "github.v3; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9F4:A7D1C:3716B:61B6F:6B04987F"
+            "B728:2C10A:4ACD3:82CFE:6B049C35"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -7181,7 +7181,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4874"
+            "4794"
           ],
           "x-ratelimit-reset": [
             "1795464508"
@@ -7190,7 +7190,7 @@
             "core"
           ],
           "x-ratelimit-used": [
-            "126"
+            "206"
           ],
           "x-xss-protection": [
             "0"
@@ -8550,6 +8550,879 @@
               "zipball_url": "https://api.github.com/repos/actions/attest/zipball/v0.1.0"
             }
           ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner0: String!, $name0: String!, $expr0: String!, $yml0: String!, $yaml0: String!, $docker0: String!, $dockerLower0: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner object(expression: $expr0) { ... on Commit { oid file: file(path: $yml0) { object { ... on Blob { text } } } fileYaml: file(path: $yaml0) { object { ... on Blob { text } } } dockerfile: file(path: $docker0) { oid } dockerfileLower: file(path: $dockerLower0) { oid } } } } }",
+            "variables": {
+              "docker0": "Dockerfile",
+              "dockerLower0": "dockerfile",
+              "expr0": "9e2237c30f869ad3bcaed6a4be2cd43564dd421b^{commit}",
+              "name0": "gh-extension-precompile",
+              "owner0": "cli",
+              "yaml0": "action.yaml",
+              "yml0": "action.yml"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Mon, 23 Nov 2026 20:04:06 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "switzerlandnorth"
+          ],
+          "x-github-media-type": [
+            "github.v4; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B728:2C10A:4ACF9:82D46:6B049C35"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4788"
+          ],
+          "x-ratelimit-reset": [
+            "1795465792"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "212"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "a0": {
+                "nameWithOwner": "cli/gh-extension-precompile",
+                "object": {
+                  "dockerfile": null,
+                  "dockerfileLower": null,
+                  "file": {
+                    "object": {
+                      "text": "name: \"release extension\"\ndescription: \"Generate a release for a precompiled gh extension\"\ninputs:\n  build_script_override:\n    description: \"Path to custom build script for producing binaries to upload\"\n  draft_release:\n    description: \"Create a draft release\"\n  github_token:\n    description: \"GitHub token to use, defaults to `github.token` if unspecified\"\n  go_version:\n    description: \"The Go version to use for compiling (supports semver spec and ranges)\"\n  go_version_file:\n    description: Path to the go.mod or go.work file to determine version of go to use\n  gpg_fingerprint:\n    description: \"GPG fingerprint to use for signing releases\"\n  release_tag:\n    description: \"Tag that the release should be created from, defaults to `github.ref` if unspecified\"\n  release_title_prefix:\n    description: \"Title prefix of the release, defaults to repository name if unspecified\"\n  generate_attestations:\n    description: \"Whether to generate artifact attestations for release binaries to establish build provenance, defaults to `false` if unspecified\"\n    default: false\n  release_android:\n    description: \"Whether to release android binaries, defaults to `false` if unspecified\"\n    default: false\n  android_ndk_home:\n    description: \"Path to the Android NDK for android-amd64 and android-arm64 builds\"\n  android_sdk_version:\n    description: \"Android SDK build-tools version\"\n  go_build_options:\n    description: \"Additional options to pass to go build command (e.g., './cmd/my-extension' to specify source directory or '-tags production' for build tags)\"\nbranding:\n  color: purple\n  icon: box\nruns:\n  using: composite\n  steps:\n    # TODO: figure out how to avoid setting up Go for non-Go extensions\n    - uses: actions/setup-go@v5\n      with:\n        # The default go version is managed here because actions/setup-go favors go-version over go-version-file,\n        # requiring us to only pass it if no other inputs are provided.\n        #\n        # Otherwise, we pass along the values given, letting the user catch the warning notice in the logs\n        # and picking either go-version or go-version-file.\n        go-version: ${{(inputs.go_version_file == '' && inputs.go_version == '') && '1.18' || inputs.go_version}}\n        go-version-file: ${{inputs.go_version_file}}\n\n    - id: determine_token\n      run: |\n        if [ -n \"$INPUT_TOKEN\" ]; then\n          token=\"$INPUT_TOKEN\"\n        else\n          token=\"$DEFAULT_TOKEN\"\n        fi\n        echo \"TOKEN=$token\" >> \"$GITHUB_OUTPUT\"\n      env:\n        DEFAULT_TOKEN: ${{ github.token }}\n        INPUT_TOKEN: ${{ inputs.github_token }}\n      shell: bash\n\n    - id: determine_release_tag\n      run: |\n        if [ -n \"$INPUT_TAG\" ]; then\n          tag=\"$INPUT_TAG\"\n        elif [[ $GITHUB_REF = refs/tags/* ]]; then\n          tag=\"${GITHUB_REF#refs/tags/}\"\n        else\n          tag=\"$(git describe --tags --abbrev=0)\"\n        fi\n\n        echo \"TAG=$tag\" >> \"$GITHUB_OUTPUT\"\n      env:\n        INPUT_TAG: ${{ inputs.release_tag }}\n      shell: bash\n\n    - id: determine_release_title_prefix\n      run: |\n        if [ -n \"$INPUT_TITLE\" ]; then\n          prefix=\"$INPUT_TITLE\"\n        else\n          prefix=\"${GITHUB_REPOSITORY#*/}\"\n        fi\n        echo \"PREFIX=$prefix\" >> \"$GITHUB_OUTPUT\"\n      env:\n        INPUT_TITLE: ${{ inputs.release_title_prefix }}\n      shell: bash\n\n    - id: determine_android_ndk_home\n      run: |\n        if [ -n \"$INPUT_ANDROID_NDK_HOME\" ]; then\n          android_ndk_home=\"$INPUT_ANDROID_NDK_HOME\"\n        else\n          android_ndk_home=\"$ANDROID_NDK_HOME\"\n        fi\n        echo \"ANDROID_NDK_HOME=$android_ndk_home\" >> \"$GITHUB_OUTPUT\"\n      env:\n        INPUT_ANDROID_NDK_HOME: ${{ inputs.android_ndk_home }}\n      shell: bash\n\n    - run: ${GITHUB_ACTION_PATH//\\\\//}/build_and_release.sh\n      env:\n        GITHUB_REPOSITORY: ${{ github.repository }}\n        GITHUB_TOKEN: ${{ steps.determine_token.outputs.TOKEN }}\n        GPG_FINGERPRINT: ${{ inputs.gpg_fingerprint }}\n        GH_EXT_BUILD_SCRIPT: ${{ inputs.build_script_override }}\n        GH_RELEASE_TAG: ${{ steps.determine_release_tag.outputs.TAG }}\n        GH_RELEASE_TITLE_PREFIX: ${{ steps.determine_release_title_prefix.outputs.PREFIX }}\n        DRAFT_RELEASE: ${{ inputs.draft_release }}\n        ANDROID_NDK_HOME: ${{ steps.determine_android_ndk_home.outputs.ANDROID_NDK_HOME }}\n        ANDROID_SDK_VERSION: ${{ inputs.android_sdk_version }}\n        RELEASE_ANDROID: ${{ inputs.release_android }}\n        GO_BUILD_OPTIONS: ${{ inputs.go_build_options }}\n      shell: bash\n\n    - if: ${{ inputs.generate_attestations == 'true' }}\n      uses: actions/attest-build-provenance@v1\n      with:\n        subject-path: \"${{ github.workspace }}/dist/*\"\n"
+                    }
+                  },
+                  "fileYaml": null,
+                  "oid": "9e2237c30f869ad3bcaed6a4be2cd43564dd421b"
+                }
+              }
+            },
+            "errors": [
+              {
+                "locations": [
+                  {
+                    "column": 307,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'action.yaml'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "fileYaml"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 372,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'Dockerfile'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "dockerfile"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 413,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'dockerfile'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "dockerfileLower"
+                ],
+                "type": "NOT_FOUND"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner0: String!, $name0: String!, $oid0: GitObjectID!, $tag0: String!, $head0: String!, $tagRef0: String!, $headRef0: String!, $owner1: String!, $name1: String!, $oid1: GitObjectID!, $tag1: String!, $head1: String!, $tagRef1: String!, $headRef1: String!, $owner2: String!, $name2: String!, $oid2: GitObjectID!, $tag2: String!, $head2: String!, $tagRef2: String!, $headRef2: String!, $owner3: String!, $name3: String!, $oid3: GitObjectID!, $tag3: String!, $head3: String!, $tagRef3: String!, $headRef3: String!, $owner4: String!, $name4: String!, $oid4: GitObjectID!, $tag4: String!, $head4: String!, $tagRef4: String!, $headRef4: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid0) { oid } tag: object(expression: $tag0) { oid } head: object(expression: $head0) { oid } tagRef: ref(qualifiedName: $tagRef0) { name } headRef: ref(qualifiedName: $headRef0) { name } } a1: repository(owner: $owner1, name: $name1) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid1) { oid } tag: object(expression: $tag1) { oid } head: object(expression: $head1) { oid } tagRef: ref(qualifiedName: $tagRef1) { name } headRef: ref(qualifiedName: $headRef1) { name } } a2: repository(owner: $owner2, name: $name2) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid2) { oid } tag: object(expression: $tag2) { oid } head: object(expression: $head2) { oid } tagRef: ref(qualifiedName: $tagRef2) { name } headRef: ref(qualifiedName: $headRef2) { name } } a3: repository(owner: $owner3, name: $name3) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid3) { oid } tag: object(expression: $tag3) { oid } head: object(expression: $head3) { oid } tagRef: ref(qualifiedName: $tagRef3) { name } headRef: ref(qualifiedName: $headRef3) { name } } a4: repository(owner: $owner4, name: $name4) { nameWithOwner databaseId owner { ... on Organization { databaseId } ... on User { databaseId } } commit: object(oid: $oid4) { oid } tag: object(expression: $tag4) { oid } head: object(expression: $head4) { oid } tagRef: ref(qualifiedName: $tagRef4) { name } headRef: ref(qualifiedName: $headRef4) { name } } }",
+            "variables": {
+              "head0": "refs/heads/v2.1.0^{commit}",
+              "head1": "refs/heads/v1^{commit}",
+              "head2": "refs/heads/predicate@1.1.4^{commit}",
+              "head3": "refs/heads/v1.4.1^{commit}",
+              "head4": "refs/heads/v5^{commit}",
+              "headRef0": "refs/heads/v2.1.0",
+              "headRef1": "refs/heads/v1",
+              "headRef2": "refs/heads/predicate@1.1.4",
+              "headRef3": "refs/heads/v1.4.1",
+              "headRef4": "refs/heads/v5",
+              "name0": "gh-extension-precompile",
+              "name1": "attest-build-provenance",
+              "name2": "attest-build-provenance",
+              "name3": "attest",
+              "name4": "setup-go",
+              "oid0": "9e2237c30f869ad3bcaed6a4be2cd43564dd421b",
+              "oid1": "ef244123eb79f2f7a7e75d99086184180e6d0018",
+              "oid2": "36fa7d009e22618ca7cd599486979b8150596c74",
+              "oid3": "67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d",
+              "oid4": "40f1582b2485089dde7abd97c1529aa768e1baff",
+              "owner0": "cli",
+              "owner1": "actions",
+              "owner2": "actions",
+              "owner3": "actions",
+              "owner4": "actions",
+              "tag0": "refs/tags/v2.1.0^{commit}",
+              "tag1": "refs/tags/v1^{commit}",
+              "tag2": "refs/tags/predicate@1.1.4^{commit}",
+              "tag3": "refs/tags/v1.4.1^{commit}",
+              "tag4": "refs/tags/v5^{commit}",
+              "tagRef0": "refs/tags/v2.1.0",
+              "tagRef1": "refs/tags/v1",
+              "tagRef2": "refs/tags/predicate@1.1.4",
+              "tagRef3": "refs/tags/v1.4.1",
+              "tagRef4": "refs/tags/v5"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Mon, 23 Nov 2026 20:04:06 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "switzerlandnorth"
+          ],
+          "x-github-media-type": [
+            "github.v4; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B728:2C10A:4ACF9:82D47:6B049C35"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4787"
+          ],
+          "x-ratelimit-reset": [
+            "1795465792"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "213"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "a0": {
+                "commit": {
+                  "oid": "9e2237c30f869ad3bcaed6a4be2cd43564dd421b"
+                },
+                "databaseId": 421583656,
+                "head": null,
+                "headRef": null,
+                "nameWithOwner": "cli/gh-extension-precompile",
+                "owner": {
+                  "databaseId": 59704711
+                },
+                "tag": {
+                  "oid": "9e2237c30f869ad3bcaed6a4be2cd43564dd421b"
+                },
+                "tagRef": {
+                  "name": "v2.1.0"
+                }
+              },
+              "a1": {
+                "commit": {
+                  "oid": "ef244123eb79f2f7a7e75d99086184180e6d0018"
+                },
+                "databaseId": 760702757,
+                "head": null,
+                "headRef": null,
+                "nameWithOwner": "actions/attest-build-provenance",
+                "owner": {
+                  "databaseId": 44036562
+                },
+                "tag": {
+                  "oid": "ef244123eb79f2f7a7e75d99086184180e6d0018"
+                },
+                "tagRef": {
+                  "name": "v1"
+                }
+              },
+              "a2": {
+                "commit": {
+                  "oid": "36fa7d009e22618ca7cd599486979b8150596c74"
+                },
+                "databaseId": 760702757,
+                "head": null,
+                "headRef": null,
+                "nameWithOwner": "actions/attest-build-provenance",
+                "owner": {
+                  "databaseId": 44036562
+                },
+                "tag": {
+                  "oid": "36fa7d009e22618ca7cd599486979b8150596c74"
+                },
+                "tagRef": {
+                  "name": "predicate@1.1.4"
+                }
+              },
+              "a3": {
+                "commit": {
+                  "oid": "67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d"
+                },
+                "databaseId": 760701061,
+                "head": null,
+                "headRef": null,
+                "nameWithOwner": "actions/attest",
+                "owner": {
+                  "databaseId": 44036562
+                },
+                "tag": {
+                  "oid": "67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d"
+                },
+                "tagRef": {
+                  "name": "v1.4.1"
+                }
+              },
+              "a4": {
+                "commit": {
+                  "oid": "40f1582b2485089dde7abd97c1529aa768e1baff"
+                },
+                "databaseId": 192624594,
+                "head": null,
+                "headRef": null,
+                "nameWithOwner": "actions/setup-go",
+                "owner": {
+                  "databaseId": 44036562
+                },
+                "tag": {
+                  "oid": "40f1582b2485089dde7abd97c1529aa768e1baff"
+                },
+                "tagRef": {
+                  "name": "v5"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner0: String!, $name0: String!, $expr0: String!, $yml0: String!, $yaml0: String!, $docker0: String!, $dockerLower0: String!, $owner1: String!, $name1: String!, $expr1: String!, $yml1: String!, $yaml1: String!, $docker1: String!, $dockerLower1: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner object(expression: $expr0) { ... on Commit { oid file: file(path: $yml0) { object { ... on Blob { text } } } fileYaml: file(path: $yaml0) { object { ... on Blob { text } } } dockerfile: file(path: $docker0) { oid } dockerfileLower: file(path: $dockerLower0) { oid } } } } a1: repository(owner: $owner1, name: $name1) { nameWithOwner object(expression: $expr1) { ... on Commit { oid file: file(path: $yml1) { object { ... on Blob { text } } } fileYaml: file(path: $yaml1) { object { ... on Blob { text } } } dockerfile: file(path: $docker1) { oid } dockerfileLower: file(path: $dockerLower1) { oid } } } } }",
+            "variables": {
+              "docker0": "Dockerfile",
+              "docker1": "Dockerfile",
+              "dockerLower0": "dockerfile",
+              "dockerLower1": "dockerfile",
+              "expr0": "40f1582b2485089dde7abd97c1529aa768e1baff^{commit}",
+              "expr1": "ef244123eb79f2f7a7e75d99086184180e6d0018^{commit}",
+              "name0": "setup-go",
+              "name1": "attest-build-provenance",
+              "owner0": "actions",
+              "owner1": "actions",
+              "yaml0": "action.yaml",
+              "yaml1": "action.yaml",
+              "yml0": "action.yml",
+              "yml1": "action.yml"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Mon, 23 Nov 2026 20:04:06 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "switzerlandnorth"
+          ],
+          "x-github-media-type": [
+            "github.v4; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B728:2C10A:4AD26:82D91:6B049C36"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4786"
+          ],
+          "x-ratelimit-reset": [
+            "1795465792"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "214"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "a0": {
+                "nameWithOwner": "actions/setup-go",
+                "object": {
+                  "dockerfile": null,
+                  "dockerfileLower": null,
+                  "file": {
+                    "object": {
+                      "text": "name: 'Setup Go environment'\ndescription: 'Setup a Go environment and add it to the PATH'\nauthor: 'GitHub'\ninputs:\n  go-version:\n    description: 'The Go version to download (if necessary) and use. Supports semver spec and ranges. Be sure to enclose this option in single quotation marks.'\n  go-version-file:\n    description: 'Path to the go.mod or go.work file.'\n  check-latest:\n    description: 'Set this option to true if you want the action to always check for the latest available version that satisfies the version spec'\n    default: false\n  token:\n    description: Used to pull Go distributions from go-versions. Since there's a default, this is typically not supplied by the user. When running this action on github.com, the default value is sufficient. When running on GHES, you can pass a personal access token for github.com if you are experiencing rate limiting.\n    default: ${{ github.server_url == 'https://github.com' && github.token || '' }}\n  cache:\n    description: Used to specify whether caching is needed. Set to true, if you'd like to enable caching.\n    default: true\n  cache-dependency-path:\n    description: 'Used to specify the path to a dependency file - go.sum'\n  architecture:\n    description: 'Target architecture for Go to use. Examples: x86, x64. Will use system architecture by default.'\noutputs:\n  go-version:\n    description: 'The installed Go version. Useful when given a version range as input.'\n  cache-hit:\n    description: 'A boolean value to indicate if a cache was hit'\nruns:\n  using: 'node20'\n  main: 'dist/setup/index.js'\n  post: 'dist/cache-save/index.js'\n  post-if: success()\n"
+                    }
+                  },
+                  "fileYaml": null,
+                  "oid": "40f1582b2485089dde7abd97c1529aa768e1baff"
+                }
+              },
+              "a1": {
+                "nameWithOwner": "actions/attest-build-provenance",
+                "object": {
+                  "dockerfile": null,
+                  "dockerfileLower": null,
+                  "file": {
+                    "object": {
+                      "text": "name: 'Attest Build Provenance'\ndescription: 'Generate provenance attestations for build artifacts'\nauthor: 'GitHub'\nbranding:\n  color: 'blue'\n  icon: 'lock'\n\ninputs:\n  subject-path:\n    description: >\n      Path to the artifact serving as the subject of the attestation. Must\n      specify exactly one of \"subject-path\" or \"subject-digest\". May contain a\n      glob pattern or list of paths (total subject count cannot exceed 2500).\n    required: false\n  subject-digest:\n    description: >\n      Digest of the subject for which provenance will be generated. Must be in\n      the form \"algorithm:hex_digest\" (e.g. \"sha256:abc123...\"). Must specify\n      exactly one of \"subject-path\" or \"subject-digest\".\n    required: false\n  subject-name:\n    description: >\n      Subject name as it should appear in the provenance statement. Required\n      unless \"subject-path\" is specified, in which case it will be inferred from\n      the path.\n  push-to-registry:\n    description: >\n      Whether to push the provenance statement to the image registry. Requires\n      that the \"subject-name\" parameter specify the fully-qualified image name\n      and that the \"subject-digest\" parameter be specified. Defaults to false.\n    default: false\n    required: false\n  show-summary:\n    description: >\n      Whether to attach a list of generated attestations to the workflow run\n      summary page. Defaults to true.\n    default: true\n    required: false\n  github-token:\n    description: >\n      The GitHub token used to make authenticated API requests.\n    default: ${{ github.token }}\n    required: false\n\noutputs:\n  bundle-path:\n    description: 'The path to the file containing the attestation bundle(s).'\n    value: ${{ steps.attest.outputs.bundle-path }}\n\nruns:\n  using: 'composite'\n  steps:\n    - uses: actions/attest-build-provenance/predicate@36fa7d009e22618ca7cd599486979b8150596c74 # predicate@1.1.4\n      id: generate-build-provenance-predicate\n    - uses: actions/attest@67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d # v1.4.1\n      id: attest\n      with:\n        subject-path: ${{ inputs.subject-path }}\n        subject-digest: ${{ inputs.subject-digest }}\n        subject-name: ${{ inputs.subject-name }}\n        predicate-type: ${{ steps.generate-build-provenance-predicate.outputs.predicate-type }}\n        predicate: ${{ steps.generate-build-provenance-predicate.outputs.predicate }}\n        push-to-registry: ${{ inputs.push-to-registry }}\n        show-summary: ${{ inputs.show-summary }}\n        github-token: ${{ inputs.github-token }}\n"
+                    }
+                  },
+                  "fileYaml": null,
+                  "oid": "ef244123eb79f2f7a7e75d99086184180e6d0018"
+                }
+              }
+            },
+            "errors": [
+              {
+                "locations": [
+                  {
+                    "column": 435,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'action.yaml'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "fileYaml"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 500,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'Dockerfile'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "dockerfile"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 541,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'dockerfile'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "dockerfileLower"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 768,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'action.yaml'.",
+                "path": [
+                  "a1",
+                  "object",
+                  "fileYaml"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 833,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'Dockerfile'.",
+                "path": [
+                  "a1",
+                  "object",
+                  "dockerfile"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 874,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'dockerfile'.",
+                "path": [
+                  "a1",
+                  "object",
+                  "dockerfileLower"
+                ],
+                "type": "NOT_FOUND"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.github.com/graphql",
+        "headers": {
+          "accept": [
+            "application/vnd.github.merge-info-preview+json, application/vnd.github.nebula-preview"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "x-github-api-version": [
+            "2022-11-28"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "query": "query($owner0: String!, $name0: String!, $expr0: String!, $yml0: String!, $yaml0: String!, $docker0: String!, $dockerLower0: String!, $owner1: String!, $name1: String!, $expr1: String!, $yml1: String!, $yaml1: String!, $docker1: String!, $dockerLower1: String!) { a0: repository(owner: $owner0, name: $name0) { nameWithOwner object(expression: $expr0) { ... on Commit { oid file: file(path: $yml0) { object { ... on Blob { text } } } fileYaml: file(path: $yaml0) { object { ... on Blob { text } } } dockerfile: file(path: $docker0) { oid } dockerfileLower: file(path: $dockerLower0) { oid } } } } a1: repository(owner: $owner1, name: $name1) { nameWithOwner object(expression: $expr1) { ... on Commit { oid file: file(path: $yml1) { object { ... on Blob { text } } } fileYaml: file(path: $yaml1) { object { ... on Blob { text } } } dockerfile: file(path: $docker1) { oid } dockerfileLower: file(path: $dockerLower1) { oid } } } } }",
+            "variables": {
+              "docker0": "predicate/Dockerfile",
+              "docker1": "Dockerfile",
+              "dockerLower0": "predicate/dockerfile",
+              "dockerLower1": "dockerfile",
+              "expr0": "36fa7d009e22618ca7cd599486979b8150596c74^{commit}",
+              "expr1": "67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d^{commit}",
+              "name0": "attest-build-provenance",
+              "name1": "attest",
+              "owner0": "actions",
+              "owner1": "actions",
+              "yaml0": "predicate/action.yaml",
+              "yaml1": "action.yaml",
+              "yml0": "predicate/action.yml",
+              "yml1": "action.yml"
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": [
+            "*"
+          ],
+          "access-control-expose-headers": [
+            "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning"
+          ],
+          "content-security-policy": [
+            "default-src 'none'"
+          ],
+          "content-type": [
+            "application/json; charset=utf-8"
+          ],
+          "date": [
+            "Mon, 23 Nov 2026 20:04:07 GMT"
+          ],
+          "referrer-policy": [
+            "origin-when-cross-origin, strict-origin-when-cross-origin"
+          ],
+          "server": [
+            "github.com"
+          ],
+          "strict-transport-security": [
+            "max-age=31536000; includeSubdomains; preload"
+          ],
+          "vary": [
+            "Accept-Encoding, Accept, X-Requested-With"
+          ],
+          "x-accepted-oauth-scopes": [
+            "repo"
+          ],
+          "x-content-type-options": [
+            "nosniff"
+          ],
+          "x-frame-options": [
+            "deny"
+          ],
+          "x-github-edge-region": [
+            "switzerlandnorth"
+          ],
+          "x-github-media-type": [
+            "github.v4; param=merge-info-preview.nebula-preview; format=json"
+          ],
+          "x-github-request-id": [
+            "B728:2C10A:4AD50:82DE1:6B049C36"
+          ],
+          "x-oauth-scopes": [
+            "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
+          ],
+          "x-ratelimit-limit": [
+            "5000"
+          ],
+          "x-ratelimit-remaining": [
+            "4935"
+          ],
+          "x-ratelimit-reset": [
+            "1795466078"
+          ],
+          "x-ratelimit-resource": [
+            "graphql"
+          ],
+          "x-ratelimit-used": [
+            "65"
+          ],
+          "x-xss-protection": [
+            "0"
+          ]
+        },
+        "body": {
+          "format": "json",
+          "value": {
+            "data": {
+              "a0": {
+                "nameWithOwner": "actions/attest-build-provenance",
+                "object": {
+                  "dockerfile": null,
+                  "dockerfileLower": null,
+                  "file": {
+                    "object": {
+                      "text": "name: 'Build Provenance Predicate'\ndescription: 'Generate predicate for build provenance attestations'\nauthor: 'GitHub'\n\noutputs:\n  predicate:\n    description: >\n      The JSON-serialized of the attestation predicate.\n  predicate-type:\n    description: >\n      URI identifying the type of the predicate.\nruns:\n  using: node20\n  main: ../dist/index.js\n"
+                    }
+                  },
+                  "fileYaml": null,
+                  "oid": "36fa7d009e22618ca7cd599486979b8150596c74"
+                }
+              },
+              "a1": {
+                "nameWithOwner": "actions/attest",
+                "object": {
+                  "dockerfile": null,
+                  "dockerfileLower": null,
+                  "file": {
+                    "object": {
+                      "text": "name: 'Generate Generic Attestations'\ndescription: 'Generate attestations for build artifacts'\nauthor: 'GitHub'\nbranding:\n  color: 'blue'\n  icon: 'link'\n\ninputs:\n  subject-path:\n    description: >\n      Path to the artifact serving as the subject of the attestation. Must\n      specify exactly one of \"subject-path\" or \"subject-digest\". May contain a\n      glob pattern or list of paths (total subject count cannot exceed 2500).\n    required: false\n  subject-digest:\n    description: >\n      Digest of the subject for the attestation. Must be in the form\n      \"algorithm:hex_digest\" (e.g. \"sha256:abc123...\"). Must specify exactly one\n      of \"subject-path\" or \"subject-digest\".\n    required: false\n  subject-name:\n    description: >\n      Subject name as it should appear in the attestation. Required unless\n      \"subject-path\" is specified, in which case it will be inferred from the\n      path.\n    required: false\n  predicate-type:\n    description: >\n      URI identifying the type of the predicate.\n    required: true\n  predicate:\n    description: >\n      String containing the value for the attestation predicate. String length\n      cannot exceed 16MB. Must supply exactly one of \"predicate-path\" or\n      \"predicate\".\n    required: false\n  predicate-path:\n    description: >\n      Path to the file which contains the content for the attestation predicate.\n      File size cannot exceed 16MB. Must supply exactly one of \"predicate-path\"\n      or \"predicate\".\n    required: false\n  push-to-registry:\n    description: >\n      Whether to push the attestation to the image registry. Requires that the\n      \"subject-name\" parameter specify the fully-qualified image name and that\n      the \"subject-digest\" parameter be specified. Defaults to false.\n    default: false\n    required: false\n  show-summary:\n    description: >\n      Whether to attach a list of generated attestations to the workflow run\n      summary page. Defaults to true.\n    default: true\n    required: false\n  github-token:\n    description: >\n      The GitHub token used to make authenticated API requests.\n    default: ${{ github.token }}\n    required: false\noutputs:\n  bundle-path:\n    description: 'The path to the file containing the attestation bundle(s).'\n\nruns:\n  using: node20\n  main: ./dist/index.js\n"
+                    }
+                  },
+                  "fileYaml": null,
+                  "oid": "67422f5511b7ff725f4dbd6fb9bd2cd925c65a8d"
+                }
+              }
+            },
+            "errors": [
+              {
+                "locations": [
+                  {
+                    "column": 435,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'predicate/action.yaml'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "fileYaml"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 500,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'predicate/Dockerfile'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "dockerfile"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 541,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'predicate/dockerfile'.",
+                "path": [
+                  "a0",
+                  "object",
+                  "dockerfileLower"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 768,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'action.yaml'.",
+                "path": [
+                  "a1",
+                  "object",
+                  "fileYaml"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 833,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'Dockerfile'.",
+                "path": [
+                  "a1",
+                  "object",
+                  "dockerfile"
+                ],
+                "type": "NOT_FOUND"
+              },
+              {
+                "locations": [
+                  {
+                    "column": 874,
+                    "line": 1
+                  }
+                ],
+                "message": "Could not resolve file for path 'dockerfile'.",
+                "path": [
+                  "a1",
+                  "object",
+                  "dockerfileLower"
+                ],
+                "type": "NOT_FOUND"
+              }
+            ]
+          }
         }
       }
     }

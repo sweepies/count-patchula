@@ -8344,8 +8344,17 @@ async fn an_action_update_carries_the_regenerated_lock() {
         .into_iter()
         .filter(|(_, args)| args.iter().any(|arg| arg == "/bin/sh"))
         .collect();
-    assert_eq!(runs.len(), 2, "{calls:?}");
+    assert_eq!(runs.len(), 3, "{calls:?}");
     let (fix, verify) = (&runs[0].1, &runs[1].1);
+    // The tool's online check runs last, read-only.
+    let confirm = &runs[2].1;
+    for flag in [
+        "--no-fix",
+        "--ignore-local-actions",
+        "--json=valid,findings",
+    ] {
+        assert!(confirm.contains(&flag.to_owned()), "{confirm:?}");
+    }
     for flag in [
         "--no-interactive",
         "--no-onboard",
@@ -8578,7 +8587,7 @@ async fn a_self_repository_composite_is_relocked_under_its_callers() {
     )
     .await;
     assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
-    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert_eq!(runs.len(), 3, "{runs:?}");
     for run in &runs {
         let paths: Vec<&String> = run.iter().filter(|arg| arg.ends_with(".yml")).collect();
         assert_eq!(paths, [".github/workflows/ci.yml"], "{run:?}");
@@ -8926,6 +8935,64 @@ fn actions_clean(lock: &str) -> Vec<ActionsRun> {
     ]
 }
 
+/// The tool's online check reads each locked action's manifest at its locked
+/// commit. A lock the fix run wrote and `--verify-local` accepted, but which
+/// leaves out a composite's `uses` edge, fails it and holds the update;
+/// an unreachable GitHub makes the update wait.
+#[tokio::test]
+async fn the_online_check_holds_a_lock_it_rejects() {
+    let files = BTreeMap::from([
+        (
+            ".github/workflows/ci.yml".into(),
+            actions_workflow("actions/checkout@v7.0.0"),
+        ),
+        (
+            contract::ACTIONS_LOCK.into(),
+            actions_lock(&[".github/workflows/ci.yml"]),
+        ),
+    ]);
+    let lock = "version: 'v0.0.3'\nworkflows:\n    '.github/workflows/ci.yml':\n        - 'actions/checkout@v7.0.1'\ndependencies:\n    'actions/checkout@v7.0.1':\n        ref: 'v7.0.1'\n        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'\n";
+    for (finding, retryable, held) in [
+        ("incomplete-lockfile", false, BranchStatus::Error),
+        ("reachability-unknown", true, BranchStatus::Error),
+    ] {
+        let mut runs = actions_clean(lock);
+        runs.push(ActionsRun {
+            code: 1,
+            stdout: serde_json::json!({
+                "valid": false,
+                "findings": [{
+                    "workflow": ".github/workflows/ci.yml",
+                    "category": finding,
+                    "severity": "error",
+                    "detail": "actions/checkout@v7.0.1 at its locked commit uses another action its lockfile entry does not record",
+                    "retryable": retryable,
+                }],
+            })
+            .to_string(),
+            stderr: String::new(),
+            lock: None,
+            removes_lock: false,
+            extra: Vec::new(),
+        });
+        let (p, ran) = actions_prepared(
+            &files,
+            &[(
+                ".github/workflows/ci.yml",
+                actions_workflow("actions/checkout@v7.0.1"),
+            )],
+            runs,
+        )
+        .await;
+        assert_eq!(p.action().status, held, "{finding}: {:?}", p.action());
+        assert!(
+            !p.contents().contains_key(contract::ACTIONS_LOCK),
+            "{finding}"
+        );
+        assert!(ran[2].contains(&"--no-fix".to_owned()), "{ran:?}");
+    }
+}
+
 /// The read-back proof: a step-level `uses:` the update wrote must appear
 /// under its workflow in the regenerated lock, and a written SHA must be
 /// the entry's recorded commit. An entry the tool left out, or a different
@@ -9030,7 +9097,7 @@ async fn a_reusable_workflow_is_not_read_back() {
     )
     .await;
     assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
-    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert_eq!(runs.len(), 3, "{runs:?}");
 }
 
 /// The tool keys entries as `strings.ToLower(owner/repo) + "@" + ref`, so
@@ -9112,7 +9179,7 @@ async fn only_the_scoped_workflows_are_read_back() {
             .collect();
         assert_eq!(paths, [".github/workflows/ci.yml"], "{run:?}");
     }
-    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert_eq!(runs.len(), 3, "{runs:?}");
 }
 
 /// A file the tool wrote beside `actions.lock` is rejected by the
@@ -9404,8 +9471,16 @@ async fn maintenance_relocks_the_whole_workflow_directory() {
     .await;
     assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
     assert!(warnings.is_empty(), "{warnings:?}");
-    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert_eq!(runs.len(), 3, "{runs:?}");
     let (fix, verify) = (&runs[0], &runs[1]);
+    let confirm = &runs[2];
+    for flag in [
+        "--no-fix",
+        "--ignore-local-actions",
+        "--json=valid,findings",
+    ] {
+        assert!(confirm.contains(&flag.to_owned()), "{confirm:?}");
+    }
     for flag in [
         "--no-interactive",
         "--no-onboard",
@@ -9503,7 +9578,7 @@ async fn a_current_lock_makes_no_maintenance_change() {
         relock_clean("{\"valid\":true,\"findings\":[]}", None),
     )
     .await;
-    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert_eq!(runs.len(), 3, "{runs:?}");
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(p.held(&Hold::LockfilesCurrent), "{:?}", p.action());
     assert!(p.action().files.is_empty(), "{:?}", p.action());
@@ -9709,7 +9784,7 @@ async fn a_lock_without_dependencies_relocks_cleanly() {
         relock_clean("{\"valid\":true,\"findings\":[]}", None),
     )
     .await;
-    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert_eq!(runs.len(), 3, "{runs:?}");
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(p.held(&Hold::LockfilesCurrent), "{:?}", p.action());
     assert!(p.moved_refs().is_empty());
@@ -9970,7 +10045,7 @@ async fn a_relock_may_drop_only_deleted_workflows() {
     )
     .await;
     assert_eq!(p.action().status, BranchStatus::Planned, "{:?}", p.action());
-    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert_eq!(runs.len(), 3, "{runs:?}");
     let paths: Vec<&String> = runs[1].iter().filter(|arg| arg.ends_with(".yml")).collect();
     assert_eq!(paths, [ci, lint], "{runs:?}");
 }

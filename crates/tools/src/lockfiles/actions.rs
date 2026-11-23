@@ -391,6 +391,7 @@ impl Runner {
         // offline on the same paths, then the lock is read back against
         // the edit.
         verify(self, &session, driver, root, &scope).await?;
+        confirm(self, &session, driver, root, &scope, "the update").await?;
         prove(root, work, &scope, &composites, config)
     }
 
@@ -493,6 +494,7 @@ impl Runner {
         let scope: Vec<String> = kept.into_iter().collect();
         if !scope.is_empty() {
             verify(self, &session, driver, root, &scope).await?;
+            confirm(self, &session, driver, root, &scope, "maintenance").await?;
         }
         moved(base, lock)
     }
@@ -558,6 +560,39 @@ async fn verify(
         .flatten()
         .unwrap_or_else(|| exit_two(&verified.stderr));
     Err(held(NOT_ONBOARDED, &reason))
+}
+
+/// The tool's own online check, `--no-fix`, over `scope`: it reads each
+/// locked action's manifest at its locked commit, which `--verify-local`
+/// cannot, so an entry missing a composite's `uses` edge holds the run
+/// instead of being published (gh-actions-lock 0.4.1 wrote such entries,
+/// github/gh-actions-lock#272). `waiting` is what waits when GitHub was
+/// unreachable.
+async fn confirm(
+    runner: &Runner,
+    session: &Session,
+    driver: &Path,
+    root: &Path,
+    scope: &[String],
+    waiting: &str,
+) -> Result<(), Failure> {
+    let confirmed = session
+        .invoke(
+            runner,
+            driver,
+            root,
+            Session::args(
+                &[
+                    "--no-interactive",
+                    "--no-fix",
+                    "--ignore-local-actions",
+                    "--json=valid,findings",
+                ],
+                scope,
+            ),
+        )
+        .await?;
+    check(&confirmed, waiting)
 }
 
 /// The refs a `--relock` advanced: every entry both locks hold whose

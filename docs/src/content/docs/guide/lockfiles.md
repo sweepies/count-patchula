@@ -27,7 +27,7 @@ commit. If the tool fails, nothing is published.
 | `mise.lock` | mise | `mise lock` with the lockfile's recorded platforms |
 | `flake.lock` | nix | `nix flake update <input>`, or `nix flake update` for maintenance |
 | `apm.lock.yaml` | APM | `apm lock`, or `apm lock --update` for maintenance |
-| `.github/workflows/actions.lock` | gh-actions-lock | `gh-actions-lock --no-interactive --no-onboard --no-narrow --ignore-local-actions --json=valid,findings <workflows>`, or the same with `--relock` and no workflows for maintenance |
+| `.github/workflows/actions.lock` | gh-actions-lock | `gh-actions-lock --no-interactive --no-onboard --no-narrow --ignore-local-actions --json=valid,findings <workflows>`, or the same with `--relock` and no workflows for maintenance; then the tool's offline `--verify-local` and online `--no-fix` checks over the same workflows |
 
 A `mise.lock` records the configuration in its own directory and above it,
 as mise does. A `mise.toml` in a subdirectory is locked by a `mise.lock` of its
@@ -251,9 +251,12 @@ workflow that calls it), keyed as the tool keys it (owner
 and repository lowercased, no sub-path), and a written SHA must be the
 commit the lock records — before the commit opens. Reusable workflows at
 `jobs.<id>.uses` are not in the lock and are not checked, and an edited
-workflow the lock does not list is not the run's to prove. `actions.lock` is
-the only file the tool may change; the usual unexpected-write guard holds
-for the rest.
+workflow the lock does not list is not the run's to prove. Last, the tool's
+online `--no-fix` check reads each locked action's manifest at its locked
+commit, so a lock entry that leaves out an action a composite uses holds the
+update instead of being published; an unreachable GitHub makes it wait.
+`actions.lock` is the only file the tool may change; the usual
+unexpected-write guard holds for the rest.
 
 `--no-narrow` also leaves a SHA pin as written: an existing pin the update
 moves stays a pin in the workflow, and the lock records it under that SHA
@@ -277,7 +280,7 @@ maintenance commit holds `actions.lock` alone. When every listed workflow
 is gone, the tool removes `actions.lock` and the maintenance commit deletes
 it; the PR says so. The regenerated lock must list exactly the listed
 workflows that still exist, or the relock fails, and the proof is
-`--verify-local` over those workflows. The maintenance PR lists each
+`--verify-local` and the online `--no-fix` check over those workflows. The maintenance PR lists each
 moved ref under its workflow, with the commit it now resolves to and the one
 the lock had. No release-age wait applies to what a relock picks up: the
 tool takes no cutoff, so a ref that moved an hour ago is locked like any

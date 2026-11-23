@@ -49,7 +49,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:06 GMT"
+            "Mon, 23 Nov 2026 20:03:55 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -79,7 +79,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9B2:C9F7F:34FAF:5F623:6B049875"
+            "B6C8:28F25:48B3A:7FF39:6B049C2B"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -88,7 +88,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4915"
+            "4817"
           ],
           "x-ratelimit-reset": [
             "1795465792"
@@ -97,7 +97,7 @@
             "graphql"
           ],
           "x-ratelimit-used": [
-            "85"
+            "183"
           ],
           "x-xss-protection": [
             "0"
@@ -177,7 +177,7 @@
             "application/json; charset=utf-8"
           ],
           "date": [
-            "Mon, 23 Nov 2026 19:48:06 GMT"
+            "Mon, 23 Nov 2026 20:03:55 GMT"
           ],
           "referrer-policy": [
             "origin-when-cross-origin, strict-origin-when-cross-origin"
@@ -207,7 +207,7 @@
             "github.v4; param=merge-info-preview.nebula-preview; format=json"
           ],
           "x-github-request-id": [
-            "C9B2:C9F7F:34FAF:5F624:6B049875"
+            "B6C8:28F25:48B3A:7FF3A:6B049C2B"
           ],
           "x-oauth-scopes": [
             "admin:enterprise, admin:gpg_key, admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, audit_log, codespace, copilot, delete:packages, delete_repo, gist, notifications, project, repo, user, workflow, write:discussion, write:network_configurations, write:packages"
@@ -216,7 +216,7 @@
             "5000"
           ],
           "x-ratelimit-remaining": [
-            "4968"
+            "4943"
           ],
           "x-ratelimit-reset": [
             "1795466078"
@@ -225,7 +225,7 @@
             "graphql"
           ],
           "x-ratelimit-used": [
-            "32"
+            "57"
           ],
           "x-xss-protection": [
             "0"
