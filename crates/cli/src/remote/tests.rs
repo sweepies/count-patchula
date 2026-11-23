@@ -172,13 +172,7 @@ fn services(fake: Arc<Fake>, dir: &std::path::Path) -> Services {
         ..Services::default()
     }
 }
-fn asking(fake: Arc<Fake>, dir: &std::path::Path, answer: bool) -> Services {
-    Services {
-        answer: Some(answer),
-        ..services(fake, dir)
-    }
-}
-fn choices(dir: &std::path::Path) -> Value {
+fn remembered_store(dir: &std::path::Path) -> Value {
     serde_json::from_slice(&std::fs::read(dir.join("repositories.json")).unwrap()).unwrap()
 }
 fn stored(dir: &std::path::Path) -> Value {
@@ -228,7 +222,7 @@ async fn first_run_signs_in_with_the_device_flow_and_stores_the_token() {
         ..Fake::default()
     });
     let services = services(fake.clone(), dir.path());
-    let app = app(&["run", "--dry-run", "--remote", "acme/app", "--json"]);
+    let app = app(&["remote", "run", "--dry-run", "acme/app", "--json"]);
     assert_eq!(run(&app, &services).await.unwrap(), 0);
     let requests = fake.requests.lock().unwrap().clone();
     let start = requests
@@ -276,7 +270,7 @@ async fn an_expired_token_is_refreshed_without_a_new_sign_in() {
     let fake = Arc::new(Fake::default());
     let services = services(fake.clone(), dir.path());
     assert_eq!(
-        run(&app(&["lookup", "--remote", "acme/app"]), &services)
+        run(&app(&["remote", "lookup", "acme/app"]), &services)
             .await
             .unwrap(),
         0
@@ -296,7 +290,7 @@ async fn a_revoked_token_signs_in_again_once() {
     });
     let services = services(fake.clone(), dir.path());
     assert_eq!(
-        run(&app(&["run", "--remote", "acme/app"]), &services)
+        run(&app(&["remote", "run", "acme/app"]), &services)
             .await
             .unwrap(),
         0
@@ -306,39 +300,19 @@ async fn a_revoked_token_signs_in_again_once() {
 }
 
 #[tokio::test]
-async fn local_only_flags_are_refused_with_remote() {
-    let dir = tempfile::tempdir().unwrap();
-    let fake = Arc::new(Fake::default());
-    let services = services(fake.clone(), dir.path());
-    for args in [
-        &["lookup", "--remote", "--config", "x.pkl", "acme/app"][..],
-        &["lookup", "--remote", "--config-dir", "policy", "acme/app"],
-        &["lookup", "--remote", "--all-repos"],
-        &["run", "--remote", "--allow-lockfile-pending", "acme/app"],
-        &["run", "--remote", "--recheck", "now", "acme/app"],
-    ] {
-        let Err((code, error)) = run(&app(args), &services).await else {
-            panic!("{args:?}")
-        };
-        assert_eq!(code, 2, "{args:?}");
-        assert!(
-            error
-                .to_string()
-                .contains("only works on this machine, not with --remote")
-        );
-    }
-    assert!(fake.requests.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn remote_with_named_repositories_needs_a_configured_server() {
+async fn remote_with_several_repositories_needs_a_configured_server() {
     let dir = tempfile::tempdir().unwrap();
     let fake = Arc::new(Fake::default());
     let services = Services {
         server: None,
         ..services(fake.clone(), dir.path())
     };
-    let Err((code, error)) = run(&app(&["lookup", "--remote", "acme/app"]), &services).await else {
+    let Err((code, error)) = run(
+        &app(&["remote", "lookup", "acme/app", "acme/api"]),
+        &services,
+    )
+    .await
+    else {
         panic!("ran without a server")
     };
     assert_eq!(code, 2);
@@ -347,19 +321,55 @@ async fn remote_with_named_repositories_needs_a_configured_server() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn auth_login_and_logout_manage_the_store() {
+async fn remote_discovers_and_remembers_a_single_named_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Arc::new(Fake::default());
+    let services = Services {
+        server: None,
+        ..services(fake.clone(), dir.path())
+    };
+    assert_eq!(
+        run(&app(&["remote", "lookup", "acme/app"]), &services)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        remembered_store(dir.path()),
+        json!({"acme/app": {"server": SERVER, "app": "Iv23client"}})
+    );
+    // Second run uses the remembered server without re-scanning GitHub issues.
+    fake.requests.lock().unwrap().clear();
+    *fake.polls.lock().unwrap() = 0;
+    assert_eq!(
+        run(&app(&["remote", "lookup", "acme/app"]), &services)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(
+        !methods(&fake)
+            .iter()
+            .any(|r| r.contains("api.github.com/repos/")),
+        "{:?}",
+        methods(&fake)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn remote_login_and_logout_manage_the_store() {
     let dir = tempfile::tempdir().unwrap();
     let fake = Arc::new(Fake::default());
     let services = services(fake.clone(), dir.path());
     assert_eq!(
-        run(&app(&["auth", "login", "--server", SERVER]), &services)
+        run(&app(&["remote", "login", "--server", SERVER]), &services)
             .await
             .unwrap(),
         0
     );
     assert_eq!(stored(dir.path())[SERVER]["accessToken"], "ghu_device");
     assert_eq!(
-        run(&app(&["auth", "logout", "--server", SERVER]), &services)
+        run(&app(&["remote", "logout", "--server", SERVER]), &services)
             .await
             .unwrap(),
         0
@@ -368,60 +378,32 @@ async fn auth_login_and_logout_manage_the_store() {
 }
 
 #[tokio::test]
-async fn a_checkout_finds_the_server_the_count_advertises_and_remembers_yes() {
+async fn find_discovers_remembers_and_logout_forgets() {
     let dir = tempfile::tempdir().unwrap();
     let fake = Arc::new(Fake::default());
-    let chosen = choose(&asking(fake.clone(), dir.path(), true), "acme/app")
+    let found = find(&services(fake.clone(), dir.path()), "acme/app")
         .await
         .unwrap();
-    assert_eq!(chosen.map(|s| s.url).as_deref(), Some(SERVER));
+    assert_eq!(found.map(|s| s.url).as_deref(), Some(SERVER));
     assert_eq!(
-        choices(dir.path()),
-        json!({"acme/app": {"server": SERVER, "remote": true, "app": "Iv23client"}})
+        remembered_store(dir.path()),
+        json!({"acme/app": {"server": SERVER, "app": "Iv23client"}})
     );
-    // Remembered: no question, and no GitHub request, even without a terminal.
+    // Remembered: no GitHub request on the next lookup.
     fake.requests.lock().unwrap().clear();
-    let again = choose(&services(fake.clone(), dir.path()), "acme/app")
+    let again = find(&services(fake.clone(), dir.path()), "acme/app")
         .await
         .unwrap();
     assert_eq!(again.map(|s| s.url).as_deref(), Some(SERVER));
     assert!(fake.requests.lock().unwrap().is_empty());
-    // Signing out asks again next time.
+    // Signing out forgets the remembered repository too.
     run(
-        &app(&["auth", "logout", "--server", SERVER]),
+        &app(&["remote", "logout", "--server", SERVER]),
         &services(fake, dir.path()),
     )
     .await
     .unwrap();
-    assert_eq!(choices(dir.path()), json!({}));
-}
-
-#[tokio::test]
-async fn no_is_remembered_and_runs_here() {
-    let dir = tempfile::tempdir().unwrap();
-    let fake = Arc::new(Fake::default());
-    let chosen = choose(&asking(fake.clone(), dir.path(), false), "acme/app")
-        .await
-        .unwrap();
-    assert_eq!(chosen, None);
-    assert_eq!(
-        choices(dir.path()),
-        json!({"acme/app": {"server": SERVER, "remote": false, "app": "Iv23client"}})
-    );
-    fake.requests.lock().unwrap().clear();
-    let again = choose(&asking(fake.clone(), dir.path(), true), "acme/app")
-        .await
-        .unwrap();
-    assert_eq!(again, None);
-    assert!(fake.requests.lock().unwrap().is_empty());
-    // Signing out of the declined server asks again too.
-    run(
-        &app(&["auth", "logout", "--server", SERVER]),
-        &services(fake, dir.path()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(choices(dir.path()), json!({}));
+    assert_eq!(remembered_store(dir.path()), json!({}));
 }
 
 #[tokio::test]
@@ -487,7 +469,7 @@ async fn a_remembered_server_that_names_another_app_is_refused_before_sign_in() 
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("repositories.json"),
-        json!({"acme/app": {"server": SERVER, "remote": true, "app": "Iv23client"}}).to_string(),
+        json!({"acme/app": {"server": SERVER, "app": "Iv23client"}}).to_string(),
     )
     .unwrap();
     let fake = Arc::new(Fake {
@@ -527,24 +509,6 @@ async fn an_unreadable_issues_page_discovers_nothing() {
         discover(&services(fake, dir.path()), "acme/app").await,
         None
     );
-}
-
-#[tokio::test]
-async fn without_a_terminal_nothing_is_discovered_or_remembered() {
-    let dir = tempfile::tempdir().unwrap();
-    let fake = Arc::new(Fake::default());
-    let chosen = choose(&services(fake.clone(), dir.path()), "acme/app")
-        .await
-        .unwrap();
-    assert_eq!(chosen, None);
-    assert!(fake.requests.lock().unwrap().is_empty());
-    assert!(!dir.path().join("repositories.json").exists());
-}
-
-#[test]
-fn here_conflicts_with_remote() {
-    let args = ["lookup", "--remote", "--here", "acme/app"];
-    assert!(App::parse_from(&args.iter().map(std::ffi::OsStr::new).collect::<Vec<_>>()).is_err());
 }
 
 /// A server that accepts the run and answers status polls from `replies`,

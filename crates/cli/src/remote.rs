@@ -1,9 +1,9 @@
-//! `--remote`: hand a lookup or run to a Count Patchula server. The user signs
-//! in once with the server's GitHub App through GitHub's device flow; the
-//! resulting user access token is stored per server and refreshed as it
-//! expires. A checkout's repository can also find its server, hidden by the
-//! Count in the PRs and dashboard he writes; the user chooses once per
-//! repository whether to run there.
+//! `patchula remote`: hand a lookup, run or TUI to a Count Patchula server. The
+//! user signs in once with the server's GitHub App through GitHub's device flow;
+//! the resulting user access token is stored per server and refreshed as it
+//! expires. Without `--server` or `PATCHULA_SERVER`, a repository can find its
+//! server from the hidden advertisement the Count writes in his PRs and
+//! dashboard, and remember its URL and App client ID for later remote runs.
 use crate::Services;
 use patchula_http::Transport;
 use patchula_server::remote::protocol::{self, Accepted, AuthInfo, JobStatus, RejectBody, Start};
@@ -181,26 +181,26 @@ fn rejected(server: &str, status: u16, value: &Value) -> (u8, miette::Report) {
     }
 }
 
-/// `patchula auth login`: sign in now, replacing any stored token.
-pub async fn sign_in(services: &Services, server: &str) -> Result<String> {
+/// `patchula remote login`: sign in now, replacing any stored token.
+pub async fn sign_in(services: &Services, target: &Server) -> Result<String> {
     let transport = services.remote_transport().map_err(fail)?;
-    login(services, &*transport, &Server::named(server.to_owned())).await
+    login(services, &*transport, target).await
 }
 
-/// `patchula auth logout`: forget the server's token, and which checkouts
-/// chose it, so they ask again. GitHub keeps the App authorization; revoke it
-/// under Settings → Applications.
+/// `patchula remote logout`: forget the server's token, and which repositories
+/// remembered it, so they discover it again. GitHub keeps the App
+/// authorization; revoke it under Settings → Applications.
 pub fn forget(services: &Services, server: &str) -> Result<bool> {
-    let chosen = update(
+    let remembered = update(
         services,
         CHOICES,
-        |choices: &mut BTreeMap<String, Choice>| {
-            let before = choices.len();
-            choices.retain(|_, choice| choice.server != server);
-            choices.len() != before
+        |entries: &mut BTreeMap<String, Remembered>| {
+            let before = entries.len();
+            entries.retain(|_, entry| entry.server != server);
+            entries.len() != before
         },
     )?;
-    Ok(forget_login(services, server)? || chosen)
+    Ok(forget_login(services, server)? || remembered)
 }
 fn forget_login(services: &Services, server: &str) -> Result<bool> {
     update(services, LOGINS, |logins: &mut BTreeMap<String, Login>| {
@@ -208,17 +208,15 @@ fn forget_login(services: &Services, server: &str) -> Result<bool> {
     })
 }
 
-/// The user's answer for a repository's advertised server. A refusal keeps
-/// the URL too, so signing out of that server asks again. `app` is the
-/// client ID discovery verified, so a later sign-in uses the same App.
+/// A discovered server remembered for a repository. `app` is the client ID
+/// discovery verified, so a later sign-in uses the same App.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Choice {
+struct Remembered {
     server: String,
-    remote: bool,
     app: String,
 }
-impl Choice {
+impl Remembered {
     fn target(self) -> Server {
         Server {
             url: self.server,
@@ -227,66 +225,41 @@ impl Choice {
     }
 }
 
-/// The server for the current checkout's `repository`: the one the user chose
-/// before, or one the Count advertises, if the user wants it. None runs here.
-pub async fn choose(services: &Services, repository: &str) -> Result<Option<Server>> {
-    if let Some(choice) = load::<Choice>(services, CHOICES)?.remove(repository) {
-        if !choice.remote {
-            return Ok(None);
-        }
-        eprintln!(
-            "patchula: running {repository} on {}, as you chose; --here runs it on this machine",
-            choice.server
-        );
-        return Ok(Some(choice.target()));
-    }
-    if !services.interactive() {
-        return Ok(None);
+/// The server remembered for `repository`, without touching the network.
+pub fn remembered(services: &Services, repository: &str) -> Result<Option<Server>> {
+    Ok(load::<Remembered>(services, CHOICES)?
+        .remove(repository)
+        .map(Remembered::target))
+}
+
+/// The server for `repository`: the one remembered for it, or one the Count
+/// advertises, which is then remembered so later remote runs skip the scan and
+/// pin its App client ID.
+pub async fn find(services: &Services, repository: &str) -> Result<Option<Server>> {
+    if let Some(target) = remembered(services, repository)? {
+        return Ok(Some(target));
     }
     let Some((server, app)) = discover(services, repository).await else {
         return Ok(None);
     };
-    let remote = services
-        .ask(&format!(
-            "patchula: the Count runs {repository} on {server}. Run there instead of on this machine? [Y/n] "
-        ))
-        .map_err(|e| fail(format!("cannot read the answer: {e}")))?;
     update(
         services,
         CHOICES,
-        |choices: &mut BTreeMap<String, Choice>| {
-            choices.insert(
+        |entries: &mut BTreeMap<String, Remembered>| {
+            entries.insert(
                 repository.to_owned(),
-                Choice {
+                Remembered {
                     server: server.clone(),
-                    remote,
                     app: app.clone(),
                 },
             );
             true
         },
     )?;
-    eprintln!(
-        "patchula: remembered for {repository}. --remote or --here overrides it once; patchula auth logout --server {server} asks again"
-    );
-    Ok(remote.then_some(Server {
+    Ok(Some(Server {
         url: server,
         app: Some(app),
     }))
-}
-
-/// The server for `--remote` in the current checkout's `repository`: the one
-/// remembered for it, whatever the answer was, or one the Count advertises.
-pub async fn find(services: &Services, repository: &str) -> Result<Option<Server>> {
-    if let Some(choice) = load::<Choice>(services, CHOICES)?.remove(repository) {
-        return Ok(Some(choice.target()));
-    }
-    Ok(discover(services, repository)
-        .await
-        .map(|(url, app)| Server {
-            url,
-            app: Some(app),
-        }))
 }
 
 /// `GET /repos/{owner}/{repo}/issues` — the `issue` schema trimmed to the
@@ -546,7 +519,7 @@ async fn client_id(transport: &dyn Transport, target: &Server) -> Result<String>
     let client_id = fetch_auth_info(transport, server).await?.client_id;
     match &target.app {
         Some(app) if *app != client_id => Err(fail(format!(
-            "{server} now names a different GitHub App than the one that advertised it; patchula auth logout --server {server} forgets it"
+            "{server} now names a different GitHub App than the one that advertised it; patchula remote logout --server {server} forgets it"
         ))),
         _ => Ok(client_id),
     }

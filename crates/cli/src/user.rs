@@ -1,7 +1,7 @@
 //! The invoking user's config, cache and data directories: the XDG variables
 //! first, then the conventional home-directory fallbacks. One definition for
 //! the settings file, the local cache, the tool store's mise data and the
-//! `--remote` credential stores.
+//! `patchula remote` credential stores.
 use std::{ffi::OsString, path::PathBuf};
 
 const HOME: &str = "HOME";

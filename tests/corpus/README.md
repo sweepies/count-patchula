@@ -9,7 +9,7 @@ dependencies across 25 managers.
   in that file. Regenerate it with `mise run corpus:snapshot`.
 - On pull requests, CI also looks up every dependency against the live
   registries and plans every branch without writing (`mise run corpus:report`,
-  which wraps `mise run corpus:check`, `patchula run --dry-run` in
+  which wraps `mise run corpus:check`, `patchula run --dry-run --dir .` in
   `tests/corpus`). A branch that fails to plan fails the job; counts, skips
   and timings go in the job summary.
 

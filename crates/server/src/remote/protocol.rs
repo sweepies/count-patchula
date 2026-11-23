@@ -1,4 +1,4 @@
-//! The wire contract between `patchula --remote` and `patchula serve`, defined
+//! The wire contract between `patchula remote` and `patchula serve`, defined
 //! once so both sides serialize the same JSON. Message shapes are frozen, so
 //! CLIs and servers of different releases interoperate.
 use serde::{Deserialize, Serialize};

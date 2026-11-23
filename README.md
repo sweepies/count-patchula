@@ -49,8 +49,8 @@ process keeps every cache warm, batches work across repositories, and acts on
 PR checkboxes the moment you tick them. It idles cheaply between batches, so
 usage-billed hosts such as Railway suit it well. Each release publishes it as
 a [container image](https://count-patchula.sweepy.dev/guide/server/#container-image),
-`ghcr.io/sweepies/count-patchula`, for linux/amd64 and linux/arm64. Once it is up, `patchula run
---remote` runs on it from your machine, signed in with GitHub, with no
+`ghcr.io/sweepies/count-patchula`, for linux/amd64 and linux/arm64. Once it is up, `patchula remote
+run` runs on it from your machine, signed in with GitHub, with no
 token or toolchain of your own.
 
 ## What you get

@@ -15,7 +15,7 @@ mod tui;
 mod updates;
 mod user;
 
-use cli::{App, AuthCommand, CacheCommand, Command, ConfigCommand, ToolsCommand};
+use cli::{App, CacheCommand, Command, ConfigCommand, RemoteCommand, ToolsCommand};
 use patchula_process::Executor as _;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
@@ -69,9 +69,6 @@ struct Services {
     transport: Option<std::sync::Arc<dyn patchula_http::Transport>>,
     #[cfg(test)]
     config_dir: Option<std::path::PathBuf>,
-    /// Answers the server prompt; tests are interactive only when it is set.
-    #[cfg(test)]
-    answer: Option<bool>,
     /// Stands in for PATCHULA_SERVER.
     #[cfg(test)]
     server: Option<String>,
@@ -117,27 +114,12 @@ impl Services {
     fn interactive(&self) -> bool {
         #[cfg(test)]
         {
-            self.answer.is_some() || self.key.is_some()
+            self.key.is_some()
         }
         #[cfg(not(test))]
         {
             io::stdin().is_terminal() && io::stderr().is_terminal()
         }
-    }
-    /// A yes/no question on stderr; anything but "n" or "no" is yes.
-    fn ask(&self, question: &str) -> io::Result<bool> {
-        eprint!("{question}");
-        #[cfg(test)]
-        if let Some(answer) = self.answer {
-            eprintln!();
-            return Ok(answer);
-        }
-        let mut line = String::default();
-        io::stdin().read_line(&mut line)?;
-        Ok(!matches!(
-            line.trim().to_ascii_lowercase().as_str(),
-            "n" | "no"
-        ))
     }
     /// A one-key question on stderr, asked until a key `pick` accepts. Enter
     /// is `'\n'`; Esc and Ctrl-C are `'q'`.
@@ -178,7 +160,7 @@ impl Services {
         eprintln!();
         answer
     }
-    /// For `--remote`, which may reach a `patchula serve` on loopback without TLS.
+    /// For `patchula remote`, which may reach a `patchula serve` on loopback without TLS.
     fn remote_transport(
         &self,
     ) -> Result<std::sync::Arc<dyn patchula_http::Transport>, patchula_http::Error> {
@@ -242,59 +224,159 @@ async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)>
             )
             .await
         }
-        Command::Auth(auth) => auth_command(app, auth, services).await,
         Command::Cache(cache) => cache_command(cache),
         Command::Completion(completion) => completion_command(completion),
         Command::Config(config) => config_command(app, config),
-        Command::Lookup(options) => batch(app, options, None, services).await,
-        Command::Run(options) => batch(app, &options.lookup, Some(options), services).await,
+        Command::Lookup(options) => batch(app, Batch::Lookup(options), services).await,
+        Command::Remote(remote) => remote_command(app, remote, services).await,
+        Command::Run(options) => batch(app, Batch::Run(options), services).await,
         Command::Tui(tui) => tui_command(app, tui, services).await,
         Command::Tools(tools) => tools_command(app, tools).await,
-        Command::Serve(serve) => server::run(app, serve).await,
+        Command::Serve(serve) => server::run(serve).await,
     }
 }
 
-/// `patchula auth login|logout`: manage the token for a `--remote` server.
-async fn auth_command(
+/// `patchula remote ...`: run against a Count Patchula server.
+async fn remote_command(
     app: &App,
-    auth: &cli::Auth,
+    remote: &cli::Remote,
     services: &Services,
 ) -> Result<u8, (u8, miette::Report)> {
-    let (AuthCommand::Login(target) | AuthCommand::Logout(target)) = &auth.command;
-    let server = match &target.server {
-        Some(server) => remote::parse(server)?,
-        None => remote::configured(services)?.ok_or_else(|| {
-            usage(format!(
-                "name the server with --server or {}",
-                remote::SERVER_VAR
-            ))
-        })?,
-    };
-    let (done, message) = match auth.command {
-        AuthCommand::Login(_) => {
-            remote::sign_in(services, &server).await?;
-            (true, format!("Signed in to {server}"))
-        }
-        AuthCommand::Logout(_) => {
-            let removed = remote::forget(services, &server)?;
-            (
-                removed,
-                if removed {
-                    format!("Signed out of {server}")
-                } else {
-                    format!("Not signed in to {server}")
+    let explicit = remote.server.as_deref();
+    match &remote.command {
+        RemoteCommand::Login => {
+            let target = match explicit {
+                Some(server) => remote::Server::named(remote::parse(server)?),
+                None => match remote::configured(services)? {
+                    Some(server) => remote::Server::named(server),
+                    None => {
+                        let discovered = match current_repository(REMOTE_CHECKOUT_HELP).await {
+                            Ok(repo) => remote::find(services, &repo).await?,
+                            Err(_) => None,
+                        };
+                        discovered.ok_or_else(|| {
+                            usage(format!(
+                                "name the server with --server or {}",
+                                remote::SERVER_VAR
+                            ))
+                        })?
+                    }
                 },
-            )
+            };
+            remote::sign_in(services, &target).await?;
+            let result = if app.json {
+                serde_json::json!({"schemaVersion":1,"server":target.url,"changed":true})
+                    .to_string()
+            } else {
+                format!("Signed in to {}", target.url)
+            };
+            writeln!(io::stdout().lock(), "{result}")
+                .map(|_| 0)
+                .map_err(fail)
         }
-    };
-    let result = if app.json {
-        serde_json::json!({"schemaVersion":1,"server":server,"changed":done}).to_string()
+        RemoteCommand::Logout => {
+            let server = match explicit {
+                Some(server) => remote::parse(server)?,
+                None => match remote::configured(services)? {
+                    Some(server) => server,
+                    None => {
+                        let remembered = match current_repository(REMOTE_CHECKOUT_HELP).await {
+                            Ok(repo) => remote::remembered(services, &repo)?,
+                            Err(_) => None,
+                        };
+                        remembered.map(|s| s.url).ok_or_else(|| {
+                            usage(format!(
+                                "name the server with --server or {}",
+                                remote::SERVER_VAR
+                            ))
+                        })?
+                    }
+                },
+            };
+            let removed = remote::forget(services, &server)?;
+            let message = if removed {
+                format!("Signed out of {server}")
+            } else {
+                format!("Not signed in to {server}")
+            };
+            let result = if app.json {
+                serde_json::json!({"schemaVersion":1,"server":server,"changed":removed}).to_string()
+            } else {
+                message
+            };
+            writeln!(io::stdout().lock(), "{result}")
+                .map(|_| 0)
+                .map_err(fail)
+        }
+        RemoteCommand::Lookup(options) => {
+            let (server, repositories) =
+                remote_target(explicit, &options.repositories, services).await?;
+            let report =
+                remote::report(services, &server, repositories, remote::Mode::Lookup).await?;
+            write_report(app, &report, false)
+        }
+        RemoteCommand::Run(options) => {
+            let (server, repositories) =
+                remote_target(explicit, &options.repositories, services).await?;
+            let mode = if options.dry_run {
+                remote::Mode::DryRun
+            } else {
+                remote::Mode::Run
+            };
+            let report = remote::report(services, &server, repositories, mode).await?;
+            write_report(app, &report, true)
+        }
+        RemoteCommand::Tui(options) => {
+            if !options.once && !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
+                return Err(usage(
+                    "patchula remote tui needs a terminal; use --once for a plain snapshot",
+                ));
+            }
+            let (server, repositories) =
+                remote_target(explicit, &options.repositories, services).await?;
+            let report =
+                remote::report(services, &server, repositories, remote::Mode::Lookup).await?;
+            run_tui(options.once, &report, tui::Origin::Server)
+        }
+    }
+}
+
+/// Resolves the repositories and server for `patchula remote lookup|run|tui`.
+async fn remote_target(
+    explicit: Option<&str>,
+    repositories: &[String],
+    services: &Services,
+) -> Result<(remote::Server, Vec<String>), (u8, miette::Report)> {
+    let repositories = if repositories.is_empty() {
+        vec![
+            current_repository(REMOTE_CHECKOUT_HELP)
+                .await
+                .map_err(|e| (USAGE, e))?,
+        ]
     } else {
-        message
+        repositories.to_vec()
     };
-    writeln!(io::stdout().lock(), "{result}")
-        .map(|_| 0)
-        .map_err(fail)
+    let server = match explicit {
+        Some(server) => remote::Server::named(remote::parse(server)?),
+        None => match remote::configured(services)? {
+            Some(server) => remote::Server::named(server),
+            None => match repositories.as_slice() {
+                [repository] => remote::find(services, repository).await?.ok_or_else(|| {
+                    usage(format!(
+                        "no Count server found for {repository}; pass --server URL or set {}",
+                        remote::SERVER_VAR
+                    ))
+                })?,
+                _ => {
+                    return Err(usage(format!(
+                        "pass --server URL or set {} when naming several repositories",
+                        remote::SERVER_VAR
+                    )));
+                }
+            },
+        },
+    };
+    Ok((server, repositories))
 }
 
 /// `patchula cache schema`: print the cache schema this binary supports.
@@ -394,19 +476,26 @@ async fn tui_command(
             "patchula tui needs a terminal; use --once for a plain snapshot",
         ));
     }
-    let (report, read) = report(app, &tui.lookup, None, services).await?;
+    let (report, read) = report(app, Batch::Lookup(&tui.lookup), services).await?;
     let origin = match read {
         Read::Checkout(checkout) => tui::Origin::Local(Box::new(
             plan::local(&checkout.0, checkout.1).map_err(usage)?,
         )),
-        Read::Server => tui::Origin::Server,
         Read::GitHub => tui::Origin::GitHub,
     };
-    let model = tui::Model::new(&report, origin);
-    if tui.once {
+    run_tui(tui.once, &report, origin)
+}
+
+fn run_tui(
+    once: bool,
+    report: &patchula_report::Report,
+    origin: tui::Origin,
+) -> Result<u8, (u8, miette::Report)> {
+    let model = tui::Model::new(report, origin);
+    if once {
         // A snapshot in CI fails the way `lookup` would.
         write!(io::stdout().lock(), "{}", tui::snapshot(&model))
-            .map(|_| exit_code(&report, None))
+            .map(|_| exit_code(report, false))
             .map_err(fail)
     } else {
         tui::interact(model)
@@ -550,24 +639,56 @@ async fn run_app(app: App) -> ExitCode {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Batch<'a> {
+    Lookup(&'a cli::Lookup),
+    Run(&'a cli::Run),
+}
+impl<'a> Batch<'a> {
+    fn scan(self) -> &'a cli::Scan {
+        match self {
+            Self::Lookup(options) => &options.scan,
+            Self::Run(options) => &options.scan,
+        }
+    }
+    fn config_dir(self) -> Option<&'a std::path::PathBuf> {
+        match self {
+            Self::Lookup(options) => options.config_dir.as_ref(),
+            Self::Run(options) => options.config_dir.as_ref(),
+        }
+    }
+    fn run(self) -> Option<&'a cli::Run> {
+        match self {
+            Self::Lookup(_) => None,
+            Self::Run(options) => Some(options),
+        }
+    }
+}
+
 async fn batch(
     app: &App,
-    options: &cli::Lookup,
-    run: Option<&cli::Run>,
+    batch: Batch<'_>,
     services: &Services,
 ) -> Result<u8, (u8, miette::Report)> {
-    let (report, _) = report(app, options, run, services).await?;
+    let (report, _) = report(app, batch, services).await?;
+    write_report(app, &report, batch.run().is_some())
+}
+
+fn write_report(
+    app: &App,
+    report: &patchula_report::Report,
+    is_run: bool,
+) -> Result<u8, (u8, miette::Report)> {
     let write = |text: &str| -> Result<(), (u8, miette::Report)> {
         write!(io::stdout().lock(), "{text}").map_err(fail)
     };
     if app.json {
         write(&format!(
             "{}\n",
-            serde_json::to_string(&report)
-                .map_err(|e| fail(format!("cannot write report: {e}")))?
+            serde_json::to_string(report).map_err(|e| fail(format!("cannot write report: {e}")))?
         ))?;
     } else {
-        write(&output::report(&report, &output::Style::stdout(app.color)))?;
+        write(&output::report(report, &output::Style::stdout(app.color)))?;
     }
     if app.verbose > 0
         && let Some(stats) = &report.stats
@@ -590,13 +711,13 @@ async fn batch(
                 .join(", ")
         );
     }
-    Ok(exit_code(&report, run))
+    Ok(exit_code(report, is_run))
 }
 
 /// The exit code a finished lookup or run reports: 1 when a repository
 /// failed, `STALE` when one changed during a run, `LOOKUP_FAILED` when a
 /// lookup (not a run) could not read a dependency, else 0.
-fn exit_code(report: &patchula_report::Report, run: Option<&cli::Run>) -> u8 {
+fn exit_code(report: &patchula_report::Report, is_run: bool) -> u8 {
     use patchula_report::Status;
     let any = |status: Status| report.repositories.iter().any(|repo| repo.status == status);
     let failures = report
@@ -607,27 +728,11 @@ fn exit_code(report: &patchula_report::Report, run: Option<&cli::Run>) -> u8 {
         FAILED
     } else if any(Status::Stale) {
         STALE
-    } else if failures && run.is_none() {
+    } else if failures && !is_run {
         LOOKUP_FAILED
     } else {
         0
     }
-}
-
-/// A lookup or run on a server. Only the repositories and the mode travel;
-/// the server applies each repository's own `patchula.pkl`.
-async fn remote_report(
-    services: &Services,
-    server: &remote::Server,
-    repositories: Vec<String>,
-    run: Option<&cli::Run>,
-) -> Result<patchula_report::Report, (u8, miette::Report)> {
-    let mode = match run {
-        None => remote::Mode::Lookup,
-        Some(run) if run.dry_run => remote::Mode::DryRun,
-        Some(_) => remote::Mode::Run,
-    };
-    remote::report(services, server, repositories, mode).await
 }
 
 /// Operator settings: `--settings`, then `PATCHULA_SETTINGS`, then
@@ -648,13 +753,15 @@ fn parse_recheck(value: &str) -> Result<patchula_words::Recheck, (u8, miette::Re
 /// The checkbox wording: `--recheck`, then for runs `PATCHULA_RECHECK` and the
 /// settings file; `next-run` otherwise.
 fn recheck(
-    app: &App,
-    run: bool,
+    run: Option<&cli::Run>,
     settings: &patchula_config::settings::Settings,
 ) -> Result<patchula_words::Recheck, (u8, miette::Report)> {
-    Ok(match app.recheck {
+    let Some(run) = run else {
+        return Ok(patchula_words::Recheck::NextRun);
+    };
+    Ok(match run.recheck {
         Some(recheck) => recheck,
-        None if run => match std::env::var(RECHECK_VAR) {
+        None => match std::env::var(RECHECK_VAR) {
             Ok(value) => parse_recheck(&value)?,
             Err(std::env::VarError::NotPresent) => {
                 settings.recheck.unwrap_or(patchula_words::Recheck::NextRun)
@@ -663,7 +770,6 @@ fn recheck(
                 return Err(usage(RECHECK_HELP));
             }
         },
-        None => patchula_words::Recheck::NextRun,
     })
 }
 
@@ -691,165 +797,115 @@ fn cache_dir(flag: Option<&std::path::Path>) -> Result<std::path::PathBuf, miett
 
 /// The repositories a batch names: the ones given, or every one the token can
 /// reach with `--all-repos` (an empty list, which the engine discovers).
-fn repositories(options: &cli::Lookup) -> Result<Vec<String>, miette::Report> {
-    if options.all_repos {
-        if !options.repositories.is_empty() {
+fn repositories(repositories: &[String], all_repos: bool) -> Result<Vec<String>, miette::Report> {
+    if all_repos {
+        if !repositories.is_empty() {
             return Err(miette::miette!(
                 "--all-repos cannot be combined with named repositories"
             ));
         }
         return Ok(Vec::new());
     }
-    Ok(options.repositories.clone())
+    Ok(repositories.to_vec())
 }
 
-/// Every flag `lookup`, `run` and `tui` take — globals included — that only
-/// works on this machine, with whether this invocation set it; `--remote`
-/// refuses them. Every other flag of those commands travels in the request
-/// or belongs to the server. A test walks the command spec and fails on a
-/// flag that is neither, so a new flag cannot be silently ignored or
-/// silently refused remotely.
-fn local_flags(
-    app: &App,
-    options: &cli::Lookup,
-    run: Option<&cli::Run>,
-) -> [(&'static str, bool); 9] {
-    [
-        ("all-repos", options.all_repos),
-        (
-            "allow-lockfile-pending",
-            run.is_some_and(|r| r.allow_lockfile_pending),
-        ),
-        ("cache", options.scan.cache.is_some()),
-        ("concurrency", options.scan.concurrency.is_some()),
-        ("config", options.scan.config.is_some()),
-        ("config-dir", options.config_dir.is_some()),
-        ("default-config", options.scan.default_config),
-        // The server's operator setting decides the checkbox wording.
-        ("recheck", app.recheck.is_some()),
-        ("settings", options.scan.settings.is_some()),
-    ]
-}
-
-/// Where a lookup, run or tui batch reads from.
+/// Where a local lookup, run or tui batch reads from.
 enum Source {
-    /// The working tree in the current directory, uncommitted changes included,
-    /// with the config to apply when it is not the tree's own `patchula.pkl`.
+    /// A working tree on disk, uncommitted changes included, with the config to
+    /// apply when it is not the tree's own `patchula.pkl`.
     Local(std::path::PathBuf, Option<Box<patchula_config::Config>>),
     /// Repositories read through the GitHub API.
     GitHub(Vec<String>),
-    /// A Count Patchula server.
-    Remote {
-        server: remote::Server,
-        repositories: Vec<String>,
-    },
 }
 
-/// Named repositories and `--all-repos` read GitHub. With neither, the checkout
-/// here runs on the server chosen for it, or reads its working tree. A real run
-/// opens pull requests from what GitHub has, so it reads GitHub instead, once
-/// the working tree matches what is pushed.
+/// `lookup` and `tui` read the working tree in the current directory unless
+/// repositories or `--all-repos` are named. `run` always reads GitHub (inferring
+/// this checkout's repository when omitted), unless `--dry-run --dir` points it
+/// at a local directory.
 async fn source(
     app: &App,
-    options: &cli::Lookup,
-    run: Option<&cli::Run>,
+    batch: Batch<'_>,
     services: &Services,
 ) -> Result<Source, (u8, miette::Report)> {
-    let named = !options.repositories.is_empty() || options.all_repos;
-    let writes = run.is_some_and(|run| !run.dry_run);
-    let local_flag = local_flags(app, options, run)
-        .into_iter()
-        .find(|(_, set)| *set)
-        .map(|(flag, _)| flag);
-    if options.remote {
-        if let Some(flag) = local_flag {
-            return Err(usage(format!(
-                "--{flag} only works on this machine, not with --remote"
-            )));
+    match batch {
+        Batch::Lookup(options) => {
+            let named = !options.repositories.is_empty() || options.all_repos;
+            if options.default_config {
+                if options.scan.config.is_some() || options.config_dir.is_some() {
+                    return Err(usage(
+                        "--default-config cannot be combined with --config or --config-dir",
+                    ));
+                }
+                if named {
+                    return Err(usage(
+                        "--default-config is for the working tree; a repository on GitHub invites the Count with its own patchula.pkl",
+                    ));
+                }
+            }
+            if named {
+                return repositories(&options.repositories, options.all_repos)
+                    .map(Source::GitHub)
+                    .map_err(|e| (USAGE, e));
+            }
+            if options.config_dir.is_some() {
+                return Err(usage(
+                    "--config-dir picks config per repository; name repositories, or use --config for the working tree",
+                ));
+            }
+            let dir = services
+                .current_dir()
+                .map_err(|e| usage(format!("cannot read the current directory: {e}")))?;
+            let config = match &options.scan.config {
+                Some(path) => Some(patchula_config::load(path).map_err(|e| (USAGE, e))?),
+                None => missing_config(
+                    &dir,
+                    options.default_config,
+                    services,
+                    &output::Style::stderr(app.color),
+                )?,
+            };
+            Ok(Source::Local(dir, config.map(Box::new)))
         }
-        if named {
-            let server = remote::configured(services)?.ok_or_else(|| {
-                usage(format!(
-                    "--remote with named repositories needs {} set to the server's URL",
-                    remote::SERVER_VAR
-                ))
-            })?;
-            return Ok(Source::Remote {
-                server: remote::Server::named(server),
-                repositories: options.repositories.clone(),
-            });
-        }
-        let repository = current_repository().await.map_err(|e| (USAGE, e))?;
-        let server = match remote::configured(services)? {
-            Some(server) => remote::Server::named(server),
-            None => remote::find(services, &repository).await?.ok_or_else(|| {
-                usage(format!(
-                    "--remote found no Count server for {repository}; set {} to the server's URL",
-                    remote::SERVER_VAR
-                ))
-            })?,
-        };
-        if writes {
-            pushed().await?;
-        }
-        return Ok(Source::Remote {
-            server,
-            repositories: vec![repository],
-        });
-    }
-    if options.scan.default_config {
-        if options.scan.config.is_some() || options.config_dir.is_some() {
-            return Err(usage(
-                "--default-config cannot be combined with --config or --config-dir",
-            ));
-        }
-        if named || writes {
-            return Err(usage(
-                "--default-config is for the working tree; a repository on GitHub invites the Count with its own patchula.pkl",
-            ));
+        Batch::Run(options) => {
+            let named = !options.repositories.is_empty() || options.all_repos;
+            if let Some(dir) = &options.dir {
+                if !options.dry_run {
+                    return Err(usage(
+                        "--dir requires --dry-run; a real run opens pull requests on GitHub",
+                    ));
+                }
+                if named {
+                    return Err(usage(
+                        "--dir cannot be combined with named repositories or --all-repos",
+                    ));
+                }
+                if options.config_dir.is_some() {
+                    return Err(usage(
+                        "--config-dir picks config per repository; use --config with --dir",
+                    ));
+                }
+                if !dir.is_dir() {
+                    return Err(usage(format!("--dir {} is not a directory", dir.display())));
+                }
+                let config = match &options.scan.config {
+                    Some(path) => Some(patchula_config::load(path).map_err(|e| (USAGE, e))?),
+                    None => {
+                        missing_config(dir, false, services, &output::Style::stderr(app.color))?
+                    }
+                };
+                return Ok(Source::Local(dir.clone(), config.map(Box::new)));
+            }
+            if named {
+                return repositories(&options.repositories, options.all_repos)
+                    .map(Source::GitHub)
+                    .map_err(|e| (USAGE, e));
+            }
+            let repository = current_repository(CHECKOUT_HELP)
+                .await
+                .map_err(|e| (USAGE, e))?;
+            Ok(Source::GitHub(vec![repository]))
         }
     }
-    if named {
-        return repositories(options)
-            .map(Source::GitHub)
-            .map_err(|e| (USAGE, e));
-    }
-    if !options.here
-        && local_flag.is_none()
-        && let Ok(repository) = current_repository().await
-        && let Some(server) = remote::choose(services, &repository).await?
-    {
-        if writes {
-            pushed().await?;
-        }
-        return Ok(Source::Remote {
-            server,
-            repositories: vec![repository],
-        });
-    }
-    if writes {
-        let repository = current_repository().await.map_err(|e| (USAGE, e))?;
-        pushed().await?;
-        return Ok(Source::GitHub(vec![repository]));
-    }
-    if options.config_dir.is_some() {
-        return Err(usage(
-            "--config-dir picks config per repository; name repositories, or use --config for the working tree",
-        ));
-    }
-    let dir = services
-        .current_dir()
-        .map_err(|e| usage(format!("cannot read the current directory: {e}")))?;
-    let config = match &options.scan.config {
-        Some(path) => Some(patchula_config::load(path).map_err(|e| (USAGE, e))?),
-        None => missing_config(
-            &dir,
-            options.scan.default_config,
-            services,
-            &output::Style::stderr(app.color),
-        )?,
-    };
-    Ok(Source::Local(dir, config.map(Box::new)))
 }
 
 /// What to do when the working tree has no `patchula.pkl`.
@@ -978,43 +1034,6 @@ fn missing_config(
     }
 }
 
-/// A real run with no repository opens pull requests from what GitHub has, so
-/// the working tree must be clean and at the remote's default branch.
-async fn pushed() -> Result<(), (u8, miette::Report)> {
-    let refuse = |message: String| {
-        (
-            USAGE,
-            miette::miette!(
-                help = "use --dry-run to plan from the working tree, or commit and push to the default branch first",
-                "{message}"
-            ),
-        )
-    };
-    let status = git(&crate::tree::STATUS_ARGS)
-        .await
-        .ok_or_else(|| refuse("cannot read this checkout's Git status".into()))?;
-    if !crate::tree::changed(&status).is_empty() {
-        return Err(refuse(
-            "a run with no repository opens pull requests from what is on GitHub, and this working tree has uncommitted changes".into(),
-        ));
-    }
-    let remote = git_remote().await.map_err(|e| (USAGE, e))?;
-    let default = git(&["symbolic-ref", "--short", &format!("refs/remotes/{remote}/HEAD")])
-        .await
-        .ok_or_else(|| {
-            refuse(format!(
-                "cannot tell the default branch of {remote}; `git remote set-head {remote} --auto` records it"
-            ))
-        })?;
-    let head = git(&["rev-parse", "HEAD"]).await;
-    if head.is_none() || head != git(&["rev-parse", &default]).await {
-        return Err(refuse(format!(
-            "a run with no repository opens pull requests from {default}, and HEAD is not at {default}"
-        )));
-    }
-    Ok(())
-}
-
 /// Runs git in the current directory: its trimmed stdout, or None on failure.
 /// The environment is the minimum git needs, and a hung git is stopped.
 async fn git(args: &[&str]) -> Option<String> {
@@ -1056,13 +1075,14 @@ fn git_command(
 
 const CHECKOUT_HELP: &str =
     "name a repository as owner/repo, or pass --all-repos for every repository the token can reach";
+const REMOTE_CHECKOUT_HELP: &str = "name a repository as owner/repo";
 
 /// The current checkout's remote: `origin`, or the only remote when there is
 /// no `origin`.
-async fn git_remote() -> Result<String, miette::Report> {
+async fn git_remote(help: &'static str) -> Result<String, miette::Report> {
     let Some(remotes) = git(&["remote"]).await else {
         return Err(miette::miette!(
-            help = CHECKOUT_HELP,
+            help = help,
             "no repository named, and the current directory is not a Git checkout"
         ));
     };
@@ -1071,26 +1091,26 @@ async fn git_remote() -> Result<String, miette::Report> {
         _ if remotes.contains(&"origin") => Ok("origin".into()),
         [only] => Ok((*only).to_owned()),
         [] => Err(miette::miette!(
-            help = CHECKOUT_HELP,
+            help = help,
             "no repository named, and this checkout has no Git remote"
         )),
         _ => Err(miette::miette!(
-            help = CHECKOUT_HELP,
+            help = help,
             "no repository named, and this checkout has several remotes but no origin"
         )),
     }
 }
 
 /// The `owner/name` of the current checkout's GitHub remote.
-async fn current_repository() -> Result<String, miette::Report> {
-    let remote = git_remote().await?;
+async fn current_repository(help: &'static str) -> Result<String, miette::Report> {
+    let remote = git_remote(help).await?;
     git(&["remote", "get-url", &remote])
         .await
         .as_deref()
         .and_then(github_repository)
         .ok_or_else(|| {
             miette::miette!(
-                help = CHECKOUT_HELP,
+                help = help,
                 "no repository named, and the {remote} remote is not a github.com repository"
             )
         })
@@ -1139,37 +1159,28 @@ mod tests;
 /// the tree's own `patchula.pkl`.
 type Checkout = (std::path::PathBuf, Option<patchula_config::Config>);
 
-/// What a lookup read: the working tree here, GitHub, or a server.
+/// What a local lookup read: the working tree here, or GitHub.
 enum Read {
     Checkout(Box<Checkout>),
     GitHub,
-    Server,
 }
 
-/// Build the engine from lookup flags and run one lookup or run batch, with the
+/// Build the engine from lookup or run flags and run one local batch, with the
 /// working tree it read, if it read one.
 async fn report(
     app: &App,
-    options: &cli::Lookup,
-    run: Option<&cli::Run>,
+    batch: Batch<'_>,
     services: &Services,
 ) -> Result<(patchula_report::Report, Read), (u8, miette::Report)> {
     use patchula_engine::{Engine, Options};
-    let scan = &options.scan;
+    let scan = batch.scan();
+    let run = batch.run();
     if let Some(concurrency) = scan.concurrency {
         patchula_engine::check_concurrency(concurrency).map_err(usage)?;
     }
-    let (repositories, local, config) = match source(app, options, run, services).await? {
-        Source::Remote {
-            server,
-            repositories,
-        } => {
-            let report = remote_report(services, &server, repositories, run).await?;
-            return Ok((report, Read::Server));
-        }
+    let (repositories, local, config) = match source(app, batch, services).await? {
         Source::GitHub(repositories) => {
-            let config = options
-                .scan
+            let config = scan
                 .config
                 .as_ref()
                 .map(|path| patchula_config::load(path))
@@ -1181,7 +1192,7 @@ async fn report(
     };
     let settings = settings(scan)?;
     let concurrency = scan.concurrency.unwrap_or(settings.concurrency);
-    let recheck = recheck(app, run.is_some(), &settings)?;
+    let recheck = recheck(run, &settings)?;
     let (credentials, failed) = patchula_engine::settings::credentials(&settings, None);
     if let Some((prefix, reason)) = failed.first() {
         return Err(usage(format!(
@@ -1217,7 +1228,7 @@ async fn report(
     let options = Options {
         repositories,
         config: config.clone(),
-        config_dir: options.config_dir.clone(),
+        config_dir: batch.config_dir().cloned(),
         local: local.clone(),
     };
     let report = if let Some(run) = run {

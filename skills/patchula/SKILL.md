@@ -51,20 +51,20 @@ work); real runs need a GitHub App installation token. Read before writing:
 
 ```sh
 patchula lookup --json > report.json   # dependencies and proposed updates
-patchula run --dry-run                 # branches, files and diffs, no writes
-patchula run                           # create branches and pull requests
+patchula run --dry-run                 # branches, files and diffs for this repo on GitHub
+patchula run                           # create branches and pull requests on GitHub
+patchula remote run                    # run on the Count server instead of locally
 ```
 
-With no repository argument, `lookup`, `run --dry-run` and `tui` read the
-working tree in the current directory, uncommitted changes included, and `tui`
-can apply selected updates to it. A real `run` with no argument opens pull
-requests for the checkout's GitHub repository (its `origin` remote), so it
-refuses a working tree with uncommitted changes or a HEAD other than the
-remote's default branch. Name repositories as `owner/repo`, or pass
-`--all-repos` for every repository the token can reach; both read through the
-GitHub API. `--remote` runs on a Count server (`PATCHULA_SERVER`, or the one
-found for the checkout), and `--here` keeps a command on this machine
-when the checkout was set to run remotely.
+With no repository argument, `lookup`, `apply` and `tui` read the working tree
+in the current directory, uncommitted changes included, and `tui` can apply
+selected updates to it. `run` always reads GitHub (even with `--dry-run`), using
+this checkout's GitHub remote when no repository is named; pass `--dry-run --dir .`
+to plan branches from a local directory. Name repositories as `owner/repo`, or
+pass `--all-repos` for every repository the token can reach; both read through
+the GitHub API. `patchula remote` (`lookup`, `run`, `tui`, `login`, `logout`)
+runs on a Count server (`--server`, `PATCHULA_SERVER`, or the server advertised
+by the repository) while top-level commands always run on this machine.
 
 `patchula tui` browses the same results interactively. `patchula apply`
 writes the working tree's updates into its files without PRs; filter with
