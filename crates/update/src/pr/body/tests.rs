@@ -525,6 +525,11 @@ mod image_tests {
             !head.contains("[!IMPORTANT]") && details.is_empty(),
             "{head}"
         );
+        // What the rebuild brings in is still named.
+        assert!(
+            head.contains("[USN-9-1](https://osv.dev/vulnerability/USN-9-1)"),
+            "{head}"
+        );
         let mut check = state("checked");
         check.fixed = vec![ImageAdvisory {
             id: "DSA-7".into(),
@@ -536,6 +541,11 @@ mod image_tests {
         let (head, details) = image_section(&[change("debian", check)]);
         assert!(
             !head.contains("[!IMPORTANT]") && details.is_empty(),
+            "{head}"
+        );
+        // The advisory OSV lists is still named.
+        assert!(
+            head.contains("[DSA-7](https://osv.dev/vulnerability/DSA-7)"),
             "{head}"
         );
     }

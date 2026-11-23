@@ -20,9 +20,7 @@ pub use markdown::{Links, fit, inert, sanitise};
 use patchula_cache::State;
 use patchula_config::{PackageId, split_package};
 use patchula_datasource::Failure;
-use patchula_datasource::upstream::{
-    ChartNotes, MirrorList, directory, mapped, mirror_url, truncate,
-};
+use patchula_datasource::upstream::{ChartNotes, MirrorList, directory, mapped, mirror_url};
 pub use patchula_datasource::upstream::{Forge, ForgeKind, Repository};
 use patchula_versioning::{Ecosystem, Parsed};
 use patchula_words::Source;
@@ -931,8 +929,8 @@ fn finish(
 /// `####`, so upstream's own headings start one below it.
 const NOTE_HEADINGS: usize = 5;
 /// The smallest budget a dependency's notes render into at all.
-const MIN_RENDER: usize = 512;
-/// The longest package name a section names, before escaping.
+pub const MIN_RENDER: usize = 512;
+/// The longest package name a section names, after escaping.
 const PACKAGE_NAME: usize = 160;
 /// The longest source or release link rendered.
 const LINK: usize = 512;
@@ -971,6 +969,54 @@ pub fn escape_html(text: &str) -> String {
     escaped
 }
 
+/// [`fit`], with the lines that close what the cut left open counted too:
+/// the result is never longer than `limit`. Text that already fits comes
+/// back as it is; otherwise the cut moves back until the closed prefix fits,
+/// and nothing at all is the last resort.
+pub fn fit_within(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_owned();
+    }
+    let mut room = limit;
+    loop {
+        let (kept, _) = fit(text, room);
+        if kept.len() <= limit {
+            return kept;
+        }
+        let over = kept.len() - limit;
+        if room <= over {
+            return String::new();
+        }
+        room -= over;
+    }
+}
+
+/// `text` escaped as [`escape_html`] does, cut to at most `max` bytes on a
+/// whole character or entity, so a cut never leaves half an entity.
+pub fn escape_html_within(text: &str, max: usize) -> String {
+    let mut escaped = String::new();
+    for ch in text.chars() {
+        let piece = escape_html(ch.encode_utf8(&mut [0; 4]));
+        if escaped.len() + piece.len() > max {
+            break;
+        }
+        escaped.push_str(&piece);
+    }
+    escaped
+}
+
+/// How a one-line note names `package`: not at all for the only package,
+/// else as code, escaped and cut to a bounded length.
+pub fn subject(package: &str, naming: Naming) -> String {
+    match naming {
+        Naming::Only => String::new(),
+        Naming::Named => format!(
+            " for <code>{}</code>",
+            escape_html_within(&package.replace(['\n', '\r'], " "), PACKAGE_NAME)
+        ),
+    }
+}
+
 /// How a package's notes name it. A pull request for one package needs no
 /// name, since its table has one row; a group's notes name each package.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -990,17 +1036,33 @@ impl Notes {
         if limit < MIN_RENDER {
             return String::new();
         }
-        let name = escape_html(&truncate(package, PACKAGE_NAME).replace(['\n', '\r'], " "));
+        let text = self.render_within(package, naming, limit);
+        if text.len() <= limit {
+            return text;
+        }
+        // A line that outgrew its room says the notes were left out, without
+        // the links that made it long.
+        let short = format!(
+            "<sub>Release notes{} left out to keep this description short.</sub>\n",
+            subject(package, naming)
+        );
+        if short.len() <= limit {
+            short
+        } else {
+            String::new()
+        }
+    }
+    /// [`render`](Self::render) before its final bound.
+    fn render_within(&self, package: &str, naming: Naming, limit: usize) -> String {
+        let name = escape_html_within(&package.replace(['\n', '\r'], " "), PACKAGE_NAME);
         // What the one-line notes say the notes are for.
-        let subject = match naming {
-            Naming::Only => String::new(),
-            Naming::Named => format!(" for <code>{name}</code>"),
-        };
+        let subject = subject(package, naming);
         let line = |text: String| format!("<sub>{text}</sub>\n");
         // A chart's own list of changes needs no source; anything else does.
         let chart = self.from_chart && !self.sections.is_empty();
         let fits = |source: &&Repository| {
-            source.url.len() <= LINK && source.url.len() + name.len() + SOURCE_MARKUP <= limit
+            let url = escape_html(&source.url).len();
+            url <= LINK && url + name.len() + SOURCE_MARKUP <= limit
         };
         let source = match &self.source {
             None if !chart => {
@@ -1153,8 +1215,18 @@ impl Notes {
         } else {
             None
         };
+        // With nothing shown, one line on its own names the package and
+        // claims no partial notes.
         if shown == 0 {
-            return notice.map_or_else(cut, line);
+            if trimmed {
+                return cut();
+            }
+            return line(match &history {
+                Some(history) => format!(
+                    "The Count could not show the release notes{subject} — <a href=\"{history}\">see upstream's history</a>."
+                ),
+                None => format!("The Count could not show the release notes{subject}."),
+            });
         }
         let total = self.sections.len();
         let count = if shown == total {

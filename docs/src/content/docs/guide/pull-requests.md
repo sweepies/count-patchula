@@ -120,9 +120,9 @@ longer material is collapsed. From the top, the body holds:
   fetches a body makes is shown without links;
 - the advisories fixed, collapsed into a table sorted by severity with the
   version each is fixed in;
+- any `bodyNotes` you configured;
 - the release notes, collapsed into one block per package (see
-  [release notes](/guide/release-notes/#how-notes-are-rendered)), and any
-  `bodyNotes` you configured;
+  [release notes](/guide/release-notes/#how-notes-are-rendered));
 - on the batch PR, the collapsed list of updates it carries, each with a box
   that sends it back to its own PR;
 - a footer saying the Count opened the PR, then the checkboxes.

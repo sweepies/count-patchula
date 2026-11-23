@@ -34,8 +34,6 @@ const IMAGE_WARNING: &str =
 const BLOCK_BREAK: usize = 2;
 /// What closes a collapsed block.
 const CLOSE: &str = "\n</details>\n";
-/// The collapsed blocks a cut body may leave open that `finish` closes.
-const CLOSES: usize = 4;
 /// The bytes of advisory links a line on what a rebuild fixes lists
 /// before it counts the rest.
 const FIXED_LINKS: usize = 3_000;
@@ -54,9 +52,6 @@ const MIN_NOTES_ROOM: usize = 1_000;
 const NOTES_SECTION_CAP: usize = 12_000;
 /// The release-notes fetches one body makes at most.
 pub(crate) const RELEASES_PER_BODY: usize = 8;
-/// The room kept beside a permit marker and the controls when the visible
-/// text is fitted around them.
-const PERMIT_RESERVE: usize = 1_000;
 /// The largest reviewed-targets marker the batch controls carry.
 const TARGETS_CAP: usize = 12_000;
 /// The longest source or compare link the update table carries.
@@ -174,11 +169,16 @@ fn rows(changes: &[Change]) -> Vec<Row<'_>> {
 /// A source or compare link as a Markdown link target inside a table, or
 /// `None` when it is too long or not a web address.
 fn link_target(url: &str) -> Option<String> {
-    if url.len() > LINK || !(url.starts_with("https://") || url.starts_with("http://")) {
+    if url.len() > LINK
+        || !(url.starts_with("https://") || url.starts_with("http://"))
+        || url.chars().any(char::is_control)
+    {
         return None;
     }
     Some(
-        url.replace(' ', "%20")
+        url.replace('\\', "%5C")
+            .replace('`', "%60")
+            .replace(' ', "%20")
             .replace('(', "%28")
             .replace(')', "%29")
             .replace('|', "%7C")
@@ -436,7 +436,7 @@ impl Bodies<'_> {
             plan.update_key(),
         ));
         let with_controls = format!("{tail}{controls}\n{ownership}\n");
-        if markers::START.len() + 1 + with_controls.len() <= BODY_LIMIT {
+        if fixed(with_controls.len(), 0) <= BODY_LIMIT {
             with_controls
         } else {
             format!("{tail}\n{ownership}\n")
@@ -444,10 +444,9 @@ impl Bodies<'_> {
     }
 }
 /// The bytes a body keeps beside its visible text: the start marker's
-/// line, the tail, the batch section, the block break before them and the
-/// closing tags a cut may need.
+/// line, the tail, the batch section and the block break before them.
 fn fixed(tail: usize, batch: usize) -> usize {
-    markers::START.len() + 1 + tail + batch + BLOCK_BREAK + CLOSES * CLOSE.len()
+    markers::START.len() + 1 + tail + batch + BLOCK_BREAK
 }
 /// The release-notes fetch `change` asks for: the package, the version it
 /// is on and the version it moves to. `None` for a change with no upstream
@@ -519,6 +518,14 @@ impl Draft<'_> {
             return None;
         }
         for change in &mut self.changes {
+            // A change with nothing to fetch, or one already fetched, asks
+            // for no room, so it never ends the notes.
+            let Some(key) = notes_key(change) else {
+                continue;
+            };
+            if self.releases.contains(&key) {
+                continue;
+            }
             if self.releases.len() >= RELEASES_PER_BODY
                 || self.notes.room(usize::MAX) < MIN_NOTES_ROOM
             {
@@ -528,12 +535,7 @@ impl Draft<'_> {
                 self.done = true;
                 return None;
             }
-            let Some(key) = notes_key(change) else {
-                continue;
-            };
-            if !self.releases.insert(key.clone()) {
-                continue;
-            }
+            self.releases.insert(key.clone());
             self.pending = Some(change);
             return Some(key);
         }
@@ -579,8 +581,12 @@ impl Draft<'_> {
                 if self.links.contains_key(&at) || notes_key(row.first) != key {
                     continue;
                 }
+                // The links never take the room the package's own notes
+                // need to render at all.
                 let more = row.render(Some(&link)).len() - row.render(None).len();
-                if self.notes.reserve(more) {
+                if self.notes.room(usize::MAX) >= more + BLOCK_BREAK + patchula_notes::MIN_RENDER
+                    && self.notes.reserve(more)
+                {
                     self.links.insert(at, link.clone());
                 }
             }
@@ -598,34 +604,30 @@ impl Draft<'_> {
             }
             Fetched::Transient => {
                 self.failed = true;
-                failed_notes(&change.package, self.naming)
+                failed_notes(&change.package, self.naming, budget)
             }
         };
-        self.notes.push(&section, usize::MAX);
+        // Each section was rendered within its budget; one that would not
+        // fit whole is left out rather than cut mid-tag.
+        if section.len() <= self.notes.room(usize::MAX) {
+            self.notes.push(&section, usize::MAX);
+        }
     }
     /// Whether a fetch failed in a way a later run may not: the finished
     /// body is then not settled.
     pub(crate) fn unsettled(&self) -> bool {
         self.failed
     }
-    /// The finished body: the visible text fitted around the permit and
-    /// controls, the batch section, the start marker and the tail's footer
-    /// and hidden markers. Every hidden marker was reserved before the
-    /// visible text was added, so the result always fits, no marker is ever
-    /// cut, and a cut never leaves a collapsed block open over the footer.
+    /// The finished body: the start marker, the visible text, the batch
+    /// section and the tail's footer and hidden markers. The tail is built
+    /// first and the visible text fitted into exactly the room it and the
+    /// batch section leave: a cut lands where a block ends and closes any
+    /// fence or collapsed block it left open, so nothing after it — the
+    /// batch section, the footer, the checkboxes — is ever swallowed, and no
+    /// marker is ever cut.
     pub(crate) fn finish(self) -> String {
         let mut visible = self.intent.text(&self.links);
         visible.push_str(self.notes.text());
-        if let Some(marker) = &self.permit {
-            // Keep policy evidence with the PR even if its local cache is lost.
-            visible = patchula_notes::fit(
-                &visible,
-                BODY_LIMIT.saturating_sub(
-                    marker.len() + self.controls.len() + self.batch.len() + PERMIT_RESERVE,
-                ),
-            )
-            .0;
-        }
         // A body with a failed fetch carries a content marker no intent
         // computes, so `reusable` never takes it as settled.
         let marker = if self.failed {
@@ -640,27 +642,21 @@ impl Draft<'_> {
         let tail = self
             .bodies
             .tail(self.plan, &marker, &self.controls, self.permit.as_deref());
-        let mut body = crate::body::Body::new(BODY_LIMIT, fixed(tail.len(), self.batch.len()));
-        body.push(visible.trim_end_matches('\n'), usize::MAX);
-        let open = body
-            .text()
-            .matches("<details>")
-            .count()
-            .saturating_sub(body.text().matches("</details>").count());
-        for _ in 0..open.min(CLOSES) {
-            body.push_reserved(CLOSE);
-        }
-        if !body.text().is_empty() {
+        let budget = BODY_LIMIT.saturating_sub(fixed(tail.len(), self.batch.len()));
+        let visible = patchula_notes::fit_within(visible.trim_end_matches('\n'), budget);
+        let visible = visible.trim_end_matches('\n');
+        let mut body = String::with_capacity(BODY_LIMIT);
+        body.push_str(markers::START);
+        body.push('\n');
+        body.push_str(visible);
+        if !visible.is_empty() {
             // The footer opens with a rule, which right under a line of
             // text would turn it into a heading.
-            body.push_reserved(if body.text().ends_with('\n') {
-                "\n"
-            } else {
-                "\n\n"
-            });
+            body.push_str("\n\n");
         }
-        body.push_reserved(&self.batch);
-        format!("{}\n{}{}", markers::START, body.text(), tail)
+        body.push_str(&self.batch);
+        body.push_str(&tail);
+        body
     }
 }
 /// What a release-notes fetch came back with.
@@ -673,16 +669,13 @@ pub(crate) enum Fetched {
     /// A failure a later run may not repeat.
     Transient,
 }
-/// How a one-line note names `package`: not at all for the only package.
-fn subject(package: &str, naming: Naming) -> String {
-    match naming {
-        Naming::Only => String::new(),
-        Naming::Named => format!(
-            " for <code>{}</code>",
-            escape_html(
-                &patchula_datasource::upstream::truncate(package, 160).replace(['\n', '\r'], " ")
-            )
-        ),
+/// `line` when it fits `budget`, else nothing: a one-line note is never cut
+/// mid-tag.
+fn within(line: String, budget: usize) -> String {
+    if line.len() <= budget {
+        line
+    } else {
+        String::new()
     }
 }
 /// The line for a package whose source resolved but whose notes could not
@@ -693,24 +686,28 @@ fn unreadable_notes(
     source: &patchula_notes::Repository,
     budget: usize,
 ) -> String {
-    if budget < 512 {
-        return String::new();
-    }
-    let subject = subject(package, naming);
-    if source.url.len() <= LINK && source.url.len() + subject.len() + 160 <= budget {
-        format!(
-            "<sub>The Count could not read the release notes{subject} — <a href=\"{}\">view upstream</a>.</sub>\n",
-            escape_html(&source.url)
-        )
+    let subject = patchula_notes::subject(package, naming);
+    let url = escape_html(&source.url);
+    let linked = format!(
+        "<sub>The Count could not read the release notes{subject} — <a href=\"{url}\">view upstream</a>.</sub>\n"
+    );
+    if url.len() <= LINK && linked.len() <= budget {
+        linked
     } else {
-        format!("<sub>The Count could not read the release notes{subject}.</sub>\n")
+        within(
+            format!("<sub>The Count could not read the release notes{subject}.</sub>\n"),
+            budget,
+        )
     }
 }
 /// The line for a package whose release-notes fetch failed this run.
-fn failed_notes(package: &str, naming: Naming) -> String {
-    format!(
-        "<sub>The Count could not read the release notes{} this run; he will try again on the next.</sub>\n",
-        subject(package, naming)
+fn failed_notes(package: &str, naming: Naming, budget: usize) -> String {
+    within(
+        format!(
+            "<sub>The Count could not read the release notes{} this run; he will try again on the next.</sub>\n",
+            patchula_notes::subject(package, naming)
+        ),
+        budget,
     )
 }
 /// The batch controls his body offers: the "Add to batch" box and the
@@ -949,9 +946,8 @@ fn security_section(changes: &[crate::Change]) -> (String, String) {
             String::new()
         };
         let row = format!(
-            "| [{}]({}){} |{package} <kbd>{}</kbd> | {} | {} |\n",
-            cell(&advisory.id),
-            link_target(&advisory.url).unwrap_or_default(),
+            "| {}{} |{package} <kbd>{}</kbd> | {} | {} |\n",
+            linked(&id_cell(&advisory.id), &advisory.url),
             if cves.is_empty() {
                 String::new()
             } else {
@@ -980,7 +976,6 @@ fn security_section(changes: &[crate::Change]) -> (String, String) {
 fn image_section(changes: &[crate::Change]) -> (String, String) {
     let mut rows = Vec::new();
     let mut listed = BTreeSet::new();
-    let mut fixed_ids = BTreeSet::new();
     let mut verified: BTreeMap<&str, Option<Severity>> = BTreeMap::new();
     let mut fixing: Vec<&str> = Vec::new();
     let mut brings_in = Vec::new();
@@ -994,7 +989,6 @@ fn image_section(changes: &[crate::Change]) -> (String, String) {
         let image = code(&change.package);
         let order = patchula_lookup::images::most_severe(check.fixed.iter().map(|f| f.id.as_str()));
         for id in order {
-            fixed_ids.insert(id.to_owned());
             let Some(advisory) = change.advisories.iter().find(|a| a.id == id) else {
                 listed.insert(id.to_owned());
                 continue;
@@ -1005,17 +999,19 @@ fn image_section(changes: &[crate::Change]) -> (String, String) {
             }
             for fixed in check.fixed.iter().filter(|f| f.id == id) {
                 let row = format!(
-                    "| [{}]({}) | <kbd>{}</kbd> | {} | {} | {} | {} |\n",
-                    cell(&fixed.id),
-                    link_target(&advisory.url).unwrap_or_default(),
+                    "| {} | <kbd>{}</kbd> | {} | {} | {} | {} |\n",
+                    linked(&id_cell(&fixed.id), &advisory.url),
                     cell(advisory.severity.map_or("unrated", Severity::as_str)),
                     cell(&fixed.package),
                     code_cell(&fixed.old),
                     fixed.new.as_deref().map_or("removed".into(), code_cell),
                     cell(&fixed.platforms.join(", ")),
                 );
-                if !rows.contains(&row) {
-                    rows.push(row);
+                if !rows.iter().any(|(_, r)| r == &row) {
+                    // Worst first; within a severity, in the order OSV's
+                    // ids sort, as found.
+                    let key = (advisory.severity.is_none(), advisory.severity, rows.len());
+                    rows.push((key, row));
                 }
             }
         }
@@ -1023,9 +1019,8 @@ fn image_section(changes: &[crate::Change]) -> (String, String) {
             match check.introduced_details.iter().find(|a| &a.id == id) {
                 Some(advisory) => {
                     let shown = format!(
-                        "[{}]({}) ({})",
-                        cell(id),
-                        safe(&advisory.url),
+                        "{} ({})",
+                        linked(&id_cell(id), &advisory.url),
                         cell(advisory.severity.map_or("unrated", Severity::as_str))
                     );
                     if !brings_in.contains(&shown) {
@@ -1113,9 +1108,10 @@ fn image_section(changes: &[crate::Change]) -> (String, String) {
             "<details>\n<summary><strong>Image advisories</strong> ({} fixed)</summary>\n\n| Advisory | Severity | Package | Old | New | Platforms |\n| --- | --- | --- | --- | --- | --- |\n",
             verified.len()
         );
+        rows.sort_by_key(|(key, _)| *key);
         let mut table = crate::body::Body::new(IMAGE_TABLE_CAP, 0);
         table.push(&opening, usize::MAX);
-        for row in &rows {
+        for (_, row) in &rows {
             if table.room(usize::MAX) < row.len() {
                 break;
             }
@@ -1231,7 +1227,7 @@ fn id_links(ids: &BTreeSet<String>, budget: usize) -> String {
     let mut links = Vec::new();
     let mut length = 0;
     for id in &ordered {
-        let link = format!("[{}](https://osv.dev/vulnerability/{})", cell(id), safe(id));
+        let link = linked(&id_cell(id), &format!("https://osv.dev/vulnerability/{id}"));
         if length + link.len() > budget {
             break;
         }
@@ -1300,9 +1296,28 @@ fn cell(text: &str) -> String {
 fn code_cell(text: &str) -> String {
     code(text).replace('|', "\\|")
 }
-/// A table cell of third-party prose, such as an advisory summary.
+/// A table cell of third-party prose, such as an advisory summary: inert,
+/// and with no tag of its own, so it cannot open or close a block.
 fn prose_cell(text: &str) -> String {
-    cell(&crate::text::inert(text))
+    cell(
+        &crate::text::inert(text)
+            .replace('<', "&lt;")
+            .replace('>', "&gt;"),
+    )
+}
+/// An advisory id from a third party as a cell or link label: no tag, and
+/// no bracket that could end the label.
+fn id_cell(id: &str) -> String {
+    cell(&id.replace('<', "&lt;").replace('>', "&gt;"))
+        .replace('[', "\\[")
+        .replace(']', "\\]")
+}
+/// `label` linked to `url`, or plain `label` when `url` is no safe link.
+fn linked(label: &str, url: &str) -> String {
+    match link_target(url) {
+        Some(url) => format!("[{label}]({url})"),
+        None => label.to_owned(),
+    }
 }
 
 #[cfg(test)]
