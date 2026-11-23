@@ -147,11 +147,7 @@ jobs:
         with:
           platforms: arm64
       - run: mise run image:build
-      # The first start installs mise through GitHub's API, which a token keeps
-      # within its limits on a shared runner.
-      - env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: mise run image:smoke
+      - run: mise run image:smoke
       - run: mise run image:smoke --arch arm64
       # What image:push needs to publish this exact index again: the index
       # the smoke test ran, the package cache and local packages it rebuilds
