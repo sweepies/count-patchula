@@ -28,7 +28,7 @@ const TOKEN_VARS: [&str; 3] = ["PATCHULA_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"];
 const GH_HOST: &str = "github.com";
 const GH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const TOKEN_HELP: &str = "lookup/run requires PATCHULA_TOKEN, GITHUB_TOKEN or GH_TOKEN, or a GitHub CLI signed in with `gh auth login`";
+const TOKEN_HELP: &str = "no GitHub token found; set PATCHULA_TOKEN, GITHUB_TOKEN, or GH_TOKEN, or sign in with `gh auth login`";
 const LOG_VAR: &str = "PATCHULA_LOG";
 /// A lookup or apply finished, but some dependencies' lookups failed.
 const LOOKUP_FAILED: u8 = 4;
@@ -211,19 +211,20 @@ async fn resolve_token(
 }
 
 async fn run(app: &App, services: &Services) -> Result<u8, (u8, miette::Report)> {
-    let command = app
-        .command
-        .as_ref()
-        .ok_or_else(|| usage("choose a subcommand; see --help"))?;
-    match command {
+    match &app.command {
         Command::Apply(options) => {
+            let style = if options.dry_run {
+                output::Style::stderr(app.color)
+            } else {
+                output::Style::stdout(app.color)
+            };
             apply::command(
                 app,
                 options,
                 services,
                 &mut io::stdout(),
                 &mut io::stderr(),
-                &output::Style::stderr(app.color),
+                &style,
             )
             .await
         }
@@ -276,7 +277,7 @@ async fn remote_command(
             };
             remote::sign_in(services, &target).await?;
             if let Some(repo) = discovered_repo {
-                remote::remember(services, &repo, &target)?;
+                remote::remember(services, &repo, &target, !app.json)?;
             }
             let result = if app.json {
                 serde_json::json!({"schemaVersion":1,"server":target.url,"changed":true})
@@ -331,10 +332,11 @@ async fn remote_command(
                 &server,
                 repositories.clone(),
                 remote::Mode::Lookup,
+                (!app.json).then_some(app.color),
             )
             .await?;
             if discovered && let [repo] = repositories.as_slice() {
-                remote::remember(services, repo, &server)?;
+                remote::remember(services, repo, &server, !app.json)?;
             }
             write_report(app, &report, false)
         }
@@ -346,9 +348,16 @@ async fn remote_command(
             } else {
                 remote::Mode::Run
             };
-            let report = remote::report(services, &server, repositories.clone(), mode).await?;
+            let report = remote::report(
+                services,
+                &server,
+                repositories.clone(),
+                mode,
+                (!app.json).then_some(app.color),
+            )
+            .await?;
             if discovered && let [repo] = repositories.as_slice() {
-                remote::remember(services, repo, &server)?;
+                remote::remember(services, repo, &server, !app.json)?;
             }
             write_report(app, &report, true)
         }
@@ -365,10 +374,11 @@ async fn remote_command(
                 &server,
                 repositories.clone(),
                 remote::Mode::Lookup,
+                (!app.json).then_some(app.color),
             )
             .await?;
             if discovered && let [repo] = repositories.as_slice() {
-                remote::remember(services, repo, &server)?;
+                remote::remember(services, repo, &server, false)?;
             }
             run_tui(options.once, &report, tui::Origin::Server)
         }
@@ -405,7 +415,7 @@ async fn remote_target(
             None => match repositories.as_slice() {
                 [repository] => remote::find(services, repository).await?.ok_or_else(|| {
                     usage(format!(
-                        "no Count server found for {repository}; pass --server URL or set {}",
+                        "no Patchula server found for {repository}; pass --server URL or set {}",
                         remote::SERVER_VAR
                     ))
                 })?,
@@ -518,7 +528,10 @@ async fn tui_command(
             "patchula tui needs a terminal; use --once for a plain snapshot",
         ));
     }
-    let (report, read) = report(app, Batch::Lookup(&tui.lookup), services).await?;
+    let Some((report, read)) = report(app, Batch::Lookup(&tui.lookup), services, !tui.once).await?
+    else {
+        return Ok(USAGE);
+    };
     let origin = match read {
         Read::Checkout(checkout) => tui::Origin::Local(Box::new(
             plan::local(&checkout.0, checkout.1).map_err(usage)?,
@@ -565,18 +578,17 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
     if let Some(mise_data) = user::mise_data() {
         runner = runner.with_seed(mise_data);
     }
-    let (action, specs) = match days {
-        None => ("installed", runner.prewarm().await),
-        Some(days) => ("pruned", runner.prune(days).await),
+    let (action, verb, specs) = match days {
+        None => ("installed", "Installed", runner.prewarm().await),
+        Some(days) => ("pruned", "Pruned", runner.prune(days).await),
     };
     let specs = specs.map_err(fail)?;
     let result = if app.json {
         serde_json::json!({"schemaVersion":1,"store":runner.tools(),action:specs}).to_string()
     } else {
         format!(
-            "{} {} tool versions in {}",
-            action,
-            specs.len(),
+            "{verb} {} in {}",
+            output::count(specs.len(), "tool version", "tool versions"),
             runner.tools().display()
         )
     };
@@ -588,11 +600,13 @@ async fn tools_command(app: &App, tools: &cli::Tools) -> Result<u8, (u8, miette:
 fn main() -> ExitCode {
     // Handle help, version, parse failures and Tab completion callbacks before
     // building the async runtime, so every Tab press avoids thread-pool startup.
-    // The embedded entry is also the derive's one way to pass a help palette.
     let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let app = match App::embedded_outcome_paletted(&argv, cli::PALETTE) {
         usage_rs::embedded::Outcome::Parsed(app) => app,
         usage_rs::embedded::Outcome::Exit(exit) => {
+            if exit.stderr && exit.code == i32::from(USAGE) {
+                return handle_parse_exit(&argv, &exit);
+            }
             let text = palette::help(&exit.text, palette::depth());
             let _ = if exit.stderr {
                 io::stderr().lock().write_all(text.as_bytes())
@@ -608,15 +622,208 @@ fn main() -> ExitCode {
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("patchula: cannot start runtime: {error}");
+            let style = output::Style::stderr(app.color);
+            eprintln!(
+                "{} cannot start runtime: {error}",
+                style.paint(output::Paint::Error, &style.bold("error:"))
+            );
             return ExitCode::from(FAILED);
         }
     };
     runtime.block_on(run_app(app))
 }
 
+/// Renders a CLI parse error with the failing command's short help inline so no
+/// follow-up `--help` invocation is needed, or JSON when `--json` was passed.
+fn handle_parse_exit(argv: &[std::ffi::OsString], exit: &usage_rs::embedded::Exit) -> ExitCode {
+    let refs: Vec<&std::ffi::OsStr> = argv.iter().map(std::ffi::OsString::as_os_str).collect();
+    let parsed = App::parse_from(&refs);
+    if has_json_flag(&refs) {
+        let message = match &parsed {
+            Err(usage_rs::Error::MissingArgsHelp { .. } | usage_rs::Error::MissingSubcommand) => {
+                "a subcommand is required".to_owned()
+            }
+            Err(error) => {
+                let raw = usage_rs::diagnostic::render(
+                    App::spec(),
+                    &refs,
+                    error,
+                    usage_rs::diagnostic::Style::PLAIN,
+                );
+                let trimmed = strip_usage_footer(&raw);
+                trimmed
+                    .strip_prefix("error: ")
+                    .unwrap_or(trimmed)
+                    .to_owned()
+            }
+            Ok(_) => strip_usage_footer(&exit.text).to_owned(),
+        };
+        let _ = writeln!(
+            io::stdout().lock(),
+            "{}",
+            serde_json::json!({"schemaVersion": 1, "error": message, "exitCode": USAGE})
+        );
+        return ExitCode::from(USAGE);
+    }
+    let color = color_flag(&refs).unwrap_or(cli::Color::Auto);
+    let help_style = match color {
+        cli::Color::Always => usage_rs::help::Style::COLOURED,
+        cli::Color::Never => usage_rs::help::Style::PLAIN,
+        cli::Color::Auto => usage_rs::help::Style::auto_stderr(),
+    }
+    .palette(cli::PALETTE);
+    let diag_style = match color {
+        cli::Color::Always => usage_rs::diagnostic::Style::COLOURED,
+        cli::Color::Never => usage_rs::diagnostic::Style::PLAIN,
+        cli::Color::Auto => usage_rs::diagnostic::Style::auto(),
+    };
+    let route = command_route(&refs);
+    let short_help = usage_rs::help::render_at_styled(App::spec(), &route, false, help_style)
+        .map(|page| palette::help(&page, palette::depth()))
+        .unwrap_or_default();
+    let text = match &parsed {
+        Err(usage_rs::Error::MissingArgsHelp { .. } | usage_rs::Error::MissingSubcommand) => {
+            short_help
+        }
+        Err(error) => {
+            let raw = usage_rs::diagnostic::render(App::spec(), &refs, error, diag_style);
+            let header = strip_usage_footer(&raw);
+            if short_help.is_empty() {
+                format!("{header}\n")
+            } else {
+                format!("{header}\n\n{short_help}")
+            }
+        }
+        Ok(_) => palette::help(&exit.text, palette::depth()),
+    };
+    let _ = io::stderr().lock().write_all(text.as_bytes());
+    ExitCode::from(USAGE)
+}
+
+fn has_json_flag(argv: &[&std::ffi::OsStr]) -> bool {
+    for word in argv {
+        if *word == "--" {
+            break;
+        }
+        if *word == "--json" {
+            return true;
+        }
+    }
+    false
+}
+
+fn color_flag(argv: &[&std::ffi::OsStr]) -> Option<cli::Color> {
+    let mut iter = argv.iter();
+    while let Some(word) = iter.next() {
+        let Some(text) = word.to_str() else {
+            continue;
+        };
+        if text == "--" {
+            break;
+        }
+        let value = if text == "--color" {
+            iter.next().and_then(|v| v.to_str())
+        } else {
+            text.strip_prefix("--color=")
+        };
+        if let Some(value) = value {
+            return match value {
+                "auto" => Some(cli::Color::Auto),
+                "always" => Some(cli::Color::Always),
+                "never" => Some(cli::Color::Never),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+/// Resolves the subcommand route reached by `argv` so parse failures can print
+/// that command's short help inline.
+fn command_route<'a>(argv: &[&std::ffi::OsStr]) -> Vec<&'a usage_rs::Command<'a>> {
+    let mut route = vec![App::command()];
+    let mut skip_value = false;
+    for word in argv {
+        let Some(text) = word.to_str() else {
+            continue;
+        };
+        if text == "--" {
+            break;
+        }
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if text.starts_with('-') {
+            if !text.contains('=') && flag_takes_value(&route, text) {
+                skip_value = true;
+            }
+            continue;
+        }
+        let current = *route.last().expect("route has root");
+        if let Some(sub) = current
+            .subcommands
+            .iter()
+            .find(|sub| sub.name == text || sub.aliases.contains(&text))
+        {
+            route.push(sub);
+        }
+    }
+    route
+}
+
+fn flag_takes_value(route: &[&usage_rs::Command<'_>], token: &str) -> bool {
+    let flags = route.iter().flat_map(|cmd| cmd.flags.iter());
+    if let Some(long) = token.strip_prefix("--") {
+        flags
+            .into_iter()
+            .find(|flag| flag.longs.contains(&long))
+            .is_some_and(|flag| flag.takes_value)
+    } else if let Some(short) = token.strip_prefix('-')
+        && short.len() == 1
+    {
+        let byte = short.as_bytes()[0];
+        flags
+            .into_iter()
+            .find(|flag| flag.shorts.contains(&byte))
+            .is_some_and(|flag| flag.takes_value)
+    } else {
+        false
+    }
+}
+
+/// Removes usage-rs's trailing `Usage:` and `For more information, try '--help'.`
+/// lines while keeping the `error:` line and any `tip:` or value list above them.
+fn strip_usage_footer(rendered: &str) -> &str {
+    let without_help = rendered
+        .split("\nFor more information, try ")
+        .next()
+        .unwrap_or(rendered);
+    let without_usage = without_help
+        .rsplit_once("\nUsage:")
+        .or_else(|| without_help.rsplit_once("\n\x1b[1m\x1b[4mUsage:"))
+        .map_or(without_help, |(head, _)| head);
+    without_usage.trim_end_matches('\n')
+}
+
+/// Formats a runtime or usage error: miette's source-snippet box when a Pkl
+/// file span is attached, otherwise plain `error:` / `hint:` matching parse errors.
+fn format_error(error: &miette::Report, style: &output::Style) -> String {
+    if error.source_code().is_some() {
+        return format!("{error:?}");
+    }
+    let label = style.paint(output::Paint::Error, &style.bold("error:"));
+    let mut out = format!("{label} {error:#}");
+    if let Some(help) = error.help() {
+        let hint = style.paint(output::Paint::AccentDim, &style.bold("hint:"));
+        out.push('\n');
+        out.push_str(&format!("{hint} {help}"));
+    }
+    out
+}
+
 async fn run_app(app: App) -> ExitCode {
-    let serving = matches!(app.command, Some(Command::Serve(_)));
+    let serving = matches!(app.command, Command::Serve(_));
     // Only our explicitly sanitized events reach stderr. Dependency HTTP debug
     // logs can contain headers even when the user requests maximum verbosity.
     use tracing_subscriber::{filter::Targets, prelude::*};
@@ -671,10 +878,10 @@ async fn run_app(app: App) -> ExitCode {
                     serde_json::json!({"schemaVersion": 1, "error": format!("{error:#}"), "exitCode": code})
                 );
             } else {
-                eprintln!("{error:?}");
-                if app.verbose > 0 {
-                    eprintln!("patchula: exiting with status {code}");
-                }
+                eprintln!(
+                    "{}",
+                    format_error(&error, &output::Style::stderr(app.color))
+                );
             }
             ExitCode::from(code)
         }
@@ -712,7 +919,9 @@ async fn batch(
     batch: Batch<'_>,
     services: &Services,
 ) -> Result<u8, (u8, miette::Report)> {
-    let (report, _) = report(app, batch, services).await?;
+    let Some((report, _)) = report(app, batch, services, false).await? else {
+        return Ok(USAGE);
+    };
     write_report(app, &report, batch.run().is_some())
 }
 
@@ -744,7 +953,7 @@ fn write_report(
             stats.lookups
         );
         eprintln!(
-            "patchula timings: {}",
+            "patchula: timings {}",
             stats
                 .phase_micros
                 .iter()
@@ -858,6 +1067,8 @@ enum Source {
     Local(std::path::PathBuf, Option<Box<patchula_config::Config>>),
     /// Repositories read through the GitHub API.
     GitHub(Vec<String>),
+    /// The user chose to quit an interactive prompt.
+    Quit,
 }
 
 /// `lookup` and `tui` read the working tree in the current directory unless
@@ -880,7 +1091,7 @@ async fn source(
                 }
                 if named {
                     return Err(usage(
-                        "--default-config is for the working tree; a repository on GitHub invites the Count with its own patchula.pkl",
+                        "--default-config only applies to the local working tree; GitHub repositories need their own patchula.pkl",
                     ));
                 }
             }
@@ -898,15 +1109,21 @@ async fn source(
                 .current_dir()
                 .map_err(|e| usage(format!("cannot read the current directory: {e}")))?;
             let config = match &options.scan.config {
-                Some(path) => Some(patchula_config::load(path).map_err(|e| (USAGE, e))?),
-                None => missing_config(
+                Some(path) => Some(Box::new(
+                    patchula_config::load(path).map_err(|e| (USAGE, e))?,
+                )),
+                None => match missing_config(
                     &dir,
                     options.default_config,
+                    app.json,
                     services,
                     &output::Style::stderr(app.color),
-                )?,
+                )? {
+                    ConfigChoice::Use(config) => config,
+                    ConfigChoice::Quit => return Ok(Source::Quit),
+                },
             };
-            Ok(Source::Local(dir, config.map(Box::new)))
+            Ok(Source::Local(dir, config))
         }
         Batch::Run(options) => {
             let named = !options.repositories.is_empty() || options.all_repos;
@@ -943,7 +1160,7 @@ async fn source(
                                         "pass --config FILE, or create {} containing `amends \"PatchulaConfig.pkl\"`",
                                         path.display()
                                     ),
-                                    "the Count stays outside: {} has no patchula.pkl",
+                                    "{} has no patchula.pkl",
                                     dir.display()
                                 ),
                             ));
@@ -969,7 +1186,7 @@ async fn source(
 /// What to do when the working tree has no `patchula.pkl`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Missing {
-    /// Use the Count's defaults for this run only.
+    /// Use the default configuration for this run only.
     Defaults,
     /// Write the starter `patchula.pkl` and read it.
     Write,
@@ -988,6 +1205,12 @@ impl Missing {
     }
 }
 
+#[derive(Debug)]
+enum ConfigChoice {
+    Use(Option<Box<patchula_config::Config>>),
+    Quit,
+}
+
 /// The config for a working tree with no `--config`: none when it has a
 /// `patchula.pkl` for the engine to read, else the defaults if
 /// `--default-config` or the person at the terminal asks for them. Asked, the
@@ -996,32 +1219,33 @@ impl Missing {
 fn missing_config(
     dir: &std::path::Path,
     default_config: bool,
+    json: bool,
     services: &Services,
     style: &output::Style,
-) -> Result<Option<patchula_config::Config>, (u8, miette::Report)> {
+) -> Result<ConfigChoice, (u8, miette::Report)> {
     let found = patchula_config::discover(dir)
         .map_err(|e| usage(format!("cannot read {}: {e}", dir.display())))?;
     if found.is_some() {
-        return Ok(None);
+        return Ok(ConfigChoice::Use(None));
     }
     let defaults = || {
         patchula_config::defaults()
-            .map(Some)
+            .map(|config| ConfigChoice::Use(Some(Box::new(config))))
             .map_err(|e| (USAGE, e))
     };
     if default_config {
         return defaults();
     }
     let path = dir.join(patchula_config::CONFIG_PATH);
-    if !services.interactive() {
+    if json || !services.interactive() {
         return Err((
             USAGE,
             miette::miette!(
                 help = format!(
-                    "pass --default-config to use the Count's defaults for this run, or create {} containing `amends \"PatchulaConfig.pkl\"` to invite him for good",
+                    "pass --default-config to use defaults for this run, or create {} containing `amends \"PatchulaConfig.pkl\"`",
                     path.display()
                 ),
-                "no repository named, and {} has no patchula.pkl to read",
+                "{} has no patchula.pkl",
                 dir.display()
             ),
         ));
@@ -1032,25 +1256,21 @@ fn missing_config(
             || dir.display().to_string(),
             |rest| format!("~/{}", rest.display()),
         );
-    let choice = |key: &str, text: &str| format!("    {}  {text}\n", style.bold(key));
+    let choice = |key: &str, text: &str| format!("  {}  {text}\n", style.bold(key));
     let mut question = String::new();
     style.wrap(
         &mut question,
         0,
-        &format!(
-            "{}The Count finds no patchula.pkl in {shown}, so he has not been invited in.",
-            style.bat()
-        ),
+        &format!("No patchula.pkl found in {shown}."),
         output::Paint::Bold,
     );
     question.push_str(&format!(
-        "{}\n{}{}{}  {} ",
-        style.dim("  He waits at the door. Press a key:"),
+        "{}{}{}  {} ",
         choice(
             "d",
-            &format!("use his defaults for this run {}", style.dim("(Enter)"))
+            &format!("use defaults for this run {}", style.dim("(Enter)"))
         ),
-        choice("w", "write a starter patchula.pkl and come in"),
+        choice("w", "write a starter patchula.pkl"),
         choice("q", "quit"),
         style.dim("›"),
     ));
@@ -1061,7 +1281,7 @@ fn missing_config(
         Missing::Defaults => {
             eprintln!(
                 "{}",
-                style.dim("  Using the Count's defaults for this run; --default-config skips this question.\n")
+                style.dim("Using defaults for this run (--default-config skips this prompt).\n")
             );
             defaults()
         }
@@ -1075,20 +1295,13 @@ fn missing_config(
             eprintln!(
                 "{}",
                 style.dim(&format!(
-                    "  Wrote {}; the Count is invited, and the file is yours to edit.\n",
-                    path.display()
+                    "Wrote {shown}/{}.\n",
+                    patchula_config::CONFIG_PATH
                 ))
             );
-            Ok(None)
+            Ok(ConfigChoice::Use(None))
         }
-        Missing::Quit => Err((
-            USAGE,
-            miette::miette!(
-                help = "pass --default-config to use the Count's defaults, or add a patchula.pkl",
-                "the Count stays outside: {} has no patchula.pkl",
-                dir.display()
-            ),
-        )),
+        Missing::Quit => Ok(ConfigChoice::Quit),
     }
 }
 
@@ -1232,12 +1445,14 @@ enum Read {
 }
 
 /// Build the engine from lookup or run flags and run one local batch, with the
-/// working tree it read, if it read one.
+/// working tree it read, if it read one. Returns `None` when the user chose to
+/// quit an interactive prompt.
 async fn report(
     app: &App,
     batch: Batch<'_>,
     services: &Services,
-) -> Result<(patchula_report::Report, Read), (u8, miette::Report)> {
+    quiet_stderr: bool,
+) -> Result<Option<(patchula_report::Report, Read)>, (u8, miette::Report)> {
     use patchula_engine::{Engine, Options};
     let scan = batch.scan();
     let run = batch.run();
@@ -1255,6 +1470,7 @@ async fn report(
             (repositories, None, config)
         }
         Source::Local(dir, config) => (Vec::new(), Some(dir), config.map(|config| *config)),
+        Source::Quit => return Ok(None),
     };
     let settings = settings(scan)?;
     let concurrency = scan.concurrency.unwrap_or(settings.concurrency);
@@ -1270,9 +1486,16 @@ async fn report(
     let cache = patchula_cache::Cache::open_dir(&dir, Default::default())
         .await
         .map_err(|e| fail(format!("cannot open the cache in {}: {e}", dir.display())))?;
-    // Said before the batch starts, so a slow cold run is expected.
-    eprintln!("patchula: cache {}", cache.opened());
-    let spinner = progress::Spinner::start(app.color);
+    let opened = cache.opened();
+    if !app.json
+        && !quiet_stderr
+        && (app.verbose > 0 || opened.cold() || !opened.superseded.is_empty())
+    {
+        eprintln!("patchula: cache {opened}");
+    }
+    let spinner = (!app.json)
+        .then(|| progress::Spinner::start(app.color))
+        .flatten();
     let transport = services.transport().map_err(fail)?;
     let mut engine = Engine::from_settings(
         &settings,
@@ -1305,11 +1528,11 @@ async fn report(
         engine.lookup(options).await
     }
     .map_err(engine_failure)?;
-    Ok((
+    Ok(Some((
         report,
         match local {
             Some(dir) => Read::Checkout(Box::new((dir, config))),
             None => Read::GitHub,
         },
-    ))
+    )))
 }

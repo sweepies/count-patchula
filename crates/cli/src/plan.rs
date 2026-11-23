@@ -113,7 +113,7 @@ impl Plan {
                     // The file checked, not one put in its place since.
                     if identity(&target, &handle.metadata()?) != id {
                         return Err(std::io::Error::other(
-                            "the file changed since the Count checked it",
+                            "the file changed after being checked",
                         ));
                     }
                     // The same inode can still hold an edit made after
@@ -121,9 +121,7 @@ impl Plan {
                     let mut current = String::new();
                     handle.read_to_string(&mut current)?;
                     if current != *old {
-                        return Err(std::io::Error::other(
-                            "the file changed since the Count planned it",
-                        ));
+                        return Err(std::io::Error::other("the file changed after planning"));
                     }
                     let handle = opened.insert(handle);
                     handle.set_len(0)?;
@@ -211,7 +209,7 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
             skipped.push((
                 index,
                 format!(
-                    "{} in {} has changed since the lookup; run it again",
+                    "{} in {} changed since the lookup; re-run to refresh",
                     update.name, update.file
                 ),
             ));
@@ -225,11 +223,11 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
             skipped.push((
                 index,
                 format!(
-                    "{} in {} already takes {} {}",
+                    "{} in {} is already being updated to {} ({})",
                     update.name,
                     update.file,
-                    other.kind,
-                    other.target()
+                    other.target(),
+                    other.kind
                 ),
             ));
             continue;
@@ -238,7 +236,10 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
         let text = match files[&update.file].read() {
             Ok(text) => text,
             Err(unread) => {
-                skipped.push((index, format!("{}: {}", update.file, unread.why())));
+                skipped.push((
+                    index,
+                    format!("{} in {}: {}", update.name, update.file, unread.why()),
+                ));
                 continue;
             }
         };
@@ -247,7 +248,7 @@ pub fn plan(local: &Local, updates: &[&Update]) -> Result<Plan, String> {
         for dep in &targets {
             match patchula_manager::edits(dep, text, value, update.digest.as_deref()) {
                 Ok(more) => found.extend(more),
-                Err(error) => failed = Some(format!("{}: {error}", update.file)),
+                Err(error) => failed = Some(format!("{} in {}: {error}", update.name, update.file)),
             }
         }
         if let Some(reason) = failed {
@@ -390,8 +391,8 @@ mod tests {
         assert_eq!(
             reasons,
             [
-                "zod in package.json already takes major 4.1.0",
-                "hono in package.json has changed since the lookup; run it again",
+                "zod in package.json is already being updated to 4.1.0 (major)",
+                "hono in package.json changed since the lookup; re-run to refresh",
                 "lodash is only in package-lock.json; update it with your package manager",
                 "ms in package.json already allows ^2.1.0; only its lockfile changes, so update it with your package manager",
             ]
@@ -486,10 +487,7 @@ mod tests {
         let error = first.write(dir.path()).unwrap_err();
         assert!(error.written.is_empty());
         assert_eq!(error.partial, None);
-        assert!(
-            error.error.contains("changed since the Count planned it"),
-            "{error}"
-        );
+        assert!(error.error.contains("changed after planning"), "{error}");
         assert_eq!(
             error.to_string(),
             format!("{}; nothing was written", error.error)

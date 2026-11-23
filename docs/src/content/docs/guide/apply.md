@@ -81,11 +81,12 @@ written.
 
 ## Output and exit codes
 
-The summary goes to stderr. It opens with what was written, or would be, and
-lists those updates; then what was left alone and why, template updates,
-failed lookups and warnings; and last how many updates the filters left out. `--dry-run` prints a unified diff
-of every file to stdout, so `patchula apply --dry-run > pin.patch` gives a
-patch for `git apply`. With `--json`, stdout is one JSON object instead:
+The summary goes to stdout for normal runs and `--check`. With `--dry-run`,
+stdout is a unified diff of every file (so `patchula apply --dry-run > pin.patch`
+gives a patch for `git apply`) and the summary goes to stderr. It opens with what
+was written, or would be, and lists those updates; then skipped updates and why,
+template updates, failed lookups and warnings; and last how many updates the
+filters excluded. With `--json`, stdout is one JSON object instead:
 `updates`, `skipped` with each `reason`, `files` with each `diff`,
 `written`, `filtered`, `warnings`, `lookupFailures` and `exitCode`.
 `lookupFailures` lists each failed lookup as the

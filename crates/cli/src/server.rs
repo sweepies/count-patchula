@@ -7,20 +7,23 @@ fn env(name: &str) -> Result<Option<String>> {
     match std::env::var(name) {
         Ok(value) => Ok(Some(value)),
         Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(_) => Err(crate::usage("server environment value is not valid UTF-8")),
+        Err(_) => Err(crate::usage(format!("{name} is not valid UTF-8"))),
     }
 }
 /// A secret from a file (`--flag` or the file's env var) or an env var holding
 /// the value itself — never both. Reading shares the settings `Secret` rule:
 /// strip trailing CR/LF, reject empty, and errors never carry the value. The
 /// bytes are kept as they are: a webhook secret or key need not be UTF-8.
-fn secret(path: Option<&PathBuf>, file_env: &str, value_env: &str) -> Result<Vec<u8>> {
-    secret_with(path, file_env, value_env, |name| std::env::var_os(name))
+fn secret(path: Option<&PathBuf>, flag: &str, file_env: &str, value_env: &str) -> Result<Vec<u8>> {
+    secret_with(path, flag, file_env, value_env, |name| {
+        std::env::var_os(name)
+    })
 }
 /// `secret` with the environment lookup passed in, so tests need not touch
 /// the process environment.
 fn secret_with(
     path: Option<&PathBuf>,
+    flag: &str,
     file_env: &str,
     value_env: &str,
     env: impl Fn(&str) -> Option<std::ffi::OsString>,
@@ -29,14 +32,14 @@ fn secret_with(
     let path = path.cloned().or_else(|| env(file_env).map(PathBuf::from));
     let value = env(value_env).is_some();
     if path.is_some() && value {
-        return Err(crate::usage(
-            "choose either a secret file or a secret environment value",
-        ));
+        return Err(crate::usage(format!(
+            "set only one of {flag} / {file_env} and {value_env}"
+        )));
     }
     if path.is_none() && !value {
-        return Err(crate::usage(
-            "server requires App private key and webhook secret via env or files",
-        ));
+        return Err(crate::usage(format!(
+            "missing secret: set {flag}, {file_env}, or {value_env}"
+        )));
     }
     let secret = match path {
         Some(path) => patchula_config::settings::Secret::File(path),
@@ -51,22 +54,24 @@ pub async fn run(serve: &Serve) -> Result<u8> {
         env("PATCHULA_LISTEN")?
             .unwrap_or_else(|| "127.0.0.1:8080".into())
             .parse()
-            .map_err(|_| crate::usage("invalid server listen address"))
+            .map_err(|_| crate::usage("invalid PATCHULA_LISTEN address (expected host:port)"))
     })?;
     let app_id = serve.app_id.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_APP_ID")?
             .ok_or_else(|| crate::usage("server requires --app-id or PATCHULA_APP_ID"))?
             .parse()
-            .map_err(|_| crate::usage("invalid App ID"))
+            .map_err(|_| crate::usage("invalid PATCHULA_APP_ID (expected a positive integer)"))
     })?;
     let timeout = serve.shutdown_timeout_secs.map(Ok).unwrap_or_else(|| {
         env("PATCHULA_SHUTDOWN_TIMEOUT_SECS")?
             .unwrap_or_else(|| "60".into())
             .parse::<u64>()
-            .map_err(|_| crate::usage("invalid shutdown timeout"))
+            .map_err(|_| crate::usage("invalid PATCHULA_SHUTDOWN_TIMEOUT_SECS (expected seconds)"))
     })?;
     if timeout == 0 || timeout > 3600 {
-        return Err(crate::usage("shutdown timeout must be 1..3600 seconds"));
+        return Err(crate::usage(
+            "--shutdown-timeout-secs / PATCHULA_SHUTDOWN_TIMEOUT_SECS must be 1..3600 seconds",
+        ));
     }
     let recheck = match serve.recheck {
         Some(recheck) => Some(recheck),
@@ -87,11 +92,13 @@ pub async fn run(serve: &Serve) -> Result<u8> {
         app_id,
         private_key: secret(
             serve.private_key_file.as_ref(),
+            "--private-key-file",
             "PATCHULA_APP_PRIVATE_KEY_FILE",
             "PATCHULA_APP_PRIVATE_KEY",
         )?,
         webhook_secret: secret(
             serve.webhook_secret_file.as_ref(),
+            "--webhook-secret-file",
             "PATCHULA_WEBHOOK_SECRET_FILE",
             "PATCHULA_WEBHOOK_SECRET",
         )?,
@@ -113,27 +120,53 @@ mod tests {
         let key = dir.path().join("key");
         std::fs::write(&key, [0xff, 0xfe, b'\n']).unwrap();
         assert_eq!(
-            secret_with(Some(&key), "KEY_FILE", "KEY", |_| None).unwrap(),
+            secret_with(Some(&key), "--key-file", "KEY_FILE", "KEY", |_| None).unwrap(),
             [0xff, 0xfe]
         );
     }
 
     #[test]
     fn a_secret_needs_a_file_or_a_value() {
-        let (code, error) =
-            secret_with(None, "PATCHULA_KEY_FILE", "PATCHULA_KEY", |_| None).unwrap_err();
+        let (code, error) = secret_with(
+            None,
+            "--key-file",
+            "PATCHULA_KEY_FILE",
+            "PATCHULA_KEY",
+            |_| None,
+        )
+        .unwrap_err();
         assert_eq!(code, 2);
+        let text = error.to_string();
         assert!(
-            error
-                .to_string()
-                .contains("requires App private key and webhook secret")
+            text.contains("--key-file")
+                && text.contains("PATCHULA_KEY_FILE")
+                && text.contains("PATCHULA_KEY"),
+            "{text}"
         );
     }
 
-    /// Flag validation runs before the secrets are read, so a `--recheck`
-    /// flag is accepted and the run still stops on the missing secret files.
-    #[tokio::test]
-    async fn serve_takes_the_recheck_flag_before_reading_secrets() {
+    #[test]
+    fn a_secret_refuses_both_file_and_value() {
+        let (code, error) = secret_with(
+            None,
+            "--key-file",
+            "PATCHULA_KEY_FILE",
+            "PATCHULA_KEY",
+            |name| Some(std::ffi::OsString::from(name)),
+        )
+        .unwrap_err();
+        assert_eq!(code, 2);
+        let text = error.to_string();
+        assert!(
+            text.contains("--key-file")
+                && text.contains("PATCHULA_KEY_FILE")
+                && text.contains("PATCHULA_KEY"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn serve_takes_the_recheck_flag_before_reading_secrets() {
         let app = crate::cli::App::parse_from(
             &[
                 "serve",
@@ -157,10 +190,10 @@ mod tests {
             .map(std::ffi::OsStr::new),
         )
         .unwrap();
-        let Some(crate::cli::Command::Serve(serve)) = &app.command else {
+        let crate::cli::Command::Serve(serve) = &app.command else {
             panic!("serve")
         };
-        let result = run(serve).await;
+        let result = futures_executor::block_on(run(serve));
         assert!(matches!(result, Err((crate::USAGE, _))), "{result:?}");
     }
 }

@@ -383,75 +383,93 @@ async fn a_missing_signed_out_or_hung_github_cli_gives_no_token() {
 
 #[test]
 fn a_working_tree_without_config_asks_once_and_never_without_a_terminal() {
-    use super::{Missing, missing_config};
+    use super::{ConfigChoice, Missing, missing_config};
     let pressing = |key: Option<char>| Services {
         key,
         ..Default::default()
     };
     let defaults = serde_json::to_value(patchula_config::defaults().unwrap()).unwrap();
-    let as_json = |config: Option<patchula_config::Config>| {
+    let as_json = |choice: ConfigChoice| {
+        let ConfigChoice::Use(config) = choice else {
+            panic!("expected a config choice");
+        };
         serde_json::to_value(config.expect("a config for this run")).unwrap()
     };
 
     // d and Enter use the defaults for this run and write nothing.
     for key in ['d', 'D', '\n'] {
         let dir = tempfile::tempdir().unwrap();
-        let config = missing_config(
+        let choice = missing_config(
             dir.path(),
+            false,
             false,
             &pressing(Some(key)),
             &super::output::Style::PLAIN,
         )
         .unwrap();
-        assert_eq!(as_json(config), defaults, "{key:?}");
+        assert_eq!(as_json(choice), defaults, "{key:?}");
         assert!(!dir.path().join("patchula.pkl").exists());
     }
 
     // w writes the starter file and leaves the engine to read it.
     let dir = tempfile::tempdir().unwrap();
-    assert!(
+    assert!(matches!(
         missing_config(
             dir.path(),
+            false,
             false,
             &pressing(Some('w')),
             &super::output::Style::PLAIN
         )
-        .unwrap()
-        .is_none()
-    );
+        .unwrap(),
+        ConfigChoice::Use(None)
+    ));
     let written = std::fs::read_to_string(dir.path().join("patchula.pkl")).unwrap();
     assert_eq!(written, patchula_config::STARTER);
     // With the file there, nobody is asked again.
-    assert!(
+    assert!(matches!(
         missing_config(
             dir.path(),
+            false,
             false,
             &pressing(Some('q')),
             &super::output::Style::PLAIN
         )
-        .unwrap()
-        .is_none()
-    );
+        .unwrap(),
+        ConfigChoice::Use(None)
+    ));
 
-    // q quits without writing.
+    // q quits cleanly without writing or returning an error box.
     let dir = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        missing_config(
+            dir.path(),
+            false,
+            false,
+            &pressing(Some('q')),
+            &super::output::Style::PLAIN,
+        )
+        .unwrap(),
+        ConfigChoice::Quit
+    ));
+    assert!(!dir.path().join("patchula.pkl").exists());
+
+    // Under --json, never prompt even with a terminal attached; fail so JSON error reaches stdout.
     let (code, error) = missing_config(
         dir.path(),
         false,
+        true,
         &pressing(Some('q')),
         &super::output::Style::PLAIN,
     )
     .unwrap_err();
     assert_eq!(code, 2);
-    assert!(
-        error.to_string().contains("the Count stays outside"),
-        "{error}"
-    );
-    assert!(!dir.path().join("patchula.pkl").exists());
+    assert!(error.to_string().contains("has no patchula.pkl"), "{error}");
 
     // Without a terminal it never asks, and says how to go on.
     let (code, error) = missing_config(
         dir.path(),
+        false,
         false,
         &pressing(None),
         &super::output::Style::PLAIN,
@@ -467,9 +485,15 @@ fn a_working_tree_without_config_asks_once_and_never_without_a_terminal() {
 
     // --default-config answers for it, at a terminal or not.
     for services in [pressing(None), pressing(Some('q'))] {
-        let config =
-            missing_config(dir.path(), true, &services, &super::output::Style::PLAIN).unwrap();
-        assert_eq!(as_json(config), defaults);
+        let choice = missing_config(
+            dir.path(),
+            true,
+            false,
+            &services,
+            &super::output::Style::PLAIN,
+        )
+        .unwrap();
+        assert_eq!(as_json(choice), defaults);
     }
     assert!(!dir.path().join("patchula.pkl").exists());
 
@@ -522,7 +546,7 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
         ];
         words.extend(args.iter().map(OsStr::new));
         let app = App::parse_from(&words).unwrap();
-        let Some(super::Command::Apply(options)) = &app.command else {
+        let super::Command::Apply(options) = &app.command else {
             panic!("apply")
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -548,14 +572,14 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
     let pinned = "FROM alpine:3.19.0@sha256:51b67269f354137895d43f3b3d810bfacd3945438e94dc5ac55fdac340352f48\n";
     let updated = "FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a\n";
 
-    // Checks and dry runs write nothing and exit 3 while updates wait.
+    // Checks write summary to stdout; dry runs write diffs to stdout and summary to stderr.
     let (code, out, err) = apply(&["--check"]).await;
-    assert_eq!(code, 3, "{err}");
-    assert!(out.is_empty());
-    assert!(err.contains("3 updates await in 2 files"), "{err}");
+    assert_eq!(code, 3, "{out}");
+    assert!(err.is_empty(), "{err}");
+    assert!(out.contains("found 3 updates waiting in 2 files"), "{out}");
     assert!(
-        err.contains("  minor  alpine     3.19.0 → 3.24.3  Dockerfile:1\n"),
-        "{err}"
+        out.contains("  minor  alpine     3.19.0 → 3.24.3  Dockerfile:1\n"),
+        "{out}"
     );
     let (code, out, err) = apply(&["--dry-run"]).await;
     assert_eq!(code, 3, "{err}");
@@ -579,10 +603,13 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
 
     // Filters choose a subset; a digest pin is just another type.
     let (code, out, err) = apply(&["--manager", "dockerfile", "--type", "pin"]).await;
-    assert_eq!(code, 0, "{err}");
-    assert!(out.is_empty());
-    assert!(err.contains("applied 1 update to 1 file"), "{err}");
-    assert!(err.contains("4 more updates stayed out of it"), "{err}");
+    assert_eq!(code, 0, "{out}");
+    assert!(err.is_empty(), "{err}");
+    assert!(out.contains("applied 1 update to 1 file"), "{out}");
+    assert!(
+        out.contains("4 other updates were excluded by your filters"),
+        "{out}"
+    );
     assert_eq!(read("Dockerfile"), pinned);
     assert_eq!(read("package.json"), manifest);
     let (code, out, _) = apply(&["--dependency", "glob:m*", "--json"]).await;
@@ -598,18 +625,21 @@ async fn apply_writes_the_working_tree_and_exits_by_what_is_left() {
     // The largest update for each declaration is applied; the patch update
     // that loses its declaration is reported as skipped, as the TUI reports
     // it, so something is still waiting.
-    let (code, _, err) = apply(&[]).await;
-    assert_eq!(code, 3, "{err}");
-    assert!(err.contains("applied 2 updates to 2 files"), "{err}");
-    assert!(err.contains("already takes minor 3.24.3"), "{err}");
+    let (code, out, _) = apply(&[]).await;
+    assert_eq!(code, 3, "{out}");
+    assert!(out.contains("applied 2 updates to 2 files"), "{out}");
+    assert!(
+        out.contains("is already being updated to 3.24.3 (minor)"),
+        "{out}"
+    );
     assert_eq!(read("Dockerfile"), updated);
     assert_eq!(
         read("package.json"),
         manifest.replace("2.1.2", "2.1.3").replace("6.0.0", "7.0.0")
     );
-    let (code, _, err) = apply(&["--check"]).await;
-    assert_eq!(code, 0, "{err}");
-    assert!(err.contains("nothing to apply"), "{err}");
+    let (code, out, _) = apply(&["--check"]).await;
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("nothing to apply"), "{out}");
 }
 
 // Multi-threaded, as `main` is: the TUI checks the tree with a blocking git call.
@@ -654,7 +684,7 @@ async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
         ];
         words.extend(args.iter().map(OsStr::new));
         let app = App::parse_from(&words).unwrap();
-        let Some(super::Command::Apply(options)) = &app.command else {
+        let super::Command::Apply(options) = &app.command else {
             panic!("apply")
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -702,18 +732,18 @@ async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
             .any(|w| w.as_str().unwrap().contains("is-number")),
         "{result}"
     );
-    let (code, _, err) = apply(&["--check"]).await;
-    assert_eq!(code, 4, "{err}");
+    let (code, out, _) = apply(&["--check"]).await;
+    assert_eq!(code, 4, "{out}");
     assert!(
-        err.contains("Lookup failures (1)\n  is-number  package.json  npm, network\n"),
-        "{err}"
+        out.contains("Lookup failures (1)\n  is-number  package.json  npm, network\n"),
+        "{out}"
     );
-    assert!(err.contains("1 lookup failed"), "{err}");
+    assert!(out.contains("1 lookup failed"), "{out}");
 
     // A plain apply still writes what it could look up.
-    let (code, _, err) = apply(&[]).await;
-    assert_eq!(code, 4, "{err}");
-    assert!(err.contains("applied 1 update to 1 file"), "{err}");
+    let (code, out, _) = apply(&[]).await;
+    assert_eq!(code, 4, "{out}");
+    assert!(out.contains("applied 1 update to 1 file"), "{out}");
     assert_eq!(
         std::fs::read_to_string(tree.path().join("package.json")).unwrap(),
         manifest.replace("2.1.2", "2.1.3")
@@ -729,12 +759,14 @@ async fn failed_lookups_fail_apply_and_lookup_with_their_own_code() {
     let (report, _) = crate::report(
         &app,
         match &app.command {
-            Some(super::Command::Lookup(options)) => super::Batch::Lookup(options),
+            super::Command::Lookup(options) => super::Batch::Lookup(options),
             _ => panic!("lookup"),
         },
         &services,
+        false,
     )
     .await
+    .unwrap()
     .unwrap();
     let repo = &report.repositories[0];
     assert_eq!(repo.skipped.len(), 1, "{repo:?}");
@@ -804,10 +836,6 @@ async fn apply_is_always_local_and_validates_its_filters() {
     for (args, message) in [
         (&["acme/app"][..], "takes no repository"),
         (&["--all-repos"], "takes no --all-repos"),
-        (
-            &["--manager", "npn"],
-            "--manager npn is not a known manager",
-        ),
         (&["--dependency", "regex:("], "--dependency"),
     ] {
         let mut words = vec!["apply"];
@@ -822,6 +850,7 @@ async fn apply_is_always_local_and_validates_its_filters() {
         &["apply", "--here"],
         &["apply", "--check", "--dry-run"],
         &["apply", "--type", "huge"],
+        &["apply", "--manager", "npn"],
     ] {
         assert!(
             App::parse_from(&args.iter().map(OsStr::new).collect::<Vec<_>>()).is_err(),
@@ -899,20 +928,16 @@ async fn apply_without_a_config_asks_or_takes_default_config() {
             .to_string()
             .contains("--default-config")
     );
-    // At a terminal, q leaves the tree alone.
+    // At a terminal, q leaves the tree alone and exits quietly with code 2.
     let services = Services {
         key: Some('q'),
         ..services
     };
-    let (code, error) = run(&apply(&["--check"]), &services).await.unwrap_err();
+    let code = run(&apply(&["--check"]), &services).await.unwrap();
     assert_eq!(code, 2);
-    assert!(
-        error.to_string().contains("the Count stays outside"),
-        "{error}"
-    );
     assert!(!tree.path().join("patchula.pkl").exists());
 
-    // --default-config looks up with the Count's defaults and writes no config.
+    // --default-config looks up with defaults and writes no config.
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/cli/apply-defaults.json");
     let transport = patchula_testkit::from_env(&path, Default::default(), || {
@@ -933,7 +958,7 @@ async fn apply_without_a_config_asks_or_takes_default_config() {
         "--cache",
         cache.to_str().unwrap(),
     ]);
-    let Some(super::Command::Apply(options)) = &app.command else {
+    let super::Command::Apply(options) = &app.command else {
         panic!("apply")
     };
     let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -947,9 +972,9 @@ async fn apply_without_a_config_asks_or_takes_default_config() {
     )
     .await
     .unwrap();
-    let err = String::from_utf8(err).unwrap();
-    assert_eq!(code, 3, "{err}");
-    assert!(err.contains("major  is-number  6.0.0 → 7.0.0"), "{err}");
+    let out = String::from_utf8(out).unwrap();
+    assert_eq!(code, 3, "{out}");
+    assert!(out.contains("major  is-number  6.0.0 → 7.0.0"), "{out}");
     assert!(!tree.path().join("patchula.pkl").exists());
     assert_eq!(
         std::fs::read_to_string(tree.path().join("Dockerfile")).unwrap(),
@@ -1033,7 +1058,7 @@ async fn apply_reports_notices_that_are_not_templates() {
         ];
         words.extend(args.iter().map(OsStr::new));
         let app = App::parse_from(&words).unwrap();
-        let Some(super::Command::Apply(options)) = &app.command else {
+        let super::Command::Apply(options) = &app.command else {
             panic!("apply")
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -1053,14 +1078,15 @@ async fn apply_reports_notices_that_are_not_templates() {
             String::from_utf8(err).unwrap(),
         )
     };
-    let (_, _, err) = apply(&["--check"]).await;
-    assert!(err.contains("Newer versions not proposed (1)"), "{err}");
+    let (_, out, err) = apply(&["--check"]).await;
+    assert!(err.is_empty(), "{err}");
+    assert!(out.contains("Newer versions not proposed (1)"), "{out}");
     assert!(
-        err.contains("acme/lib ^1 | ^2 → 3.0.0 available, not proposed: the constraint `^1 | ^2` cannot be rewritten"),
-        "{err}"
+        out.contains("acme/lib ^1 | ^2 → 3.0.0 available, not proposed: the constraint `^1 | ^2` cannot be rewritten"),
+        "{out}"
     );
-    assert!(!err.contains("Template updates"), "{err}");
-    assert!(!err.contains("copier"), "{err}");
+    assert!(!out.contains("Template updates"), "{out}");
+    assert!(!out.contains("copier"), "{out}");
     let (_, out, _) = apply(&["--check", "--json"]).await;
     let result: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(result["notices"][0]["available"], "3.0.0");
@@ -1316,11 +1342,12 @@ async fn run_dry_run_dir_plans_local_directory_and_requires_config() {
         "amends \"PatchulaConfig.pkl\"\ndefaults { waitHours = 0 }\nmanagers = new Listing { \"npm\" }\n",
     )
     .unwrap();
-    let Some(super::Command::Run(run_opts)) = &app.command else {
+    let super::Command::Run(run_opts) = &app.command else {
         panic!("run")
     };
-    let (report, read) = crate::report(&app, super::Batch::Run(run_opts), &services)
+    let (report, read) = crate::report(&app, super::Batch::Run(run_opts), &services, false)
         .await
+        .unwrap()
         .unwrap();
     assert!(matches!(read, super::Read::Checkout(_)));
     let actions = report.actions.expect("dry-run produces actions");

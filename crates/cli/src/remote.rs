@@ -104,8 +104,9 @@ pub async fn report(
     target: &Server,
     repositories: Vec<String>,
     mode: Mode,
+    spinner_color: Option<crate::cli::Color>,
 ) -> Result<patchula_report::Report> {
-    report_inner(services, target, repositories, mode)
+    report_inner(services, target, repositories, mode, spinner_color)
         .await
         .map_err(|error| unreachable_hint(target, error))
 }
@@ -115,12 +116,14 @@ async fn report_inner(
     target: &Server,
     repositories: Vec<String>,
     mode: Mode,
+    spinner_color: Option<crate::cli::Color>,
 ) -> Result<patchula_report::Report> {
     let server = target.url.as_str();
+    let announce = spinner_color.is_some();
     let transport = services.remote_transport().map_err(fail)?;
     let body = serde_json::to_value(Start { mode, repositories })
         .map_err(|_| fail("cannot encode the run request"))?;
-    let mut token = token(services, &*transport, target).await?;
+    let mut token = token(services, &*transport, target, announce).await?;
     let mut response = send(
         &*transport,
         Method::POST,
@@ -132,7 +135,7 @@ async fn report_inner(
     if response.0 == 401 {
         // GitHub revoked the stored token; sign in again once.
         forget_login(services, server)?;
-        token = login(services, &*transport, target).await?;
+        token = login(services, &*transport, target, announce).await?;
         response = send(
             &*transport,
             Method::POST,
@@ -149,7 +152,13 @@ async fn report_inner(
     let id = serde_json::from_value::<Accepted>(value)
         .map_err(|_| fail("the server did not return a run ID"))?
         .id;
-    eprintln!("patchula: the Count is on it at {server}");
+    let verb = match mode {
+        Mode::Lookup => "Looking up",
+        Mode::DryRun | Mode::Run => "Running",
+    };
+    let _spinner = spinner_color.and_then(|color| {
+        crate::progress::Spinner::start_with(color, &format!("{verb} on {server}…"))
+    });
     // A finished report lives JOB_TTL_SECONDS; the run itself is bounded by
     // RUN_LIMIT_SECONDS. Past the deadline the job is gone or hung.
     let deadline =
@@ -176,7 +185,7 @@ async fn report_inner(
         match JobStatus::decode(&value).map_err(|error| match error {
             protocol::StatusError::Report(patchula_report::Error::Version(version)) => fail(
                 format!(
-                    "{server} sends report schema {version}; this CLI reads {}. Use the same release on both",
+                    "{server} sends report schema {version}; this CLI reads {}; use the same release on both",
                     patchula_report::SCHEMA_VERSION
                 ),
             ),
@@ -204,7 +213,7 @@ fn rejected(server: &str, status: u16, value: &Value) -> (u8, miette::Report) {
             .is_ok_and(|body| body.error_kind == "unknown-run")
     {
         return fail(format!(
-            "{server}: the run is gone — a finished report lives {} minutes, and a restart loses every run",
+            "{server}: the run is gone; a finished report lives {} minutes, and a server restart clears active runs",
             protocol::JOB_TTL_SECONDS / 60
         ));
     }
@@ -219,7 +228,7 @@ fn rejected(server: &str, status: u16, value: &Value) -> (u8, miette::Report) {
 /// `patchula remote login`: sign in now, replacing any stored token.
 pub async fn sign_in(services: &Services, target: &Server) -> Result<String> {
     let transport = services.remote_transport().map_err(fail)?;
-    login(services, &*transport, target)
+    login(services, &*transport, target, false)
         .await
         .map_err(|error| unreachable_hint(target, error))
 }
@@ -232,7 +241,7 @@ fn unreachable_hint(target: &Server, error: (u8, miette::Report)) -> (u8, miette
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned));
         let message = error.1.to_string();
-        if host.is_some_and(|host| message == format!("cannot reach {host}")) {
+        if host.is_some_and(|host| message.starts_with(&format!("cannot reach {host}"))) {
             return (
                 error.0,
                 miette::miette!(
@@ -314,8 +323,14 @@ pub async fn find(services: &Services, repository: &str) -> Result<Option<(Serve
     )))
 }
 
-/// Remember a newly discovered server for `repository` and note it on stderr.
-pub fn remember(services: &Services, repository: &str, target: &Server) -> Result<()> {
+/// Remember a newly discovered server for `repository` and note it on stderr
+/// when `announce` is true.
+pub fn remember(
+    services: &Services,
+    repository: &str,
+    target: &Server,
+    announce: bool,
+) -> Result<()> {
     let Some(app) = &target.app else {
         return Ok(());
     };
@@ -333,10 +348,12 @@ pub fn remember(services: &Services, repository: &str, target: &Server) -> Resul
             true
         },
     )?;
-    eprintln!(
-        "patchula: remembered {} (App {app}) for {repository}; `patchula remote logout --server {}` signs out and forgets it",
-        target.url, target.url
-    );
+    if announce {
+        eprintln!(
+            "patchula: remembered {} (App {app}) for {repository}; run `patchula remote logout --server {}` to forget it",
+            target.url, target.url
+        );
+    }
     Ok(())
 }
 
@@ -570,10 +587,15 @@ fn save<T: Serialize>(path: &std::path::Path, entries: &BTreeMap<String, T>) -> 
 }
 
 /// A usable token for the server: the stored one, a refreshed one, or a new sign-in.
-async fn token(services: &Services, transport: &dyn Transport, target: &Server) -> Result<String> {
+async fn token(
+    services: &Services,
+    transport: &dyn Transport,
+    target: &Server,
+    announce: bool,
+) -> Result<String> {
     let now = chrono::Utc::now().timestamp();
     let Some(stored) = load::<Login>(services, LOGINS)?.remove(&target.url) else {
-        return login(services, transport, target).await;
+        return login(services, transport, target, announce).await;
     };
     if stored.expires_at.is_none_or(|at| at > now + 60) {
         return Ok(stored.access_token);
@@ -598,7 +620,7 @@ async fn token(services: &Services, transport: &dyn Transport, target: &Server) 
             return Ok(login.access_token);
         }
     }
-    login(services, transport, target).await
+    login(services, transport, target, announce).await
 }
 
 fn granted(value: &Value, now: i64) -> Option<Login> {
@@ -632,7 +654,12 @@ async fn client_id(transport: &dyn Transport, target: &Server) -> Result<String>
 }
 
 /// GitHub's device flow for the server's App.
-async fn login(services: &Services, transport: &dyn Transport, target: &Server) -> Result<String> {
+async fn login(
+    services: &Services,
+    transport: &dyn Transport,
+    target: &Server,
+    announce: bool,
+) -> Result<String> {
     let server = target.url.as_str();
     let client_id = client_id(transport, target).await?;
     let (_, device) = send_form(transport, DEVICE_CODE_URL, &[("client_id", &client_id)]).await?;
@@ -667,7 +694,9 @@ async fn login(services: &Services, transport: &dyn Transport, target: &Server) 
         .await?;
         if let Some(login) = granted(&value, chrono::Utc::now().timestamp()) {
             store(services, server, login.clone())?;
-            eprintln!("patchula: signed in to {server}");
+            if announce {
+                eprintln!("patchula: signed in to {server}");
+            }
             return Ok(login.access_token);
         }
         match value["error"].as_str() {

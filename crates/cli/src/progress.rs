@@ -13,14 +13,18 @@ pub struct Spinner {
 
 impl Spinner {
     /// A spinner when stderr is a terminal that can draw one: a bold braille
-    /// wheel and the Count's name in the accent, then what he is doing.
+    /// wheel in the accent, then the current step.
     pub fn start(color: cli::Color) -> Option<Arc<Self>> {
+        Self::start_with(color, "Preparing…")
+    }
+
+    /// A spinner starting with a custom message.
+    pub fn start_with(color: cli::Color, initial: &str) -> Option<Arc<Self>> {
         let terminal = console::Term::stderr().is_term()
             && std::env::var_os("TERM").is_none_or(|term| term != "dumb");
         if !terminal {
             return None;
         }
-        let style = output::Style::stderr(color);
         // clx paints its spinner blue when stderr is coloured; the frame is
         // repainted in the accent, or left plain when we may not colour.
         let wheel = if output::colored(color, true) {
@@ -28,12 +32,11 @@ impl Spinner {
         } else {
             String::new()
         };
-        let label = style.paint(output::Paint::Accent, &style.bold("the Count"));
         let job = ProgressJobBuilder::new()
             .body(format!(
-                "{{{{ spinner(name=\"dot\") | replace(from=\"\x1b[34m\", to=\"{wheel}\") }}}} {label}  {{{{ message | flex }}}}"
+                "{{{{ spinner(name=\"dot\") | replace(from=\"\x1b[34m\", to=\"{wheel}\") }}}} {{{{ message | flex }}}}"
             ))
-            .prop("message", "the Count is getting ready…")
+            .prop("message", initial)
             .on_done(ProgressJobDoneBehavior::Hide)
             .start();
         Some(Arc::new(Self {
@@ -43,41 +46,30 @@ impl Spinner {
     }
 
     fn show(&self, (stage, total, done): (Stage, usize, usize)) {
-        let message = match stage {
-            Stage::Discovery => "finding the repositories the token can reach…".to_owned(),
-            Stage::Extraction if total == 1 => "reading the manifests…".to_owned(),
-            Stage::Extraction => format!("reading {total} repositories…"),
-            Stage::Lookup => format!(
-                "running {}…",
-                crate::output::count(total, "lookup", "lookups")
-            ),
-            Stage::Digests => format!(
-                "resolving {}…",
-                crate::output::count(total, "digest", "digests")
-            ),
-            Stage::Lockfiles => format!(
-                "regenerating lockfiles for {}…",
-                crate::output::count(total, "branch", "branches")
-            ),
-            Stage::Writing => format!(
-                "writing {} and their pull requests…",
-                crate::output::count(total, "branch", "branches")
-            ),
-        };
         let counted = total > 0
             && !matches!(stage, Stage::Writing)
             && !(stage == Stage::Extraction && total == 1);
-        self.job.prop(
-            "message",
-            &if counted {
-                format!("{message} {}/{total}", done.min(total))
-            } else {
-                message
-            },
-        );
+        let done = done.min(total);
+        let message = match stage {
+            Stage::Discovery => "Discovering repositories…".to_owned(),
+            Stage::Extraction if total == 1 => "Reading manifests…".to_owned(),
+            Stage::Extraction if counted => format!("Reading repositories ({done}/{total})…"),
+            Stage::Extraction => "Reading repositories…".to_owned(),
+            Stage::Lookup if counted => format!("Running lookups ({done}/{total})…"),
+            Stage::Lookup => "Running lookups…".to_owned(),
+            Stage::Digests if counted => format!("Resolving digests ({done}/{total})…"),
+            Stage::Digests => "Resolving digests…".to_owned(),
+            Stage::Lockfiles if counted => format!("Updating lockfiles ({done}/{total})…"),
+            Stage::Lockfiles => "Updating lockfiles…".to_owned(),
+            Stage::Writing => format!(
+                "Writing {} and pull requests…",
+                crate::output::count(total, "branch", "branches")
+            ),
+        };
+        self.job.prop("message", &message);
         if counted {
             self.job.progress_total(total);
-            self.job.progress_current(done.min(total));
+            self.job.progress_current(done);
         }
         self.job.update();
     }

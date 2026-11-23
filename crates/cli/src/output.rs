@@ -274,7 +274,7 @@ impl Counts {
             (self.vulnerabilities, "vulnerability", "vulnerabilities"),
             (self.failures, "failed lookup", "failed lookups"),
             (self.notices, "notice", "notices"),
-            (self.skipped, "skipped value", "skipped values"),
+            (self.skipped, "skipped entry", "skipped entries"),
             (self.warnings, "warning", "warnings"),
         ] {
             if n > 0 {
@@ -338,17 +338,43 @@ pub fn report(report: &Report, style: &Style) -> String {
         .filter(|r| r.status == Status::Error)
         .count();
     let single = report.repositories.len() == 1;
-    let headline = match report.repositories.as_slice() {
-        [] => "The Count found no repositories to visit.".to_owned(),
-        [repo] if repo.status == Status::Error => format!(
-            "The Count could not read {}: {}",
-            repo.repository,
-            repo.reason.as_deref().unwrap_or("it failed")
+    let status_line = |label: &str, reason: Option<&str>| match reason {
+        Some(reason) => format!("{label}: {reason}"),
+        None => label.to_owned(),
+    };
+    let (headline, paint) = match report.repositories.as_slice() {
+        [] => (
+            "The Count found no repositories to visit.".to_owned(),
+            Paint::Bold,
         ),
-        [repo] => format!(
-            "The Count visited {} and found {}.",
-            repo.repository,
-            sentence(&total.phrases())
+        [repo] if repo.status == Status::Error => (
+            match &repo.reason {
+                Some(reason) => format!("The Count could not read {}: {reason}", repo.repository),
+                None => format!("The Count could not read {}.", repo.repository),
+            },
+            Paint::Error,
+        ),
+        [repo] if repo.status == Status::Skipped => (
+            match &repo.reason {
+                Some(reason) => format!("The Count skipped {}: {reason}", repo.repository),
+                None => format!("The Count skipped {}.", repo.repository),
+            },
+            Paint::Warning,
+        ),
+        [repo] if repo.status == Status::Stale => (
+            match &repo.reason {
+                Some(reason) => format!("The Count stopped on {}: {reason}", repo.repository),
+                None => format!("The Count stopped on {}.", repo.repository),
+            },
+            Paint::Warning,
+        ),
+        [repo] => (
+            format!(
+                "The Count visited {} and found {}.",
+                repo.repository,
+                sentence(&total.phrases())
+            ),
+            Paint::Bold,
         ),
         repos => {
             let mut line = format!(
@@ -363,13 +389,8 @@ pub fn report(report: &Report, style: &Style) -> String {
                     count(errors, "repository", "repositories")
                 );
             }
-            line
+            (line, Paint::Bold)
         }
-    };
-    let paint = if single && errors > 0 {
-        Paint::Error
-    } else {
-        Paint::Bold
     };
     style.summary(&mut out, &format!("{}{headline}", style.bat()), paint);
     let updates = updates::updates(report);
@@ -379,37 +400,17 @@ pub fn report(report: &Report, style: &Style) -> String {
             let (state, paint) = match repo.status {
                 Status::Complete => (sentence(&Counts::of(repo).phrases()), Paint::Dim),
                 Status::Skipped => (
-                    format!("skipped: {}", repo.reason.as_deref().unwrap_or("no reason")),
+                    status_line("skipped", repo.reason.as_deref()),
                     Paint::Warning,
                 ),
-                Status::Stale => (
-                    format!("stale: {}", repo.reason.as_deref().unwrap_or("no reason")),
-                    Paint::Warning,
-                ),
-                Status::Error => (
-                    format!("error: {}", repo.reason.as_deref().unwrap_or("no reason")),
-                    Paint::Error,
-                ),
+                Status::Stale => (status_line("stale", repo.reason.as_deref()), Paint::Warning),
+                Status::Error => (status_line("error", repo.reason.as_deref()), Paint::Error),
             };
             let _ = writeln!(
                 out,
                 "\n{}  {}",
                 style.bold(&repo.repository),
                 style.paint(paint, &state)
-            );
-        } else if repo.status == Status::Skipped {
-            style.wrap(
-                &mut out,
-                0,
-                &format!("skipped: {}", repo.reason.as_deref().unwrap_or("no reason")),
-                Paint::Warning,
-            );
-        } else if repo.status == Status::Stale {
-            style.wrap(
-                &mut out,
-                0,
-                &format!("stale: {}", repo.reason.as_deref().unwrap_or("no reason")),
-                Paint::Warning,
             );
         }
         if let Some(actions) = &report.actions {

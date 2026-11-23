@@ -82,7 +82,7 @@ pub fn update(
     let touched = changed(dir)?;
     if !status.success() {
         return Err(format!(
-            "copier stopped ({status}) and changed {}. If it asked for --trust, review the template and run copier update --trust yourself; the Count never trusts a template for you",
+            "copier stopped ({status}) and changed {}. If it asked for --trust, review the template and run `copier update --trust` yourself; patchula never passes --trust automatically",
             if touched.is_empty() {
                 "nothing".into()
             } else {
@@ -105,10 +105,12 @@ pub fn update(
 
 /// What copier did to one template, for the TUI and `apply`.
 pub fn summary(name: &str, tag: &str, outcome: &Outcome) -> String {
-    let count = outcome.touched.len();
+    if outcome.touched.is_empty() {
+        return format!("Copier moved {name} to {tag}: no files changed.");
+    }
     format!(
-        "Copier moved {name} to {tag}: {count} file{} changed ({}){}. Review and commit them yourself.",
-        if count == 1 { "" } else { "s" },
+        "Copier moved {name} to {tag}: {} changed ({}){}. Review and commit them yourself.",
+        crate::output::count(outcome.touched.len(), "file", "files"),
         outcome.touched.join(", "),
         if outcome.conflicts.is_empty() {
             String::new()
@@ -225,6 +227,9 @@ printf '<<<<<<< before updating\n' > notes.md",
         let tree = dir.path().join("tree");
         let error = update(&fake, &tree, "api/.copier-answers.yml", "v1.6.0", false).unwrap_err();
         assert!(error.contains("changed nothing"), "{error}");
-        assert!(error.contains("copier update --trust yourself"), "{error}");
+        assert!(
+            error.contains("`copier update --trust` yourself"),
+            "{error}"
+        );
     }
 }

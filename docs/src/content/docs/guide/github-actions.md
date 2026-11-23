@@ -154,13 +154,13 @@ Entries are keyed by the cache schema the binary reads
 an older one, starts from a cold cache instead of failing on a database it
 cannot read.
 
-Each run first prints how warm its cache is, so a slow run is expected
-before it starts: `cold` when there is no cache yet (none was restored), the
-cache was corrupt, or it holds nothing; `partly cold` when a new release
-stores some kinds of entry differently, so it drops the outdated ones and
-fetches them again, naming the kinds;
-otherwise `warm`, with how many responses and values it holds and when it
-was last opened.
+When the cache is cold or partly cold (or when `-v` is passed), the run first
+prints how warm its cache is so a slow run is expected before it starts: `cold`
+when there is no cache yet (none was restored), the cache was corrupt, or it
+holds nothing; `partly cold` when a new release stores some kinds of entry
+differently, so it drops the outdated ones and fetches them again, naming the
+kinds; with `-v` on a warm cache, `warm` with how many responses and values it
+holds and when it was last opened.
 
 ```text
 patchula: cache partly cold: 8412 responses (61.3 MiB) and 2210 stored values, last opened 6 hours ago; 1903 outdated entries dropped (extract)
