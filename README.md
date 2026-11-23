@@ -84,6 +84,8 @@ token or toolchain of your own.
 - A terminal UI (`patchula tui`) to browse updates, and in a checkout, pick
   some and write them into your files. `patchula apply` writes them without
   asking, for scripts and pre-commit hooks.
+- A desktop window (`patchula-gui`, built from this repository) with the same
+  lists, an inspector for each update and a diff to review before it writes.
 
 ## How fast
 

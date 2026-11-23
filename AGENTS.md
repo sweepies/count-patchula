@@ -32,6 +32,15 @@ with Astro Starlight; the pages are under `docs/src/content/docs/`.
 - Document a major deviation from Renovate, one a Renovate user would trip
   over, in `docs/src/content/docs/renovate/departures.md`.
 
+The desktop window (`patchula-gui`) is its own Cargo workspace under `gui/`,
+so that Rune's GPU and windowing crates stay out of `Cargo.lock` and out of
+`build`, `test` and `lint`; its tasks are `gui:test`, `gui:lint`, `gui:run`
+and `gui:snap`. It links only `patchula-report` and `patchula-words` and runs
+the `patchula` binary for everything else, so a lookup or a write is never
+implemented twice. A change to what a page shows updates
+`docs/src/content/docs/guide/gui.md`, and its pictures in `docs/src/assets/gui/`
+come from `mise run gui:snap`.
+
 Architecture, caching and the HTTP test design are in
 `docs/src/content/docs/internals/`. Read the relevant page before changing the
 engine, cache or GitHub client. Read `internals/threat-model.md` before

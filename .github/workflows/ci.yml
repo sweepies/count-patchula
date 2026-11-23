@@ -36,6 +36,7 @@ jobs:
     outputs:
       rust: ${{ steps.release.outputs.bump != 'true' && (steps.some.outputs.rust == 'true' || steps.every.outputs.rust == 'true') }}
       docs: ${{ steps.some.outputs.docs }}
+      gui: ${{ steps.some.outputs.gui }}
     env:
       # The release bot's own PR from this repository, the only one the release
       # check below may run for (see there). One predicate, so the steps that
@@ -60,6 +61,15 @@ jobs:
               - tasks.toml
               - mise.lock
               - .github/workflows/ci.yml
+            # The window, and the two crates it reads the report through.
+            gui:
+              - gui/**
+              - crates/report/**
+              - crates/words/**
+              - mise.toml
+              - tasks.toml
+              - mise.lock
+              - .github/workflows/ci.yml
       # A file counts when it matches every pattern: anything outside these
       # may change what the Rust jobs check.
       - id: every
@@ -70,6 +80,9 @@ jobs:
             rust:
               - "**"
               - "!docs/**"
+              # The window's own workspace, which the gui job checks.
+              - "!gui/**"
+              - "!mise-tasks/gui/**"
               - "!assets/**"
               - "!skills/**"
               - "!.claude/**"
@@ -381,6 +394,47 @@ jobs:
           path: corpus-report.json
           if-no-files-found: warn
           retention-days: 14
+
+  # The desktop window is its own Cargo workspace under gui/, so no job above
+  # builds it. Its tests drive the views through Rune's runtime with no GPU.
+  gui:
+    name: "Window: tests, Clippy"
+    needs: changes
+    if: needs.changes.outputs.gui == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MISE_DISABLE_TOOLS: go,node,tak,usage,nu,http:deepsource
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v6.1.0
+        with:
+          path: *mise-downloads
+          key: *mise-downloads-key
+          restore-keys: *mise-downloads-restore
+      - uses: jdx/mise-action@v5.2.4
+        with:
+          cache: false
+      # Rune and its patched crates come from one Git revision; the registry
+      # crates are the window's own lockfile.
+      - id: gui-downloads
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: *cargo-downloads
+          key: cargo-downloads-gui-v1-${{ hashFiles('gui/Cargo.lock') }}
+          restore-keys: cargo-downloads-gui-v1-
+      # The Linux build links libxkbcommon and libwayland-client.
+      - run: mise run gui:deps
+      - run: mise run gui:test
+      - run: mise run gui:lint
+      - if: github.ref == 'refs/heads/main' && steps.gui-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        continue-on-error: true
+        with:
+          path: *cargo-downloads
+          key: cargo-downloads-gui-v1-${{ hashFiles('gui/Cargo.lock') }}
 
   docs:
     name: "Docs: build"

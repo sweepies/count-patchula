@@ -1,0 +1,27 @@
+#!/usr/bin/env nu
+#MISE description="Render every scene of the Count's window to PNGs without opening a window; needs a GPU, or a software Vulkan driver named in VK_ICD_FILENAMES"
+#USAGE flag "--out <dir>" help="Directory for the PNGs, one per scene. Default: gui/target/snaps"
+#USAGE flag "--theme <theme>" help="The appearance to draw. Default: dark" {
+#USAGE   choices "dark" "light"
+#USAGE }
+#USAGE flag "--size <size>" help="The window's size in points. Default: 1280x800"
+#USAGE flag "--scale <scale>" help="Device pixels per point. Default: 2"
+
+def main [
+  --out: path = "gui/target/snaps"
+  --theme: string = "dark"
+  --size: string = "1280x800"
+  --scale: string = "2"
+] {
+  ^cargo build --locked --manifest-path gui/Cargo.toml
+  let app = "gui/target/debug/patchula-gui"
+  mkdir $out
+  let look = [--size $size --scale $scale --theme $theme]
+  # The window as it opens, then each named scene.
+  ^$app --snap ($out | path join "updates.png") ...$look
+  let scenes = ^$app --list-scenes | lines | where {|scene| $scene | is-not-empty }
+  for scene in $scenes {
+    ^$app --snap ($out | path join $"($scene).png") --scene $scene ...$look
+  }
+  print $"(($scenes | length) + 1) pictures in ($out)"
+}

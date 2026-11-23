@@ -91,3 +91,6 @@ leaves alone, with a reason, what it cannot write in place.
 
 For GitHub repositories the TUI is for looking. Let [`patchula run`](/guide/pull-requests/)
 open the pull requests.
+
+The [desktop window](/guide/gui/) shows the same lists outside a terminal, with
+a diff to read before it writes.
