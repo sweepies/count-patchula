@@ -104,6 +104,14 @@ usage = 'arg "<tag>" help="Release tag, such as v0.1.0"'
 tools = { communique = "1.8.0" }
 run = 'communique generate "${usage_tag?}" --github-release'
 
+# The Count's own instance (instance/alchemy.run.ts), applied by
+# instance:deploy in the release workflow.
+["instance:install"]
+description = "Install the instance deploy's packages from its lockfile"
+dir = "instance"
+tools = { node = "26.13.0", aube = "2.9.0" }
+run = "aube ci"
+
 # The documentation site. Node and aube are task-scoped, like the test-only
 # lockfile engines, so a development `mise install` does not fetch them.
 ["docs:install"]

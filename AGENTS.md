@@ -57,6 +57,9 @@ The release bot (`.github/workflows/release-bot.yml`, tasks in
 `mise-tasks/release/`) releases from those commit messages: after CI passes on
 main it keeps a `release-next` PR at the next version (git-cliff, `cliff.toml`),
 merges it on Mondays, and tags the merge, which starts `release.yml`. Run the
-workflow by hand to release now. Never bump the version yourself: it lives only
+workflow by hand to release now. `release.yml` also moves the project's own
+server to each new tag (`instance/`, `mise-tasks/instance/deploy`,
+`internals/instance.md`): paused the moment the tag lands, deployed once its
+image is published. Never bump the version yourself: it lives only
 in `Cargo.toml`'s `workspace.package`, the docs write the current release as
 `@@version@@`, and the help snapshot holds `{version}`.

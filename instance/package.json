@@ -1,0 +1,14 @@
+{
+  "name": "count-patchula-instance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "alchemy deploy --yes --stage instance"
+  },
+  "dependencies": {
+    "@alchemy.run/kubernetes": "2.0.0-beta.87",
+    "@effect/platform-node": "4.1.5",
+    "alchemy": "2.0.0-beta.87",
+    "effect": "4.1.5"
+  }
+}

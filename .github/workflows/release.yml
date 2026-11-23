@@ -3,7 +3,8 @@ name: Release
 # Pushing a v* tag builds static archives, checks each one runs on its own
 # platform, builds and pushes the server image from the Linux archives,
 # publishes the GitHub release with a signed packslip manifest, then lets
-# communique rewrite the notes. A pull request that changes the image or this
+# communique rewrite the notes. It also pauses the Count's own instance as
+# soon as the tag lands and deploys it on the new image at the end. A pull request that changes the image or this
 # workflow builds and checks the Linux archives and the image, with read-only
 # permissions, and publishes nothing.
 on:
@@ -174,6 +175,8 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     permissions:
       contents: read
       # Logs in to GHCR and pushes the image.
@@ -223,6 +226,68 @@ jobs:
           subject-digest: ${{ steps.push.outputs.arm64 }}
           sbom-path: target/image/sbom/sbom-aarch64.spdx.json
           push-to-registry: true
+
+  # The Count's own instance (internals/instance in the docs). The moment a
+  # tag lands, before anything is built, the instance scales to 0, so no older
+  # Count sweeps once a newer release exists; instance-deploy brings it back
+  # on this tag's image. Both sign in to the cluster with the job's OIDC
+  # token, and a repository without the instance variables skips them.
+  instance-pause:
+    name: Pause the instance
+    if: github.event_name == 'push' && vars.INSTANCE_ENDPOINT != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Signs in to the cluster.
+      id-token: write
+    env:
+      # Only the task runner and the deploy's Node packages.
+      MISE_ENABLE_TOOLS: nu,node,aube
+      INSTANCE_ENDPOINT: ${{ vars.INSTANCE_ENDPOINT }}
+      INSTANCE_CA: ${{ vars.INSTANCE_CA }}
+      INSTANCE_AUDIENCE: ${{ vars.INSTANCE_AUDIENCE }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.4
+        with:
+          cache: false
+          install_args: nu
+      - run: mise run instance:deploy "$GITHUB_REF_NAME"
+
+  # Deploys run one at a time; a newer tag's deploy replaces a waiting one.
+  instance-deploy:
+    name: Deploy the instance
+    needs: image-publish
+    if: vars.INSTANCE_ENDPOINT != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: instance-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # Signs in to the cluster.
+      id-token: write
+    env:
+      # Only the task runner and the deploy's Node packages.
+      MISE_ENABLE_TOOLS: nu,node,aube
+      INSTANCE_ENDPOINT: ${{ vars.INSTANCE_ENDPOINT }}
+      INSTANCE_CA: ${{ vars.INSTANCE_CA }}
+      INSTANCE_AUDIENCE: ${{ vars.INSTANCE_AUDIENCE }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5.2.4
+        with:
+          cache: false
+          install_args: nu
+      - env:
+          DIGEST: ${{ needs.image-publish.outputs.digest }}
+        run: mise run instance:deploy "$GITHUB_REF_NAME" --digest "$DIGEST"
 
   release:
     name: Publish

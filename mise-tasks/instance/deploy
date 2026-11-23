@@ -1,0 +1,64 @@
+#!/usr/bin/env nu
+#MISE description="In the release workflow: apply the Count's instance at a release tag. Without --digest it scales the instance to 0, so an older Count never sweeps once a newer tag exists; with the published digest it runs that image. Does nothing unless the tag is the newest v* tag"
+#MISE depends=["instance:install"]
+#MISE tools={node="26.13.0", aube="2.9.0"}
+#USAGE arg "<tag>" help="The pushed tag, such as v1.2.3"
+#USAGE flag "--digest <digest>" help="The published image index's digest, sha256:…"
+
+# The cluster comes from INSTANCE_ENDPOINT and INSTANCE_CA, and the job's
+# GitHub OIDC token, minted for INSTANCE_AUDIENCE, signs in to it. The token
+# only ever travels in the environment.
+def main [tag: string, --digest: string] {
+  let newest = newest-tag
+  if $tag != $newest {
+    print $"($tag) is not the newest tag \(($newest)\); leaving the instance alone"
+    return
+  }
+  let version = $tag | str replace --regex '^v' ''
+  let image = if $digest == null {
+    $"ghcr.io/sweepies/count-patchula:($version)"
+  } else {
+    $"ghcr.io/sweepies/count-patchula:($version)@($digest)"
+  }
+  let replicas = if $digest == null { 0 } else { 1 }
+  apply $image $replicas
+  print $"instance at ($image), ($replicas) replica\(s\)"
+  # A tag pushed while this ran has its own pause, which may have landed just
+  # before this apply. Pause again for it, so this older Count stops.
+  let newest = newest-tag
+  if $replicas > 0 and $newest != $tag {
+    print $"($newest) appeared during the deploy"
+    apply $"ghcr.io/sweepies/count-patchula:($newest | str replace --regex '^v' '')" 0
+    print $"instance paused for ($newest)"
+  }
+}
+
+def apply [image: string, replicas: int] {
+  let token = oidc-token
+  with-env {INSTANCE_TOKEN: $token, INSTANCE_IMAGE: $image, INSTANCE_REPLICAS: ($replicas | into string)} {
+    ^aube --dir instance run deploy
+  }
+}
+
+def oidc-token []: nothing -> string {
+  http get --headers {Authorization: $"bearer ($env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)"} $"($env.ACTIONS_ID_TOKEN_REQUEST_URL)&audience=($env.INSTANCE_AUDIENCE)" | get value
+}
+
+# Read from GitHub, not the checkout, so a tag pushed while this job ran
+# counts. A prerelease sorts below its release.
+def newest-tag []: nothing -> string {
+  ^git ls-remote --tags --refs $"https://github.com/($env.GITHUB_REPOSITORY).git" "refs/tags/v*"
+  | lines
+  | each { split row "refs/tags/" | last }
+  | where {|tag| $tag =~ '^v\d+\.\d+\.\d+(-.+)?$' }
+  | sort-by { sortable $in }
+  | last
+}
+
+# v0.10.2-rc.1 as 000000000010000002 0 rc.1, and v0.10.2 as … 1, so versions
+# compare as strings.
+def sortable [tag: string]: nothing -> string {
+  let parts = $tag | parse --regex '^v(?<core>\d+\.\d+\.\d+)(?:-(?<pre>.+))?$' | first
+  let core = $parts.core | split row "." | each {|part| $part | fill --alignment right --character "0" --width 6 } | str join
+  if ($parts.pre | is-empty) { $"($core) 1" } else { $"($core) 0 ($parts.pre)" }
+}

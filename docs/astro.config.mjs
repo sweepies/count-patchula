@@ -139,6 +139,7 @@ const sidebar = [
       { label: "GitHub client", slug: "internals/github-client" },
       { label: "Threat model", slug: "internals/threat-model" },
       { label: "Image SBOM advisories", slug: "internals/image-sboms" },
+      { label: "The Count's instance", slug: "internals/instance" },
       { label: "HTTP fixtures", slug: "internals/http-testing" },
     ],
   },
