@@ -53,9 +53,9 @@ can change what the tool resolves.
 ### The rebasing banner
 
 While a rebuild takes long enough to notice, the PR description says so. A
-banner at the top of the Count's part of the description reads "The Count is
-sinking his teeth into this branch", with a small animated image and what he
-is doing:
+note at the top of the Count's part of the description, with a small animated
+image, reads "The Count is sinking his teeth into this branch", says what he is
+doing and asks you to hold off merging until he is done:
 
 - re-checking the PR against its base, once its re-check box is ticked;
 - rebuilding the branch on its base and regenerating its lockfiles, when a
@@ -98,17 +98,36 @@ The title and commit message are
 `<commitPrefix> update <dependency> to <version>`, or
 `<commitPrefix> pin dependencies` for pin branches. `commitPrefix` is
 `chore(deps):` by default and `fix(deps):` for an update that fixes an
-advisory. The body opens with any
-[tooling warnings](/guide/auto-merge/#tooling-warnings) for a PR set to merge
-itself, then the advisories the branch fixes, if any, and for a pinned image's
-new digest with what the Count found comparing its old and new SBOMs: a warning
-when he can't tell whether the rebuild fixes anything, unless you silenced it
-with `security.quietImages`, or a note when he couldn't read an SBOM on this run
-(see [container image rebuilds](/guide/security/#container-image-rebuilds)). Then it
-holds a table of every update on the branch (package, change, type, file),
-the release notes for each package, folded into a collapsed block per
-dependency (see [release notes](/guide/release-notes/#how-notes-are-rendered)),
-any `bodyNotes` you configured, and two checkboxes:
+advisory.
+
+Everything needed to decide on the PR is visible without expanding anything;
+longer material is collapsed. From the top, the body holds:
+
+- any [tooling warnings](/guide/auto-merge/#tooling-warnings) for a PR set to
+  merge itself;
+- for a security fix, one line saying how many known vulnerabilities it fixes,
+  their severities and the packages they are in. For a pinned image's new
+  digest, the same line for what the Count found comparing its old and new
+  SBOMs, a warning when he can't tell whether the rebuild fixes anything
+  (unless you silenced it with `security.quietImages`), or a note when he
+  couldn't read an SBOM on this run (see
+  [container image rebuilds](/guide/security/#container-image-rebuilds));
+- a table of every update on the branch: the package, linked to its source
+  repository; the version change, linked to the compare view; the update type
+  (and `security` for a fix); and the files. Updates that move one package
+  from the same version to the same target share a row that lists each file.
+  A package whose source is private, unresolved or past the eight release-note
+  fetches a body makes is shown without links;
+- the advisories fixed, collapsed into a table sorted by severity with the
+  version each is fixed in;
+- any `bodyNotes` you configured;
+- the release notes, collapsed into one block per package (see
+  [release notes](/guide/release-notes/#how-notes-are-rendered));
+- on the batch PR, the collapsed list of updates it carries, each with a box
+  that sends it back to its own PR;
+- a footer saying the Count opened the PR, then the checkboxes.
+
+The checkboxes are:
 
 - re-check, which forces the branch through verification and regeneration on
   the next run, or straight away under the [server](/guide/server/). Either

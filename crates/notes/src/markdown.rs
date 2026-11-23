@@ -777,23 +777,48 @@ fn without_code_spans(line: &str) -> String {
 pub(super) fn close_open_blocks(text: &str) -> String {
     let mut output = text.trim_end().to_owned();
     let mut fences = Fences::default();
-    let mut details = 0_i32;
+    let mut details = 0_usize;
     for line in output.lines() {
         if !fences.advance(line) && !fences.is_open() {
-            let lower = without_code_spans(line).to_ascii_lowercase();
-            details += lower.matches("<details").count() as i32;
-            details -= lower.matches("</details>").count() as i32;
+            details = details_depth(details, &without_code_spans(line));
         }
     }
     if let Some(closer) = fences.closer() {
         output.push('\n');
         output.push_str(&closer);
     }
-    for _ in 0..details.max(0) {
+    for _ in 0..details {
         output.push_str("\n</details>");
     }
     output.push('\n');
     output
+}
+
+/// The `<details>` depth after `line`, read left to right as a browser
+/// would: an opening tag (`<details` then a space, `>` or `/`) goes one
+/// deeper, a closing tag one shallower, and a closing tag with nothing open
+/// is ignored rather than cancelling a later opening one.
+fn details_depth(mut depth: usize, line: &str) -> usize {
+    let lower = line.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(at) = rest.find('<') {
+        rest = &rest[at..];
+        if let Some(after) = rest.strip_prefix("</details>") {
+            depth = depth.saturating_sub(1);
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix("<details")
+            && after
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_whitespace() || c == '>' || c == '/')
+        {
+            depth += 1;
+            rest = after;
+        } else {
+            rest = &rest[1..];
+        }
+    }
+    depth
 }
 
 /// The longest prefix of `text`, at most `limit` bytes, that ends where a
@@ -801,8 +826,15 @@ pub(super) fn close_open_blocks(text: &str) -> String {
 /// span), a code fence or after a heading with nothing under it. Anything open
 /// at the end is closed. The flag says whether all of `text` fit.
 pub fn fit(text: &str, limit: usize) -> (String, bool) {
+    let (_, kept, whole) = fit_at(text, limit);
+    (kept, whole)
+}
+
+/// [`fit`], with the byte offset it cut `text` at: `text.len()` when all of
+/// it fit.
+pub(crate) fn fit_at(text: &str, limit: usize) -> (usize, String, bool) {
     if text.len() <= limit {
-        return (close_open_blocks(text), true);
+        return (text.len(), close_open_blocks(text), true);
     }
     let lines = lines_with_fences(text);
     let mut cut = 0;
@@ -845,5 +877,5 @@ pub fn fit(text: &str, limit: usize) -> (String, bool) {
             }
         }
     }
-    (close_open_blocks(&text[..cut]), false)
+    (cut, close_open_blocks(&text[..cut]), false)
 }

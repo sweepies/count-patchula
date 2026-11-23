@@ -71,8 +71,10 @@ An update fixes an advisory when the current version is affected and the
 target is not, judged from the advisory's affected ranges for that package. An
 advisory whose ranges the Count cannot evaluate is never claimed as fixed.
 
-- **Pull requests** open with a table of the advisories they fix, with their
-  CVE IDs, severity and summary, and the commit message ends in `[security]`.
+- **Pull requests** open with one line counting the vulnerabilities they fix
+  and their severities; a collapsed table below the update table lists each
+  advisory, most severe first, with its CVE IDs, severity, the version that
+  fixes it and its summary. The commit message ends in `[security]`.
 - **Labels:** the `security` label joins the update's other labels.
 - **The dashboard** lists every known vulnerability first, with the update that
   fixes it or the release that would.
@@ -148,8 +150,9 @@ Images built on RPM distributions, such as Red Hat UBI, AlmaLinux, Oracle
 Linux or Amazon Linux, are not checked yet and are listed as not covered.
 
 **What a fix looks like.** A rebuild that fixes an advisory is a security
-update like any other: the PR opens with a table of the five most severe
-advisories it fixes, with the package's old and new version (or "removed") and
+update like any other: the PR opens with one line counting what it fixes, and
+a collapsed table of the five most severe advisories sits below the update
+table, with the package's old and new version (or "removed") and
 the platforms, then a count and links for the rest OSV lists. The commit ends
 in `[security]`, the `security` label is added and `security.apply` applies.
 When `security.apply` turns off updates or digests for the image, or its

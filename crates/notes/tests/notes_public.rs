@@ -88,7 +88,11 @@ async fn public_note_sources_and_release_range() {
                 .unwrap()
                 .ends_with("/compare/v1.5.0...v1.6.0")
         );
-        let text = notes.render("github.com/google/uuid", 12_000);
+        let text = notes.render(
+            "github.com/google/uuid",
+            patchula_notes::Naming::Only,
+            12_000,
+        );
         assert!(text.contains("1.6.0"));
     }
 }
@@ -217,7 +221,7 @@ async fn public_sandbox_note_ranges() {
                     "{package} {current}..{target}: empty notes must be incomplete"
                 );
             }
-            let text = notes.render(package, 12_000);
+            let text = notes.render(package, patchula_notes::Naming::Only, 12_000);
             assert!(text.len() <= 12_000);
             assert!(!text.trim().is_empty(), "{package} rendered notes");
             if let Some(version) = newest {

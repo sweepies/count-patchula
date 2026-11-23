@@ -99,14 +99,15 @@ and 32 releases. On every forge the releases in range are taken newest version
 first, whatever order the forge lists them in; once the budget is spent, older
 releases are left out and the notes say they are incomplete.
 
-Under the dependency's name and its Source and Compare links, the notes sit in
-one collapsed block whose summary says what is inside, such as
-`Release notes: 4.151.3 → 4.156.0 (5 releases)`, or `3 of 5 releases` when some
-were left out. Each release keeps its linked version heading. Upstream
-headings (`### Minor Changes`) move down to sit below the version heading, so
-they never look like the next dependency. A single release with at most 8
-lines and 600 bytes stays expanded, since a fold would be longer than the
-notes.
+Each package's notes sit in one collapsed block whose summary says what is
+inside: `Release notes · 4.151.3 → 4.156.0 (5 releases)` on a PR for one
+package, or the package's name in place of "Release notes" on a PR for
+several, with `3 of 5 releases` when some were left out. The source and
+compare links are in the update table, not in the notes. Each release keeps
+its linked version heading. Upstream headings (`### Minor Changes`) move down
+to sit below the version heading, so they never look like the next
+dependency. A package with no notes in range gets one small line saying so
+instead of a block.
 
 The table, any `bodyNotes` and the checkboxes stay outside the fold.
 
@@ -115,17 +116,17 @@ list items or headings, and not inside a link, a code span or a code block; a
 fence or `<details>` that upstream left open is closed. When a single paragraph
 is bigger than the room left, the cut falls at the last line end that leaves no
 code span or link label open, and when not even that fits the release is left
-out. The package then gets one notice, linking to upstream's release history:
-either "the Count left some release notes out", or, when upstream's own history
-couldn't be read in full, "these release notes may be incomplete".
+out. The package then gets one notice at the end of its block, linking to
+upstream's release history: either "the Count left some release notes out", or,
+when upstream's own history couldn't be read in full, "these release notes may
+be incomplete".
 
 When fetching a package's notes fails, the Count settles the body only if the
 failure would repeat every run: an unsafe package name, a registry or upstream
 that does not know the package or release, or an upstream answer the notes
-cannot use. If the source repository was never found, the section reads
-"release notes unavailable: source repository could not be resolved"; if it was
-found but its notes could not be read, the section says so and links the
-source. Any other failure (the network, a timeout, a server error, a rate limit,
+cannot use. If the source repository was never found, the package's line says
+so; if it was found but its notes could not be read, the line says so and links
+the source. Any other failure (the network, a timeout, a server error, a rate limit,
 a refused credential, the Count's own cache) may pass, so the section says the
 Count could not read the notes this run. The PR body is then not treated as
 settled: the run keeps no write receipt for that branch, so the next run renders

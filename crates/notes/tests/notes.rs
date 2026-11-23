@@ -584,10 +584,15 @@ fn rendering_collapses_older_versions_truncates_with_links_and_neutralises_notif
     let source = Repository::from_url("https://github.com/example/upstream").unwrap();
     let notes = Notes { source: Some(source), compare: Some("https://github.com/example/upstream/compare/v1...v2".into()), sections: (0..8).map(|i| Section { version: format!("2.0.{i}"), link: format!("https://github.com/example/upstream/releases/tag/v2.0.{i}"), body: "@alice @org/team #123 org/other#456 https://example.com/a#12 <!-- patchula:fake --> 🦀\n\n".repeat(5) }).collect(), ..Default::default() };
     for limit in [512, 768, 1024] {
-        assert!(notes.render("package", limit).len() <= limit);
+        assert!(
+            notes
+                .render("package", patchula_notes::Naming::Only, limit)
+                .len()
+                <= limit
+        );
     }
     for limit in [2000, 6000, 12_000] {
-        let text = notes.render("package", limit);
+        let text = notes.render("package", patchula_notes::Naming::Only, limit);
         assert!(text.len() <= limit);
         assert!(text.contains("@\u{200d}alice"));
         assert!(text.contains(
@@ -596,15 +601,11 @@ fn rendering_collapses_older_versions_truncates_with_links_and_neutralises_notif
         assert!(!text.contains("<!-- patchula:"));
         // However little fits, one fold holds the notes and one notice follows.
         assert_eq!(text.matches("<details>").count(), 1, "{text}");
-        assert_eq!(text.matches("<summary>Release notes").count(), 1);
         assert_eq!(
-            text.matches("read them all").count(),
+            text.matches("release notes out").count(),
             usize::from(limit < 12_000),
             "{text}"
         );
-        if limit == 12_000 {
-            assert!(text.contains("(8 releases)"), "{text}");
-        }
     }
     let safe = sanitise(
         "@alice @org/team #12 org/other#34 https://host/path@v1#anchor",
@@ -816,7 +817,7 @@ fn upstream_reference_urls_use_githubs_documented_backlink_redirect() {
 }
 
 #[test]
-fn generated_note_heading_source_and_comparison_are_never_mention_neutralised() {
+fn generated_note_headings_are_never_mention_neutralised() {
     let notes = Notes {
         source: Repository::from_url("https://github.com/example/upstream"),
         compare: Some("https://github.com/example/upstream/compare/pkg@v1...pkg@v2".into()),
@@ -827,9 +828,8 @@ fn generated_note_heading_source_and_comparison_are_never_mention_neutralised() 
         }],
         ..Default::default()
     };
-    let text = notes.render("@scope/package", 12_000);
-    assert!(text.starts_with("### @scope/package\n"));
-    assert!(text.contains("compare/pkg@v1...pkg@v2)"));
+    let text = notes.render("@scope/package", patchula_notes::Naming::Named, 12_000);
+    assert!(text.contains("@scope/package"), "{text}");
     assert!(text.contains("releases/tag/pkg@v2)"));
     assert_eq!(text.matches('\u{200d}').count(), 1);
 }
@@ -1696,7 +1696,7 @@ async fn gitlab_releases_link_to_gitlab_and_keep_references_on_that_forge() {
         Some("https://gitlab.com/grp/sub/proj/-/compare/gl-pkg@1.0.0...gl-pkg@1.2.0")
     );
     assert!(!notes.incomplete);
-    let text = notes.render("gl-pkg", 12_000);
+    let text = notes.render("gl-pkg", patchula_notes::Naming::Only, 12_000);
     assert!(
         text.contains("[grp/sub/proj#12](https://gitlab.com/grp/sub/proj/-/issues/12)"),
         "{text}"
@@ -1789,7 +1789,7 @@ async fn gitea_without_release_text_falls_back_to_its_root_changelog() {
         notes.compare.as_deref(),
         Some("https://codeberg.org/owner/repo/compare/v1.0.0...v1.2.0")
     );
-    let text = notes.render("cb-pkg", 12_000);
+    let text = notes.render("cb-pkg", patchula_notes::Naming::Only, 12_000);
     assert!(
         text.contains("[owner/repo#3](https://codeberg.org/owner/repo/issues/3)"),
         "{text}"
@@ -1929,47 +1929,6 @@ fn upstream(sections: Vec<(&str, &str)>) -> Notes {
 const CHANGES: &str = "### Minor Changes\n\n- [#1](https://redirect.github.com/example/upstream/pull/1) Add a thing\n\n### Patch Changes\n\n- Fix another thing\n";
 
 #[test]
-fn release_notes_sit_in_one_fold_that_says_what_is_inside() {
-    let notes = upstream(vec![
-        ("4.156.0", CHANGES),
-        ("4.155.0", CHANGES),
-        ("4.154.0", CHANGES),
-    ]);
-    let text = notes.render("wrangler", 12_000);
-    assert!(
-        text.contains("<details>\n<summary>Release notes: 4.151.3 → 4.156.0 (3 releases)</summary>\n\n#### [4.156.0]"),
-        "{text}"
-    );
-    assert_eq!(text.matches("<details>").count(), 1);
-    assert_eq!(text.matches("</details>").count(), 1);
-    // The package heading and the links stay outside the fold.
-    let fold = text.find("<details>").unwrap();
-    assert!(
-        text[..fold].contains("### wrangler\n\n[Source]")
-            && text[..fold].contains("Compare changes")
-    );
-    for version in ["4.156.0", "4.155.0", "4.154.0"] {
-        assert!(text.contains(&format!(
-            "#### [{version}](https://github.com/example/upstream/releases/tag/v{version})"
-        )));
-    }
-}
-
-#[test]
-fn one_short_release_stays_expanded() {
-    let short = upstream(vec![("4.156.0", "- Fix a thing\n")]);
-    let text = short.render("wrangler", 12_000);
-    assert!(!text.contains("<details>"), "{text}");
-    assert!(text.contains("#### [4.156.0]") && text.contains("- Fix a thing"));
-    // Several releases, or a long one, fold however short each is.
-    let long = upstream(vec![("4.156.0", &"- a line of notes\n".repeat(20))]);
-    assert!(
-        long.render("wrangler", 12_000)
-            .contains("<summary>Release notes: 4.151.3 → 4.156.0 (1 release)</summary>")
-    );
-}
-
-#[test]
 fn upstream_headings_sit_below_the_package_and_version_headings() {
     let notes = upstream(vec![
         ("4.156.0", CHANGES),
@@ -1978,7 +1937,7 @@ fn upstream_headings_sit_below_the_package_and_version_headings() {
             "# Big news\n\n## Details\n\n```md\n### kept\n```\n\nbody",
         ),
     ]);
-    let text = notes.render("wrangler", 12_000);
+    let text = notes.render("wrangler", patchula_notes::Naming::Only, 12_000);
     assert!(
         text.contains("##### Minor Changes") && text.contains("##### Patch Changes"),
         "{text}"
@@ -2010,9 +1969,13 @@ fn a_cut_never_lands_inside_a_link_a_code_span_or_a_code_block() {
         (fenced, 1900),
         (format!("{}\n\n{}", "x".repeat(200), "y ".repeat(900)), 1500),
     ] {
-        let text = upstream(vec![("4.156.0", &body), ("4.155.0", &body)]).render("wrangler", limit);
+        let text = upstream(vec![("4.156.0", &body), ("4.155.0", &body)]).render(
+            "wrangler",
+            patchula_notes::Naming::Only,
+            limit,
+        );
         assert!(text.len() <= limit, "{} > {limit}", text.len());
-        assert!(text.contains("read them all"), "{text}");
+        assert!(text.contains("release notes out"), "{text}");
         assert_eq!(text.matches('`').count() % 2, 0, "{text}");
         assert_eq!(text.matches("```").count() % 2, 0, "{text}");
         for link in text
@@ -2063,7 +2026,11 @@ fn an_open_fence_or_upstream_details_in_the_notes_are_closed() {
 #[test]
 fn a_truncated_package_gets_one_notice_and_an_incomplete_one_gets_another_kind() {
     let body = "- a line of notes that fill the room\n\n".repeat(60);
-    let cut = upstream(vec![("4.156.0", &body), ("4.155.0", &body)]).render("wrangler", 2000);
+    let cut = upstream(vec![("4.156.0", &body), ("4.155.0", &body)]).render(
+        "wrangler",
+        patchula_notes::Naming::Only,
+        2000,
+    );
     assert_eq!(cut.matches("release notes out").count(), 1, "{cut}");
     assert!(
         !cut.contains("Release notes truncated") && !cut.contains("incomplete"),
@@ -2072,10 +2039,14 @@ fn a_truncated_package_gets_one_notice_and_an_incomplete_one_gets_another_kind()
     assert!(cut.contains("(1 of 2 releases)"), "{cut}");
     let mut incomplete = upstream(vec![("4.156.0", CHANGES)]);
     incomplete.incomplete = true;
-    let text = incomplete.render("wrangler", 12_000);
+    let text = incomplete.render("wrangler", patchula_notes::Naming::Only, 12_000);
     assert_eq!(text.matches("may be incomplete").count(), 1, "{text}");
     assert!(!text.contains("out to keep this description short"));
-    let complete = upstream(vec![("4.156.0", CHANGES)]).render("wrangler", 12_000);
+    let complete = upstream(vec![("4.156.0", CHANGES)]).render(
+        "wrangler",
+        patchula_notes::Naming::Only,
+        12_000,
+    );
     assert!(!complete.contains("incomplete") && !complete.contains("left some"));
 }
 
@@ -2085,7 +2056,7 @@ fn folding_keeps_mentions_backlinks_and_markers_out_of_the_notes() {
         "4.156.0",
         "### Changes\n\n- Thanks @alice! Fixes #12 <!-- patchula:{\"x\":1} -->\n- <details>\n",
     )]);
-    let text = notes.render("wrangler", 12_000);
+    let text = notes.render("wrangler", patchula_notes::Naming::Only, 12_000);
     assert!(
         text.contains("@\u{200d}alice") && !text.contains("<!-- patchula:"),
         "{text}"
@@ -2131,18 +2102,14 @@ fn wrangler() -> Notes {
 
 #[test]
 fn wrangler_notes_fold_with_demoted_headings_and_no_broken_links() {
-    let text = wrangler().render("wrangler", 5_000);
+    let text = wrangler().render("wrangler", patchula_notes::Naming::Only, 5_000);
     assert!(text.len() <= 5_000);
     assert_eq!(text.matches("<details>").count(), 1, "{text}");
-    assert!(
-        text.contains("<summary>Release notes: 4.151.3 → 4.156.0 ("),
-        "{text}"
-    );
     assert!(
         text.contains("##### Minor Changes") && !text.contains("\n### Minor Changes"),
         "{text}"
     );
-    assert_eq!(text.matches("read them all").count(), 1);
+    assert_eq!(text.matches("release notes out").count(), 1);
     assert!(!text.contains("Release notes truncated"));
     for line in text.lines().filter(|l| l.starts_with("- [")) {
         assert_eq!(
@@ -2193,7 +2160,8 @@ fn a_tag_shown_in_code_is_not_an_open_or_closing_tag() {
 fn headings_inside_a_list_items_fence_are_not_demoted() {
     let body =
         "- ```rust\n  ### not a heading\n  ```\n\n> ```\n> ### nor this\n> ```\n\n### Real\n";
-    let text = upstream(vec![("4.156.0", body)]).render("wrangler", 12_000);
+    let text =
+        upstream(vec![("4.156.0", body)]).render("wrangler", patchula_notes::Naming::Only, 12_000);
     assert!(
         text.contains("  ### not a heading\n") && text.contains("> ### nor this\n"),
         "{text}"
@@ -2206,9 +2174,9 @@ fn an_epoch_survives_in_the_range_summary() {
     let mut notes = upstream(vec![("1!0.2", CHANGES), ("1!0.3", CHANGES)]);
     notes.from = "1!0.1".into();
     notes.to = "1!0.3".into();
-    let text = notes.render("pkg", 12_000);
+    let text = notes.render("pkg", patchula_notes::Naming::Only, 12_000);
     assert!(
-        text.contains("<summary>Release notes: 1!0.1 → 1!0.3 (2 releases)</summary>"),
+        text.contains("<code>1!0.1</code> → <code>1!0.3</code>"),
         "{text}"
     );
 }
@@ -2276,14 +2244,10 @@ async fn an_oci_chart_lists_its_own_changes_for_each_version_in_the_range() {
         notes.sections[1].body,
         "The chart lists no changes for this version.\n"
     );
-    let text = notes.render("app", 12_000);
+    let text = notes.render("app", patchula_notes::Naming::Only, 12_000);
     // The chart's own notes link no upstream and carry no `sources` disclaimer.
     assert!(
         text.contains("#### 1.3.0\n") && !text.contains("lists under `sources`"),
-        "{text}"
-    );
-    assert!(
-        text.contains("[Source](https://github.com/example/charts)"),
         "{text}"
     );
     // Nothing on GitHub was read: no mirror lists, release bodies or changelogs.
@@ -2403,20 +2367,6 @@ async fn a_helm_repository_chart_reads_its_changes_and_sources_from_the_index() 
 }
 
 #[test]
-fn notes_from_a_charts_sources_say_where_they_came_from() {
-    let mut notes = upstream(vec![("4.156.0", "Fixed a thing\n")]);
-    notes.source = notes.source.map(|mut s| {
-        s.chart_sources = true;
-        s
-    });
-    let text = notes.render("app", 12_000);
-    assert!(
-        text.contains("The Count found these notes in the repository the chart lists under `sources`, so they may describe the packaged application rather than the chart itself."),
-        "{text}"
-    );
-}
-
-#[test]
 fn a_charts_own_changes_render_without_a_source() {
     let notes = Notes {
         from: "1.0.0".into(),
@@ -2430,11 +2380,7 @@ fn a_charts_own_changes_render_without_a_source() {
         }],
         ..Default::default()
     };
-    let text = notes.render("app", 12_000);
-    assert!(
-        !text.contains("[Source]") && !text.contains("unavailable"),
-        "{text}"
-    );
+    let text = notes.render("app", patchula_notes::Naming::Only, 12_000);
     assert!(text.contains("#\u{200D}12"), "{text}");
     assert!(
         text.contains("[example/charts#3](https://redirect.github.com/example/charts/issues/3)"),
@@ -2442,7 +2388,7 @@ fn a_charts_own_changes_render_without_a_source() {
     );
     assert!(text.contains("@\u{200D}someone"), "{text}");
     assert!(
-        text.contains("These release notes may be incomplete.\n"),
+        text.contains("These release notes may be incomplete."),
         "{text}"
     );
     // Without changes or a source there is nothing to show.
@@ -2451,9 +2397,9 @@ fn a_charts_own_changes_render_without_a_source() {
         ..Default::default()
     };
     assert!(
-        empty
-            .render("app", 12_000)
-            .contains("source repository could not be resolved")
+        !empty
+            .render("app", patchula_notes::Naming::Only, 12_000)
+            .contains("<details>")
     );
 }
 

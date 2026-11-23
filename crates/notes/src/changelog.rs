@@ -180,7 +180,7 @@ pub(super) fn compact_tree(
     serde_json::to_vec(&tree)
 }
 pub(crate) const NOTES_CHANGELOG_DIRECTORY: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("notes-changelog-directory", 2, compact_tree);
+    patchula_http::Derived::new("notes-changelog-directory", 3, compact_tree);
 pub(super) fn is_changelog(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_uppercase();
     let stem = name.split('.').next().unwrap_or(&name);
@@ -245,4 +245,4 @@ pub(super) fn compact_blob(
     serde_json::to_vec(&parse_changelog(&blob_text(body)?))
 }
 pub(crate) const PARSED_CHANGELOG: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("parsed-changelog", 2, compact_blob);
+    patchula_http::Derived::new("parsed-changelog", 3, compact_blob);

@@ -156,10 +156,13 @@ pub fn apply(
     Ok(origins)
 }
 
-/// The batch section of the batch PR body, with a removal box per item.
+/// The batch section of the batch PR body: a collapsed list with a removal
+/// box per item, then the items marker, ending in a blank line.
 pub(crate) fn render(items: &[Item]) -> String {
-    let mut text = String::from(
-        "\nTick an item to send it back to its own pull request; closing this pull request sends every item back.\n\n",
+    let mut text = format!(
+        "<details>\n<summary><strong>Remove an update from this batch</strong> ({} item{})</summary>\n\n<sub>Tick an item to send it back to its own pull request; closing this PR sends every item back.</sub>\n\n",
+        items.len(),
+        if items.len() == 1 { "" } else { "s" }
     );
     for item in items {
         let title = crate::text::inert(&item.title.replace(['\n', '\r', '<', '>', '`'], " "));
@@ -173,9 +176,9 @@ pub(crate) fn render(items: &[Item]) -> String {
             item.origin
         ));
     }
-    text.push('\n');
+    text.push_str("\n</details>\n\n");
     text.push_str(&markers::hidden(markers::ITEMS, &items));
-    text.push('\n');
+    text.push_str("\n\n");
     text
 }
 

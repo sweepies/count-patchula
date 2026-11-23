@@ -1185,10 +1185,16 @@ impl Lifecycle {
         plan: &Plan,
     ) -> Result<(), Error> {
         if self.bodies().reserved(plan) > BODY_LIMIT {
-            return Err(Error::Refused(
+            // Name what fills the fixed part of the body: the permits, the
+            // batch's items, or the markers of a large group.
+            let why = if self.branch_permits.contains_key(&plan.action().branch) {
                 "manual release-age evidence exceeds the PR body budget; split this update group"
-                    .into(),
-            ));
+            } else if plan.batch_items().is_some() {
+                "the batch PR's items exceed the PR body budget; take some updates out of the batch"
+            } else {
+                "the PR body's markers exceed its budget; split this update group"
+            };
+            return Err(Error::Refused(why.into()));
         }
         let existing = self.open_pr(plan).cloned();
         let text = self

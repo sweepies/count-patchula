@@ -39,11 +39,10 @@ fn pr(text: &str) -> model::PullRequest {
     .expect("a complete REST pull request")
 }
 
-/// A maintenance body lists the refs a relock advanced, one plain line
-/// each under its workflow, and only when there are some; the list joins
-/// the content hash, so a new moved ref rewrites the body.
+/// The refs a relock advanced join the content hash, so a new moved ref
+/// rewrites the body.
 #[test]
-fn the_moved_ref_list_is_rendered_only_when_refs_moved() {
+fn moved_refs_join_the_content_hash() {
     let permits = BTreeMap::new();
     let bodies = bodies(&permits);
     let file = patchula_report::FileAction {
@@ -59,69 +58,20 @@ fn the_moved_ref_list_is_rendered_only_when_refs_moved() {
             .moved_refs(moved)
             .build()
     };
-    let (quiet, quiet_marker) = bodies.intent(&plan(Vec::new()));
-    assert!(!quiet.contains("moved upstream"), "{quiet}");
-    let moved =
-        |workflow: &str, dependency: &str, from: char, to: char| patchula_lockfiles::MovedRef {
-            workflow: workflow.into(),
-            dependency: dependency.into(),
-            from: from.to_string().repeat(40),
-            to: to.to_string().repeat(40),
-        };
-    let (text, marker) = bodies.intent(&plan(vec![
-        moved(".github/workflows/ci.yml", "actions/checkout@v7", 'a', 'b'),
-        moved(".github/workflows/ci.yml", "actions/setup-go@v5", 'c', 'd'),
-        moved(
-            ".github/workflows/release.yml",
-            "actions/checkout@v7",
-            'a',
-            'b',
-        ),
-    ]));
-    assert!(
-        text.contains(concat!(
-            "\n- .github/workflows/actions.lock\n\n",
-            "Refs that moved upstream, now locked at their new commits:\n",
-            "\n- `.github/workflows/ci.yml`",
-            "\n  - `actions/checkout@v7` now resolves to `bbbbbbb`; the lock had `aaaaaaa`",
-            "\n  - `actions/setup-go@v5` now resolves to `ddddddd`; the lock had `ccccccc`",
-            "\n- `.github/workflows/release.yml`",
-            "\n  - `actions/checkout@v7` now resolves to `bbbbbbb`; the lock had `aaaaaaa`\n",
-        )),
-        "{text}"
-    );
+    let (_, quiet_marker) = bodies.intent(&plan(Vec::new()));
+    let (_, marker) = bodies.intent(&plan(vec![patchula_lockfiles::MovedRef {
+        workflow: ".github/workflows/ci.yml".into(),
+        dependency: "actions/checkout@v7".into(),
+        from: "a".repeat(40),
+        to: "b".repeat(40),
+    }]));
     assert_ne!(marker, quiet_marker);
 }
 
-/// A maintenance plan has no changes, so its body opens with what it
-/// refreshes and never with a table that has no rows.
+/// A relock that removes `actions.lock` changes the content hash, so the
+/// body is rewritten to say so.
 #[test]
-fn the_maintenance_body_has_no_empty_update_table() {
-    let permits = BTreeMap::new();
-    let bodies = bodies(&permits);
-    let plan = testing::Draft::new(action("patchula/lock-file-maintenance"))
-        .maintenance()
-        .identity("a".repeat(64))
-        .file(patchula_report::FileAction {
-            path: "Cargo.lock".into(),
-            blob_sha: String::new(),
-            diff: String::new(),
-        })
-        .build();
-    let (text, _) = bodies.intent(&plan);
-    assert!(!text.contains("| Package |"), "{text}");
-    assert!(
-        text.starts_with(
-            "Scheduled maintenance using the repository's mise tool versions.\n\n- Cargo.lock"
-        ),
-        "{text}"
-    );
-}
-
-/// A relock that pruned the last listed workflow removes `actions.lock`,
-/// and the maintenance body says so; a relock that kept it says nothing.
-#[test]
-fn a_removed_actions_lock_is_named_in_the_maintenance_body() {
+fn a_removed_actions_lock_joins_the_content_hash() {
     let permits = BTreeMap::new();
     let bodies = bodies(&permits);
     let file = patchula_report::FileAction {
@@ -135,15 +85,9 @@ fn a_removed_actions_lock_is_named_in_the_maintenance_body() {
             .identity("a".repeat(64))
             .file(file.clone())
     };
-    let line = "Every workflow `actions.lock` listed is gone, so the lockfile is removed.";
-    let (kept, kept_marker) = bodies.intent(&draft().build());
-    assert!(!kept.contains(line), "{kept}");
-    let (removed, removed_marker) =
+    let (_, kept_marker) = bodies.intent(&draft().build());
+    let (_, removed_marker) =
         bodies.intent(&draft().delete(".github/workflows/actions.lock").build());
-    assert!(
-        removed.contains(&format!("\n- .github/workflows/actions.lock\n\n{line}\n")),
-        "{removed}"
-    );
     assert_ne!(removed_marker, kept_marker);
 }
 
@@ -198,24 +142,25 @@ fn a_body_is_reusable_only_when_nothing_it_records_changed() {
     assert!(!bodies.reusable(&retry, Some(&pr(&finished)), &marker));
 }
 
-/// `reserved` counts the tail the way `finish` writes it: the start marker
-/// line plus the tail's bytes, so a tail that cannot fit is refused before
+/// `reserved` counts what `finish` keeps beside the visible text: the start
+/// marker line, the tail and the closing room, so a tail that cannot fit is refused before
 /// any request builds the body.
 #[test]
 fn the_reserved_tail_is_what_finish_appends() {
     let permits = BTreeMap::new();
     let plan = update_plan("patchula/a-1.x", vec![change("a")]);
     let base = bodies(&permits).reserved(&plan);
-    let expected = markers::START.len()
-        + 1
-        + bodies(&permits)
+    let expected = fixed(
+        bodies(&permits)
             .tail(
                 &plan,
                 &" ".repeat(markers::CONTENT_MARKER_LEN),
                 &controls(&plan),
                 None,
             )
-            .len();
+            .len(),
+        0,
+    );
     assert_eq!(base, expected);
     // A permit marker joins the tail and `reserved` grows by exactly its
     // bytes.
@@ -259,7 +204,7 @@ fn the_draft_stops_asking_when_the_body_has_no_room() {
     assert!(
         draft
             .finish()
-            .contains("Out of room for more release notes.")
+            .contains("Out of room for more release notes")
     );
     // Two eligible changes and a near-full intent: one fetch, then the
     // byte-room stop answers `None` with one fetch still wanted.
@@ -282,15 +227,14 @@ fn the_draft_stops_asking_when_the_body_has_no_room() {
     assert!(
         draft
             .finish()
-            .contains("Out of room for more release notes.")
+            .contains("Out of room for more release notes")
     );
 }
 
-/// A failed release-notes fetch says so in its section, never "could not
-/// be resolved", and the body it leaves is not reused: the next run
-/// fetches again.
+/// A failed release-notes fetch leaves a body that is not reused: the next
+/// run fetches again. A lasting failure settles.
 #[test]
-fn a_failed_notes_fetch_is_named_and_never_reused() {
+fn a_failed_notes_fetch_is_never_reused() {
     let permits = BTreeMap::new();
     let bodies = bodies(&permits);
     let plan = update_plan("patchula/a-1.x", vec![change("a")]);
@@ -298,22 +242,18 @@ fn a_failed_notes_fetch_is_named_and_never_reused() {
     let mut draft = bodies.draft(&plan);
     assert!(draft.next().is_some());
     draft.push(&Fetched::Transient);
+    assert!(draft.unsettled());
     let failed = draft.finish();
-    assert!(failed.contains("### a\n\nThe Count could not read these release notes this run"));
-    assert!(!failed.contains("could not be resolved"));
     assert!(!bodies.reusable(&plan, Some(&pr(&failed)), &marker));
-    // A lasting failure with no source says so, and settles.
     let mut draft = bodies.draft(&plan);
     assert!(draft.next().is_some());
     draft.push(&Fetched::Lasting(None));
     let unresolved = draft.finish();
-    assert!(unresolved.contains("source repository could not be resolved"));
     assert!(bodies.reusable(&plan, Some(&pr(&unresolved)), &marker));
 }
 
-/// A lasting failure after the source resolved keeps the source's link and
-/// says the notes could not be read, not that the source was not found;
-/// the body settles.
+/// A lasting failure after the source resolved keeps the source's link,
+/// and the body settles.
 #[test]
 fn a_resolved_source_with_unreadable_notes_keeps_its_link() {
     let permits = BTreeMap::new();
@@ -325,10 +265,7 @@ fn a_resolved_source_with_unreadable_notes_keeps_its_link() {
     let source = patchula_notes::Repository::from_url("https://github.com/o/r").unwrap();
     draft.push(&Fetched::Lasting(Some(source)));
     let body = draft.finish();
-    assert!(body.contains(
-        "### a\n\nThe Count could not read these release notes; [view upstream](https://github.com/o/r)."
-    ));
-    assert!(!body.contains("could not be resolved"));
+    assert!(body.contains("(https://github.com/o/r)"), "{body}");
     assert!(bodies.reusable(&plan, Some(&pr(&body)), &marker));
 }
 
@@ -336,12 +273,12 @@ fn a_resolved_source_with_unreadable_notes_keeps_its_link() {
 #[test]
 fn unticking_clears_only_the_recheck_box() {
     let line = format!(
-        "- [x] Tick to re-check this PR on the next run. {}\n",
+        "- [x] Re-check this PR on the next run {}\n",
         markers::RECHECK
     );
     let body = format!("before\n{line}- [x] Tick the batch.\nafter\n");
     let unticked = unticked(&body);
-    assert!(unticked.contains("- [ ] Tick to re-check this PR"));
+    assert!(unticked.contains("- [ ] Re-check this PR"));
     assert!(unticked.contains("- [x] Tick the batch."));
     assert!(unticked.starts_with("before\n") && unticked.ends_with("after\n"));
 }
@@ -374,54 +311,11 @@ fn the_title_is_one_line_and_ownership_compares_whole_markers() {
 mod security_tests {
     use super::security_section;
 
-    #[test]
-    fn fixed_advisories_lead_the_body_once_each() {
-        let advisory: patchula_report::Advisory = serde_json::from_value(serde_json::json!({
-            "id":"GHSA-jf85-cpcp-j695","aliases":["CVE-2019-10744","SNYK-JS-LODASH-450202"],
-            "severity":"critical","summary":"Prototype | pollution",
-            "url":"https://osv.dev/vulnerability/GHSA-jf85-cpcp-j695"
-        }))
-        .unwrap();
-        let change = crate::Change {
+    fn change(package: &str, advisory: patchula_report::Advisory) -> crate::Change {
+        crate::Change {
             registry: None,
             source: patchula_words::Source::Npm,
-            package: "lodash".into(),
-            file: "package.json".into(),
-            current: "4.17.11".into(),
-            current_version: None,
-            value: Some("4.17.21".into()),
-            version: Some("4.17.21".into()),
-            digest: None,
-            kind: patchula_words::Update::Patch,
-            merge: false,
-            labels: Vec::new(),
-            release_notes: true,
-            body_notes: Vec::new(),
-            advisories: vec![advisory],
-            image: None,
-        };
-        let mut other = change.clone();
-        other.file = "web/package.json".into();
-        let text = security_section(&[change.clone(), other]);
-        assert!(text.starts_with("> [!IMPORTANT]\n> This update fixes 1 known vulnerability."));
-        assert!(text.contains("| [GHSA-jf85-cpcp-j695](https://osv.dev/vulnerability/GHSA-jf85-cpcp-j695) (CVE-2019-10744) | critical | lodash | Prototype \\| pollution |\n"), "{text}");
-        let mut plain = change;
-        plain.advisories.clear();
-        assert!(security_section(&[plain]).is_empty());
-    }
-
-    #[test]
-    fn advisory_text_and_package_names_never_mention_anyone() {
-        let advisory: patchula_report::Advisory = serde_json::from_value(serde_json::json!({
-            "id":"GHSA-x","severity":"high",
-            "summary":"Reported by @mallory, see #12 and https://github.com/a/b/issues/3",
-            "url":"https://osv.dev/vulnerability/GHSA-x"
-        }))
-        .unwrap();
-        let change = crate::Change {
-            registry: None,
-            source: patchula_words::Source::Npm,
-            package: "@scope/pkg".into(),
+            package: package.into(),
             file: "package.json".into(),
             current: "1.0.0".into(),
             current_version: None,
@@ -432,17 +326,57 @@ mod security_tests {
             merge: false,
             labels: Vec::new(),
             release_notes: true,
-            body_notes: vec!["Held for @mallory".into()],
+            body_notes: Vec::new(),
             advisories: vec![advisory],
             image: None,
-        };
-        let text = security_section(&[change]);
+        }
+    }
+
+    /// An advisory a package's changes share is listed once, a pipe in its
+    /// summary cannot end the table cell, and the collapsed table is closed.
+    #[test]
+    fn fixed_advisories_are_listed_once_each() {
+        let advisory: patchula_report::Advisory = serde_json::from_value(serde_json::json!({
+            "id":"GHSA-jf85-cpcp-j695","aliases":["CVE-2019-10744","SNYK-JS-LODASH-450202"],
+            "severity":"critical","summary":"Prototype | pollution",
+            "url":"https://osv.dev/vulnerability/GHSA-jf85-cpcp-j695"
+        }))
+        .unwrap();
+        let change = change("lodash", advisory);
+        let mut other = change.clone();
+        other.file = "web/package.json".into();
+        let (head, details) = security_section(&[change.clone(), other]);
+        assert!(!head.is_empty());
+        assert_eq!(
+            details.matches("[GHSA-jf85-cpcp-j695]").count(),
+            1,
+            "{details}"
+        );
+        assert!(details.contains("Prototype \\| pollution"), "{details}");
+        assert!(details.ends_with("</details>\n"), "{details}");
+        let mut plain = change;
+        plain.advisories.clear();
+        assert_eq!(security_section(&[plain]), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn advisory_text_and_package_names_never_mention_anyone() {
+        let advisory: patchula_report::Advisory = serde_json::from_value(serde_json::json!({
+            "id":"GHSA-x","severity":"high",
+            "summary":"Reported by @mallory, see #12 and https://github.com/a/b/issues/3",
+            "url":"https://osv.dev/vulnerability/GHSA-x"
+        }))
+        .unwrap();
+        let mut change = change("@scope/pkg", advisory);
+        change.body_notes = vec!["Held for @mallory".into()];
+        let (head, details) = security_section(&[change]);
+        let text = format!("{head}{details}");
         for forged in ["@mallory", " #12", "//github.com/a/b/issues/3"] {
             assert!(!text.contains(forged), "{forged}: {text}");
         }
         assert!(text.contains("@\u{200d}mallory"), "{text}");
         // Package names are data, not prose.
-        assert!(text.contains("| @scope/pkg |"), "{text}");
+        assert!(text.contains("`@scope/pkg`"), "{text}");
         assert!(super::prose_cell("@mallory").contains("@\u{200d}mallory"));
         assert!(
             crate::batch::render(&[crate::batch::Item {
@@ -489,9 +423,9 @@ mod image_tests {
 
     /// An image section past its budget stays within `IMAGE_CAP`, its table
     /// within `IMAGE_TABLE_CAP`, and a full table still leaves the lines
-    /// after it their room. The warning callout stays whole, the section
-    /// ends on a block break so the update table starts its own block, and
-    /// the whole body fits.
+    /// after it their room. The warning callout stays whole, the headline
+    /// ends on a block break so the update table starts its own block, the
+    /// collapsed table is closed, and the whole body fits.
     #[test]
     fn an_oversized_image_section_keeps_its_limits() {
         let mut check = state("checked");
@@ -520,18 +454,18 @@ mod image_tests {
         // Enough images without an SBOM that their warnings overflow too.
         let mut changes = vec![fixing];
         changes.extend((0..80).map(|n| change(&format!("image-{n}"), state("no-sbom"))));
-        let text = image_section(&changes);
-        assert!(text.len() <= IMAGE_CAP, "{}", text.len());
-        assert!(text.ends_with("\n\n"), "{:?}", &text[text.len() - 200..]);
-        assert!(text.contains(IMAGE_WARNING), "{text}");
-        let table = text.find("| Advisory |").unwrap();
-        let listed = text.find("\nAnd 200 more listed by OSV: ").unwrap();
+        let (head, details) = image_section(&changes);
+        assert!(head.len() + details.len() <= IMAGE_CAP);
+        assert!(head.ends_with("\n\n"), "{:?}", &head[head.len() - 200..]);
+        assert!(head.contains(IMAGE_WARNING), "{head}");
+        assert!(details.ends_with("</details>\n"), "{details}");
+        let table = details.find("| Advisory |").unwrap();
+        let listed = details.find("\nAnd 200 more listed by OSV: ").unwrap();
         assert!(listed - table <= IMAGE_TABLE_CAP, "{}", listed - table);
-        assert!(listed - table > IMAGE_TABLE_CAP - 200, "{}", listed - table);
+        assert!(listed - table > IMAGE_TABLE_CAP - 300, "{}", listed - table);
         // The listed line is whole, and the warnings start but are cut.
-        assert!(text.contains(" not listed here.\n"), "{text}");
-        assert!(text.contains("> [!WARNING]\n"), "{text}");
-        assert!(text.matches("publishes no SBOM").count() < 80, "{text}");
+        assert!(details.contains(" not listed here.\n"), "{details}");
+        assert!(head.matches("publishes no SBOM").count() < 80, "{head}");
         // In the whole body the update table opens a block of its own.
         let permits = std::collections::BTreeMap::new();
         let plan = super::update_plan("patchula/debian-1.x", changes);
@@ -544,52 +478,8 @@ mod image_tests {
         assert!(body.len() <= BODY_LIMIT, "{}", body.len());
     }
 
-    #[test]
-    fn a_fixing_rebuild_lists_its_advisories_with_old_and_new_versions() {
-        let mut check = state("checked");
-        check.fixed = vec![
-            ImageAdvisory {
-                id: "DSA-1".into(),
-                package: "openssl".into(),
-                old: "3.0.1".into(),
-                new: Some("3.0.2".into()),
-                platforms: vec!["linux/amd64".into(), "linux/arm64".into()],
-            },
-            ImageAdvisory {
-                id: "DSA-2".into(),
-                package: "perl".into(),
-                old: "5.36".into(),
-                new: None,
-                platforms: vec!["linux/amd64".into()],
-            },
-        ];
-        check.introduced = vec!["DSA-3".into()];
-        let mut fixing = change("debian", check);
-        fixing.advisories = vec![
-            serde_json::from_value(serde_json::json!({
-                "id": "DSA-1", "severity": "high", "url": "https://osv.dev/vulnerability/DSA-1"
-            }))
-            .unwrap(),
-        ];
-        let text = image_section(&[fixing]);
-        assert!(text.starts_with("> [!IMPORTANT]\n> This rebuild fixes known vulnerabilities in the image's OS packages. The Count read OSV.dev's record for the 1 below, and OSV.dev lists 1 more that the new image no longer has."), "{text}");
-        assert!(text.contains("| [DSA-1](https://osv.dev/vulnerability/DSA-1) | high | openssl | 3.0.1 | 3.0.2 | linux/amd64, linux/arm64 |\n"), "{text}");
-        assert!(
-            text.contains(
-                "\nAnd 1 more listed by OSV: [DSA-2](https://osv.dev/vulnerability/DSA-2).\n"
-            ),
-            "{text}"
-        );
-        assert!(
-            text.contains("The new image also brings in 1 advisory listed by OSV: [DSA-3](https://osv.dev/vulnerability/DSA-3).\n"),
-            "{text}"
-        );
-        assert!(
-            !text.contains("OSV.dev knows of no vulnerability"),
-            "{text}"
-        );
-    }
-
+    /// Only advisories with a record get a row, most severe first; the rest
+    /// are counted by id.
     #[test]
     fn only_advisories_with_a_record_get_a_row_and_the_rest_are_counted_ids() {
         let advisory = |id: &str, severity: &str| -> patchula_report::Advisory {
@@ -608,53 +498,38 @@ mod image_tests {
                 platforms: vec!["linux/amd64".into()],
             })
             .collect();
-        check.introduced = vec!["USN-9-1".into(), "UBUNTU-CVE-2025-7".into()];
-        check.introduced_details = vec![advisory("USN-9-1", "moderate")];
         let mut fixing = change("debian", check);
         fixing.advisories = (4..=8)
             .map(|n| advisory(&format!("DEBIAN-CVE-2025-{n}"), "high"))
             .collect();
-        let text = image_section(&[fixing]);
+        let (_, details) = image_section(&[fixing]);
+        assert_eq!(details.matches(" | openssl | ").count(), 5, "{details}");
         assert!(
-            text.contains(
-                "The Count read OSV.dev's record for the 5 below, and OSV.dev lists 3 more"
-            ),
-            "{text}"
+            details.find("[DEBIAN-CVE-2025-8]").unwrap()
+                < details.find("[DEBIAN-CVE-2025-4]").unwrap(),
+            "{details}"
         );
-        assert_eq!(text.matches("| high | openssl |").count(), 5, "{text}");
         assert!(
-            text.find("[DEBIAN-CVE-2025-8]").unwrap() < text.find("[DEBIAN-CVE-2025-4]").unwrap(),
-            "{text}"
+            details.contains("\nAnd 3 more listed by OSV: "),
+            "{details}"
         );
-        assert!(text.contains("\nAnd 3 more listed by OSV: [DEBIAN-CVE-2025-3](https://osv.dev/vulnerability/DEBIAN-CVE-2025-3), [DEBIAN-CVE-2025-2](https://osv.dev/vulnerability/DEBIAN-CVE-2025-2), [DEBIAN-CVE-2025-1](https://osv.dev/vulnerability/DEBIAN-CVE-2025-1).\n"), "{text}");
-        assert!(text.contains("The new image also brings in [USN-9-1](https://osv.dev/vulnerability/USN-9-1) (moderate); and 1 more listed by OSV: [UBUNTU-CVE-2025-7](https://osv.dev/vulnerability/UBUNTU-CVE-2025-7).\n"), "{text}");
     }
 
+    /// A rebuild with no verified record claims no fix.
     #[test]
-    fn a_rebuild_that_only_brings_advisories_in_still_says_so() {
+    fn a_rebuild_without_a_verified_record_claims_no_fix() {
         let mut check = state("checked");
         check.introduced = vec!["USN-9-1".into()];
-        let text = image_section(&[change("debian", check)]);
-        assert!(!text.contains("[!IMPORTANT]"), "{text}");
+        let (head, details) = image_section(&[change("debian", check)]);
         assert!(
-            text.contains("The new image brings in 1 advisory listed by OSV: [USN-9-1](https://osv.dev/vulnerability/USN-9-1).\n"),
-            "{text}"
+            !head.contains("[!IMPORTANT]") && details.is_empty(),
+            "{head}"
         );
-    }
-
-    #[test]
-    fn a_generator_name_cannot_close_its_code_span() {
-        let mut ko = state("sbom-without-os");
-        ko.detail = Some("ko`\n> [!NOTE] `x".into());
-        let text = image_section(&[change("ghcr.io/acme/api", ko)]);
+        // What the rebuild brings in is still named.
         assert!(
-            text.contains("made by ``ko` > [!NOTE] `x``, which doesn't look for them"),
-            "{text}"
+            head.contains("[USN-9-1](https://osv.dev/vulnerability/USN-9-1)"),
+            "{head}"
         );
-    }
-
-    #[test]
-    fn a_rebuild_with_no_verified_record_claims_no_fix() {
         let mut check = state("checked");
         check.fixed = vec![ImageAdvisory {
             id: "DSA-7".into(),
@@ -663,112 +538,42 @@ mod image_tests {
             new: Some("3.0.2".into()),
             platforms: vec!["linux/amd64".into()],
         }];
-        let text = image_section(&[change("debian", check)]);
-        assert!(!text.contains("[!IMPORTANT]"), "{text}");
-        assert!(text.contains("OSV.dev lists 1 advisory that the new image no longer has, but the Count read no record that confirms one, so he doesn't count this rebuild as a security fix: [DSA-7](https://osv.dev/vulnerability/DSA-7)."), "{text}");
+        let (head, details) = image_section(&[change("debian", check)]);
+        assert!(
+            !head.contains("[!IMPORTANT]") && details.is_empty(),
+            "{head}"
+        );
+        // The advisory OSV lists is still named.
+        assert!(
+            head.contains("[DSA-7](https://osv.dev/vulnerability/DSA-7)"),
+            "{head}"
+        );
     }
 
     #[test]
-    fn each_image_gets_its_own_line_and_silenced_warnings_are_left_off() {
+    fn a_generator_name_cannot_close_its_code_span() {
         let mut ko = state("sbom-without-os");
-        ko.detail = Some("ko".into());
+        ko.detail = Some("ko`\n> [!NOTE] `x".into());
+        let (head, _) = image_section(&[change("ghcr.io/acme/api", ko)]);
+        assert!(head.contains("``ko` > [!NOTE] `x``"), "{head}");
+    }
+
+    /// Warnings share one callout, and a silenced image is left off.
+    #[test]
+    fn silenced_warnings_are_left_off() {
         let mut silenced = state("no-sbom");
         silenced.silenced = Some("scanned in CI".into());
-        let mut partial = state("partial-sources");
-        partial.packages = 131;
-        let mut unreadable = state("unreadable");
-        unreadable.detail = Some("registry rate limit reached; retry after 60 seconds".into());
-        let mut oracle = state("os-not-covered");
-        oracle.os = Some("ol 9".into());
-        let text = image_section(&[
+        let (head, _) = image_section(&[
             change("quay.io/argoproj/argocd", state("no-sbom")),
-            change("ghcr.io/acme/api", ko),
             change("ghcr.io/acme/internal", silenced),
-            change("debian", partial),
-            change("mysql", oracle),
-            change("ghcr.io/astral-sh/uv", state("no-os-packages")),
             change("quay.io/old", state("previous-unavailable")),
-            change("alpine", unreadable),
         ]);
-        assert_eq!(text.matches("[!WARNING]").count(), 1, "{text}");
+        assert_eq!(head.matches("[!WARNING]").count(), 1, "{head}");
         assert!(
-            text.contains("> `quay.io/argoproj/argocd` publishes no SBOM for this image"),
-            "{text}"
+            head.contains("argocd") && head.contains("quay.io/old"),
+            "{head}"
         );
-        assert!(
-            text.contains("made by `ko`, which doesn't look for them"),
-            "{text}"
-        );
-        assert!(
-            text.contains("> `mysql` is built on ol 9, and OSV.dev has no advisories for it."),
-            "{text}"
-        );
-        assert!(
-            text.contains(
-                "The previous `quay.io/old` image (`sha256:4c49fc0…`) is no longer available"
-            ),
-            "{text}"
-        );
-        assert!(!text.contains("internal"), "{text}");
-        assert!(
-            text.contains("The Count compared `debian`'s old and new package lists."),
-            "{text}"
-        );
-        assert!(text.contains("its 131 OS packages come from"), "{text}");
-        assert!(
-            text.contains("According to its SBOM, `ghcr.io/astral-sh/uv` has no OS packages"),
-            "{text}"
-        );
-        assert!(text.contains("The Count couldn't read `alpine`'s SBOM on this run (registry rate limit reached; retry after 60 seconds)."), "{text}");
-    }
-}
-
-mod tooling_tests {
-    use super::tooling_section;
-    use crate::tooling::*;
-    use patchula_words::{ToolingDetail, ToolingRule};
-
-    fn callout(rule: ToolingRule, detail: Option<ToolingDetail>) -> Callout {
-        Callout {
-            rule,
-            detail,
-            branch: "main".into(),
-        }
-    }
-
-    #[test]
-    fn each_tooling_warning_is_a_caution_in_the_design_wording() {
-        let text = tooling_section(&[
-            callout(ToolingRule::MergeWithoutCi, None),
-            callout(ToolingRule::MergeWithoutCi, Some(ToolingDetail::Native)),
-            callout(ToolingRule::MergeWithoutRequiredChecks, None),
-            callout(ToolingRule::SecurityMergeWithoutDelivery, None),
-        ]);
-        assert_eq!(text.matches("> [!CAUTION]\n").count(), 4, "{text}");
-        for line in [
-            "> **This PR is set to merge itself, and the Count can't find any CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits, so nothing will have tested it when GitHub merges it.\n",
-            "> **This PR is set to merge itself, and the Count can't find any CI.** No workflow or CI file runs on pull requests, and no checks have reported on recent commits. He waits for at least one passing check before merging, so this PR will stay open.\n",
-            "> **Nothing makes this PR pass its checks before GitHub merges it.** The Count uses GitHub's auto-merge here, and `main` requires no status checks, so a red PR merges as readily as a green one. Add a required check in a ruleset.\n",
-            "> **Merging this fix ships nothing.** This PR fixes a known vulnerability and will merge on its own, but nothing in this repository builds, releases or deploys when `main` changes. Whatever runs the old code stays bitten. If something outside this repository delivers it, say so in `warnings.quiet`.\n",
-        ] {
-            assert!(text.contains(line), "{line}\n{text}");
-        }
-        let narrower = tooling_section(&[
-            callout(
-                ToolingRule::MergeWithoutRequiredChecks,
-                Some(ToolingDetail::ReviewsOnly),
-            ),
-            callout(
-                ToolingRule::SecurityMergeWithoutDelivery,
-                Some(ToolingDetail::TaggedRelease),
-            ),
-        ]);
-        assert!(
-            narrower.contains("`main` requires a review but no status checks"),
-            "{narrower}"
-        );
-        assert!(narrower.contains("> **Merging this fix doesn't ship it.** It will merge on its own, and nothing runs when `main` changes. The only workflow here that could deliver it runs on tags or releases, so it ships only if you cut one.\n"), "{narrower}");
-        assert!(tooling_section(&[]).is_empty());
+        assert!(!head.contains("internal"), "{head}");
     }
 }
 
