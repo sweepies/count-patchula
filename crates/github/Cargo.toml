@@ -28,7 +28,7 @@ sha2 = "0.11.1"
 sha1 = "0.11"
 base64 = "0.23"
 futures-util = "0.3"
-jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+jsonwebtoken = { version = "12", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tracing = "0.1"
 
