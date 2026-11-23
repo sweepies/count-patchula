@@ -28,7 +28,7 @@ workflows:
         - 'actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc'
         - 'infisical/secrets-action@v1.0.18'
         - 'jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
-        - 'sweepies/count-patchula@v0.6.0'
+        - 'sweepies/count-patchula@b78f970fd30690e712159d3d32f313fbf9eaaf81'
     '.github/workflows/release-bot.yml':
         - 'actions/checkout@v7.0.1'
         - 'jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
@@ -130,9 +130,9 @@ dependencies:
         commit: 'sha1-d2e351f16c6ca20d17c85e6c992e04bdeb64e87d'
         owner_id: 107880645
         repo_id: 795503506
-    'jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8':
-        ref: 'v5.1.2'
-        commit: 'sha1-08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8'
+    'jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d':
+        ref: 'v5.2.4'
+        commit: 'sha1-6be3c7ed4c21d4f76b208d351d95aac273ebb76d'
         owner_id: 216188
         repo_id: 738284564
     'jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78':
@@ -152,11 +152,11 @@ dependencies:
         repo_id: 1356006409
         uses:
             - 'actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8'
-    'sweepies/count-patchula@v0.6.0':
-        ref: 'v0.6.0'
-        commit: 'sha1-ac2e952dc4c403dae4516c550fe03db9f5a4f82b'
+    'sweepies/count-patchula@b78f970fd30690e712159d3d32f313fbf9eaaf81':
+        ref: 'v0.9.0'
+        commit: 'sha1-b78f970fd30690e712159d3d32f313fbf9eaaf81'
         owner_id: 7191851
         repo_id: 1419868512
         uses:
             - 'actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
-            - 'jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8'
+            - 'jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d'
