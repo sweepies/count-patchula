@@ -104,9 +104,10 @@ constraints included, is under [version policies](/guide/versioning/#version-pol
 ## Release channels
 
 Newest stable is the default. `channel = "lts"` follows the line the source's
-catalog marks with an `lts` dist-tag. For mise's `node` and setup-node's
-`actions/node-versions`, the Count reads the LTS line from Node's distribution
-index (`nodejs.org/dist/index.json`). Any other source whose catalog carries an
+catalog marks with an `lts` dist-tag. For mise's `node`, the Count reads the
+LTS line from `mise ls-remote node lts`; for setup-node's
+`actions/node-versions`, from Node's distribution index
+(`nodejs.org/dist/index.json`). Any other source whose catalog carries an
 `lts` dist-tag works the same way:
 
 ```pkl

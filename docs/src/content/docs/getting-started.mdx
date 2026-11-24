@@ -103,7 +103,8 @@ or at its URL followed by `index.md`.
    which mise installs on first use. A repeat run on an unchanged repository
    costs one GraphQL query.
 
-   With no repository named, commands use this checkout; see [working tree or
+   With no repository named, `run` uses this checkout's GitHub repository,
+   while `lookup` reads the working tree; see [working tree or
    GitHub](/guide/how-it-works/#working-tree-or-github).
 
    To have the updates written into your checkout instead of opened as PRs, run

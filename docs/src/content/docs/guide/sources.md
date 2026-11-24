@@ -203,9 +203,9 @@ refused before any request reaches it. That includes a token service on
 another port of the registry's host, such as `registry:2` with
 cesanta/docker_auth on `:5001`, which therefore does not work.
 Authenticated pulls, Docker Hub's included, use a [private
-registry](#private-registries) entry. When Docker Hub's `ratelimit-remaining`
-hits zero, queued reads stop. A 429 shares a cooldown across the host and
-retries at most three times, honouring `Retry-After`. If the wait is too long,
+registry](#private-registries) entry. When Docker Hub's pull quota runs out,
+manifest reads wait out its window; tag lists and HEAD requests carry on. A
+429 shares a cooldown across the host and retries at most three times, honouring `Retry-After`. If the wait is too long,
 the last cached response is used and marked stale in the report; a cold miss is
 still an error.
 
@@ -541,12 +541,12 @@ registries {
 ## Dates and release age
 
 Publication dates feed the [release-age wait](/guide/lookup-policy/). Go dates
-releases through the proxy's `.info` documents, only for the 20 newest on a cold
-lookup, since a module can list hundreds and older releases are outside any
-wait; versions the proxy lists but cannot describe are dropped. npm, crates,
-PyPI, RubyGems, NuGet and Packagist report them directly. Maven Central's search
-API lags by months, so Maven uses each POM's `Last-Modified` header, for the ten
-newest versions only. GitHub tags are dated [as the release-age
+every listed version once through the proxy's `.info` documents and keeps the
+answer, so a warm lookup asks only about versions it has not seen; versions the
+proxy lists but cannot describe are dropped. npm, crates, PyPI, RubyGems,
+NuGet and Packagist report them directly. Maven Central's search API lags by
+months, so Maven dates each version once by its POM's `Last-Modified` header
+and keeps the answer. GitHub tags are dated [as the release-age
 wait describes](/guide/lookup-policy/#the-release-age-wait). mise tools use the
 date mise lists, which is a backend's own release or publication date. GitLab
 tags use the annotated tag's date. Lightweight GitLab tags, Gitea and Forgejo
