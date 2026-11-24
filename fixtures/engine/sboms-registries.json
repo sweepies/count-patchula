@@ -105,7 +105,6 @@
           "format": "json",
           "value": {
             "expires_in": 3600,
-            "issued_at": "2026-10-29T22:31:14Z",
             "token": "[REDACTED]"
           }
         }
@@ -464,51 +463,6 @@
     },
     {
       "request": {
-        "method": "HEAD",
-        "url": "https://registry-1.docker.io/v2/library/busybox/manifests/latest",
-        "headers": {
-          "accept": [
-            "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 401,
-        "headers": {
-          "content-length": [
-            "158"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Thu, 29 Oct 2026 22:37:15 GMT"
-          ],
-          "docker-distribution-api-version": [
-            "registry/2.0"
-          ],
-          "docker-ratelimit-source": [
-            "45.250.253.225"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000"
-          ],
-          "www-authenticate": [
-            "Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:library/busybox:pull\""
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      }
-    },
-    {
-      "request": {
         "method": "GET",
         "url": "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fbusybox%3Apull",
         "headers": {
@@ -566,7 +520,6 @@
           "value": {
             "access_token": "[REDACTED]",
             "expires_in": 300,
-            "issued_at": "2026-10-29T22:37:15.167505625Z",
             "token": "[REDACTED]"
           }
         }

@@ -6288,63 +6288,6 @@
     {
       "request": {
         "method": "GET",
-        "url": "https://registry-1.docker.io/v2/library/alpine/tags/list?n=1000",
-        "headers": {
-          "accept": [
-            "application/json"
-          ]
-        },
-        "body": {
-          "format": "text",
-          "value": ""
-        }
-      },
-      "response": {
-        "status": 401,
-        "headers": {
-          "content-length": [
-            "157"
-          ],
-          "content-type": [
-            "application/json"
-          ],
-          "date": [
-            "Mon, 26 Oct 2026 05:03:14 GMT"
-          ],
-          "docker-distribution-api-version": [
-            "registry/2.0"
-          ],
-          "strict-transport-security": [
-            "max-age=31536000"
-          ],
-          "www-authenticate": [
-            "Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",scope=\"repository:library/alpine:pull\""
-          ]
-        },
-        "body": {
-          "format": "json",
-          "value": {
-            "errors": [
-              {
-                "code": "UNAUTHORIZED",
-                "detail": [
-                  {
-                    "Action": "pull",
-                    "Class": "",
-                    "Name": "library/alpine",
-                    "Type": "repository"
-                  }
-                ],
-                "message": "authentication required"
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "method": "GET",
         "url": "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Falpine%3Apull",
         "headers": {
           "accept": [
@@ -6401,7 +6344,6 @@
           "value": {
             "access_token": "[REDACTED]",
             "expires_in": 300,
-            "issued_at": "2026-10-26T05:03:14.616031616Z",
             "token": "[REDACTED]"
           }
         }
@@ -6489,7 +6431,7 @@
     {
       "request": {
         "method": "GET",
-        "url": "https://registry-1.docker.io/v2/library/alpine/tags/list?n=1000",
+        "url": "https://registry-1.docker.io/v2/library/alpine/tags/list?n=50000",
         "headers": {
           "accept": [
             "application/json"

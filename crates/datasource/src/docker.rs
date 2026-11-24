@@ -62,7 +62,7 @@ fn compact_config(
     .map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const OCI_CONFIG_NOTES: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("oci-config-notes", 3, compact_config);
+    patchula_http::Derived::new("oci-config-notes", 4, compact_config);
 
 /// The config of one image or chart version, as release notes read it.
 struct ImageConfig {
@@ -128,6 +128,48 @@ fn realm_trust(host: &str, realm: &Url) -> RealmTrust {
         RealmTrust::Refused
     }
 }
+/// The token service and `service` a registry's 401 always names, for the
+/// registries whose anonymous tokens are minted before the first read.
+fn known_realm(host: &str) -> Option<(&'static str, &'static str)> {
+    match host {
+        "registry-1.docker.io" => Some(("https://auth.docker.io/token", "registry.docker.io")),
+        "ghcr.io" => Some(("https://ghcr.io/token", "ghcr.io")),
+        _ => None,
+    }
+}
+/// The token service a 401's `WWW-Authenticate: Bearer` challenge names, and
+/// its `service`.
+fn challenge(response: &patchula_http::Response) -> Result<(Url, Option<String>)> {
+    let challenge = response
+        .headers
+        .get("www-authenticate")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(Error::Invalid)?;
+    let raw = challenge
+        .strip_prefix("Bearer ")
+        .or_else(|| challenge.strip_prefix("bearer "))
+        .ok_or(Error::Invalid)?;
+    let fields: BTreeMap<_, _> = raw
+        .split(',')
+        .filter_map(|v| v.trim().split_once('='))
+        .map(|(k, v)| (k, v.trim_matches('"')))
+        .collect();
+    let realm =
+        Url::parse(fields.get("realm").ok_or(Error::Invalid)?).map_err(|_| Error::Invalid)?;
+    Ok((realm, fields.get("service").map(|v| (*v).to_owned())))
+}
+/// The first `tags/list` page of an image. Docker Hub returns every tag of
+/// even its largest repositories in one page of `n=50000`; GHCR answers 100
+/// without `n`, ECR Public rejects `n=10000` and Quay caps pages at 100, so
+/// every other registry asks for 1000. Either way `Link` names the next page.
+fn tags_url(host: &str, path: &str) -> Result<Url> {
+    let n = if host == "registry-1.docker.io" {
+        50_000
+    } else {
+        1000
+    };
+    Url::parse(&format!("https://{host}/v2/{path}/tags/list?n={n}")).map_err(|_| Error::Invalid)
+}
 fn catalog(tags: Vec<String>) -> Catalog {
     Catalog {
         versions: tags.into_iter().map(Version::new).collect(),
@@ -144,7 +186,7 @@ fn oci_catalog(tags: Vec<String>) -> Catalog {
 /// The persisted anonymous pull token: the code that picks and expires the
 /// bearer out of a token answer is its compaction, so it carries its own
 /// version like a `Derived` and `tests/derived-versions.tsv` guards it.
-pub(crate) const PULL_TOKEN_REPRESENTATION: (&str, u32) = ("anonymous-registry-pull-token", 3);
+pub(crate) const PULL_TOKEN_REPRESENTATION: (&str, u32) = ("anonymous-registry-pull-token", 4);
 fn token_key(host: &str, path: &str) -> Result<HttpKey> {
     Ok(HttpKey::new(
         "GET",
@@ -168,7 +210,7 @@ fn compact_tags(
     serde_json::to_vec(&page).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const OCI_TAGS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("oci-tags", 3, compact_tags);
+    patchula_http::Derived::new("oci-tags", 4, compact_tags);
 
 pub(crate) fn identity(package: &str) -> Result<(String, String)> {
     let package = package.strip_prefix("oci://").unwrap_or(package);
@@ -283,7 +325,30 @@ impl Client {
                 });
             }
         }
-        let bearer = live(&saved).map(str::to_owned);
+        // A registry whose token service is known gets an anonymous token
+        // before its first read instead of after the 401 that would name the
+        // service, unless the cache answers the read without the registry.
+        // Minting under the scope's lock makes concurrent reads share one
+        // token. Registry reads are never mirrored, so the read reaches `url`
+        // and the token service is the one that registry's own 401 names. A
+        // failed mint fails the read, as it would after that 401.
+        let mut bearer = live(&saved).map(str::to_owned);
+        if bearer.is_none()
+            && !authenticated
+            && let Some((realm, service)) = known_realm(host)
+            && Url::parse(url).is_ok_and(|url| url.host_str() == Some(host) && url.port().is_none())
+        {
+            if let Some(response) = self.registry_fresh(url, read).await? {
+                drop(saved);
+                return self.answered(host, path, url, read, response).await;
+            }
+            let realm = Url::parse(realm).map_err(|_| Error::Invalid)?;
+            let pull = self
+                .mint(host, path, realm, Some(service), None, persisted.as_ref())
+                .await?;
+            bearer = Some(pull.bearer.clone());
+            *saved = Some(pull);
+        }
         drop(saved);
         let mut response = self
             .registry_read(url, read, bearer.as_deref(), account)
@@ -300,109 +365,19 @@ impl Client {
                     self.cache.http_remove(key).await?;
                 }
                 *saved_token = None;
-                let challenge = response
-                    .headers
-                    .get("www-authenticate")
-                    .and_then(|v| v.to_str().ok())
-                    .ok_or(Error::Invalid)?;
-                let raw = challenge
-                    .strip_prefix("Bearer ")
-                    .or_else(|| challenge.strip_prefix("bearer "))
-                    .ok_or(Error::Invalid)?;
-                let fields: BTreeMap<_, _> = raw
-                    .split(',')
-                    .filter_map(|v| v.trim().split_once('='))
-                    .map(|(k, v)| (k, v.trim_matches('"')))
-                    .collect();
-                let mut realm = Url::parse(fields.get("realm").ok_or(Error::Invalid)?)
-                    .map_err(|_| Error::Invalid)?;
-                let trust = realm_trust(host, &realm);
-                if trust == RealmTrust::Refused {
-                    return Err(Error::Invalid);
-                }
-                realm.set_query(None);
-                if let Some(service) = fields.get("service") {
-                    realm.query_pairs_mut().append_pair("service", service);
-                }
-                realm
-                    .query_pairs_mut()
-                    .append_pair("scope", &format!("repository:{path}:pull"));
-                let requested_at = conditional::unix_now();
-                let trusted_realm = trust == RealmTrust::Credentials;
-                // Only a registry with its own entry gets an account token, so its
-                // answers are always cached under that entry, never anonymously.
-                let realm_entry = self.http.credential(realm.as_str()).cloned();
-                let source = entry
-                    .as_ref()
-                    .and_then(|entry| realm_entry.as_ref().or(trusted_realm.then_some(entry)));
-                let credentials = match source.map(|entry| &entry.auth) {
-                    Some(patchula_http::Auth::Basic { username, password }) => {
-                        Some((username.as_str(), password.as_str()))
-                    }
-                    _ => None,
-                };
-                let auth = self.http.token_get(realm.as_str(), credentials).await?;
-                if !auth.status.is_success() {
-                    return Err(patchula_http::CacheError::Status(auth.status.as_u16()).into());
-                }
-                let value: Value = serde_json::from_slice(&auth.body)?;
-                let bearer = value["token"]
-                    .as_str()
-                    .or_else(|| value["access_token"].as_str())
-                    .ok_or(Error::Invalid)?
-                    .to_owned();
-                // Anonymous pull-only credentials, scoped to this registry and image.
-                // Honor issued_at and HTTP Age so a cached token cannot outlive issuance.
-                let issued = value["issued_at"]
-                    .as_str()
-                    .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
-                    .map_or(requested_at, |v| v.timestamp().min(requested_at));
-                let age = auth
-                    .headers
-                    .get("age")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<i64>().ok())
-                    .unwrap_or(0)
-                    .max(0);
-                let expires_at = issued
-                    .saturating_add(value["expires_in"].as_u64().unwrap_or(60).min(3600) as i64)
-                    .saturating_sub(age)
-                    .saturating_sub(10);
-                let expiry = Instant::now()
-                    + Duration::from_secs(
-                        expires_at.saturating_sub(conditional::unix_now()).max(0) as u64,
-                    );
-                if let Some(key) = &persisted
-                    && expires_at > conditional::unix_now()
-                    && !auth
-                        .headers
-                        .get("cache-control")
-                        .and_then(|v| v.to_str().ok())
-                        .is_some_and(|v| {
-                            v.split(',')
-                                .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
-                        })
-                {
-                    self.cache
-                        .http_put(
-                            key,
-                            &HttpEntry {
-                                status: 200,
-                                etag: None,
-                                last_modified: None,
-                                headers: BTreeMap::new(),
-                                body: bearer.as_bytes().to_vec(),
-                                fetched_at: requested_at,
-                                expires_at: Some(expires_at),
-                                cache_control: None,
-                            },
-                        )
-                        .await?;
-                }
-                *saved_token = Some(Pull {
-                    bearer: bearer.clone(),
-                    expiry,
-                });
+                let (realm, service) = challenge(&response)?;
+                let pull = self
+                    .mint(
+                        host,
+                        path,
+                        realm,
+                        service.as_deref(),
+                        entry.as_ref(),
+                        persisted.as_ref(),
+                    )
+                    .await?;
+                let bearer = pull.bearer.clone();
+                *saved_token = Some(pull);
                 bearer
             };
             drop(saved_token);
@@ -414,6 +389,115 @@ impl Client {
                 }
             }
         }
+        self.answered(host, path, url, read, response).await
+    }
+
+    /// A pull token for `path` from the token service at `realm`, asked
+    /// with `service`. The registry entry's credentials go only to a realm
+    /// `realm_trust` lets them reach, otherwise only the realm's own entry's.
+    /// An anonymous token is persisted under `persisted`; an account's never.
+    async fn mint(
+        &self,
+        host: &str,
+        path: &str,
+        mut realm: Url,
+        service: Option<&str>,
+        entry: Option<&patchula_http::Credential>,
+        persisted: Option<&HttpKey>,
+    ) -> Result<Pull> {
+        let trust = realm_trust(host, &realm);
+        if trust == RealmTrust::Refused {
+            return Err(Error::Invalid);
+        }
+        realm.set_query(None);
+        if let Some(service) = service {
+            realm.query_pairs_mut().append_pair("service", service);
+        }
+        realm
+            .query_pairs_mut()
+            .append_pair("scope", &format!("repository:{path}:pull"));
+        let requested_at = conditional::unix_now();
+        let trusted_realm = trust == RealmTrust::Credentials;
+        // Only a registry with its own entry gets an account token, so its
+        // answers are always cached under that entry, never anonymously.
+        let realm_entry = self.http.credential(realm.as_str()).cloned();
+        let source =
+            entry.and_then(|entry| realm_entry.as_ref().or(trusted_realm.then_some(entry)));
+        let credentials = match source.map(|entry| &entry.auth) {
+            Some(patchula_http::Auth::Basic { username, password }) => {
+                Some((username.as_str(), password.as_str()))
+            }
+            _ => None,
+        };
+        let auth = self.http.token_get(realm.as_str(), credentials).await?;
+        if !auth.status.is_success() {
+            return Err(patchula_http::CacheError::Status(auth.status.as_u16()).into());
+        }
+        let value: Value = serde_json::from_slice(&auth.body)?;
+        let bearer = value["token"]
+            .as_str()
+            .or_else(|| value["access_token"].as_str())
+            .ok_or(Error::Invalid)?
+            .to_owned();
+        // Anonymous pull-only credentials, scoped to this registry and image.
+        // Honor issued_at and HTTP Age so a cached token cannot outlive issuance.
+        let issued = value["issued_at"]
+            .as_str()
+            .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+            .map_or(requested_at, |v| v.timestamp().min(requested_at));
+        let age = auth
+            .headers
+            .get("age")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0)
+            .max(0);
+        let expires_at = issued
+            .saturating_add(value["expires_in"].as_u64().unwrap_or(60).min(3600) as i64)
+            .saturating_sub(age)
+            .saturating_sub(10);
+        let expiry = Instant::now()
+            + Duration::from_secs(expires_at.saturating_sub(conditional::unix_now()).max(0) as u64);
+        if let Some(key) = persisted
+            && expires_at > conditional::unix_now()
+            && !auth
+                .headers
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| {
+                    v.split(',')
+                        .any(|v| v.trim().eq_ignore_ascii_case("no-store"))
+                })
+        {
+            self.cache
+                .http_put(
+                    key,
+                    &HttpEntry {
+                        status: 200,
+                        etag: None,
+                        last_modified: None,
+                        headers: BTreeMap::new(),
+                        body: bearer.as_bytes().to_vec(),
+                        fetched_at: requested_at,
+                        expires_at: Some(expires_at),
+                        cache_control: None,
+                    },
+                )
+                .await?;
+        }
+        Ok(Pull { bearer, expiry })
+    }
+
+    /// What the registry's answer to `url` means: a throttle, a failure, or
+    /// a response, with the stale-manifest bookkeeping a manifest read keeps.
+    async fn answered(
+        &self,
+        host: &str,
+        path: &str,
+        url: &str,
+        read: Read,
+        response: patchula_http::Response,
+    ) -> Result<patchula_http::Response> {
         if response.status == 429 {
             return Err(Error::RateLimit(
                 response
@@ -440,6 +524,24 @@ impl Client {
             entries.remove(&key);
         }
         Ok(response)
+    }
+
+    /// The answer the cache gives a registry read without the registry.
+    async fn registry_fresh(
+        &self,
+        url: &str,
+        read: Read,
+    ) -> Result<Option<patchula_http::Response>> {
+        let (method, derived) = match read {
+            Read::Head => (reqwest::Method::HEAD, None),
+            Read::Manifest => (reqwest::Method::GET, None),
+            Read::Tags => (reqwest::Method::GET, Some(OCI_TAGS)),
+            Read::Blob { derived, .. } => (reqwest::Method::GET, Some(derived)),
+        };
+        Ok(self
+            .http
+            .registry_fresh(url, read.accept(), derived.as_ref(), method)
+            .await?)
     }
 
     async fn registry_read(
@@ -591,8 +693,7 @@ impl Client {
     /// `tags/list` leaves behind.
     async fn tags(&self, package: &str) -> Result<Vec<String>> {
         let (host, path) = identity(package)?;
-        let mut url = Url::parse(&format!("https://{host}/v2/{path}/tags/list?n=1000"))
-            .map_err(|_| Error::Invalid)?;
+        let mut url = tags_url(&host, &path)?;
         let origin = url.origin();
         let mut pages = Pages::starting_at(10000, url.as_str());
         let mut tags = std::collections::BTreeSet::new();
@@ -691,6 +792,34 @@ mod identity_tests {
         let oci = super::oci_catalog(vec!["10.0.0_a".into(), "2.0.0".into()]);
         assert_eq!(oci.versions[0].version, "10.0.0+a");
         assert_eq!(oci.versions[1].version, "2.0.0");
+    }
+
+    #[test]
+    fn only_docker_hub_asks_for_every_tag_in_one_page() {
+        let first = |package: &str| {
+            let (host, path) = super::identity(package).unwrap();
+            super::tags_url(&host, &path).unwrap().to_string()
+        };
+        assert_eq!(
+            first("grafana/loki"),
+            "https://registry-1.docker.io/v2/grafana/loki/tags/list?n=50000"
+        );
+        for (package, url) in [
+            (
+                "ghcr.io/spec/image",
+                "https://ghcr.io/v2/spec/image/tags/list?n=1000",
+            ),
+            (
+                "public.ecr.aws/spec/image",
+                "https://public.ecr.aws/v2/spec/image/tags/list?n=1000",
+            ),
+            (
+                "quay.io/spec/image",
+                "https://quay.io/v2/spec/image/tags/list?n=1000",
+            ),
+        ] {
+            assert_eq!(first(package), url, "{package}");
+        }
     }
 
     #[test]

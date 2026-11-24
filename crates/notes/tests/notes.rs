@@ -27,8 +27,18 @@ impl Transport for Routes {
     fn send(&self, request: reqwest::Request) -> Exchange<'_> {
         Box::pin(async move {
             let url = request.url().as_str().to_owned();
+            // Off GitHub, only OCI registry endpoints carry the anonymous pull token.
             if request.url().host_str() != Some("api.github.com") {
-                assert!(!request.headers().contains_key("authorization"));
+                if request.url().path().starts_with("/v2/") {
+                    assert!(
+                        request
+                            .headers()
+                            .get("authorization")
+                            .is_none_or(|v| v == "Bearer anonymous-fixture")
+                    );
+                } else {
+                    assert!(request.headers().get("authorization").is_none());
+                }
             }
             self.requests.lock().unwrap().push(url.clone());
             if request.url().path() == "/graphql" {
@@ -157,6 +167,16 @@ async fn every_ecosystem_resolves_its_own_metadata_conditionally_without_credent
         (
             "https://vanity.example/mod?go-get=1".into(),
             json!({"html":"<meta name=\"go-import\" content=\"vanity.example/mod git https://github.com/example/go\">"}),
+        ),
+        (
+            "https://ghcr.io/token?service=ghcr.io&scope=repository%3Aexample%2Fimage%3Apull"
+                .into(),
+            json!({"token":"anonymous-fixture","expires_in":300}),
+        ),
+        (
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fredis%3Apull"
+                .into(),
+            json!({"token":"anonymous-fixture","expires_in":300}),
         ),
         (
             "https://ghcr.io/v2/example/image/manifests/2.0.0".into(),

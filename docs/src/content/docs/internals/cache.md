@@ -285,6 +285,15 @@ body budget. Only the bearer is stored. Expiry follows `issued_at`,
 a missing `expires_in` means 60 seconds. A 401 evicts the token and allows one
 shared refresh.
 
+Docker Hub and GHCR always name the same token service (`auth.docker.io/token`
+and `ghcr.io/token`), so an anonymous read there with no live token mints one
+before its first request instead of after a 401, under the same lock, expiry
+and storage rules. It does so only when the read would reach the registry: a
+fresh cached answer needs no token. A failed mint fails the read, as it would
+after the 401. A read under an operator entry keeps the 401 exchange: its
+first request carries the entry's own credentials, and its tokens are an
+account's.
+
 :::caution
 These tokens are public, anonymous and pull-only, and never enter tracing,
 errors or fixtures, but SQLite stores them unencrypted. Keep the cache under

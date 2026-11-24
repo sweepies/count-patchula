@@ -107,7 +107,7 @@ struct BlobScope {
 }
 impl State for BlobSections {
     const NAMESPACE: &'static str = "changelog";
-    const VERSION: u32 = 17;
+    const VERSION: u32 = 18;
     const CODE_VERSIONED: bool = true;
     type Scope = BlobScope;
 }

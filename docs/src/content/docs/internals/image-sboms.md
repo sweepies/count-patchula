@@ -18,7 +18,10 @@ report is assembled, for repositories with `security.advisories` and
 current digest and each new digest a proposal will pin (a same-tag digest
 update, or a tag update's `newDigest`), and reads one SBOM per digest and
 platform in `security.imagePlatforms` (`linux/amd64` by default), 16 at a
-time. A dependency with a digest that has none of those platforms is then read
+time. The current digests are known before the lookup, so their SBOMs are read
+alongside the lookup and digest phases, for the same dependencies and
+platforms, and the `image` phase reads only the new digests and the fallback
+platforms. A dependency with a digest that has none of those platforms is then read
 for the first platform that digest's index lists, on all its digests. OSV
 receives no image digest and no SBOM. For the SBOMs of replacements only, one
 batched `querybatch` call carries each source package's ecosystem (such as
@@ -44,7 +47,10 @@ carries the first platform the index does list, skipping attestations) or
    differs from the requested platform is `NoPlatform`.
 2. Otherwise the cosign tags: `sha256-<digest>.att` for the platform digest,
    then the index digest, then `.sbom` for both. A HEAD comes first, so a
-   missing tag costs nothing against pull limits. The manifest a tag names is
+   missing tag costs nothing against pull limits. The four HEADs are sent at
+   once, since most tags are missing, and their answers are taken in that
+   order: the first tag that yields an SBOM wins, and an error ahead of it
+   fails the read. The manifest a tag names is
    read by the digest in `Docker-Content-Digest` (from the HEAD, or else from
    the GET) and checked against it; a registry that sends neither has its tag
    skipped. An `.att` layer must be an SPDX in-toto statement, optionally in a
@@ -192,8 +198,9 @@ so it costs the same with the check on or off.
   another subject is skipped for the `.sbom` tag, an SBOM blob whose bytes
   don't match its digest is rejected, an SBOM attestation after a provenance
   one is found, a single manifest is matched to the platform in its config, a
-  cosign manifest with no digest is not read, and an official image the mirror
-  lacks is read from Docker Hub.
+  cosign manifest with no digest is not read, the cosign tags are asked about
+  at once and taken in order, and an official image the mirror lacks is read
+  from Docker Hub.
 - `crates/lookup/src/images.rs` unit tests: fixed, removed and introduced
   advisories across platforms, an advisory listed for two packages, state
   precedence, and which current-digest states are warnings.

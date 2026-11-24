@@ -307,6 +307,7 @@ impl Transport for Recorder {
                 _ => Body::read(&response.body).unwrap_or_else(|error| panic!("{error}")),
             };
             self.redactor.body(&mut body);
+            undate_token(&key.url, &mut body);
             let interaction = Interaction {
                 request: key,
                 response: RecordedResponse {
@@ -323,6 +324,32 @@ impl Transport for Recorder {
             save(&self.path, &cassette, &self.redactor).unwrap_or_else(|error| panic!("{error}"));
             Ok(response)
         })
+    }
+}
+
+/// Whether `url` is an OCI/Docker registry token endpoint (`*/token` or
+/// `*/auth` with a `repository:` pull scope).
+fn is_registry_token_url(url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let path = url.path().trim_end_matches('/');
+    (path.ends_with("/token") || path.ends_with("/auth"))
+        && url
+            .query_pairs()
+            .any(|(k, v)| k == "scope" && v.starts_with("repository:"))
+}
+
+/// Drop a registry token answer's `issued_at`. The Count expires a token
+/// from its issue time, so a recorded one would be expired in every replay
+/// and each read would mint again; without it, a replayed token lives from
+/// the replay, as the live one did from the recording.
+fn undate_token(url: &str, body: &mut Body) {
+    if is_registry_token_url(url)
+        && let Body::Json(serde_json::Value::Object(fields)) = body
+        && (fields.contains_key("token") || fields.contains_key("access_token"))
+    {
+        fields.remove("issued_at");
     }
 }
 
@@ -426,4 +453,42 @@ pub fn check_directory(path: &Path, redactor: &Redactor) -> Result<usize, Error>
         }
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod undate_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn undate_token_only_touches_registry_token_urls() {
+        for url in [
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository%3Alibrary%2Fnode%3Apull",
+            "https://ghcr.io/token?service=ghcr.io&scope=repository%3Aorg%2Fimg%3Apull",
+            "https://gitlab.com/jwt/auth?service=container_registry&scope=repository%3Aorg%2Fimg%3Apull",
+            "https://quay.io/v2/auth?service=quay.io&scope=repository%3Aorg%2Fimg%3Apull",
+            "https://public.ecr.aws/token/?service=public.ecr.aws&scope=repository%3Adocker%2Falpine%3Apull",
+        ] {
+            let mut body = Body::Json(json!({
+                "token": "abc",
+                "issued_at": "2026-01-01T00:00:00Z"
+            }));
+            undate_token(url, &mut body);
+            assert_eq!(body, Body::Json(json!({"token": "abc"})), "{url}");
+        }
+
+        for url in [
+            "https://api.example.invalid/v1/session",
+            "https://api.example.invalid/token",
+            "https://auth.docker.io/token?service=registry.docker.io&scope=catalog",
+        ] {
+            let expected = Body::Json(json!({
+                "token": "abc",
+                "issued_at": "2026-01-01T00:00:00Z"
+            }));
+            let mut body = expected.clone();
+            undate_token(url, &mut body);
+            assert_eq!(body, expected, "{url}");
+        }
+    }
 }
