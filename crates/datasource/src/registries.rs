@@ -38,7 +38,7 @@ fn terraform(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, Cache
     encode(&catalog)
 }
 pub(crate) const TERRAFORM_CATALOG: Derived<CacheError> =
-    Derived::new("terraform-catalog", 6, terraform);
+    Derived::new("terraform-catalog", 7, terraform);
 
 /// One chart from a Helm repository index: its versions, and what release
 /// notes read from each version's metadata.
@@ -187,16 +187,19 @@ fn unescape(text: &str) -> String {
 /// pairs. Tags are matched without regard to case, and a `>` inside a quoted
 /// attribute value does not end one. Only the text the scan has not passed —
 /// an unfinished anchor's tag and text — is held, so a large page scans in
-/// bounded memory.
+/// bounded memory. The scan moves a cursor over the text and drops what it
+/// passed once per fed chunk, so a page scans in time linear in its size.
+/// Every delimiter it looks for is ASCII, so byte positions it finds are
+/// always character boundaries.
 struct Anchors {
     /// Bytes held back mid UTF-8 character.
     raw: Vec<u8>,
-    /// Decoded text the scan has not passed.
+    /// Decoded text the scan has not dropped.
     text: String,
     /// Where the `<a` search resumes.
     at: usize,
     /// Inside an `<a` tag: its start, how far it is scanned, the open quote.
-    tag: Option<(usize, usize, Option<char>)>,
+    tag: Option<(usize, usize, Option<u8>)>,
     /// Past an `<a>` tag: the tag's end, how far `</a>` is searched, and
     /// whether the tag carried `data-yanked`.
     close: Option<(usize, usize, bool)>,
@@ -204,6 +207,24 @@ struct Anchors {
     files: Vec<(String, bool)>,
     /// Invalid UTF-8 seen: the whole document fails.
     bad: bool,
+}
+/// Where ASCII `needle`, written in lower case, first occurs in `haystack`
+/// without regard to ASCII case.
+fn find_ignoring_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    let first = needle[0];
+    let mut from = 0;
+    while let Some(offset) = haystack[from..]
+        .iter()
+        .position(|b| b.to_ascii_lowercase() == first)
+    {
+        let at = from + offset;
+        let candidate = haystack.get(at..at + needle.len())?;
+        if candidate.eq_ignore_ascii_case(needle) {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
 }
 impl Anchors {
     fn new() -> Self {
@@ -258,20 +279,22 @@ impl Anchors {
                 }
             }
         }
-        self.pump(false);
+        let keep = self.scan(false);
+        self.drop_before(keep);
     }
-    /// Scans as far as the decoded text allows, then keeps only what the
-    /// scan still needs.
-    fn pump(&mut self, eof: bool) {
+    /// Scans as far as the decoded text allows. Returns where the text the
+    /// scan still needs starts; everything before it can be dropped.
+    fn scan(&mut self, eof: bool) -> usize {
         loop {
+            let text = self.text.as_bytes();
             if let Some((start, scan, mut quote)) = self.tag.take() {
                 // The end of the tag, outside quotes.
                 let mut end = None;
-                for (offset, c) in self.text[scan..].char_indices() {
-                    match (quote, c) {
-                        (Some(q), c) if c == q => quote = None,
-                        (None, '"' | '\'') => quote = Some(c),
-                        (None, '>') => {
+                for (offset, &byte) in text[scan..].iter().enumerate() {
+                    match (quote, byte) {
+                        (Some(q), byte) if byte == q => quote = None,
+                        (None, b'"' | b'\'') => quote = Some(byte),
+                        (None, b'>') => {
                             end = Some(scan + offset);
                             break;
                         }
@@ -280,70 +303,50 @@ impl Anchors {
                 }
                 match end {
                     Some(end) => {
-                        let yanked = self.text[start..end]
-                            .to_ascii_lowercase()
-                            .contains("data-yanked");
+                        let yanked =
+                            find_ignoring_case(&text[start..end], b"data-yanked").is_some();
                         self.close = Some((end, end, yanked));
                     }
                     None => {
-                        if eof {
-                            return;
-                        }
-                        self.tag = Some((start, self.text.len(), quote));
-                        self.drop_before(start);
-                        return;
+                        self.tag = Some((start, text.len(), quote));
+                        return if eof { 0 } else { start };
                     }
                 }
             } else if let Some((end, probe, yanked)) = self.close.take() {
                 // The first `</a>` past the tag. A closer found straddling an
                 // earlier search's end is not missed: the search resumes a
-                // `</a>`'s width before it, shifted to a character's start.
-                let from = end.max(self.text.floor_char_boundary(probe.saturating_sub(3)));
-                if let Some(found) = self.text[from..].to_ascii_lowercase().find("</a>") {
-                    let close = from + found;
-                    let name = unescape(self.text[end + 1..close].trim());
-                    self.files.push((name, yanked));
-                    self.at = close;
-                    self.drop_before(close);
-                } else {
-                    if eof {
-                        return;
+                // `</a>`'s width before it.
+                let from = end.max(probe.saturating_sub(3));
+                match find_ignoring_case(&text[from..], b"</a>") {
+                    Some(found) => {
+                        let close = from + found;
+                        let name = unescape(self.text[end + 1..close].trim());
+                        self.files.push((name, yanked));
+                        self.at = close;
                     }
-                    self.close = Some((end, self.text.len(), yanked));
-                    self.drop_before(end);
-                    return;
+                    None => {
+                        self.close = Some((end, text.len(), yanked));
+                        return if eof { 0 } else { end };
+                    }
                 }
             } else {
-                match self.text[self.at..].to_ascii_lowercase().find("<a") {
+                match find_ignoring_case(&text[self.at..], b"<a") {
                     Some(found) => {
                         let start = self.at + found + 2;
-                        if start < self.text.len()
-                            && self.text[start..]
-                                .starts_with(|c: char| c.is_ascii_whitespace() || c == '>')
-                        {
-                            self.tag = Some((start, start, None));
-                        } else if start < self.text.len() {
-                            self.at = start;
-                        } else {
-                            // `<a` at the very end decides with more input.
-                            if eof {
-                                return;
+                        match text.get(start) {
+                            Some(b) if b.is_ascii_whitespace() || *b == b'>' => {
+                                self.tag = Some((start, start, None));
                             }
-                            self.drop_before(self.at + found);
-                            return;
+                            Some(_) => self.at = start,
+                            // `<a` at the very end decides with more input.
+                            None => return if eof { 0 } else { self.at + found },
                         }
                     }
                     None => {
-                        if eof {
-                            return;
-                        }
                         // A trailing `<` may grow into `<a`; the rest is done.
-                        let keep = self
-                            .text
-                            .len()
-                            .saturating_sub(usize::from(self.text.ends_with('<')));
-                        self.drop_before(keep);
-                        return;
+                        let keep = text.len() - usize::from(text.ends_with(b"<"));
+                        self.at = keep;
+                        return if eof { 0 } else { keep };
                     }
                 }
             }
@@ -357,60 +360,60 @@ impl Anchors {
         if self.bad {
             return Err(CacheError::Document);
         }
-        self.pump(true);
+        self.scan(true);
         Ok(self.files)
     }
 }
 
-/// Feeds every byte the JSON parse reads into the anchor scan as well, so a
-/// failed JSON read can retry the same bytes as HTML without the body held.
-struct Tee<'a> {
-    body: &'a mut dyn std::io::Read,
-    anchors: &'a mut Anchors,
-}
-impl std::io::Read for Tee<'_> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let read = self.body.read(buffer)?;
-        self.anchors.feed(&buffer[..read]);
-        Ok(read)
-    }
-}
+/// How much of a private index's page is read at once.
+const PAGE_BUFFER: usize = 64 * 1024;
 
 /// A private index's page, as PEP 691 JSON or PEP 503 HTML, read into one
 /// catalog per project its files name. A page whose files belong to another
 /// project gives the requested one none of their versions.
 fn simple_any(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, CacheError> {
-    // The format is sniffed: a failed JSON read retries the same bytes as
-    // HTML, so the anchor scan watches the stream as it is read and the rest
-    // of the body drains through it on the retry.
-    let mut anchors = Anchors::new();
-    let files = {
-        let mut tee = Tee {
-            body: &mut *body,
-            anchors: &mut anchors,
-        };
-        simple_files(&mut tee)
-    }
-    .or_else(|_| {
-        let mut rest = [0; 8192];
-        loop {
-            match body.read(&mut rest) {
-                Ok(0) => break,
-                Ok(read) => anchors.feed(&rest[..read]),
-                Err(_) => return Err(CacheError::Document),
+    use std::io::BufRead;
+    // The format is sniffed from the first byte that is not whitespace: a
+    // PEP 691 page is a JSON object, so it starts with `{`, which no HTML
+    // page does. Anything else is scanned as HTML; a page starting with `{`
+    // that is not a PEP 691 document is a document error.
+    let mut body = std::io::BufReader::with_capacity(PAGE_BUFFER, body);
+    let first = loop {
+        let buffer = body.fill_buf().map_err(|_| CacheError::Document)?;
+        if buffer.is_empty() {
+            break None;
+        }
+        match buffer.iter().position(|b| !b.is_ascii_whitespace()) {
+            Some(at) => break Some(buffer[at]),
+            None => {
+                let read = buffer.len();
+                body.consume(read);
             }
         }
-        anchors.finish().map(|files| {
-            files
-                .into_iter()
-                .map(|(filename, yanked)| SimpleFile {
-                    filename,
-                    uploaded: None,
-                    yanked: Value::Bool(yanked),
-                })
-                .collect()
-        })
-    })?;
+    };
+    let files = if first == Some(b'{') {
+        simple_files(&mut body)?
+    } else {
+        let mut anchors = Anchors::new();
+        loop {
+            let buffer = body.fill_buf().map_err(|_| CacheError::Document)?;
+            if buffer.is_empty() {
+                break;
+            }
+            anchors.feed(buffer);
+            let read = buffer.len();
+            body.consume(read);
+        }
+        anchors
+            .finish()?
+            .into_iter()
+            .map(|(filename, yanked)| SimpleFile {
+                filename,
+                uploaded: None,
+                yanked: Value::Bool(yanked),
+            })
+            .collect()
+    };
     let mut projects = BTreeMap::<String, Vec<SimpleFile>>::new();
     for file in files {
         if let Some((project, _)) = file_release(&file.filename) {
@@ -424,13 +427,13 @@ fn simple_any(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, Cach
     serde_json::to_vec(&catalogs).map_err(|_| CacheError::Document)
 }
 pub(crate) const PYPI_INDEX_CATALOG: Derived<CacheError> =
-    Derived::new("pypi-index-catalog", 6, simple_any);
+    Derived::new("pypi-index-catalog", 7, simple_any);
 
 fn simple(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, CacheError> {
     encode(&catalog_of(&simple_files(body)?))
 }
 pub(crate) const PYPI_SIMPLE_CATALOG: Derived<CacheError> =
-    Derived::new("pypi-simple-catalog", 6, simple);
+    Derived::new("pypi-simple-catalog", 7, simple);
 
 #[derive(Deserialize)]
 struct SimpleFile {
@@ -549,5 +552,74 @@ mod tests {
             }
             assert_eq!(anchors.finish().unwrap(), expected, "chunk size {chunk}");
         }
+    }
+
+    /// Edge cases scan the same whatever the chunking: a `>` in a quoted
+    /// attribute, `<a` prefixes of other tags, a closer split across chunks,
+    /// mixed case, and an anchor still open at the end of the page.
+    #[test]
+    fn anchors_scan_edge_cases_at_every_chunk() {
+        let page = concat!(
+            "<abbr>not an anchor</abbr><area href=x>",
+            "<a title='a > b' href=\"x\">pkg-1.0.tar.gz</a>",
+            "<A\tDATA-YANKED=\"\">pkg-1.1.tar.gz</A>",
+            "</a><a>pkg-1.2.tar.gz</a",
+            ">tail<a href=\"y\">unfinished",
+        );
+        let mut buffered = Anchors::new();
+        buffered.feed(page.as_bytes());
+        let expected = buffered.finish().unwrap();
+        assert_eq!(
+            expected,
+            vec![
+                ("pkg-1.0.tar.gz".to_string(), false),
+                ("pkg-1.1.tar.gz".to_string(), true),
+                ("pkg-1.2.tar.gz".to_string(), false),
+            ]
+        );
+        for chunk in 1..=24 {
+            let mut anchors = Anchors::new();
+            for part in page.as_bytes().chunks(chunk) {
+                anchors.feed(part);
+            }
+            assert_eq!(anchors.finish().unwrap(), expected, "chunk size {chunk}");
+        }
+    }
+
+    /// A large page keeps only what the scan still needs: the text it holds
+    /// stays bounded however many anchors it has passed.
+    #[test]
+    fn anchors_hold_bounded_text_on_a_large_page() {
+        let mut anchors = Anchors::new();
+        for i in 0..20_000 {
+            anchors
+                .feed(format!("<a href=\"/p/pkg-{i}.0.tar.gz\">pkg-{i}.0.tar.gz</a>\n").as_bytes());
+            assert!(anchors.text.len() < 64, "{} bytes held", anchors.text.len());
+        }
+        assert_eq!(anchors.finish().unwrap().len(), 20_000);
+    }
+
+    /// A private index's page is sniffed: PEP 691 JSON after leading
+    /// whitespace reads as JSON, anything else scans as HTML, and both
+    /// give the same catalog.
+    #[test]
+    fn a_private_page_is_read_as_json_or_html_by_its_first_byte() {
+        let json = br#"  
+ {"meta":{"api-version":"1.0"},"files":[{"filename":"pkg-1.0.tar.gz","yanked":false},{"filename":"pkg-2.0.tar.gz","yanked":true}]}"#;
+        let html = b"<!DOCTYPE html><a href=\"x\">pkg-1.0.tar.gz</a><a data-yanked href=\"y\">pkg-2.0.tar.gz</a>";
+        let read = |body: &[u8]| -> BTreeMap<String, Catalog> {
+            serde_json::from_slice(&simple_any(&mut &body[..]).unwrap()).unwrap()
+        };
+        for catalogs in [read(json), read(html)] {
+            let catalog = &catalogs["pkg"];
+            assert_eq!(catalog.versions.len(), 2);
+            assert_eq!(catalog.versions[0].version, "2.0");
+            assert!(catalog.versions[0].yanked);
+            assert!(!catalog.versions[1].yanked);
+        }
+        // A page that starts like JSON but is no PEP 691 document fails.
+        assert!(simple_any(&mut &b"{\"files\": 3}"[..]).is_err());
+        // An empty page has no files.
+        assert!(read(b"").is_empty());
     }
 }

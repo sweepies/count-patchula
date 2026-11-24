@@ -93,12 +93,125 @@ pub fn fixes(
     advisories: &[std::sync::Arc<Advisory>],
     target: &str,
 ) -> Vec<String> {
-    let scheme = Ecosystem::of(dep.scheme, dep.source);
-    advisories
-        .iter()
-        .filter(|advisory| affects(advisory, query, scheme, target) == Some(false))
-        .map(|advisory| advisory.id.clone())
-        .collect()
+    Fixes::new(dep, query, advisories).of(target)
+}
+
+/// A dependency's advisories with their affected versions and ranges parsed
+/// and sorted once, for asking which of many candidate versions fix them.
+pub(crate) struct Fixes {
+    scheme: Ecosystem,
+    advisories: Vec<(String, Affecting)>,
+}
+impl Fixes {
+    pub(crate) fn new(
+        dep: &Dependency,
+        query: &AdvisoryQuery,
+        advisories: &[std::sync::Arc<Advisory>],
+    ) -> Self {
+        let scheme = Ecosystem::of(dep.scheme, dep.source);
+        Self {
+            scheme,
+            advisories: advisories
+                .iter()
+                .map(|advisory| (advisory.id.clone(), Affecting::new(advisory, query, scheme)))
+                .collect(),
+        }
+    }
+    /// IDs of the advisories that affect the current version but not
+    /// `target`.
+    pub(crate) fn of(&self, target: &str) -> Vec<String> {
+        let Some(parsed) = parse(self.scheme, target) else {
+            return Vec::new();
+        };
+        self.advisories
+            .iter()
+            .filter(|(_, affecting)| affecting.affects(self.scheme, &parsed) == Some(false))
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+}
+
+/// One advisory's entries for the queried package, parsed.
+struct Affecting(Vec<Entry>);
+/// One `affected` entry, parsed.
+struct Entry {
+    /// The listed versions that parse.
+    versions: Vec<Parsed>,
+    /// Whether the entry lists any versions, parsed or not.
+    lists: bool,
+    /// Its SEMVER and ECOSYSTEM ranges' events in version order; `None` for
+    /// a range with an event that does not parse, which leaves the advisory
+    /// undecidable.
+    ranges: Vec<Option<Vec<Bound>>>,
+}
+/// A range event at its version; `None` is `introduced: 0`.
+type Bound = (Option<Parsed>, EventKind);
+#[derive(Clone, Copy)]
+enum EventKind {
+    Introduced,
+    Fixed,
+    LastAffected,
+}
+impl Affecting {
+    fn new(advisory: &Advisory, query: &AdvisoryQuery, scheme: Ecosystem) -> Self {
+        Self(
+            advisory
+                .affected
+                .iter()
+                .filter(|a| same_package(a, query))
+                .map(|affected| {
+                    let versions = affected
+                        .versions
+                        .iter()
+                        .filter_map(|v| parse(scheme, v))
+                        .collect();
+                    let ranges = affected
+                        .ranges
+                        .iter()
+                        .filter(|r| matches!(r.kind.as_str(), "SEMVER" | "ECOSYSTEM"))
+                        .map(|range| sorted_events(&range.events, scheme))
+                        .collect();
+                    Entry {
+                        versions,
+                        lists: !affected.versions.is_empty(),
+                        ranges,
+                    }
+                })
+                .collect(),
+        )
+    }
+    /// Whether `version` falls in the advisory's affected ranges or
+    /// versions; `None` when that cannot be decided.
+    fn affects(&self, scheme: Ecosystem, version: &Parsed) -> Option<bool> {
+        let mut decided = false;
+        for Entry {
+            versions,
+            lists,
+            ranges,
+        } in &self.0
+        {
+            if versions
+                .iter()
+                .any(|v| scheme.order(v, version) == Ordering::Equal)
+            {
+                return Some(true);
+            }
+            if *lists {
+                decided = true;
+            }
+            for range in ranges {
+                match range
+                    .as_deref()
+                    .map(|events| in_range(events, scheme, version))
+                {
+                    Some(true) => return Some(true),
+                    Some(false) => decided = true,
+                    None => return None,
+                }
+            }
+        }
+        decided.then_some(false)
+    }
 }
 
 /// Whether `version` falls in the advisory's affected ranges or versions for
@@ -110,32 +223,7 @@ pub fn affects(
     version: &str,
 ) -> Option<bool> {
     let parsed = parse(scheme, version)?;
-    let mut decided = false;
-    for affected in advisory.affected.iter().filter(|a| same_package(a, query)) {
-        if affected
-            .versions
-            .iter()
-            .filter_map(|v| parse(scheme, v))
-            .any(|v| scheme.order(&v, &parsed) == Ordering::Equal)
-        {
-            return Some(true);
-        }
-        if !affected.versions.is_empty() {
-            decided = true;
-        }
-        for range in affected
-            .ranges
-            .iter()
-            .filter(|r| matches!(r.kind.as_str(), "SEMVER" | "ECOSYSTEM"))
-        {
-            match in_range(&range.events, scheme, &parsed) {
-                Some(true) => return Some(true),
-                Some(false) => decided = true,
-                None => return None,
-            }
-        }
-    }
-    decided.then_some(false)
+    Affecting::new(advisory, query, scheme).affects(scheme, &parsed)
 }
 
 /// The lowest fixed version above `current` in the package's ranges.
@@ -160,19 +248,19 @@ pub(crate) fn fixed_in(
         .map(|(_, v)| v.clone())
 }
 
-/// OSV's evaluation: walk the events in version order, entering the range at
-/// `introduced` and leaving it at `fixed` or after `last_affected`.
-fn in_range(events: &[Event], scheme: Ecosystem, version: &Parsed) -> Option<bool> {
+/// A range's events at their versions, in version order, `introduced: 0`
+/// first and `limit` left out; `None` when an event's version does not parse.
+fn sorted_events(events: &[Event], scheme: Ecosystem) -> Option<Vec<Bound>> {
     let mut sorted = Vec::with_capacity(events.len());
     for event in events {
         let bound = match event {
-            Event::Introduced(v) if v == "0" => None,
-            Event::Introduced(v) | Event::Fixed(v) | Event::LastAffected(v) => {
-                Some(parse(scheme, v)?)
-            }
+            Event::Introduced(v) if v == "0" => (None, EventKind::Introduced),
+            Event::Introduced(v) => (Some(parse(scheme, v)?), EventKind::Introduced),
+            Event::Fixed(v) => (Some(parse(scheme, v)?), EventKind::Fixed),
+            Event::LastAffected(v) => (Some(parse(scheme, v)?), EventKind::LastAffected),
             Event::Limit(_) => continue,
         };
-        sorted.push((bound, event));
+        sorted.push(bound);
     }
     sorted.sort_by(|(a, _), (b, _)| match (a, b) {
         (None, None) => Ordering::Equal,
@@ -180,17 +268,25 @@ fn in_range(events: &[Event], scheme: Ecosystem, version: &Parsed) -> Option<boo
         (Some(_), None) => Ordering::Greater,
         (Some(a), Some(b)) => scheme.order(a, b),
     });
+    Some(sorted)
+}
+
+/// OSV's evaluation: walk the sorted events, entering the range at
+/// `introduced` and leaving it at `fixed` or after `last_affected`.
+fn in_range(events: &[Bound], scheme: Ecosystem, version: &Parsed) -> bool {
     let mut affected = false;
-    for (bound, event) in sorted {
-        let order = bound.map_or(Ordering::Greater, |b| scheme.order(version, &b));
-        match event {
-            Event::Introduced(_) if order != Ordering::Less => affected = true,
-            Event::Fixed(_) if order != Ordering::Less => affected = false,
-            Event::LastAffected(_) if order == Ordering::Greater => affected = false,
+    for (bound, kind) in events {
+        let order = bound
+            .as_ref()
+            .map_or(Ordering::Greater, |b| scheme.order(version, b));
+        match kind {
+            EventKind::Introduced if order != Ordering::Less => affected = true,
+            EventKind::Fixed if order != Ordering::Less => affected = false,
+            EventKind::LastAffected if order == Ordering::Greater => affected = false,
             _ => {}
         }
     }
-    Some(affected)
+    affected
 }
 
 fn same_package(affected: &patchula_datasource::Affected, query: &AdvisoryQuery) -> bool {

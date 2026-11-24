@@ -1,5 +1,5 @@
-//! Maven repositories: `maven-metadata.xml` lists versions, and each POM's
-//! `Last-Modified` dates every one of them for the release-age wait.
+//! Maven repositories: `maven-metadata.xml` lists versions, and each
+//! candidate's POM `Last-Modified` dates it for the release-age wait.
 use super::*;
 use patchula_config::split_package;
 
@@ -59,7 +59,7 @@ fn versions(
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const MAVEN_METADATA: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("maven-metadata", 3, versions);
+    patchula_http::Derived::new("maven-metadata", 4, versions);
 
 /// The directory holding an artifact's `maven-metadata.xml`.
 fn base(package: &str) -> Result<String> {
@@ -85,22 +85,29 @@ impl Client {
         let listed: Vec<String> = serde_json::from_slice(&response.body)?;
         let mut versions: Vec<Version> = listed.into_iter().map(Version::new).collect();
         sort(&mut versions, Ecosystem::Maven);
-        // Every version is dated once, by its POM, and the answer kept: a
-        // new release on an older line is dated like a new major. A version
-        // without a POM is not resolvable and is dropped; a failed request
-        // leaves the version unchecked, which policy holds.
+        // Each candidate version is dated once, by its POM, and the answer
+        // kept: a new release on an older line is dated like a new major. A
+        // version without a POM is not resolvable and is dropped; a failed
+        // request — a 429 the retries did not clear included — leaves the
+        // version unchecked, which policy holds. The POM is read the way
+        // the metadata was, through an operator mirror when one stands in,
+        // and the answer is kept under the entry that gave it.
         let scope = dates::DatesScope {
             source: Source::Maven,
             package: base.clone(),
             credential: self
                 .http
-                .credential(&format!("{base}/"))
+                .plain_credential(&format!("{base}/"))
                 .map(|entry| entry.scope().to_owned()),
         };
         self.date_versions(&scope, &mut versions, |version| {
             let url = format!("{base}/{version}/{artifact}-{version}.pom");
             async move {
-                match self.http.registry_head(&url, "application/xml", None).await {
+                match self
+                    .http
+                    .uncached(reqwest::Method::HEAD, &url, "application/xml")
+                    .await
+                {
                     Ok(response) => Some(dates::Dated::At(
                         response
                             .headers

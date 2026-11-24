@@ -398,25 +398,25 @@ impl State for BranchHint {
 }
 impl State for RepoConfig {
     const NAMESPACE: &'static str = "config";
-    const VERSION: u32 = 22;
+    const VERSION: u32 = 23;
     const CODE_VERSIONED: bool = true;
     type Scope = RepoConfigScope;
 }
 impl State for CachedExtraction {
     const NAMESPACE: &'static str = "extract";
-    const VERSION: u32 = 25;
+    const VERSION: u32 = 26;
     const CODE_VERSIONED: bool = true;
     type Scope = ExtractionScope;
 }
 impl State for FileExtraction {
     const NAMESPACE: &'static str = "files";
-    const VERSION: u32 = 25;
+    const VERSION: u32 = 26;
     const CODE_VERSIONED: bool = true;
     type Scope = FilesScope;
 }
 impl State for EvaluatedConfig {
     const NAMESPACE: &'static str = "config-files";
-    const VERSION: u32 = 22;
+    const VERSION: u32 = 23;
     const CODE_VERSIONED: bool = true;
     type Scope = ConfigFilesScope;
 }
@@ -450,6 +450,9 @@ impl Sent {
 /// it. A `Public` key's token is scoped to it, so it is never the repository
 /// the tool is released from.
 type MiseVias = BTreeMap<LookupKey, MiseRepository>;
+/// The versions each key's lookup describes; a key without an entry
+/// describes every version.
+type CatalogCandidates = BTreeMap<LookupKey, patchula_datasource::Candidates>;
 type Catalogs = BTreeMap<LookupKey, std::result::Result<patchula_datasource::Catalog, Failure>>;
 #[allow(dead_code)]
 mod repository_head {
@@ -771,6 +774,7 @@ impl Engine {
         sources: &Sources,
         key: &LookupKey,
         vias: &MiseVias,
+        candidates: &CatalogCandidates,
     ) -> (
         std::result::Result<patchula_datasource::Catalog, Failure>,
         bool,
@@ -782,6 +786,7 @@ impl Engine {
                     .clone()
                     .with_versions_host(key.0)
                     .with_mise_access(key.2.clone(), vias.get(key).cloned())
+                    .with_candidates(candidates.get(key).cloned().unwrap_or_default())
                     .lookup(&key.1),
             ))
             .await;
@@ -987,6 +992,7 @@ impl Engine {
         keys: BTreeSet<LookupKey>,
         sources: &Sources,
         vias: &MiseVias,
+        candidates: &CatalogCandidates,
     ) -> (Catalogs, BTreeSet<LookupKey>) {
         let (pkl, mut keys): (BTreeSet<_>, BTreeSet<_>) = keys
             .into_iter()
@@ -1013,7 +1019,8 @@ impl Engine {
                 (key, stream)
             })
             .collect();
-        let (mut results, mut credentialed) = self.fetch_catalogs(keys, sources, vias).await;
+        let (mut results, mut credentialed) =
+            self.fetch_catalogs(keys, sources, vias, candidates).await;
         // A borrowed repository's fetch stands in for its packages' progress.
         self.progress.advance(packages.len() - borrowed.len());
         for (key, stream) in packages {
@@ -1048,6 +1055,7 @@ impl Engine {
         keys: BTreeSet<LookupKey>,
         sources: &Sources,
         vias: &MiseVias,
+        candidates: &CatalogCandidates,
     ) -> (Catalogs, BTreeSet<LookupKey>) {
         /// Packages one release-catalog batch asks for.
         const RELEASES_PER_BATCH: usize = 16;
@@ -1102,7 +1110,8 @@ impl Engine {
                                         PackageId::public(Source::GithubReleases, package),
                                         MiseAccess::Run,
                                     );
-                                    let result = Self::lookup_key(sources, &key, vias).await;
+                                    let result =
+                                        Self::lookup_key(sources, &key, vias, candidates).await;
                                     (key, result)
                                 })
                                 .buffer_unordered(FALLBACK_FAN_OUT)
@@ -1117,7 +1126,7 @@ impl Engine {
             .collect::<Vec<_>>();
         let others = stream::iter(others)
             .map(|key| async move {
-                let result = Self::lookup_key(sources, &key, vias).await;
+                let result = Self::lookup_key(sources, &key, vias, candidates).await;
                 self.progress.advance(1);
                 (key, result)
             })

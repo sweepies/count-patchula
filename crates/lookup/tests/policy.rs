@@ -2354,3 +2354,125 @@ fn an_unchecked_release_waits_instead_of_skipping_the_release_age_wait() {
     );
     assert!(evaluation.not_proposed.is_empty());
 }
+
+/// A catalog whose source dated only `Evaluator::candidates` — every other
+/// version listed unchecked and undated — evaluates exactly as one with
+/// every version dated: the same proposals, holds and unread releases,
+/// under a release-age wait, for a patch on the current line, a new major,
+/// prereleases asked for or not, a range's floor and a lockfile-resolved
+/// current.
+#[test]
+fn candidate_scoped_dating_evaluates_like_a_fully_dated_catalog() {
+    use patchula_datasource::Candidates;
+    let now: chrono::DateTime<chrono::Utc> = "2026-11-24T00:00:00Z".parse().unwrap();
+    let dated = |version: &str, published: &str| Version {
+        version: version.into(),
+        published_at: Some(published.into()),
+        digest: None,
+        deprecated: false,
+        yanked: false,
+        prerelease: false,
+        unchecked: false,
+    };
+    let go = |current: &str| {
+        let mut dep = dependency("example.com/mod");
+        dep.manager = Manager::Go;
+        dep.source = Source::Go;
+        dep.scheme = Scheme::Go;
+        dep.current = current.into();
+        dep.resolved = Some(current.into());
+        dep
+    };
+    let go_releases = [
+        ("v1.0.0", "2020-01-01T00:00:00Z"),
+        ("v1.2.3", "2021-01-01T00:00:00Z"),
+        // A patch on the current line, old enough.
+        ("v1.2.4", "2026-01-01T00:00:00Z"),
+        // A minor still inside the wait.
+        ("v1.3.0", "2026-11-23T12:00:00Z"),
+        ("v2.0.0-rc.1", "2026-06-01T00:00:00Z"),
+        ("v2.0.0", "2026-07-01T00:00:00Z"),
+    ];
+    let mut maven = dependency("org.example:lib");
+    maven.manager = Manager::Maven;
+    maven.source = Source::Maven;
+    maven.scheme = Scheme::Maven;
+    maven.current = "[1.2,2.0)".into();
+    maven.resolved = None;
+    let maven_releases = [
+        ("1.0", "2020-01-01T00:00:00Z"),
+        ("1.2", "2021-01-01T00:00:00Z"),
+        ("1.2.1", "2026-01-01T00:00:00Z"),
+        ("1.5-beta1", "2026-02-01T00:00:00Z"),
+        ("2.0", "2026-11-23T00:00:00Z"),
+    ];
+    let mut locked = go("v1.0.0");
+    locked.resolved = Some("v1.2.3".into());
+    type Releases<'a> = &'a [(&'a str, &'a str)];
+    let cases: Vec<(Dependency, Releases, Option<&str>)> = vec![
+        (go("v1.2.3"), &go_releases, None),
+        (go("v1.2.3"), &go_releases, Some("regex:-rc")),
+        (go("v2.0.0-rc.1"), &go_releases, None),
+        (locked, &go_releases, None),
+        (maven, &maven_releases, None),
+    ];
+    let mut decided = 0;
+    for (dep, releases, permitted) in cases {
+        let mut cfg = config("renovate-migration");
+        cfg.defaults.wait_hours = 24;
+        cfg.defaults.permitted = permitted.map(|filter| filter.parse().unwrap());
+        let eval = Evaluator::new(&cfg, Default::default()).unwrap();
+        let candidates = eval.candidates(&dep);
+        assert!(!candidates.is_all(), "{} {}", dep.name, dep.current);
+        let full = Catalog {
+            versions: releases.iter().rev().map(|(v, at)| dated(v, at)).collect(),
+            dist_tags: Default::default(),
+        };
+        let mut scoped = full.clone();
+        for version in &mut scoped.versions {
+            if !candidates.describes(&version.version) {
+                version.published_at = None;
+                version.unchecked = true;
+            }
+        }
+        let expected = eval
+            .evaluate_with(&dep, &full, now, &Default::default(), None)
+            .unwrap();
+        let actual = eval
+            .evaluate_with(&dep, &scoped, now, &Default::default(), None)
+            .unwrap();
+        let shown = |evaluation: &patchula_lookup::Evaluation| {
+            format!(
+                "{:?} {:?} {:?}",
+                evaluation
+                    .updates
+                    .iter()
+                    .map(|u| (
+                        u.new_version.clone(),
+                        u.release_age.clone().map(|a| a.published_at)
+                    ))
+                    .collect::<Vec<_>>(),
+                evaluation.held_back,
+                evaluation.not_proposed
+            )
+        };
+        assert_eq!(
+            shown(&actual),
+            shown(&expected),
+            "{} {}",
+            dep.name,
+            dep.current
+        );
+        decided += expected.updates.len() + expected.held_back.len();
+    }
+    assert!(decided > 0, "the cases propose or hold something");
+    // A patch release on the baseline's line is a candidate; the baseline,
+    // older releases and unrequested prereleases are not.
+    let eval = Evaluator::new(&config("renovate-migration"), Default::default()).unwrap();
+    let candidates = eval.candidates(&go("v1.2.3"));
+    assert!(candidates.describes("v1.2.4") && candidates.describes("v2.0.0"));
+    assert!(!candidates.describes("v1.2.3") && !candidates.describes("v1.0.0"));
+    assert!(!candidates.describes("v2.0.0-rc.1"));
+    // A current value that is no version describes every version.
+    assert_eq!(eval.candidates(&go("latest")), Candidates::all());
+}

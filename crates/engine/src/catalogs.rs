@@ -14,6 +14,9 @@ pub(crate) struct Saved<'a> {
     fetched_at: i64,
     catalog: std::borrow::Cow<'a, Catalog>,
     credentialed: bool,
+    /// The versions the lookup described: a view serves only a lookup
+    /// whose candidates these cover, since the rest are listed unchecked.
+    candidates: patchula_datasource::Candidates,
 }
 #[derive(Serialize)]
 pub(crate) struct CatalogScope {
@@ -36,7 +39,7 @@ enum CatalogAccess {
 }
 impl State for Saved<'_> {
     const NAMESPACE: &'static str = "catalog";
-    const VERSION: u32 = 28;
+    const VERSION: u32 = 29;
     // Code-versioned: the view is datasource output decoded into `Catalog`;
     // a stale-but-decodable view from a release whose transforms moved is
     // worse than a miss.
@@ -78,6 +81,7 @@ impl Engine {
         waits: &BTreeMap<LookupKey, u32>,
         force: &BTreeSet<LookupKey>,
         vias: &MiseVias,
+        candidates: &CatalogCandidates,
         now: DateTime<Utc>,
     ) -> Result<(Catalogs, Evidence, BTreeSet<LookupKey>)> {
         let mut results = Catalogs::new();
@@ -101,8 +105,10 @@ impl Engine {
             .await;
         for cached in cached {
             let (key, hours, saved) = cached?;
+            let wanted = candidates.get(&key).cloned().unwrap_or_default();
             if let Some(saved) = saved.filter(|saved| {
                 hours.is_some_and(|hours| eligible(saved.fetched_at, now.timestamp_millis(), hours))
+                    && saved.candidates.covers(&wanted)
             }) {
                 let fetched_at = DateTime::from_timestamp_millis(saved.fetched_at)
                     .ok_or_else(|| Error::Invalid("invalid catalog timestamp".into()))?;
@@ -126,8 +132,8 @@ impl Engine {
         }
         let fresh = self.sources.revalidating();
         let ((mut fetched, sent), (forced, sent_forced)) = tokio::join!(
-            self.catalogs(ordinary, &self.sources, vias),
-            self.catalogs(forced, &fresh, vias)
+            self.catalogs(ordinary, &self.sources, vias, candidates),
+            self.catalogs(forced, &fresh, vias, candidates)
         );
         fetched.extend(forced);
         credentialed.extend(sent);
@@ -158,6 +164,7 @@ impl Engine {
                         fetched_at: now.timestamp_millis(),
                         catalog: std::borrow::Cow::Borrowed(catalog),
                         credentialed: credentialed.contains(key),
+                        candidates: candidates.get(key).cloned().unwrap_or_default(),
                     },
                 ));
             }
@@ -176,7 +183,7 @@ pub(crate) struct Controls {
 }
 impl State for Controls {
     const NAMESPACE: &'static str = "catalog-controls";
-    const VERSION: u32 = 28;
+    const VERSION: u32 = 29;
     // Code-versioned: the stored keys come from `identity` and `plan`
     // code, and a key written by older code that no longer matches its
     // dependency quietly un-retries a ticked box.

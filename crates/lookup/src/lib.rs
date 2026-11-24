@@ -6,7 +6,7 @@ pub mod images;
 mod repository;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use patchula_config::{Config, Filter, Policy};
-use patchula_datasource::{Catalog, Version};
+use patchula_datasource::{Candidates, Catalog, Version};
 use patchula_manager::{Dependency, Range, ShortTags, Written};
 use patchula_report::{HeldBack, ReleaseAge, Update as Proposal, UpdatePolicy};
 use patchula_versioning::{Ecosystem, Parsed};
@@ -266,6 +266,39 @@ impl Evaluator {
                 .is_ok();
         }
         true
+    }
+    /// The catalog versions policy may read a date or flag of for `dep`,
+    /// which a source dating one version per request (Go, Maven, NuGet, the
+    /// versions host's tags) then describes: the releases newer than the
+    /// baseline `evaluate_with` compares against, prereleases among them only
+    /// when the current version is one or a `permitted` filter, which may
+    /// ask for them, is set. Every version when the baseline cannot be told
+    /// without the catalog: an `extract` pattern, a runtime toolchain's
+    /// resolved range, or a current value that is no version (a dist-tag or
+    /// a floating `latest`, whose target may sit below any baseline).
+    pub fn candidates(&self, dep: &Dependency) -> Candidates {
+        let scheme = Ecosystem::of(dep.scheme, dep.source);
+        if dep.extract.is_some() || dep.proposing().runtime_toolchain || dep.source == Source::Nix {
+            return Candidates::all();
+        }
+        if scheme.parse(&dep.current).is_err() && scheme.floor(&dep.current, &dep.current).is_none()
+        {
+            return Candidates::all();
+        }
+        let current = dep.resolved.as_deref().unwrap_or(&dep.current);
+        let Some((floor, baseline)) = floor_text(scheme, &dep.current, current) else {
+            return Candidates::all();
+        };
+        // A lockfile-only package's fix may be a prerelease.
+        let mut prereleases = !baseline.0.pre.is_empty() || dep.kind == DependencyKind::Transitive;
+        for kind in [Update::Major, Update::Minor, Update::Patch, Update::Pin] {
+            let Ok(effective) = self.effective(dep, kind) else {
+                return Candidates::all();
+            };
+            prereleases |=
+                effective.permitted.is_some() || self.secured(effective).permitted.is_some();
+        }
+        Candidates::after(dep.scheme, dep.source, &floor, prereleases)
     }
     /// A forge action's digest comes only from its tag catalog, so the catalog
     /// is needed whenever its tag pin can change, even with version updates off.
@@ -564,6 +597,7 @@ impl Evaluator {
         let Ok(current) = scheme.parse(&dep.current) else {
             return Ok(Evaluation::default());
         };
+        let fix_index = crate::advisories::Fixes::new(dep, query, found);
         let fixed = found
             .iter()
             .filter_map(|a| crate::advisories::fixed_in(a, query, scheme, &current))
@@ -571,7 +605,7 @@ impl Evaluator {
             // The lock can only move within what the dependents already allow.
             .filter(|(parsed, _)| scheme.classify(&current, parsed) != Update::Major)
             .map(|(parsed, v)| {
-                let fixes = crate::fixes(dep, query, found, &v);
+                let fixes = fix_index.of(&v);
                 (parsed, v, fixes)
             })
             .filter(|(_, _, fixes)| !fixes.is_empty())
@@ -652,9 +686,13 @@ impl Evaluator {
         advisories: Option<Advisories<'_>>,
     ) -> Result<Evaluation> {
         let proposing = dep.proposing();
+        // Parsed once: `fixes` is asked about every candidate version.
+        let fix_index =
+            advisories.map(|(query, found)| crate::advisories::Fixes::new(dep, query, found));
         let fixes = |version: &str| {
-            advisories
-                .map(|(query, found)| crate::fixes(dep, query, found, version))
+            fix_index
+                .as_ref()
+                .map(|index| index.of(version))
                 .unwrap_or_default()
         };
         if self.ignored(dep) {
@@ -968,7 +1006,7 @@ impl Evaluator {
             // that asks for them; one that only narrows or excludes does not.
             if prerelease(&parsed, version)
                 && !current_prerelease
-                && !asks_for_prerelease(effective.permitted, scheme, &normalized, &parsed)?
+                && !asks_for_prerelease(effective.permitted, scheme, &normalized, &parsed)
             {
                 continue;
             }
@@ -1329,6 +1367,25 @@ impl Evaluator {
             .map(|(_, v)| v.clone()))
     }
 }
+/// The baseline `evaluate_with` reads for `current` when no catalog
+/// resolves it, as a text `scheme` parses back to the same version: the
+/// version itself, or the floor of the declared range.
+fn floor_text(scheme: Ecosystem, declared: &str, current: &str) -> Option<(String, Parsed)> {
+    if let Ok(parsed) = scheme.parse(current) {
+        return Some((current.to_owned(), parsed));
+    }
+    let parsed = scheme.floor(declared, current)?;
+    let text = parsed
+        .2
+        .clone()
+        .or_else(|| parsed.1.as_ref().map(ToString::to_string))
+        .unwrap_or_else(|| parsed.0.to_string());
+    let back = scheme.parse(&text).ok()?;
+    scheme
+        .order(&back, &parsed)
+        .is_eq()
+        .then_some((text, parsed))
+}
 /// The committed cooldown a proposed target still sits inside, when `dep`
 /// carries one: only a security fix the floor did not hold can be marked —
 /// anything else inside the cooldown is held back, not proposed.
@@ -1409,18 +1466,19 @@ fn any<T: PartialEq>(values: &[T], value: T) -> bool {
 fn prerelease(parsed: &Parsed, version: &Version) -> bool {
     !parsed.0.pre.is_empty() || version.prerelease
 }
-/// Whether `permitted` deliberately admits the prerelease `text` (see
-/// `Filter::asks_for_prerelease`). Without a filter, nothing asks.
+/// Whether `permitted`, which `text` already satisfies, deliberately admits
+/// the prerelease `text` (see `Filter::asks_for_prerelease`). Without a
+/// filter, nothing asks.
 fn asks_for_prerelease(
     permitted: Option<&Filter>,
     scheme: Ecosystem,
     text: &str,
     parsed: &Parsed,
-) -> Result<bool> {
+) -> bool {
     let Some(filter) = permitted else {
-        return Ok(false);
+        return false;
     };
-    filter.asks_for_prerelease(scheme, text, &without_prerelease(scheme, text, parsed))
+    filter.asks_for_prerelease(scheme, || without_prerelease(scheme, text, parsed))
 }
 /// `text` without its prerelease part: the longest prefix, cut before a
 /// separator or where digits and letters meet, that parses as a release

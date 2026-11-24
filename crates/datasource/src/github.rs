@@ -37,6 +37,8 @@ mod releases {
     pub struct ReleasesQuery;
 }
 const RELEASES: &str = releases::releases_query::QUERY;
+/// Stored tag objects read at once: enough to keep every cache reader busy.
+const TAG_OBJECT_READ_FAN_OUT: usize = 16;
 const GIT_OBJECT_FIELDS: &str = "oid __typename ... on Tag{tagger{date} target{__typename ... on Commit{oid} ... on Tag{target{__typename ... on Commit{oid}}}}}";
 pub type TagDigests = BTreeMap<(String, String), std::result::Result<String, Failure>>;
 
@@ -55,7 +57,7 @@ fn compact_release_head(
     >(body)?)
 }
 pub(crate) const GITHUB_RELEASE_HEAD: patchula_http::Derived<serde_json::Error> =
-    patchula_http::Derived::new("github-release-head", 11, compact_release_head);
+    patchula_http::Derived::new("github-release-head", 12, compact_release_head);
 
 /// The newest release's identity on a release source; a change refetches
 /// history. `None` records a source with no releases.
@@ -68,7 +70,7 @@ pub(crate) struct SourceHeadScope {
 }
 impl State for SourceHead {
     const NAMESPACE: &'static str = "source-head";
-    const VERSION: u32 = 11;
+    const VERSION: u32 = 12;
     // Code-versioned: the stored fingerprint holds the newest release's
     // fields as this build picks them, an entry built by code that picked
     // differently must not compare equal.
@@ -85,7 +87,7 @@ pub(crate) struct TagCatalogScope {
 }
 impl State for TagCatalog {
     const NAMESPACE: &'static str = "tag-catalog";
-    const VERSION: u32 = 11;
+    const VERSION: u32 = 12;
     // Code-versioned: the fingerprint in the key names the refs, not the
     // catalog this build's peel-and-map code derived from them.
     const CODE_VERSIONED: bool = true;
@@ -101,7 +103,7 @@ pub(crate) struct TagObjectScope {
 }
 impl State for TagObject {
     const NAMESPACE: &'static str = "tag-object";
-    const VERSION: u32 = 11;
+    const VERSION: u32 = 12;
     // Code-versioned: the stored version is this build's decode of the
     // object the scope's sha names.
     const CODE_VERSIONED: bool = true;
@@ -392,19 +394,30 @@ impl Client {
             let sha = reference["object"]["sha"].as_str().ok_or(Error::Invalid)?;
             targets.entry(sha.into()).or_default().push(name.into());
         }
+        // The stored tag objects are read across the cache's readers at once.
+        let saved: Vec<(String, Vec<String>, TagObjectScope, Option<TagObject>)> =
+            stream::iter(targets)
+                .map(|(sha, names)| async move {
+                    let scope = TagObjectScope {
+                        package: package.into(),
+                        object_sha: sha.clone(),
+                    };
+                    let saved = self.cache.state::<TagObject>(&scope).await?;
+                    Ok::<_, Error>((sha, names, scope, saved))
+                })
+                .buffered(TAG_OBJECT_READ_FAN_OUT)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<_>>()?;
         let mut missing = Vec::new();
-        for (sha, names) in targets {
-            let scope = TagObjectScope {
-                package: package.into(),
-                object_sha: sha.clone(),
-            };
-            if let Some(saved) = self.cache.state::<TagObject>(&scope).await? {
-                versions.extend(names.into_iter().map(|version| Version {
+        for (sha, names, scope, saved) in saved {
+            match saved {
+                Some(saved) => versions.extend(names.into_iter().map(|version| Version {
                     version,
                     ..saved.0.clone()
-                }));
-            } else {
-                missing.push((sha, names, scope));
+                })),
+                None => missing.push((sha, names, scope)),
             }
         }
         let (owner, name) = package.split_once('/').ok_or(Error::Invalid)?;
@@ -433,6 +446,7 @@ impl Client {
                     .graphql::<Value>(&query, Value::Object(variables))
                     .await?;
                 let mut result = Vec::new();
+                let mut learned = Vec::with_capacity(chunk.len());
                 for (i, (sha, names, scope)) in chunk.iter().enumerate() {
                     let node = &data["repository"][format!("t{i}")];
                     if node["oid"] != *sha {
@@ -444,13 +458,14 @@ impl Client {
                         published_at: node["tagger"]["date"].as_str().map(str::to_owned),
                         digest: commit["oid"].as_str().map(str::to_owned),
                     });
-                    let saved = TagObject(target);
-                    self.cache.set_state(scope, &saved).await?;
                     result.extend(names.iter().map(|version| Version {
                         version: version.clone(),
-                        ..saved.0.clone()
+                        ..target.clone()
                     }));
+                    learned.push((scope.clone(), TagObject(target)));
                 }
+                // One writer transaction per page of objects.
+                self.cache.set_states(&learned).await?;
                 Ok::<_, Error>(result)
             })
             .buffer_unordered(self.github.concurrency())

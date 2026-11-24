@@ -9,7 +9,7 @@ manager, and rules can select by it.
 |---|---|---|
 | `npm` | package name | the npm registry, full metadata for publication times, dist-tags and deprecations |
 | `crates` | crate name | the crates.io sparse index, with publication times; yanked releases are skipped |
-| `go` | module path | the Go module proxy (`@v/list`, and `.info` once for each version it has not dated yet) |
+| `go` | module path | the Go module proxy (`@v/list`, and `.info` once for each candidate version it has not dated yet) |
 | `pypi` | normalised name | the PyPI JSON API, falling back to the PEP 691 simple API |
 | `docker` | image | registry v2 tags and manifests on Docker Hub, GHCR and other registries |
 | `oci` | `registry/chart` | OCI registry tags for Helm charts |
@@ -19,8 +19,8 @@ manager, and rules can select by it.
 | `github-runners` | runner family | a catalog of GitHub-hosted runner labels |
 | `forge-tags` | `host/path` | GitLab and Gitea/Forgejo tags, for pre-commit hooks and GitLab CI includes and components |
 | `mise` | tool name, as written in `mise.toml` | `mise ls-remote --json`, run by the Count's pinned mise ([mise lookups](#mise-lookups)) |
-| `maven` | `group:artifact` | `maven-metadata.xml` on Maven Central, Google Maven or the Gradle plugin portal; each POM's `Last-Modified`, read once per version, dates it |
-| `nuget` | package ID | the nuget.org flat container and every registration page, for dates and unlisted and deprecated flags |
+| `maven` | `group:artifact` | `maven-metadata.xml` on Maven Central, Google Maven or the Gradle plugin portal; each candidate's POM `Last-Modified`, read once per version, dates it |
+| `nuget` | package ID | the nuget.org flat container and the registration pages that may hold a candidate, for dates and unlisted and deprecated flags |
 | `rubygems` | gem name | the RubyGems versions API |
 | `packagist` | `vendor/name` | Packagist's p2 metadata |
 | `pkl` | the package URI without `package://` and the version, such as `pkg.pkl-lang.org/pkl-pantry/pkl.toml` | the GitHub releases of the repository that publishes it, only those tagged as this package; each repository is read once per run ([Pkl](/guide/managers/#pkl)) |
@@ -181,9 +181,12 @@ mise's registry are read from the public
 [mise-versions](https://mise-versions.jdx.dev) mirror instead of the GitHub API:
 `releases.json` and `tags.json`, validated by ETag. A `pkl` package's
 repository is read the same way. The mirror dates a tag only
-by its release, so when a `github-tags` lookup finds a tag without one, which
-may be an annotated tag with a tagger date, that repository's tags are read
-from GitHub instead. Repositories outside the
+by its release, so when a `github-tags` lookup finds a
+[candidate](#dates-and-release-age) tag without one, which may be an
+annotated tag with a tagger date, that repository's tags are read from GitHub
+instead. An undated tag that is no candidate, such as a floating `v3` below
+the `v4` a workflow uses, keeps the mirror's answer and is left unchecked.
+Repositories outside the
 registry, including private ones, go straight to GitHub. If the mirror fails
 with a transport error, 429 or 5xx, the Count falls back to GitHub; a 403, 404 or
 empty list does not, and a truncated list is reported as an incomplete lookup.
@@ -540,13 +543,30 @@ registries {
 
 ## Dates and release age
 
-Publication dates feed the [release-age wait](/guide/lookup-policy/). Go dates
-every listed version once through the proxy's `.info` documents and keeps the
-answer, so a warm lookup asks only about versions it has not seen; versions the
-proxy lists but cannot describe are dropped. npm, crates, PyPI, RubyGems,
-NuGet and Packagist report them directly. Maven Central's search API lags by
-months, so Maven dates each version once by its POM's `Last-Modified` header
-and keeps the answer. GitHub tags are dated [as the release-age
+Publication dates feed the [release-age wait](/guide/lookup-policy/). Sources
+that date one version per request date only the candidates: every release
+newer than the version a dependency is on, wherever it sorts, so a patch
+release on an older line is dated like a new major, with prereleases among
+them only when the dependency is on one or a `permitted` filter is set. When
+several dependencies share a package, the candidates are the union of theirs.
+A dependency whose current value is no version (a dist-tag, `latest`), or that
+an `extractVersion` pattern or a runtime toolchain range reads, makes every
+version a candidate. Older versions are listed unchecked; they can never be
+proposed. Each answer is kept, so a later lookup from an older version asks
+only about the versions it adds.
+
+Go dates each candidate once through the proxy's `.info` documents and keeps
+the answer, so a warm lookup asks only about versions it has not seen;
+versions the proxy lists but cannot describe are dropped. npm, crates, PyPI,
+RubyGems and Packagist report dates directly. NuGet reads them from the
+registration pages, skipping a page whose versions all sit at or below the
+version every dependency on the package is on. Maven Central's search API lags
+by months, so Maven dates each candidate once by its POM's `Last-Modified`
+header and keeps the answer; the POM is read the way the metadata is, through
+an operator [mirror](#private-registries) when one stands in. A date request
+that fails, a 429 the retries do not clear included, leaves its version
+unchecked, so a positive wait holds it until a later lookup reads the date.
+GitHub tags are dated [as the release-age
 wait describes](/guide/lookup-policy/#the-release-age-wait). mise tools use the
 date mise lists, which is a backend's own release or publication date. GitLab
 tags use the annotated tag's date. Lightweight GitLab tags, Gitea and Forgejo

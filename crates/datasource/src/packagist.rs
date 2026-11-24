@@ -5,27 +5,36 @@ use super::*;
 fn versions(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let document: serde_json::Value = patchula_http::conditional::json_document(body)
+    /// The document's one package's releases; other fields are skipped.
+    #[derive(Deserialize)]
+    struct Document {
+        #[serde(default)]
+        packages: BTreeMap<String, Vec<Entry>>,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        version: Option<String>,
+        time: Option<String>,
+    }
+    let document: Document = patchula_http::conditional::json_document(body)
         .map_err(|_| patchula_http::CacheError::Document)?;
-    let entries = document["packages"]
-        .as_object()
-        .and_then(|p| p.values().next())
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let versions: Vec<Version> = entries
-        .iter()
+    let versions: Vec<Version> = document
+        .packages
+        .into_values()
+        .next()
+        .unwrap_or_default()
+        .into_iter()
         .filter_map(|e| {
             Some(Version {
-                published_at: e["time"].as_str().map(str::to_owned),
-                ..Version::new(e["version"].as_str()?.into())
+                published_at: e.time,
+                ..Version::new(e.version?)
             })
         })
         .collect();
     serde_json::to_vec(&versions).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const PACKAGIST_P2: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("packagist-p2", 3, versions);
+    patchula_http::Derived::new("packagist-p2", 4, versions);
 
 impl Client {
     pub(crate) async fn packagist(&self, package: &str) -> Result<Catalog> {

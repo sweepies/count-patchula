@@ -77,6 +77,8 @@ pub(super) struct Plan {
     )>,
     /// OSV queries to ask, and whether a manual retry revalidates each.
     advisories: BTreeMap<patchula_datasource::AdvisoryQuery, bool>,
+    /// The versions each catalog's lookup describes.
+    candidates: CatalogCandidates,
 }
 
 /// The digest keys policy evaluation wants resolved, and whether a manual
@@ -115,6 +117,41 @@ fn listed_ids(
             .collect(),
         _ => BTreeSet::new(),
     }
+}
+
+/// The versions each catalog key's lookup describes: what every evaluated
+/// dependency that reads it needs (see `Evaluator::candidates`), widened
+/// together. A key no such dependency reads is absent, and its lookup
+/// describes every version.
+pub(crate) fn catalog_candidates(work: &[Work]) -> CatalogCandidates {
+    let mut candidates = CatalogCandidates::new();
+    for repo in work {
+        let Some(eval) = &repo.evaluator else {
+            continue;
+        };
+        for dep in &repo.dependencies {
+            let Some(key) = &dep.needs.catalog_key else {
+                continue;
+            };
+            // Only these evaluate the catalog's releases; any other
+            // dependency reads no date or flag from it.
+            if dep.needs.ignored
+                || !(dep.needs.versions
+                    || dep.needs.forge
+                    || dep.kind == patchula_words::DependencyKind::Transitive)
+            {
+                continue;
+            }
+            let wanted = eval.candidates(&dep.dependency);
+            match candidates.get_mut(key) {
+                Some(described) => described.widen(&wanted),
+                None => {
+                    candidates.insert(key.clone(), wanted);
+                }
+            }
+        }
+    }
+    candidates
 }
 
 /// For each scoped mise key, the first repository (in batch order) whose
@@ -637,6 +674,7 @@ impl Engine {
                 }
             }
         }
+        plan.candidates = catalog_candidates(work);
         // Replace per-repository hints only after successful extraction; the
         // mutable tags join them after digest resolution names the set.
         for repo in work.iter() {
@@ -747,7 +785,14 @@ impl Engine {
         let fresh_sources = &self.sources.revalidating();
         let vias = mise_vias(work);
         let (remaining, refs, advisories) = tokio::join!(
-            self.age_catalogs(plan.keys.clone(), &plan.waits, &plan.forced, &vias, now),
+            self.age_catalogs(
+                plan.keys.clone(),
+                &plan.waits,
+                &plan.forced,
+                &vias,
+                &plan.candidates,
+                now
+            ),
             self.digests(current_refs, fresh_sources, true, sent),
             advisories
         );
@@ -833,8 +878,16 @@ impl Engine {
             self.progress.stage(Stage::Lookup, vulnerable.len());
             // Promoted lockfile packages may name keys the first pass had not.
             let vias = mise_vias(work);
+            let candidates = catalog_candidates(work);
             let (fresh, evidence, credentialed) = self
-                .age_catalogs(vulnerable, &BTreeMap::new(), &BTreeSet::new(), &vias, now)
+                .age_catalogs(
+                    vulnerable,
+                    &BTreeMap::new(),
+                    &BTreeSet::new(),
+                    &vias,
+                    &candidates,
+                    now,
+                )
                 .await?;
             // The fresh reads win over the aged ones they replace.
             lookups.catalogs.extend(fresh);

@@ -2,6 +2,8 @@
 #![forbid(unsafe_code)]
 mod advisories;
 pub use advisories::{Advisory, AdvisoryListing, AdvisoryQuery, Affected, Event, Range};
+mod candidates;
+pub use candidates::Candidates;
 mod catalog;
 pub use catalog::{Catalog, Version};
 pub(crate) use catalog::{sha256_hex, sort};
@@ -20,6 +22,7 @@ mod mise;
 pub use mise::{MiseAccess, MiseRepository, mise_scope_rule};
 mod nix;
 pub use nix::Flakes;
+mod node;
 mod nuget;
 mod packagist;
 mod pkl;
@@ -273,6 +276,9 @@ pub struct Client {
     /// A batch key's access, which the lookup's own must match.
     mise_expected: Option<MiseAccess>,
     nix: Option<std::sync::Arc<dyn Flakes>>,
+    /// The versions a lookup describes when its source dates them one
+    /// request at a time.
+    candidates: Candidates,
     stale_registry: std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, BTreeMap<StaleKey, i64>>>>,
 }
 impl Client {
@@ -322,8 +328,16 @@ impl Client {
             mise_repository: None,
             mise_expected: None,
             nix: None,
+            candidates: Candidates::all(),
             stale_registry: Default::default(),
         }
+    }
+    /// A client whose lookups describe only `candidates`: the versions a
+    /// source dates one request at a time (Go, Maven, NuGet's registration
+    /// pages, the versions host's tags) outside them are listed unchecked.
+    pub fn with_candidates(mut self, candidates: Candidates) -> Self {
+        self.candidates = candidates;
+        self
     }
 
     /// Cached registry reads used because of rate limiting, keyed by catalog or digest tag.
@@ -483,23 +497,35 @@ impl Client {
             latest_version
         };
         sort(&mut versions, Ecosystem::Go);
-        // Every listed version is dated through `.info`, once: the answer is
-        // kept, so a warm lookup asks only about versions it has not seen,
-        // including a patch release on an older line. The proxy lists some
-        // versions it cannot describe (404); those are not installable
+        // Each candidate version is dated through `.info`, once: the answer
+        // is kept, so a warm lookup asks only about versions it has not
+        // seen, including a patch release on an older line. The proxy lists
+        // some versions it cannot describe (404); those are not installable
         // releases and are dropped.
         let scope = dates::DatesScope {
             source: Source::Go,
             package: package.into(),
-            credential: None,
+            credential: self
+                .http
+                .plain_credential(&format!("{prefix}/"))
+                .map(|entry| entry.scope().to_owned()),
         };
         self.date_versions(&scope, &mut versions, |version| {
             let url = format!("{prefix}/{version}.info");
             async move {
-                match self.http.get(&url, "application/json").await {
+                #[derive(Deserialize)]
+                struct Info {
+                    #[serde(rename = "Time")]
+                    time: Option<String>,
+                }
+                match self
+                    .http
+                    .uncached(reqwest::Method::GET, &url, "application/json")
+                    .await
+                {
                     Ok(response) => {
-                        let info: Value = serde_json::from_slice(&response.body).ok()?;
-                        Some(dates::Dated::At(info["Time"].as_str().map(str::to_owned)))
+                        let info: Info = serde_json::from_slice(&response.body).ok()?;
+                        Some(dates::Dated::At(info.time))
                     }
                     Err(patchula_http::CacheError::Status(404 | 410)) => {
                         Some(dates::Dated::Missing)

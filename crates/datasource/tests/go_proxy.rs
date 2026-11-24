@@ -1,8 +1,8 @@
 //! Independent Go proxy contract fixtures; no network client is constructed.
 use patchula_cache::Cache;
-use patchula_datasource::{Catalog, Client};
+use patchula_datasource::{Candidates, Catalog, Client};
 use patchula_http::{Exchange, Response, Transport};
-use patchula_words::Source;
+use patchula_words::{Scheme, Source};
 use std::sync::{Arc, Mutex};
 
 /// A module proxy whose listing, undescribable (404) and failing (500)
@@ -12,6 +12,8 @@ struct Proxy {
     missing: Vec<String>,
     failing: Mutex<Vec<String>>,
     infos: Mutex<Vec<String>>,
+    /// The `Cache-Control` every answer carries.
+    cache_control: &'static str,
 }
 impl Proxy {
     fn new(list: Vec<String>, missing: &[&str]) -> Arc<Self> {
@@ -20,6 +22,7 @@ impl Proxy {
             missing: missing.iter().map(|v| (*v).to_owned()).collect(),
             failing: Mutex::new(Vec::new()),
             infos: Mutex::new(Vec::new()),
+            cache_control: "no-store",
         })
     }
     fn infos(&self) -> Vec<String> {
@@ -54,9 +57,12 @@ impl Transport for Proxy {
             };
             Ok(Response {
                 status: reqwest::StatusCode::from_u16(status).unwrap(),
-                headers: [(reqwest::header::CACHE_CONTROL, "no-store".parse().unwrap())]
-                    .into_iter()
-                    .collect(),
+                headers: [(
+                    reqwest::header::CACHE_CONTROL,
+                    self.cache_control.parse().unwrap(),
+                )]
+                .into_iter()
+                .collect(),
                 body: body.into_bytes(),
                 stale: None,
             })
@@ -64,6 +70,9 @@ impl Transport for Proxy {
     }
 }
 async fn lookup(proxy: &Arc<Proxy>, cache: &Cache) -> Catalog {
+    lookup_for(proxy, cache, Candidates::all()).await
+}
+async fn lookup_for(proxy: &Arc<Proxy>, cache: &Cache, candidates: Candidates) -> Catalog {
     let github = patchula_github::Client::with_transport(
         "offline",
         cache.clone(),
@@ -77,6 +86,7 @@ async fn lookup(proxy: &Arc<Proxy>, cache: &Cache) -> Catalog {
         cache.clone(),
     )
     .with_versions_host(false)
+    .with_candidates(candidates)
     .lookup(&patchula_config::PackageId::public(
         Source::Go,
         "example.com/mod",
@@ -155,4 +165,75 @@ async fn a_failed_date_request_leaves_the_version_unchecked_and_is_retried() {
     assert_eq!(proxy.infos(), ["v1.0.1"]);
     let dated = version(&catalog, "v1.0.1");
     assert!(!dated.unchecked && dated.published_at.is_some());
+}
+
+/// Releases newer than the baseline are dated, a patch on the current line
+/// included; older ones and unwanted prereleases are listed unchecked and
+/// never asked about. A later lookup with an older baseline asks only about
+/// the versions it adds.
+#[tokio::test]
+async fn only_candidates_are_dated_and_an_older_baseline_adds_only_its_own() {
+    let list = [
+        "v1.0.0",
+        "v1.2.0",
+        "v1.2.3",
+        "v1.2.4",
+        "v1.3.0",
+        "v2.0.0-rc.1",
+        "v2.0.0",
+    ];
+    let proxy = Proxy::new(list.iter().map(|v| (*v).to_owned()).collect(), &[]);
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    let after =
+        |floor: &str, prereleases| Candidates::after(Scheme::Go, Source::Go, floor, prereleases);
+    let catalog = lookup_for(&proxy, &cache, after("v1.2.3", false)).await;
+    assert_eq!(proxy.infos(), ["v1.2.4", "v1.3.0", "v2.0.0"]);
+    for dated in ["v1.2.4", "v1.3.0", "v2.0.0"] {
+        let dated = version(&catalog, dated);
+        assert!(dated.published_at.is_some() && !dated.unchecked);
+    }
+    for undated in ["v1.0.0", "v1.2.0", "v1.2.3", "v2.0.0-rc.1"] {
+        let undated = version(&catalog, undated);
+        assert!(
+            undated.unchecked && undated.published_at.is_none(),
+            "{}",
+            undated.version
+        );
+    }
+    // An older baseline that also wants prereleases asks only about what
+    // the first lookup did not.
+    let catalog = lookup_for(&proxy, &cache, after("v1.0.0", true)).await;
+    assert_eq!(proxy.infos(), ["v1.2.0", "v1.2.3", "v2.0.0-rc.1"]);
+    assert!(version(&catalog, "v1.0.0").unchecked);
+    assert!(!version(&catalog, "v1.2.0").unchecked);
+    // Every version, and everything is known by now.
+    let catalog = lookup(&proxy, &cache).await;
+    assert_eq!(proxy.infos(), ["v1.0.0"]);
+    assert!(catalog.versions.iter().all(|v| !v.unchecked));
+}
+
+/// A `.info` answer is kept as release-dates state only: it is never
+/// written to the HTTP cache, even when the proxy lets it be cached.
+#[tokio::test]
+async fn date_requests_never_enter_the_http_cache() {
+    let proxy = Arc::new(Proxy {
+        cache_control: "public, max-age=600",
+        ..Arc::into_inner(Proxy::new(vec!["v1.0.0".into()], &[])).unwrap()
+    });
+    let cache = Cache::open(":memory:", Default::default()).await.unwrap();
+    lookup(&proxy, &cache).await;
+    assert_eq!(proxy.infos(), ["v1.0.0"]);
+    let key = |url: &str| {
+        patchula_http::conditional::key("GET", url, &[("accept", "application/json")], None, None)
+            .unwrap()
+    };
+    assert!(
+        cache
+            .http_get(&key(
+                "https://proxy.golang.org/example.com/mod/@v/v1.0.0.info"
+            ))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

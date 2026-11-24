@@ -830,18 +830,54 @@ fn chart_item(walk: &mut Walk, first: Ev, depth: usize) -> Result<ChartFields, (
 /// A chart name's version list as serde's `Vec<Chart>` reads it: a
 /// sequence streams its items, anything else is what a sequence
 /// deserializer makes of it — an empty plain scalar is an empty list.
-fn chart_versions(walk: &mut Walk, first: Ev, depth: usize) -> Result<Vec<ChartFields>, ()> {
+/// One chart version as the catalog keeps it. The walk reduces each entry
+/// as soon as it is read, so its `sources` and `annotations` trees are
+/// dropped then rather than held until the index ends.
+struct ChartVersion {
+    version: Version,
+    notes: upstream::ChartNotes,
+}
+impl ChartFields {
+    /// The catalog's view of this entry. The walk rejects an entry without
+    /// a version, as serde's `Chart` does, so `None` never happens there.
+    fn reduce(self) -> Option<ChartVersion> {
+        let version = self.version?;
+        let sources = self
+            .sources
+            .as_ref()
+            .and_then(Yaml::as_sequence)
+            .map(|items| items.iter().filter_map(Yaml::as_str).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let notes = upstream::ChartNotes::new(
+            sources.into_iter(),
+            self.annotations
+                .as_ref()
+                .and_then(|a| a.get(upstream::CHANGES))
+                .and_then(Yaml::as_str),
+        );
+        Some(ChartVersion {
+            version: Version {
+                published_at: self.created,
+                digest: self.digest,
+                deprecated: self.deprecated,
+                ..Version::new(version)
+            },
+            notes,
+        })
+    }
+}
+fn chart_versions(walk: &mut Walk, first: Ev, depth: usize) -> Result<Vec<ChartVersion>, ()> {
     let mut versions = Vec::new();
     match first {
         Ev::SeqStart(_) => loop {
             match walk.take()? {
                 Ev::SeqEnd => break,
-                item => versions.push(chart_item(walk, item, depth - 1)?),
+                item => versions.extend(chart_item(walk, item, depth - 1)?.reduce()),
             }
         },
         _ => {
             for item in items_of(&walk.node(first, depth)?)? {
-                versions.push(chart_item_nodes(item)?);
+                versions.extend(chart_item_nodes(item)?.reduce());
             }
         }
     }
@@ -905,7 +941,7 @@ fn chart_item_nodes(node: &Node) -> Result<ChartFields, ()> {
 
 /// Reads the index's `entries` map as it streams: each chart name's version
 /// list is consumed an entry at a time.
-fn helm_index(walk: &mut Walk) -> Result<Vec<(String, Vec<ChartFields>)>, ()> {
+fn helm_index(walk: &mut Walk) -> Result<Vec<(String, Vec<ChartVersion>)>, ()> {
     let mut entries = Vec::new();
     let mut seen_entries = false;
     loop {
@@ -936,7 +972,7 @@ fn helm_index(walk: &mut Walk) -> Result<Vec<(String, Vec<ChartFields>)>, ()> {
                                 let chart = string_key(key)?.to_owned();
                                 let mut versions = Vec::new();
                                 for item in items_of(value)? {
-                                    versions.push(chart_item_nodes(item)?);
+                                    versions.extend(chart_item_nodes(item)?.reduce());
                                 }
                                 entries.push((chart, versions));
                             }
@@ -964,7 +1000,7 @@ fn helm(body: &mut dyn Read) -> std::result::Result<Vec<u8>, CacheError> {
 }
 fn helm_walk(body: &mut dyn Read) -> std::result::Result<Vec<u8>, CacheError> {
     let mut walk = Walk::new(body);
-    let entries = (|| -> Result<Vec<(String, Vec<ChartFields>)>, ()> {
+    let entries = (|| -> Result<Vec<(String, Vec<ChartVersion>)>, ()> {
         match walk.take()? {
             Ev::StreamStart => {}
             _ => return Err(()),
@@ -995,40 +1031,13 @@ fn helm_walk(body: &mut dyn Read) -> std::result::Result<Vec<u8>, CacheError> {
         .into_iter()
         .map(|(name, entries)| {
             let mut chart = HelmChart::default();
-            for v in entries {
-                // The walk rejects an entry without a version, as serde's
-                // `Chart` does, so none is skipped here.
-                let Some(version) = v.version else {
-                    continue;
-                };
-                let sources = v
-                    .sources
-                    .as_ref()
-                    .and_then(Yaml::as_sequence)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Yaml::as_str)
-                            .map(str::to_owned)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                let notes = upstream::ChartNotes::new(
-                    sources.iter().map(String::as_str),
-                    v.annotations
-                        .as_ref()
-                        .and_then(|a| a.get(upstream::CHANGES))
-                        .and_then(Yaml::as_str),
-                );
-                if !notes.is_empty() {
-                    chart.notes.insert(version.clone(), notes);
+            for entry in entries {
+                if !entry.notes.is_empty() {
+                    chart
+                        .notes
+                        .insert(entry.version.version.clone(), entry.notes);
                 }
-                chart.catalog.versions.push(Version {
-                    published_at: v.created,
-                    digest: v.digest,
-                    deprecated: v.deprecated,
-                    ..Version::new(version)
-                });
+                chart.catalog.versions.push(entry.version);
             }
             sort(&mut chart.catalog.versions, Ecosystem::Npm);
             (name, chart)
@@ -1036,7 +1045,7 @@ fn helm_walk(body: &mut dyn Read) -> std::result::Result<Vec<u8>, CacheError> {
         .collect();
     serde_json::to_vec(&charts).map_err(|_| CacheError::Document)
 }
-pub(crate) const HELM_INDEX: Derived<CacheError> = Derived::new("helm-index", 6, helm);
+pub(crate) const HELM_INDEX: Derived<CacheError> = Derived::new("helm-index", 7, helm);
 
 #[cfg(test)]
 mod tests {

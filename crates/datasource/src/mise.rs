@@ -81,8 +81,6 @@ impl State for Listing {
 /// What mise lists for a tool installed from a Git ref, with or without a
 /// `#tag=`, `#branch=` or `#rev=` fragment.
 const GIT_REF: &str = "HEAD";
-/// The GitHub repository whose LTS line nodejs.org, not its releases, names.
-const NODE_VERSIONS: &str = "actions/node-versions";
 
 fn is_node(tool: &str) -> bool {
     matches!(patchula_mise::split(tool).0, "node" | "core:node")
@@ -298,41 +296,5 @@ impl Client {
             versions,
             dist_tags,
         })
-    }
-    /// The `lts` dist-tag `actions/node-versions` catalogs carry. Its
-    /// releases are GitHub releases, which mise does not list, so the
-    /// evidence is nodejs.org's (see `node_lts`). A failed read leaves the
-    /// catalog without it: stable setup-node targets remain usable during a
-    /// Node-index outage, and an explicit LTS policy fails closed without
-    /// this evidence.
-    pub(super) async fn node_lts_tags(&self, package: &str) -> BTreeMap<String, String> {
-        if !package.eq_ignore_ascii_case(NODE_VERSIONS) {
-            return BTreeMap::new();
-        }
-        self.node_lts().await.unwrap_or_default()
-    }
-    /// The LTS evidence nodejs.org's release index publishes.
-    async fn node_lts(&self) -> Result<BTreeMap<String, String>> {
-        let response = self
-            .http
-            .get("https://nodejs.org/dist/index.json", "application/json")
-            .await?;
-        let values: Vec<Value> = serde_json::from_slice(&response.body)?;
-        let mut lts = Vec::new();
-        for value in values {
-            let version = value["version"]
-                .as_str()
-                .ok_or(Error::Invalid)?
-                .trim_start_matches('v');
-            if value["lts"].as_str().is_some_and(|s| !s.is_empty()) {
-                lts.push(version.to_owned());
-            }
-        }
-        Ok(lts
-            .into_iter()
-            .filter_map(|v| Some((Ecosystem::Loose.parse(&v).ok()?, v)))
-            .max_by(|(a, _), (b, _)| Ecosystem::Loose.order(a, b))
-            .map(|(_, v)| BTreeMap::from([("lts".into(), v)]))
-            .unwrap_or_default())
     }
 }

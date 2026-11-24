@@ -1,9 +1,12 @@
 //! Per-version release dates for sources whose listing carries none (Go's
-//! `.info`, a Maven POM's `Last-Modified`). Every listed version is asked
-//! about once and the answer kept, so a warm lookup asks only about versions
-//! it has not seen, wherever they sort: a patch release on an older line is
-//! dated like a new major. A version whose request failed is marked
-//! unchecked and asked about again by the next lookup.
+//! `.info`, a Maven POM's `Last-Modified`). Only the versions the lookup's
+//! `Candidates` name are asked about — every release newer than the
+//! baseline, wherever it sorts: a patch release on an older line is dated
+//! like a new major. Each answer is kept, so a later lookup with an older
+//! baseline asks only about the versions it adds. A version whose request
+//! failed, or that was not asked about, is marked unchecked; a failed one is
+//! asked about again by the next lookup. The requests bypass the HTTP cache,
+//! since the answers are kept here.
 use super::*;
 use futures_util::{StreamExt, stream};
 
@@ -36,10 +39,12 @@ impl State for Dates {
 }
 
 impl Client {
-    /// Date every version in `versions` that has no date yet, asking `ask`
-    /// only about versions the store has no answer for. `ask` returns
-    /// `None` when the request failed: that version is marked unchecked and
-    /// nothing is stored for it. Missing versions are dropped.
+    /// Date the versions in `versions` the lookup's candidates name that
+    /// have no date yet, asking `ask` only about versions the store has no
+    /// answer for. `ask` returns `None` when the request failed: that
+    /// version is marked unchecked and nothing is stored for it. A version
+    /// the store has no answer for and that was not asked about is unchecked
+    /// too. Missing versions are dropped.
     pub(crate) async fn date_versions<F, Fut>(
         &self,
         scope: &DatesScope,
@@ -50,10 +55,15 @@ impl Client {
         F: Fn(String) -> Fut,
         Fut: std::future::Future<Output = Option<Dated>>,
     {
+        let candidates = self.candidates.wanted();
         let mut dates = self.cache.state::<Dates>(scope).await?.unwrap_or_default();
         let wanted: Vec<String> = versions
             .iter()
-            .filter(|v| v.published_at.is_none() && !dates.0.contains_key(&v.version))
+            .filter(|v| {
+                v.published_at.is_none()
+                    && !dates.0.contains_key(&v.version)
+                    && candidates.contains(&v.version)
+            })
             .map(|v| v.version.clone())
             .collect();
         let answers: Vec<(String, Option<Dated>)> = stream::iter(wanted)
@@ -90,7 +100,11 @@ impl Client {
                     }
                     true
                 }
-                None => true,
+                // Not asked about: the source said nothing of it.
+                None => {
+                    version.unchecked |= version.published_at.is_none();
+                    true
+                }
             }
         });
         if learned {

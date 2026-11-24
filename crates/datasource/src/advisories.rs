@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 /// Advisory records fetched at once.
 const ADVISORY_FAN_OUT: usize = 16;
+/// Stored OSV listings read at once: enough to keep every cache reader busy.
+const LISTING_READ_FAN_OUT: usize = 16;
 
 const OSV: &str = "https://api.osv.dev/v1";
 /// OSV accepts at most this many queries in one batch.
@@ -269,7 +271,7 @@ pub(crate) struct AdvisoryScope {
 }
 impl State for Stored {
     const NAMESPACE: &'static str = "osv-advisory";
-    const VERSION: u32 = 7;
+    const VERSION: u32 = 8;
     // Code-versioned: the stored advisory is this build's `Record`-to-
     // `Advisory` mapping of the record the scope's id names.
     const CODE_VERSIONED: bool = true;
@@ -329,16 +331,35 @@ impl Client {
         let window = self.http.advisory_freshness();
         let mut answered = AdvisoryListing::new();
         let mut pending: Vec<(&AdvisoryQuery, Option<String>)> = Vec::new();
-        for query in queries {
-            if let Some(saved) = self
-                .fresh_state_within::<StoredListing>(&ListingScope::of(query), window)
-                .await?
-            {
-                answered.insert(query.clone(), saved.vulns);
-            } else {
-                pending.push((query, None));
+        // The stored listings are read across the cache's readers at once.
+        // Streamed by index: a closure over `&AdvisoryQuery` returning a
+        // future is not general enough for the run's futures to be `Send`.
+        let listed: Vec<&AdvisoryQuery> = queries.iter().collect();
+        let saved: Vec<(&AdvisoryQuery, Option<StoredListing>)> = stream::iter(0..listed.len())
+            .map(|at| {
+                let query = listed[at];
+                async move {
+                    let saved = self
+                        .fresh_state_within::<StoredListing>(&ListingScope::of(query), window)
+                        .await?;
+                    Ok::<_, Error>((query, saved))
+                }
+            })
+            .buffer_unordered(LISTING_READ_FAN_OUT)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<_>>()?;
+        for (query, saved) in saved {
+            match saved {
+                Some(saved) => {
+                    answered.insert(query.clone(), saved.vulns);
+                }
+                None => pending.push((query, None)),
             }
         }
+        // Batches go out in query order, whatever order the reads finished in.
+        pending.sort_by(|a, b| a.0.cmp(b.0));
         let mut listed = BTreeMap::<&AdvisoryQuery, Vec<Listed>>::new();
         // Every page token a query has been given.
         let mut tokens = BTreeMap::<&AdvisoryQuery, Pages>::new();
@@ -384,20 +405,15 @@ impl Client {
             pending = next;
         }
         let fetched_at = chrono::Utc::now().timestamp_millis();
+        let mut stored = Vec::with_capacity(listed.len());
         for (query, vulns) in listed {
             let vulns: Vec<(String, String)> =
                 vulns.into_iter().map(|l| (l.id, l.modified)).collect();
-            self.cache
-                .set_state(
-                    &ListingScope::of(query),
-                    &StoredListing {
-                        fetched_at,
-                        vulns: vulns.clone(),
-                    },
-                )
-                .await?;
-            answered.insert(query.clone(), vulns);
+            answered.insert(query.clone(), vulns.clone());
+            stored.push((ListingScope::of(query), StoredListing { fetched_at, vulns }));
         }
+        // One writer transaction for every listing the batch learned.
+        self.cache.set_states(&stored).await?;
         Ok(answered)
     }
 

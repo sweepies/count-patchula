@@ -5,28 +5,35 @@ use super::*;
 fn versions(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let values: Vec<serde_json::Value> = patchula_http::conditional::json_document(body)
+    /// One published build; other fields are skipped.
+    #[derive(Deserialize)]
+    struct Build {
+        number: Option<String>,
+        platform: Option<String>,
+        created_at: Option<String>,
+    }
+    let builds: Vec<Build> = patchula_http::conditional::json_document(body)
         .map_err(|_| patchula_http::CacheError::Document)?;
     let mut seen = BTreeMap::<String, Version>::new();
-    for value in &values {
-        let Some(number) = value["number"].as_str() else {
+    for build in builds {
+        let Some(number) = build.number else {
             continue;
         };
-        let ruby = value["platform"] == "ruby";
-        let version = Version {
-            published_at: value["created_at"].as_str().map(str::to_owned),
-            ..Version::new(number.into())
-        };
+        let ruby = build.platform.as_deref() == Some("ruby");
         // Prefer the plain `ruby` platform's date for a version.
-        if ruby || !seen.contains_key(number) {
-            seen.insert(number.into(), version);
+        if ruby || !seen.contains_key(&number) {
+            let version = Version {
+                published_at: build.created_at,
+                ..Version::new(number.clone())
+            };
+            seen.insert(number, version);
         }
     }
     serde_json::to_vec(&seen.into_values().collect::<Vec<_>>())
         .map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const RUBYGEMS_VERSIONS: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("rubygems-versions", 3, versions);
+    patchula_http::Derived::new("rubygems-versions", 4, versions);
 
 impl Client {
     pub(crate) async fn rubygems(&self, package: &str) -> Result<Catalog> {

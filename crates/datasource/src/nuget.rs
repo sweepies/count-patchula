@@ -1,6 +1,6 @@
-//! nuget.org: the flat container lists versions; the registration pages,
-//! every one of them, date them and mark unlisted (yanked) and deprecated
-//! releases.
+//! nuget.org: the flat container lists versions; the registration pages
+//! date them and mark unlisted (yanked) and deprecated releases. A page is
+//! read when it may hold a version the lookup's candidates name.
 use super::*;
 use futures_util::{StreamExt, stream};
 
@@ -27,57 +27,103 @@ fn listing(
     serde_json::to_vec(&index.versions).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NUGET_FLAT: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("nuget-flat", 3, listing);
-fn entries(items: &serde_json::Value) -> Vec<Entry> {
+    patchula_http::Derived::new("nuget-flat", 4, listing);
+
+/// A registration leaf: one version's catalog entry. Only the fields the
+/// catalog keeps are read.
+#[derive(Deserialize)]
+struct Leaf {
+    #[serde(rename = "catalogEntry")]
+    entry: Option<CatalogEntry>,
+}
+#[derive(Deserialize)]
+struct CatalogEntry {
+    version: Option<String>,
+    published: Option<String>,
+    listed: Option<bool>,
+    /// Present and not null on a deprecated version; its contents are not
+    /// read.
+    #[serde(default)]
+    deprecation: Option<serde::de::IgnoredAny>,
+}
+fn entries(items: Vec<Leaf>) -> Vec<Entry> {
     items
-        .as_array()
         .into_iter()
-        .flatten()
         .filter_map(|item| {
-            let entry = &item["catalogEntry"];
+            let entry = item.entry?;
             Some(Entry {
-                version: entry["version"].as_str()?.into(),
+                version: entry.version?,
                 // Unlisted packages report a 1900 publication date.
-                published: entry["published"]
-                    .as_str()
-                    .filter(|p| !p.starts_with("1900-"))
-                    .map(str::to_owned),
-                listed: entry["listed"].as_bool().unwrap_or(true),
-                deprecated: !entry["deprecation"].is_null(),
+                published: entry.published.filter(|p| !p.starts_with("1900-")),
+                listed: entry.listed.unwrap_or(true),
+                deprecated: entry.deprecation.is_some(),
             })
         })
         .collect()
 }
-/// The registration index: every page, its entries inline or as a link.
+/// A registration page as the index describes it: its entries inline, or a
+/// link, with the range of versions it holds.
+#[derive(Serialize, Deserialize)]
+struct Page {
+    #[serde(default)]
+    entries: Vec<Entry>,
+    page: Option<String>,
+    lower: Option<String>,
+    upper: Option<String>,
+}
+/// The registration index: every page, its entries inline or as a link,
+/// with its version bounds.
 fn registration(
     body: &mut dyn std::io::Read,
 ) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let index: serde_json::Value = patchula_http::conditional::json_document(body)
+    #[derive(Deserialize)]
+    struct Index {
+        items: Vec<IndexPage>,
+    }
+    #[derive(Deserialize)]
+    struct IndexPage {
+        #[serde(rename = "@id")]
+        id: Option<String>,
+        lower: Option<String>,
+        upper: Option<String>,
+        items: Option<Vec<Leaf>>,
+    }
+    let index: Index = patchula_http::conditional::json_document(body)
         .map_err(|_| patchula_http::CacheError::Document)?;
-    let pages: Vec<serde_json::Value> = index["items"]
-        .as_array()
-        .ok_or(patchula_http::CacheError::Document)?
-        .iter()
-        .map(|page| {
-            if page["items"].is_array() {
-                serde_json::json!({"entries": entries(&page["items"])})
-            } else {
-                serde_json::json!({"page": page["@id"]})
-            }
+    let pages: Vec<Page> = index
+        .items
+        .into_iter()
+        .map(|page| match page.items {
+            Some(items) => Page {
+                entries: entries(items),
+                page: None,
+                lower: page.lower,
+                upper: page.upper,
+            },
+            None => Page {
+                entries: Vec::new(),
+                page: page.id,
+                lower: page.lower,
+                upper: page.upper,
+            },
         })
         .collect();
     serde_json::to_vec(&pages).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NUGET_REGISTRATION: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("nuget-registration", 3, registration);
+    patchula_http::Derived::new("nuget-registration", 4, registration);
 fn page(body: &mut dyn std::io::Read) -> std::result::Result<Vec<u8>, patchula_http::CacheError> {
-    let page: serde_json::Value = patchula_http::conditional::json_document(body)
+    #[derive(Deserialize)]
+    struct Linked {
+        #[serde(default)]
+        items: Vec<Leaf>,
+    }
+    let page: Linked = patchula_http::conditional::json_document(body)
         .map_err(|_| patchula_http::CacheError::Document)?;
-    serde_json::to_vec(&serde_json::json!({"entries": entries(&page["items"])}))
-        .map_err(|_| patchula_http::CacheError::Document)
+    serde_json::to_vec(&entries(page.items)).map_err(|_| patchula_http::CacheError::Document)
 }
 pub(crate) const NUGET_REGISTRATION_PAGE: patchula_http::Derived<patchula_http::CacheError> =
-    patchula_http::Derived::new("nuget-registration-page", 3, page);
+    patchula_http::Derived::new("nuget-registration-page", 4, page);
 
 /// How a version is matched between the flat container and the
 /// registration: case-insensitive and without build metadata, which the
@@ -107,12 +153,6 @@ impl Client {
             )
             .await?;
         let listed: Vec<String> = serde_json::from_slice(&response.body)?;
-        #[derive(Deserialize)]
-        struct Page {
-            #[serde(default)]
-            entries: Vec<Entry>,
-            page: Option<String>,
-        }
         let pages: Vec<Page> = serde_json::from_slice(
             &self
                 .http
@@ -124,11 +164,23 @@ impl Client {
                 .await?
                 .body,
         )?;
-        // Every page is read, not just the newest: a page holds 64 versions
-        // counted from the oldest, so an older line's new patch release, or
-        // an unlisted one, can sit on any of them. A page that fails fails
-        // the lookup rather than leave its versions looking listed.
+        // A page holds 64 versions counted from the oldest, so an older
+        // line's new patch release, or an unlisted one, can sit on any of
+        // them. A linked page is read unless its upper bound is at or below
+        // the candidates' floor, so it holds no candidate; its versions are
+        // listed unchecked. A page without bounds is always read. A page
+        // that fails fails the lookup rather than leave its versions looking
+        // listed.
+        let wanted = self.candidates.wanted();
         let pages: Vec<Result<Vec<Entry>>> = stream::iter(pages)
+            .filter(|page| {
+                let read = page.page.is_none()
+                    || page
+                        .upper
+                        .as_deref()
+                        .is_none_or(|upper| wanted.reaches_above(upper));
+                std::future::ready(read)
+            })
             .map(|page| async move {
                 let Some(url) = page.page else {
                     return Ok(page.entries);
@@ -136,14 +188,13 @@ impl Client {
                 if !url.starts_with("https://api.nuget.org/") {
                     return Err(Error::Invalid);
                 }
-                Ok(serde_json::from_slice::<Page>(
+                Ok(serde_json::from_slice::<Vec<Entry>>(
                     &self
                         .http
                         .get_derived(&url, "application/json", &NUGET_REGISTRATION_PAGE)
                         .await?
                         .body,
-                )?
-                .entries)
+                )?)
             })
             .buffered(PAGE_FAN_OUT)
             .collect()

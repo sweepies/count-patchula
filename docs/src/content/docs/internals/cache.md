@@ -149,11 +149,17 @@ prefix apart from initial pagination. The newest item is also kept in
 `release_heads`.
 
 Sources that date one version per request (Go's `.info`, a Maven POM's
-`Last-Modified`) keep each answer as `release-dates` state, per package and,
-for Maven, per operator registry entry: a version's date, or that the
-registry cannot serve it. A lookup asks only about listed versions with no
-answer yet, wherever they sort; a failed request stores nothing, so the
-version stays unchecked and the next lookup asks again.
+`Last-Modified`) keep each answer as `release-dates` state, per package and
+per operator registry entry that answered, a mirror standing in included: a
+version's date, or that the registry cannot serve it. A lookup asks only
+about its candidates (the versions policy can read a date of, see
+[sources](/guide/sources/#dates-and-release-age)) with no answer yet, wherever
+they sort; a failed request stores nothing, so the version stays unchecked
+and the next lookup asks again. These requests bypass the HTTP table: the
+answer is kept here, so writing the response there too would only cost a
+writer transaction and budget an npm packument could use. They still take
+the host's permit, honour its cooldown, retry a 429 like a registry read, and
+carry the operator entry's credentials.
 
 Typed values the Count keeps between runs (hints, extractions, catalog views,
 receipts and the like) live in `state`; the server queue, installations and
@@ -353,7 +359,10 @@ Successful catalog views are stored as `catalog` state, scoped to the
 package, whether the versions host may stand in, the credential scope and a
 digest of every operator registry entry's scope (its prefix and credentials
 fingerprint), so adding, removing or rotating an entry misses every view read
-before, as the HTTP cache does. A
+before, as the HTTP cache does. A view records the candidates its lookup
+described and serves only a lookup whose candidates those cover, so a
+dependency on an older version than the view was read for reads the catalog
+again rather than find its candidates unchecked. A
 dependency with a positive effective `waitHours`
 reuses a catalog younger than `clamp(waitHours - 1, 1, 24)` hours, 23 hours
 for the default 24-hour wait. Zero keeps the usual HTTP freshness. Dependencies
