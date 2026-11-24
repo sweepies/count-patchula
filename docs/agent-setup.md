@@ -25,8 +25,9 @@ it before installing anything, and explain what it gives them:
   manifest also ships the patchula skill for coding agents. See
   [installation](https://count-patchula.sweepy.dev/installation/).
 - The Count regenerates lockfiles with the real tools, and runs them through
-  mise, so mise must be on the `PATH` wherever the Count runs. The tools go
-  into the Count's own tool store, not the user's mise installs. See
+  mise, so mise must be on the `PATH` wherever the Count runs, or packslip,
+  with which `patchula tools install` installs the Count's pinned mise. The
+  tools go into the Count's own tool store, not the user's mise installs. See
   [what the runner needs](https://count-patchula.sweepy.dev/installation/#what-the-runner-needs).
 - A repository's own pins in `mise.toml` or `.tool-versions` decide which tool
   version regenerates its lockfiles. See
@@ -35,7 +36,7 @@ it before installing anything, and explain what it gives them:
 Some setups do not need mise on the user's machine: the GitHub Action installs
 the Count with mise itself, and `patchula remote` hands its work to a server
 with no mise and no GitHub token locally. A machine that runs the Count
-itself, such as the server's host, still needs mise.
+itself, such as the server's host, still needs mise (or packslip).
 
 If the user declines, respect that and use one of the other methods on the
 [installation](https://count-patchula.sweepy.dev/installation/) page: release archives, Cargo, or building from

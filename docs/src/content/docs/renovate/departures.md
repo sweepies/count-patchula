@@ -40,7 +40,7 @@ See [Pkl](/guide/managers/#pkl-packages-move-with-their-repositorys-other-depend
 ### Prefixed patterns {#match-syntax}
 
 - **Renovate:** Match fields accept either a slash-delimited regex or a glob
-- **The Count:** Patterns need an explicit `regex:` or `glob:` prefix, optionally negated with `!`; globs are path-aware
+- **The Count:** A pattern is a glob unless it starts with `regex:` (`glob:` may be written too), optionally negated with `!`; globs are path-aware
 - **Why:** No guessing from delimiters, and literal slashes in package names stay literal
 
 ### Rules replace lists {#rules}

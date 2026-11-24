@@ -39,7 +39,9 @@ patchula run acme/my-app             # then let him bite
 ```
 
 Lockfile tools, and the versions of the tools in `mise.toml`, come from
-[mise](https://mise.jdx.dev), so it needs to be on the `PATH`. See [getting started](https://count-patchula.sweepy.dev/getting-started/).
+[mise](https://mise.jdx.dev), so it needs to be on the `PATH`, or
+[packslip](https://packslip.dev) to install the Count's own pinned mise. See
+[getting started](https://count-patchula.sweepy.dev/getting-started/).
 
 The CLI is the quickest way to try him, and the [GitHub
 Action](https://count-patchula.sweepy.dev/guide/github-actions/) runs him on a

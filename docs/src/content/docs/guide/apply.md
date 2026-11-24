@@ -16,7 +16,7 @@ patchula apply --manager github-actions --type pin --type digest
 
 It reads the working tree the way [`lookup`](/reference/cli/#patchula-lookup)
 does with no repository named: the `patchula.pkl` here, or `--config`,
-uncommitted changes included. It takes the same cache, concurrency and HTTP
+uncommitted changes included. It takes the same cache, settings and concurrency
 flags, and needs a [token](/guide/how-it-works/#tokens) for the lookups like
 every other command. It always runs on this machine, and repository arguments
 and `--all-repos` are refused.
@@ -87,8 +87,9 @@ gives a patch for `git apply`) and the summary goes to stderr. It opens with wha
 was written, or would be, and lists those updates; then skipped updates and why,
 template updates, failed lookups and warnings; and last how many updates the
 filters excluded. With `--json`, stdout is one JSON object instead:
-`updates`, `skipped` with each `reason`, `files` with each `diff`,
-`written`, `filtered`, `warnings`, `lookupFailures` and `exitCode`.
+`schemaVersion`, `updates`, `skipped` with each `reason`, `files` with each
+`diff`, `written`, `filtered`, `notices`, `warnings`, `lookupFailures` and
+`exitCode`.
 `lookupFailures` lists each failed lookup as the
 [report](/reference/report/#lookup-failures) does.
 

@@ -67,7 +67,7 @@ class Registry {
 class Lockfiles {
   /// GiB to keep of the package caches lockfile tools share between runs,
   /// evicting least recently used private partitions first, then the public
-  /// one. 0 turns the persistent caches off.
+  /// one. 1 to 1000000.
   cacheGiB: Int = 20
 }
 

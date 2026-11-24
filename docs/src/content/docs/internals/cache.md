@@ -2,7 +2,7 @@
 title: "SQLite cache"
 description: "How the SQLite cache is laid out: HTTP entries, releases and state, registry tokens, host limits and freshness floors."
 ---
-`patchula-cache` uses rusqlite 0.41 with bundled SQLite, so the system
+`patchula-cache` uses rusqlite with bundled SQLite, so the system
 SQLite's version and features never matter. HTTP bodies are stored with Zstd
 level 3.
 
@@ -12,10 +12,11 @@ A cache is a directory. `Cache::open_dir` creates it and opens
 `cache.sqlite` (with SQLite's `-wal` and `-shm` files) inside it. The partial
 clones for lockfile tools go in `worktrees/` and the tool store in `tools/`,
 unless `PATCHULA_TOOLS_DIR` moves it. The package caches the tools share
-between runs go in `tool-caches/`, partitioned by the credentials a run
-holds: `public` for a run without any (safe to share because repositories
-that commit credentials are refused), `private-<hash of the entries'
-scopes>` otherwise, with no read-only lower layer between them. Pruning is
+between runs go in `tool-caches/`, partitioned as
+[lockfiles](/guide/lockfiles/#tool-caches) describes: `public` for a run whose
+files are provably public-only, `installation-<hash>` for an installation's
+other runs, and `private-<hash of the entries' scopes>` for runs given operator
+credentials, with no read-only lower layer between them. Pruning is
 throttled per cache root and takes `tool-caches/prune.lock` so concurrent
 prunes never over-evict. The server also keeps `server.lock`
 there. The CLI's default directory is shared by every checkout on the machine,
