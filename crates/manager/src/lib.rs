@@ -83,11 +83,18 @@ impl Location {
 /// A file's text with the byte offset of each line's start, built once per
 /// file so a `Location` does not rescan the text for every dependency.
 /// Derefs to the text itself.
+///
+/// It also keeps the file's YAML documents and scalar locations, parsed the
+/// first time a manager asks, so every manager that reads one file as YAML
+/// shares one parse of each.
 pub(crate) struct Lines<'a> {
     text: &'a str,
     /// Byte offset of each line's first byte: 0, then one past each '\n'.
     starts: Vec<usize>,
+    documents: std::cell::OnceCell<Result<std::borrow::Cow<'a, [serde_yaml_ng::Value]>, String>>,
+    spans: std::cell::OnceCell<YamlSpans>,
 }
+type YamlSpans = Result<(BTreeMap<String, Location>, yaml_locations::Aliases), String>;
 impl<'a> Lines<'a> {
     pub(crate) fn new(text: &'a str) -> Self {
         Self {
@@ -95,6 +102,63 @@ impl<'a> Lines<'a> {
             starts: std::iter::once(0)
                 .chain(text.match_indices('\n').map(|(n, _)| n + 1))
                 .collect(),
+            documents: std::cell::OnceCell::new(),
+            spans: std::cell::OnceCell::new(),
+        }
+    }
+    /// `text` with its YAML documents already parsed, when `documents` has
+    /// them: what [`yaml::docs`] gave for the same text.
+    pub(crate) fn with_documents(
+        text: &'a str,
+        documents: Option<&'a [serde_yaml_ng::Value]>,
+    ) -> Self {
+        let lines = Self::new(text);
+        if let Some(documents) = documents {
+            let _ = lines
+                .documents
+                .set(Ok(std::borrow::Cow::Borrowed(documents)));
+        }
+        lines
+    }
+    /// The file's YAML documents, as [`yaml::docs`] parses them.
+    pub(crate) fn yaml_documents(&self) -> Result<&[serde_yaml_ng::Value], String> {
+        match self
+            .documents
+            .get_or_init(|| yaml::docs(self.text).map(std::borrow::Cow::Owned))
+        {
+            Ok(documents) => Ok(documents),
+            Err(e) => Err(e.clone()),
+        }
+    }
+    /// The file read as exactly one YAML document, as
+    /// `serde_yaml_ng::from_str` reads it: the shared parse when it holds
+    /// one document, else `from_str`'s own answer for any other text.
+    pub(crate) fn yaml_document(
+        &self,
+    ) -> Result<std::borrow::Cow<'_, serde_yaml_ng::Value>, String> {
+        if let Ok([document]) = self.yaml_documents() {
+            return Ok(std::borrow::Cow::Borrowed(document));
+        }
+        serde_yaml_ng::from_str(self.text)
+            .map(std::borrow::Cow::Owned)
+            .map_err(|e| e.to_string())
+    }
+    /// The file's YAML scalar locations, as [`yaml_locations::parse`] reads
+    /// them.
+    pub(crate) fn yaml_locations(&self) -> Result<&BTreeMap<String, Location>, String> {
+        self.yaml_aliased().map(|(locations, _)| locations)
+    }
+    /// The file's YAML scalar locations and aliases, as
+    /// [`yaml_locations::parse_aliased`] reads them.
+    pub(crate) fn yaml_aliased(
+        &self,
+    ) -> Result<(&BTreeMap<String, Location>, &yaml_locations::Aliases), String> {
+        match self
+            .spans
+            .get_or_init(|| yaml_locations::parse_aliased(self))
+        {
+            Ok((locations, aliases)) => Ok((locations, aliases)),
+            Err(e) => Err(e.clone()),
         }
     }
     /// The byte offset the 1-indexed `line` starts at.
@@ -392,11 +456,38 @@ impl Declaration<'_> {
 }
 /// The lowercase hex SHA-256 of `bytes`: what declaration keys, plan
 /// fingerprints and receipt hashes are made with.
+/// Whether `text` ends with `suffix`, an ASCII lowercase suffix, compared
+/// ASCII case-insensitively: `text.to_ascii_lowercase().ends_with(suffix)`
+/// without the copy.
+pub(crate) fn ends_with_lowercase(text: &str, suffix: &str) -> bool {
+    text.len() >= suffix.len()
+        && text.as_bytes()[text.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+}
 pub fn hash(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hex(&Sha256::digest(bytes))
+}
+/// [`hash`] of `value`'s JSON, streamed into the digest rather than built
+/// as one buffer: the same answer as hashing `serde_json::to_vec(value)`.
+pub fn hash_json<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<String> {
+    struct Sink(Sha256);
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = std::io::BufWriter::with_capacity(1 << 16, Sink(Sha256::new()));
+    serde_json::to_writer(&mut writer, value)?;
+    let digest = writer
+        .into_inner()
+        .map_err(|e| serde_json::Error::io(e.into_error()))?;
+    Ok(hex(&digest.0.finalize()))
+}
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Extraction {
@@ -726,15 +817,28 @@ pub(crate) fn ecosystem(manager: Manager) -> &'static dyn Ecosystem {
 
 pub struct Scanner {
     pub(crate) config: Config,
+    /// `config.managers` as a set, bit `manager as usize` for each: the
+    /// scan asks once per manager for every file in the tree.
+    enabled: u64,
 }
+const _: () = assert!(Manager::ALL.len() <= u64::BITS as usize);
 impl Scanner {
     pub fn new(config: &Config) -> Result<Self, String> {
         Ok(Self {
             config: config.clone(),
+            enabled: config
+                .managers
+                .iter()
+                .fold(0, |set, manager| set | 1 << *manager as usize),
         })
     }
+    /// Whether `manager` is enabled.
+    pub(crate) fn enabled(&self, manager: Manager) -> bool {
+        self.enabled >> manager as usize & 1 == 1
+    }
     pub fn needs(&self, path: &str) -> bool {
-        self.config.managers.iter().any(|m| self.selected(*m, path)) || self.registry_file(path)
+        (!self.excluded(path) && self.config.managers.iter().any(|m| self.selects(*m, path)))
+            || self.registry_file(path)
     }
     /// Whether only managers whose file names another format shares select
     /// `path`. Such a file over [`SHARED_NAME_LIMIT`], or one that is not
@@ -744,11 +848,14 @@ impl Scanner {
     /// no file the tooling warnings read, has such a name, which a test in
     /// the engine pins.
     pub fn shared_name(&self, path: &str) -> bool {
+        if self.excluded(path) {
+            return false;
+        }
         let mut selecting = self
             .config
             .managers
             .iter()
-            .filter(|m| self.selected(**m, path))
+            .filter(|m| self.selects(**m, path))
             .peekable();
         selecting.peek().is_some() && selecting.all(|m| ecosystem(*m).shared_name(path))
     }
@@ -780,10 +887,9 @@ impl Scanner {
     }
     /// Whether npm dependencies, or an npm extractor, are maintained.
     fn npm_enabled(&self) -> bool {
-        [Manager::Npm, Manager::Bun]
-            .iter()
-            .any(|m| self.config.managers.contains(m))
-            || (self.config.managers.contains(&Manager::Regex)
+        self.enabled(Manager::Npm)
+            || self.enabled(Manager::Bun)
+            || (self.enabled(Manager::Regex)
                 && self
                     .config
                     .extractors
@@ -808,7 +914,7 @@ impl Scanner {
     /// enabled. Skipped, not warned about, so they leave branch cleanup and
     /// automerge on.
     pub fn unsupported<'a>(&self, paths: impl IntoIterator<Item = &'a str>) -> Vec<Skipped> {
-        if !self.config.managers.contains(&Manager::Pyproject) {
+        if !self.enabled(Manager::Pyproject) {
             return Vec::new();
         }
         paths
@@ -824,9 +930,7 @@ impl Scanner {
             .collect()
     }
     pub(crate) fn selected(&self, manager: Manager, path: &str) -> bool {
-        self.config.managers.contains(&manager)
-            && !self.excluded(path)
-            && self.selects(manager, path)
+        self.enabled(manager) && !self.excluded(path) && self.selects(manager, path)
     }
     /// Whether `manager`'s file patterns take `path`, before whether the
     /// manager is enabled and whether `exclude` leaves the path out.
@@ -844,17 +948,13 @@ impl Scanner {
         } else {
             BTreeMap::new()
         };
-        let yaml = if yaml::MANAGERS
-            .iter()
-            .any(|m| self.config.managers.contains(m))
-        {
+        let yaml = if yaml::MANAGERS.iter().any(|m| self.enabled(*m)) {
             Some(yaml::prepare(self, files, &mut result.warnings))
         } else {
             None
         };
-        let feeds = (self.config.managers.contains(&Manager::Nuget)
-            || self.config.managers.contains(&Manager::Mise))
-        .then(|| nuget::Feeds::new(files));
+        let feeds = (self.enabled(Manager::Nuget) || self.enabled(Manager::Mise))
+            .then(|| nuget::Feeds::new(files));
         let shared = Shared {
             yaml,
             npmrcs,
@@ -862,7 +962,7 @@ impl Scanner {
         };
         let mut prepared = Vec::new();
         for &manager in EXTRACT_ORDER {
-            if self.config.managers.contains(&manager) {
+            if self.enabled(manager) {
                 prepared.push((manager, ecosystem(manager).prepare(self, files, &shared)?));
             }
         }
@@ -882,7 +982,14 @@ impl Scanner {
                     continue;
                 }
             };
-            let text = Lines::new(text);
+            // The YAML family's documents for this file, which every other
+            // manager reading it as YAML shares.
+            let documents = shared
+                .yaml
+                .as_ref()
+                .and_then(|yaml| yaml.documents.get(path.as_str()))
+                .map(Vec::as_slice);
+            let text = Lines::with_documents(text, documents);
             for (manager, eco) in &mut prepared {
                 let Some(extract) = eco.extract.as_mut() else {
                     continue;
@@ -1031,6 +1138,22 @@ fn requirements_name(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Streaming a value's JSON into the digest hashes the same bytes as
+    /// building the JSON first.
+    #[test]
+    fn hash_json_hashes_the_json_bytes() {
+        let mut files = super::Files::new();
+        files.insert(
+            "a/package.json".into(),
+            "{\"x\": \"\u{e9}\"}".to_owned().into(),
+        );
+        files.insert("b.txt".into(), "y".repeat(200_000).into());
+        assert_eq!(
+            super::hash_json(&files).unwrap(),
+            super::hash(&serde_json::to_vec(&files).unwrap())
+        );
+    }
+
     /// A default port is dropped only for its own scheme: `http://host:443`
     /// names another server than `http://host`.
     #[test]

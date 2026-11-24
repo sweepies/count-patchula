@@ -105,6 +105,7 @@ pub(super) fn extract(
         // locked for a transitive dependent, or a path dependency outside the
         // workspace, at another version a wide requirement would match too.
         let declaring = declaring_packages(files, doc, base);
+        let releases = Releases::new(packages);
         let members: Vec<_> = packages
             .iter()
             .filter(|p| p.get("source").is_none())
@@ -115,7 +116,7 @@ pub(super) fn extract(
                 .iter()
                 .filter_map(|member| member.get("dependencies")?.as_array())
                 .flatten()
-                .filter_map(|edge| registry_edge(packages, edge.as_str()?, &dep.package))
+                .filter_map(|edge| registry_edge(&releases, edge.as_str()?, &dep.package))
                 .filter_map(|v| Some((Ecosystem::Cargo.parse(v).ok()?, v)))
                 .filter(|(v, _)| Ecosystem::Cargo.matches(&dep.current, v).unwrap_or(false))
                 .collect();
@@ -198,23 +199,35 @@ fn glob(pattern: &str) -> Option<globset::GlobMatcher> {
 /// of `package`. An edge is `name`, `name version` or `name version (source)`;
 /// the source is kept, because a git dependency can be the same crate at the
 /// same version.
-fn registry_edge<'a>(
-    packages: &'a toml_edit::ArrayOfTables,
-    edge: &str,
-    package: &str,
-) -> Option<&'a str> {
+fn registry_edge<'a>(releases: &Releases<'a>, edge: &str, package: &str) -> Option<&'a str> {
     let mut words = edge.split_whitespace();
     if words.next()? != package {
         return None;
     }
     let version = words.next();
     let source = words.next().map(|s| s.trim_matches(['(', ')']));
-    packages
+    releases
+        .0
+        .get(package)?
         .iter()
-        .filter(|p| named(p) == Some(package) && registry(p))
         .filter(|p| version.is_none_or(|v| p.get("version").and_then(Item::as_str) == Some(v)))
         .filter(|p| source.is_none_or(|s| p.get("source").and_then(Item::as_str) == Some(s)))
         .find_map(|p| p.get("version")?.as_str())
+}
+/// A lock's crates.io packages by name, in lock order, so an edge finds its
+/// package without scanning the whole lock.
+struct Releases<'a>(std::collections::HashMap<&'a str, Vec<&'a toml_edit::Table>>);
+
+impl<'a> Releases<'a> {
+    fn new(packages: &'a toml_edit::ArrayOfTables) -> Self {
+        let mut by_name = std::collections::HashMap::<_, Vec<_>>::new();
+        for package in packages.iter().filter(|p| registry(p)) {
+            if let Some(name) = named(package) {
+                by_name.entry(name).or_default().push(package);
+            }
+        }
+        Self(by_name)
+    }
 }
 fn named(p: &toml_edit::Table) -> Option<&str> {
     p.get("name").and_then(Item::as_str)
@@ -344,9 +357,10 @@ fn walk(
 
 /// Whether `path` is a Cargo configuration file in the repository.
 pub(crate) fn config_file(path: &str) -> bool {
-    [".cargo/config.toml", ".cargo/config"]
-        .iter()
-        .any(|name| path == *name || path.ends_with(&format!("/{name}")))
+    [".cargo/config.toml", ".cargo/config"].iter().any(|name| {
+        path.strip_suffix(name)
+            .is_some_and(|rest| rest.is_empty() || rest.ends_with('/'))
+    })
 }
 
 /// Whether `value` — a `Cargo.lock` `source` or a registry `index` — names

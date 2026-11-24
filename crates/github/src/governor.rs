@@ -307,25 +307,32 @@ impl Governor {
         let spent = number(response, "x-ratelimit-remaining") == Some(0);
         let graphql_answer = resource == "graphql" && status == 200;
         // Only a rate-limit status or a GraphQL answer can carry a body that
-        // classifies; any other, which may be megabytes, is never parsed.
+        // classifies; any other, which may be megabytes, is never parsed. A
+        // GraphQL 200 classifies on its top-level `errors` alone, so one
+        // whose bytes cannot spell that key is not parsed either. The call
+        // runs under the in-flight permit, and a 200 is usually a large
+        // blob batch the caller parses anyway.
         // Inspect only to classify; never attach this data to an error or log.
-        let json: serde_json::Value = if rate_status || graphql_answer {
-            serde_json::from_slice(&response.body).unwrap_or_default()
+        let parse = rate_status || graphql_answer && may_name_errors(&response.body);
+        let body = if parse {
+            Classified::parse(&response.body)
         } else {
-            serde_json::Value::Null
+            Classified::default()
         };
-        let message = json
-            .get("message")
+        let message = body
+            .message
+            .as_ref()
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_ascii_lowercase();
         let documented_secondary = message.contains("secondary rate limit")
             || message.contains("abuse detection")
-            || json
-                .get("documentation_url")
+            || body
+                .documentation_url
+                .as_ref()
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|url| url.contains("secondary-rate-limits"));
-        let graphql = GraphqlLimit::classify(graphql_answer, &json);
+        let graphql = GraphqlLimit::classify(graphql_answer, body.errors.as_ref());
         // GitHub answers both GraphQL limits with a 200 and `RATE_LIMITED`.
         // A spent `x-ratelimit-remaining` names the primary window, which
         // ends at `x-ratelimit-reset`; without it, or with an error message
@@ -382,9 +389,8 @@ struct GraphqlLimit {
 }
 
 impl GraphqlLimit {
-    fn classify(graphql_answer: bool, json: &serde_json::Value) -> Self {
-        let errors = json
-            .get("errors")
+    fn classify(graphql_answer: bool, errors: Option<&serde_json::Value>) -> Self {
+        let errors = errors
             .and_then(serde_json::Value::as_array)
             .filter(|_| graphql_answer)
             .map_or(&[][..], Vec::as_slice);
@@ -405,6 +411,64 @@ impl GraphqlLimit {
             limited: typed || names_secondary,
             names_secondary,
         }
+    }
+}
+
+/// Whether a JSON body could hold an `errors` key. JSON spells a key either
+/// literally or with a `\u` escape, so a body with neither has none.
+fn may_name_errors(body: &[u8]) -> bool {
+    memchr::memmem::find(body, b"errors").is_some() || memchr::memmem::find(body, b"\\u").is_some()
+}
+
+/// The top-level fields of a JSON body that classify a rate limit. Every
+/// other value is skipped without being built, so a large answer costs a
+/// scan rather than a document. A body that is not a JSON object classifies
+/// as nothing, as does one that fails to parse; a repeated key keeps its
+/// last value.
+#[derive(Default)]
+struct Classified {
+    message: Option<serde_json::Value>,
+    documentation_url: Option<serde_json::Value>,
+    errors: Option<serde_json::Value>,
+}
+
+impl Classified {
+    fn parse(body: &[u8]) -> Self {
+        serde_json::from_slice(body).unwrap_or_default()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Classified {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct Fields;
+        impl<'de> serde::de::Visitor<'de> for Fields {
+            type Value = Classified;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Classified, A::Error> {
+                let mut fields = Classified::default();
+                while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
+                    let slot = match key.as_ref() {
+                        "message" => &mut fields.message,
+                        "documentation_url" => &mut fields.documentation_url,
+                        "errors" => &mut fields.errors,
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                            continue;
+                        }
+                    };
+                    *slot = Some(map.next_value()?);
+                }
+                Ok(fields)
+            }
+        }
+        deserializer.deserialize_map(Fields)
     }
 }
 
@@ -507,6 +571,62 @@ mod tests {
             assert!(state.secondary_until.is_some(), "{headers:?} {message}");
             assert!(state.content_throttled_until.is_some());
             assert!(!state.primary.contains_key("graphql"));
+        }
+    }
+
+    /// A GraphQL 200 without the bytes of an `errors` key is not parsed; any
+    /// body that might spell one, escaped or not, is.
+    #[test]
+    fn only_a_body_that_may_hold_errors_is_parsed() {
+        assert!(!may_name_errors(
+            br#"{"data":{"b0":{"text":"fn main() {}","oid":"45b9"}}}"#
+        ));
+        assert!(may_name_errors(br#"{"errors":[]}"#));
+        assert!(may_name_errors(br#"{"\u0065rrors":[]}"#));
+        assert!(may_name_errors(br#"{"data":{"b0":{"text":"\u003c"}}}"#));
+    }
+
+    /// The classifying fields are read like a document's: a repeated key
+    /// keeps its last value, an escaped key is the key it spells, and a
+    /// body that is not an object classifies as nothing.
+    #[test]
+    fn classified_reads_the_top_level_fields_only() {
+        let body = Classified::parse(
+            br#"{"data":{"errors":[1]},"message":1,"\u0065rrors":[{"type":"X"}],"errors":[{"type":"RATE_LIMITED"}]}"#,
+        );
+        assert_eq!(
+            body.errors,
+            Some(serde_json::json!([{"type": "RATE_LIMITED"}]))
+        );
+        assert_eq!(body.message, Some(serde_json::json!(1)));
+        assert!(body.documentation_url.is_none());
+        for other in [&br#"[{"errors":[]}]"#[..], b"not json", b""] {
+            let body = Classified::parse(other);
+            assert!(body.errors.is_none() && body.message.is_none());
+        }
+    }
+
+    /// An ordinary GraphQL 200 — a blob batch — is not a limit, and a
+    /// `RATE_LIMITED` answer is one however its key is spelled, beside
+    /// megabytes of data.
+    #[tokio::test]
+    async fn a_large_graphql_answer_classifies_by_its_errors_alone() {
+        let text = "x".repeat(4 << 20);
+        let governor = Governor::new(4, Duration::from_secs(3600), 12);
+        let mut answer = response(200, &[]);
+        answer.body = serde_json::to_vec(&serde_json::json!({
+            "data": {"b0": {"text": text}}
+        }))
+        .unwrap();
+        assert!(!governor.rate_limited("graphql", &answer, 0).await.unwrap());
+        for errors in [r#""errors""#, r#""\u0065rrors""#] {
+            let governor = Governor::new(4, Duration::from_secs(3600), 12);
+            answer.body = format!(
+                r#"{{"data":{{"b0":{{"text":"{text}"}}}},{errors}:[{{"type":"RATE_LIMITED","message":"slow down"}}]}}"#
+            )
+            .into_bytes();
+            assert!(governor.rate_limited("graphql", &answer, 0).await.unwrap());
+            assert!(governor.state.lock().await.secondary_until.is_some());
         }
     }
 

@@ -294,6 +294,8 @@ pub(super) fn extract(files: &Files, selected: impl Fn(&str) -> bool) -> Vec<Dep
         .collect();
     let mut claimed = BTreeSet::new();
     let mut out = Vec::new();
+    // Each definition file's line offsets, built once for all its variables.
+    let mut lines = BTreeMap::<&str, crate::Lines<'_>>::new();
     uses.sort_by(|a, b| (&a.file, a.at).cmp(&(&b.file, b.at)));
     for reference in uses {
         if parallel.contains(&reference.package) {
@@ -308,9 +310,12 @@ pub(super) fn extract(files: &Files, selected: impl Fn(&str) -> bool) -> Vec<Dep
         let Ok(text) = files[&definition.file].read() else {
             continue;
         };
+        let text = lines
+            .entry(&definition.file)
+            .or_insert_with(|| crate::Lines::new(text));
         out.push(super::gradle::maven(
             &definition.file,
-            &crate::Lines::new(text),
+            text,
             reference.package,
             reference.kind,
             definition.start,

@@ -259,12 +259,20 @@ impl Store {
     }
 
     pub fn http_put(&mut self, key: &str, entry: &HttpEntry) -> Result<()> {
-        let body = zstd::stream::encode_all(entry.body.as_slice(), 3)?;
-        let headers = serde_json::to_string(&entry.headers)?;
+        self.http_put_many(&[(key, entry)])
+    }
+
+    /// Write every entry in one transaction, in order, and evict once after.
+    pub fn http_put_many(&mut self, entries: &[(&str, &HttpEntry)]) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute("UPDATE access_clock SET value=value+1", [])?;
-        tx.execute("INSERT INTO http(key,status,etag,last_modified,headers,body,fetched_at,expires_at,cache_control,last_access) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,(SELECT value FROM access_clock)) ON CONFLICT(key) DO UPDATE SET status=excluded.status,etag=excluded.etag,last_modified=excluded.last_modified,headers=excluded.headers,body=excluded.body,fetched_at=excluded.fetched_at,expires_at=excluded.expires_at,cache_control=excluded.cache_control,last_access=excluded.last_access",
-            params![key, entry.status, entry.etag, entry.last_modified, headers, body, entry.fetched_at, entry.expires_at, entry.cache_control])?;
+        for (key, entry) in entries {
+            let body = zstd::stream::encode_all(entry.body.as_slice(), 3)?;
+            let headers = serde_json::to_string(&entry.headers)?;
+            tx.prepare_cached("UPDATE access_clock SET value=value+1")?
+                .execute([])?;
+            tx.prepare_cached("INSERT INTO http(key,status,etag,last_modified,headers,body,fetched_at,expires_at,cache_control,last_access) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,(SELECT value FROM access_clock)) ON CONFLICT(key) DO UPDATE SET status=excluded.status,etag=excluded.etag,last_modified=excluded.last_modified,headers=excluded.headers,body=excluded.body,fetched_at=excluded.fetched_at,expires_at=excluded.expires_at,cache_control=excluded.cache_control,last_access=excluded.last_access")?
+                .execute(params![key, entry.status, entry.etag, entry.last_modified, headers, body, entry.fetched_at, entry.expires_at, entry.cache_control])?;
+        }
         tx.commit()?;
         self.evict().map(|_| ())
     }

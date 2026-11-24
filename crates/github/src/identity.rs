@@ -95,13 +95,14 @@ impl Client {
         if !token.starts_with("ghs_") {
             return None;
         }
-        let reach = self.installation_reach().await?;
-        let bot = self
-            .graphql::<Viewer>("query { viewer { databaseId } }", serde_json::json!({}))
-            .await
-            .ok()?
-            .viewer
-            .database_id?;
+        // The listing and the viewer are independent reads: both go out at
+        // once, and both must succeed.
+        let (reach, viewer) = tokio::join!(
+            self.installation_reach(),
+            self.graphql::<Viewer>("query { viewer { databaseId } }", serde_json::json!({})),
+        );
+        let reach = reach?;
+        let bot = viewer.ok()?.viewer.database_id?;
         if !self.reads_contents(&reach.probe).await {
             return None;
         }

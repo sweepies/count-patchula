@@ -2230,6 +2230,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "jsonwebtoken",
+ "memchr",
  "patchula-cache",
  "patchula-config",
  "patchula-github",

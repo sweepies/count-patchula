@@ -51,10 +51,13 @@ pub(super) fn dependency(
 }
 
 pub(super) fn dockerfile(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
-    let arg = Regex::new(
-        r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
-    )
-    .map_err(|e| e.to_string())?;
+    static ARG: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(
+            r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))",
+        )
+        .expect("build argument pattern")
+    });
+    let arg = &*ARG;
     let mut args = BTreeMap::<String, String>::new();
     let mut stages = std::collections::BTreeSet::new();
     let mut seen_from = false;

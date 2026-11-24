@@ -220,15 +220,16 @@ fn sdk(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
 fn project_file(path: &str) -> bool {
     crate::roles::leaf(path)
         .rsplit_once('.')
-        .is_some_and(|(_, ext)| ext.to_ascii_lowercase().ends_with("proj"))
+        .is_some_and(|(_, ext)| crate::ends_with_lowercase(ext, "proj"))
 }
 
 pub(super) fn selected(path: &str) -> bool {
     let leaf = crate::roles::leaf(path);
-    let lower = leaf.to_ascii_lowercase();
     project_file(path)
-        || solution_file(&lower)
-        || lower == "directory.packages.props"
+        || [".sln", ".slnx", ".slnf"]
+            .iter()
+            .any(|suffix| crate::ends_with_lowercase(leaf, suffix))
+        || leaf.eq_ignore_ascii_case("directory.packages.props")
         || matches!(
             leaf,
             "Directory.Build.props" | "global.json" | "packages.lock.json"
@@ -276,7 +277,7 @@ pub(crate) const RESTORE_OVERRIDES: [&str; 6] = [
 /// Whether `path` is an MSBuild file or response file that could set a
 /// restore property.
 pub(crate) fn msbuild_file(path: &str) -> bool {
-    let leaf = crate::roles::leaf(path).to_ascii_lowercase();
+    let leaf = crate::roles::leaf(path);
     [
         ".props",
         ".targets",
@@ -288,7 +289,7 @@ pub(crate) fn msbuild_file(path: &str) -> bool {
         ".pubxml",
     ]
     .iter()
-    .any(|suffix| leaf.ends_with(suffix))
+    .any(|suffix| crate::ends_with_lowercase(leaf, suffix))
 }
 
 /// `text` with XML character references (`&#83;`, `&#x53;`) decoded, so a
@@ -740,10 +741,6 @@ impl Feeds {
 }
 
 /// Whether `leaf`, already lowercased, is a solution file.
-fn solution_file(leaf: &str) -> bool {
-    leaf.ends_with(".sln") || leaf.ends_with(".slnx") || leaf.ends_with(".slnf")
-}
-
 /// Whether `text`, already decoded and lowercased, holds a `<name`
 /// element start: the tag followed by whitespace, `/` or `>`, so a
 /// property such as `<TargetFramework` does not count as `<Target`.

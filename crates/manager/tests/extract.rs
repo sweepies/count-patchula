@@ -248,6 +248,59 @@ fn npm_is_strict_json_and_bun_lock_is_jsonc() {
 }
 /// A file that does not parse, such as an ERB-templated YAML config, is
 /// skipped with a warning while the rest of the repository is extracted.
+/// Kubernetes and Flux select every YAML file, but take nothing from a
+/// YAML lockfile, and a workflow the YAML family and GitHub Actions both
+/// read extracts the same through their shared parse.
+#[test]
+fn yaml_managers_share_a_parse_and_leave_lockfiles_alone() {
+    let defaults = patchula_config::load_files(
+        "/repo/patchula.pkl",
+        std::collections::BTreeMap::from([(
+            "/repo/patchula.pkl".into(),
+            "amends \"PatchulaConfig.pkl\"".into(),
+        )]),
+    )
+    .unwrap();
+    let scanner = Scanner::new(&defaults).unwrap();
+    let pod = "kind: Pod\nspec:\n  containers:\n    - name: app\n      image: nginx:1.27.0\n";
+    let files = read_files([
+        (
+            ".github/workflows/ci.yml".into(),
+            "on: push\njobs:\n  build:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@v4\n".into(),
+        ),
+        ("deploy/pod.yaml".into(), pod.into()),
+        ("pnpm-lock.yaml".into(), format!("lockfileVersion: '9.0'\n{pod}")),
+        ("aube-lock.yaml".into(), format!("lockfileVersion: '9.0'\n{pod}")),
+    ]);
+    assert!(scanner.needs("pnpm-lock.yaml"));
+    let extraction = scanner.extract(&files).unwrap();
+    assert!(extraction.warnings.is_empty(), "{:?}", extraction.warnings);
+    let mut found: Vec<_> = extraction
+        .dependencies
+        .iter()
+        .map(|d| (d.manager, d.file.as_str(), d.name.as_str(), d.location.line))
+        .collect();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            (
+                Manager::GithubActions,
+                ".github/workflows/ci.yml",
+                "actions/checkout",
+                6
+            ),
+            (
+                Manager::GithubActions,
+                ".github/workflows/ci.yml",
+                "ubuntu",
+                4
+            ),
+            (Manager::Kubernetes, "deploy/pod.yaml", "nginx", 5),
+        ]
+    );
+}
+
 #[test]
 fn unparseable_files_are_skipped_with_a_warning() {
     let defaults = patchula_config::load_files(

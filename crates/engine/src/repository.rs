@@ -137,6 +137,8 @@ pub async fn view<S: Source>(
     let mut files = Files::new();
     let mut blobs = BTreeMap::new();
     let mut wanted = Vec::new();
+    // Whether each wanted entry has a shared name, asked once per entry.
+    let mut shared = Vec::new();
     for entry in &entries {
         if !(scanner.needs(&entry.path)
             || tooling::reads(&entry.path)
@@ -144,22 +146,22 @@ pub async fn view<S: Source>(
         {
             continue;
         }
-        if scanner.shared_name(&entry.path)
-            && entry.size.is_some_and(|size| size > SHARED_NAME_LIMIT)
-        {
+        let shared_name = scanner.shared_name(&entry.path);
+        if shared_name && entry.size.is_some_and(|size| size > SHARED_NAME_LIMIT) {
             continue;
         }
         if entry.mode == SYMLINK_MODE {
             files.insert(entry.path.clone(), Text::Unread(Unread::Failed));
         } else {
             wanted.push(entry.clone());
+            shared.push(shared_name);
         }
     }
     let contents = source.read(&wanted).await?;
-    for (entry, content) in wanted.iter().zip(contents) {
+    for ((entry, content), shared_name) in wanted.iter().zip(contents).zip(shared) {
         // A shared-name file that is not text is another format's, left
         // out; one that cannot be read still refuses the repository.
-        if scanner.shared_name(&entry.path)
+        if shared_name
             && content
                 .as_ref()
                 .is_ok_and(|bytes| std::str::from_utf8(bytes).is_err())
@@ -173,12 +175,14 @@ pub async fn view<S: Source>(
     }
     // What the files read so far name, such as the sources of a Gradle
     // build the settings include, until they name nothing new.
+    let mut settled = false;
     for _ in 0..MORE_ROUNDS {
         let more = scanner.more(
             &files,
             paths.iter().chain(&hidden_paths).map(String::as_str),
         );
         if more.is_empty() {
+            settled = true;
             break;
         }
         let mut wanted = Vec::new();
@@ -196,11 +200,16 @@ pub async fn view<S: Source>(
         }
     }
     // What the chain still names when the rounds run out is unreadable the
-    // same way, so its lookups fail saying why.
-    let deep = scanner.more(
-        &files,
-        paths.iter().chain(&hidden_paths).map(String::as_str),
-    );
+    // same way, so its lookups fail saying why. A chain that settled names
+    // nothing more: the files have not changed since it said so.
+    let deep = if settled {
+        Vec::new()
+    } else {
+        scanner.more(
+            &files,
+            paths.iter().chain(&hidden_paths).map(String::as_str),
+        )
+    };
     for path in &deep {
         files.insert(path.clone(), Text::Unread(Unread::TooDeep));
     }

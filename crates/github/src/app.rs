@@ -81,6 +81,8 @@ impl MintScope {
 
 /// One mint's cached token, locked while it is minted.
 type MintSlot = Arc<Mutex<Option<CachedToken>>>;
+/// One repository's cached id, locked while it is read.
+type IdSlot = Arc<Mutex<Option<u64>>>;
 
 /// Deliberately no Debug implementation: contains the signing key and access tokens.
 pub struct App {
@@ -92,8 +94,9 @@ pub struct App {
     /// another's.
     tokens: std::sync::Mutex<BTreeMap<Mint, MintSlot>>,
     /// Repository ids by installation and lowercased `owner/name`, read
-    /// once for scoped mints.
-    repository_ids: std::sync::Mutex<BTreeMap<(u64, String), u64>>,
+    /// once for scoped mints: one slot per repository, so simultaneous
+    /// mints for it read the id once.
+    repository_ids: std::sync::Mutex<BTreeMap<(u64, String), IdSlot>>,
 }
 impl App {
     pub fn new(
@@ -307,8 +310,12 @@ impl App {
             return Err(Error::Configuration);
         }
         let key = (installation, repository.to_ascii_lowercase());
-        if let Some(id) = lock(&self.repository_ids).get(&key) {
-            return Ok(*id);
+        // Single flight per repository: a failed read leaves the slot empty
+        // for the next caller.
+        let slot = lock(&self.repository_ids).entry(key).or_default().clone();
+        let mut saved = slot.lock().await;
+        if let Some(id) = *saved {
+            return Ok(id);
         }
         let token = self.token_at(installation, now).await?;
         let value = self
@@ -326,7 +333,7 @@ impl App {
             .as_u64()
             .filter(|id| valid_id(*id))
             .ok_or(Error::Json)?;
-        lock(&self.repository_ids).insert(key, id);
+        *saved = Some(id);
         Ok(id)
     }
     /// Forget `repository`'s cached id, after a scoped mint for it failed.
@@ -845,6 +852,63 @@ mod tests {
                 .await,
             Err(Error::Json)
         ));
+    }
+
+    /// Counts `GET repos/acme/app` reads, each answered after a pause so
+    /// simultaneous callers overlap.
+    struct SlowRepository(AtomicUsize);
+    impl Transport for SlowRepository {
+        fn send(&self, request: Request) -> Exchange<'_> {
+            let read = request
+                .url()
+                .path()
+                .to_ascii_lowercase()
+                .ends_with("/repos/acme/app");
+            if read {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+            let expires = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+            let answer = if read {
+                json!({"full_name": "acme/app", "id": 7})
+            } else {
+                json!({"token": "full", "expires_at": expires})
+            };
+            Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                Ok(Response {
+                    status: reqwest::StatusCode::OK,
+                    headers: header::HeaderMap::new(),
+                    body: serde_json::to_vec(&answer).unwrap(),
+                    stale: None,
+                })
+            })
+        }
+    }
+
+    /// Simultaneous scoped mints for one repository read its id once.
+    #[tokio::test]
+    async fn simultaneous_repository_id_reads_share_one_request() {
+        let pem = AppKey::generate().pkcs1_pem();
+        let transport = Arc::new(SlowRepository(AtomicUsize::new(0)));
+        let app = App::new(
+            1,
+            pem.as_bytes(),
+            transport.clone(),
+            Url::parse("https://api.github.com").unwrap(),
+        )
+        .unwrap();
+        let now = Utc::now().timestamp();
+        let ids = futures_util::future::join_all(
+            ["acme/app", "Acme/App", "acme/app", "ACME/app"]
+                .map(|name| app.repository_id(10, name, now)),
+        )
+        .await;
+        assert!(ids.into_iter().all(|id| id.unwrap() == 7));
+        assert_eq!(transport.0.load(Ordering::SeqCst), 1);
+        // A forgotten id is read again.
+        app.forget_repository(10, "acme/app");
+        assert_eq!(app.repository_id(10, "acme/app", now).await.unwrap(), 7);
+        assert_eq!(transport.0.load(Ordering::SeqCst), 2);
     }
 
     /// Answers every request with one JSON body.

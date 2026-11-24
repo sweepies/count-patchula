@@ -301,10 +301,14 @@ fn possible_source(value: &str) -> bool {
     }
     // A locator whose reference is `patch:` wraps another locator, which
     // may be percent-encoded and so show no `:` of its own.
-    value.to_ascii_lowercase().contains("@patch:")
-        || value.rsplit_once('@').is_some_and(|(before, after)| {
-            !before.is_empty() && !before.contains("://") && after.contains(':')
-        })
+    value.contains('@')
+        && (value
+            .as_bytes()
+            .windows(b"@patch:".len())
+            .any(|w| w.eq_ignore_ascii_case(b"@patch:"))
+            || value.rsplit_once('@').is_some_and(|(before, after)| {
+                !before.is_empty() && !before.contains("://") && after.contains(':')
+            }))
 }
 
 /// Whether `value` — a whole string a file holds — names no fetch source

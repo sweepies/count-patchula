@@ -632,6 +632,22 @@ impl Cache {
         self.call(move |store| store.http_put(&key, &entry)).await
     }
 
+    /// `http_put` for every entry, in one write transaction.
+    pub async fn http_put_many(&self, entries: &[(HttpKey, HttpEntry)]) -> Result<()> {
+        let entries = entries
+            .iter()
+            .map(|(key, entry)| Ok((key.encoded()?, entry.clone())))
+            .collect::<Result<Vec<_>>>()?;
+        self.call(move |store| {
+            let rows: Vec<(&str, &HttpEntry)> = entries
+                .iter()
+                .map(|(key, entry)| (key.as_str(), entry))
+                .collect();
+            store.http_put_many(&rows)
+        })
+        .await
+    }
+
     /// A 304 changes metadata, never the compressed body. Avoid recompressing
     /// and rewriting large registry documents after conditional validation.
     pub async fn http_refresh(&self, key: &HttpKey, entry: &HttpEntry) -> Result<()> {
@@ -1111,6 +1127,38 @@ mod tests {
             key = key.representation(representation);
         }
         key.encoded().unwrap()
+    }
+
+    /// Entries written together read back like entries written one by one.
+    #[tokio::test]
+    async fn entries_put_together_read_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = Cache::open(directory.path().join("cache.sqlite"), Options::default())
+            .await
+            .unwrap();
+        let key = |doc: &str| {
+            HttpKey::new(
+                "GET",
+                &format!("https://example.org/{doc}"),
+                BTreeMap::new(),
+            )
+            .unwrap()
+        };
+        let mut second = entry();
+        second.body = b"second".to_vec();
+        cache
+            .http_put_many(&[(key("a"), entry()), (key("b"), second)])
+            .await
+            .unwrap();
+        assert_eq!(
+            cache.http_get(&key("a")).await.unwrap().unwrap().body,
+            b"body"
+        );
+        assert_eq!(
+            cache.http_get(&key("b")).await.unwrap().unwrap().body,
+            b"second"
+        );
+        cache.http_put_many(&[]).await.unwrap();
     }
 
     async fn keys(cache: &Cache) -> (Vec<String>, Vec<String>) {

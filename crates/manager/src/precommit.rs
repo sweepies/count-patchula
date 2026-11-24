@@ -15,8 +15,8 @@ fn identity(url: &str) -> Option<(Source, String)> {
 }
 
 pub(super) fn extract(path: &str, text: &Lines<'_>) -> Result<Vec<Dependency>, String> {
-    let locations = crate::yaml_locations::parse(text)?;
-    let Some(document) = crate::yaml::docs(text)?.into_iter().next() else {
+    let locations = text.yaml_locations()?;
+    let Some(document) = text.yaml_documents()?.first() else {
         return Ok(Vec::new());
     };
     let Some(repos) = document.get("repos").and_then(|r| r.as_sequence()) else {

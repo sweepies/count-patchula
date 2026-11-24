@@ -41,7 +41,7 @@ oci-config-notes	3	crates/datasource/src/docker.rs,crates/datasource/src/upstrea
 oci-tags	3	crates/datasource/src/docker.rs,crates/http/src/derive.rs	serde,serde_json	dd5a6821b1f00d878ca2eae941717f9ec352eda04705864e2b5b18652f84e516
 image-platform	6	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	serde,serde_json,sha2	aa3fca12cea6d8c7dfd793addcb02526757cda5f6752969ff9035ee706f9acb8
 sbom-os	6	crates/datasource/src/images.rs,crates/datasource/src/catalog.rs,crates/http/src/derive.rs	base64,serde,serde_json,sha2	aa3fca12cea6d8c7dfd793addcb02526757cda5f6752969ff9035ee706f9acb8
-github-release-head	12	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	17fc24b1568e119d91a73ca9025f83c4fe7b68245cd09d11a68363ba45944d25
+github-release-head	13	crates/datasource/src/github.rs,crates/http/src/derive.rs	serde,serde_json	acdba2af139c12874d7b35b67f2e383ad6920f9bd6cba85884fab16c586117e7
 node-lts	1	crates/datasource/src/node.rs,crates/versioning/src/lib.rs,crates/http/src/derive.rs	semver,serde,serde_json	615d86aae2092e86089bb6adc6f51a31248d15564c8faf3e744d8444926d2301
 anonymous-registry-pull-token	3	crates/datasource/src/docker.rs	chrono,serde,serde_json	6fe5929e69f0c0f415bbc943be347da10c3cf882df97f62790b508e85516545d
 notes-adapter-listing	15	crates/notes/src/adapters.rs,crates/http/src/derive.rs	serde,serde_json	4e7ac3953415ae9e4a1d09e7102bd0bb6f593dac7de214e59dfc4a42fa5fc83b
